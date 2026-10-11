@@ -3429,6 +3429,14 @@ namespace lfs::vis::project {
                 .defer_geometry_payloads = true,
             });
         if (!opened) {
+            if (opened.error().code() == lfs::ErrorCode::NotFound && document_->source_reader()) {
+                std::error_code error;
+                if (!std::filesystem::exists(path, error) && !error) {
+                    // The document still owns the removed file's payloads.
+                    // Keep that reader so an explicit save can recover them.
+                    return {};
+                }
+            }
             return lfs::Status::failure(
                 std::move(opened).error());
         }

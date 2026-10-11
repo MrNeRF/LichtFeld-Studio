@@ -4953,6 +4953,120 @@ namespace {
             << lfs::format_for_developer(appended.error());
     }
 
+    TEST(ProjectDocumentTest, SaveAfterSourceRemovalPreservesCompleteDocument) {
+        for (const bool remove_source : {false, true}) {
+            for (const int mode : {0, 1, 2}) {
+                SCOPED_TRACE(std::format("removed={} mode={}", remove_source, mode));
+                TemporaryDirectory temporary;
+                const auto source = temporary.path / "source.licht";
+                const auto destination = mode == 1 ? temporary.path / "copy.licht" : source;
+                const auto checkpoint_uuid = fixed_uuid(19'701);
+                write_phase_a_fixture(source);
+                {
+                    auto seeded = require_result_ptr(ProjectDocument::open(source));
+                    install_bound_autosave_checkpoint(*seeded, fixed_uuid(19'700), checkpoint_uuid);
+                    auto options = save_options(19'702, 300);
+                    options.commit.snapshot_uuid = checkpoint_uuid;
+                    const auto preview = one_pixel_png();
+                    options.preview_png = preview;
+                    static_cast<void>(require_result(seeded->save(source, options)));
+                }
+                auto document = require_result_ptr(ProjectDocument::open(source));
+                auto before = require_result(ProjectReader::open(source));
+                const auto original = read_file_bytes(source);
+                require_status(document->set_license(ProjectLicense{"CC BY", "Unsaved notice"}));
+                if (remove_source) {
+                    ASSERT_TRUE(fs::remove(source));
+                }
+                auto options = save_options(19'703, 400);
+                options.commit.snapshot_uuid = checkpoint_uuid;
+                const auto started = std::chrono::steady_clock::now();
+                auto saved = mode == 0 ? document->save(destination, options)
+                                       : document->save_as(destination, options);
+                RecordProperty(std::format("removed_{}_mode_{}_us", remove_source, mode),
+                               std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count());
+                ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+                EXPECT_FALSE(document->dirty());
+                EXPECT_EQ(*document->source_path(), fs::absolute(destination));
+                auto after = require_result(ProjectReader::open(destination));
+                require_status(after.verify_all());
+                EXPECT_EQ(require_result(after.read_preview()), require_result(before.read_preview()));
+                for (const auto& row : before.chunks()) {
+                    if (!row.is_live() || row.key.fourcc == FOURCC_PROJ) {
+                        continue;
+                    }
+                    const auto* copied = after.find(row.key);
+                    ASSERT_NE(copied, nullptr) << row.key.fourcc.to_string();
+                    EXPECT_EQ(require_result(after.read_chunk(*copied)), require_result(before.read_chunk(row)))
+                        << row.key.fourcc.to_string();
+                }
+                auto reopened = require_result_ptr(ProjectDocument::open(destination));
+                EXPECT_EQ(require_result(reopened->project().license()),
+                          (ProjectLicense{"CC BY", "Unsaved notice"}));
+                EXPECT_NE(reopened->find_checkpoint(checkpoint_uuid), nullptr);
+                if (mode == 1) {
+                    EXPECT_EQ(fs::exists(source), !remove_source);
+                    if (!remove_source) {
+                        EXPECT_EQ(read_file_bytes(source), original);
+                    }
+                }
+                auto append_options = save_options(19'704, 500);
+                append_options.commit.snapshot_uuid = checkpoint_uuid;
+                static_cast<void>(require_result(document->save(destination, append_options)));
+            }
+        }
+    }
+
+    TEST(ProjectDocumentTest, MissingSourceSaveAsFailurePreservesEditsAndDestination) {
+        for (const bool cancel : {false, true}) {
+            SCOPED_TRACE(cancel);
+            TemporaryDirectory temporary;
+            const auto source = temporary.path / "source.licht";
+            const auto destination = temporary.path / "destination.licht";
+            write_phase_a_fixture(source);
+            const auto destination_bytes = one_pixel_png();
+            write_file_bytes(destination, destination_bytes);
+            auto document = require_result_ptr(ProjectDocument::open(source));
+            const auto checkpoint_uuid = fixed_uuid(19'721);
+            install_bound_autosave_checkpoint(*document, fixed_uuid(19'720), checkpoint_uuid);
+            const auto* checkpoint = document->find_checkpoint(checkpoint_uuid);
+            ASSERT_NE(checkpoint, nullptr);
+            std::vector<std::byte> checkpoint_bytes(checkpoint->size());
+            require_status(checkpoint->read_at(0, checkpoint_bytes));
+            require_status(document->set_license(ProjectLicense{"CC BY", "Pending edit"}));
+            ASSERT_TRUE(fs::remove(source));
+            const std::vector<std::byte> invalid_preview(MAX_PREVIEW_BYTES + 1);
+            auto options = save_options(19'722, 400);
+            options.commit.snapshot_uuid = checkpoint_uuid;
+            if (cancel) {
+                options.save_as_cancel = [] { return true; };
+            } else {
+                options.preview_png = invalid_preview;
+            }
+            auto failed = document->save_as(destination, options);
+            ASSERT_FALSE(failed);
+            EXPECT_TRUE(document->dirty());
+            EXPECT_EQ(*document->source_path(), fs::absolute(source));
+            EXPECT_EQ(read_file_bytes(destination), destination_bytes);
+            EXPECT_FALSE(fs::exists(source));
+            options.save_as_cancel = {};
+            options.preview_png = {};
+            auto retried = document->save_as(destination, options);
+            ASSERT_TRUE(retried) << lfs::format_for_developer(retried.error());
+            auto reopened = require_result_ptr(ProjectDocument::open(destination));
+            EXPECT_EQ(require_result(reopened->project().license()),
+                      (ProjectLicense{"CC BY", "Pending edit"}));
+            checkpoint = reopened->find_checkpoint(checkpoint_uuid);
+            ASSERT_NE(checkpoint, nullptr);
+            std::vector<std::byte> saved_bytes(checkpoint->size());
+            require_status(checkpoint->read_at(0, saved_bytes));
+            EXPECT_EQ(saved_bytes, checkpoint_bytes);
+            for (const auto& entry : fs::directory_iterator(temporary.path)) {
+                EXPECT_EQ(entry.path().filename().string().find(".saveas-"), std::string::npos);
+            }
+        }
+    }
+
     TEST(ProjectDocumentTest, SaveAsPreservesUnicodeSourceAndDestinationPaths) {
         TemporaryDirectory temporary;
         const fs::path source =

@@ -9738,6 +9738,39 @@ contract["check_selection_submode_follows_native_mode"](lf)
         }
     }
 
+    TEST_F(VisualizerImplResetTest, SaveAfterSourceRemovalKeepsLiveSceneEdits) {
+        for (const bool save_as : {false, true}) {
+            SCOPED_TRACE(save_as);
+            const auto source = temporary_.path / (save_as ? "removed-as-source.licht" : "removed-save-source.licht");
+            const auto destination = save_as ? temporary_.path / "recovered-copy.licht" : source;
+            write_empty_project(source);
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+            ASSERT_TRUE(viewer.projectOpen(source, ProjectSwitchDisposition::DiscardChanges));
+            ASSERT_TRUE(waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+            ASSERT_NE(viewer.getScene().addGroup("Unsaved group"), lfs::core::NULL_NODE);
+            ASSERT_TRUE(std::filesystem::remove(source));
+            auto saved = save_as ? viewer.projectSaveAs(destination, false) : viewer.projectSave(false);
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
+            ASSERT_TRUE(std::filesystem::exists(destination));
+            const auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info);
+            EXPECT_FALSE(info->dirty);
+            EXPECT_EQ(*info->path, destination);
+            auto reopened = lfs::test::licht::require_result(
+                lfs::io::project::ProjectDocument::open(destination));
+            const auto nodes = lfs::test::licht::require_result(reopened.scene_graph().nodes());
+            EXPECT_TRUE(std::ranges::any_of(nodes, [](const auto& node) { return node.name == "Unsaved group"; }));
+            if (save_as) {
+                EXPECT_FALSE(std::filesystem::exists(source));
+            }
+        }
+    }
+
     TEST_F(VisualizerImplResetTest,
            SaveAsAssignsNewProjectIdentity) {
         const auto source_path =

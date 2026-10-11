@@ -1690,13 +1690,15 @@ namespace lfs::io::project {
 
         [[nodiscard]] lfs::Result<void>
         refresh_source_rows(const std::filesystem::path& path,
-                            const ReaderOptions& options = {}) {
-            auto reader = ProjectReader::open(path, options);
-            if (!reader) {
-                return lfs::Result<void>::failure(std::move(reader).error());
+                            const ReaderOptions& options = {},
+                            std::shared_ptr<ProjectReader> shared_reader = {}) {
+            if (!shared_reader) {
+                auto reader = ProjectReader::open(path, options);
+                if (!reader) {
+                    return lfs::Result<void>::failure(std::move(reader).error());
+                }
+                shared_reader = std::make_shared<ProjectReader>(std::move(*reader));
             }
-            auto shared_reader = std::make_shared<ProjectReader>(
-                std::move(*reader));
             std::map<ChunkKey, SourceRow, ChunkKeyLess> refreshed;
             std::unordered_map<lfs::core::Uuid, LazyChunkValue>
                 refreshed_checkpoints;
@@ -3684,7 +3686,15 @@ namespace lfs::io::project {
     lfs::Result<ProjectDocumentSaveReport>
     ProjectDocument::save(const std::filesystem::path& path,
                           const ProjectDocumentSaveOptions& options) {
-        return save_impl(path, options, nullptr);
+        auto saved = save_impl(path, options, nullptr);
+        if (!saved && saved.error().code() == lfs::ErrorCode::NotFound &&
+            impl_->source_path && impl_->source_reader) {
+            std::error_code error;
+            if (!detail::project_fs::exists(*impl_->source_path, error) && !error) {
+                return save_as(path, options);
+            }
+        }
+        return saved;
     }
 
     lfs::Result<ProjectDocumentSaveReport>
@@ -4787,9 +4797,15 @@ namespace lfs::io::project {
         if (!impl_->source_path) {
             return save(*normalized, options);
         }
-        if (*impl_->source_path == *normalized) {
+        std::error_code source_error;
+        const bool source_missing =
+            !detail::project_fs::exists(*impl_->source_path, source_error) && !source_error;
+        if (*impl_->source_path == *normalized && !source_missing) {
             return save(*normalized, options);
         }
+        // Retain the unlinked file for both staging and rollback. Lazy and
+        // opaque chapters may have no in-memory representation.
+        const auto retained_source = source_missing ? impl_->source_reader : nullptr;
 
         const auto original_project_uuid =
             impl_->project_uuid;
@@ -4903,7 +4919,63 @@ namespace lfs::io::project {
         }
 
         lfs::Result<void> compacted;
-        if (preserve_source_autosave) {
+        if (retained_source) {
+            compacted = [&]() -> lfs::Result<void> {
+                auto created = ProjectWriter::create(
+                    temporary, CreateOptions{
+                                   .project_uuid = save_as_project_uuid,
+                                   .file_uuid = file_uuid,
+                                   .creation_time_unix_ns = compaction_options.creation_time_unix_ns,
+                                   .disk_reserve_bytes = options.disk_reserve_bytes,
+                               });
+                if (!created) {
+                    return lfs::Result<void>::failure(std::move(created).error());
+                }
+                const auto& head = retained_source->commit();
+                if (auto planned = created->plan_commit(CommitOptions{
+                        .kind = CommitKind::Compaction,
+                        .commit_uuid = compaction_options.commit_uuid,
+                        .snapshot_uuid = compaction_options.snapshot_uuid,
+                        .wallclock_unix_ns = compaction_options.wallclock_unix_ns,
+                        .min_reader_version = head.min_reader_version,
+                        .min_safe_writer_version = head.min_safe_writer_version,
+                        .extra_reader_capabilities = head.required_reader_capabilities,
+                        .extra_writer_capabilities = head.required_writer_capabilities,
+                    });
+                    !planned) {
+                    return planned;
+                }
+                const auto keep_row = [&options](const ChunkInfo& row) {
+                    return row.is_live() &&
+                           !(row.key.fourcc == FOURCC_CKPT &&
+                             std::ranges::find(options.save_as_excluded_checkpoints, row.key.instance_uuid) !=
+                                 options.save_as_excluded_checkpoints.end());
+                };
+                std::uint64_t planned_bytes = 0;
+                for (const auto& row : retained_source->chunks() | std::views::filter(keep_row)) {
+                    auto total = checked_add(planned_bytes, row.stored_bytes, "save.preflight_bytes");
+                    if (!total) {
+                        return lfs::Result<void>::failure(std::move(total).error());
+                    }
+                    planned_bytes = *total;
+                }
+                if (auto preflight = created->preflight(planned_bytes); !preflight) {
+                    return preflight;
+                }
+                for (const auto& row : retained_source->chunks() | std::views::filter(keep_row)) {
+                    if (options.save_as_cancel && options.save_as_cancel()) {
+                        return fail<void>(lfs::ErrorCode::Cancelled,
+                                          "Project compaction was canceled.",
+                                          "the caller requested cancellation while copying payloads",
+                                          "compaction.cancel");
+                    }
+                    if (auto copied = created->copy_chunk_verbatim(*retained_source, row); !copied) {
+                        return copied;
+                    }
+                }
+                return created->commit();
+            }();
+        } else if (preserve_source_autosave) {
             // The sidecar belongs to the original project and must remain
             // available there. Save As uses the live document below, so
             // compact a private copy of the master without touching either
@@ -4929,7 +5001,7 @@ namespace lfs::io::project {
             compacted = ProjectWriter::compact_to(
                 original_path, temporary, compaction_options);
         }
-        if (!compacted &&
+        if (!retained_source && !compacted &&
             compacted.error().code() == lfs::ErrorCode::Unavailable) {
             // Save As is read-only on the original and may proceed while
             // another process holds its writer lock. In that case, first
@@ -4962,7 +5034,8 @@ namespace lfs::io::project {
                 const std::filesystem::path& source,
                 const lfs::core::Uuid& project_uuid,
                 const auto& preserved_dirty,
-                const auto& preserved_normalized_source_keys)
+                const auto& preserved_normalized_source_keys,
+                std::shared_ptr<ProjectReader> reader = {})
             -> lfs::Result<void> {
             auto rebound_project = impl_->project;
             if (auto updated =
@@ -5016,7 +5089,8 @@ namespace lfs::io::project {
             extract_dirty(
                 impl_->sfm_observations, dirty_sfm_observations,
                 FOURCC_SFMO);
-            auto refreshed = impl_->refresh_source_rows(source);
+            auto refreshed = impl_->refresh_source_rows(
+                source, {}, std::move(reader));
             if (!refreshed) {
                 for (auto& [uuid, payload] : dirty_checkpoints) {
                     impl_->checkpoints.insert_or_assign(
@@ -5081,7 +5155,8 @@ namespace lfs::io::project {
                 original_path,
                 original_project_uuid,
                 original_dirty,
-                original_normalized_source_keys);
+                original_normalized_source_keys,
+                retained_source);
         };
 
         if (auto rebound =

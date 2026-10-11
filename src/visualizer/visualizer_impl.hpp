@@ -491,6 +491,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_NavigationVerticalRoundTripPreservesPosesAndGridChoices_Test;
         friend class VisualizerImplResetTest_AssetManagerProjectRestorePreservesLeftDockWidth_Test;
         friend class VisualizerImplResetTest_SaveAsAssignsNewProjectIdentity_Test;
+        friend class VisualizerImplResetTest_SaveAfterSourceRemovalKeepsLiveSceneEdits_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;
