@@ -356,46 +356,59 @@ namespace lfs::io {
                                                         : "CPU");
             }
 
-            codec_ctx_ = avcodec_alloc_context3(codec);
-            if (!codec_ctx_) {
-                setError("Failed to allocate video decoder context");
-                close();
-                return false;
-            }
-            const int parameters_result =
-                avcodec_parameters_to_context(codec_ctx_, stream->codecpar);
-            if (parameters_result < 0) {
-                setError("Failed to configure video decoder: " +
-                         ffmpegError(parameters_result));
-                close();
-                return false;
-            }
-#ifdef AV_CODEC_EXPORT_DATA_DOVI_RPU
-            // Export Dolby Vision RPU side data for libplacebo.
-            codec_ctx_->export_side_data |= AV_CODEC_EXPORT_DATA_DOVI_RPU;
-#endif
-
-            if (using_hw_decode_) {
-                codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
-                if (!codec_ctx_->hw_device_ctx) {
-                    setError("Failed to retain CUDA video decoder context");
+            for (;;) {
+                codec_ctx_ = avcodec_alloc_context3(codec);
+                if (!codec_ctx_) {
+                    setError("Failed to allocate video decoder context");
                     close();
                     return false;
                 }
-                codec_ctx_->get_format = getHwFormat;
-            } else {
-                const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
-                codec_ctx_->thread_count = std::min(MAX_SW_DECODE_THREADS,
-                                                    static_cast<int>(hardware_threads));
-                codec_ctx_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
-                LOG_INFO("VideoPlayer: FFmpeg software decoder threads: {}", codec_ctx_->thread_count);
-            }
+                const int parameters_result =
+                    avcodec_parameters_to_context(codec_ctx_, stream->codecpar);
+                if (parameters_result < 0) {
+                    setError("Failed to configure video decoder: " +
+                             ffmpegError(parameters_result));
+                    close();
+                    return false;
+                }
+#ifdef AV_CODEC_EXPORT_DATA_DOVI_RPU
+                // Export Dolby Vision RPU side data for libplacebo.
+                codec_ctx_->export_side_data |= AV_CODEC_EXPORT_DATA_DOVI_RPU;
+#endif
 
-            const int codec_open_result =
-                avcodec_open2(codec_ctx_, codec, nullptr);
-            if (codec_open_result < 0) {
-                setError("Failed to open video decoder: " +
-                         ffmpegError(codec_open_result));
+                if (using_hw_decode_) {
+                    codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
+                    if (!codec_ctx_->hw_device_ctx) {
+                        setError("Failed to retain CUDA video decoder context");
+                        close();
+                        return false;
+                    }
+                    codec_ctx_->get_format = getHwFormat;
+                } else {
+                    const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
+                    codec_ctx_->thread_count = std::min(MAX_SW_DECODE_THREADS,
+                                                        static_cast<int>(hardware_threads));
+                    codec_ctx_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+                    LOG_INFO("VideoPlayer: FFmpeg software decoder threads: {}", codec_ctx_->thread_count);
+                }
+
+                const int codec_open_result =
+                    avcodec_open2(codec_ctx_, codec, nullptr);
+                if (codec_open_result >= 0)
+                    break;
+
+                if (using_hw_decode_) {
+                    LOG_WARN("VideoPlayer: failed to open NVDEC decoder {}: {}; falling back to CPU",
+                             hw_decoder_name, ffmpegError(codec_open_result));
+                    avcodec_free_context(&codec_ctx_);
+                    av_buffer_unref(&hw_device_ctx_);
+                    using_hw_decode_ = false;
+                    codec = avcodec_find_decoder(codec_id);
+                    if (codec)
+                        continue;
+                }
+
+                setError("Failed to open video decoder: " + ffmpegError(codec_open_result));
                 close();
                 return false;
             }

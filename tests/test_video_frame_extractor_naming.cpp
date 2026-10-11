@@ -178,6 +178,9 @@ namespace {
 namespace lfs::gui {
     class VideoExtractorDialogTestAccess {
     public:
+        static const std::filesystem::path& videoPath(const VideoExtractorDialog& dialog) { return dialog.video_path_; }
+        static const std::filesystem::path& outputPath(const VideoExtractorDialog& dialog) { return dialog.output_dir_; }
+        static void outputPath(VideoExtractorDialog& dialog, const std::filesystem::path& path) { dialog.output_dir_ = path; }
         static bool naming(VideoExtractorDialog& dialog, int selection, const std::string& custom,
                            const std::filesystem::path& video, std::string& pattern, std::string& error) {
             dialog.naming_selection_ = selection;
@@ -1246,4 +1249,71 @@ TEST(VideoFrameExtractorTrim, PlayerFullRangeKeepsTheLastFrame) {
     VideoFrameExtractor extractor;
     ASSERT_TRUE(extractor.extract(params, error)) << error;
     EXPECT_EQ(countPngFiles(output_dir), static_cast<std::size_t>(frame_count));
+}
+
+namespace {
+    std::filesystem::path decoderFixture(const char* name) {
+        return std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/video" / name;
+    }
+
+    void checkDecoderFixture(const char* name, const int width, const int height) {
+        const auto source = decoderFixture(name);
+        lfs::io::VideoPlayer player;
+        ASSERT_TRUE(player.open(source)) << player.takeError();
+        EXPECT_TRUE(player.takeError().empty());
+        EXPECT_EQ(player.sourceWidth(), width);
+        EXPECT_EQ(player.sourceHeight(), height);
+        EXPECT_DOUBLE_EQ(player.fps(), 10.0);
+        EXPECT_NEAR(player.duration(), 0.5, 0.001);
+        ASSERT_NE(player.currentFrameData(), nullptr);
+        const size_t size = static_cast<size_t>(player.width()) * player.height() * player.currentFrameChannels();
+        const std::vector<uint8_t> first(player.currentFrameData(), player.currentFrameData() + size);
+        EXPECT_GT(*std::max_element(first.begin(), first.end()), 200);
+        player.seek(0.3);
+        EXPECT_NEAR(player.currentTime(), 0.3, 0.001);
+        player.seek(0.0);
+        ASSERT_NE(player.currentFrameData(), nullptr);
+        EXPECT_EQ(first, std::vector<uint8_t>(player.currentFrameData(), player.currentFrameData() + size));
+        player.close();
+        EXPECT_FALSE(player.isOpen());
+        ASSERT_TRUE(player.open(source)) << player.takeError();
+        EXPECT_EQ(first, std::vector<uint8_t>(player.currentFrameData(), player.currentFrameData() + size));
+
+        TempDir temp("decoder_fallback");
+        auto params = extractionParams(source, temp.path / "frames");
+        params.end_time = -1.0;
+        VideoFrameExtractor extractor;
+        std::string error;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        EXPECT_EQ(countPngFiles(params.output_dir), 5u);
+    }
+} // namespace
+
+TEST(VideoDecoderFallback, H264444OpensSeeksAndExtracts) {
+    checkDecoderFixture("h264_444.mp4", 64, 48);
+}
+
+TEST(VideoDecoderFallback, OddSizedH264444OpensSeeksAndExtracts) {
+    checkDecoderFixture("h264_444_odd.mp4", 65, 49);
+}
+
+TEST(VideoDecoderFallback, H264420StillOpensSeeksAndExtracts) {
+    checkDecoderFixture("h264_420.mp4", 64, 48);
+}
+
+TEST(VideoDecoderFallback, FailedReplacementClearsDialogPathsAndCanRecover) {
+    using Access = lfs::gui::VideoExtractorDialogTestAccess;
+    lfs::gui::VideoExtractorDialog dialog;
+    const auto source = decoderFixture("h264_420.mp4");
+    ASSERT_TRUE(dialog.openVideoPath(source));
+    EXPECT_EQ(Access::videoPath(dialog), source);
+    Access::outputPath(dialog, "custom_output");
+    ASSERT_TRUE(dialog.openVideoPath(source));
+    EXPECT_EQ(Access::outputPath(dialog), "custom_output");
+    EXPECT_FALSE(dialog.openVideoPath(decoderFixture("missing.mp4")));
+    EXPECT_TRUE(Access::videoPath(dialog).empty());
+    EXPECT_TRUE(Access::outputPath(dialog).empty());
+    ASSERT_TRUE(dialog.openVideoPath(source));
+    EXPECT_EQ(Access::videoPath(dialog), source);
+    EXPECT_EQ(Access::outputPath(dialog), source.parent_path() / "h264_420_frames");
 }
