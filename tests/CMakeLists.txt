@@ -747,6 +747,7 @@ set(TEST_FILES
     test_scene_graph_dnd.cpp
     test_rml_im_mode_layout.cpp
     test_rml_python_listener_lifetime.cpp
+    test_rendering_environment_select.cpp
     test_status_bar_fit.cpp
     test_gallery_file_panel_layout.cpp
     test_histogram_layout.cpp

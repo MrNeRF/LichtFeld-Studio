@@ -354,3 +354,49 @@ def test_rendering_rml_only_exposes_3dgs_backends():
 
     assert '<option value="3dgs">3DGS</option>' in content
     assert '<option value="3dgut">3DGUT</option>' in content
+
+
+def test_custom_environment_changes_refresh_closed_select(rendering_panel_module):
+    module = rendering_panel_module
+    settings = SimpleNamespace(environment_mode="EQUIRECTANGULAR", environment_map_path="/tmp/first.hdr")
+    module.lf.get_render_settings = lambda: settings
+    writes = []
+    select = SimpleNamespace(
+        get_attribute=lambda _name, _default: module.CUSTOM_ENVIRONMENT_PRESET_VALUE,
+        set_attribute=lambda name, value: writes.append((name, value)),
+    )
+    panel = module.RenderingPanel()
+    panel._doc = SimpleNamespace(get_element_by_id=lambda name: select if name == "environment-map-preset" else None)
+    panel._handle = _HandleStub()
+
+    for path in ("/tmp/first.hdr", "/tmp/second.hdr", "/tmp/third.exr"):
+        settings.environment_map_path = path
+        writes.clear()
+        assert panel._sync_environment_state() is True
+        # RmlUi's closed label is a cached copy of the selected option.
+        # Dirtying its text binding alone does not invalidate that copy.
+        assert writes == [("value", module.CUSTOM_ENVIRONMENT_PRESET_VALUE)]
+        assert panel._environment_map_last_custom_display_name() == Path(path).name
+        writes.clear()
+        panel._handle.dirty_fields.clear()
+        assert panel._sync_environment_state() is False
+        assert writes == []
+        assert panel._handle.dirty_fields == []
+
+    for index, path in enumerate(module.ENVIRONMENT_PRESET_PATHS):
+        settings.environment_map_path = path
+        writes.clear()
+        assert panel._sync_environment_state() is True
+        assert writes == []
+        assert panel._environment_map_last_custom_display_name() == "third.exr"
+
+
+def test_environment_sync_without_mounted_select(rendering_panel_module):
+    module = rendering_panel_module
+    settings = SimpleNamespace(environment_mode="EQUIRECTANGULAR", environment_map_path="/tmp/custom.hdr")
+    module.lf.get_render_settings = lambda: settings
+    panel = module.RenderingPanel()
+    assert panel._sync_environment_state() is True
+    panel._doc = SimpleNamespace(get_element_by_id=lambda _name: None)
+    settings.environment_map_path = "/tmp/another.hdr"
+    assert panel._sync_environment_state() is True

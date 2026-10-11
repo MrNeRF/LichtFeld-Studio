@@ -714,6 +714,12 @@ class RenderingPanel(Panel):
             return False
         self._last_environment_state = state
         self._dirty_environment_bindings()
+        if self._doc and current_path and current_path not in ENVIRONMENT_PRESET_PATHS:
+            select = self._doc.get_element_by_id("environment-map-preset")
+            if select and select.get_attribute("value", "") == CUSTOM_ENVIRONMENT_PRESET_VALUE:
+                # RmlUi caches the closed label even when the selected option's
+                # text changes. Reapply the value to refresh that copy on update.
+                select.set_attribute("value", CUSTOM_ENVIRONMENT_PRESET_VALUE)
         return True
 
     def _projection_state_snapshot(self):
