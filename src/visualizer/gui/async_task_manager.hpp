@@ -14,6 +14,7 @@
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_simplify.hpp"
+#include "core/uuid.hpp"
 #include "gui/gallery_scene_publication.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
@@ -382,11 +383,14 @@ namespace lfs::vis {
                 std::atomic<bool> apply_pending{false};
                 mutable std::mutex mutex;
                 std::string source_name;
+                core::Uuid source_uuid;
+                uint64_t scene_epoch = 0;
                 std::string output_name;
                 std::unique_ptr<lfs::core::SplatData> result;
                 std::optional<std::jthread> thread;
             };
             SplatSimplifyState splat_simplify_state_;
+            uint64_t splat_simplify_scene_epoch_ = 0;
         };
 
     } // namespace gui

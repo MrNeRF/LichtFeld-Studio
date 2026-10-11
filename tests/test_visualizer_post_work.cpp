@@ -6068,6 +6068,157 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(manager->getSelectedNodeName(), "async-single");
     }
 
+    class SplatSimplifyCompletionTest : public VisualizerImplResetTest {
+    protected:
+        void startAndWaitForResult(VisualizerImpl& viewer) {
+            auto& tasks = viewer.getGuiManager()->asyncTasks();
+            core::SplatSimplifyOptions options;
+            options.ratio = 1.0;
+            options.opacity_prune_threshold = 0.0;
+            tasks.startSplatSimplify("source", options);
+            ASSERT_TRUE(tasks.isSplatSimplifyActive());
+            ASSERT_TRUE(waitUntil([&] { return tasks.hasPendingMainThreadCompletions(); }));
+            ASSERT_TRUE(tasks.getSplatSimplifyError().empty());
+        }
+
+        void expectDiscarded(VisualizerImpl& viewer) {
+            auto& tasks = viewer.getGuiManager()->asyncTasks();
+            tasks.pollSplatSimplifyCompletion();
+            EXPECT_FALSE(tasks.isSplatSimplifyActive());
+            EXPECT_FALSE(tasks.hasPendingMainThreadCompletions());
+            EXPECT_TRUE(tasks.getSplatSimplifyError().empty());
+            EXPECT_EQ(tasks.getSplatSimplifyStage(), LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED));
+            EXPECT_EQ(viewer.getScene().getNode("source_2"), nullptr);
+        }
+    };
+
+    TEST_F(SplatSimplifyCompletionTest, NewProjectDiscardsReadyResult) {
+        VisualizerImpl viewer(projectOptions());
+        viewer.getScene().addSplat("source", lfs::test::licht::make_splat(2));
+        ASSERT_NO_FATAL_FAILURE(startAndWaitForResult(viewer));
+        core::events::cmd::NewProject{.discard_changes = true}.emit();
+        ASSERT_EQ(viewer.getScene().getNodeCount(), 0u);
+        expectDiscarded(viewer);
+        EXPECT_EQ(viewer.getScene().getNodeCount(), 0u);
+        EXPECT_TRUE(viewer.getSceneManager()->getSelectedNodeNames().empty());
+        EXPECT_FALSE(op::undoHistory().canUndo());
+    }
+
+    TEST_F(SplatSimplifyCompletionTest, NewProjectWithSameNameDiscardsReadyResult) {
+        VisualizerImpl viewer(projectOptions());
+        viewer.getScene().addSplat("source", lfs::test::licht::make_splat(2));
+        ASSERT_NO_FATAL_FAILURE(startAndWaitForResult(viewer));
+        core::events::cmd::NewProject{.discard_changes = true}.emit();
+        const auto replacement = viewer.getScene().addSplat("source", lfs::test::licht::make_splat(3));
+        viewer.getSceneManager()->selectNode(replacement);
+        expectDiscarded(viewer);
+        EXPECT_EQ(viewer.getScene().getNodeCount(), 1u);
+        EXPECT_EQ(viewer.getScene().getNode("source")->model->size(), 3u);
+        EXPECT_EQ(viewer.getSceneManager()->getSelectedNodeName(), "source");
+    }
+
+    TEST_F(SplatSimplifyCompletionTest, ReplacedSceneWithRestoredUuidDiscardsReadyResult) {
+        VisualizerImpl viewer(projectOptions());
+        auto& scene = viewer.getScene();
+        const auto source = scene.addSplat("source", lfs::test::licht::make_splat(2));
+        const auto uuid = scene.getNodeById(source)->uuid;
+        ASSERT_NO_FATAL_FAILURE(startAndWaitForResult(viewer));
+        scene.clear();
+        ASSERT_NE(scene.restoreNodeWithUuid({
+                      .uuid = uuid,
+                      .type = core::NodeType::SPLAT,
+                      .name = "source",
+                      .gaussian_count = 3,
+                      .model = lfs::test::licht::make_splat(3),
+                  }),
+                  core::NULL_NODE);
+        expectDiscarded(viewer);
+        EXPECT_EQ(scene.getNodeCount(), 1u);
+        EXPECT_EQ(scene.getNode("source")->model->size(), 3u);
+    }
+
+    TEST_F(SplatSimplifyCompletionTest, IdlePollingCost) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        constexpr int iterations = 1000000;
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < iterations; ++i)
+            tasks.pollSplatSimplifyCompletion();
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        std::cout << "Idle simplify poll ns/update: "
+                  << std::chrono::duration<double, std::nano>(elapsed).count() / iterations << '\n';
+        EXPECT_FALSE(tasks.isSplatSimplifyActive());
+    }
+
+    TEST_F(SplatSimplifyCompletionTest, RemovedSourceDiscardsReadyResult) {
+        VisualizerImpl viewer(projectOptions());
+        viewer.getScene().addSplat("source", lfs::test::licht::make_splat(2));
+        ASSERT_NO_FATAL_FAILURE(startAndWaitForResult(viewer));
+        viewer.getScene().removeNode("source");
+        // A label reused inside the same scene must not adopt the old result.
+        viewer.getScene().addSplat("source", lfs::test::licht::make_splat(3));
+        expectDiscarded(viewer);
+        EXPECT_EQ(viewer.getScene().getNodeCount(), 1u);
+        EXPECT_EQ(viewer.getScene().getNode("source")->model->size(), 3u);
+    }
+
+    TEST_F(SplatSimplifyCompletionTest, CancelDiscardsReadyResult) {
+        VisualizerImpl viewer(projectOptions());
+        viewer.getScene().addSplat("source", lfs::test::licht::make_splat(2));
+        ASSERT_NO_FATAL_FAILURE(startAndWaitForResult(viewer));
+        viewer.getGuiManager()->asyncTasks().cancelSplatSimplify();
+        expectDiscarded(viewer);
+        EXPECT_EQ(viewer.getScene().getNodeCount(), 1u);
+        EXPECT_EQ(viewer.getScene().getNode("source")->model->size(), 2u);
+    }
+
+    TEST_F(SplatSimplifyCompletionTest, UnchangedSourcePreservesPlacementAndHistory) {
+        VisualizerImpl viewer(projectOptions());
+        auto& scene = viewer.getScene();
+        const auto parent = scene.addGroup("parent");
+        const auto source = scene.addSplat("source", lfs::test::licht::make_splat(2), parent);
+        const auto transform = glm::translate(glm::mat4(1.0f), glm::vec3(5.0f, 2.0f, 3.0f));
+        scene.setNodeTransform(source, transform);
+        ASSERT_NO_FATAL_FAILURE(startAndWaitForResult(viewer));
+        // Changes to other scenes and unrelated nodes do not invalidate the work.
+        core::Scene other;
+        other.clear();
+        const auto unrelated = scene.addGroup("unrelated");
+        scene.removeNodeById(unrelated);
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        tasks.pollSplatSimplifyCompletion();
+        ASSERT_FALSE(tasks.isSplatSimplifyActive());
+        EXPECT_TRUE(tasks.getSplatSimplifyError().empty());
+        const auto* result = scene.getNode("source_2");
+        ASSERT_NE(result, nullptr);
+        EXPECT_EQ(result->parent_id, parent);
+        EXPECT_EQ(result->local_transform.get(), transform);
+        EXPECT_EQ(result->model->size(), 2u);
+        EXPECT_EQ(viewer.getSceneManager()->getSelectedNodeName(), "source_2");
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(scene.getNode("source_2"), nullptr);
+        EXPECT_NE(scene.getNode("source"), nullptr);
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        ASSERT_NE(scene.getNode("source_2"), nullptr);
+        EXPECT_EQ(scene.getNode("source_2")->local_transform.get(), transform);
+    }
+
+    TEST_F(SplatSimplifyCompletionTest, RenamedSourcePreservesPlacement) {
+        VisualizerImpl viewer(projectOptions());
+        auto& scene = viewer.getScene();
+        const auto parent = scene.addGroup("parent");
+        const auto source = scene.addSplat("source", lfs::test::licht::make_splat(2), parent);
+        const auto transform = glm::translate(glm::mat4(1.0f), glm::vec3(5.0f, 2.0f, 3.0f));
+        scene.setNodeTransform(source, transform);
+        ASSERT_NO_FATAL_FAILURE(startAndWaitForResult(viewer));
+        scene.renameNode("source", "renamed");
+        viewer.getGuiManager()->asyncTasks().pollSplatSimplifyCompletion();
+        const auto* result = scene.getNode("source_2");
+        ASSERT_NE(result, nullptr);
+        EXPECT_EQ(result->parent_id, parent);
+        EXPECT_EQ(result->local_transform.get(), transform);
+    }
+
     TEST_F(VisualizerImplResetTest, AsyncSplatBatchAttachesInInputOrder) {
         const auto first = temporary_.path / "async-missing-first.ply";
         const auto second = temporary_.path / "async-second.ply";
