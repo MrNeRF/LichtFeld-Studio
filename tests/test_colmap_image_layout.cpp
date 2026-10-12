@@ -22,6 +22,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -169,6 +170,26 @@ namespace {
             }
             out.close();
             ASSERT_TRUE(out.good()) << "Failed to write " << path;
+        }
+
+        void write_nerf_sidecars(const fs::path& dataset, const std::string& image_folder,
+                                 const std::string& sidecar_prefix, bool unique_names = false) {
+            nlohmann::json frames = nlohmann::json::array();
+            for (const auto* group : {"setA", "setB"}) {
+                const std::string name = unique_names ? std::string(group) + ".png" : "shared.png";
+                const auto image = fs::path(image_folder) / group / name;
+                write_png(dataset / image);
+                frames.push_back({{"file_path", image.generic_string()},
+                                  {"transform_matrix", {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}}}});
+                for (const bool depth : {true, false}) {
+                    const auto path = dataset / (depth ? "depth" : "normal") / sidecar_prefix / group / name;
+                    fs::create_directories(path.parent_path());
+                    const uint8_t pixels[] = {128, 128, 255};
+                    ASSERT_TRUE(lfs::core::save_png(path, pixels, 1, 1, depth ? 1 : 3, 8, 6));
+                }
+            }
+            write_text_file(dataset / "transforms.json",
+                            nlohmann::json({{"w", 1}, {"h", 1}, {"fl_x", 1}, {"fl_y", 1}, {"cx", 0.5}, {"cy", 0.5}, {"frames", frames}}).dump());
         }
 
         fs::path temp_dir_;
@@ -1648,4 +1669,74 @@ TEST_F(ColmapImageLayoutTest, UnreadableImageHeaderDoesNotRejectCameraImport) {
     ASSERT_EQ(std::get<0>(loaded->value).size(), 1u);
     EXPECT_TRUE(std::get<0>(loaded->value).front()->has_image());
     EXPECT_TRUE(loaded->warnings.empty());
+}
+
+TEST_F(ColmapImageLayoutTest, NerfNestedDuplicateSidecars) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    for (const std::string folder : {"images", "images_8", "train", ""}) {
+        for (const bool mirror_root : {false, true}) {
+            const std::string prefix = mirror_root ? folder : "";
+            const auto dataset = temp_dir_ / (folder + std::to_string(mirror_root));
+            write_nerf_sidecars(dataset, folder, prefix);
+            for (const bool depth : {true, false}) {
+                for (const bool enabled : {true, false}) {
+                    SCOPED_TRACE(folder + ":" + prefix + ":" + std::to_string(depth) + ":" + std::to_string(enabled));
+                    lfs::io::BlenderLoader loader;
+                    const auto result = loader.load(dataset, {.load_depths = depth && enabled, .load_normals = !depth && enabled});
+                    EXPECT_TRUE(result.has_value()) << result.error().format();
+                    if (!result)
+                        continue;
+                    const auto& cameras = std::get<lfs::io::LoadedScene>(result->data).cameras;
+                    ASSERT_EQ(cameras.size(), 2u);
+                    for (size_t i = 0; i < cameras.size(); ++i) {
+                        EXPECT_EQ(cameras[i]->image_name(), "shared.png");
+                        const auto relative = fs::path(prefix) / (i == 0 ? "setA" : "setB") / "shared.png";
+                        EXPECT_EQ(cameras[i]->depth_path(), dataset / "depth" / relative);
+                        EXPECT_EQ(cameras[i]->normal_path(), dataset / "normal" / relative);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(ColmapImageLayoutTest, NerfSidecarLegacyMatchesAndTrueAmbiguity) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    for (const bool unique : {true, false}) {
+        const auto dataset = temp_dir_ / std::to_string(unique);
+        write_nerf_sidecars(dataset, "images_8", "unrelated", unique);
+        lfs::io::BlenderLoader loader;
+        for (const bool depth : {true, false}) {
+            const auto result = loader.load(dataset, {.load_depths = depth, .load_normals = !depth});
+            if (!unique) {
+                ASSERT_FALSE(result.has_value());
+                EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
+            } else {
+                ASSERT_TRUE(result.has_value()) << result.error().format();
+                for (const auto& camera : std::get<lfs::io::LoadedScene>(result->data).cameras) {
+                    EXPECT_EQ(camera->depth_path(), lfs::io::DepthDirCache(dataset).find(camera->image_name()));
+                    EXPECT_EQ(camera->normal_path(), lfs::io::NormalDirCache(dataset).find(camera->image_name()));
+                }
+            }
+        }
+        if (!unique) {
+            const auto disabled = loader.load(dataset, {});
+            ASSERT_TRUE(disabled.has_value()) << disabled.error().format();
+            for (const auto& camera : std::get<lfs::io::LoadedScene>(disabled->data).cameras) {
+                EXPECT_TRUE(camera->depth_path().empty());
+                EXPECT_TRUE(camera->normal_path().empty());
+            }
+            // A root-level match already won over nested duplicates; retain that choice.
+            fs::copy_file(dataset / "depth/unrelated/setA/shared.png", dataset / "depth/shared.png");
+            fs::copy_file(dataset / "normal/unrelated/setA/shared.png", dataset / "normal/shared.png");
+            const auto flat = loader.load(dataset, {.load_depths = true, .load_normals = true});
+            ASSERT_TRUE(flat.has_value()) << flat.error().format();
+            for (const auto& camera : std::get<lfs::io::LoadedScene>(flat->data).cameras) {
+                EXPECT_EQ(camera->depth_path(), dataset / "depth/shared.png");
+                EXPECT_EQ(camera->normal_path(), dataset / "normal/shared.png");
+            }
+        }
+    }
 }
