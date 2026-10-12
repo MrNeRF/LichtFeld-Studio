@@ -897,6 +897,21 @@ TEST_F(PlyErrorTaxonomyTest, ExportStillRejectsNaNOpacityAndInfinitePositions) {
     }
 }
 
+TEST_F(PlyErrorTaxonomyTest, ExportSupportsLongLegalFileName) {
+    using namespace lfs::core;
+    PointCloud pc;
+    pc.means = Tensor::zeros({1, 3}, Device::CPU);
+    pc.opacity = Tensor::zeros({1, 1}, Device::CPU);
+
+    for (const bool binary : {true, false}) {
+        const auto output = path(std::string(250, binary ? 'b' : 'a') + ".ply");
+        const auto saved = lfs::io::save_ply(pc, {.output_path = output, .binary = binary});
+        ASSERT_TRUE(saved.has_value()) << saved.error().format();
+        EXPECT_TRUE(fs::exists(output));
+        EXPECT_GT(fs::file_size(output), 0u);
+    }
+}
+
 TEST_F(PlyErrorTaxonomyTest, SplatExportRepairsOpacityAfterDeletedRowFiltering) {
     using namespace lfs::core;
     std::string body;

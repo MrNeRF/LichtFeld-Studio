@@ -15,6 +15,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
+#include "io/atomic_output_path.hpp"
 #include "io/error.hpp"
 #include "io/ply_export_internal.hpp"
 #include "ply_property_order.hpp"
@@ -567,7 +568,7 @@ namespace lfs::io {
                 return false;
             }
 
-            struct stat st {};
+            struct stat st{};
             if (fstat(fd, &st) < 0) {
                 return false;
             }
@@ -3037,17 +3038,16 @@ namespace lfs::io {
             const auto ticks = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
 
             for (int attempt = 0; attempt < 128; ++attempt) {
-                auto candidate = output_path;
-                candidate += std::format(".{}.{}.tmp", ticks, counter.fetch_add(1, std::memory_order_relaxed));
+                const auto candidate = make_atomic_temp_output_path_for_suffix(
+                    output_path, std::format(".{}.{}.tmp", ticks, counter.fetch_add(1, std::memory_order_relaxed)));
 
                 std::error_code ec;
                 if (!std::filesystem::exists(candidate, ec))
                     return candidate;
             }
 
-            auto candidate = output_path;
-            candidate += std::format(".{}.tmp", counter.fetch_add(1, std::memory_order_relaxed));
-            return candidate;
+            return make_atomic_temp_output_path_for_suffix(
+                output_path, std::format(".{}.tmp", counter.fetch_add(1, std::memory_order_relaxed)));
         }
 
         struct ScopedTempOutputFile {
