@@ -2607,6 +2607,8 @@
     "export_cancelled": "ユーザーによってエクスポートがキャンセルされました",
     "no_splat_data": "エクスポートするスプラットデータがありません",
     "export_streamed_lod": "「{}」をエクスポートできません: モデルが大きすぎてメモリに収まらず、ディスクからストリーミングされています。",
+    "export_extension_required": "エクスポートするファイル名は {} で終わる必要があります。",
+    "export_extension_warning": "エクスポートした{}データのファイル名には通常の拡張子がありません。他のアプリで認識されない可能性があります。",
     "video_encoder_unavailable": "ビデオエンコーダーを利用できません",
     "scene_manager_unavailable": "シーンマネージャーを利用できません",
     "no_model_selected": "エクスポートするモデルが選択されていません",

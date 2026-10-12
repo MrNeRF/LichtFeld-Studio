@@ -2606,6 +2606,8 @@
     "export_cancelled": "Export cancelled by user",
     "no_splat_data": "No splat data to export",
     "export_streamed_lod": "Can't export \"{}\": the model is too large to fit in memory and streams from disk.",
+    "export_extension_required": "Export file name must end with {}.",
+    "export_extension_warning": "Exported {} data to a file without its usual extension. Other apps may not recognize it.",
     "video_encoder_unavailable": "Video encoder not available",
     "scene_manager_unavailable": "Scene manager is not available",
     "no_model_selected": "No model selected for export",

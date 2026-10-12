@@ -146,6 +146,7 @@ namespace lfs::vis {
             std::string outcome{"idle"};
             std::string format;
             std::string error;
+            std::string warning;
             std::string path;
 
             [[nodiscard]] bool operator==(const ExportProgressState& other) const noexcept {
@@ -155,6 +156,7 @@ namespace lfs::vis {
                        outcome == other.outcome &&
                        format == other.format &&
                        error == other.error &&
+                       warning == other.warning &&
                        path == other.path;
             }
         };

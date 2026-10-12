@@ -2607,6 +2607,8 @@
     "export_cancelled": "Eksport anulowany przez użytkownika",
     "no_splat_data": "Brak danych splat do wyeksportowania",
     "export_streamed_lod": "Nie można wyeksportować \"{}\": model jest zbyt duży, aby zmieścić się w pamięci, i jest strumieniowany z dysku.",
+    "export_extension_required": "Nazwa pliku eksportu musi kończyć się na {}.",
+    "export_extension_warning": "Wyeksportowane dane {} nie mają zwykłego rozszerzenia. Inne aplikacje mogą ich nie rozpoznać.",
     "video_encoder_unavailable": "Enkoder wideo jest niedostępny",
     "scene_manager_unavailable": "Menedżer scen jest niedostępny",
     "no_model_selected": "Nie wybrano modelu do eksportu",

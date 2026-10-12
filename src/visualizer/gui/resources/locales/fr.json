@@ -2607,6 +2607,8 @@
     "export_cancelled": "Exportation annulée par l’utilisateur",
     "no_splat_data": "Aucune donnée de splats à exporter",
     "export_streamed_lod": "Impossible d'exporter \"{}\" : le modèle est trop volumineux pour tenir en mémoire et est lu en continu depuis le disque.",
+    "export_extension_required": "Le nom du fichier d'exportation doit se terminer par {}.",
+    "export_extension_warning": "Les données {} exportées n'ont pas leur extension habituelle. D'autres applications risquent de ne pas les reconnaître.",
     "video_encoder_unavailable": "Encodeur vidéo indisponible",
     "scene_manager_unavailable": "Le gestionnaire de scènes est indisponible",
     "no_model_selected": "Aucun modèle sélectionné pour l’exportation",

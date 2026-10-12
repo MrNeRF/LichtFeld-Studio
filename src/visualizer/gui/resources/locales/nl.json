@@ -2607,6 +2607,8 @@
     "export_cancelled": "Export geannuleerd door gebruiker",
     "no_splat_data": "Geen splat-gegevens om te exporteren",
     "export_streamed_lod": "Kan \"{}\" niet exporteren: het model is te groot voor het geheugen en wordt vanaf de schijf gestreamd.",
+    "export_extension_required": "De bestandsnaam voor export moet eindigen op {}.",
+    "export_extension_warning": "De geëxporteerde {}-gegevens hebben niet de gebruikelijke extensie. Andere apps herkennen het bestand mogelijk niet.",
     "video_encoder_unavailable": "Video-encoder niet beschikbaar",
     "scene_manager_unavailable": "Scènebeheerder is niet beschikbaar",
     "no_model_selected": "Geen model geselecteerd om te exporteren",

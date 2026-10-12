@@ -24,6 +24,7 @@
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/scene_export_path.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
@@ -40,6 +41,7 @@
 #include "training/training_manager.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
+#include "visualizer/gui/string_keys.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_entry.hpp"
@@ -1851,6 +1853,15 @@ namespace lfs::app {
             return plan;
         }
 
+        json with_scene_export_warning(json result, const core::ExportFormat format,
+                                       const std::filesystem::path& path) {
+            if (core::scene_export_path_status(format, path) == core::SceneExportPathStatus::Warn) {
+                result["warning"] = LOCF(lichtfeld::Strings::Runtime::EXPORT_EXTENSION_WARNING,
+                                         core::scene_export_format_name(format));
+            }
+            return result;
+        }
+
         std::expected<void, std::string> export_scene_nodes(const vis::SceneManager& scene_manager,
                                                             const std::vector<std::string>& node_names,
                                                             const core::ExportFormat format,
@@ -1858,6 +1869,10 @@ namespace lfs::app {
                                                             const int sh_degree,
                                                             const bool include_provenance = true,
                                                             io::SsogSaveOptions ssog_options = {}) {
+            if (core::scene_export_path_status(format, path) == core::SceneExportPathStatus::Conflict)
+                return std::unexpected(LOCF(lichtfeld::Strings::Runtime::EXPORT_EXTENSION_REQUIRED,
+                                            core::required_scene_export_extension(format)));
+
             const auto& scene = scene_manager.getScene();
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
@@ -3692,14 +3707,15 @@ namespace lfs::app {
                     if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::PLY, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
-                    return json{
-                        {"success", true},
-                        {"started", false},
-                        {"completed", true},
-                        {"format", "ply"},
-                        {"path", core::path_to_utf8(path)},
-                        {"nodes", *node_names},
-                    };
+                    return with_scene_export_warning(json{
+                                                         {"success", true},
+                                                         {"started", false},
+                                                         {"completed", true},
+                                                         {"format", "ply"},
+                                                         {"path", core::path_to_utf8(path)},
+                                                         {"nodes", *node_names},
+                                                     },
+                                                     core::ExportFormat::PLY, path);
                 });
             });
 
@@ -3735,14 +3751,15 @@ namespace lfs::app {
                     if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SOG, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
-                    return json{
-                        {"success", true},
-                        {"started", false},
-                        {"completed", true},
-                        {"format", "sog"},
-                        {"path", core::path_to_utf8(path)},
-                        {"nodes", *node_names},
-                    };
+                    return with_scene_export_warning(json{
+                                                         {"success", true},
+                                                         {"started", false},
+                                                         {"completed", true},
+                                                         {"format", "sog"},
+                                                         {"path", core::path_to_utf8(path)},
+                                                         {"nodes", *node_names},
+                                                     },
+                                                     core::ExportFormat::SOG, path);
                 });
             });
 
@@ -3838,14 +3855,15 @@ namespace lfs::app {
                     if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SPZ, path, sh_degree, include_provenance); !result)
                         return json{{"error", result.error()}};
 
-                    return json{
-                        {"success", true},
-                        {"started", false},
-                        {"completed", true},
-                        {"format", "spz"},
-                        {"path", core::path_to_utf8(path)},
-                        {"nodes", *node_names},
-                    };
+                    return with_scene_export_warning(json{
+                                                         {"success", true},
+                                                         {"started", false},
+                                                         {"completed", true},
+                                                         {"format", "spz"},
+                                                         {"path", core::path_to_utf8(path)},
+                                                         {"nodes", *node_names},
+                                                     },
+                                                     core::ExportFormat::SPZ, path);
                 });
             });
 

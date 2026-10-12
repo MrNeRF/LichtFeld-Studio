@@ -4824,6 +4824,7 @@ namespace lfs::python {
                 state["format"] = export_state.format;
                 state["path"] = export_state.path;
                 state["error"] = export_state.error;
+                state["warning"] = export_state.warning;
                 state["commit_uuid"] = export_state.commit_uuid;
                 return state;
             },

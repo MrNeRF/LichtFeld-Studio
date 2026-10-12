@@ -2607,6 +2607,8 @@
     "export_cancelled": "사용자가 내보내기를 취소했습니다",
     "no_splat_data": "내보낼 스플랫 데이터가 없습니다",
     "export_streamed_lod": "\"{}\"을(를) 내보낼 수 없습니다: 모델이 너무 커서 메모리에 들어가지 않으며 디스크에서 스트리밍됩니다.",
+    "export_extension_required": "내보낼 파일 이름은 {}로 끝나야 합니다.",
+    "export_extension_warning": "내보낸 {} 데이터 파일에 일반적인 확장자가 없습니다. 다른 앱에서 인식하지 못할 수 있습니다.",
     "video_encoder_unavailable": "비디오 인코더를 사용할 수 없습니다",
     "scene_manager_unavailable": "씬 관리자를 사용할 수 없습니다",
     "no_model_selected": "내보낼 모델이 선택되지 않았습니다",

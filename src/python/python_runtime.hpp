@@ -415,6 +415,7 @@ namespace lfs::python {
         std::string format;
         std::string path;
         std::string error;
+        std::string warning;
     };
 
     struct OverlayImportState {
