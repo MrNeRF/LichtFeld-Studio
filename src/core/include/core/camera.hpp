@@ -227,6 +227,8 @@ namespace lfs::core {
         void rebase_asset_paths(const std::filesystem::path& old_root,
                                 const std::filesystem::path& new_root);
         bool has_in_memory_mask() const noexcept { return _in_memory_mask_raw.is_valid(); }
+        const Tensor& raw_mask_tensor() const noexcept { return _in_memory_mask_raw; }
+        std::uint64_t mask_revision() const noexcept { return _mask_revision; }
         bool has_mask() const noexcept {
             return has_in_memory_mask() ||
                    (!_mask_path.empty() && std::filesystem::exists(_mask_path));
@@ -331,6 +333,7 @@ namespace lfs::core {
         // Raw, pre-supplied in-memory mask (used by direct-scene plugins) —
         // takes precedence over _mask_path when set. Processed on first use.
         Tensor _in_memory_mask_raw;
+        std::uint64_t _mask_revision = 0;
 
         // Depth caching (processed depth stored on GPU)
         Tensor _cached_depth;

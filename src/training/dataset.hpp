@@ -395,6 +395,8 @@ namespace lfs::training {
         float mask_threshold = 0.0f; // If > 0, values >= threshold become 1.0
         bool alpha_is_transparency = false;
         bool use_alpha_as_mask = false; // Extract alpha channel from RGBA as mask
+        bool fill_masked_rgb = false;
+        bool mask_keep_high_band = false;
     };
 
     // Pipelined DataLoader with GPU batch JPEG decoding
@@ -545,7 +547,13 @@ namespace lfs::training {
                 request.params.undistort = request.undistort;
             }
 
-            if (aux_config_.load_masks && !cam->has_in_memory_mask() && cam->has_mask()) {
+            request.fill_masked_rgb = aux_config_.fill_masked_rgb;
+            request.mask_keep_high_band = aux_config_.mask_keep_high_band;
+            if (aux_config_.load_masks && cam->has_in_memory_mask()) {
+                request.rgb_mask = cam->raw_mask_tensor();
+                request.rgb_mask_revision = cam->mask_revision();
+                request.mask_params = {.invert = aux_config_.invert_masks, .threshold = aux_config_.mask_threshold};
+            } else if (aux_config_.load_masks && cam->has_mask()) {
                 request.mask_path = cam->mask_path();
                 request.mask_params.invert = aux_config_.invert_masks;
                 request.mask_params.threshold = aux_config_.mask_threshold;

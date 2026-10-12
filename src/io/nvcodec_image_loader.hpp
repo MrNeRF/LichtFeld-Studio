@@ -16,6 +16,7 @@ typedef struct nvimgcodecDecoder* nvimgcodecDecoder_t;
 typedef struct nvimgcodecEncoder* nvimgcodecEncoder_t;
 
 namespace lfs::io {
+    struct MaskedImageFill;
 
     /**
      * @brief Output format for image decoding
@@ -85,7 +86,7 @@ namespace lfs::io {
             int max_width = 0,
             void* cuda_stream = nullptr,
             DecodeFormat format = DecodeFormat::RGB,
-            bool output_uint8 = false);
+            bool output_uint8 = false, const MaskedImageFill* masked_fill = nullptr);
 
         /**
          * @brief Decode JPEG from memory to GPU
@@ -104,7 +105,7 @@ namespace lfs::io {
             int max_width = 0,
             void* cuda_stream = nullptr,
             DecodeFormat format = DecodeFormat::RGB,
-            bool output_uint8 = false);
+            bool output_uint8 = false, const MaskedImageFill* masked_fill = nullptr);
 
         std::vector<lfs::core::Tensor> decode_jpeg_batch_from_spans(
             const std::vector<std::pair<const uint8_t*, size_t>>& jpeg_spans,

@@ -8900,6 +8900,8 @@ namespace lfs::training {
                 });
             }
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
+                aux_pipeline_config.fill_masked_rgb = true;
+                aux_pipeline_config.mask_keep_high_band = params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
                 aux_pipeline_config.invert_masks = params_.optimization.invert_masks;
                 aux_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
                 if (params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {

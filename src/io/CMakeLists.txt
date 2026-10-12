@@ -11,6 +11,7 @@ add_library(lfs_io_cuda STATIC
         cuda/splat_decimate.cu
         cuda/image_format_kernels.cuh
         cuda/image_format_kernels.cu
+        cuda/masked_image_fill.cu
 )
 
 target_include_directories(lfs_io_cuda

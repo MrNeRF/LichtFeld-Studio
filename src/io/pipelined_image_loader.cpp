@@ -13,6 +13,7 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "cuda/image_format_kernels.cuh"
+#include "cuda/masked_image_fill.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/nvcodec_image_loader.hpp"
 
@@ -1435,6 +1436,8 @@ namespace lfs::io {
             gpu_staging = cpu_tensor.to(Device::CUDA, stream);
             synchronize_async_upload_before_free(stream, "image");
             lfs::core::free_image_float(img_data);
+            if (params.masked_fill)
+                fill_masked_image(gpu_staging, *params.masked_fill, stream);
             const auto [target_width, target_height] =
                 lfs::core::resized_image_dimensions(width, height, params.resize_factor, params.max_width);
             decoded = params.undistort || (target_width == width && target_height == height)
@@ -2359,8 +2362,20 @@ namespace lfs::io {
                 continue;
             }
 
+            auto rgb_key = make_cache_key(request.path, request.params);
+            if (request.fill_masked_rgb && (request.mask_path || request.rgb_mask || request.extract_alpha_as_mask)) {
+                const auto& policy = request.extract_alpha_as_mask ? request.alpha_mask_params : request.mask_params;
+                rgb_key += "_maskfill_" + std::to_string(std::bit_cast<uint32_t>(policy.threshold)) +
+                           (policy.invert ? "_inv" : "_normal") + (request.mask_keep_high_band ? "_high" : "_weighted");
+                if (request.extract_alpha_as_mask)
+                    rgb_key += "_alpha";
+                else if (request.rgb_mask)
+                    rgb_key += "_memory_" + std::to_string(request.rgb_mask_revision) +
+                               "_" + std::to_string(reinterpret_cast<std::uintptr_t>(request.rgb_mask->data_ptr()));
+                else
+                    rgb_key += "_sidecar_" + lfs::core::path_to_utf8(*request.mask_path);
+            }
             if (request.extract_alpha_as_mask) {
-                const auto rgb_key = make_cache_key(request.path, request.params);
                 const auto alpha_key = make_mask_cache_key(request.path, request.params) + (request.alpha_is_transparency ? "_transparency" : "");
                 auto cached_rgb = get_from_jpeg_cache(rgb_key);
                 auto cached_alpha = get_from_jpeg_cache(alpha_key);
@@ -2401,6 +2416,8 @@ namespace lfs::io {
                     result.alpha_as_mask = true;
                     result.alpha_is_transparency = request.alpha_is_transparency;
                     result.alpha_mask_params = request.alpha_mask_params;
+                    result.fill_masked_rgb = request.fill_masked_rgb;
+                    result.mask_keep_high_band = request.mask_keep_high_band;
                     result.needs_processing = true;
                     result.undistort = request.undistort;
 
@@ -2418,10 +2435,18 @@ namespace lfs::io {
             result.loader_generation = request.loader_generation;
             result.path = request.path;
             result.params = request.params;
-            result.cache_key = make_cache_key(request.path, request.params);
+            result.cache_key = rgb_key;
+            result.fill_masked_rgb = request.fill_masked_rgb;
+            result.mask_keep_high_band = request.mask_keep_high_band;
+            result.rgb_mask_path = request.mask_path && is_regular_file_no_throw(*request.mask_path)
+                                       ? request.mask_path
+                                       : std::nullopt;
+            result.rgb_mask = request.rgb_mask;
+            result.mask_params = request.mask_params;
             result.is_mask = false;
             result.undistort = request.undistort;
 
+            std::optional<PrefetchedImage> cold_rgb;
             try {
                 const bool needs_requested_processing = load_params_need_processing(request.params);
 
@@ -2455,7 +2480,10 @@ namespace lfs::io {
                         ++stats_.hot_path_hits;
                     } else {
                         result.needs_processing = true;
-                        cold_queue_.push(std::move(result));
+                        if (result.fill_masked_rgb && result.rgb_mask_path && !result.rgb_mask)
+                            cold_rgb = std::move(result);
+                        else
+                            cold_queue_.push(std::move(result));
                         std::lock_guard<std::mutex> lock(stats_mutex_);
                         ++stats_.cold_path_misses;
                     }
@@ -2502,6 +2530,11 @@ namespace lfs::io {
                             }
 
                             mask_result.needs_processing = true;
+                            if (cold_rgb && cold_rgb->fill_masked_rgb && cold_rgb->rgb_mask_path) {
+                                auto source = std::make_shared<std::promise<lfs::core::Tensor>>();
+                                cold_rgb->rgb_mask_source = source->get_future().share();
+                                mask_result.mask_source_promise = std::move(source);
+                            }
                             cold_queue_.push(std::move(mask_result));
                             std::lock_guard<std::mutex> lock(stats_mutex_);
                             ++stats_.mask_cache_misses;
@@ -2516,6 +2549,9 @@ namespace lfs::io {
                     }
                 }
             }
+
+            if (cold_rgb)
+                cold_queue_.push(std::move(*cold_rgb));
 
             enqueue_depth_request();
             enqueue_normal_request();
@@ -2937,15 +2973,25 @@ namespace lfs::io {
             }
 
             try {
+                // Wait before acquiring a decoder: with one cold worker/decoder,
+                // the sidecar queued ahead of this image must remain runnable.
+                if (item.rgb_mask_source.valid()) {
+                    try {
+                        item.rgb_mask = item.rgb_mask_source.get();
+                    } catch (...) {
+                        LOG_DEBUG("Source mask sharing unavailable; retrying the regular fill decode");
+                    }
+                }
                 auto nvcodec = acquire_nvcodec_loader(config_.decoder_pool_size);
 
                 if (item.alpha_as_mask) {
+                    const MaskedImageFill fill{.alpha = true, .invert = item.alpha_mask_params.invert, .threshold = item.alpha_mask_params.threshold, .keep_high_band = item.mask_keep_high_band};
                     const auto rgba = load_rgba_image_cpu_decoded(
                         item.path,
                         item.undistort ? 1 : item.params.resize_factor,
                         item.undistort ? 0 : item.params.max_width,
                         nullptr,
-                        config_.use_16bit_color, !item.alpha_is_transparency);
+                        config_.use_16bit_color, !item.alpha_is_transparency, item.fill_masked_rgb ? &fill : nullptr);
                     const size_t H = rgba.shape()[1];
                     const size_t W = rgba.shape()[2];
                     auto rgb = rgba.slice(0, 0, 3).contiguous();
@@ -3020,6 +3066,7 @@ namespace lfs::io {
                     lfs::core::Tensor aux_tensor;
                     bool used_gpu = false;
                     bool float_depth = false;
+                    bool share_processed_mask_source = false;
                     // nvimagecodec and the uint8 path truncate to 8 bits; 16-bit
                     // depth priors must keep their precision.
                     const bool depth_16bit =
@@ -3032,8 +3079,8 @@ namespace lfs::io {
                             const NvcodecSlotGuard slot;
                             aux_tensor = nvcodec->load_image_gpu(
                                 item.path,
-                                item.undistort ? 1 : item.params.resize_factor,
-                                item.undistort ? 0 : item.params.max_width,
+                                item.undistort || item.mask_source_promise ? 1 : item.params.resize_factor,
+                                item.undistort || item.mask_source_promise ? 0 : item.params.max_width,
                                 aux_stream, item.is_mask ? DecodeFormat::Mask : DecodeFormat::Grayscale);
                             used_gpu = true;
                         } catch (...) {
@@ -3043,10 +3090,27 @@ namespace lfs::io {
                     if (!used_gpu && item.is_mask) {
                         auto mask_params = item.params;
                         mask_params.cuda_stream = aux_stream;
-                        mask_params.resize_factor = item.undistort ? 1 : item.params.resize_factor;
-                        mask_params.max_width = item.undistort ? 0 : item.params.max_width;
+                        mask_params.resize_factor = item.undistort || item.mask_source_promise ? 1 : item.params.resize_factor;
+                        mask_params.max_width = item.undistort || item.mask_source_promise ? 0 : item.params.max_width;
                         aux_tensor = load_mask_image_cpu_decoded(item.path, mask_params).squeeze(0);
                         used_gpu = true;
+                    }
+                    if (item.mask_source_promise) {
+                        if (!aux_tensor.is_valid() || aux_tensor.ndim() != 2)
+                            throw std::runtime_error("Mask preprocessing produced an invalid tensor");
+                        const int src_h = static_cast<int>(aux_tensor.shape()[0]);
+                        const int src_w = static_cast<int>(aux_tensor.shape()[1]);
+                        const auto [target_w, target_h] = sidecar_target_size(item, src_w, src_h);
+                        if (target_w != src_w || target_h != src_h) {
+                            item.mask_source_promise->set_value(aux_tensor);
+                            aux_tensor = lfs::core::lanczos_resize_grayscale(aux_tensor, target_h, target_w, 2, aux_stream, true);
+                        } else if (item.undistort) {
+                            item.mask_source_promise->set_value(aux_tensor);
+                        } else {
+                            // The source and processed grids coincide. Share the
+                            // final grid after quantization instead of copying it.
+                            share_processed_mask_source = true;
+                        }
                     }
                     if (!used_gpu) {
                         int src_w = 0;
@@ -3147,7 +3211,11 @@ namespace lfs::io {
                     }
 
                     // The first visit must use the same bytes as every cache visit.
-                    auto mask_bytes = item.is_mask ? lfs::core::cuda::quantize_mask_to_byte_grid(aux_tensor, is_nvcodec_available()) : lfs::core::Tensor{};
+                    auto mask_bytes = item.is_mask ? lfs::core::cuda::quantize_mask_to_byte_grid(
+                                                         aux_tensor, is_nvcodec_available() || share_processed_mask_source)
+                                                   : lfs::core::Tensor{};
+                    if (share_processed_mask_source)
+                        item.mask_source_promise->set_value(mask_bytes);
                     if (item.is_mask && is_nvcodec_available()) {
                         try {
                             auto jpeg_bytes = nvcodec->encode_grayscale_to_jpeg2k(mask_bytes, nullptr, true, true);
@@ -3333,6 +3401,26 @@ namespace lfs::io {
                         ready_event);
 
                 } else {
+                    std::optional<MaskedImageFill> fill;
+                    if (item.fill_masked_rgb && (item.rgb_mask_path || item.rgb_mask)) {
+                        lfs::core::Tensor mask;
+                        if (item.rgb_mask)
+                            mask = *item.rgb_mask;
+                        else {
+                            if (is_nvcodec_available()) {
+                                try {
+                                    const NvcodecSlotGuard slot;
+                                    mask = nvcodec->load_image_gpu(*item.rgb_mask_path, 1, 0, nullptr, DecodeFormat::Mask);
+                                } catch (...) {
+                                    LOG_DEBUG("Mask GPU decode unavailable for image fill; using CPU grayscale");
+                                }
+                            }
+                            if (!mask.is_valid())
+                                mask = load_mask_image_cpu_decoded(*item.rgb_mask_path, {}).squeeze(0);
+                        }
+                        fill.emplace(MaskedImageFill{.mask = std::move(mask), .invert = item.mask_params.invert, .threshold = item.mask_params.threshold, .keep_high_band = item.mask_keep_high_band, .resize_factor = item.params.resize_factor, .max_width = item.params.max_width});
+                        item.params.masked_fill = &*fill;
+                    }
                     lfs::core::Tensor decoded;
                     bool used_gpu = false;
 
@@ -3342,13 +3430,13 @@ namespace lfs::io {
                             if (item.undistort) {
                                 decoded = nvcodec->load_image_from_memory_gpu(
                                     read_file(item.path), 1, 0, nullptr,
-                                    DecodeFormat::RGB, item.params.output_uint8);
+                                    DecodeFormat::RGB, item.params.output_uint8, item.params.masked_fill);
                             } else {
                                 decoded = nvcodec->load_image_gpu(
                                     item.path,
                                     item.params.resize_factor,
                                     item.params.max_width,
-                                    nullptr, DecodeFormat::RGB, item.params.output_uint8);
+                                    nullptr, DecodeFormat::RGB, item.params.output_uint8, item.params.masked_fill);
                             }
                             used_gpu = true;
                         } catch (...) {
@@ -3370,6 +3458,13 @@ namespace lfs::io {
                 }
 
             } catch (...) {
+                if (item.mask_source_promise) {
+                    try {
+                        item.mask_source_promise->set_exception(std::current_exception());
+                    } catch (const std::future_error&) {
+                        // A later processing error cannot retract a source already shared with RGB.
+                    }
+                }
                 const auto message = describe_current_exception("non-standard image loader exception");
                 if (item.alpha_as_mask) {
                     LOG_WARN("[PipelinedImageLoader] Alpha-as-mask failed {}: {} - loading as RGB",

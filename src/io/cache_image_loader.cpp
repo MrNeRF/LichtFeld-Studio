@@ -12,6 +12,7 @@
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "cuda/masked_image_fill.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"
 #include <stb_image.h>
@@ -346,20 +347,30 @@ namespace lfs::io {
 
     } // namespace
 
+    const char* masked_image_fill_error() {
+        const auto& localization = lfs::event::LocalizationManager::getInstance();
+        return localization.hasKey("io.mask_fill_failed") ? LOC("io.mask_fill_failed")
+                                                          : "Unable to prepare this image for masked training.";
+    }
+
     lfs::core::Tensor upload_rgb_image(const unsigned char* data, const int width, const int height, const int channels,
                                        const LoadParams& params) {
         assert(data && channels == 3);
         const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
-        return hwc_to_chw(upload_hwc(data, width, height, channels, stream),
-                          params.resize_factor, params.max_width, params.output_uint8, stream);
+        auto staging = upload_hwc(data, width, height, channels, stream);
+        if (params.masked_fill)
+            fill_masked_image(staging, *params.masked_fill, staging.stream());
+        return hwc_to_chw(staging, params.resize_factor, params.max_width, params.output_uint8, stream);
     }
 
     lfs::core::Tensor upload_rgb_image(const std::uint16_t* data, const int width, const int height, const int channels,
                                        const LoadParams& params) {
         assert(data && channels == 3);
         const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
-        return hwc_to_chw(upload_hwc(data, width, height, channels, stream),
-                          params.resize_factor, params.max_width, params.output_uint8, stream);
+        auto staging = upload_hwc(data, width, height, channels, stream);
+        if (params.masked_fill)
+            fill_masked_image(staging, *params.masked_fill, staging.stream());
+        return hwc_to_chw(staging, params.resize_factor, params.max_width, params.output_uint8, stream);
     }
 
     lfs::core::Tensor load_rgb_image_cpu_decoded(
@@ -419,14 +430,16 @@ namespace lfs::io {
 
     lfs::core::Tensor load_rgba_image_cpu_decoded(
         const std::filesystem::path& path, const int resize_factor, const int max_width, void* const cuda_stream,
-        const bool decode_16bit, const bool exact_mask_alpha) {
+        const bool decode_16bit, const bool exact_mask_alpha, const MaskedImageFill* masked_fill) {
         using namespace lfs::core;
         const auto stream = static_cast<cudaStream_t>(cuda_stream);
         const auto finish = [&](const auto* data, const int width, const int height, const int channels) {
             if (!data || channels != 4)
                 throw std::runtime_error("Failed to decode RGBA image: " + path_to_utf8(path));
-            return hwc_to_chw(upload_hwc(data, width, height, channels, stream),
-                              resize_factor, max_width, false, stream, exact_mask_alpha);
+            auto staging = upload_hwc(data, width, height, channels, stream);
+            if (masked_fill)
+                fill_masked_image(staging, *masked_fill, staging.stream());
+            return hwc_to_chw(staging, resize_factor, max_width, false, stream, exact_mask_alpha);
         };
         if (decode_16bit) {
             auto [data, width, height, channels] = load_image_with_alpha_u16(path, 1, 0);
