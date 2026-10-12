@@ -15,8 +15,10 @@
 #include "core/tensor_completion.hpp"
 #include "core/tensor_sh.hpp"
 #include "core/tensor_upload.hpp"
+#include "io/atomic_output_path.hpp"
 #include "io/error.hpp"
 #include "io/ply_export_internal.hpp"
+#include "ply_property_order.hpp"
 #include "tinyply.hpp"
 #include <algorithm>
 #include <array>
@@ -557,7 +559,7 @@ namespace lfs::io {
                 return false;
             }
 
-            struct stat st{};
+            struct stat st {};
             if (fstat(fd, &st) < 0) {
                 return false;
             }
@@ -3027,17 +3029,16 @@ namespace lfs::io {
             const auto ticks = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
 
             for (int attempt = 0; attempt < 128; ++attempt) {
-                auto candidate = output_path;
-                candidate += std::format(".{}.{}.tmp", ticks, counter.fetch_add(1, std::memory_order_relaxed));
+                const auto candidate = make_atomic_temp_output_path_for_suffix(
+                    output_path, std::format(".{}.{}.tmp", ticks, counter.fetch_add(1, std::memory_order_relaxed)));
 
                 std::error_code ec;
                 if (!std::filesystem::exists(candidate, ec))
                     return candidate;
             }
 
-            auto candidate = output_path;
-            candidate += std::format(".{}.tmp", counter.fetch_add(1, std::memory_order_relaxed));
-            return candidate;
+            return make_atomic_temp_output_path_for_suffix(
+                output_path, std::format(".{}.tmp", counter.fetch_add(1, std::memory_order_relaxed)));
         }
 
         struct ScopedTempOutputFile {
@@ -4270,6 +4271,12 @@ namespace lfs::io {
             throw_if_load_cancel_requested(options, "PLY read cancelled");
             ply.read(file);
             throw_if_load_cancel_requested(options, "PLY read cancelled");
+
+            detail::order_ply_vertex_properties(ply, *vertices, {"x", "y", "z"}, options);
+            if (has_colors && colors)
+                detail::order_ply_vertex_properties(ply, *colors, {"red", "green", "blue"}, options);
+            if (has_normals && normals)
+                detail::order_ply_vertex_properties(ply, *normals, {"nx", "ny", "nz"}, options);
 
             const size_t N = vertices->count;
             if (N == 0) {

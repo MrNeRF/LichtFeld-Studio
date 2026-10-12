@@ -4,6 +4,7 @@
 
 #include "io/loaders/blender_loader.hpp"
 #include "core/camera.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -13,6 +14,7 @@
 #include "io/filesystem_utils.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/loaders/missing_dataset_images.hpp"
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -36,6 +38,29 @@ namespace lfs::io {
             if (detail::normalize_lookup_key(*relative.begin()) == "images")
                 relative = relative.lexically_relative(*relative.begin());
             return lfs::core::path_to_utf8(relative);
+        }
+
+        FileLookupResult lookup_sidecar(const SidecarDirCache& cache,
+                                        const std::filesystem::path& image_path,
+                                        const std::string& image_name,
+                                        const std::filesystem::path& absolute_dataset_path) {
+            auto original = cache.lookup(image_name);
+            if (!original.ambiguous())
+                return original;
+
+            auto relative = std::filesystem::absolute(image_path).lexically_normal().lexically_relative(absolute_dataset_path);
+            if (relative.empty() || *relative.begin() == "..")
+                return original;
+
+            // Preserve existing matches; use the frame's directories only to resolve ambiguity.
+            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
+                return result;
+
+            // Sidecars can mirror either the dataset root or the leading image folder.
+            relative = relative.lexically_relative(*relative.begin());
+            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
+                return result;
+            return original;
         }
     } // namespace
 
@@ -258,7 +283,7 @@ namespace lfs::io {
                     }
 
                     std::filesystem::path depth_path;
-                    if (auto depth_lookup = depth_cache.lookup(info._image_name); depth_lookup.found()) {
+                    if (auto depth_lookup = lookup_sidecar(depth_cache, info._image_path, info._image_name, absolute_base_path); depth_lookup.found()) {
                         depth_path = std::move(depth_lookup.path);
                     } else if (depth_lookup.ambiguous()) {
                         if (options.load_depths) {
@@ -274,7 +299,7 @@ namespace lfs::io {
                     }
 
                     std::filesystem::path normal_path;
-                    if (auto normal_lookup = normal_cache.lookup(info._image_name); normal_lookup.found()) {
+                    if (auto normal_lookup = lookup_sidecar(normal_cache, info._image_path, info._image_name, absolute_base_path); normal_lookup.found()) {
                         normal_path = std::move(normal_lookup.path);
                     } else if (normal_lookup.ambiguous()) {
                         if (options.load_normals) {
@@ -395,11 +420,18 @@ namespace lfs::io {
 
             // Check ply_file_path in transforms.json (nerfstudio format), fallback to pointcloud.ply
             std::filesystem::path pointcloud_path;
+            std::filesystem::path normalized_candidate;
             if (std::ifstream file; lfs::core::open_file_for_read(transforms_file, std::ios::in | std::ios::binary, file)) {
                 try {
                     if (const auto json = nlohmann::json::parse(file, nullptr, true, true);
                         json.contains("ply_file_path")) {
-                        pointcloud_path = base_path / lfs::core::utf8_to_path(json["ply_file_path"].get<std::string>());
+                        auto ply_path = json["ply_file_path"].get<std::string>();
+                        pointcloud_path = base_path / lfs::core::utf8_to_path(ply_path);
+                        // Keep existing native filenames; retry Windows separators on other platforms.
+                        if (ply_path.find('\\') != std::string::npos && !std::filesystem::exists(pointcloud_path)) {
+                            std::replace(ply_path.begin(), ply_path.end(), '\\', '/');
+                            normalized_candidate = base_path / lfs::core::utf8_to_path(ply_path);
+                        }
                     }
                 } catch (...) {
                     // Ignore parse errors - will fallback to default pointcloud.ply
@@ -414,16 +446,45 @@ namespace lfs::io {
             if (!missing_images.empty()) {
                 warnings.push_back(format_missing_dataset_images_warning(missing_images));
             }
-            if (std::filesystem::exists(pointcloud_path)) {
-                auto loaded_point_cloud = load_simple_ply_point_cloud(pointcloud_path, options);
-                point_cloud = std::make_shared<PointCloud>(
-                    convert_transforms_point_cloud_to_colmap_world(std::move(loaded_point_cloud)));
-                LOG_INFO("Loaded {} points from {}", point_cloud->size(),
-                         lfs::core::path_to_utf8(pointcloud_path.filename()));
+            std::optional<PointCloud> loaded_point_cloud;
+            if (!normalized_candidate.empty()) {
+                std::error_code ec;
+                if (std::filesystem::is_regular_file(normalized_candidate, ec)) {
+                    try {
+                        loaded_point_cloud = load_simple_ply_point_cloud(normalized_candidate, options);
+                        pointcloud_path = normalized_candidate;
+                    } catch (const std::runtime_error& e) {
+                        throw_if_load_cancel_requested(options, "Blender/NeRF point cloud load cancelled");
+                        // This optional spelling must not displace a working default or random seed.
+                        LOG_DEBUG("Ignoring unusable normalized seed path: {}", e.what());
+                    }
+                }
+            }
+            if (loaded_point_cloud || std::filesystem::exists(pointcloud_path)) {
+                if (!loaded_point_cloud) {
+                    loaded_point_cloud = load_simple_ply_point_cloud(pointcloud_path, options);
+                }
+                if (loaded_point_cloud->size() > 0) {
+                    point_cloud = std::make_shared<PointCloud>(
+                        convert_transforms_point_cloud_to_colmap_world(std::move(*loaded_point_cloud)));
+                    LOG_INFO("Loaded {} points from {}", point_cloud->size(),
+                             lfs::core::path_to_utf8(pointcloud_path.filename()));
+                } else {
+                    const auto& localization = lfs::event::LocalizationManager::getInstance();
+                    // Standalone/headless loaders can run before locale resources are initialized.
+                    warnings.emplace_back(localization.hasKey("io.no_finite_seed_points")
+                                              ? LOC("io.no_finite_seed_points")
+                                              : "The point cloud contains no finite seed points. Using random initialization.");
+                    LOG_WARN("{}", warnings.back());
+                }
             } else {
                 point_cloud = std::make_shared<PointCloud>(generate_random_point_cloud());
                 LOG_WARN("No PLY found, using {} random points", point_cloud->size());
                 warnings.emplace_back("No point cloud file found, using random initialization");
+            }
+
+            if (!point_cloud) {
+                point_cloud = std::make_shared<PointCloud>(generate_random_point_cloud());
             }
 
             // Centralize scene

@@ -105,6 +105,9 @@ namespace lfs::vis {
         std::uint64_t split_view_image_generation_ = 0;
         std::uint64_t split_left_image_generation_ = 0;
         std::uint64_t split_right_image_generation_ = 0;
+        std::shared_ptr<const lfs::core::Tensor> cached_split_right_image_;
+        glm::ivec2 cached_split_right_size_{0, 0};
+        bool cached_split_right_flip_y_ = false;
         const lfs::core::Tensor* split_left_source_ = nullptr;
         glm::ivec2 split_left_source_size_{0, 0};
         int split_left_source_camera_uid_ = -1;
@@ -120,6 +123,7 @@ namespace lfs::vis {
         GTComparisonActualSizeState gt_comparison_actual_size_state_;
         std::optional<GTComparisonActualFrameSnapshot> gt_comparison_published_actual_frame_;
         std::uint64_t gt_async_depth_ticket_ = 0;
+        bool gt_async_refresh_pending_ = false;
         lfs::core::Tensor gt_async_depth_dest_{};
         GTComparisonMode gt_async_ticket_mode_ = GTComparisonMode::RGB;
         std::optional<lfs::rendering::CameraIntrinsics> gt_async_ticket_intrinsics_;

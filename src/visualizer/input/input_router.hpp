@@ -42,6 +42,7 @@ namespace lfs::vis::input {
         // Reuse the event-time GUI hit recorded by the window's frame buffer.
         void beginMouseButton(int action, double x, double y, const gui::GuiHitTestResult& hit);
         void endMouseButton(int action);
+        void endMouseButton(int action, double x, double y);
         void syncPressedMouseButtons(bool any_buttons_pressed);
         void focusViewportKeyboard();
 

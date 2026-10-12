@@ -3338,6 +3338,7 @@ NB_MODULE(lichtfeld, m) {
                     throw nb::value_error("Open a viewport with a representable orthographic extent");
                 auto settings = rm->getSettings();
                 settings.orthographic = true;
+                settings.equirectangular = false;
                 settings.ortho_scale = scale;
                 rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
                 lfs::vis::apply_set_ortho_scale(std::nullopt);

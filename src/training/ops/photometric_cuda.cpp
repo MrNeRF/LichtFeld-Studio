@@ -246,6 +246,13 @@ namespace lfs::training {
             return value;
         }
 
+        lfs::gpu_ops::Tensor photo_masked_metric_map(
+            const lfs::gpu_ops::Tensor& predicted,
+            const lfs::gpu_ops::Tensor& target,
+            const lfs::gpu_ops::Tensor& mask) {
+            return kernels::masked_ssim_map_forward(predicted, target, mask);
+        }
+
         void photo_error_map(
             lfs::gpu_ops::PhotoSaved& saved,
             const lfs::gpu_ops::Tensor& predicted,
@@ -302,6 +309,7 @@ namespace lfs::training {
             .create = photo_create,
             .evaluate = photo_evaluate,
             .metric = photo_metric,
+            .masked_metric_map = photo_masked_metric_map,
             .error_map = photo_error_map,
             .map_to_error = photo_map_to_error,
             .workspace_bytes = photo_workspace_bytes,

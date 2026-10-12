@@ -5234,5 +5234,7 @@
   "node_editor.ramp_hint": "拖动色标移动位置。单击添加，双击或按 Delete 删除。选择色标后可编辑 RGBA。",
   "node_editor.keyframe_hint": "插入关键帧 · Ctrl+单击，或悬停时按 I",
   "toolbar.asset_manager": "项目",
-  "training.reset_before_strategy_change": "更改策略前请重置训练。"
+  "training.reset_before_strategy_change": "更改策略前请重置训练。",
+  "io.no_finite_seed_points": "点云中没有坐标为有限值的初始点。将使用随机初始化。",
+  "io.mesh_no_triangle_faces": "网格文件不包含三角形面。"
 }

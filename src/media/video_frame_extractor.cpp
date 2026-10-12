@@ -2077,21 +2077,28 @@ namespace lfs::io {
                         throw_if_cancelled();
                         const double target_time = fpsSampleTime(
                             start_time, end_time, target_fps, target_index);
-                        // Keep decoding when reaching the next target costs no
-                        // more than the preroll observed after the previous seek.
-                        // Seeking repeatedly into a long GOP otherwise decodes
-                        // the same prefix for every selected frame.
-                        const bool seek_to_target = !has_retained_frame ||
-                                                    target_time - retained_frame_time >
-                                                        observed_seek_preroll + 1.0 / video_fps;
+                        const int64_t target_timestamp = stream_timestamp_for_time(target_time);
+                        const AVIndexEntry* target_keyframe = avformat_index_get_entry_from_timestamp(
+                            video_stream, target_timestamp, AVSEEK_FLAG_BACKWARD);
+                        // Prefer the demuxer index: seeking helps only when it
+                        // lands beyond the frame already retained by the decoder.
+                        bool seek_to_target = !has_retained_frame;
+                        if (has_retained_frame && retained_frame_time < target_time) {
+                            if (target_keyframe && (target_keyframe->flags & AVINDEX_KEYFRAME) &&
+                                target_keyframe->timestamp <= target_timestamp) {
+                                seek_to_target = target_keyframe->timestamp >
+                                                 stream_timestamp_for_time(retained_frame_time);
+                            } else {
+                                seek_to_target = target_time - retained_frame_time >
+                                                 observed_seek_preroll + 1.0 / video_fps;
+                            }
+                        }
                         if (!seek_to_target && retained_frame_time >= target_time &&
                             retained_frame_time < end_time) {
                             process_selected_frame(sparse_previous_frame, retained_frame_time);
                             continue;
                         }
                         if (seek_to_target) {
-                            const int64_t target_timestamp =
-                                stream_timestamp_for_time(target_time);
                             const int seek_result = av_seek_frame(
                                 fmt_ctx, video_stream_idx, target_timestamp,
                                 AVSEEK_FLAG_BACKWARD);
@@ -2152,6 +2159,10 @@ namespace lfs::io {
                                 observed_seek_preroll = std::max(0.0, target_time - frame_time);
                                 first_frame_after_seek = false;
                             }
+                            // A forward-decoded keyframe refreshes the fallback
+                            // estimate even when no further seek has occurred.
+                            if (!seek_to_target && (frame->flags & AV_FRAME_FLAG_KEY))
+                                observed_seek_preroll = std::max(0.0, target_time - frame_time);
                             const double frame_duration = frame->duration > 0
                                                               ? static_cast<double>(frame->duration) * time_base
                                                               : 1.0 / video_fps;

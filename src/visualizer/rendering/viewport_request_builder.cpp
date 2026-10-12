@@ -851,6 +851,7 @@ namespace lfs::vis {
         request.background_color = view.background_color;
         request.transparent_background = frame.transparent_background;
         request.orthographic = view.orthographic;
+        request.equirectangular = frame.render.equirectangular;
         request.ortho_scale = view.ortho_scale;
         request.focal_y = intrinsics.focal_y;
         request.voxel_size = frame.render.voxel_size;

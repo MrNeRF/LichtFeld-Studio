@@ -526,6 +526,9 @@ namespace lfs::vis {
         const auto release_inactive_split_outputs = [&] {
             if (view_state.split_view_service_.isActive(context.settings))
                 return;
+            view_state.cached_split_right_image_.reset();
+            view_state.cached_split_right_size_ = {};
+            view_state.cached_split_right_flip_y_ = false;
             for (auto* target : {&view_state.split_left_render_target_, &view_state.split_right_render_target_}) {
                 const bool has_splats = scene_renderer_ && scene_renderer_->hasRenderTarget(*target);
                 const bool has_points = point_scene_renderer_ && point_scene_renderer_->hasRenderTarget(*target);
@@ -642,46 +645,53 @@ namespace lfs::vis {
             if (!view_state.vksplat_stale_frame_guard_.canUseCachedFrame()) {
                 return {};
             }
+            const auto with_cached_split = [&view_state](ViewportFrameResult frame) {
+                frame.split_right_image = view_state.cached_split_right_image_;
+                frame.split_right_image_generation = view_state.split_right_image_generation_;
+                frame.split_right_size = view_state.cached_split_right_size_;
+                frame.split_right_flip_y = view_state.cached_split_right_flip_y_;
+                return frame;
+            };
             if (vulkanViewRenderState(view_state).external_viewport_image != VK_NULL_HANDLE) {
-                return {.image = publishVulkanFrameResources(view_state, {},
-                                                             vulkanViewRenderState(view_state).external_viewport_image,
-                                                             vulkanViewRenderState(view_state).external_viewport_image_view,
-                                                             vulkanViewRenderState(view_state).external_viewport_image_layout,
-                                                             vulkanViewRenderState(view_state).external_viewport_image_generation,
-                                                             VK_NULL_HANDLE, 0,
-                                                             {vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().begin(),
-                                                              vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().end()}),
-                        .image_generation = view_state.vulkan_viewport_image_generation_,
-                        .size = view_state.vulkan_viewport_image_size_,
-                        .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
-                        .flip_y = view_state.vulkan_viewport_image_flip_y_,
-                        .matches_viewport_extent =
-                            view_state.vulkan_viewport_coordinate_size_ == current_size};
+                return with_cached_split({.image = publishVulkanFrameResources(view_state, {},
+                                                                               vulkanViewRenderState(view_state).external_viewport_image,
+                                                                               vulkanViewRenderState(view_state).external_viewport_image_view,
+                                                                               vulkanViewRenderState(view_state).external_viewport_image_layout,
+                                                                               vulkanViewRenderState(view_state).external_viewport_image_generation,
+                                                                               VK_NULL_HANDLE, 0,
+                                                                               {vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().begin(),
+                                                                                vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().end()}),
+                                          .image_generation = view_state.vulkan_viewport_image_generation_,
+                                          .size = view_state.vulkan_viewport_image_size_,
+                                          .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
+                                          .flip_y = view_state.vulkan_viewport_image_flip_y_,
+                                          .matches_viewport_extent =
+                                              view_state.vulkan_viewport_coordinate_size_ == current_size});
             }
             if (!view_state.vulkan_viewport_image_) {
-                return {.image = publishVulkanFrameResources(view_state, {},
-                                                             VK_NULL_HANDLE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, 0,
-                                                             VK_NULL_HANDLE, 0,
-                                                             {vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().begin(),
-                                                              vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().end()}),
-                        .image_generation = view_state.split_view_image_generation_,
-                        .size = view_state.vulkan_viewport_image_size_,
-                        .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
-                        .flip_y = view_state.vulkan_viewport_image_flip_y_,
-                        .matches_viewport_extent =
-                            view_state.vulkan_viewport_coordinate_size_ == current_size};
+                return with_cached_split({.image = publishVulkanFrameResources(view_state, {},
+                                                                               VK_NULL_HANDLE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, 0,
+                                                                               VK_NULL_HANDLE, 0,
+                                                                               {vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().begin(),
+                                                                                vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().end()}),
+                                          .image_generation = view_state.split_view_image_generation_,
+                                          .size = view_state.vulkan_viewport_image_size_,
+                                          .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
+                                          .flip_y = view_state.vulkan_viewport_image_flip_y_,
+                                          .matches_viewport_extent =
+                                              view_state.vulkan_viewport_coordinate_size_ == current_size});
             }
-            return {.image = publishVulkanFrameResources(view_state, view_state.vulkan_viewport_image_,
-                                                         VK_NULL_HANDLE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, 0,
-                                                         VK_NULL_HANDLE, 0,
-                                                         {vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().begin(),
-                                                          vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().end()}),
-                    .image_generation = view_state.vulkan_viewport_image_generation_,
-                    .size = view_state.vulkan_viewport_image_size_,
-                    .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
-                    .flip_y = view_state.vulkan_viewport_image_flip_y_,
-                    .matches_viewport_extent =
-                        view_state.vulkan_viewport_coordinate_size_ == current_size};
+            return with_cached_split({.image = publishVulkanFrameResources(view_state, view_state.vulkan_viewport_image_,
+                                                                           VK_NULL_HANDLE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, 0,
+                                                                           VK_NULL_HANDLE, 0,
+                                                                           {vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().begin(),
+                                                                            vulkanViewRenderState(view_state).viewport_interop_.frameCompletions().end()}),
+                                      .image_generation = view_state.vulkan_viewport_image_generation_,
+                                      .size = view_state.vulkan_viewport_image_size_,
+                                      .alloc_size = view_state.vulkan_viewport_image_alloc_size_,
+                                      .flip_y = view_state.vulkan_viewport_image_flip_y_,
+                                      .matches_viewport_extent =
+                                          view_state.vulkan_viewport_coordinate_size_ == current_size});
         };
         const auto defer_shared_scratch = [this, &view_state](const std::string& reason) {
             if (reason.find("arena is busy") != std::string::npos) {
@@ -867,7 +877,11 @@ namespace lfs::vis {
         const DirtyMask pending_dirty = view_state.dirty_mask_.load(std::memory_order_relaxed);
         const bool only_split_position_pending =
             (pending_dirty & ~DirtyFlag::SPLIT_POSITION) == 0;
-        if (!context.preparing_import && (pending_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
+        const bool gt_readback_pending =
+            view_state.gt_async_depth_ticket_ != 0 &&
+            splitViewUsesGTComparison(frame_settings.split_view_mode) &&
+            frame_settings.gt_comparison_mode != GTComparisonMode::RGB;
+        if (!gt_readback_pending && !context.preparing_import && (pending_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
             view_state.vulkan_viewport_image_size_ == render_size &&
             has_cached_split_view_output() &&
             update_cached_split_position(!only_split_position_pending)) {
@@ -1055,6 +1069,7 @@ namespace lfs::vis {
                     vulkanViewRenderState(*view).viewport_interop_.clearDepthBlitImage();
                     view->viewport_artifact_service_.clearViewportOutput();
                     view->gt_async_depth_ticket_ = 0;
+                    view->gt_async_refresh_pending_ = false;
                     view->gt_async_depth_dest_ = {};
                     view->gt_async_ticket_intrinsics_.reset();
                     view->gt_async_ticket_view_.reset();
@@ -1214,6 +1229,8 @@ namespace lfs::vis {
             if (scene_manager)
                 noteImportRenderFrame(scene_manager->getScene().renderGeneration());
             clearViewportImageState(view_state);
+            view_state.cached_split_right_image_.reset();
+            view_state.cached_split_right_size_ = {};
             view_state.vulkan_viewport_coordinate_size_ = current_size;
             view_state.last_logged_vksplat_render_error_.clear();
             view_state.viewport_artifact_service_.clearViewportOutput();
@@ -1287,7 +1304,7 @@ namespace lfs::vis {
         // Camera thumbnails are uploaded and composited by the GUI viewport
         // pass. Reuse the cached splat image for an overlay-only refresh; a
         // thumbnail must never turn a stream-in update into a full splat pass.
-        if (!vksplat_viewport_resize &&
+        if (!vksplat_viewport_resize && !gt_readback_pending &&
             (frame_dirty == 0 || frame_dirty == DirtyFlag::OVERLAY) &&
             has_cached_viewport_output) {
             LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
@@ -2115,6 +2132,8 @@ namespace lfs::vis {
                             std::string compare_error;
 
                             if (!gtComparisonUsesRGBReference(gt_mode)) {
+                                view_state.gt_async_refresh_pending_ |=
+                                    (frame_dirty & ~(DirtyFlag::OVERLAY | DirtyFlag::SPLIT_POSITION)) != 0;
                                 // #1574 hold-then-swap: never host-wait the GT depth ticket on the
                                 // render thread. Poll any outstanding ticket; swap into the held
                                 // display when Ready; submit at most one new ticket when free. The
@@ -2250,7 +2269,8 @@ namespace lfs::vis {
                                         }
                                     }
 
-                                    if (compare_error.empty() && view_state.gt_async_depth_ticket_ == 0) {
+                                    if (compare_error.empty() && view_state.gt_async_depth_ticket_ == 0 &&
+                                        view_state.gt_async_refresh_pending_) {
                                         request.depth_view = false;
                                         scene_renderer_->setDepthCaptureMode(true, true);
                                         struct DepthCaptureModeGuard {
@@ -2291,6 +2311,7 @@ namespace lfs::vis {
                                                     view_state.gt_async_depth_dest_ = {};
                                                 } else {
                                                     view_state.gt_async_depth_ticket_ = *ticket;
+                                                    view_state.gt_async_refresh_pending_ = false;
                                                     view_state.gt_async_ticket_mode_ = gt_mode;
                                                     view_state.gt_async_ticket_intrinsics_ =
                                                         request.frame_view.intrinsics_override;
@@ -2301,6 +2322,10 @@ namespace lfs::vis {
                                             }
                                         }
                                     }
+
+                                    if (view_state.gt_async_depth_ticket_ != 0)
+                                        markViewDirty(context.view, DirtyFlag::OVERLAY,
+                                                      FrameReason::AsyncCompletion);
 
                                     if (view_state.gt_async_held_display_ &&
                                         view_state.gt_async_held_display_->is_valid()) {
@@ -2335,6 +2360,7 @@ namespace lfs::vis {
                                 }
                                 view_state.gt_async_held_display_.reset();
                                 view_state.gt_async_held_view_.reset();
+                                view_state.gt_async_refresh_pending_ = false;
                                 const bool use_point_cloud_compare =
                                     frame_settings.point_cloud_mode || !has_visible_gaussian_model;
                                 if (use_point_cloud_compare) {
@@ -2456,7 +2482,7 @@ namespace lfs::vis {
                                 }
 
                                 SplitCompositeContentRect rect =
-                                    resolveSplitCompositeContentRect(render_size, true, gt_size);
+                                    resolveSplitCompositeContentRect(gt_comparison_size, true, gt_size);
                                 if (rendered_gt_actual_size) {
                                     const glm::ivec4 physical_rect =
                                         gt_actual_content_rect.value_or(
@@ -2651,7 +2677,8 @@ namespace lfs::vis {
             pending_split_view.left.spatial_filter = filter_reconstructed_panels;
             pending_split_view.right.spatial_filter = filter_reconstructed_panels;
             pending_split_view.coordinate_extent =
-                rendered_gt_actual_size ? current_size : render_size;
+                rendered_gt_actual_size ? current_size : rendered_image_contains_ground_truth ? gt_comparison_size
+                                                                                              : render_size;
             if (environmentBackgroundUsesTransparentViewerCompositing(frame_settings)) {
                 const auto environment = buildViewportEnvironment(frame_ctx, frame_settings, true, environment_map_path);
                 pending_split_view.left.environment = environment;
@@ -3358,7 +3385,7 @@ namespace lfs::vis {
                         if (!capture_params.left.image || !capture_params.right.image) {
                             return {};
                         }
-                        // content_rect is authored in coordinate_extent (render_size)
+                        // content_rect is authored in coordinate_extent
                         // space; the capture tensor is current_size. Match
                         // recordScenePass: per-edge rounding into output pixels.
                         // Capture has no on-screen viewport offset.
@@ -3461,6 +3488,9 @@ namespace lfs::vis {
                     result.split_right_image_generation = view_state.split_right_image_generation_;
                 }
             }
+            view_state.cached_split_right_image_ = result.split_right_image;
+            view_state.cached_split_right_size_ = result.split_right_size;
+            view_state.cached_split_right_flip_y_ = result.split_right_flip_y;
             if (!pending_split_view.enabled) {
                 release_inactive_split_outputs();
             }

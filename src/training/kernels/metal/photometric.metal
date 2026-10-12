@@ -11,6 +11,7 @@ constant uint kPhotoMaskBytes [[function_constant(41)]];
 constant uint kPhotoLossMode [[function_constant(42)]];
 // Forward maps: 1 writes the channel mean [N,1,H,W], 0 one map per channel.
 constant uint kPhotoChannelMean [[function_constant(43)]];
+constant bool kPhotoMaskedWindow = kPhotoLossMode == 3 || kPhotoLossMode == 4;
 
 constant float kSsimC1 = 0.01f * 0.01f;
 constant float kSsimC2 = 0.03f * 0.03f;
@@ -153,23 +154,26 @@ struct PhotoForwardParams {
 // window: x, x^2, y, y^2, xy; decoupled: corrected, raw, raw^2, gt, gt^2, raw*gt.
 template <bool Decoupled>
 static void photo_window(thread float* q, threadgroup const float* s0, threadgroup const float* s1,
-                         threadgroup const float* s2, const uint l, const uint r, const bool pair, const float w) {
-    const float a0 = s0[l], a1 = s1[l];
+                         threadgroup const float* s2, threadgroup const float* sm,
+                         const uint l, const uint r, const bool pair, const float w) {
+    const float a0 = s0[l], a1 = s1[l], a2 = Decoupled ? s2[l] : 0.0f;
     const float b0 = pair ? s0[r] : 0.0f, b1 = pair ? s1[r] : 0.0f;
+    const float b2 = Decoupled && pair ? s2[r] : 0.0f;
+    const float ml = kPhotoMaskedWindow ? sm[l] : 1.0f;
+    const float mr = kPhotoMaskedWindow && pair ? sm[r] : pair ? 1.0f : 0.0f;
+    q[0] += (a0 * ml + b0 * mr) * w;
+    q[1] += (Decoupled ? a1 * ml + b1 * mr : a0 * a0 * ml + b0 * b0 * mr) * w;
+    q[2] += (Decoupled ? a1 * a1 * ml + b1 * b1 * mr : a1 * ml + b1 * mr) * w;
     if (Decoupled) {
-        const float a2 = s2[l], b2 = pair ? s2[r] : 0.0f;
-        q[0] += (a0 + b0) * w;
-        q[1] += (a1 + b1) * w;
-        q[2] += (a1 * a1 + b1 * b1) * w;
-        q[3] += (a2 + b2) * w;
-        q[4] += (a2 * a2 + b2 * b2) * w;
-        q[5] += (a1 * a2 + b1 * b2) * w;
+        q[3] += (a2 * ml + b2 * mr) * w;
+        q[4] += (a2 * a2 * ml + b2 * b2 * mr) * w;
+        q[5] += (a1 * a2 * ml + b1 * b2 * mr) * w;
+        if (kPhotoMaskedWindow) q[6] += (ml + mr) * w;
     } else {
-        q[0] += (a0 + b0) * w;
-        q[1] += (a0 * a0 + b0 * b0) * w;
-        q[2] += (a1 + b1) * w;
-        q[3] += (a1 * a1 + b1 * b1) * w;
-        q[4] += (a0 * a1 + b0 * b1) * w;
+        q[3] += (a1 * a1 * ml + b1 * b1 * mr) * w;
+        q[4] += (a0 * a1 * ml + b0 * b1 * mr) * w;
+        // The standard path uses five moments; the masked path adds mass.
+        if (kPhotoMaskedWindow) q[5] += (ml + mr) * w;
     }
 }
 
@@ -178,8 +182,9 @@ static void photo_window(thread float* q, threadgroup const float* s0, threadgro
 template <bool Decoupled>
 static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, const uint2 t, const uint rank,
                                threadgroup float* s0, threadgroup float* s1, threadgroup float* s2,
-                               threadgroup float* conv, thread float& loss_sum, thread float& mask_sum) {
+                               threadgroup float* sm, threadgroup float* conv, thread float& loss_sum, thread float& mask_sum) {
     constexpr int kQuantities = Decoupled ? 6 : 5;
+    const int quantities = kQuantities + (kPhotoMaskedWindow ? 1 : 0);
     const int H = p.height, W = p.width, C = p.channels;
     const uint per_image = p.tiles_x * p.tiles_y;
     const uint b = tile / per_image;
@@ -191,6 +196,9 @@ static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, 
     const uint plane = uint(H) * uint(W);
     const uint pixel = inside ? uint(py) * uint(W) + uint(px) : 0;
     const uint center = (t.y + kPhotoHalo) * kPhotoSpan + t.x + kPhotoHalo;
+    const int anchor_x = min(x0 + kPhotoTile / 2, W - 1);
+    const int anchor_y = min(y0 + kPhotoTile / 2, H - 1);
+    const float inv_mask_scale = kPhotoMaskedWindow ? 1.0f / fmax(1.0f, photo_mask(p.mask, uint(anchor_y) * uint(W) + uint(anchor_x))) : 1.0f;
 
     float ssim_sum = 0.0f, cs_sum = 0.0f, l1_sum = 0.0f;
     for (int c = 0; c < C; ++c) {
@@ -202,6 +210,8 @@ static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, 
             const bool in = gx >= 0 && gx < W && gy >= 0 && gy < H;
             const uint g = in ? base + uint(gy) * uint(W) + uint(gx) : 0;
             s0[i] = in ? p.prediction[g] : 0.0f;
+            if (kPhotoMaskedWindow)
+                sm[i] = (in ? photo_mask(p.mask, uint(gy) * uint(W) + uint(gx)) : 1.0f) * inv_mask_scale;
             if (Decoupled) {
                 s1[i] = in ? p.raw[g] : 0.0f;
                 s2[i] = in ? photo_target(p.target, g) : 0.0f;
@@ -213,32 +223,36 @@ static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, 
 
         for (uint row = t.y; row < uint(kPhotoSpan); row += kPhotoTile) {
             const uint o = row * kPhotoSpan + t.x + kPhotoHalo;
-            float q[6];
-            for (int k = 0; k < kQuantities; ++k)
+            float q[7];
+            for (int k = 0; k < quantities; ++k)
                 q[k] = 0.0f;
             for (int d = 1; d <= kPhotoHalo; ++d)
-                photo_window<Decoupled>(q, s0, s1, s2, o - uint(d), o + uint(d), true, kSsimGauss[kPhotoHalo - d]);
-            photo_window<Decoupled>(q, s0, s1, s2, o, o, false, kSsimGauss[kPhotoHalo]);
-            for (int k = 0; k < kQuantities; ++k)
+                photo_window<Decoupled>(q, s0, s1, s2, sm, o - uint(d), o + uint(d), true, kSsimGauss[kPhotoHalo - d]);
+            photo_window<Decoupled>(q, s0, s1, s2, sm, o, o, false, kSsimGauss[kPhotoHalo]);
+            for (int k = 0; k < quantities; ++k)
                 conv[uint(k) * kPhotoConvCells + row * kPhotoTile + t.x] = q[k];
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        float v[6];
-        for (int k = 0; k < kQuantities; ++k)
+        float v[7];
+        for (int k = 0; k < quantities; ++k)
             v[k] = 0.0f;
         const uint column = t.y + kPhotoHalo;
         for (int d = 1; d <= kPhotoHalo; ++d) {
             const float w = kSsimGauss[kPhotoHalo - d];
             const uint top = (column - uint(d)) * kPhotoTile + t.x;
             const uint bottom = (column + uint(d)) * kPhotoTile + t.x;
-            for (int k = 0; k < kQuantities; ++k)
+            for (int k = 0; k < quantities; ++k)
                 v[k] += (conv[uint(k) * kPhotoConvCells + top] + conv[uint(k) * kPhotoConvCells + bottom]) * w;
         }
-        for (int k = 0; k < kQuantities; ++k)
+        for (int k = 0; k < quantities; ++k)
             v[k] += conv[uint(k) * kPhotoConvCells + column * kPhotoTile + t.x] * kSsimGauss[kPhotoHalo];
         if (!inside)
             continue;
+        const float inv_window = kPhotoMaskedWindow ? (v[kQuantities] >= 1.0e-30f ? 1.0f / v[kQuantities] : 0.0f) : 1.0f;
+        const float derivative_weight = kPhotoMaskedWindow ? sm[center] * inv_window : 1.0f;
+        if (kPhotoMaskedWindow)
+            for (int k = 0; k < kQuantities; ++k) v[k] *= inv_window;
 
         const uint index = base + pixel;
         float ssim, cs;
@@ -256,12 +270,12 @@ static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, 
             ssim = luminance * cs;
             if (p.write_partials != 0) {
                 const float dl_dmu = 2.0f * (mu_g * A - mu_c * Cn) / (A * A);
-                p.dm_mu[index] = half(cs * dl_dmu);
+                p.dm_mu[index] = half(cs * dl_dmu * derivative_weight);
                 const float ds1 = p.ssim_weight * (-(luminance * D) / (B * B));
                 const float ds12 = p.ssim_weight * ((2.0f * luminance) / B);
-                p.dm_sigma1[index] = half(ds1);
-                p.dm_sigma12[index] = half(ds12);
-                p.raw_dm_mu[index] = half(ds1 * (-2.0f * mu_r) + ds12 * (-mu_g));
+                p.dm_sigma1[index] = half(ds1 * derivative_weight);
+                p.dm_sigma12[index] = half(ds12 * derivative_weight);
+                p.raw_dm_mu[index] = half((ds1 * (-2.0f * mu_r) + ds12 * (-mu_g)) * derivative_weight);
             }
         } else {
             const float mu1 = v[0], mu2 = v[2];
@@ -278,16 +292,16 @@ static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, 
             if (p.write_partials != 0) {
                 const float dm_mu = (mu2 * 2.0f * D) / (A * B) - (mu2 * 2.0f * Cn) / (A * B) -
                                     (mu1 * 2.0f * Cn * D) / (A * A * B) + (mu1 * 2.0f * Cn * D) / (A * B * B);
-                p.dm_mu[index] = half(dm_mu);
-                p.dm_sigma1[index] = half((-Cn * D) / (A * B * B));
-                p.dm_sigma12[index] = half((2.0f * Cn) / (A * B));
+                p.dm_mu[index] = half(dm_mu * derivative_weight);
+                p.dm_sigma1[index] = half((-Cn * D) / (A * B * B) * derivative_weight);
+                p.dm_sigma12[index] = half((2.0f * Cn) / (A * B) * derivative_weight);
             }
         }
         if (kPhotoChannelMean == 0) {
             if (p.write_map != 0)
-                p.ssim_map[index] = ssim;
+                p.ssim_map[index] = kPhotoMaskedWindow && sm[center] <= 0.0f ? 1.0f : ssim;
             if (p.write_cs != 0)
-                p.cs_map[index] = cs;
+                p.cs_map[index] = kPhotoMaskedWindow && sm[center] <= 0.0f ? 1.0f : cs;
         }
         ssim_sum += ssim;
         cs_sum += cs;
@@ -308,7 +322,7 @@ static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, 
     if (p.write_error != 0)
         p.error[pixel] = fmax(1.0f - (p.error_from_cs != 0 ? cs_sum : ssim_sum) * inv_c, 0.0f);
 
-    if (kPhotoLossMode == 0)
+    if (kPhotoLossMode == 0 || kPhotoLossMode == 4)
         return;
     const float per_pixel = (1.0f - p.ssim_weight) * l1_sum + float(C) * p.ssim_weight * (1.0f - ssim_mean);
     if (kPhotoLossMode == 3) {
@@ -330,12 +344,12 @@ template <bool Decoupled>
 static void photo_forward(constant PhotoForwardParams& p, const uint2 t, const uint rank, const uint group,
                           const uint groups, const uint simd_lane, const uint simd_group, const uint simd_groups,
                           threadgroup float* s0, threadgroup float* s1, threadgroup float* s2,
-                          threadgroup float* conv, threadgroup float* scratch) {
+                          threadgroup float* sm, threadgroup float* conv, threadgroup float* scratch) {
     float loss_sum = 0.0f, mask_sum = 0.0f;
     const uint tiles = p.tiles_x * p.tiles_y * uint(p.batch);
     for (uint tile = group; tile < tiles; tile += groups)
-        photo_forward_tile<Decoupled>(p, tile, t, rank, s0, s1, s2, conv, loss_sum, mask_sum);
-    if (kPhotoLossMode == 0)
+        photo_forward_tile<Decoupled>(p, tile, t, rank, s0, s1, s2, sm, conv, loss_sum, mask_sum);
+    if (kPhotoLossMode == 0 || kPhotoLossMode == 4)
         return;
     loss_sum = loss_group_sum(loss_sum, scratch, rank, simd_lane, simd_group, simd_groups);
     if (rank == 0)
@@ -357,9 +371,10 @@ kernel void photo_ssim_forward(constant PhotoForwardParams& p [[buffer(0)]],
                                uint simd_group [[simdgroup_index_in_threadgroup]],
                                uint simd_groups [[simdgroups_per_threadgroup]]) {
     threadgroup float s0[kPhotoSpanCells], s1[kPhotoSpanCells];
-    threadgroup float conv[5 * kPhotoConvCells];
+    threadgroup float sm[kPhotoSpanCells];
+    threadgroup float conv[6 * kPhotoConvCells];
     threadgroup float scratch[32];
-    photo_forward<false>(p, t, rank, group.x, groups.x, simd_lane, simd_group, simd_groups, s0, s1, s1, conv, scratch);
+    photo_forward<false>(p, t, rank, group.x, groups.x, simd_lane, simd_group, simd_groups, s0, s1, s1, sm, conv, scratch);
 }
 
 kernel void photo_ssim_forward_decoupled(constant PhotoForwardParams& p [[buffer(0)]],
@@ -371,9 +386,10 @@ kernel void photo_ssim_forward_decoupled(constant PhotoForwardParams& p [[buffer
                                          uint simd_group [[simdgroup_index_in_threadgroup]],
                                          uint simd_groups [[simdgroups_per_threadgroup]]) {
     threadgroup float s0[kPhotoSpanCells], s1[kPhotoSpanCells], s2[kPhotoSpanCells];
-    threadgroup float conv[6 * kPhotoConvCells];
+    threadgroup float sm[kPhotoSpanCells];
+    threadgroup float conv[7 * kPhotoConvCells];
     threadgroup float scratch[32];
-    photo_forward<true>(p, t, rank, group.x, groups.x, simd_lane, simd_group, simd_groups, s0, s1, s2, conv, scratch);
+    photo_forward<true>(p, t, rank, group.x, groups.x, simd_lane, simd_group, simd_groups, s0, s1, s2, sm, conv, scratch);
 }
 
 struct PhotoBackwardParams {
@@ -412,13 +428,14 @@ kernel void photo_ssim_backward(constant PhotoBackwardParams& p [[buffer(0)]],
     const uint plane = uint(H) * uint(W);
     const uint pixel = inside ? uint(py) * uint(W) + uint(px) : 0;
     const float l1_weight = 1.0f - p.ssim_weight;
+    const float input_mask = p.masked != 0 && inside ? photo_mask(p.mask, pixel) : 1.0f;
     const float inv_mask_sum = p.masked != 0 ? 1.0f / p.mask_sum[0] : 0.0f;
     const bool crop_y = p.valid_padding != 0 && H > 10, crop_x = p.valid_padding != 0 && W > 10;
 
     float chain_center = 0.0f;
     if (inside) {
         if (p.masked != 0)
-            chain_center = photo_mask(p.mask, pixel) * inv_mask_sum;
+            chain_center = input_mask * inv_mask_sum;
         else if ((!crop_x || (px >= 5 && px < W - 5)) && (!crop_y || (py >= 5 && py < H - 5)))
             chain_center = p.grad_per_pixel;
     }
@@ -433,7 +450,7 @@ kernel void photo_ssim_backward(constant PhotoBackwardParams& p [[buffer(0)]],
                 const uint local = uint(gy) * uint(W) + uint(gx);
                 float chain;
                 if (p.masked != 0)
-                    chain = photo_mask(p.mask, local) * inv_mask_sum;
+                    chain = inv_mask_sum;
                 else
                     chain = (!crop_x || (gx >= 5 && gx < W - 5)) && (!crop_y || (gy >= 5 && gy < H - 5)) ? p.grad_per_pixel : 0.0f;
                 const float scale = -p.ssim_weight * chain;
@@ -487,7 +504,7 @@ kernel void photo_ssim_backward(constant PhotoBackwardParams& p [[buffer(0)]],
             const float p1 = p.prediction[base + pixel];
             const float p2 = photo_target(p.target, base + pixel);
             const float sign = p1 == p2 ? 0.0f : copysign(1.0f, p1 - p2);
-            p.grad[base + pixel] = s0 + 2.0f * p1 * s1 + p2 * s2 + l1_weight * sign * chain_center;
+            p.grad[base + pixel] = input_mask * (s0 + 2.0f * p1 * s1 + p2 * s2) + l1_weight * sign * chain_center;
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
