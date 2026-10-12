@@ -3139,5 +3139,6 @@
   "runtime.import_batch_failed.other": "파일 {}개를 불러오지 못했습니다",
   "runtime.import_out_of_memory": "GPU 메모리가 부족합니다",
   "runtime.import_batch_kept": "나머지 파일은 불러왔으며 장면에서 계속 사용할 수 있습니다.",
-  "runtime.import_render_failed": "이 파일을 렌더링할 준비를 하지 못했습니다"
+  "runtime.import_render_failed": "이 파일을 렌더링할 준비를 하지 못했습니다",
+  "training.iterations_must_exceed_current": "최대 반복 횟수는 현재 훈련 단계보다 커야 합니다."
 }

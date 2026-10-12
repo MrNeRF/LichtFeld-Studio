@@ -3139,5 +3139,6 @@
   "runtime.import_batch_failed.other": "{} files were not loaded",
   "runtime.import_out_of_memory": "Not enough GPU memory",
   "runtime.import_batch_kept": "The other files were loaded and remain available in the scene.",
-  "runtime.import_render_failed": "Could not prepare this file for rendering"
+  "runtime.import_render_failed": "Could not prepare this file for rendering",
+  "training.iterations_must_exceed_current": "Maximum iterations must be greater than the current training step."
 }

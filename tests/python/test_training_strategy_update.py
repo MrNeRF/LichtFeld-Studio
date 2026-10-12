@@ -73,3 +73,60 @@ def test_strategy_update_preserves_training(tmp_path, endpoint, initial, target,
         if tool("runtime_job_describe", job_id="training.main")["actions"]["cancel"]:
             tool("runtime_job_control", job_id="training.main", action="cancel")
         tool("runtime_job_wait", job_id="training.main", until="inactive", timeout_ms=90000)
+
+
+def test_paused_iteration_limit_stays_ahead_of_completed_step(tmp_path, endpoint):
+    def tool(name, **arguments):
+        return _tool(endpoint, name, arguments)
+
+    def state():
+        return tool("training_get_state")
+
+    assert tool("scene_load_dataset", path=_dataset(tmp_path / "source", 60),
+                images_folder="images", min_track_length=0,
+                output_path=str(tmp_path / "output"))["success"]
+    tool("runtime_job_wait", job_id="import.dataset", until="inactive", timeout_ms=90000)
+    assert tool("training_params_set", values={"strategy": "mcmc", "iterations": 1000000,
+                                              "max_cap": 2000, "enable_eval": False})["success"]
+    tool("training_start")
+    try:
+        _wait(lambda: state()["iteration"] > 10)
+        tool("runtime_job_control", job_id="training.main", action="pause")
+        _wait(lambda: state()["is_paused"])
+        completed = state()["iteration"]
+        original = tool("training_params_get")
+
+        for invalid in (completed - 1, completed):
+            response = _call(endpoint, "tools/call", {"name": "training_params_set",
+                                                       "arguments": {"values": {"iterations": invalid}}})
+            assert response["isError"], response
+            assert tool("training_params_get") == original
+            assert state()["is_paused"]
+            assert state()["iteration"] == completed
+
+        direct = tool("editor_run", code=(
+            "import lichtfeld as lf\n"
+            "params = lf.optimization_params()\n"
+            f"try:\n    params.iterations = {completed - 1}\n"
+            "except (ValueError, RuntimeError) as error:\n"
+            "    print('LIMIT_REJECTED', error)\n"
+            "else:\n    print('LIMIT_ACCEPTED')\n"),
+            show_console=False, wait_for_completion=True, wait_for_output=True,
+            timeout_ms=30000)
+        assert "LIMIT_REJECTED" in str(direct), direct
+        assert "LIMIT_ACCEPTED" not in str(direct), direct
+        assert tool("training_params_get") == original
+
+        target = completed + 30
+        assert tool("training_params_set", values={"iterations": target})["success"]
+        assert next(p["value"] for p in tool("training_params_get")["properties"]
+                    if p["id"] == "iterations") == target
+        tool("runtime_job_control", job_id="training.main", action="resume")
+        _wait(lambda: not state()["is_running"] and not state()["is_paused"])
+        assert state()["iteration"] == target
+        assert state()["max_iterations"] == target
+        assert tool("ui_modal_get")["title"] == "Training Complete"
+    finally:
+        if tool("runtime_job_describe", job_id="training.main")["actions"]["cancel"]:
+            tool("runtime_job_control", job_id="training.main", action="cancel")
+        tool("runtime_job_wait", job_id="training.main", until="inactive", timeout_ms=90000)

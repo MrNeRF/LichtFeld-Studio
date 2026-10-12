@@ -355,6 +355,29 @@ def test_auto_scale_user_override_survives_camera_change_until_relocked(
     assert params.auto_scaled_for == 800
 
 
+def test_paused_iteration_limit_rejects_current_step_without_scaling(
+    training_panel_module, monkeypatch
+):
+    params = _ParamsStub()
+    params.iterations = 100
+    params.steps_scaler = 2.0
+    params.grow_until_iter = 50
+    monkeypatch.setattr(
+        training_panel_module,
+        "RuntimeState",
+        SimpleNamespace(
+            training_state=SimpleNamespace(value="paused"),
+            iteration=SimpleNamespace(value=100),
+        ),
+    )
+    panel = training_panel_module.TrainingPanel()
+
+    assert panel._set_iterations(params, 99) is False
+    assert params.iterations == 100
+    assert params.steps_scaler == 2.0
+    assert params.grow_until_iter == 50
+
+
 def test_training_panel_progress_updates_bound_value(training_panel_module, monkeypatch):
     panel = training_panel_module.TrainingPanel()
     panel._handle = _HandleStub()

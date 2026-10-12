@@ -359,6 +359,14 @@ namespace lfs::python {
             throw std::runtime_error("Unsupported property type");
         }
 
+        if (prop_id == "iterations") {
+            if (const auto* tm = get_trainer_manager(); tm &&
+                                                        tm->rejectsIterationLimit(std::any_cast<size_t>(new_value))) {
+                throw std::invalid_argument(
+                    LOC("training.iterations_must_exceed_current"));
+            }
+        }
+
         std::any old_value;
         modify_params([&](auto& p) {
             auto candidate = p;

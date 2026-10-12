@@ -3139,5 +3139,6 @@
   "runtime.import_batch_failed.other": "{} bestanden zijn niet geladen",
   "runtime.import_out_of_memory": "Onvoldoende GPU-geheugen",
   "runtime.import_batch_kept": "De overige bestanden zijn geladen en blijven beschikbaar in de scène.",
-  "runtime.import_render_failed": "Dit bestand kon niet worden voorbereid voor weergave"
+  "runtime.import_render_failed": "Dit bestand kon niet worden voorbereid voor weergave",
+  "training.iterations_must_exceed_current": "Het maximale aantal iteraties moet hoger zijn dan de huidige trainingsstap."
 }

@@ -3139,5 +3139,6 @@
   "runtime.import_batch_failed.other": "{} plików nie zostało wczytanych",
   "runtime.import_out_of_memory": "Za mało pamięci GPU",
   "runtime.import_batch_kept": "Pozostałe pliki zostały wczytane i nadal są dostępne w scenie.",
-  "runtime.import_render_failed": "Nie udało się przygotować tego pliku do wyświetlenia"
+  "runtime.import_render_failed": "Nie udało się przygotować tego pliku do wyświetlenia",
+  "training.iterations_must_exceed_current": "Maksymalna liczba iteracji musi być większa niż bieżący krok treningu."
 }

@@ -1980,6 +1980,9 @@ class TrainingPanel(Panel):
     def _set_iterations(self, params, val):
         if val <= 0:
             return False
+        if (RuntimeState.training_state.value == "paused"
+                and val <= RuntimeState.iteration.value):
+            return False
         if not self._auto_scale_steps_locked:
             params.iterations = val
             return True

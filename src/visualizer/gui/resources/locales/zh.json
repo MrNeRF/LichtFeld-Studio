@@ -3139,5 +3139,6 @@
   "runtime.import_batch_failed.other": "有 {} 个文件未能加载",
   "runtime.import_out_of_memory": "GPU 显存不足",
   "runtime.import_batch_kept": "其他文件已加载，仍可在场景中使用。",
-  "runtime.import_render_failed": "无法准备此文件以进行渲染"
+  "runtime.import_render_failed": "无法准备此文件以进行渲染",
+  "training.iterations_must_exceed_current": "最大迭代次数必须大于当前训练步数。"
 }

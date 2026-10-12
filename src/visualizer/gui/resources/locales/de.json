@@ -3139,5 +3139,6 @@
   "runtime.import_batch_failed.other": "{} Dateien wurden nicht geladen",
   "runtime.import_out_of_memory": "Nicht genügend Grafikspeicher",
   "runtime.import_batch_kept": "Die anderen Dateien wurden geladen und sind weiterhin in der Szene verfügbar.",
-  "runtime.import_render_failed": "Diese Datei konnte nicht für die Darstellung vorbereitet werden"
+  "runtime.import_render_failed": "Diese Datei konnte nicht für die Darstellung vorbereitet werden",
+  "training.iterations_must_exceed_current": "Die maximale Iterationszahl muss größer als der aktuelle Trainingsschritt sein."
 }

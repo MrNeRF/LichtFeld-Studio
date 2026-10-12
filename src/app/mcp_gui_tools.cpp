@@ -3347,6 +3347,14 @@ namespace lfs::app {
                         if (trainer && !trainer->canChangeStrategy(*strategy))
                             return json{{"error", LOC("training.reset_before_strategy_change")}};
                     }
+                    if (const auto* trainer = viewer_impl->getTrainerManager(); trainer) {
+                        for (const auto& change : changes) {
+                            if (change.meta.id == "iterations" &&
+                                trainer->rejectsIterationLimit(std::any_cast<size_t>(change.value))) {
+                                return json{{"error", LOC("training.iterations_must_exceed_current")}};
+                            }
+                        }
+                    }
                     const auto before = params->copyActiveParams();
                     if (strategy) {
                         params->modifyActiveParams([&](auto&) {

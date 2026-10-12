@@ -2612,6 +2612,11 @@ namespace lfs::vis {
         return canonical == core::param::canonical_strategy_name(trainer_->getParams().optimization.strategy);
     }
 
+    bool TrainerManager::rejectsIterationLimit(const std::size_t iterations) const {
+        return isPaused() &&
+               iterations <= static_cast<std::size_t>(std::max(0, getCurrentIteration()));
+    }
+
     lfs::core::param::TrainingParameters TrainerManager::getEditableTrainingParams(
         const ParameterManager& parameter_manager) const {
         const auto& configured_dataset = parameter_manager.getDatasetConfig();
