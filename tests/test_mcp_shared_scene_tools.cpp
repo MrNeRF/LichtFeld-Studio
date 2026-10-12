@@ -110,6 +110,7 @@ TEST(McpSharedSceneToolsTest, LoadDatasetDefaultsOutputPathAndStrategyAlias) {
     EXPECT_EQ(backend.loaded_params.dataset.data_path, dataset_path);
     EXPECT_EQ(backend.loaded_params.dataset.output_path,
               lfs::core::param::default_dataset_output_path(dataset_path));
+    EXPECT_FALSE(backend.loaded_params.dataset.output_path_explicit);
     EXPECT_EQ(backend.loaded_params.optimization.strategy,
               std::string(lfs::core::param::kStrategyMRNF));
     EXPECT_EQ(result["output_path"].get<std::string>(),
@@ -137,12 +138,30 @@ TEST(McpSharedSceneToolsTest, LoadDatasetHonorsExplicitOutputPathAndCanonicalStr
     ASSERT_TRUE(result["success"].get<bool>());
     ASSERT_TRUE(backend.load_dataset_called);
     EXPECT_EQ(backend.loaded_params.dataset.output_path, output_path);
+    EXPECT_TRUE(backend.loaded_params.dataset.output_path_explicit);
     EXPECT_EQ(backend.loaded_params.dataset.images, "images_8");
     EXPECT_EQ(backend.loaded_params.optimization.iterations, 42u);
     EXPECT_EQ(backend.loaded_params.optimization.strategy,
               std::string(lfs::core::param::kStrategyIGSPlus));
     EXPECT_EQ(result["output_path"].get<std::string>(), output_path.string());
     EXPECT_EQ(result["strategy"].get<std::string>(), std::string(lfs::core::param::kStrategyIGSPlus));
+}
+
+TEST(McpSharedSceneToolsTest, LoadDatasetTreatsEmptyOutputPathAsDefault) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend backend;
+    lfs::mcp::register_shared_scene_tools(backend.backend());
+
+    const std::filesystem::path dataset_path = "/tmp/mcp_dataset";
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+        "scene.load_dataset",
+        json{{"path", dataset_path.string()}, {"output_path", ""}});
+
+    ASSERT_TRUE(result["success"].get<bool>());
+    ASSERT_TRUE(backend.load_dataset_called);
+    EXPECT_EQ(backend.loaded_params.dataset.output_path,
+              lfs::core::param::default_dataset_output_path(dataset_path));
+    EXPECT_FALSE(backend.loaded_params.dataset.output_path_explicit);
 }
 
 TEST(McpSharedSceneToolsTest, LoadDatasetAppliesMrnfDefaultsWhenStrategyOmitted) {

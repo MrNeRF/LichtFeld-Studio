@@ -437,7 +437,7 @@ namespace lfs::core {
         struct LFS_CORE_API DatasetConfig {
             std::filesystem::path data_path = "";
             std::filesystem::path output_path = "";
-            // True when -o/--output-path was given on this process's command line.
+            // True when an output path was explicitly supplied by CLI or runtime API.
             // Runtime-only: to_json, from_json, and PRMS dataset_json omit it.
             bool output_path_explicit = false;
             std::string output_name = "";
