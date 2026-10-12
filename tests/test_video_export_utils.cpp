@@ -12,6 +12,7 @@
 #include "io/video/video_encoder.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/scene_renderer_factory.hpp"
 #include "screen/screen_service.hpp"
 #if LFS_GRAPHICS_VULKAN
 #include "rendering/vksplat_viewport_renderer.hpp"
@@ -863,18 +864,29 @@ namespace {
         request.raster_backend = settings.raster_backend;
         request.gut = true;
         request.equirectangular = panorama;
+        // Compare the export pipeline with the selected scene backend. Metal and
+        // Vulkan have different conservative coverage at the edge of the frustum.
+        auto reference_renderer = lfs::vis::createSceneRenderer(graphics_);
+        ASSERT_TRUE(reference_renderer);
         const auto slot = preview_slot_;
         for (int format = 0; format < 3; ++format) {
             SCOPED_TRACE(::testing::Message() << "format=" << format << " tiled=" << tiled);
             request.transparent_background = format == 2;
-            auto rendered = renderer_->render(context_, *model_, request, false, slot, false, true);
+            auto rendered = reference_renderer->render(*model_, request, false, slot, false, true);
             ASSERT_TRUE(rendered) << rendered.error();
-            auto reference = format == 2 ? renderer_->readOutputImageRgba8(context_, slot)
-                                         : renderer_->readOutputImageRgb8(context_, slot);
+            auto reference = format == 2 ? reference_renderer->readOutputImageRgba8(slot)
+                                         : reference_renderer->readOutputImageRgb8(slot);
             ASSERT_TRUE(reference) << reference.error();
+            // Float previews retain interactive sorting and its cold-frame warmup.
+            if (format == 0) {
+                ASSERT_TRUE(renderExportPreview(manager, *model_, format, width, height, panorama));
+            }
             auto actual = renderExportPreview(manager, *model_, format, width, height, panorama);
             ASSERT_TRUE(actual);
             ASSERT_EQ(actual->numel(), (*reference)->numel());
+            ASSERT_TRUE(std::any_of((*reference)->ptr<uint8_t>(),
+                                    (*reference)->ptr<uint8_t>() + (*reference)->numel(),
+                                    [](uint8_t value) { return value != 0; }));
             int max_diff = 0;
             size_t changed = 0;
             const auto* expected = (*reference)->ptr<uint8_t>();
