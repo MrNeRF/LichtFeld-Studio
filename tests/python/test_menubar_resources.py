@@ -1075,7 +1075,7 @@ def test_scene_graph_selection_markers_are_optional_user_preferences():
 
     assert "setSceneGraphSelectionMarkers(bool enabled)" in preferences_hpp
     assert 'values["scene_graph_selection_markers"] = enabled' in preferences_cpp
-    assert 'value("scene_graph_selection_markers", false)' in preferences_cpp
+    assert 'field<bool>(impl_->values, "scene_graph_selection_markers", false)' in preferences_cpp
     assert 'data-checked="scene_graph_selection_markers"' in preferences_rml
     assert 'toggle_section(\'scene_graph\')' in preferences_rml
     assert '@tr:preferences.scene_graph' in preferences_rml

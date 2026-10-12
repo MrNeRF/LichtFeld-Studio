@@ -43,11 +43,12 @@ namespace lfs::vis::gui {
 
         // Writes user-global UI preferences only. Project layout is persisted
         // exclusively in the .licht GUIL chapter.
-        void saveUserPreferences() const;
-        [[nodiscard]] lfs::Status saveUserPreferencesChecked() const;
+        void saveUserPreferences(bool* backed_up = nullptr) const;
+        [[nodiscard]] lfs::Status saveUserPreferencesChecked(bool* backed_up = nullptr) const;
         void load();
         static std::filesystem::path getConfigDir();
         LFS_VIS_API static void setPersistenceEnabled(bool enabled) noexcept;
+        LFS_VIS_API static bool takeLegacyLayoutBackupNotice() noexcept;
 
     private:
         static std::filesystem::path getLegacyConfigPath();

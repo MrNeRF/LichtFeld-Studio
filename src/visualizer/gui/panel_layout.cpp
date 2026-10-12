@@ -47,14 +47,21 @@ namespace lfs::vis::gui {
     }
 
     void PanelLayoutManager::loadState() {
-        // Legacy layout.json remains an import-only first-run reader. Project
-        // panel geometry is authoritative in GUIL (right_panel_width,
-        // scene_panel_ratio, python_console_width, bottom_dock_height,
-        // left_dock_width, sequencer visibility). Do not seed those from
-        // layout.json so a later GUIL restore cannot fight stale user prefs.
         LayoutState state;
         state.load();
-        setShowSequencer(false);
+        const auto config_dir = LayoutState::getConfigDir();
+        if (!config_dir.empty() && std::filesystem::exists(config_dir / "layout.json")) {
+            auto migrated = captureProjectState();
+            migrated.right_panel_width = state.right_panel_width;
+            migrated.scene_panel_ratio = state.scene_panel_ratio;
+            migrated.python_console_width = state.python_console_width;
+            migrated.bottom_dock_height = state.bottom_dock_height;
+            migrated.left_dock_width = state.left_dock_width;
+            migrated.show_sequencer = state.show_sequencer;
+            applyProjectState(migrated);
+        } else {
+            setShowSequencer(false);
+        }
         previous_bottom_docked_ids_.clear();
         bottom_dock_sync_seeded_ = false;
     }

@@ -33,9 +33,9 @@ namespace lfs::vis {
         [[nodiscard]] std::string themeName();
         void setUiScale(float value);
         [[nodiscard]] float uiScale();
-        void setZoomSpeed(float value);
+        void setZoomSpeed(float value, bool persist = true);
         [[nodiscard]] float zoomSpeed();
-        void setNavigationSpeed(float value);
+        void setNavigationSpeed(float value, bool persist = true);
         [[nodiscard]] float navigationSpeed();
 
         void setLanguage(const std::string& value);
@@ -101,9 +101,9 @@ namespace lfs::vis {
 
     LFS_VIS_API void saveCameraNavigationPreference(const std::string& mode);
     [[nodiscard]] LFS_VIS_API std::string loadCameraNavigationPreference();
-    LFS_VIS_API void saveZoomSpeedPreference(float speed);
+    LFS_VIS_API void saveZoomSpeedPreference(float speed, bool persist = true);
     [[nodiscard]] LFS_VIS_API float loadZoomSpeedPreference();
-    LFS_VIS_API void saveNavigationSpeedPreference(float speed);
+    LFS_VIS_API void saveNavigationSpeedPreference(float speed, bool persist = true);
     [[nodiscard]] LFS_VIS_API float loadNavigationSpeedPreference();
     LFS_VIS_API void setRememberCameraNavigationPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool rememberCameraNavigationPreference();

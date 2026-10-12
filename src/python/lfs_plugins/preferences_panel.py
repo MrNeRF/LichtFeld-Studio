@@ -114,6 +114,7 @@ class PreferencesPanel(Panel):
             self.SPEED_SCRUB_FIELD_DEFS,
             self._get_scrub_value,
             self._set_scrub_value,
+            commit_value=self._commit_scrub_value,
         )
 
     @property
@@ -811,6 +812,13 @@ class PreferencesPanel(Panel):
         return self.SPEED_SCRUB_FIELD_DEFS[prop].min_value
 
     def _set_scrub_value(self, prop, value):
+        if prop == "zoom_speed":
+            lf.ui.set_zoom_speed_preference(float(value), persist=False)
+        elif prop == "navigation_speed":
+            lf.ui.set_navigation_speed_preference(float(value), persist=False)
+        self._refresh_selection()
+
+    def _commit_scrub_value(self, prop, value):
         if prop == "zoom_speed":
             self._set_zoom_speed(value)
         elif prop == "navigation_speed":

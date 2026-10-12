@@ -34,8 +34,9 @@ def test_project_folder_remove_label_uses_sentence_case_in_all_locales():
 def preferences_panel_module(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
     source_python = project_root / "src" / "python"
-    if str(source_python) not in sys.path:
-        sys.path.insert(0, str(source_python))
+    if str(source_python) in sys.path:
+        sys.path.remove(str(source_python))
+    sys.path.insert(0, str(source_python))
 
     state = SimpleNamespace(
         language="it",
@@ -217,9 +218,9 @@ def preferences_panel_module(monkeypatch):
         get_viewport_toolbar_position=lambda: state.viewport_toolbar_position,
         set_viewport_toolbar_position=set_viewport_toolbar_position,
         get_zoom_speed_preference=lambda: state.zoom_speed,
-        set_zoom_speed_preference=lambda value: set_speed("zoom_speed", value),
+        set_zoom_speed_preference=lambda value, persist=True: set_speed("zoom_speed", value),
         get_navigation_speed_preference=lambda: state.navigation_speed,
-        set_navigation_speed_preference=lambda value: set_speed("navigation_speed", value),
+        set_navigation_speed_preference=lambda value, persist=True: set_speed("navigation_speed", value),
         remember_camera_navigation=lambda: False,
         set_remember_camera_navigation=lambda _enabled: None,
         remember_camera_view_snap=lambda: False,
@@ -556,6 +557,36 @@ def test_navigation_speed_preferences_round_trip_and_clamp(preferences_panel_mod
     panel._set_navigation_speed(101)
     assert state.zoom_speed == 1
     assert state.navigation_speed == 100
+
+
+@pytest.mark.parametrize("field", ["zoom_speed", "navigation_speed"])
+def test_speed_scrub_moves_preview_and_write_once_on_commit(preferences_panel_module,
+                                                              monkeypatch, tmp_path, field):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    writes = []
+    reads = []
+    path = tmp_path / "preferences.json"
+    path.write_text(json.dumps({field: getattr(state, field)}))
+
+    def set_speed(value, persist=True):
+        setattr(state, field, float(value))
+        if persist:
+            reads.append(path.read_text())
+            path.write_text(json.dumps({field: float(value)}))
+            writes.append(float(value))
+
+    monkeypatch.setattr(module.lf.ui, f"set_{field}_preference", set_speed)
+    for move in range(20):
+        panel._set_scrub_value(field, 20 + move)
+        assert getattr(state, field) == 20 + move
+    assert writes == []
+    assert reads == []
+    panel._commit_scrub_value(field, getattr(state, field))
+    assert writes == [39.0]
+    assert len(reads) == 1
+    assert json.loads(path.read_text())[field] == 39.0
 
 
 def test_navigation_speed_preferences_reset_with_input_section(preferences_panel_module):

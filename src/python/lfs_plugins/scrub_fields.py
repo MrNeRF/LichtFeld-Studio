@@ -48,11 +48,13 @@ class ScrubFieldController:
     def __init__(self, specs: dict[str, ScrubFieldSpec],
                  get_value: Callable[[str], float],
                  set_value: Callable[[str, float], None], *,
+                 commit_value: Callable[[str, float], None] | None = None,
                  capture_edit: Callable[[str], object] | None = None,
                  restore_edit: Callable[[str, object], None] | None = None):
         self._specs = dict(specs)
         self._get_value = get_value
         self._set_value = set_value
+        self._commit_value = commit_value
         self._capture_edit = capture_edit
         self._restore_edit = restore_edit
         self._doc = None
@@ -262,6 +264,7 @@ class ScrubFieldController:
 
         state.commit_on_blur = True
         self._commit_edit_value(state)
+        self._commit_if_changed(state)
         state.input_el.blur()
 
     def _on_input_blur(self, prop: str, _event) -> None:
@@ -301,8 +304,22 @@ class ScrubFieldController:
         state.dragging = False
         state.field.set_class("is-dragging", False)
 
+        if was_dragging:
+            self._commit_if_changed(state)
+
         if open_editor and not was_dragging and not state.editing:
             self._enter_edit(state)
+
+    def _commit_if_changed(self, state: _ScrubFieldState) -> None:
+        if self._commit_value is None:
+            return
+        value = self._safe_value(state.prop)
+        if self._values_equal(state.spec, value, state.edit_value_before):
+            return
+        try:
+            self._commit_value(state.prop, value)
+        except (RuntimeError, TypeError, ValueError):
+            return
 
     def _enter_edit(self, state: _ScrubFieldState) -> None:
         state.editing = True

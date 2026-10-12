@@ -8,6 +8,7 @@
 #include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/persisted_settings.hpp"
 #include "core/user_paths.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <initializer_list>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -56,6 +58,32 @@ namespace lfs::vis {
 
         [[nodiscard]] bool knownProjectManagerView(std::string_view view) {
             return view == "remember" || view == "gallery" || view == "list";
+        }
+
+        void eraseKnownProjectManagerFields(json& project_manager) {
+            for (const char* key : {"default_view", "open_at_startup", "remember_state"})
+                project_manager.erase(key);
+            auto state = project_manager.find("state");
+            if (state == project_manager.end() || !state->is_object())
+                return;
+            for (const char* key : {"view_mode", "bottom_panel_height", "inspector_width",
+                                    "inspector_height", "inspector_height_version", "thumbnail_size",
+                                    "operations_expanded", "sort_mode", "sort_descending",
+                                    "selected_folder_id", "active_filter", "panel_width",
+                                    "panel_open", "navigator_width", "thumbnail_sizes"})
+                state->erase(key);
+            for (const char* nested : {"list_column_overrides", "inspector_sections"}) {
+                auto children = state->find(nested);
+                if (children == state->end() || !children->is_object())
+                    continue;
+                for (const char* key : {"name", "gallery", "size", "modified", "folder",
+                                        "project", "file"})
+                    children->erase(key);
+                if (children->empty())
+                    state->erase(nested);
+            }
+            if (state->empty())
+                project_manager.erase("state");
         }
 
         constexpr float kDefaultZoomSpeed = 11.0f;
@@ -246,24 +274,99 @@ namespace lfs::vis {
     struct UserPreferences::Impl {
         std::mutex mutex;
         json values = json::object();
+        json persisted_values = json::object();
         std::optional<lfs::core::UserPaths> paths;
         std::filesystem::path loaded_path;
         bool loaded = false;
         bool writable = true;
         bool warned = false;
+        bool reset_project_manager_on_save = false;
 
         void saveValuesLocked() {
             if (!paths || !writable)
                 return;
-            values["schema_version"] = 1;
-            if (const auto result = paths->writePreferencesAtomically(values.dump(2) + '\n'); !result)
-                LOG_WARN("Unable to save user preferences: {}",
-                         lfs::format_for_developer(result.error()));
+            try {
+                if (lfs::core::persisted_settings::field<std::uint64_t>(values, "schema_version", 1) <= 1)
+                    values["schema_version"] = 1;
+                auto merged = lfs::core::persisted_settings::mergeForWrite(
+                    paths->preferencesFile(), values, "schema_version", 1,
+                    nullptr, {}, paths->backupDir());
+                if (reset_project_manager_on_save) {
+                    auto saved_pm = merged.find("project_manager");
+                    if (saved_pm != merged.end() && saved_pm->is_object()) {
+                        eraseKnownProjectManagerFields(*saved_pm);
+                        if (saved_pm->empty())
+                            merged.erase("project_manager");
+                    }
+                }
+                for (auto previous = persisted_values.begin(); previous != persisted_values.end(); ++previous) {
+                    if (!values.contains(previous.key()))
+                        merged.erase(previous.key());
+                }
+                if (lfs::core::persisted_settings::field<std::uint64_t>(merged, "schema_version", 1) <= 1) {
+                    for (const char* legacy : {"working_directory", "asset_manager_directory"})
+                        if (!values.contains(legacy))
+                            merged.erase(legacy);
+                }
+                if (const auto result = paths->writePreferencesAtomically(merged.dump(2) + '\n'); !result)
+                    LOG_WARN("Unable to save user preferences: {}",
+                             lfs::format_for_developer(result.error()));
+                else {
+                    values = std::move(merged);
+                    persisted_values = values;
+                    reset_project_manager_on_save = false;
+                }
+            } catch (const std::exception& error) {
+                LOG_WARN("Unable to save user preferences: {}", error.what());
+            }
+        }
+
+        void logInvalidFieldsLocked() const {
+            using lfs::core::persisted_settings::field;
+            for (const char* key : {"theme", "language", "project_location",
+                                    "working_directory", "asset_manager_directory",
+                                    "legacy_working_directory", "new_project_navigation_up_axis",
+                                    "camera_navigation_mode", "status_bar_progress_style",
+                                    "viewport_chrome_style", "viewport_toolbar_position",
+                                    "scene_upscaler"})
+                (void)field<std::string>(values, key, {});
+            for (const char* key : {"remember_camera_navigation", "remember_camera_view_snap",
+                                    "camera_view_snap", "new_project_align_grid",
+                                    "scene_graph_selection_markers"})
+                (void)field<bool>(values, key, false);
+            for (const char* key : {"zoom_speed", "navigation_speed", "viewport_toolbar_free_y"})
+                (void)field<float>(values, key, 0.0f);
+            const auto scale = values.find("ui_scale");
+            if (scale != values.end() && !scale->is_number() &&
+                !(scale->is_string() && scale->get<std::string>() == "auto"))
+                LOG_WARN("Invalid type for preference 'ui_scale'; using its default");
+            for (const char* key : {"project_manager", "mcp", "scene_upscaler_presets"}) {
+                const auto item = values.find(key);
+                if (item != values.end() && !item->is_object())
+                    LOG_WARN("Invalid type for preference '{}'; using its default", key);
+            }
+            const auto project_manager = values.find("project_manager");
+            if (project_manager != values.end() && project_manager->is_object()) {
+                (void)field<std::string>(*project_manager, "default_view", {});
+                (void)field<bool>(*project_manager, "open_at_startup", true);
+                (void)field<bool>(*project_manager, "remember_state", true);
+                const auto state = project_manager->find("state");
+                if (state != project_manager->end() && !state->is_object())
+                    LOG_WARN("Invalid type for preference 'project_manager.state'; using its default");
+            }
+            const auto mcp = values.find("mcp");
+            if (mcp != values.end() && mcp->is_object()) {
+                (void)field<bool>(*mcp, "enabled", false);
+                (void)field<bool>(*mcp, "expose_network", false);
+                (void)field<int>(*mcp, "port", 0);
+                (void)field<bool>(*mcp, "request_logging", false);
+            }
         }
 
         void migrateProjectLocationLocked() {
             if (!paths || !writable)
                 return;
+            const bool future = lfs::core::persisted_settings::field<std::uint64_t>(values, "schema_version", 1) > 1;
 
             const auto working = values.find("working_directory");
             if (working != values.end() && working->is_string() &&
@@ -274,8 +377,10 @@ namespace lfs::vis {
             const auto project = values.find("project_location");
             bool changed = false;
             if (project != values.end() && project->is_string()) {
-                changed = values.erase("working_directory") > 0;
-                changed = values.erase("asset_manager_directory") > 0 || changed;
+                if (!future) {
+                    changed = values.erase("working_directory") > 0;
+                    changed = values.erase("asset_manager_directory") > 0 || changed;
+                }
             } else {
                 std::string selected;
                 const auto asset = values.find("asset_manager_directory");
@@ -293,10 +398,12 @@ namespace lfs::vis {
                 }
                 values["project_location"] = selected;
                 changed = true;
-                changed = values.erase("working_directory") > 0 || changed;
-                changed = values.erase("asset_manager_directory") > 0 || changed;
+                if (!future) {
+                    changed = values.erase("working_directory") > 0 || changed;
+                    changed = values.erase("asset_manager_directory") > 0 || changed;
+                }
             }
-            if (changed)
+            if (changed && lfs::core::persisted_settings::field<std::uint64_t>(values, "schema_version", 1) <= 1)
                 saveValuesLocked();
         }
 
@@ -334,6 +441,8 @@ namespace lfs::vis {
             writable = true;
             warned = false;
             values = json::object();
+            persisted_values = json::object();
+            reset_project_manager_on_save = false;
 
             std::ifstream input(path);
             if (!input)
@@ -344,7 +453,22 @@ namespace lfs::vis {
                 if (!parsed.is_object())
                     throw std::runtime_error("root value is not an object");
                 values = std::move(parsed);
+                persisted_values = values;
                 input.close();
+                logInvalidFieldsLocked();
+                const auto schema = values.find("schema_version");
+                if (schema != values.end() &&
+                    (!schema->is_number_integer() ||
+                     (!schema->is_number_unsigned() && schema->get<std::int64_t>() < 0))) {
+                    const auto backup = paths->backupCorruptPreferences();
+                    if (!backup) {
+                        writable = false;
+                        LOG_WARN("Invalid preference version could not be backed up: {}",
+                                 lfs::format_for_developer(backup.error()));
+                    } else {
+                        LOG_WARN("Invalid preference version was backed up before migration");
+                    }
+                }
                 migrateProjectLocationLocked();
             } catch (const std::exception& error) {
                 // Windows does not allow the malformed file to be moved while
@@ -389,7 +513,7 @@ namespace lfs::vis {
     std::string UserPreferences::themeName() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        return impl_->values.value("theme", std::string{});
+        return lfs::core::persisted_settings::field<std::string>(impl_->values, "theme", {});
     }
     void UserPreferences::setUiScale(const float value) {
         std::scoped_lock lock(impl_->mutex);
@@ -412,11 +536,12 @@ namespace lfs::vis {
         }
         return 0.0f;
     }
-    void UserPreferences::setZoomSpeed(const float value) {
+    void UserPreferences::setZoomSpeed(const float value, const bool persist) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
         impl_->values["zoom_speed"] = clampNavigationSpeed(value, kDefaultZoomSpeed);
-        impl_->saveLocked();
+        if (persist)
+            impl_->saveLocked();
     }
     float UserPreferences::zoomSpeed() {
         std::scoped_lock lock(impl_->mutex);
@@ -426,11 +551,12 @@ namespace lfs::vis {
             return clampNavigationSpeed(it->get<float>(), kDefaultZoomSpeed);
         return kDefaultZoomSpeed;
     }
-    void UserPreferences::setNavigationSpeed(const float value) {
+    void UserPreferences::setNavigationSpeed(const float value, const bool persist) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
         impl_->values["navigation_speed"] = clampNavigationSpeed(value, kDefaultNavigationSpeed);
-        impl_->saveLocked();
+        if (persist)
+            impl_->saveLocked();
     }
     float UserPreferences::navigationSpeed() {
         std::scoped_lock lock(impl_->mutex);
@@ -488,7 +614,7 @@ namespace lfs::vis {
     void UserPreferences::setCameraNavigation(const std::string& value) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        if (!impl_->values.value("remember_camera_navigation", false))
+        if (!lfs::core::persisted_settings::field<bool>(impl_->values, "remember_camera_navigation", false))
             return;
         impl_->values["camera_navigation_mode"] = knownCameraMode(value) ? value : "orbit";
         impl_->saveLocked();
@@ -496,9 +622,9 @@ namespace lfs::vis {
     std::string UserPreferences::cameraNavigation() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        if (!impl_->values.value("remember_camera_navigation", false))
+        if (!lfs::core::persisted_settings::field<bool>(impl_->values, "remember_camera_navigation", false))
             return "orbit";
-        const std::string mode = impl_->values.value("camera_navigation_mode", "orbit");
+        const std::string mode = lfs::core::persisted_settings::field<std::string>(impl_->values, "camera_navigation_mode", "orbit");
         return knownCameraMode(mode) ? mode : "orbit";
     }
     void UserPreferences::setRememberCameraNavigation(const bool enabled) {
@@ -512,12 +638,12 @@ namespace lfs::vis {
     bool UserPreferences::rememberCameraNavigation() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        return impl_->values.value("remember_camera_navigation", false);
+        return lfs::core::persisted_settings::field<bool>(impl_->values, "remember_camera_navigation", false);
     }
     void UserPreferences::setCameraViewSnap(const bool enabled) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        if (!impl_->values.value("remember_camera_view_snap", false))
+        if (!lfs::core::persisted_settings::field<bool>(impl_->values, "remember_camera_view_snap", false))
             return;
         impl_->values["camera_view_snap"] = enabled;
         impl_->saveLocked();
@@ -525,9 +651,9 @@ namespace lfs::vis {
     bool UserPreferences::cameraViewSnap() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        if (!impl_->values.value("remember_camera_view_snap", false))
+        if (!lfs::core::persisted_settings::field<bool>(impl_->values, "remember_camera_view_snap", false))
             return false;
-        return impl_->values.value("camera_view_snap", false);
+        return lfs::core::persisted_settings::field<bool>(impl_->values, "camera_view_snap", false);
     }
     void UserPreferences::setRememberCameraViewSnap(const bool enabled) {
         std::scoped_lock lock(impl_->mutex);
@@ -540,7 +666,7 @@ namespace lfs::vis {
     bool UserPreferences::rememberCameraViewSnap() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        return impl_->values.value("remember_camera_view_snap", false);
+        return lfs::core::persisted_settings::field<bool>(impl_->values, "remember_camera_view_snap", false);
     }
     void UserPreferences::setSceneGraphSelectionMarkers(const bool enabled) {
         std::scoped_lock lock(impl_->mutex);
@@ -551,7 +677,7 @@ namespace lfs::vis {
     bool UserPreferences::sceneGraphSelectionMarkers() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        return impl_->values.value("scene_graph_selection_markers", false);
+        return lfs::core::persisted_settings::field<bool>(impl_->values, "scene_graph_selection_markers", false);
     }
     void UserPreferences::setProgressBarStyle(const std::string_view value) {
         std::scoped_lock lock(impl_->mutex);
@@ -696,7 +822,14 @@ namespace lfs::vis {
         auto& project_manager = impl_->values["project_manager"];
         if (!project_manager.is_object())
             project_manager = json::object();
-        project_manager["state"] = state;
+        if (lfs::core::persisted_settings::field<std::uint64_t>(impl_->values, "schema_version", 1) > 1) {
+            auto& stored_state = project_manager["state"];
+            if (!stored_state.is_object())
+                stored_state = json::object();
+            lfs::core::persisted_settings::mergeKnown(stored_state, state);
+        } else {
+            project_manager["state"] = state;
+        }
         impl_->saveLocked();
     }
 
@@ -715,19 +848,28 @@ namespace lfs::vis {
     void UserPreferences::resetProjectManagerPreferences() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        impl_->values.erase("project_manager");
+        auto project_manager = impl_->values.find("project_manager");
+        if (lfs::core::persisted_settings::field<std::uint64_t>(impl_->values, "schema_version", 1) > 1) {
+            if (project_manager == impl_->values.end() || !project_manager->is_object())
+                return;
+            impl_->reset_project_manager_on_save = true;
+            eraseKnownProjectManagerFields(*project_manager);
+        } else {
+            impl_->values.erase("project_manager");
+        }
         impl_->saveLocked();
     }
 
     void UserPreferences::setMcp(const McpPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        impl_->values["mcp"] = {
-            {"enabled", state.enabled},
-            {"expose_network", state.expose_network},
-            {"port", std::clamp(state.port, 1, 65535)},
-            {"request_logging", state.request_logging},
-        };
+        auto& mcp = impl_->values["mcp"];
+        if (!mcp.is_object())
+            mcp = json::object();
+        mcp["enabled"] = state.enabled;
+        mcp["expose_network"] = state.expose_network;
+        mcp["port"] = std::clamp(state.port, 1, 65535);
+        mcp["request_logging"] = state.request_logging;
         impl_->saveLocked();
     }
 
@@ -812,9 +954,9 @@ namespace lfs::vis {
     void clearLanguagePreference() { UserPreferences::instance().clearLanguage(); }
     void saveCameraNavigationPreference(const std::string& value) { UserPreferences::instance().setCameraNavigation(value); }
     std::string loadCameraNavigationPreference() { return UserPreferences::instance().cameraNavigation(); }
-    void saveZoomSpeedPreference(const float speed) { UserPreferences::instance().setZoomSpeed(speed); }
+    void saveZoomSpeedPreference(const float speed, const bool persist) { UserPreferences::instance().setZoomSpeed(speed, persist); }
     float loadZoomSpeedPreference() { return UserPreferences::instance().zoomSpeed(); }
-    void saveNavigationSpeedPreference(const float speed) { UserPreferences::instance().setNavigationSpeed(speed); }
+    void saveNavigationSpeedPreference(const float speed, const bool persist) { UserPreferences::instance().setNavigationSpeed(speed, persist); }
     float loadNavigationSpeedPreference() { return UserPreferences::instance().navigationSpeed(); }
     void setRememberCameraNavigationPreference(const bool enabled) { UserPreferences::instance().setRememberCameraNavigation(enabled); }
     bool rememberCameraNavigationPreference() { return UserPreferences::instance().rememberCameraNavigation(); }

@@ -3,6 +3,8 @@
 
 #include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
+#include "gui/layout_state.hpp"
+#include "gui/panel_layout.hpp"
 #include "visualizer/preferences.hpp"
 
 #include <gtest/gtest.h>
@@ -11,8 +13,10 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace {
     using json = nlohmann::json;
@@ -62,6 +66,17 @@ namespace {
         std::ifstream input(paths.preferencesFile());
         return json::parse(input);
     }
+
+    bool hasBackup(const std::filesystem::path& root, const std::filesystem::path& original,
+                   const std::string& contents) {
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(root))
+            if (entry.is_regular_file() && entry.path().filename() == original.filename()) {
+                std::ifstream input(entry.path());
+                if (std::string(std::istreambuf_iterator<char>(input), {}) == contents)
+                    return true;
+            }
+        return false;
+    }
 } // namespace
 
 TEST(PreferencesMigration, AssetDirectoryWinsOverWorkingDirectoryAndErasesLegacyKeys) {
@@ -83,6 +98,102 @@ TEST(PreferencesMigration, AssetDirectoryWinsOverWorkingDirectoryAndErasesLegacy
     EXPECT_EQ(migrated.at("legacy_working_directory"), working.string());
     EXPECT_FALSE(migrated.contains("asset_manager_directory"));
     EXPECT_FALSE(migrated.contains("working_directory"));
+}
+
+TEST(PreferencesMigration, FutureSchemaAndUnknownFieldsSurviveSettingChange) {
+    const auto home = makeHome("lfs_preferences_future_schema");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"schema_version", 999},
+                              {"asset_manager_directory", (home / "assets").string()},
+                              {"future_feature", {{"enabled", true}}}});
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_EQ(lfs::vis::loadProjectLocationPreference(), home / "assets");
+    preferences.setThemeName("dark");
+    const auto saved = readPreferences(*paths);
+    EXPECT_EQ(saved.at("schema_version"), 999);
+    EXPECT_EQ(saved.at("asset_manager_directory"), (home / "assets").string());
+    EXPECT_EQ(saved.at("future_feature"), json({{"enabled", true}}));
+}
+
+TEST(PreferencesMigration, WrongTypedThemeFallsBackWithoutCrashing) {
+    const auto home = makeHome("lfs_preferences_theme_number");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"schema_version", 1}, {"theme", 42}});
+    EXPECT_EQ(lfs::vis::UserPreferences::instance().themeName(), "");
+}
+
+TEST(PreferencesMigration, LegacyLayoutLoadsGeometryAndSequencerPerField) {
+    const auto home = makeHome("lfs_preferences_legacy_layout");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    std::ofstream(paths->configDir() / "layout.json") << R"({
+        "right_panel_width": 540, "scene_panel_ratio": 0.55,
+        "python_console_width": "bad", "show_sequencer": true,
+        "bottom_dock_height": 280, "left_dock_width": 370})";
+    lfs::vis::gui::LayoutState state;
+    state.load();
+    EXPECT_FLOAT_EQ(state.right_panel_width, 540);
+    EXPECT_FLOAT_EQ(state.scene_panel_ratio, 0.55f);
+    EXPECT_FLOAT_EQ(state.python_console_width, -1);
+    EXPECT_TRUE(state.show_sequencer);
+    EXPECT_FLOAT_EQ(state.bottom_dock_height, 280);
+    EXPECT_FLOAT_EQ(state.left_dock_width, 370);
+    lfs::vis::gui::PanelLayoutManager layout;
+    layout.loadState();
+    const auto applied = layout.captureProjectState();
+    EXPECT_FLOAT_EQ(applied.right_panel_width, 540);
+    EXPECT_FLOAT_EQ(applied.scene_panel_ratio, 0.55f);
+    EXPECT_FLOAT_EQ(applied.bottom_dock_height, 280);
+    EXPECT_FLOAT_EQ(applied.left_dock_width, 370);
+    EXPECT_TRUE(applied.show_sequencer);
+}
+
+TEST(PreferencesMigration, UiPreferencesKeepFutureFieldsAndBackUpDamagedFile) {
+    const auto home = makeHome("lfs_preferences_ui_future");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    const auto path = paths->uiPreferencesFile();
+    const auto old_layout = paths->layoutFile();
+    const std::string damaged_layout = R"({"right_panel_width":540,"show_sequencer":)";
+    std::ofstream(old_layout) << damaged_layout;
+    std::ofstream(path) << R"({"schema_version":999,"future_panel":{"user_choice":"keep_this"},"perf_hud":{"visible":true,"future_setting":7},"vram_hud":{"collapsed":["current_path",{"future_path":"keep_this"},42]}})";
+    lfs::vis::gui::LayoutState state;
+    state.load();
+    EXPECT_TRUE(state.perf_hud_visible);
+    EXPECT_TRUE(hasBackup(paths->backupDir(), old_layout, damaged_layout));
+    EXPECT_TRUE(lfs::vis::gui::LayoutState::takeLegacyLayoutBackupNotice());
+    bool backed_up = false;
+    const auto save_result = state.saveUserPreferencesChecked(&backed_up);
+    ASSERT_TRUE(save_result) << lfs::format_for_developer(save_result.error());
+    EXPECT_FALSE(backed_up);
+    std::ifstream saved_file(path);
+    const auto saved = json::parse(saved_file);
+    EXPECT_EQ(saved.at("schema_version"), 999);
+    EXPECT_EQ(saved.at("future_panel").at("user_choice"), "keep_this");
+    EXPECT_EQ(saved.at("perf_hud").at("future_setting"), 7);
+    EXPECT_EQ(saved.at("vram_hud").at("collapsed"),
+              json::array({"current_path", {{"future_path", "keep_this"}}, 42}));
+    saved_file.close();
+    std::ofstream(path, std::ios::trunc) << "{damaged";
+    ASSERT_TRUE(state.saveUserPreferencesChecked(&backed_up));
+    EXPECT_TRUE(backed_up);
+    EXPECT_TRUE(hasBackup(paths->backupDir(), path, "{damaged"));
+    const std::string wrong_root = R"(["bad-root",1])";
+    std::ofstream(path, std::ios::trunc) << wrong_root;
+    ASSERT_TRUE(state.saveUserPreferencesChecked(&backed_up));
+    EXPECT_TRUE(backed_up);
+    EXPECT_TRUE(hasBackup(paths->backupDir(), path, wrong_root));
+    EXPECT_TRUE(json::parse(std::ifstream(path)).at("perf_hud").at("visible"));
 }
 
 TEST(PreferencesMigration, ExistingProjectLocationPreservesLegacyWorkingDirectory) {
@@ -227,6 +338,34 @@ TEST(PreferencesMigration, CameraSpeedPreferencesPersistAndClamp) {
     EXPECT_FLOAT_EQ(preferences.navigationSpeed(), 100.0f);
 }
 
+TEST(PreferencesMigration, FutureProjectManagerResetKeepsUnknownChildren) {
+    const auto home = makeHome("lfs_preferences_future_pm_reset");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"schema_version", 999},
+                              {"project_manager", {{"default_view", "gallery"}, {"open_at_startup", false}, {"future_control", {{"enabled", true}}}, {"state", {{"view_mode", "list"}, {"future_layout", {{"width", 77}}}, {"inspector_sections", {{"project", false}, {"future_section", false}}}}}}}});
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_EQ(preferences.projectManagerDefaultView(), "gallery");
+    auto external = readPreferences(*paths);
+    external["project_manager"]["added_later"] = "preserve";
+    external["project_manager"]["state"]["list_column_overrides"] =
+        {{"name", 170}, {"future_column", 210}};
+    writePreferences(*paths, external);
+    preferences.resetProjectManagerPreferences();
+    const auto saved = readPreferences(*paths);
+    EXPECT_EQ(saved.at("schema_version"), 999);
+    const auto& pm = saved.at("project_manager");
+    EXPECT_FALSE(pm.contains("default_view"));
+    EXPECT_FALSE(pm.contains("open_at_startup"));
+    EXPECT_EQ(pm.at("future_control"), json({{"enabled", true}}));
+    EXPECT_EQ(pm.at("added_later"), "preserve");
+    EXPECT_EQ(pm.at("state"), json({{"future_layout", {{"width", 77}}},
+                                    {"inspector_sections", {{"future_section", false}}},
+                                    {"list_column_overrides", {{"future_column", 210}}}}));
+}
+
 TEST(PreferencesMigration, ProjectManagerPreferencesUseCanonicalStoreAndResetInIsolation) {
     const auto home = makeHome("lfs_preferences_project_manager");
     const ScopedLfsHome scoped_home(home);
@@ -265,6 +404,10 @@ TEST(PreferencesMigration, ProjectManagerPreferencesUseCanonicalStoreAndResetInI
     EXPECT_EQ(preferences.projectManagerDefaultView(), "remember");
     EXPECT_TRUE(preferences.openProjectManagerAtStartup());
     EXPECT_TRUE(preferences.rememberProjectManagerState());
+
+    preferences.setLanguage("fr");
+    preferences.clearLanguage();
+    EXPECT_FALSE(readPreferences(*paths).contains("language"));
 }
 
 TEST(PreferencesMigration, InvalidProjectManagerPreferencesFallBackWithoutContamination) {
