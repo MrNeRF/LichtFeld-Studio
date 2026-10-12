@@ -150,7 +150,15 @@ int main(int argc, char** argv) {
             progress.push_back({current, total, discarded});
         };
         const int cancel_after = request.value("cancel_after", -1);
-        params.cancel_requested = [&]() { return cancel_after >= 0 && progressed >= cancel_after; };
+        params.cancel_requested = [&]() {
+            if (request.value("cancel_metadata_commit", false) && std::filesystem::is_directory(params.output_dir)) {
+                for (const auto& entry : std::filesystem::directory_iterator(params.output_dir)) {
+                    if (lfs::core::path_to_utf8(entry.path().filename()).starts_with("extraction_metadata.json.tmp-"))
+                        return true;
+                }
+            }
+            return cancel_after >= 0 && progressed >= cancel_after;
+        };
         VideoFrameExtractor extractor;
         std::string error;
         using namespace lfs::media;

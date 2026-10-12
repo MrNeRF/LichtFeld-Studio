@@ -2412,24 +2412,21 @@ namespace lfs::io {
                                               {"sharpness_score", f.sharpness_score}});
                         }
 
-                        if (float_output) {
-                            media::ExrOutputOptions options;
-                            options.overwrite = params.overwrite_metadata;
-                            options.cancelled = params.cancel_requested;
-                            const auto result = core::writeTextFileAtomically(meta_path, root.dump(2), {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled});
-                            if (!result) {
-                                failure_ = result.error();
-                                if (failure_->code() == ErrorCode::Cancelled)
-                                    throw ExtractionCancelled{};
-                                throw std::runtime_error(std::string(failure_->detail()));
-                            }
-                        } else {
-                            std::ofstream meta_file(meta_path, std::ios::binary);
-                            meta_file << root.dump(2);
-                            meta_file.close();
-                            if (!meta_file)
-                                throw std::runtime_error("Could not write output file");
+                        // SDR historically replaces its manifest; float output has
+                        // an explicit collision policy. Preserve both contracts.
+                        const auto result = core::writeTextFileAtomically(meta_path, root.dump(2),
+                                                                          {.overwrite = !float_output || params.overwrite_metadata,
+                                                                           .durable = false,
+                                                                           .create_directories = false,
+                                                                           .cancelled = params.cancel_requested});
+                        if (!result) {
+                            failure_ = result.error();
+                            if (failure_->code() == ErrorCode::Cancelled)
+                                throw ExtractionCancelled{};
+                            throw std::runtime_error(std::string(failure_->detail()));
                         }
+                    } catch (const ExtractionCancelled&) {
+                        throw;
                     } catch (const std::exception& e) {
                         if (float_output)
                             throw;

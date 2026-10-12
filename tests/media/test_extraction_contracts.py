@@ -38,7 +38,7 @@ class ExtractionContracts(unittest.TestCase):
         path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
         result = subprocess.run([str(RUNNER), str(path)], capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
-        return json.loads(result.stdout), output
+        return json.loads(result.stdout), Path(request["output"])
 
     def test_memory_sink_preserves_pixels_pts_and_ownership(self):
         for fixture in ("cfr-asymmetric", "vfr-asymmetric"):
@@ -412,6 +412,47 @@ class ExtractionContracts(unittest.TestCase):
 
     def metadata(self, output):
         return json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))
+
+    def test_sdr_manifest_replacement_preserves_legacy_policy(self):
+        for image_format in ("png", "jpg"):
+            with self.subTest(format=image_format):
+                output = Path(tempfile.mkdtemp(prefix="replace-manifest-", dir=self.root))
+                manifest = output / "extraction_metadata.json"
+                manifest.write_bytes(b'{"previous_run":true}')
+                result, _ = self.extract(output=str(output), format=image_format)
+                self.completed(result)
+                metadata = self.metadata(output)
+                self.assertEqual(metadata["schema_version"], 2)
+                self.assertEqual(len(metadata["frames"]), 4)
+                self.assertTrue(all((output / frame["file"]).is_file() for frame in metadata["frames"]))
+                self.assertEqual(list(output.glob("extraction_metadata.json.tmp-*")), [])
+
+    def test_sdr_manifest_cancel_before_publication_preserves_previous_file(self):
+        output = Path(tempfile.mkdtemp(prefix="cancel-manifest-", dir=self.root))
+        manifest = output / "extraction_metadata.json"
+        previous = b'{"previous_run":true}\n'
+        manifest.write_bytes(previous)
+        result, _ = self.extract(output=str(output), cancel_metadata_commit=True)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["outcome"], "cancelled")
+        self.assertTrue(result["error"])
+        self.assertEqual(manifest.read_bytes(), previous)
+        self.assert_frames(output, [0, 1, 2, 3])
+        self.assertEqual(list(output.glob("extraction_metadata.json.tmp-*")), [])
+
+    def test_sdr_manifest_publication_failure_keeps_committed_images(self):
+        output = Path(tempfile.mkdtemp(prefix="failed-manifest-", dir=self.root))
+        manifest = output / "extraction_metadata.json"
+        manifest.mkdir()
+        sentinel = manifest / "keep.txt"
+        sentinel.write_bytes(b"unrelated data")
+        result, _ = self.extract(output=str(output))
+        self.assertFalse(result["success"])
+        self.assertEqual(result["outcome"], "failed")
+        self.assertTrue(result["error"])
+        self.assertEqual(sentinel.read_bytes(), b"unrelated data")
+        self.assert_frames(output, [0, 1, 2, 3])
+        self.assertEqual(list(output.glob("extraction_metadata.json.tmp-*")), [])
 
     def reference_frame(self, index, spec=fixtures.SPECS[0]):
         size = spec["width"] * spec["height"] * 3
