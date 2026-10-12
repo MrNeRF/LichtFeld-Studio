@@ -252,9 +252,16 @@ def main():
     current_profile = {"name": current["name"], "version": current["version"],
                        "bindings": [{key: value for key, value in binding.items()
                                      if key != "action_symbol"} for binding in current["bindings"]]}
-    baseline = ROOT / f'tests/data/keymap_contract/current_v{current["version"]}.json'
+    baseline = ROOT / f'tests/data/keymap_contract/current_v{current["version"]}.digest'
     baseline.parent.mkdir(parents=True, exist_ok=True)
-    content = json.dumps(current_profile, indent=2) + "\n"
+    canonical_bindings = json.dumps(current_profile["bindings"], separators=(",", ":"),
+                                    sort_keys=True).encode("utf-8")
+    digest_value = 14695981039346656037
+    for byte in canonical_bindings:
+        digest_value = ((digest_value ^ byte) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    digest = f"{digest_value:016x}"
+    content = f'version {current["version"]}\nfnv1a64 {digest}\n'
+    print(f'current defaults v{current["version"]} fnv1a64: {digest}')
     if args.check:
         if not baseline.exists() or baseline.read_text() != content:
             raise SystemExit(

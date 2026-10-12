@@ -689,6 +689,7 @@ set(TEST_FILES
     test_keymap_damaged_profile.cpp
     test_keymap_active_profile.cpp
     test_keymap_trigger_validation.cpp
+    test_keymap_upgrade_guard.cpp
     test_keymap_rejected_import.cpp
     test_keymap_named_save.cpp
     test_keymap_extended_keys.cpp
