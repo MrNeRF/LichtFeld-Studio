@@ -4,6 +4,7 @@
 
 #include "core/camera.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/cuda/mask_normalization.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/cuda_error_typed.hpp"
 #include "core/image_io.hpp"
@@ -637,11 +638,6 @@ namespace lfs::core {
             mask = Tensor::full(mask.shape(), 1.0f, mask.device()) - mask;
         }
 
-        if (binarize && !(_undistort_prepared && apply_undistortion) &&
-            mask_threshold > 0.0f && mask_threshold < 1.0f) {
-            mask = mask.ge(mask_threshold).to(DataType::Float32);
-        }
-
         if (_undistort_prepared && apply_undistortion) {
             const auto scaled = prepare_undistort_params(
                 _undistort_params,
@@ -653,11 +649,10 @@ namespace lfs::core {
         }
 
         if (binarize) {
-            const float final_threshold = _undistort_prepared && apply_undistortion &&
-                                                  mask_threshold > 0.0f && mask_threshold < 1.0f
+            const float final_threshold = mask_threshold > 0.0f && mask_threshold <= 1.0f
                                               ? mask_threshold
                                               : 0.5f;
-            mask = mask.ge(final_threshold).to(DataType::UInt8).contiguous();
+            mask = cuda::threshold_mask(mask, final_threshold);
         } else {
             // Keep Float32 [0,1] so undistorted samples match the pipelined
             // loader / fused-kernel domain (kMaskKeepMin). Rounding through
@@ -705,7 +700,7 @@ namespace lfs::core {
                 }
             }
             if (mask.dtype() == DataType::UInt8) {
-                mask = mask.to(DataType::Float32).div(255.0f);
+                mask = cuda::normalize_mask_bytes(mask);
             } else if (mask.dtype() != DataType::Float32) {
                 mask = mask.to(DataType::Float32);
             }

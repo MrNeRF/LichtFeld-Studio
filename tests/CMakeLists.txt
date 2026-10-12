@@ -740,6 +740,7 @@ set(TEST_FILES
     test_export_env_composite.cpp
     test_image_io.cpp
     test_project_thumbnail_image.cpp
+    test_camera_mask_threshold.cpp
     test_camera_thumbnail_policy.cpp
     test_undistort.cpp
     gut_camera_model_cuda.cu
