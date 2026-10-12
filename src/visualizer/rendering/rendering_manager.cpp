@@ -518,8 +518,11 @@ namespace lfs::vis {
 
     lfs::Result<void> RenderingManager::updateSettingsFromUser(const RenderSettings& new_settings) {
         bool validate_environment = false;
+        bool orthographic_selected = false;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            orthographic_selected = new_settings.orthographic && !settings_.orthographic &&
+                                    settings_.equirectangular;
             validate_environment = settings_.environment_map_path != new_settings.environment_map_path ||
                                    (settings_.environment_mode != new_settings.environment_mode &&
                                     new_settings.environment_mode == EnvironmentBackgroundMode::Equirectangular);
@@ -546,7 +549,19 @@ namespace lfs::vis {
                 return lfs::Result<void>::failure(std::move(error));
             }
         }
-        updateSettings(new_settings);
+        if (new_settings.orthographic && new_settings.equirectangular) {
+            auto projection_settings = new_settings;
+            // Select the newly enabled projection. Ambiguous requests retain
+            // panorama's existing rendering priority.
+            if (orthographic_selected) {
+                projection_settings.equirectangular = false;
+            } else {
+                projection_settings.orthographic = false;
+            }
+            updateSettings(projection_settings);
+        } else {
+            updateSettings(new_settings);
+        }
         return {};
     }
 
@@ -557,6 +572,11 @@ namespace lfs::vis {
     void RenderingManager::updateSettings(const RenderSettings& new_settings,
                                           const DirtyMask dirty_flags) {
         RenderSettings sanitized_settings = new_settings;
+        // Restored settings retain panorama's rendering priority. Input must
+        // use that same projection even when an older project saved both flags.
+        if (sanitized_settings.equirectangular) {
+            sanitized_settings.orthographic = false;
+        }
         const auto backend = sceneUpscalerBackendFromId(sanitized_settings.scene_upscaler)
                                  .value_or(SceneUpscalerBackend::Native);
         if (!sceneUpscalerPreset(backend, sanitized_settings.scene_upscaler_preset)) {
@@ -674,7 +694,13 @@ namespace lfs::vis {
     }
 
     void RenderingManager::setOrthographic(const bool enabled, const float viewport_height, const float distance_to_pivot) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
+        std::unique_lock<std::mutex> lock(settings_mutex_);
+
+        const bool projection_changed = enabled && settings_.equirectangular;
+        if (projection_changed) {
+            settings_.equirectangular = false;
+            enforceProjectionBackend(settings_, true);
+        }
 
         constexpr float MIN_DISTANCE = 0.01f;
         constexpr float MIN_SCALE = 1.0f;
@@ -686,12 +712,7 @@ namespace lfs::vis {
             if (enabled && !settings_.orthographic) {
                 settings_.ortho_scale = DEFAULT_SCALE;
             }
-            settings_.orthographic = enabled;
-            markDirty(DirtyFlag::CAMERA, lfs::vis::FrameReason::CameraMotion);
-            return;
-        }
-
-        if (enabled && !settings_.orthographic) {
+        } else if (enabled && !settings_.orthographic) {
             const float vfov = lfs::rendering::focalLengthToVFov(settings_.focal_length_mm);
             const float half_tan_fov = std::tan(glm::radians(vfov) * 0.5f);
             settings_.ortho_scale = std::clamp(
@@ -701,6 +722,12 @@ namespace lfs::vis {
 
         settings_.orthographic = enabled;
         markDirty(DirtyFlag::CAMERA, lfs::vis::FrameReason::CameraMotion);
+        lock.unlock();
+
+        if (projection_changed) {
+            auto& generation = app_store().render_settings_generation;
+            generation.set(generation.get() + 1);
+        }
     }
 
     float RenderingManager::getFovDegrees() const {

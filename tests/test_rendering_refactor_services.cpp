@@ -17,8 +17,10 @@
 #include "io/cache_image_loader.hpp"
 #include "io/loader.hpp"
 #include "operation/undo_history.hpp"
+#include "project/session_state.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/gt_comparison_cache_utils.hpp"
 #include "visualizer/rendering/render_pass.hpp"
@@ -837,6 +839,165 @@ namespace lfs::vis {
                                      (2.0f * distance_to_pivot *
                                       std::tan(glm::radians(lfs::rendering::focalLengthToVFov(50.0f)) * 0.5f));
         EXPECT_NEAR(ortho_settings.ortho_scale, expected_scale, 1e-4f);
+    }
+
+    TEST_F(RenderingManagerEventsTest, OrthographicSelectionLeavesPanorama) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+        for (const auto backend : {Backend::ThreeDgs, Backend::ThreeDgut}) {
+            for (const float height : {0.0f, 900.0f}) {
+                RenderingManager manager;
+                auto settings = manager.getSettings();
+                settings.raster_backend = backend;
+                settings.gut = lfs::rendering::isGutBackend(backend);
+                manager.updateSettings(settings);
+                auto event = lfs::core::events::ui::RenderSettingsChanged{};
+                event.equirectangular = true;
+                event.emit();
+
+                const auto generation = app_store().render_settings_generation.get();
+                manager.setOrthographic(true, height, 7.5f);
+                const auto selected = manager.getSettings();
+                EXPECT_GT(app_store().render_settings_generation.get(), generation);
+                EXPECT_TRUE(selected.orthographic);
+                EXPECT_FALSE(selected.equirectangular);
+                EXPECT_EQ(selected.raster_backend, backend);
+                EXPECT_EQ(selected.gut, lfs::rendering::isGutBackend(backend));
+                EXPECT_FALSE(selected.raster_backend_before_equirectangular.has_value());
+                EXPECT_FLOAT_EQ(selected.focal_length_mm, settings.focal_length_mm);
+            }
+        }
+    }
+
+    TEST_F(RenderingManagerEventsTest, PanoramaEventLeavesOrthographic) {
+        RenderingManager manager;
+        manager.setOrthographic(true, 900.0f, 7.5f);
+        const float scale = manager.getSettings().ortho_scale;
+        const auto generation = app_store().render_settings_generation.get();
+        auto event = lfs::core::events::ui::RenderSettingsChanged{};
+        event.equirectangular = true;
+        event.emit();
+        EXPECT_GT(app_store().render_settings_generation.get(), generation);
+        EXPECT_TRUE(manager.getSettings().equirectangular);
+        EXPECT_FALSE(manager.getSettings().orthographic);
+        EXPECT_FLOAT_EQ(manager.getSettings().ortho_scale, scale);
+    }
+
+    TEST_F(RenderingManagerEventsTest, UserProjectionChangesSelectRequestedProjection) {
+        RenderingManager manager;
+        manager.setOrthographic(true, 900.0f, 7.5f);
+        auto settings = manager.getSettings();
+        settings.equirectangular = true;
+        ASSERT_TRUE(manager.updateSettingsFromUser(settings));
+        EXPECT_TRUE(manager.getSettings().equirectangular);
+        EXPECT_FALSE(manager.getSettings().orthographic);
+
+        settings = manager.getSettings();
+        settings.orthographic = true;
+        settings.ortho_scale = 73.0f;
+        ASSERT_TRUE(manager.updateSettingsFromUser(settings));
+        EXPECT_TRUE(manager.getSettings().orthographic);
+        EXPECT_FALSE(manager.getSettings().equirectangular);
+        EXPECT_FLOAT_EQ(manager.getSettings().ortho_scale, 73.0f);
+        EXPECT_EQ(manager.getSettings().raster_backend, lfs::rendering::GaussianRasterBackend::ThreeDgs);
+    }
+
+    TEST_F(RenderingManagerEventsTest, DisablingOrthographicPreservesPanorama) {
+        RenderingManager manager;
+        auto event = lfs::core::events::ui::RenderSettingsChanged{};
+        event.equirectangular = true;
+        event.emit();
+        const auto before = manager.getSettings();
+        manager.setOrthographic(false, 900.0f, 7.5f);
+        const auto after = manager.getSettings();
+        EXPECT_TRUE(after.equirectangular);
+        EXPECT_FALSE(after.orthographic);
+        EXPECT_FLOAT_EQ(after.ortho_scale, before.ortho_scale);
+        EXPECT_EQ(after.raster_backend, before.raster_backend);
+        EXPECT_EQ(after.raster_backend_before_equirectangular, before.raster_backend_before_equirectangular);
+    }
+
+    TEST_F(RenderingManagerEventsTest, RestoredConflictingProjectionUsesPanorama) {
+        for (const auto backend : {lfs::rendering::GaussianRasterBackend::ThreeDgs,
+                                   lfs::rendering::GaussianRasterBackend::ThreeDgut}) {
+            for (const bool already_orthographic : {false, true}) {
+                RenderingManager manager;
+                manager.setOrthographic(already_orthographic, 900.0f, 7.5f);
+                auto saved = manager.getSettings();
+                saved.orthographic = true;
+                saved.equirectangular = true;
+                saved.ortho_scale = 73.0f;
+                saved.focal_length_mm = 35.0f;
+                saved.raster_backend = backend;
+                const auto json = project::renderSettingsToProjectJson(saved);
+                const auto original_json = json.dump();
+                auto restored = project::renderSettingsFromProjectJson(json, manager.getSettings());
+                ASSERT_TRUE(restored);
+                // Match the settings restoration used by the VIEW chapter.
+                manager.updateSettings(*restored);
+                const auto effective = manager.getSettings();
+                EXPECT_TRUE(effective.equirectangular);
+                EXPECT_FALSE(effective.orthographic);
+                EXPECT_FLOAT_EQ(effective.ortho_scale, saved.ortho_scale);
+                EXPECT_FLOAT_EQ(effective.focal_length_mm, saved.focal_length_mm);
+                EXPECT_EQ(effective.raster_backend, lfs::rendering::GaussianRasterBackend::ThreeDgut);
+                EXPECT_EQ(json.dump(), original_json);
+                EXPECT_TRUE(json.at("orthographic").get<bool>());
+                EXPECT_TRUE(json.at("equirectangular").get<bool>());
+
+                // Subsequent split restoration applies the effective settings again.
+                manager.updateSettings(effective);
+                EXPECT_FALSE(manager.getSettings().orthographic);
+                EXPECT_TRUE(manager.getSettings().equirectangular);
+            }
+        }
+    }
+
+    TEST_F(RenderingManagerEventsTest, RestoredValidProjectionsPreserveSavedSettings) {
+        for (const auto backend : {lfs::rendering::GaussianRasterBackend::ThreeDgs,
+                                   lfs::rendering::GaussianRasterBackend::ThreeDgut}) {
+            for (const int projection : {0, 1, 2}) {
+                RenderingManager manager;
+                auto saved = manager.getSettings();
+                saved.orthographic = projection == 1;
+                saved.equirectangular = projection == 2;
+                saved.ortho_scale = 73.0f;
+                saved.focal_length_mm = 35.0f;
+                saved.raster_backend = backend;
+                const auto restored = project::renderSettingsFromProjectJson(
+                    project::renderSettingsToProjectJson(saved));
+                ASSERT_TRUE(restored);
+                manager.updateSettings(*restored);
+                const auto effective = manager.getSettings();
+                EXPECT_EQ(effective.orthographic, saved.orthographic);
+                EXPECT_EQ(effective.equirectangular, saved.equirectangular);
+                EXPECT_FLOAT_EQ(effective.ortho_scale, saved.ortho_scale);
+                EXPECT_FLOAT_EQ(effective.focal_length_mm, saved.focal_length_mm);
+                EXPECT_EQ(effective.raster_backend, restored->raster_backend);
+            }
+        }
+    }
+
+    TEST_F(RenderingManagerEventsTest, UserSettingsPreserveUnchangedProjection) {
+        for (const int projection : {0, 1, 2}) {
+            RenderingManager manager;
+            auto settings = manager.getSettings();
+            settings.orthographic = projection == 1;
+            settings.equirectangular = projection == 2;
+            settings.ortho_scale = 73.0f;
+            manager.updateSettings(settings);
+            const auto before = manager.getSettings();
+
+            settings = before;
+            settings.show_grid = !settings.show_grid;
+            ASSERT_TRUE(manager.updateSettingsFromUser(settings));
+            const auto after = manager.getSettings();
+            EXPECT_EQ(after.orthographic, before.orthographic);
+            EXPECT_EQ(after.equirectangular, before.equirectangular);
+            EXPECT_FLOAT_EQ(after.ortho_scale, before.ortho_scale);
+            EXPECT_FLOAT_EQ(after.focal_length_mm, before.focal_length_mm);
+            EXPECT_EQ(after.raster_backend, before.raster_backend);
+            EXPECT_EQ(after.raster_backend_before_equirectangular, before.raster_backend_before_equirectangular);
+        }
     }
 
     TEST_F(RenderingManagerEventsTest, OrthographicLeaveKeepsFocalLength) {

@@ -10,6 +10,7 @@
 #include "core/services.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include <algorithm>
 
 namespace lfs::vis {
@@ -201,7 +202,10 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleRenderSettingsChanged(const ui::RenderSettingsChanged& event) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
+        std::unique_lock<std::mutex> lock(settings_mutex_);
+        const bool projection_changed = event.equirectangular &&
+                                        (*event.equirectangular != settings_.equirectangular ||
+                                         (*event.equirectangular && settings_.orthographic));
         if (event.sh_degree) {
             settings_.sh_degree = *event.sh_degree;
             LOG_TRACE("SH_DEGREE changed to: {}", settings_.sh_degree);
@@ -224,10 +228,19 @@ namespace lfs::vis {
         }
         if (event.equirectangular) {
             settings_.equirectangular = *event.equirectangular;
+            if (settings_.equirectangular) {
+                settings_.orthographic = false;
+            }
             enforceProjectionBackend(settings_, true);
             LOG_TRACE("Equirectangular rendering: {}", settings_.equirectangular ? "enabled" : "disabled");
         }
         markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SceneChange);
+        lock.unlock();
+
+        if (projection_changed) {
+            auto& generation = app_store().render_settings_generation;
+            generation.set(generation.get() + 1);
+        }
     }
 
     void RenderingManager::handleWindowResized() {
