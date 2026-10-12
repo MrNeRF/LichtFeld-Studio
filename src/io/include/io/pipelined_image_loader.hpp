@@ -469,6 +469,7 @@ namespace lfs::io {
 
         enum class SidecarCacheFormat : uint8_t {
             Depth,
+            DepthFloat,
             Normal
         };
 
