@@ -13,6 +13,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -361,6 +362,7 @@ namespace lfs::vis::input {
 
         std::string current_profile_name_;
         std::vector<Binding> bindings_;
+        std::set<std::pair<ToolMode, Action>> disabled_bindings_;
         std::uint64_t bindings_revision_ = 0;
 
         using KeyMapKey = std::tuple<ToolMode, int, int>;
@@ -386,6 +388,7 @@ namespace lfs::vis::input {
 
         size_t migrateLoadedProfile(int version);
         size_t collapseRedundantModeBindings(int version);
+        [[nodiscard]] bool isDisabled(ToolMode mode, Action action) const;
     };
 
     LFS_VIS_API std::string getActionName(Action action);

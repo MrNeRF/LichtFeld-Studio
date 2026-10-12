@@ -1822,6 +1822,233 @@ namespace lfs::vis {
         std::filesystem::remove(profile_path);
     }
 
+    TEST_F(InputControllerFocusTest, HistoricalDefaultProfilesFollowCurrentDefaults) {
+        namespace fs = std::filesystem;
+        const fs::path data_dir = fs::path(PROJECT_ROOT_PATH) / "tests/data/keymap_defaults";
+        const fs::path output = fs::temp_directory_path() / "lfs_keymap_history_result.json";
+        input::InputBindings defaults;
+        ASSERT_TRUE(defaults.saveProfileToFile(output));
+        const auto expected = nlohmann::json::parse(std::ifstream(output))["bindings"];
+        for (const auto& entry : fs::directory_iterator(data_dir)) {
+            if (entry.path().extension() != ".json")
+                continue;
+            SCOPED_TRACE(entry.path().filename().string());
+            input::InputBindings loaded;
+            ASSERT_TRUE(loaded.loadProfileFromFile(entry.path()));
+            ASSERT_TRUE(loaded.saveProfileToFile(output));
+            const auto actual = nlohmann::json::parse(std::ifstream(output))["bindings"];
+            EXPECT_EQ(actual, expected);
+            for (const auto mode : input::kAllToolModes) {
+                EXPECT_EQ(loaded.getActionForDrag(mode, input::MouseButton::MIDDLE, 0),
+                          input::Action::CAMERA_ORBIT);
+            }
+            EXPECT_EQ(loaded.getActionForDrag(input::ToolMode::SELECTION,
+                                              input::MouseButton::LEFT, 0),
+                      input::Action::SELECTION_REPLACE);
+            EXPECT_EQ(loaded.getActionForScroll(input::ToolMode::SELECTION,
+                                                input::MODIFIER_CTRL),
+                      input::Action::BRUSH_RESIZE);
+            EXPECT_EQ(loaded.getActionForKey(input::ToolMode::SELECTION,
+                                             input::KEY_DELETE, 0),
+                      input::Action::DELETE_SELECTED);
+            for (const auto mode : {input::ToolMode::TRANSLATE,
+                                    input::ToolMode::ROTATE, input::ToolMode::SCALE}) {
+                EXPECT_EQ(loaded.getActionForMouseButton(mode, input::MouseButton::LEFT,
+                                                         0, false),
+                          input::Action::NODE_PICK);
+                EXPECT_EQ(loaded.getActionForDrag(mode, input::MouseButton::LEFT, 0),
+                          input::Action::NODE_RECT_SELECT);
+            }
+        }
+        fs::remove(output);
+    }
+
+    TEST_F(InputControllerFocusTest, HistoricalProfileKeepsUserRebindRemovalAndAddition) {
+        namespace fs = std::filesystem;
+        const fs::path source = fs::path(PROJECT_ROOT_PATH) /
+                                "tests/data/keymap_defaults/v0.5.4.json";
+        const fs::path profile = fs::temp_directory_path() / "lfs_keymap_user_changes.json";
+        auto saved = nlohmann::json::parse(std::ifstream(source));
+        bool orbit_changed = false;
+        for (auto it = saved["bindings"].begin(); it != saved["bindings"].end();) {
+            if (it->value("mode", -1) == static_cast<int>(input::ToolMode::SELECTION) &&
+                it->value("action", -1) == static_cast<int>(input::Action::DELETE_SELECTED)) {
+                it = saved["bindings"].erase(it);
+                continue;
+            }
+            if (it->value("mode", -1) == static_cast<int>(input::ToolMode::GLOBAL) &&
+                it->value("action", -1) == static_cast<int>(input::Action::CAMERA_ORBIT)) {
+                (*it)["modifiers"] = input::MODIFIER_ALT;
+                orbit_changed = true;
+            }
+            ++it;
+        }
+        ASSERT_TRUE(orbit_changed);
+        saved["bindings"].push_back({{"mode", static_cast<int>(input::ToolMode::SELECTION)},
+                                     {"action", static_cast<int>(input::Action::TOGGLE_UI)},
+                                     {"description", input::getActionName(input::Action::TOGGLE_UI)},
+                                     {"trigger_type", "key"},
+                                     {"key", input::KEY_F9},
+                                     {"modifiers", 0},
+                                     {"on_repeat", false}});
+        {
+            std::ofstream file(profile);
+            file << saved.dump(2);
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile));
+        EXPECT_EQ(loaded.getActionForDrag(input::ToolMode::SELECTION, input::MouseButton::MIDDLE,
+                                          input::MODIFIER_NONE),
+                  input::Action::NONE);
+        EXPECT_EQ(loaded.getActionForDrag(input::ToolMode::SELECTION, input::MouseButton::MIDDLE,
+                                          input::MODIFIER_ALT),
+                  input::Action::CAMERA_ORBIT);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::SELECTION, input::KEY_DELETE, 0),
+                  input::Action::NONE);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::SELECTION, input::KEY_F9, 0),
+                  input::Action::TOGGLE_UI);
+
+        ASSERT_TRUE(loaded.saveProfileToFile(profile));
+        input::InputBindings reloaded;
+        ASSERT_TRUE(reloaded.loadProfileFromFile(profile));
+        EXPECT_EQ(reloaded.getActionForDrag(input::ToolMode::SELECTION, input::MouseButton::MIDDLE,
+                                            input::MODIFIER_ALT),
+                  input::Action::CAMERA_ORBIT);
+        EXPECT_EQ(reloaded.getActionForKey(input::ToolMode::SELECTION, input::KEY_DELETE, 0),
+                  input::Action::NONE);
+        EXPECT_EQ(reloaded.getActionForKey(input::ToolMode::SELECTION, input::KEY_F9, 0),
+                  input::Action::TOGGLE_UI);
+        fs::remove(profile);
+    }
+
+    TEST_F(InputControllerFocusTest, OverrideProfileFollowsChangedDefaultWithoutMigration) {
+        namespace fs = std::filesystem;
+        const fs::path profile = fs::temp_directory_path() / "lfs_keymap_future_default.json";
+        const nlohmann::json saved = {
+            {"name", "Default"},
+            {"version", 30},
+            {"bindings", {{{"mode", 0}, {"action", static_cast<int>(input::Action::CAMERA_ORBIT)}, {"description", "Camera Orbit"}, {"trigger_type", "drag"}, {"button", static_cast<int>(input::MouseButton::RIGHT)}, {"modifiers", 0}}}},
+            {"overrides", {{"bindings", nlohmann::json::array()}, {"removed", nlohmann::json::array()}}}};
+        {
+            std::ofstream file(profile);
+            file << saved.dump(2);
+        }
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile));
+        EXPECT_EQ(loaded.getActionForDrag(input::ToolMode::TRANSLATE, input::MouseButton::MIDDLE,
+                                          0),
+                  input::Action::CAMERA_ORBIT);
+        fs::remove(profile);
+    }
+
+    TEST_F(InputControllerFocusTest, EarlyReleaseRebindUsesHistoricalActionIdentity) {
+        namespace fs = std::filesystem;
+        const fs::path source = fs::path(PROJECT_ROOT_PATH) /
+                                "tests/data/keymap_defaults/v0.5.0.json";
+        const fs::path profile = fs::temp_directory_path() / "lfs_keymap_early_rebind.json";
+        auto saved = nlohmann::json::parse(std::ifstream(source));
+        bool changed = false;
+        for (auto& b : saved["bindings"]) {
+            if (b.value("mode", -1) == static_cast<int>(input::ToolMode::SELECTION) &&
+                b.value("description", "") == "Select" &&
+                b.value("trigger_type", "") == "drag" && b.value("button", -1) == 0 &&
+                b.value("modifiers", -1) == 0) {
+                b["modifiers"] = input::MODIFIER_SUPER;
+                changed = true;
+            }
+        }
+        ASSERT_TRUE(changed);
+        {
+            std::ofstream file(profile);
+            file << saved.dump(2);
+        }
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile));
+        EXPECT_EQ(loaded.getActionForDrag(input::ToolMode::SELECTION, input::MouseButton::LEFT,
+                                          input::MODIFIER_SUPER),
+                  input::Action::SELECTION_REPLACE);
+        fs::remove(profile);
+    }
+
+    TEST_F(InputControllerFocusTest, HistoricalProfileKeepsSingleTriggerRemoval) {
+        namespace fs = std::filesystem;
+        const fs::path source = fs::path(PROJECT_ROOT_PATH) /
+                                "tests/data/keymap_defaults/v0.5.3.json";
+        const fs::path profile = fs::temp_directory_path() / "lfs_keymap_single_removal.json";
+        auto saved = nlohmann::json::parse(std::ifstream(source));
+        bool removed = false;
+        for (auto it = saved["bindings"].begin(); it != saved["bindings"].end();) {
+            if (it->value("mode", -1) == static_cast<int>(input::ToolMode::SELECTION) &&
+                it->value("action", -1) == static_cast<int>(input::Action::BRUSH_RESIZE) &&
+                it->value("trigger_type", "") == "scroll" &&
+                it->value("modifiers", -1) == input::MODIFIER_SHIFT) {
+                it = saved["bindings"].erase(it);
+                removed = true;
+            } else {
+                ++it;
+            }
+        }
+        ASSERT_TRUE(removed);
+        {
+            std::ofstream file(profile);
+            file << saved.dump(2);
+        }
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile));
+        EXPECT_EQ(loaded.getActionForScroll(input::ToolMode::SELECTION, input::MODIFIER_CTRL),
+                  input::Action::BRUSH_RESIZE);
+        EXPECT_EQ(loaded.getActionForScroll(input::ToolMode::SELECTION, input::MODIFIER_SHIFT),
+                  input::Action::NONE);
+        fs::remove(profile);
+    }
+
+    TEST_F(InputControllerFocusTest, ResavedProfileDropsEarlierDefaultResidue) {
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::path(PROJECT_ROOT_PATH) / "tests/data/keymap_defaults";
+        const fs::path profile = fs::temp_directory_path() / "lfs_keymap_resaved_defaults.json";
+        auto saved = nlohmann::json::parse(std::ifstream(dir / "v0.5.4.json"));
+        const auto old = nlohmann::json::parse(std::ifstream(dir / "v0.5.0.json"));
+        for (const auto& prior : old["bindings"]) {
+            if (prior.value("mode", -1) != static_cast<int>(input::ToolMode::SELECTION))
+                continue;
+            if (prior.value("description", "") != "Select" &&
+                prior.value("description", "") != "Delete Gaussians" &&
+                prior.value("description", "") != "Orbit")
+                continue;
+            if (prior.value("description", "") == "Select" &&
+                prior.value("trigger_type", "") != "drag")
+                continue;
+            for (auto it = saved["bindings"].begin(); it != saved["bindings"].end();) {
+                if (it->value("mode", -1) == prior.value("mode", -1) &&
+                    it->value("trigger_type", "") == prior.value("trigger_type", "") &&
+                    it->value("button", -1) == prior.value("button", -1) &&
+                    it->value("key", -1) == prior.value("key", -1) &&
+                    it->value("modifiers", -1) == prior.value("modifiers", -1))
+                    it = saved["bindings"].erase(it);
+                else
+                    ++it;
+            }
+            saved["bindings"].push_back(prior);
+        }
+        {
+            std::ofstream file(profile);
+            file << saved.dump(2);
+        }
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile));
+        EXPECT_EQ(loaded.getActionForDrag(input::ToolMode::SELECTION,
+                                          input::MouseButton::MIDDLE, 0),
+                  input::Action::CAMERA_ORBIT);
+        EXPECT_EQ(loaded.getActionForDrag(input::ToolMode::SELECTION,
+                                          input::MouseButton::LEFT, 0),
+                  input::Action::SELECTION_REPLACE);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::SELECTION,
+                                         input::KEY_DELETE, 0),
+                  input::Action::DELETE_SELECTED);
+        fs::remove(profile);
+    }
+
     TEST_F(InputControllerFocusTest, VersionTwentyProfileMigratesPreferencesShortcut) {
         const auto profile_path = std::filesystem::temp_directory_path() /
                                   "lfs_input_bindings_legacy_v20.json";
@@ -1924,7 +2151,7 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 29"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 30"), std::string::npos); // PROFILE_VERSION
         EXPECT_NE(contents.find("Gallery Primary Action"), std::string::npos);
         EXPECT_NE(contents.find("Copy Gallery Link"), std::string::npos);
         EXPECT_NE(contents.find("Refresh Assets"), std::string::npos);

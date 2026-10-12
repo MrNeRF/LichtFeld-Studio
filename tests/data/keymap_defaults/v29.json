@@ -1,0 +1,894 @@
+{
+  "name": "Default",
+  "version": 29,
+  "bindings": [
+    {
+      "mode": 0,
+      "action": 1,
+      "description": "Orbit",
+      "trigger_type": "drag",
+      "button": 2,
+      "modifiers": 0
+    },
+    {
+      "mode": 0,
+      "action": 2,
+      "description": "Pan",
+      "trigger_type": "drag",
+      "button": 1,
+      "modifiers": 0
+    },
+    {
+      "mode": 0,
+      "action": 3,
+      "description": "Zoom",
+      "trigger_type": "scroll",
+      "modifiers": 0
+    },
+    {
+      "mode": 0,
+      "action": 4,
+      "description": "Roll",
+      "trigger_type": "scroll",
+      "modifiers": 0,
+      "chord_key": 82
+    },
+    {
+      "mode": 0,
+      "action": 13,
+      "description": "Set pivot",
+      "trigger_type": "mouse_button",
+      "button": 1,
+      "modifiers": 0,
+      "double_click": true
+    },
+    {
+      "mode": 0,
+      "action": 5,
+      "description": "Forward",
+      "trigger_type": "key",
+      "key": 87,
+      "modifiers": 0,
+      "on_repeat": true
+    },
+    {
+      "mode": 0,
+      "action": 6,
+      "description": "Backward",
+      "trigger_type": "key",
+      "key": 83,
+      "modifiers": 0,
+      "on_repeat": true
+    },
+    {
+      "mode": 0,
+      "action": 7,
+      "description": "Left",
+      "trigger_type": "key",
+      "key": 65,
+      "modifiers": 0,
+      "on_repeat": true
+    },
+    {
+      "mode": 0,
+      "action": 8,
+      "description": "Right",
+      "trigger_type": "key",
+      "key": 68,
+      "modifiers": 0,
+      "on_repeat": true
+    },
+    {
+      "mode": 0,
+      "action": 9,
+      "description": "Up",
+      "trigger_type": "key",
+      "key": 81,
+      "modifiers": 0,
+      "on_repeat": true
+    },
+    {
+      "mode": 0,
+      "action": 10,
+      "description": "Down",
+      "trigger_type": "key",
+      "key": 69,
+      "modifiers": 0,
+      "on_repeat": true
+    },
+    {
+      "mode": 0,
+      "action": 70,
+      "description": "Home",
+      "trigger_type": "key",
+      "key": 72,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 11,
+      "description": "Set home",
+      "trigger_type": "key",
+      "key": 72,
+      "modifiers": 1,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 12,
+      "description": "Focus selection",
+      "trigger_type": "key",
+      "key": 70,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 14,
+      "description": "Next view",
+      "trigger_type": "key",
+      "key": 262,
+      "modifiers": 0,
+      "on_repeat": true
+    },
+    {
+      "mode": 0,
+      "action": 15,
+      "description": "Prev view",
+      "trigger_type": "key",
+      "key": 263,
+      "modifiers": 0,
+      "on_repeat": true
+    },
+    {
+      "mode": 0,
+      "action": 16,
+      "description": "Speed up",
+      "trigger_type": "key",
+      "key": 61,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 17,
+      "description": "Speed down",
+      "trigger_type": "key",
+      "key": 45,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 16,
+      "description": "Speed up",
+      "trigger_type": "key",
+      "key": 334,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 17,
+      "description": "Speed down",
+      "trigger_type": "key",
+      "key": 333,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 18,
+      "description": "Zoom speed up",
+      "trigger_type": "key",
+      "key": 61,
+      "modifiers": 3,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 19,
+      "description": "Zoom speed down",
+      "trigger_type": "key",
+      "key": 45,
+      "modifiers": 3,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 18,
+      "description": "Zoom speed up",
+      "trigger_type": "key",
+      "key": 334,
+      "modifiers": 3,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 19,
+      "description": "Zoom speed down",
+      "trigger_type": "key",
+      "key": 333,
+      "modifiers": 3,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 20,
+      "description": "Split view",
+      "trigger_type": "key",
+      "key": 86,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 21,
+      "description": "Independent split",
+      "trigger_type": "key",
+      "key": 86,
+      "modifiers": 1,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 22,
+      "description": "GT comparison",
+      "trigger_type": "key",
+      "key": 71,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 72,
+      "description": "Camera frustums",
+      "trigger_type": "key",
+      "key": 67,
+      "modifiers": 4,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 81,
+      "description": "Grid",
+      "trigger_type": "key",
+      "key": 71,
+      "modifiers": 4,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 24,
+      "description": "Cycle PLY",
+      "trigger_type": "key",
+      "key": 84,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 27,
+      "description": "Undo",
+      "trigger_type": "key",
+      "key": 90,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 28,
+      "description": "Redo",
+      "trigger_type": "key",
+      "key": 89,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 29,
+      "description": "Invert",
+      "trigger_type": "key",
+      "key": 73,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 30,
+      "description": "Deselect",
+      "trigger_type": "key",
+      "key": 68,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 31,
+      "description": "Select all",
+      "trigger_type": "key",
+      "key": 65,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 32,
+      "description": "Copy",
+      "trigger_type": "key",
+      "key": 67,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 76,
+      "description": "Cut",
+      "trigger_type": "key",
+      "key": 88,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 33,
+      "description": "Paste",
+      "trigger_type": "key",
+      "key": 86,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 87,
+      "description": "Gallery Primary Action",
+      "trigger_type": "key",
+      "key": 257,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 88,
+      "description": "Copy Gallery Link",
+      "trigger_type": "key",
+      "key": 67,
+      "modifiers": 3,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 89,
+      "description": "Refresh Assets",
+      "trigger_type": "key",
+      "key": 294,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 43,
+      "description": "Sel vis",
+      "trigger_type": "key",
+      "key": 84,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 47,
+      "description": "Centers",
+      "trigger_type": "key",
+      "key": 49,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 48,
+      "description": "Rectangle",
+      "trigger_type": "key",
+      "key": 50,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 49,
+      "description": "Polygon",
+      "trigger_type": "key",
+      "key": 51,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 50,
+      "description": "Lasso",
+      "trigger_type": "key",
+      "key": 52,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 51,
+      "description": "Rings",
+      "trigger_type": "key",
+      "key": 53,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 52,
+      "description": "Color",
+      "trigger_type": "key",
+      "key": 54,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 74,
+      "description": "Box",
+      "trigger_type": "key",
+      "key": 55,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 75,
+      "description": "Sphere",
+      "trigger_type": "key",
+      "key": 56,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 41,
+      "description": "Cancel",
+      "trigger_type": "key",
+      "key": 256,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 56,
+      "description": "Hide UI",
+      "trigger_type": "key",
+      "key": 301,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 57,
+      "description": "Fullscreen",
+      "trigger_type": "key",
+      "key": 300,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 77,
+      "description": "Performance HUD",
+      "trigger_type": "key",
+      "key": 299,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 78,
+      "description": "Preferences",
+      "trigger_type": "key",
+      "key": 44,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 82,
+      "description": "Select All Scene Nodes",
+      "trigger_type": "key",
+      "key": 65,
+      "modifiers": 3,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 83,
+      "description": "Toggle Scene Selection Visibility",
+      "trigger_type": "key",
+      "key": 72,
+      "modifiers": 3,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 84,
+      "description": "Toggle Scene Selection Training",
+      "trigger_type": "key",
+      "key": 84,
+      "modifiers": 3,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 85,
+      "description": "Group Selected Scene Nodes",
+      "trigger_type": "key",
+      "key": 71,
+      "modifiers": 2,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 86,
+      "description": "Ungroup Selected Scene Node",
+      "trigger_type": "key",
+      "key": 71,
+      "modifiers": 3,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 79,
+      "description": "Toggle MCP Server",
+      "trigger_type": "key",
+      "key": 77,
+      "modifiers": 3,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 80,
+      "description": "Toggle MCP Local/Network Binding",
+      "trigger_type": "key",
+      "key": 78,
+      "modifiers": 3,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 71,
+      "description": "Zoom histogram at cursor",
+      "trigger_type": "scroll",
+      "modifiers": 2
+    },
+    {
+      "mode": 0,
+      "action": 58,
+      "description": "Add keyframe",
+      "trigger_type": "key",
+      "key": 75,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 59,
+      "description": "Update keyframe",
+      "trigger_type": "key",
+      "key": 85,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 60,
+      "description": "Play/Pause",
+      "trigger_type": "key",
+      "key": 32,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 61,
+      "description": "Select",
+      "trigger_type": "key",
+      "key": 49,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 62,
+      "description": "Translate",
+      "trigger_type": "key",
+      "key": 50,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 63,
+      "description": "Rotate",
+      "trigger_type": "key",
+      "key": 51,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 64,
+      "description": "Scale",
+      "trigger_type": "key",
+      "key": 52,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 65,
+      "description": "Mirror",
+      "trigger_type": "key",
+      "key": 53,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 67,
+      "description": "Align",
+      "trigger_type": "key",
+      "key": 54,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 68,
+      "description": "Pie Menu",
+      "trigger_type": "key",
+      "key": 96,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 1,
+      "action": 44,
+      "description": "Select",
+      "trigger_type": "drag",
+      "button": 0,
+      "modifiers": 0
+    },
+    {
+      "mode": 1,
+      "action": 45,
+      "description": "Add sel",
+      "trigger_type": "drag",
+      "button": 0,
+      "modifiers": 1
+    },
+    {
+      "mode": 1,
+      "action": 46,
+      "description": "Remove sel",
+      "trigger_type": "drag",
+      "button": 0,
+      "modifiers": 2
+    },
+    {
+      "mode": 1,
+      "action": 73,
+      "description": "Intersect sel",
+      "trigger_type": "drag",
+      "button": 0,
+      "modifiers": 4
+    },
+    {
+      "mode": 1,
+      "action": 40,
+      "description": "Confirm polygon",
+      "trigger_type": "key",
+      "key": 257,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 1,
+      "action": 42,
+      "description": "Undo polygon/cancel selection",
+      "trigger_type": "mouse_button",
+      "button": 1,
+      "modifiers": 0,
+      "double_click": false
+    },
+    {
+      "mode": 1,
+      "action": 36,
+      "description": "Depth box",
+      "trigger_type": "key",
+      "key": 88,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 1,
+      "action": 34,
+      "description": "Depth",
+      "trigger_type": "scroll",
+      "modifiers": 4
+    },
+    {
+      "mode": 1,
+      "action": 38,
+      "description": "Brush size",
+      "trigger_type": "scroll",
+      "modifiers": 2
+    },
+    {
+      "mode": 1,
+      "action": 38,
+      "description": "Brush size",
+      "trigger_type": "scroll",
+      "modifiers": 1
+    },
+    {
+      "mode": 1,
+      "action": 37,
+      "description": "Crop filter",
+      "trigger_type": "key",
+      "key": 67,
+      "modifiers": 6,
+      "on_repeat": false
+    },
+    {
+      "mode": 7,
+      "action": 53,
+      "description": "Apply/confirm",
+      "trigger_type": "key",
+      "key": 257,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 7,
+      "action": 53,
+      "description": "Apply/confirm",
+      "trigger_type": "key",
+      "key": 335,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 0,
+      "action": 54,
+      "description": "Pick node",
+      "trigger_type": "mouse_button",
+      "button": 0,
+      "modifiers": 0,
+      "double_click": false
+    },
+    {
+      "mode": 0,
+      "action": 55,
+      "description": "Rectangle select nodes",
+      "trigger_type": "drag",
+      "button": 0,
+      "modifiers": 0
+    },
+    {
+      "mode": 3,
+      "action": 54,
+      "description": "Pick node",
+      "trigger_type": "mouse_button",
+      "button": 0,
+      "modifiers": 0,
+      "double_click": false
+    },
+    {
+      "mode": 3,
+      "action": 55,
+      "description": "Rectangle select nodes",
+      "trigger_type": "drag",
+      "button": 0,
+      "modifiers": 0
+    },
+    {
+      "mode": 4,
+      "action": 54,
+      "description": "Pick node",
+      "trigger_type": "mouse_button",
+      "button": 0,
+      "modifiers": 0,
+      "double_click": false
+    },
+    {
+      "mode": 4,
+      "action": 55,
+      "description": "Rectangle select nodes",
+      "trigger_type": "drag",
+      "button": 0,
+      "modifiers": 0
+    },
+    {
+      "mode": 5,
+      "action": 54,
+      "description": "Pick node",
+      "trigger_type": "mouse_button",
+      "button": 0,
+      "modifiers": 0,
+      "double_click": false
+    },
+    {
+      "mode": 5,
+      "action": 55,
+      "description": "Rectangle select nodes",
+      "trigger_type": "drag",
+      "button": 0,
+      "modifiers": 0
+    },
+    {
+      "mode": 0,
+      "action": 26,
+      "description": "Delete node",
+      "trigger_type": "key",
+      "key": 261,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 3,
+      "action": 26,
+      "description": "Delete node",
+      "trigger_type": "key",
+      "key": 261,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 4,
+      "action": 26,
+      "description": "Delete node",
+      "trigger_type": "key",
+      "key": 261,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 5,
+      "action": 26,
+      "description": "Delete node",
+      "trigger_type": "key",
+      "key": 261,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 1,
+      "action": 25,
+      "description": "Delete Gaussians",
+      "trigger_type": "key",
+      "key": 261,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 6,
+      "action": 25,
+      "description": "Delete Gaussians",
+      "trigger_type": "key",
+      "key": 261,
+      "modifiers": 0,
+      "on_repeat": false
+    },
+    {
+      "mode": 7,
+      "action": 25,
+      "description": "Delete Gaussians",
+      "trigger_type": "key",
+      "key": 261,
+      "modifiers": 0,
+      "on_repeat": false
+    }
+  ]
+}
