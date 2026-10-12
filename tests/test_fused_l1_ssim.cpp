@@ -15,6 +15,7 @@
 #include "core/tensor.hpp"
 #include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/ssim.cuh"
+#include "masked_ssim_reference.hpp"
 #include "training/losses/photometric_loss.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
@@ -435,49 +436,7 @@ protected:
     std::pair<float, Tensor> compute_reference_masked_loss(
         const Tensor& img1, const Tensor& img2, const Tensor& mask, float ssim_weight) {
 
-        constexpr float EPSILON = lfs::training::kernels::SSIM_EPSILON;
-
-        auto img1_4d = img1.ndim() == 3 ? img1.unsqueeze(0) : img1;
-        auto img2_4d = img2.ndim() == 3 ? img2.unsqueeze(0) : img2;
-
-        const int N = static_cast<int>(img1_4d.shape()[0]);
-        const int C = static_cast<int>(img1_4d.shape()[1]);
-        const int H = static_cast<int>(img1_4d.shape()[2]);
-        const int W = static_cast<int>(img1_4d.shape()[3]);
-
-        const float l1_weight = 1.0f - ssim_weight;
-
-        // Expand mask to [N, C, H, W]
-        auto mask_2d = mask.ndim() == 3 ? mask.squeeze(0) : mask;
-        if (mask_2d.dtype() == DataType::UInt8 || mask_2d.dtype() == DataType::Bool) {
-            mask_2d = mask_2d.to(DataType::Float32);
-        }
-        auto mask_expanded = mask_2d.unsqueeze(0).unsqueeze(0).expand({N, C, H, W});
-        auto mask_sum = mask_expanded.sum() + EPSILON;
-
-        // Masked L1 loss
-        auto l1_diff = (img1_4d - img2_4d).abs();
-        auto masked_l1_loss = ((l1_diff * mask_expanded).sum() / mask_sum).item<float>();
-
-        // Masked L1 gradient
-        auto sign_diff = (img1_4d - img2_4d).sign();
-        auto l1_grad = sign_diff * mask_expanded / mask_sum;
-
-        // Masked SSIM
-        auto ssim_result = ssim_forward_map(img1_4d, img2_4d, false);
-        auto ssim_map = ssim_result.ssim_map;
-        auto masked_ssim = ((ssim_map * mask_expanded).sum() / mask_sum).item<float>();
-        float ssim_loss = 1.0f - masked_ssim;
-
-        // SSIM gradient
-        auto dL_dmap = mask_expanded * (-1.0f) / mask_sum;
-        auto ssim_grad = ssim_backward_with_grad_map(ssim_result.ctx, dL_dmap);
-
-        // Combined
-        float combined_loss = l1_weight * masked_l1_loss + ssim_weight * ssim_loss;
-        auto combined_grad = l1_grad * l1_weight + ssim_grad * ssim_weight;
-
-        return {combined_loss, combined_grad};
+        return masked_ssim_reference(img1, img2, mask, ssim_weight);
     }
 };
 

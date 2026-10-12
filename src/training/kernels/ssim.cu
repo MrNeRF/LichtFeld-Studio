@@ -844,8 +844,167 @@ namespace {
         }
     }
 
+    // Normalize only the masked samples; retain the existing zero-padding
+    // convention outside the image. The scratch storage is reused by the image
+    // convolution, so no per-pixel allocation or extra kernel is needed.
+    template <typename MaskT, int Moments>
+    __device__ float load_mask_window(
+        const MaskT* mask, int H, int W,
+        float (&tile)[SHARED_Y][SHARED_X],
+        float (&scratch)[CONV_Y][CONV_X][Moments], bool& full_support) {
+        const auto block = cg::this_thread_block();
+        const int start_y = block.group_index().y * BLOCK_Y;
+        const int start_x = block.group_index().x * BLOCK_X;
+        // A common scale cancels from normalized moments and center/mass.
+        // Removing it improves second-moment precision for structure weights.
+        const int anchor_y = min(start_y + BLOCK_Y / 2, H - 1);
+        const int anchor_x = min(start_x + BLOCK_X / 2, W - 1);
+        const float inv_scale = 1.0f / fmaxf(1.0f, mask_value(mask, anchor_y * W + anchor_x));
+        bool all_one = true;
+        for (int i = block.thread_rank(); i < SHARED_Y * SHARED_X; i += BLOCK_X * BLOCK_Y) {
+            const int y = i / SHARED_X;
+            const int x = i % SHARED_X;
+            const int gy = start_y + y - HALO;
+            const int gx = start_x + x - HALO;
+            const float value = (gx >= 0 && gx < W && gy >= 0 && gy < H
+                                     ? mask_value(mask, gy * W + gx)
+                                     : 1.0f) *
+                                inv_scale;
+            tile[y][x] = value;
+            all_one = all_one && value == 1.0f;
+        }
+        // Most binary-mask tiles have full support; their Gaussian mass is one.
+        full_support = __syncthreads_and(all_one);
+        if (full_support)
+            return 1.0f;
+        const int x = threadIdx.x + HALO;
+        for (int y = threadIdx.y; y < CONV_Y; y += BLOCK_Y) {
+            float sum = tile[y][x] * cGauss[HALO];
+#pragma unroll
+            for (int d = 1; d <= HALO; ++d)
+                sum += (tile[y][x - d] + tile[y][x + d]) * cGauss[HALO - d];
+            scratch[y][threadIdx.x][0] = sum;
+        }
+        block.sync();
+        const int y = threadIdx.y + HALO;
+        float sum = scratch[y][threadIdx.x][0] * cGauss[HALO];
+#pragma unroll
+        for (int d = 1; d <= HALO; ++d)
+            sum += (scratch[y - d][threadIdx.x][0] + scratch[y + d][threadIdx.x][0]) * cGauss[HALO - d];
+        // Below this mass the window is unsupported. This is far below the
+        // loss reduction's epsilon, and bounds the reciprocal even without FTZ.
+        constexpr float min_window_mass = 1.0e-30f;
+        return sum >= min_window_mass ? 1.0f / sum : 0.0f;
+    }
+
+    // Full-support tiles retain the cheaper symmetric convolution.
+    template <bool Weighted>
+    __device__ __forceinline__ void masked_horizontal_moments(
+        const float (&sTile)[SHARED_Y][SHARED_X][2],
+        const float (&mask_tile)[SHARED_Y][SHARED_X],
+        float (&xconv)[CONV_Y][CONV_X][5]) {
+        int ly = threadIdx.y;
+        int lx = threadIdx.x + HALO;
+
+        float sumX = 0.f, sumX2 = 0.f, sumY = 0.f, sumY2 = 0.f, sumXY = 0.f;
+
+#pragma unroll
+        for (int d = 1; d <= HALO; ++d) {
+            float w = cGauss[HALO - d];
+            float Xleft = sTile[ly][lx - d][0];
+            float Yleft = sTile[ly][lx - d][1];
+            float Xright = sTile[ly][lx + d][0];
+            float Yright = sTile[ly][lx + d][1];
+            if constexpr (Weighted) {
+                const float ml = mask_tile[ly][lx - d] * w;
+                const float mr = mask_tile[ly][lx + d] * w;
+
+                sumX += Xleft * ml + Xright * mr;
+                sumX2 += (Xleft * Xleft) * ml + (Xright * Xright) * mr;
+                sumY += Yleft * ml + Yright * mr;
+                sumY2 += (Yleft * Yleft) * ml + (Yright * Yright) * mr;
+                sumXY += (Xleft * Yleft) * ml + (Xright * Yright) * mr;
+            } else {
+                sumX += (Xleft + Xright) * w;
+                sumX2 += (Xleft * Xleft + Xright * Xright) * w;
+                sumY += (Yleft + Yright) * w;
+                sumY2 += (Yleft * Yleft + Yright * Yright) * w;
+                sumXY += (Xleft * Yleft + Xright * Yright) * w;
+            }
+        }
+        {
+            float centerX = sTile[ly][lx][0];
+            float centerY = sTile[ly][lx][1];
+            float wc = cGauss[HALO];
+            if constexpr (Weighted)
+                wc *= mask_tile[ly][lx];
+            sumX += centerX * wc;
+            sumX2 += (centerX * centerX) * wc;
+            sumY += centerY * wc;
+            sumY2 += (centerY * centerY) * wc;
+            sumXY += (centerX * centerY) * wc;
+        }
+
+        xconv[ly][threadIdx.x][0] = sumX;
+        xconv[ly][threadIdx.x][1] = sumX2;
+        xconv[ly][threadIdx.x][2] = sumY;
+        xconv[ly][threadIdx.x][3] = sumY2;
+        xconv[ly][threadIdx.x][4] = sumXY;
+
+        int ly2 = ly + BLOCK_Y;
+        if (ly2 < CONV_Y) {
+            sumX = 0.f;
+            sumX2 = 0.f;
+            sumY = 0.f;
+            sumY2 = 0.f;
+            sumXY = 0.f;
+
+#pragma unroll
+            for (int d = 1; d <= HALO; ++d) {
+                float w = cGauss[HALO - d];
+                float Xleft = sTile[ly2][lx - d][0];
+                float Yleft = sTile[ly2][lx - d][1];
+                float Xright = sTile[ly2][lx + d][0];
+                float Yright = sTile[ly2][lx + d][1];
+                if constexpr (Weighted) {
+                    const float ml = mask_tile[ly2][lx - d] * w;
+                    const float mr = mask_tile[ly2][lx + d] * w;
+
+                    sumX += Xleft * ml + Xright * mr;
+                    sumX2 += (Xleft * Xleft) * ml + (Xright * Xright) * mr;
+                    sumY += Yleft * ml + Yright * mr;
+                    sumY2 += (Yleft * Yleft) * ml + (Yright * Yright) * mr;
+                    sumXY += (Xleft * Yleft) * ml + (Xright * Yright) * mr;
+                } else {
+                    sumX += (Xleft + Xright) * w;
+                    sumX2 += (Xleft * Xleft + Xright * Xright) * w;
+                    sumY += (Yleft + Yright) * w;
+                    sumY2 += (Yleft * Yleft + Yright * Yright) * w;
+                    sumXY += (Xleft * Yleft + Xright * Yright) * w;
+                }
+            }
+            {
+                float cx = sTile[ly2][lx][0];
+                float cy = sTile[ly2][lx][1];
+                float wc = cGauss[HALO];
+                if constexpr (Weighted)
+                    wc *= mask_tile[ly2][lx];
+                sumX += cx * wc;
+                sumX2 += (cx * cx) * wc;
+                sumY += cy * wc;
+                sumY2 += (cy * cy) * wc;
+                sumXY += (cx * cy) * wc;
+            }
+            xconv[ly2][threadIdx.x][0] = sumX;
+            xconv[ly2][threadIdx.x][1] = sumX2;
+            xconv[ly2][threadIdx.x][2] = sumY;
+            xconv[ly2][threadIdx.x][3] = sumY2;
+            xconv[ly2][threadIdx.x][4] = sumXY;
+        }
+    }
+
     // Masked Fused L1+SSIM Forward Kernel.
-    template <typename TargetT>
+    template <typename TargetT, typename MaskT>
     __global__ void maskedFusedL1SSIMForwardCUDA(
         int H,
         int W,
@@ -854,6 +1013,7 @@ namespace {
         float C2,
         const float* __restrict__ img1,
         const TargetT* __restrict__ img2,
+        const MaskT* __restrict__ mask,
         __half* __restrict__ dm_dmu1,
         __half* __restrict__ dm_dsigma1_sq,
         __half* __restrict__ dm_dsigma12,
@@ -869,6 +1029,31 @@ namespace {
 
         __shared__ float sTile[SHARED_Y][SHARED_X][2];
         __shared__ float xconv[CONV_Y][CONV_X][5];
+
+        __shared__ float mask_tile[SHARED_Y][SHARED_X];
+        bool full_support;
+        const float inv_window = load_mask_window(mask, H, W, mask_tile, xconv, full_support);
+        const float center_weight = mask_tile[threadIdx.y + HALO][threadIdx.x + HALO];
+        const float derivative_weight = center_weight * inv_window;
+        // Ignored centers contribute no loss or partials, even near a kept tile.
+        if (!__syncthreads_or(pix_x < W && pix_y < H && center_weight != 0.0f)) {
+            if (pix_x < W && pix_y < H) {
+                for (int c = 0; c < CH; ++c) {
+                    const int index = bIdx * CH * num_pix + c * num_pix + pix_id;
+                    if (dm_dmu1)
+                        dm_dmu1[index] = __float2half(0.0f);
+                    if (dm_dsigma1_sq)
+                        dm_dsigma1_sq[index] = __float2half(0.0f);
+                    if (dm_dsigma12)
+                        dm_dsigma12[index] = __float2half(0.0f);
+                }
+                if (ssim_map)
+                    ssim_map[bIdx * num_pix + pix_id] = 1.0f;
+                if (cs_map)
+                    cs_map[bIdx * num_pix + pix_id] = 1.0f;
+            }
+            return;
+        }
 
         float ssim_sum = 0.0f;
         float cs_sum = 0.0f;
@@ -899,83 +1084,10 @@ namespace {
             }
             block.sync();
 
-            // 2) Horizontal convolution
-            {
-                int ly = threadIdx.y;
-                int lx = threadIdx.x + HALO;
-
-                float sumX = 0.f, sumX2 = 0.f, sumY = 0.f, sumY2 = 0.f, sumXY = 0.f;
-
-#pragma unroll
-                for (int d = 1; d <= HALO; ++d) {
-                    float w = cGauss[HALO - d];
-                    float Xleft = sTile[ly][lx - d][0];
-                    float Yleft = sTile[ly][lx - d][1];
-                    float Xright = sTile[ly][lx + d][0];
-                    float Yright = sTile[ly][lx + d][1];
-
-                    sumX += (Xleft + Xright) * w;
-                    sumX2 += ((Xleft * Xleft) + (Xright * Xright)) * w;
-                    sumY += (Yleft + Yright) * w;
-                    sumY2 += ((Yleft * Yleft) + (Yright * Yright)) * w;
-                    sumXY += ((Xleft * Yleft) + (Xright * Yright)) * w;
-                }
-                {
-                    float centerX = sTile[ly][lx][0];
-                    float centerY = sTile[ly][lx][1];
-                    float wc = cGauss[HALO];
-                    sumX += centerX * wc;
-                    sumX2 += (centerX * centerX) * wc;
-                    sumY += centerY * wc;
-                    sumY2 += (centerY * centerY) * wc;
-                    sumXY += (centerX * centerY) * wc;
-                }
-
-                xconv[ly][threadIdx.x][0] = sumX;
-                xconv[ly][threadIdx.x][1] = sumX2;
-                xconv[ly][threadIdx.x][2] = sumY;
-                xconv[ly][threadIdx.x][3] = sumY2;
-                xconv[ly][threadIdx.x][4] = sumXY;
-
-                int ly2 = ly + BLOCK_Y;
-                if (ly2 < CONV_Y) {
-                    sumX = 0.f;
-                    sumX2 = 0.f;
-                    sumY = 0.f;
-                    sumY2 = 0.f;
-                    sumXY = 0.f;
-
-#pragma unroll
-                    for (int d = 1; d <= HALO; ++d) {
-                        float w = cGauss[HALO - d];
-                        float Xleft = sTile[ly2][lx - d][0];
-                        float Yleft = sTile[ly2][lx - d][1];
-                        float Xright = sTile[ly2][lx + d][0];
-                        float Yright = sTile[ly2][lx + d][1];
-
-                        sumX += (Xleft + Xright) * w;
-                        sumX2 += ((Xleft * Xleft) + (Xright * Xright)) * w;
-                        sumY += (Yleft + Yright) * w;
-                        sumY2 += ((Yleft * Yleft) + (Yright * Yright)) * w;
-                        sumXY += ((Xleft * Yleft) + (Xright * Yright)) * w;
-                    }
-                    {
-                        float cx = sTile[ly2][lx][0];
-                        float cy = sTile[ly2][lx][1];
-                        float wc = cGauss[HALO];
-                        sumX += cx * wc;
-                        sumX2 += (cx * cx) * wc;
-                        sumY += cy * wc;
-                        sumY2 += (cy * cy) * wc;
-                        sumXY += (cx * cy) * wc;
-                    }
-                    xconv[ly2][threadIdx.x][0] = sumX;
-                    xconv[ly2][threadIdx.x][1] = sumX2;
-                    xconv[ly2][threadIdx.x][2] = sumY;
-                    xconv[ly2][threadIdx.x][3] = sumY2;
-                    xconv[ly2][threadIdx.x][4] = sumXY;
-                }
-            }
+            if (full_support)
+                masked_horizontal_moments<false>(sTile, mask_tile, xconv);
+            else
+                masked_horizontal_moments<true>(sTile, mask_tile, xconv);
             block.sync();
 
             // 3) Vertical convolution + SSIM
@@ -1008,14 +1120,14 @@ namespace {
                 }
 
                 if (pix_x < W && pix_y < H) {
-                    float mu1 = out0;
-                    float mu2 = out2;
+                    float mu1 = out0 * inv_window;
+                    float mu2 = out2 * inv_window;
                     float mu1_sq = mu1 * mu1;
                     float mu2_sq = mu2 * mu2;
 
-                    float sigma1_sq = out1 - mu1_sq;
-                    float sigma2_sq = out3 - mu2_sq;
-                    float sigma12 = out4 - mu1 * mu2;
+                    float sigma1_sq = out1 * inv_window - mu1_sq;
+                    float sigma2_sq = out3 * inv_window - mu2_sq;
+                    float sigma12 = out4 * inv_window - mu1 * mu2;
 
                     float A = mu1_sq + mu2_sq + C1;
                     float B = sigma1_sq + sigma2_sq + C2;
@@ -1034,9 +1146,9 @@ namespace {
                         float d_m_dsigma1_sq = (-C_ * D_) / (A * B * B);
                         float d_m_dsigma12 = (2.f * C_) / (A * B);
 
-                        dm_dmu1[global_idx] = static_cast<__half>(d_m_dmu1);
-                        dm_dsigma1_sq[global_idx] = static_cast<__half>(d_m_dsigma1_sq);
-                        dm_dsigma12[global_idx] = static_cast<__half>(d_m_dsigma12);
+                        dm_dmu1[global_idx] = static_cast<__half>(d_m_dmu1 * derivative_weight);
+                        dm_dsigma1_sq[global_idx] = static_cast<__half>(d_m_dsigma1_sq * derivative_weight);
+                        dm_dsigma12[global_idx] = static_cast<__half>(d_m_dsigma12 * derivative_weight);
                     }
                 }
             }
@@ -1045,17 +1157,299 @@ namespace {
         if (pix_x < W && pix_y < H) {
             const float inv_c = 1.0f / static_cast<float>(CH);
             if (ssim_map) {
-                ssim_map[bIdx * num_pix + pix_id] = ssim_sum * inv_c;
+                ssim_map[bIdx * num_pix + pix_id] = center_weight > 0.0f ? ssim_sum * inv_c : 1.0f;
             }
             if (cs_map) {
-                cs_map[bIdx * num_pix + pix_id] = cs_sum * inv_c;
+                cs_map[bIdx * num_pix + pix_id] = center_weight > 0.0f ? cs_sum * inv_c : 1.0f;
+            }
+        }
+    }
+
+    template <typename TargetT, typename MaskT>
+    __global__ void maskedDecoupledFusedL1SSIMForwardCUDA(
+        int H,
+        int W,
+        int CH,
+        float C1,
+        float C2,
+        float ssim_weight,
+        const float* __restrict__ corrected_img,
+        const float* __restrict__ raw_img,
+        const TargetT* __restrict__ gt_img,
+        const MaskT* __restrict__ mask,
+        __half* __restrict__ app_dm_dmu1,
+        __half* __restrict__ raw_dm_dmu1,
+        __half* __restrict__ raw_dm_dsigma1_sq,
+        __half* __restrict__ raw_dm_dsigma12,
+        float* __restrict__ ssim_map,
+        float* __restrict__ cs_map) {
+
+        auto block = cg::this_thread_block();
+        const int bIdx = block.group_index().z;
+        const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
+        const int pix_x = block.group_index().x * BLOCK_X + block.thread_index().x;
+        const int pix_id = pix_y * W + pix_x;
+        const int num_pix = H * W;
+
+        __shared__ float sTile[SHARED_Y][SHARED_X][3];
+        // [0]=corrected, [1]=raw, [2]=raw^2, [3]=gt, [4]=gt^2, [5]=raw*gt
+        __shared__ float xconv[CONV_Y][CONV_X][6];
+
+        __shared__ float mask_tile[SHARED_Y][SHARED_X];
+        bool full_support;
+        const float inv_window = load_mask_window(mask, H, W, mask_tile, xconv, full_support);
+        const float center_weight = mask_tile[threadIdx.y + HALO][threadIdx.x + HALO];
+        const float derivative_weight = center_weight * inv_window;
+        // Ignored centers contribute no loss or partials, even near a kept tile.
+        if (!__syncthreads_or(pix_x < W && pix_y < H && center_weight != 0.0f)) {
+            if (pix_x < W && pix_y < H) {
+                for (int c = 0; c < CH; ++c) {
+                    const int index = bIdx * CH * num_pix + c * num_pix + pix_id;
+                    if (app_dm_dmu1)
+                        app_dm_dmu1[index] = __float2half(0.0f);
+                    if (raw_dm_dmu1)
+                        raw_dm_dmu1[index] = __float2half(0.0f);
+                    if (raw_dm_dsigma1_sq)
+                        raw_dm_dsigma1_sq[index] = __float2half(0.0f);
+                    if (raw_dm_dsigma12)
+                        raw_dm_dsigma12[index] = __float2half(0.0f);
+                }
+                if (ssim_map)
+                    ssim_map[bIdx * num_pix + pix_id] = 1.0f;
+                if (cs_map)
+                    cs_map[bIdx * num_pix + pix_id] = 1.0f;
+            }
+            return;
+        }
+
+        float ssim_sum = 0.0f;
+        float cs_sum = 0.0f;
+        for (int c = 0; c < CH; ++c) {
+            {
+                const int tileSize = SHARED_Y * SHARED_X;
+                const int threads = BLOCK_X * BLOCK_Y;
+                const int steps = (tileSize + threads - 1) / threads;
+                const int tileStartY = block.group_index().y * BLOCK_Y;
+                const int tileStartX = block.group_index().x * BLOCK_X;
+
+                for (int s = 0; s < steps; ++s) {
+                    int tid = s * threads + block.thread_rank();
+                    if (tid < tileSize) {
+                        int local_y = tid / SHARED_X;
+                        int local_x = tid % SHARED_X;
+                        int gy = tileStartY + local_y - HALO;
+                        int gx = tileStartX + local_x - HALO;
+
+                        sTile[local_y][local_x][0] = get_pix_value(corrected_img, bIdx, c, gy, gx, CH, H, W);
+                        sTile[local_y][local_x][1] = get_pix_value(raw_img, bIdx, c, gy, gx, CH, H, W);
+                        sTile[local_y][local_x][2] = get_pix_value(gt_img, bIdx, c, gy, gx, CH, H, W);
+                    }
+                }
+            }
+            block.sync();
+
+            {
+                int ly = threadIdx.y;
+                int lx = threadIdx.x + HALO;
+
+                float sum_corrected = 0.f;
+                float sum_raw = 0.f;
+                float sum_raw_sq = 0.f;
+                float sum_gt = 0.f;
+                float sum_gt_sq = 0.f;
+                float sum_raw_gt = 0.f;
+
+#pragma unroll
+                for (int d = 1; d <= HALO; ++d) {
+                    const float w = cGauss[HALO - d];
+
+                    const float corrected_left = sTile[ly][lx - d][0];
+                    const float corrected_right = sTile[ly][lx + d][0];
+                    const float raw_left = sTile[ly][lx - d][1];
+                    const float raw_right = sTile[ly][lx + d][1];
+                    const float gt_left = sTile[ly][lx - d][2];
+                    const float gt_right = sTile[ly][lx + d][2];
+                    const float ml = mask_tile[ly][lx - d] * w;
+                    const float mr = mask_tile[ly][lx + d] * w;
+
+                    sum_corrected += corrected_left * ml + corrected_right * mr;
+                    sum_raw += raw_left * ml + raw_right * mr;
+                    sum_raw_sq += (raw_left * raw_left) * ml + (raw_right * raw_right) * mr;
+                    sum_gt += gt_left * ml + gt_right * mr;
+                    sum_gt_sq += (gt_left * gt_left) * ml + (gt_right * gt_right) * mr;
+                    sum_raw_gt += (raw_left * gt_left) * ml + (raw_right * gt_right) * mr;
+                }
+
+                {
+                    const float corrected_center = sTile[ly][lx][0];
+                    const float raw_center = sTile[ly][lx][1];
+                    const float gt_center = sTile[ly][lx][2];
+                    const float wc = cGauss[HALO] * mask_tile[ly][lx];
+
+                    sum_corrected += corrected_center * wc;
+                    sum_raw += raw_center * wc;
+                    sum_raw_sq += (raw_center * raw_center) * wc;
+                    sum_gt += gt_center * wc;
+                    sum_gt_sq += (gt_center * gt_center) * wc;
+                    sum_raw_gt += (raw_center * gt_center) * wc;
+                }
+
+                xconv[ly][threadIdx.x][0] = sum_corrected;
+                xconv[ly][threadIdx.x][1] = sum_raw;
+                xconv[ly][threadIdx.x][2] = sum_raw_sq;
+                xconv[ly][threadIdx.x][3] = sum_gt;
+                xconv[ly][threadIdx.x][4] = sum_gt_sq;
+                xconv[ly][threadIdx.x][5] = sum_raw_gt;
+
+                const int ly2 = ly + BLOCK_Y;
+                if (ly2 < CONV_Y) {
+                    sum_corrected = 0.f;
+                    sum_raw = 0.f;
+                    sum_raw_sq = 0.f;
+                    sum_gt = 0.f;
+                    sum_gt_sq = 0.f;
+                    sum_raw_gt = 0.f;
+
+#pragma unroll
+                    for (int d = 1; d <= HALO; ++d) {
+                        const float w = cGauss[HALO - d];
+
+                        const float corrected_left = sTile[ly2][lx - d][0];
+                        const float corrected_right = sTile[ly2][lx + d][0];
+                        const float raw_left = sTile[ly2][lx - d][1];
+                        const float raw_right = sTile[ly2][lx + d][1];
+                        const float gt_left = sTile[ly2][lx - d][2];
+                        const float gt_right = sTile[ly2][lx + d][2];
+                        const float ml = mask_tile[ly2][lx - d] * w;
+                        const float mr = mask_tile[ly2][lx + d] * w;
+
+                        sum_corrected += corrected_left * ml + corrected_right * mr;
+                        sum_raw += raw_left * ml + raw_right * mr;
+                        sum_raw_sq += (raw_left * raw_left) * ml + (raw_right * raw_right) * mr;
+                        sum_gt += gt_left * ml + gt_right * mr;
+                        sum_gt_sq += (gt_left * gt_left) * ml + (gt_right * gt_right) * mr;
+                        sum_raw_gt += (raw_left * gt_left) * ml + (raw_right * gt_right) * mr;
+                    }
+
+                    {
+                        const float corrected_center = sTile[ly2][lx][0];
+                        const float raw_center = sTile[ly2][lx][1];
+                        const float gt_center = sTile[ly2][lx][2];
+                        const float wc = cGauss[HALO] * mask_tile[ly2][lx];
+
+                        sum_corrected += corrected_center * wc;
+                        sum_raw += raw_center * wc;
+                        sum_raw_sq += (raw_center * raw_center) * wc;
+                        sum_gt += gt_center * wc;
+                        sum_gt_sq += (gt_center * gt_center) * wc;
+                        sum_raw_gt += (raw_center * gt_center) * wc;
+                    }
+
+                    xconv[ly2][threadIdx.x][0] = sum_corrected;
+                    xconv[ly2][threadIdx.x][1] = sum_raw;
+                    xconv[ly2][threadIdx.x][2] = sum_raw_sq;
+                    xconv[ly2][threadIdx.x][3] = sum_gt;
+                    xconv[ly2][threadIdx.x][4] = sum_gt_sq;
+                    xconv[ly2][threadIdx.x][5] = sum_raw_gt;
+                }
+            }
+            block.sync();
+
+            {
+                int ly = threadIdx.y + HALO;
+                int lx = threadIdx.x;
+
+                float corrected_conv = 0.f;
+                float raw_conv = 0.f;
+                float raw_sq_conv = 0.f;
+                float gt_conv = 0.f;
+                float gt_sq_conv = 0.f;
+                float raw_gt_conv = 0.f;
+
+#pragma unroll
+                for (int d = 1; d <= HALO; ++d) {
+                    const float w = cGauss[HALO - d];
+                    float* top = xconv[ly - d][lx];
+                    float* bot = xconv[ly + d][lx];
+
+                    corrected_conv += (top[0] + bot[0]) * w;
+                    raw_conv += (top[1] + bot[1]) * w;
+                    raw_sq_conv += (top[2] + bot[2]) * w;
+                    gt_conv += (top[3] + bot[3]) * w;
+                    gt_sq_conv += (top[4] + bot[4]) * w;
+                    raw_gt_conv += (top[5] + bot[5]) * w;
+                }
+
+                {
+                    const float wc = cGauss[HALO];
+                    float* ctr = xconv[ly][lx];
+                    corrected_conv += ctr[0] * wc;
+                    raw_conv += ctr[1] * wc;
+                    raw_sq_conv += ctr[2] * wc;
+                    gt_conv += ctr[3] * wc;
+                    gt_sq_conv += ctr[4] * wc;
+                    raw_gt_conv += ctr[5] * wc;
+                }
+
+                if (pix_x < W && pix_y < H) {
+                    const float mu_corrected = corrected_conv * inv_window;
+                    const float mu_raw = raw_conv * inv_window;
+                    const float mu_gt = gt_conv * inv_window;
+
+                    const float mu_corrected_sq = mu_corrected * mu_corrected;
+                    const float mu_raw_sq = mu_raw * mu_raw;
+                    const float mu_gt_sq = mu_gt * mu_gt;
+
+                    const float sigma_raw_sq = raw_sq_conv * inv_window - mu_raw_sq;
+                    const float sigma_gt_sq = gt_sq_conv * inv_window - mu_gt_sq;
+                    const float sigma12 = raw_gt_conv * inv_window - mu_raw * mu_gt;
+
+                    const float A_app = mu_corrected_sq + mu_gt_sq + C1;
+                    const float C_app = 2.f * mu_corrected * mu_gt + C1;
+                    const float luminance = C_app / A_app;
+
+                    const float B_raw = sigma_raw_sq + sigma_gt_sq + C2;
+                    const float D_raw = 2.f * sigma12 + C2;
+                    const float contrast_structure = D_raw / B_raw;
+
+                    const int global_idx = bIdx * CH * num_pix + c * num_pix + pix_id;
+                    const float ssim_val = luminance * contrast_structure;
+                    ssim_sum += ssim_val;
+                    cs_sum += contrast_structure;
+
+                    if (app_dm_dmu1) {
+                        const float dl_dmu1 =
+                            2.f * (mu_gt * A_app - mu_corrected * C_app) / (A_app * A_app);
+                        app_dm_dmu1[global_idx] = static_cast<__half>(contrast_structure * dl_dmu1 * derivative_weight);
+
+                        const float ds1sq = ssim_weight * (-(luminance * D_raw) / (B_raw * B_raw));
+                        const float ds12 = ssim_weight * ((2.f * luminance) / B_raw);
+                        raw_dm_dsigma1_sq[global_idx] = static_cast<__half>(ds1sq * derivative_weight);
+                        raw_dm_dsigma12[global_idx] = static_cast<__half>(ds12 * derivative_weight);
+                        // center / mass < 16 can overflow the raw mean partial
+                        // in half even for raw RGB = 3. Remove that amplification
+                        // with an exact power of two; backward restores it in float.
+                        raw_dm_dmu1[global_idx] =
+                            static_cast<__half>((ds1sq * (-2.f * mu_raw) + ds12 * (-mu_gt)) * (derivative_weight * (1.0f / 16.0f)));
+                    }
+                }
+            }
+        }
+
+        if (pix_x < W && pix_y < H) {
+            const float inv_c = 1.0f / static_cast<float>(CH);
+            if (ssim_map) {
+                ssim_map[bIdx * num_pix + pix_id] = center_weight > 0.0f ? ssim_sum * inv_c : 1.0f;
+            }
+            if (cs_map) {
+                cs_map[bIdx * num_pix + pix_id] = center_weight > 0.0f ? cs_sum * inv_c : 1.0f;
             }
         }
     }
 
     // Masked Fused L1+SSIM Backward Kernel.
     // HasSigmaPartials=false: appearance branch skips unused sigma partials.
-    template <typename TargetT, typename MaskT, bool HasSigmaPartials = true, bool Accumulate = false>
+    template <typename TargetT, typename MaskT, bool HasSigmaPartials = true, bool Accumulate = false, bool ScaledMeanPartial = false>
     __global__ void maskedFusedL1SSIMBackwardCUDA(
         float ssim_weight,
         float inv_mask_sum, // 1.0 / mask_sum for normalization
@@ -1087,6 +1481,16 @@ namespace {
             mask_val = mask_value(mask, pix_y * W + pix_x);
         }
 
+        // No sample gradient can cross into an ignored output tile.
+        if (!__syncthreads_or(mask_val != 0.0f)) {
+            if constexpr (!Accumulate) {
+                if (pix_x < W && pix_y < H)
+                    for (int c = 0; c < CH; ++c)
+                        dL_dimg1[bIdx * CH * num_pix + c * num_pix + pix_id] = 0.0f;
+            }
+            return;
+        }
+
         __shared__ float sData[SHARED_Y][SHARED_X][3];
         __shared__ float sScratch[CONV_Y][CONV_X][3];
 
@@ -1113,12 +1517,12 @@ namespace {
                     for (int col = lane_id; col < SHARED_X; col += 32) {
                         int gx = start_x + col - HALO;
 
-                        float local_mask = (gx >= 0 && gx < W && gy >= 0 && gy < H)
-                                               ? mask_value(mask, gy * W + gx)
-                                               : 0.0f;
-                        float chain = local_mask * inv_mask_sum;
+                        // Forward partials include center weight / window mass.
+                        const float chain = inv_mask_sum;
 
                         float vmu = get_pix_value(dm_dmu1, bIdx, c, gy, gx, CH, H, W);
+                        if constexpr (ScaledMeanPartial)
+                            vmu *= 16.0f;
                         float vs1 = 0.f, vs12 = 0.f;
                         if constexpr (HasSigmaPartials) {
                             vs1 = get_pix_value(dm_dsigma1_sq, bIdx, c, gy, gx, CH, H, W);
@@ -1190,7 +1594,7 @@ namespace {
                     sum2 += ctr[2] * wc;
                 }
 
-                float grad_ssim = sum0 + (2.f * p1) * sum1 + p2 * sum2;
+                float grad_ssim = mask_val * (sum0 + (2.f * p1) * sum1 + p2 * sum2);
 
                 // L1 gradient with mask
                 float sign_grad = (p1 == p2) ? 0.0f : copysignf(1.0f, p1 - p2);
@@ -2215,7 +2619,7 @@ namespace lfs::training::kernels {
                 using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
                 dispatch_mask_ptr(mask, [&](auto* mask_ptr) {
                     using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
-                    maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/true, /*Accumulate=*/true>
+                    maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/true, /*Accumulate=*/true, /*ScaledMeanPartial=*/true>
                         <<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                             1.0f, inv_mask_sum, raw.H, raw.W, static_cast<int>(C), C1, C2,
                             raw.raw_img.ptr<float>(), gt_ptr, mask_ptr,
@@ -2287,17 +2691,18 @@ namespace lfs::training::kernels {
         const auto stream = workspace.ssim_map.stream();
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            maskedFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
-                H, W, C, C1, C2,
-                img1.ptr<float>(), img2_ptr,
-                workspace.dm_dmu1.ptr<__half>(),
-                workspace.dm_dsigma1_sq.ptr<__half>(),
-                workspace.dm_dsigma12.ptr<__half>(),
-                workspace.ssim_map.ptr<float>(),
-                workspace.cs_map.ptr<float>());
-            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_fused_l1_forward");
-
             dispatch_mask_ptr(mask_2d, [&](auto* mask_ptr) {
+                using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
+                maskedFusedL1SSIMForwardCUDA<TargetT, MaskT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+                    H, W, C, C1, C2,
+                    img1.ptr<float>(), img2_ptr, mask_ptr,
+                    workspace.dm_dmu1.ptr<__half>(),
+                    workspace.dm_dsigma1_sq.ptr<__half>(),
+                    workspace.dm_dsigma12.ptr<__half>(),
+                    workspace.ssim_map.ptr<float>(),
+                    workspace.cs_map.ptr<float>());
+                LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_fused_l1_forward");
+
                 launch_masked_fused_l1_ssim_mean_device(
                     img1.ptr<float>(),
                     img2_ptr,
@@ -2405,18 +2810,19 @@ namespace lfs::training::kernels {
         const auto stream = workspace.ssim_map.stream();
         dispatch_target_ptr(gt, [&](auto* gt_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
-            decoupledFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
-                H, W, C, C1, C2, ssim_weight,
-                corrected.ptr<float>(), raw.ptr<float>(), gt_ptr,
-                workspace.app_dm_dmu1.ptr<__half>(),
-                workspace.raw_dm_dmu1.ptr<__half>(),
-                workspace.raw_dm_dsigma1_sq.ptr<__half>(),
-                workspace.raw_dm_dsigma12.ptr<__half>(),
-                workspace.ssim_map.ptr<float>(),
-                workspace.cs_map.ptr<float>());
-            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_fused_l1_forward");
-
             dispatch_mask_ptr(mask_2d, [&](auto* mask_ptr) {
+                using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
+                maskedDecoupledFusedL1SSIMForwardCUDA<TargetT, MaskT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+                    H, W, C, C1, C2, ssim_weight,
+                    corrected.ptr<float>(), raw.ptr<float>(), gt_ptr, mask_ptr,
+                    workspace.app_dm_dmu1.ptr<__half>(),
+                    workspace.raw_dm_dmu1.ptr<__half>(),
+                    workspace.raw_dm_dsigma1_sq.ptr<__half>(),
+                    workspace.raw_dm_dsigma12.ptr<__half>(),
+                    workspace.ssim_map.ptr<float>(),
+                    workspace.cs_map.ptr<float>());
+                LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_fused_l1_forward");
+
                 launch_masked_fused_l1_ssim_mean_device(
                     corrected.ptr<float>(),
                     gt_ptr,

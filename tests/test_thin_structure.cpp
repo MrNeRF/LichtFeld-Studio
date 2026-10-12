@@ -185,29 +185,34 @@ TEST(ThinStructure, ConstantResponseScalesFusedAndBothDecoupledOutputs) {
         structure_photometric_weight(structure, {}, weight, 2.0f, true);
         const float scale = 1.0f + 2.0f * response;
         const float denominator = structure_base_denominator({}, 32, 32, true);
-        FusedL1SSIMWorkspace plain_ws;
+        // Zero-weight padding is excluded from windows just like an ignore mask.
+        // A constant response must scale this masked baseline, including both
+        // decoupled gradients, without restoring the excluded border samples.
+        Tensor base_weight;
+        structure_photometric_weight(Tensor::zeros({32, 32}, Device::CUDA), {}, base_weight, 2.0f, true);
+        MaskedFusedL1SSIMWorkspace plain_ws;
         MaskedFusedL1SSIMWorkspace weighted_ws;
-        auto [plain_loss, plain_ctx] = fused_l1_ssim_forward(image.tensor, target.tensor, 0.22f, plain_ws, true);
+        auto [plain_loss, plain_ctx] = masked_fused_l1_ssim_forward(image.tensor, target.tensor, base_weight, 0.22f, plain_ws, denominator);
         const float baseline = plain_loss.item<float>();
-        auto plain_gradient = fused_l1_ssim_backward(plain_ctx, plain_ws).clone();
+        auto plain_gradient = masked_fused_l1_ssim_backward(plain_ctx, plain_ws).clone();
         auto [loss, ctx] = masked_fused_l1_ssim_forward(image.tensor, target.tensor, weight, 0.22f, weighted_ws, denominator);
         const float value = loss.item<float>() * ctx.mask_sum_value / denominator;
         ctx.mask_sum_value = denominator;
         if (response == 0.0f)
             EXPECT_EQ(value, baseline);
         EXPECT_NEAR(value, scale * baseline, 2e-6f);
-        expect_close(plain_ws.cs_map, weighted_ws.cs_map, 0.0f);
-        expect_close(plain_ws.ssim_map, weighted_ws.ssim_map, 0.0f);
+        expect_close(plain_ws.cs_map * base_weight, weighted_ws.cs_map * base_weight, 2e-5f);
+        expect_close(plain_ws.ssim_map * base_weight, weighted_ws.ssim_map * base_weight, 2e-5f);
         expect_close(masked_fused_l1_ssim_backward(ctx, weighted_ws), plain_gradient * scale, response == 0.0f ? 0.0f : 5e-7f);
-        DecoupledFusedL1SSIMWorkspace dec_ws;
+        MaskedDecoupledFusedL1SSIMWorkspace dec_ws;
         MaskedDecoupledFusedL1SSIMWorkspace weighted_dec_ws;
-        auto [dec_loss, dec_ctx] = decoupled_fused_l1_ssim_forward(image.tensor, raw.tensor, target.tensor, 0.22f, dec_ws, true);
-        auto dec_gradient = decoupled_fused_l1_ssim_backward(dec_ctx, dec_ws);
+        auto [dec_loss, dec_ctx] = masked_decoupled_fused_l1_ssim_forward(image.tensor, raw.tensor, target.tensor, base_weight, 0.22f, dec_ws, denominator);
+        auto dec_gradient = masked_decoupled_fused_l1_ssim_backward(dec_ctx, dec_ws);
         auto [weighted_loss, weighted_ctx] = masked_decoupled_fused_l1_ssim_forward(image.tensor, raw.tensor, target.tensor, weight, 0.22f, weighted_dec_ws, denominator);
         EXPECT_NEAR(weighted_loss.item<float>() * weighted_ctx.mask_sum_value / denominator, dec_loss.item<float>() * scale, 2e-6f);
         if (response == 0.0f)
             EXPECT_EQ(weighted_loss.item<float>() * weighted_ctx.mask_sum_value / denominator, dec_loss.item<float>());
-        expect_close(dec_ws.cs_map, weighted_dec_ws.cs_map, 0.0f);
+        expect_close(dec_ws.cs_map * base_weight, weighted_dec_ws.cs_map * base_weight, 2e-5f);
         weighted_ctx.mask_sum_value = denominator;
         auto gradients = masked_decoupled_fused_l1_ssim_backward(weighted_ctx, weighted_dec_ws);
         expect_close(gradients.grad_corrected, dec_gradient.grad_corrected * scale, response == 0.0f ? 0.0f : 5e-7f);

@@ -635,6 +635,7 @@ set(TEST_FILES
     test_expanded_tensor_ops.cpp
     test_bool_any_all.cpp
     test_fused_l1_ssim.cpp
+    test_masked_ssim_window.cpp
     test_densify_error_map.cpp
     test_screen_share.cpp
     test_loss_workspace_union.cpp
@@ -1001,6 +1002,33 @@ endif()
 if(COMMAND lfs_enable_fast_cxx_compile)
     lfs_enable_fast_cxx_compile(lichtfeld_tests)
 endif()
+
+# Exercise the production SSIM translation unit with Debug's subnormal semantics,
+# independently of the application's Release fast-math flags.
+add_executable(masked_ssim_noftz_tests
+    test_main.cpp
+    test_masked_ssim_window.cpp
+    ${CMAKE_SOURCE_DIR}/src/training/kernels/ssim.cu
+)
+set_target_properties(masked_ssim_noftz_tests PROPERTIES
+    CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON
+    CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(masked_ssim_noftz_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/training ${CUDAToolkit_INCLUDE_DIRS})
+target_compile_options(masked_ssim_noftz_tests PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--ftz=false --prec-div=true --prec-sqrt=true --extended-lambda --expt-relaxed-constexpr>)
+target_link_libraries(masked_ssim_noftz_tests PRIVATE
+    lfs_training lfs_core GTest::gtest CUDA::cudart)
+if(MSVC)
+    target_compile_definitions(masked_ssim_noftz_tests PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>)
+    target_compile_options(masked_ssim_noftz_tests PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
+endif()
+add_test(NAME masked_ssim_noftz COMMAND masked_ssim_noftz_tests
+    --gtest_filter=MaskedSSIMWindowTest.SparseSupportRemainsFinite:MaskedSSIMWindowTest.TinyWindowSupportApproachesUnsupported)
+set_tests_properties(masked_ssim_noftz PROPERTIES LABELS "gpu")
 
 # Tensor-library hardening is intentionally isolated from the default test
 # tiers.  During the hardening phases these oracle tests are expected to expose
