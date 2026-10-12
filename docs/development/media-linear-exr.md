@@ -269,6 +269,14 @@ linear resize, owned surfaces, MCP, resume/replay/reconstruction and rejection o
 SDR/HLG/LOG or overrides under PQ. Two HEVC streams with identical decoded
 samples and different mastering/MaxCLL peaks produce identical EXR samples; the
 fixture verifies actual frame tags, first-frame preservation and trim output.
+Additional contracts reject actual midstream transfer/primaries changes before
+publishing the changed frame (already completed images remain). Metadata-only
+preflight rejects absent tags; frame-level declarations are validated separately.
+Tensor references cover varied 8-bit 4:2:0 chroma, planar RGB16 and shifted
+semiplanar 10-bit 4:2:0 in both byte orders, including native, reduced and enlarged
+extents. Sharpness-enabled extraction preserves the unscored EXR bytes. The
+shared normalized HDR EOTF matches the previous float expression over all 14-bit
+codes; existing HDR renderer contracts remain part of qualification.
 Synthetic references do not qualify every real HDR bitstream, metadata change,
 Dolby Vision profile or damaged stream. HLG, vendor LOG, BT.2020 CL and Dolby
 Vision remain unsupported by this float profile.

@@ -316,8 +316,46 @@ class FloatEXR(unittest.TestCase):
             trim_metadata=json.loads((trimmed/"extraction_metadata.json").read_text())
             self.assertGreater(trim_metadata["performance"]["decoded_frames"],len(trim_metadata["frames"]),
                                "decode cost must include color prefetch discarded by a trim seek")
+            if peak==1000:
+                scored=self.root/"pq-scored"
+                self.invoke("extract",source,"--output",scored,"--interval","1","--sharpness","0",
+                            "--format","exr","--float-profile","pq-nits","--exr-precision","float",
+                            "--exr-compression","none","--quiet")
+                self.assertEqual([image.read_bytes() for image in sorted(scored.glob("*.exr"))],
+                                 [image.read_bytes() for image in images],"scoring must not quantize the PQ master")
+                scored_metadata=json.loads((scored/"extraction_metadata.json").read_text())
+                self.assertEqual(scored_metadata["output"]["sharpness_domain"],
+                                 "linear cd/m2 divided by 10000, clipped quantized RGB8 proxy")
             encoded.append((raw,[image.read_bytes() for image in images]))
         self.assertEqual(encoded[0],encoded[1],"mastering peak must not change PQ's absolute EOTF or encoded EXR")
+
+    def test_pq_rejects_frame_level_transfer_and_primaries_changes(self):
+        segments=[]
+        for name,transfer,primaries in [("pq2020","smpte2084","bt2020"),
+                                        ("pq709","smpte2084","bt709"),
+                                        ("hlg2020","arib-std-b67","bt2020")]:
+            segment=self.root/(name+".hevc")
+            run([FFMPEG,"-v","error","-f","lavfi","-i","testsrc2=size=64x32:rate=10:duration=0.2",
+                 "-pix_fmt","yuv420p10le","-c:v","libx265","-x265-params",
+                 f"pools=1:frame-threads=1:keyint=1:lossless=1:colorprim={primaries}:transfer={transfer}:colormatrix=bt2020nc",
+                 "-f","hevc",segment])
+            segments.append(segment.read_bytes())
+        for index,field,expected in [(1,"color_primaries","bt709"),(2,"color_transfer","arib-std-b67")]:
+            elementary=self.root/f"changed-{index}.hevc"
+            elementary.write_bytes(segments[0]+segments[index])
+            source=self.root/f"changed-{index}.mkv"
+            run([FFMPEG,"-v","error","-r","10","-i",elementary,"-c:v","copy",source])
+            frames=json.loads(run([FFPROBE,"-v","error","-show_frames","-of","json",source]))["frames"]
+            self.assertEqual(len(frames),4)
+            self.assertEqual(frames[0]["color_transfer"],"smpte2084")
+            self.assertEqual(frames[0]["color_primaries"],"bt2020")
+            self.assertEqual(frames[2][field],expected,"fixture must expose actual frame-level changes")
+            output=self.root/f"changed-output-{index}"
+            result=self.invoke("extract",source,"--output",output,"--interval","1","--format","exr",
+                               "--float-profile","pq-nits","--quiet",code=3)
+            self.assertEqual(result["error"]["code"],"Unsupported")
+            self.assertEqual(len(list(output.glob("*.exr"))),2,"only frames before the unsupported change remain")
+            self.assertFalse((output/"extraction_metadata.json").exists())
 
     def test_float_color_profile_rejects_unsupported_tags_without_relabeling_hdr(self):
         raw=struct.pack("<"+"H"*384,*([512]*384))

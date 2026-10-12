@@ -1212,7 +1212,7 @@ namespace lfs::io {
                 if (float_output) {
                     if (dv_profile > 0 || (video_stream->codecpar->color_trc == AVCOL_TRC_SMPTE2084 && params.float_color_profile != media::FloatColorProfile::PqNits) || video_stream->codecpar->color_trc == AVCOL_TRC_ARIB_STD_B67 ||
                         video_stream->codecpar->color_trc == AVCOL_TRC_LOG || video_stream->codecpar->color_trc == AVCOL_TRC_LOG_SQRT) {
-                        failure_ = make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "HDR/Dolby Vision is outside the float SDR profile", .detection = LFS_SOURCE_SITE_CURRENT()});
+                        failure_ = make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "Source HDR transfer or Dolby Vision is outside the selected float profile", .detection = LFS_SOURCE_SITE_CURRENT()});
                         throw std::runtime_error(std::string(failure_->detail()));
                     }
                     AVCodecParameters color_source = *video_stream->codecpar;

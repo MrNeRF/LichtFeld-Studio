@@ -9,7 +9,7 @@ extern "C" {
 #include "video_color.hpp"
 
 namespace lfs::media::detail {
-    // Integer SDR through shared color primitives and the optional tensor host.
+    // Integer SDR/PQ through shared color primitives and the optional tensor host.
     class LinearFrameConverter {
     public:
         LinearFrameConverter(const AVCodecParameters&, FrameColor overrides, FloatColorProfile profile = FloatColorProfile::Sdr);

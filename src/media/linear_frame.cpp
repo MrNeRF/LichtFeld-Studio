@@ -99,12 +99,12 @@ namespace lfs::media::detail {
         if (!valid)
             return valid;
         if (av_frame_get_side_data(&frame, AV_FRAME_DATA_DOVI_METADATA))
-            return SinkResult::failure(unsupported("Dolby Vision is outside the linear SDR profile"));
+            return SinkResult::failure(unsupported("Dolby Vision is outside the supported float extraction profiles"));
         const auto curve = overrides_.transfer != ColorTransfer::Unspecified ? overrides_.transfer : transfer;
         const auto resolved_primaries = overrides_.primaries != ColorPrimaries::Unspecified ? overrides_.primaries : primaries;
         auto color = outputColor();
         if (!color || resolved_primaries != color->primaries || (transfer_ != ColorTransfer::Unspecified && curve != transfer_))
-            return SinkResult::failure(unsupported("Linear SDR transfer or primaries changed during extraction"));
+            return SinkResult::failure(unsupported("Transfer or primaries changed during float extraction"));
         if (!destination || width <= 0 || height <= 0 || uint64_t(width) * height > std::numeric_limits<uint32_t>::max() / 3)
             return SinkResult::failure(unsupported(std::format("Linear output exceeds address limits (width={}, height={}, component_limit={})", width, height, std::numeric_limits<uint32_t>::max())));
         auto described = describeDecodedVideoFrame(&frame);
