@@ -1261,6 +1261,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_histogram_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_http.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_import_dialog_panels.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_settings_version_safety.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_io_hygiene_regressions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_keymap_bindings.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_new_project_panel.py
