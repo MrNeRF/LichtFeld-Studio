@@ -353,13 +353,38 @@ namespace lfs::app {
         }
 
         template <typename F>
-        auto capture_after_gui_render(vis::Visualizer* viewer, F&& fn) {
+        auto capture_after_gui_render(vis::Visualizer* viewer, F&& fn,
+                                      const bool scene_before_overlays = false) {
             using R = std::invoke_result_t<F>;
 
             auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
             if (!viewer_impl)
                 return make_post_failure<R>("Composited capture requires a GUI visualizer");
 
+            if (scene_before_overlays) {
+                if (viewer_impl->isOnViewerThread()) {
+                    // A synchronous caller cannot wait for a later frame on the
+                    // render thread. Still defer its capture so this frame's
+                    // already-passed gate cannot be armed or consumed inline.
+                    auto task = std::make_shared<std::decay_t<F>>(std::forward<F>(fn));
+                    const bool posted = viewer_impl->postSceneCaptureWork({
+                        .run = [task] {
+                            try {
+                                (void)std::invoke(*task);
+                            } catch (...) {
+                                LOG_WARN("Deferred viewport capture failed after the MCP caller returned");
+                            } },
+                        .cancel = [] {},
+                    });
+                    return make_post_failure<R>(posted ? "No rendered viewport image is available yet"
+                                                       : "Viewer is shutting down");
+                }
+                return detail::post_and_wait_impl(
+                    [viewer_impl](vis::Visualizer::WorkItem work) {
+                        return viewer_impl->postSceneCaptureWork(std::move(work));
+                    },
+                    std::forward<F>(fn));
+            }
             return post_render_and_wait(viewer_impl, std::forward<F>(fn));
         }
 
@@ -367,7 +392,8 @@ namespace lfs::app {
             vis::VisualizerImpl* viewer_impl,
             const vis::RenderingManager& rendering_manager,
             const int width,
-            const int height) {
+            const int height,
+            const bool scene_before_overlays = false) {
             const auto rect = rendering_manager.framebufferViewportRect();
             if (!rect.valid())
                 return std::unexpected("No rendered viewport image is available yet");
@@ -377,7 +403,7 @@ namespace lfs::app {
             if (!vulkan_context)
                 return std::unexpected("Viewport capture requires a Vulkan window");
 
-            auto capture = vulkan_context->captureAndEndActiveFrameRgba();
+            auto capture = vulkan_context->captureAndEndActiveFrameRgba(scene_before_overlays);
             if (!capture)
                 return std::unexpected(capture.error());
 
@@ -421,14 +447,17 @@ namespace lfs::app {
             if (!rendering_manager)
                 return std::unexpected("Viewport capture is not initialized");
 
-            if (auto image = rendering_manager->captureViewportImage(); image && image->is_valid())
-                return mcp::encode_render_tensor_to_base64(*image, width, height);
+            // Meshes are composited after the offscreen splat image. Read the
+            // scene before viewport overlays whenever that pass contributes.
+            const bool has_mesh = rendering_manager->hasVulkanMeshItems();
+            if (!has_mesh) {
+                if (auto image = rendering_manager->captureViewportImage(); image && image->is_valid())
+                    return mcp::encode_render_tensor_to_base64(*image, width, height);
+            }
 
-            // Mesh-only and environment-only scenes are drawn by GPU passes that composite
-            // straight into the window, so no render path publishes an offscreen image to
-            // read back. The viewport is on screen regardless, so crop it out of the
-            // composited window instead of reporting nothing to capture.
-            return capture_viewport_from_window(viewer_impl, *rendering_manager, width, height);
+            // GPU-only scenes also have no offscreen image to read back.
+            return capture_viewport_from_window(viewer_impl, *rendering_manager, width, height,
+                                                has_mesh);
         }
 
         std::expected<std::string, std::string> capture_full_window_to_base64(
@@ -2719,8 +2748,7 @@ namespace lfs::app {
                     return capture_after_gui_render(viewer, [viewer, camera_index, width, height]() {
                         if (camera_index)
                             return render_dataset_camera_to_base64(viewer, *camera_index, width, height);
-                        return capture_live_viewport_to_base64(viewer, width, height);
-                    });
+                        return capture_live_viewport_to_base64(viewer, width, height); }, !camera_index.has_value());
                 },
             .gaussian_count =
                 [viewer]() -> std::expected<int64_t, std::string> {
@@ -5832,9 +5860,7 @@ namespace lfs::app {
                 .description = "Base64-encoded PNG capture of the live viewport region only; excludes panels, toolbars, and other window UI",
                 .mime_type = "image/png"},
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
-                auto result = capture_after_gui_render(viewer, [viewer]() {
-                    return capture_live_viewport_to_base64(viewer);
-                });
+                auto result = capture_after_gui_render(viewer, [viewer]() { return capture_live_viewport_to_base64(viewer); }, true);
                 if (!result)
                     return std::unexpected(result.error());
 
@@ -5862,9 +5888,7 @@ namespace lfs::app {
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
                 std::expected<std::string, std::string> result = std::unexpected("Unknown resource URI: " + uri);
                 if (uri == "lichtfeld://render/current") {
-                    result = capture_after_gui_render(viewer, [viewer]() {
-                        return capture_live_viewport_to_base64(viewer);
-                    });
+                    result = capture_after_gui_render(viewer, [viewer]() { return capture_live_viewport_to_base64(viewer); }, true);
                 } else if (uri == "lichtfeld://render/window") {
                     result = capture_after_gui_render(viewer, [viewer]() {
                         return capture_full_window_to_base64(viewer);

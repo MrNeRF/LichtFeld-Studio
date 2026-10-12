@@ -598,6 +598,10 @@ namespace lfs::vis {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);
             return vulkan_mesh_frame_;
         }
+        [[nodiscard]] bool hasVulkanMeshItems() const {
+            std::lock_guard lock(vulkan_mesh_frame_mutex_);
+            return !vulkan_mesh_frame_.items.empty();
+        }
         void clearVulkanMeshFrame();
 
         // Preview selection

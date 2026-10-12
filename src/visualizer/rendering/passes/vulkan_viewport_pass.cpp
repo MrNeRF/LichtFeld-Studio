@@ -398,6 +398,14 @@ namespace lfs::vis {
                     recordMeshPass(c.cmd, rect_of(c), p);
                 });
             addGraphPass(
+                "scene_capture", P::Geometry,
+                [](const VulkanViewportPassParams& p) {
+                    return !p.mesh_items.empty() && p.record_scene_capture != nullptr;
+                },
+                [](const ViewportRecordContext& c, const VulkanViewportPassParams& p) {
+                    (void)p.record_scene_capture(p.scene_capture_context, c.cmd);
+                });
+            addGraphPass(
                 "textured_overlay", P::WorldOverlay,
                 [this](const VulkanViewportPassParams& p) {
                     const auto& frame = resourcesForFrame(p.frame_slot);

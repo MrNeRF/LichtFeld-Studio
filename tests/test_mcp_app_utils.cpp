@@ -5,6 +5,7 @@
 #include "core/error.hpp"
 #include "core/scene.hpp"
 #include "mcp/mcp_tools.hpp"
+#include "visualizer/scene_capture_job_queue.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <chrono>
@@ -208,6 +209,69 @@ namespace {
     };
 
 } // namespace
+
+TEST(SceneCaptureJobQueueTest, MeshAddedBeforeRequestUsesNextFramesMeshState) {
+    lfs::vis::SceneCaptureJobQueue jobs;
+    int completed = 0;
+    int canceled = 0;
+    bool scene_has_mesh = false;
+    ASSERT_TRUE(jobs.post({.run = [&] { ++completed; }, .cancel = [&] { ++canceled; }}));
+    scene_has_mesh = true; // mutation after posting, before the next frame
+    ASSERT_TRUE(jobs.beginFrame(scene_has_mesh));
+    EXPECT_TRUE(jobs.needsSceneReadback());
+    jobs.completeFrame();
+    EXPECT_EQ(completed, 1);
+    EXPECT_EQ(canceled, 0);
+}
+
+TEST(SceneCaptureJobQueueTest, ViewerThreadRenderWorkWaitsForNextCaptureGate) {
+    lfs::vis::SceneCaptureJobQueue jobs;
+    int completed = 0;
+    EXPECT_FALSE(jobs.beginFrame(true));
+    EXPECT_FALSE(jobs.needsSceneReadback()); // current frame's gate
+    ASSERT_TRUE(jobs.post({.run = [&] { ++completed; }, .cancel = [] {}}));
+    jobs.completeFrame(); // current frame's render work
+    EXPECT_EQ(completed, 0);
+    ASSERT_TRUE(jobs.beginFrame(true));
+    EXPECT_TRUE(jobs.needsSceneReadback());
+    jobs.completeFrame();
+    EXPECT_EQ(completed, 1);
+}
+
+TEST(SceneCaptureJobQueueTest, SceneSwitchCancelsPendingAndActiveJobsExactlyOnce) {
+    lfs::vis::SceneCaptureJobQueue jobs;
+    int completed = 0;
+    int canceled = 0;
+    const auto post = [&] {
+        return jobs.post({.run = [&] { ++completed; }, .cancel = [&] { ++canceled; }});
+    };
+    ASSERT_TRUE(post());
+    ASSERT_TRUE(jobs.beginFrame(true));
+    ASSERT_TRUE(post());
+    jobs.cancelAll(); // scene replacement before the capture gate
+    jobs.cancelAll(); // scene cleared event may follow
+    EXPECT_FALSE(jobs.needsSceneReadback());
+    EXPECT_FALSE(jobs.beginFrame(true));
+    jobs.completeFrame();
+    EXPECT_EQ(completed, 0);
+    EXPECT_EQ(canceled, 2);
+}
+
+TEST(SceneCaptureJobQueueTest, IdleRequestDemandsAFrameWithoutAnotherSceneEvent) {
+    lfs::vis::SceneCaptureJobQueue jobs;
+    int completed = 0;
+    EXPECT_FALSE(jobs.hasPending());
+    EXPECT_FALSE(jobs.hasWork());
+    ASSERT_TRUE(jobs.post({.run = [&] { ++completed; }, .cancel = [] {}}));
+    EXPECT_TRUE(jobs.hasPending());
+    EXPECT_TRUE(jobs.hasWork());
+    ASSERT_TRUE(jobs.beginFrame(false));
+    EXPECT_FALSE(jobs.hasPending());
+    EXPECT_FALSE(jobs.needsSceneReadback());
+    jobs.completeFrame();
+    EXPECT_EQ(completed, 1);
+    EXPECT_FALSE(jobs.hasWork());
+}
 
 TEST(McpAppUtilsTest, PostAndWaitExecutesInlineOnViewerThread) {
     FakeVisualizer viewer;

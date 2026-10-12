@@ -282,7 +282,19 @@ namespace lfs::vis {
                                                   const Frame& frame);
         [[nodiscard]] LFS_VIS_API bool endFrame();
         [[nodiscard]] bool hasActiveFrame() const noexcept { return frame_active_; }
-        [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba();
+        void requestSceneCapture() noexcept {
+            scene_capture_requested_.store(true, std::memory_order_release);
+        }
+        void cancelSceneCaptureRequest() noexcept {
+            scene_capture_requested_.store(false, std::memory_order_release);
+        }
+        [[nodiscard]] bool sceneCaptureRequested() const noexcept {
+            return scene_capture_requested_.load(std::memory_order_acquire);
+        }
+        [[nodiscard]] LFS_VIS_API bool recordSceneCapture(VkCommandBuffer command_buffer,
+                                                          const Frame& frame);
+        [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba(
+            bool scene_before_overlays = false);
         [[nodiscard]] bool waitForNextFrameSlot();
         [[nodiscard]] bool waitForCurrentFrameSlot();
         [[nodiscard]] LFS_VIS_API bool waitForSubmittedFrames();
@@ -568,6 +580,14 @@ namespace lfs::vis {
         std::chrono::steady_clock::time_point framebuffer_resize_last_recreate_{};
         bool frame_active_ = false;
         bool frame_rendering_active_ = false;
+        std::atomic_bool scene_capture_requested_{false};
+        struct SceneCaptureStaging {
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VkExtent2D extent{};
+            std::uint32_t image_index = 0;
+        } scene_capture_staging_;
+        void destroySceneCaptureStaging();
         bool frame_suboptimal_ = false;
         // Phase 7B: owner quarantine latch (10 s policy) shared by the six UI waits.
         std::atomic<bool> gpu_wait_quarantined_{false};

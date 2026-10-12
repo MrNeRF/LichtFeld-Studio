@@ -1397,6 +1397,9 @@ namespace lfs::vis {
             if (work.cancel)
                 work.cancel();
         }
+        scene_capture_jobs_.cancelAll(true);
+        if (auto* const context = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
+            context->cancelSceneCaptureRequest();
 
         std::function<void()> shutdown_callback;
         {
@@ -1947,6 +1950,17 @@ namespace lfs::vis {
             wakeMainLoop();
         });
 
+        state::SceneReplacing::when([this](const auto&) {
+            scene_capture_jobs_.cancelAll();
+            if (auto* const context = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
+                context->cancelSceneCaptureRequest();
+        });
+        state::SceneCleared::when([this](const auto&) {
+            scene_capture_jobs_.cancelAll();
+            if (auto* const context = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
+                context->cancelSceneCaptureRequest();
+        });
+
         ui::PointCloudModeChanged::when([this](const auto&) {
             wakeMainLoop();
         });
@@ -2372,6 +2386,8 @@ namespace lfs::vis {
     }
 
     bool VisualizerImpl::hasPendingWork() const {
+        if (scene_capture_jobs_.hasPending())
+            return true;
         std::lock_guard lock(work_queue_mutex_);
         return !work_queue_.empty();
     }
@@ -2630,6 +2646,9 @@ namespace lfs::vis {
             applyFrameStateEffects(frame_state_.on_renderer_terminal(ctx->rendererTerminalState()));
         if (frame_state_.state() == FrameStateMachine::State::RendererDead) {
             // Keep the CPU event and MCP queues responsive without issuing another GPU frame.
+            scene_capture_jobs_.cancelAll();
+            if (auto* const context = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
+                context->cancelSceneCaptureRequest();
             processRenderWorkQueue();
             if (window_manager_)
                 window_manager_->waitEvents();
@@ -2776,6 +2795,14 @@ namespace lfs::vis {
         if (gui_manager_)
             gui_manager_->sequencerUI().tickPlaybackBeforeSceneRender();
 
+        if (scene_capture_jobs_.hasPending()) {
+            const bool has_mesh = scene_manager_ &&
+                                  !scene_manager_->getScene().getVisibleMeshes().empty();
+            if (scene_capture_jobs_.beginFrame(has_mesh))
+                rendering_manager_->markDirty(DirtyFlag::ALL, FrameReason::AsyncCompletion,
+                                              "viewport_capture");
+        }
+
         const bool is_training = trainer_manager_ && trainer_manager_->isTrainingActive();
         if (rendering_manager_) {
             rendering_manager_->pollTrainingRefresh(
@@ -2835,6 +2862,8 @@ namespace lfs::vis {
             LOG_ERROR("stale view: view inputs changed without a view render");
         }
         if (gui_frame_rendered_ && !ledger_plan.present) {
+            if (scene_capture_jobs_.hasActive())
+                scene_capture_jobs_.cancelActive();
             LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} wake_reason={} wake_timeout_source={}",
                      frame_demand.scene_dirty,
                      frame_demand.continuous_input,
@@ -2878,6 +2907,8 @@ namespace lfs::vis {
         if (gui_frame_rendered_ && camera_animation_only) {
             const double wait = camera_animation_cadence_.secondsUntilReady(camera_frame_started, displayFrameInterval());
             if (wait > 0.0) {
+                if (scene_capture_jobs_.hasActive())
+                    scene_capture_jobs_.cancelActive();
                 // MAILBOX does not pace autonomous camera motion. Keep its
                 // invalidation until the next display interval. Fresh pointer
                 // and keyboard input bypass this wait and render immediately.
@@ -2893,6 +2924,7 @@ namespace lfs::vis {
         rendering_manager_->sampleFrameRates(ledger_plan);
         std::optional<std::chrono::steady_clock::time_point>
             project_frame_started;
+        bool capture_view_rendered = false;
         if (ledger_plan.render_views != 0 && !viewport_export_locked && !interactive_transition_settling &&
             !frame_state_.scene_render_suspended()) {
             if (!python::is_plugin_preload_running() && frame_demand.python_redraw && gui_manager_)
@@ -2904,6 +2936,7 @@ namespace lfs::vis {
                 gui_frame_rendered_ && frame_demand.onlySceneDirty() &&
                 rendering_manager_->pendingDirtyMask() == DirtyFlag::SPLATS;
             const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
+            capture_view_rendered = vulkan_frame.rendered;
             rendering_manager_->retainVksplatScratch();
             if (vulkan_frame.rendered)
                 rendering_manager_->countViewRendered(ledger_plan);
@@ -2912,6 +2945,8 @@ namespace lfs::vis {
             // A preview refresh parked until training frees the shared scratch
             // changed nothing on screen; present once it has rendered.
             if (preview_refresh_only && rendering_manager_->hasParkedArenaRetry()) {
+                if (scene_capture_jobs_.hasActive())
+                    scene_capture_jobs_.cancelActive();
                 waitForNextEvent(is_training);
                 return;
             }
@@ -2975,6 +3010,8 @@ namespace lfs::vis {
                       frame_demand.store_dirty);
         }
         bool presented_gui_frame = false;
+        if (!capture_view_rendered && scene_capture_jobs_.hasActive())
+            scene_capture_jobs_.cancelActive();
         if (gui_manager_) {
             LOG_TIMER("VisualizerImpl::render.gui_frame_total_with_swapchain_wait");
             window_manager_->updateWindowSize("pre_gui_render");
@@ -3015,6 +3052,7 @@ namespace lfs::vis {
                          last_wake_reason_);
             }
         } else {
+            completeSceneCaptureFrame(false);
             processRenderWorkQueue();
         }
         if (project_frame_started && project_lifecycle_) {
@@ -3049,7 +3087,7 @@ namespace lfs::vis {
         // just-finished presentation.
         FrameDemand next_demand = frame_demand;
         next_demand.python_redraw = python::has_redraw_request();
-        next_demand.render_work = hasPendingRenderWork();
+        next_demand.render_work = hasPendingRenderWork() || scene_capture_jobs_.hasPending();
         next_demand.store_dirty = app_store().store().has_dirty();
         last_frame_demand_ = next_demand;
         has_last_frame_demand_ = true;
@@ -4107,6 +4145,28 @@ namespace lfs::vis {
         wakeMainLoop();
 
         return true;
+    }
+
+    bool VisualizerImpl::postSceneCaptureWork(WorkItem work) {
+        if (!acceptsPostedWork())
+            return false;
+        if (!scene_capture_jobs_.post(std::move(work)))
+            return false;
+        wakeMainLoop();
+        return true;
+    }
+
+    void VisualizerImpl::completeSceneCaptureFrame(const bool frame_recorded) {
+        if (!scene_capture_jobs_.hasWork())
+            return;
+        if (scene_capture_jobs_.hasActive()) {
+            if (!frame_recorded)
+                scene_capture_jobs_.cancelActive();
+            else
+                scene_capture_jobs_.completeFrame();
+        }
+        if (scene_capture_jobs_.hasPending())
+            wakeMainLoop();
     }
 
     bool VisualizerImpl::acceptsPostedWork() const {

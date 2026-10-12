@@ -1752,7 +1752,79 @@ namespace lfs::vis {
         return true;
     }
 
-    std::expected<VulkanContext::WindowCapture, std::string> VulkanContext::captureAndEndActiveFrameRgba() {
+    void VulkanContext::destroySceneCaptureStaging() {
+        if (scene_capture_staging_.buffer != VK_NULL_HANDLE &&
+            scene_capture_staging_.allocation != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator_, scene_capture_staging_.buffer,
+                             scene_capture_staging_.allocation);
+        }
+        scene_capture_staging_ = {};
+    }
+
+    bool VulkanContext::recordSceneCapture(const VkCommandBuffer command_buffer,
+                                           const Frame& frame) {
+        if (!scene_capture_requested_.exchange(false, std::memory_order_acq_rel))
+            return true;
+        if (!frame_active_ || command_buffer != frame.command_buffer ||
+            active_image_index_ != frame.image_index ||
+            (swapchain_image_usage_ & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0 ||
+            allocator_ == VK_NULL_HANDLE || frame.extent.width == 0 || frame.extent.height == 0)
+            return false;
+
+        if (scene_capture_staging_.buffer != VK_NULL_HANDLE) {
+            if (!waitForSubmittedFrames())
+                return false;
+            destroySceneCaptureStaging();
+        }
+
+        const VkDeviceSize byte_size = static_cast<VkDeviceSize>(frame.extent.width) *
+                                       frame.extent.height * 4u;
+        VkBufferCreateInfo buffer_info{};
+        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.size = byte_size;
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo allocation_info{};
+        allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+        allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+        VmaAllocationInfo staging_info{};
+        const VkResult result = vmaCreateBuffer(allocator_, &buffer_info, &allocation_info,
+                                                &scene_capture_staging_.buffer,
+                                                &scene_capture_staging_.allocation, &staging_info);
+        if (result != VK_SUCCESS || scene_capture_staging_.buffer == VK_NULL_HANDLE ||
+            scene_capture_staging_.allocation == VK_NULL_HANDLE || staging_info.size < byte_size) {
+            destroySceneCaptureStaging();
+            return false;
+        }
+        vmaSetAllocationName(allocator_, scene_capture_staging_.allocation,
+                             "Viewport scene capture readback");
+        setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER, scene_capture_staging_.buffer,
+                            "viewport.scene.capture[{}]", byte_size);
+
+        if (!finishActiveRendering(command_buffer)) {
+            destroySceneCaptureStaging();
+            return false;
+        }
+        const VkImage image = swapchain_images_[active_image_index_];
+        image_barriers_.transitionImage(command_buffer, image, swapchain_epoch_,
+                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        VkBufferImageCopy region{};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent = {frame.extent.width, frame.extent.height, 1};
+        vkCmdCopyImageToBuffer(command_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               scene_capture_staging_.buffer, 1, &region);
+        image_barriers_.transitionImage(command_buffer, image, swapchain_epoch_,
+                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        scene_capture_staging_.extent = frame.extent;
+        scene_capture_staging_.image_index = active_image_index_;
+        return restartActiveRendering(command_buffer, frame);
+    }
+
+    std::expected<VulkanContext::WindowCapture, std::string> VulkanContext::captureAndEndActiveFrameRgba(
+        const bool scene_before_overlays) {
         auto fail_capture = [this](std::string message) -> std::expected<WindowCapture, std::string> {
             fail(std::move(message));
             return std::unexpected(last_error_);
@@ -1799,8 +1871,23 @@ namespace lfs::vis {
             static_cast<VkDeviceSize>(extent.width) *
             static_cast<VkDeviceSize>(extent.height) * 4u;
 
-        VkBuffer staging_buffer = VK_NULL_HANDLE;
-        VmaAllocation staging_allocation = VK_NULL_HANDLE;
+        if (scene_before_overlays &&
+            (scene_capture_staging_.buffer == VK_NULL_HANDLE ||
+             scene_capture_staging_.allocation == VK_NULL_HANDLE ||
+             scene_capture_staging_.image_index != active_image_index_ ||
+             scene_capture_staging_.extent.width != extent.width ||
+             scene_capture_staging_.extent.height != extent.height)) {
+            return std::unexpected("No rendered viewport image is available yet");
+        }
+
+        VkBuffer staging_buffer = scene_before_overlays
+                                      ? std::exchange(scene_capture_staging_.buffer, VK_NULL_HANDLE)
+                                      : VK_NULL_HANDLE;
+        VmaAllocation staging_allocation = scene_before_overlays
+                                               ? std::exchange(scene_capture_staging_.allocation, VK_NULL_HANDLE)
+                                               : VK_NULL_HANDLE;
+        if (scene_before_overlays)
+            scene_capture_staging_ = {};
         auto destroy_staging = [&]() {
             if (staging_buffer != VK_NULL_HANDLE && staging_allocation != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator_, staging_buffer, staging_allocation);
@@ -1820,20 +1907,25 @@ namespace lfs::vis {
         allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
 
         VmaAllocationInfo staging_info{};
-        VkResult result = static_cast<VkResult>(vmaCreateBuffer(allocator_,
-                                                                &buffer_info,
-                                                                &allocation_info,
-                                                                &staging_buffer,
-                                                                &staging_allocation,
-                                                                &staging_info));
-        if (result != VK_SUCCESS)
-            return fail_capture(std::format(
-                "vmaCreateBuffer(window capture) failed: {} ({}) (allocator={:#x}, requested_size={}, usage={:#x})",
-                vkResultToString(result),
-                static_cast<int>(result),
-                reinterpret_cast<std::uintptr_t>(allocator_),
-                byte_size,
-                static_cast<std::uint32_t>(buffer_info.usage)));
+        VkResult result = VK_SUCCESS;
+        if (scene_before_overlays) {
+            vmaGetAllocationInfo(allocator_, staging_allocation, &staging_info);
+        } else {
+            result = static_cast<VkResult>(vmaCreateBuffer(allocator_,
+                                                           &buffer_info,
+                                                           &allocation_info,
+                                                           &staging_buffer,
+                                                           &staging_allocation,
+                                                           &staging_info));
+            if (result != VK_SUCCESS)
+                return fail_capture(std::format(
+                    "vmaCreateBuffer(window capture) failed: {} ({}) (allocator={:#x}, requested_size={}, usage={:#x})",
+                    vkResultToString(result),
+                    static_cast<int>(result),
+                    reinterpret_cast<std::uintptr_t>(allocator_),
+                    byte_size,
+                    static_cast<std::uint32_t>(buffer_info.usage)));
+        }
         if (staging_buffer == VK_NULL_HANDLE || staging_allocation == VK_NULL_HANDLE ||
             staging_info.size < byte_size) {
             const std::string error = std::format(
@@ -1847,11 +1939,13 @@ namespace lfs::vis {
             destroy_staging();
             return fail_capture(error);
         }
-        vmaSetAllocationName(allocator_, staging_allocation, "Window capture readback");
-        setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
-                            staging_buffer,
-                            "window.capture.readback[{}]",
-                            byte_size);
+        if (!scene_before_overlays) {
+            vmaSetAllocationName(allocator_, staging_allocation, "Window capture readback");
+            setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
+                                staging_buffer,
+                                "window.capture.readback[{}]",
+                                byte_size);
+        }
 
         VkCommandBuffer command_buffer = command_buffers_[active_frame_index_];
         if (!finishActiveRendering(command_buffer)) {
@@ -1859,29 +1953,30 @@ namespace lfs::vis {
             return std::unexpected(last_error_);
         }
 
-        const VkImage image = swapchain_images_[active_image_index_];
-        image_barriers_.transitionImage(command_buffer,
-                                        image,
-                                        swapchain_epoch_,
-                                        VK_IMAGE_ASPECT_COLOR_BIT,
-                                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        if (!scene_before_overlays) {
+            const VkImage image = swapchain_images_[active_image_index_];
+            image_barriers_.transitionImage(command_buffer,
+                                            image,
+                                            swapchain_epoch_,
+                                            VK_IMAGE_ASPECT_COLOR_BIT,
+                                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
-        VkBufferImageCopy copy_region{};
-        copy_region.bufferOffset = 0;
-        copy_region.bufferRowLength = 0;
-        copy_region.bufferImageHeight = 0;
-        copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copy_region.imageSubresource.mipLevel = 0;
-        copy_region.imageSubresource.baseArrayLayer = 0;
-        copy_region.imageSubresource.layerCount = 1;
-        copy_region.imageOffset = {0, 0, 0};
-        copy_region.imageExtent = {extent.width, extent.height, 1};
-        vkCmdCopyImageToBuffer(command_buffer,
-                               image,
-                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               staging_buffer,
-                               1,
-                               &copy_region);
+            VkBufferImageCopy copy_region{};
+            copy_region.bufferOffset = 0;
+            copy_region.bufferRowLength = 0;
+            copy_region.bufferImageHeight = 0;
+            copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copy_region.imageSubresource.mipLevel = 0;
+            copy_region.imageSubresource.baseArrayLayer = 0;
+            copy_region.imageOffset = {0, 0, 0};
+            copy_region.imageExtent = {extent.width, extent.height, 1};
+            vkCmdCopyImageToBuffer(command_buffer,
+                                   image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   staging_buffer,
+                                   1,
+                                   &copy_region);
+        }
 
         if (!endFrame()) {
             const std::string error = last_error_.empty() ? "Vulkan frame submission failed during window capture"
@@ -3588,8 +3683,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;
@@ -5117,6 +5212,8 @@ namespace lfs::vis {
         if (device_ == VK_NULL_HANDLE) {
             return;
         }
+
+        destroySceneCaptureStaging();
 
         for (DepthStencilResource& resource : depth_stencil_resources_) {
             const auto resource_index = static_cast<std::size_t>(&resource - depth_stencil_resources_.data());

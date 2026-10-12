@@ -7378,7 +7378,31 @@ namespace lfs::vis::gui {
                         rendering_manager->reportSceneUpscalerRuntimeSelection(
                             vulkan_viewport_pass_->sceneUpscalerSelection());
                     }
-                    recordVulkanViewport(frame.command_buffer, frame.extent, viewport_params);
+                    struct SceneCaptureContext {
+                        VulkanContext* context;
+                        const VulkanContext::Frame* frame;
+                    } scene_capture_context{vulkan_context, &frame};
+                    const bool capture_armed = !viewport_params.mesh_items.empty() && viewer_ &&
+                                               viewer_->hasActiveSceneCaptureJob();
+                    if (capture_armed) {
+                        vulkan_context->requestSceneCapture();
+                        viewport_params.scene_capture_context = &scene_capture_context;
+                        viewport_params.record_scene_capture = [](void* state, VkCommandBuffer cb) {
+                            const auto* capture = static_cast<const SceneCaptureContext*>(state);
+                            return capture->context->recordSceneCapture(cb, *capture->frame);
+                        };
+                    }
+                    if (capture_armed) {
+                        try {
+                            recordVulkanViewport(frame.command_buffer, frame.extent, viewport_params);
+                        } catch (...) {
+                            vulkan_context->cancelSceneCaptureRequest();
+                            throw;
+                        }
+                        vulkan_context->cancelSceneCaptureRequest();
+                    } else {
+                        recordVulkanViewport(frame.command_buffer, frame.extent, viewport_params);
+                    }
                 }
                 {
                     LOG_TIMER("gui_render.rmlui_record");
@@ -7404,6 +7428,7 @@ namespace lfs::vis::gui {
                     }
                 }
                 if (viewer_) {
+                    viewer_->completeSceneCaptureFrame(viewport_pass_ready);
                     viewer_->processRenderWorkQueue();
                 }
                 // Synchronous full-window capture explicitly submits and consumes
@@ -7429,6 +7454,7 @@ namespace lfs::vis::gui {
                              interactive_transition_resume_training_);
                 }
                 if (viewer_) {
+                    viewer_->completeSceneCaptureFrame(false);
                     viewer_->processRenderWorkQueue();
                 }
             }
@@ -7446,6 +7472,7 @@ namespace lfs::vis::gui {
         }
 
         if (!vulkan_gui_ && viewer_) {
+            viewer_->completeSceneCaptureFrame(false);
             viewer_->processRenderWorkQueue();
         }
         updateInteractiveTransitionGuard();
