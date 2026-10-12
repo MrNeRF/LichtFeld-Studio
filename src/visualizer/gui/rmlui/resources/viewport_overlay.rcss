@@ -448,6 +448,14 @@ body {
     z-index: 9;
 }
 
+/* Shared bars span both panels; keep them below the axes and centered tool rails. */
+#viewport-content.split-view #depth-view-block,
+#viewport-content.split-view .viewport-selection-overlay,
+#viewport-content.split-view .viewport-transform-overlay {
+    top: auto;
+    bottom: 5dp;
+}
+
 .viewport-depth-header {
     flex-wrap: nowrap;
     align-items: center;

@@ -584,6 +584,9 @@ namespace lfs::vis::gui {
         if (!changed)
             return false;
 
+        if (auto* const content = document_->GetElementById("viewport-content"))
+            content->SetClass("split-view", show_secondary_toolbar_);
+
         const auto apply_root = [&](const char* element_id,
                                     const float x,
                                     const float width,

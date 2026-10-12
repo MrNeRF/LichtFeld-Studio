@@ -116,6 +116,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_ui_visibility_transition.cpp
         test_summary_labels.cpp
         test_menu_bar_title.cpp
+        test_viewport_depth_layout.cpp
         test_panel_layout_render_demand.cpp
         test_preferences_migration.cpp
         test_python_editor_input.cpp
@@ -706,6 +707,7 @@ set(TEST_FILES
     test_context_menu_placement.cpp
     test_rml_static_style_boundaries.cpp
     test_preferences_hint_layout.cpp
+    test_viewport_depth_layout.cpp
     test_viewport_select.cpp
     test_sequencer_regressions.cpp
     test_timeline_save_budget.cpp
