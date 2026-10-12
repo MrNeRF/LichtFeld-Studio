@@ -14,6 +14,7 @@
 #include "io/filesystem_utils.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/loaders/missing_dataset_images.hpp"
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -418,11 +419,18 @@ namespace lfs::io {
 
             // Check ply_file_path in transforms.json (nerfstudio format), fallback to pointcloud.ply
             std::filesystem::path pointcloud_path;
+            std::filesystem::path normalized_candidate;
             if (std::ifstream file; lfs::core::open_file_for_read(transforms_file, std::ios::in | std::ios::binary, file)) {
                 try {
                     if (const auto json = nlohmann::json::parse(file, nullptr, true, true);
                         json.contains("ply_file_path")) {
-                        pointcloud_path = base_path / lfs::core::utf8_to_path(json["ply_file_path"].get<std::string>());
+                        auto ply_path = json["ply_file_path"].get<std::string>();
+                        pointcloud_path = base_path / lfs::core::utf8_to_path(ply_path);
+                        // Keep existing native filenames; retry Windows separators on other platforms.
+                        if (ply_path.find('\\') != std::string::npos && !std::filesystem::exists(pointcloud_path)) {
+                            std::replace(ply_path.begin(), ply_path.end(), '\\', '/');
+                            normalized_candidate = base_path / lfs::core::utf8_to_path(ply_path);
+                        }
                     }
                 } catch (...) {
                     // Ignore parse errors - will fallback to default pointcloud.ply
@@ -437,11 +445,27 @@ namespace lfs::io {
             if (!missing_images.empty()) {
                 warnings.push_back(format_missing_dataset_images_warning(missing_images));
             }
-            if (std::filesystem::exists(pointcloud_path)) {
-                auto loaded_point_cloud = load_simple_ply_point_cloud(pointcloud_path, options);
-                if (loaded_point_cloud.size() > 0) {
+            std::optional<PointCloud> loaded_point_cloud;
+            if (!normalized_candidate.empty()) {
+                std::error_code ec;
+                if (std::filesystem::is_regular_file(normalized_candidate, ec)) {
+                    try {
+                        loaded_point_cloud = load_simple_ply_point_cloud(normalized_candidate, options);
+                        pointcloud_path = normalized_candidate;
+                    } catch (const std::runtime_error& e) {
+                        throw_if_load_cancel_requested(options, "Blender/NeRF point cloud load cancelled");
+                        // This optional spelling must not displace a working default or random seed.
+                        LOG_DEBUG("Ignoring unusable normalized seed path: {}", e.what());
+                    }
+                }
+            }
+            if (loaded_point_cloud || std::filesystem::exists(pointcloud_path)) {
+                if (!loaded_point_cloud) {
+                    loaded_point_cloud = load_simple_ply_point_cloud(pointcloud_path, options);
+                }
+                if (loaded_point_cloud->size() > 0) {
                     point_cloud = std::make_shared<PointCloud>(
-                        convert_transforms_point_cloud_to_colmap_world(std::move(loaded_point_cloud)));
+                        convert_transforms_point_cloud_to_colmap_world(std::move(*loaded_point_cloud)));
                     LOG_INFO("Loaded {} points from {}", point_cloud->size(),
                              lfs::core::path_to_utf8(pointcloud_path.filename()));
                 } else {
