@@ -740,6 +740,7 @@ set(TEST_FILES
     test_export_env_composite.cpp
     test_image_io.cpp
     test_project_thumbnail_image.cpp
+    test_mask_resized_cache.cpp
     test_mask_cache_endpoints.cpp
     test_mask_color_consistency.cpp
     test_camera_mask_threshold.cpp

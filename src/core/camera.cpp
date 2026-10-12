@@ -630,6 +630,14 @@ namespace lfs::core {
         } else if (mask.ndim() == 3 && mask.shape()[0] == 1) {
             mask = mask.squeeze(0);
         }
+        if (warp_full_resolution) {
+            const auto scaled = prepare_undistort_params(
+                _undistort_params, static_cast<int>(mask.shape()[1]), static_cast<int>(mask.shape()[0]),
+                resize_factor, max_width);
+            mask = undistort_mask_area(mask, scaled, _stream);
+        }
+        // Match the sidecar training cache before inversion and classification.
+        cuda::quantize_mask_to_byte_grid(mask, false);
         return mask;
     }
 
@@ -671,7 +679,7 @@ namespace lfs::core {
                                   const bool apply_undistortion) const {
         const CUDAStreamGuard stream_guard(_stream);
         return finish_mask(read_mask_image(path, resize_factor, max_width, apply_undistortion), resize_factor,
-                           max_width, invert_mask, mask_threshold, binarize, apply_undistortion);
+                           max_width, invert_mask, mask_threshold, binarize, false);
     }
 
     Tensor Camera::load_and_get_mask(const int resize_factor, const int max_width,
@@ -749,7 +757,7 @@ namespace lfs::core {
         }
 
         mask = finish_mask(std::move(mask), resize_factor, max_width, invert_mask, mask_threshold, binarize,
-                           apply_undistortion);
+                           apply_undistortion && _in_memory_mask_raw.is_valid());
         _cached_mask = mask;
         _mask_loaded = true;
         _cached_mask_resize_factor = resize_factor;

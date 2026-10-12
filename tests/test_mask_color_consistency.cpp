@@ -7,11 +7,8 @@
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
 #include <array>
-#include <cstdlib>
 #include <cuda_runtime.h>
-#include <fstream>
 #include <gtest/gtest.h>
-#include <nlohmann/json.hpp>
 
 namespace {
     using namespace lfs::core;
@@ -100,12 +97,6 @@ TEST_F(MaskColorConsistency, ColorAndGrayMasksUseTheTrainingLuminanceBeforeResam
                         }
                     }
                     EXPECT_EQ(mismatches, 0u);
-                    if (!gray && resize == 1 && !invert && threshold == .5f) {
-                        if (const char* path = std::getenv("LFS_MASK_COLOR_EVIDENCE"))
-                            std::ofstream(path) << nlohmann::json{{"training", {{"shape", {height, width}}, {"values", training}}},
-                                                                  {"evaluation", {{"shape", {height, width}}, {"values", evaluation}}}}
-                                                       .dump();
-                    }
                 }
             }
         }

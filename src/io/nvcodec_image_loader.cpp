@@ -2073,7 +2073,7 @@ namespace lfs::io {
         // whose execution stream is not the caller-supplied codec stream.
         // Current mask-cache callers deliberately use the legacy stream.
         LFS_ASSERT_MSG(
-            !eight_bit || cuda_stream == nullptr,
+            !eight_bit || image.dtype() == DataType::UInt8 || cuda_stream == nullptr,
             "eight-bit JPEG2000 staging currently requires the legacy CUDA stream");
 
         if (!impl_->encoder) {
@@ -2086,8 +2086,8 @@ namespace lfs::io {
         if (shape.rank() != 2) {
             throw std::runtime_error("Expected 2D tensor, got " + std::to_string(shape.rank()) + "D");
         }
-        if (image.dtype() != DataType::Float32 || image.device() != Device::CUDA) {
-            throw std::runtime_error("encode_grayscale_to_jpeg2k expects a Float32 CUDA tensor");
+        if ((image.dtype() != DataType::Float32 && !(eight_bit && image.dtype() == DataType::UInt8)) || image.device() != Device::CUDA) {
+            throw std::runtime_error("encode_grayscale_to_jpeg2k expects Float32 CUDA, or UInt8 for an eight-bit mask");
         }
 
         const uint32_t height = static_cast<uint32_t>(shape[0]);
@@ -2096,7 +2096,7 @@ namespace lfs::io {
 
         const Tensor hw_float = image.contiguous();
         Tensor encoded = eight_bit
-                             ? (hw_float * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8)
+                             ? (hw_float.dtype() == DataType::UInt8 ? hw_float : (hw_float * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8))
                              : Tensor::empty(TensorShape({height, width}), Device::CUDA, DataType::Float16);
         if (!eight_bit) {
             cuda::launch_float32_hwc_to_uint16_hwc(

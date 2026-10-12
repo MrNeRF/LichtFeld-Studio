@@ -3146,9 +3146,11 @@ namespace lfs::io {
                                          : lfs::core::undistort_mask_area(aux_tensor, scaled, aux_stream);
                     }
 
+                    // The first visit must use the same bytes as every cache visit.
+                    auto mask_bytes = item.is_mask ? lfs::core::cuda::quantize_mask_to_byte_grid(aux_tensor, is_nvcodec_available()) : lfs::core::Tensor{};
                     if (item.is_mask && is_nvcodec_available()) {
                         try {
-                            auto jpeg_bytes = nvcodec->encode_grayscale_to_jpeg2k(aux_tensor, nullptr, true, true);
+                            auto jpeg_bytes = nvcodec->encode_grayscale_to_jpeg2k(mask_bytes, nullptr, true, true);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
                         } catch (...) {

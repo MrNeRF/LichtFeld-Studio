@@ -14,4 +14,7 @@ namespace lfs::core::cuda {
     LFS_CUDA_API Tensor threshold_mask(const Tensor& mask, float threshold);
     // Alpha's existing 16-bit cache uses the same correctly rounded value domain.
     LFS_CUDA_API void normalize_mask_u16(const std::uint16_t* input, float* output, size_t count, cudaStream_t stream);
+    // Put a sidecar on the existing truncated-byte cache grid in place. Optional
+    // byte output is already ready for the lossless cache encoder.
+    LFS_CUDA_API Tensor quantize_mask_to_byte_grid(Tensor& mask, bool keep_bytes = true);
 } // namespace lfs::core::cuda
