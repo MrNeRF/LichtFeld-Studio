@@ -101,9 +101,9 @@ def test_first_preview_request_opens_once_during_lazy_reentry(
     open_calls = []
     original_open = image_preview.ImagePreviewPanel.open
 
-    def track_open(panel, image_paths, mask_paths, start_index, camera_uids=None):
+    def track_open(panel, image_paths, mask_paths, start_index, camera_uids=None, camera_nodes=None):
         open_calls.append((image_paths, mask_paths, start_index, camera_uids))
-        return original_open(panel, image_paths, mask_paths, start_index, camera_uids)
+        return original_open(panel, image_paths, mask_paths, start_index, camera_uids, camera_nodes)
 
     monkeypatch.setattr(image_preview.ImagePreviewPanel, "open", track_open)
 
