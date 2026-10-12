@@ -1016,7 +1016,10 @@ namespace lfs::vis {
             const auto vp_data = frame_ctx.makeViewportData();
             frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
             frame.camera_position = vp_data.translation;
-            frame.items = buildViewportMeshDrawItems(frame_ctx.scene_state, settings, vp_data.translation);
+            if (!frame_ctx.scene_state.meshes.empty()) {
+                frame.camera_backward = vp_data.rotation[2];
+                frame.items = buildViewportMeshDrawItems(frame_ctx.scene_state, settings, frame.camera_backward);
+            }
 
             const auto frame_view = frame_ctx.makeFrameView();
             frame.environment = makeEnvironmentParams(frame_view, settings, environment_map_path);
@@ -2641,7 +2644,8 @@ namespace lfs::vis {
                             .start_position = layout.start_position,
                             .end_position = layout.end_position,
                             .view_projection = panel_view.getProjectionMatrix() * panel_view.getViewMatrix(),
-                            .camera_position = panel_view.translation});
+                            .camera_position = panel_view.translation,
+                            .camera_backward = panel_view.rotation[2]});
                     };
                 append_panel(context.viewport, 0);
                 append_panel(split_view_service_.secondaryViewport(), 1);

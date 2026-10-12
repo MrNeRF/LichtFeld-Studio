@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <span>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -29,6 +30,7 @@ namespace lfs::vis {
         const lfs::core::MeshData* mesh = nullptr;
         glm::mat4 model{1.0f};
         glm::vec3 light_dir{0.3f, 1.0f, 0.5f};
+        bool camera_relative_light = false;
         float light_intensity = 0.7f;
         float ambient = 0.4f;
         bool backface_culling = true;
@@ -44,20 +46,23 @@ namespace lfs::vis {
         int shadow_map_resolution = 2048;
     };
 
-    struct VulkanMeshPassParams {
-        glm::mat4 view_projection{1.0f};
-        glm::vec3 camera_position{0.0f};
-        std::vector<VulkanMeshDrawItem> items;
-        std::size_t frame_slot = 0;
-        std::size_t draw_group = 0;
-        std::size_t draw_group_count = 1;
-    };
-
     struct VulkanMeshViewportPanel {
         float start_position = 0.0f;
         float end_position = 1.0f;
         glm::mat4 view_projection{1.0f};
         glm::vec3 camera_position{0.0f};
+        glm::vec3 camera_backward{0.0f, 0.0f, 1.0f};
+    };
+
+    struct VulkanMeshPassParams {
+        glm::mat4 view_projection{1.0f};
+        glm::vec3 camera_position{0.0f};
+        glm::vec3 camera_backward{0.0f, 0.0f, 1.0f};
+        std::vector<VulkanMeshDrawItem> items;
+        std::span<const VulkanMeshViewportPanel> panels;
+        std::size_t frame_slot = 0;
+        std::size_t draw_group = 0;
+        std::size_t draw_group_count = 1;
     };
 
     class LFS_VIS_API VulkanMeshPass {

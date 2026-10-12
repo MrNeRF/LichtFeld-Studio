@@ -5364,6 +5364,7 @@ namespace lfs::vis::gui {
             auto mesh_frame = rendering_manager->getVulkanMeshFrame();
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
+            params.mesh_camera_backward = mesh_frame.camera_backward;
             params.mesh_items = std::move(mesh_frame.items);
             params.mesh_panels = std::move(mesh_frame.panels);
             params.environment = std::move(mesh_frame.environment);
@@ -8020,6 +8021,7 @@ namespace lfs::vis::gui {
                 VulkanViewportPassParams params;
                 params.mesh_view_projection = frame.view_projection;
                 params.mesh_camera_position = frame.camera_position;
+                params.mesh_camera_backward = frame.camera_backward;
                 params.mesh_items = frame.items;
                 params.mesh_panels = frame.panels;
                 params.environment = frame.environment;

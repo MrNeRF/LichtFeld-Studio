@@ -2096,7 +2096,9 @@ namespace lfs::vis {
             VulkanMeshPassParams mesh_params{
                 .view_projection = params.mesh_view_projection,
                 .camera_position = params.mesh_camera_position,
+                .camera_backward = params.mesh_camera_backward,
                 .items = params.mesh_items,
+                .panels = params.mesh_panels,
                 .frame_slot = params.frame_slot,
                 .draw_group_count = std::max<std::size_t>(1, params.mesh_panels.size()),
             };
@@ -2403,7 +2405,9 @@ namespace lfs::vis {
             const bool split_active = sceneSplitActive(params);
             const bool split_mesh_panels_active = split_active && !params.mesh_panels.empty();
             VulkanMeshPassParams mesh_params{
+                .camera_backward = params.mesh_camera_backward,
                 .items = params.mesh_items,
+                .panels = params.mesh_panels,
                 .frame_slot = params.frame_slot,
                 .draw_group_count = std::max<std::size_t>(1, params.mesh_panels.size()),
             };
@@ -2425,6 +2429,7 @@ namespace lfs::vis {
                     }
                     mesh_params.view_projection = panel.view_projection;
                     mesh_params.camera_position = panel.camera_position;
+                    mesh_params.camera_backward = panel.camera_backward;
                     mesh_params.draw_group = panel_index;
                     const VkRect2D mesh_rect{
                         .offset = {x0, rect.y},
@@ -2436,6 +2441,7 @@ namespace lfs::vis {
             } else if (!split_active) {
                 mesh_params.view_projection = params.mesh_view_projection;
                 mesh_params.camera_position = params.mesh_camera_position;
+                mesh_params.camera_backward = params.mesh_camera_backward;
                 const VkRect2D mesh_rect{
                     .offset = {rect.x, rect.y},
                     .extent = {static_cast<std::uint32_t>(rect.width),
@@ -2875,7 +2881,9 @@ namespace lfs::vis {
             const VulkanMeshPassParams mesh_params{
                 .view_projection = params.mesh_view_projection,
                 .camera_position = params.mesh_camera_position,
+                .camera_backward = params.mesh_camera_backward,
                 .items = params.mesh_items,
+                .panels = params.mesh_panels,
                 .frame_slot = slot,
                 .draw_group_count = std::max<size_t>(1, params.mesh_panels.size())};
             // Preparation does not write per-draw presentation uniforms. Reuse the

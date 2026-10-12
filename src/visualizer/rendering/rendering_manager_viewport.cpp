@@ -1073,7 +1073,8 @@ namespace lfs::vis {
         VulkanMeshPassParams mesh_params{
             .view_projection = {},
             .camera_position = view.translation,
-            .items = buildViewportMeshDrawItems(render_state, settings, view.translation),
+            .camera_backward = view.rotation[2],
+            .items = buildViewportMeshDrawItems(render_state, settings, view.rotation[2]),
         };
         if (mesh_params.items.empty()) {
             return {};

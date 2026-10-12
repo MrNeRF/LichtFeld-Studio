@@ -609,7 +609,7 @@ namespace lfs::vis {
     std::vector<VulkanMeshDrawItem> buildViewportMeshDrawItems(
         const SceneRenderState& scene_state,
         const RenderSettings& settings,
-        const glm::vec3& camera_position) {
+        const glm::vec3& camera_backward) {
         const bool any_selected_mesh = std::any_of(
             scene_state.meshes.begin(),
             scene_state.meshes.end(),
@@ -621,8 +621,8 @@ namespace lfs::vis {
         const bool dim_non_emphasized =
             settings.desaturate_unselected && (any_selected_mesh || any_selected_node);
 
-        const glm::vec3 headlight_dir = glm::length(camera_position) > 1e-6f
-                                            ? glm::normalize(camera_position)
+        const glm::vec3 headlight_dir = glm::length(camera_backward) > 1e-6f
+                                            ? glm::normalize(camera_backward)
                                             : settings.mesh_light_dir;
 
         std::vector<VulkanMeshDrawItem> items;
@@ -635,6 +635,7 @@ namespace lfs::vis {
             item.mesh = mesh.mesh;
             item.model = mesh.transform;
             item.light_dir = headlight_dir;
+            item.camera_relative_light = true;
             item.light_intensity = settings.mesh_light_intensity;
             item.ambient = settings.mesh_ambient;
             item.backface_culling = settings.mesh_backface_culling;

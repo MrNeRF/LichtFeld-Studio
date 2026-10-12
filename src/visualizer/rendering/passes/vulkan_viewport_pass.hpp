@@ -163,6 +163,7 @@ namespace lfs::vis {
         // viewport pass.
         glm::mat4 mesh_view_projection{1.0f};
         glm::vec3 mesh_camera_position{0.0f};
+        glm::vec3 mesh_camera_backward{0.0f, 0.0f, 1.0f};
         std::vector<VulkanMeshDrawItem> mesh_items;
         std::vector<VulkanMeshViewportPanel> mesh_panels;
 

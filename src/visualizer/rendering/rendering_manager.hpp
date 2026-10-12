@@ -582,6 +582,7 @@ namespace lfs::vis {
         struct VulkanMeshFrame {
             glm::mat4 view_projection{1.0f};
             glm::vec3 camera_position{0.0f};
+            glm::vec3 camera_backward{0.0f, 0.0f, 1.0f};
             std::vector<lfs::vis::VulkanMeshDrawItem> items;
             std::vector<lfs::vis::VulkanMeshViewportPanel> panels;
             lfs::vis::VulkanEnvironmentParams environment;
