@@ -38,6 +38,16 @@ int runAtomicFileContracts() {
     auto collision = writeTextFileAtomically(file, "replacement", {.overwrite = false});
     require(!collision && collision.error().code() == ErrorCode::AlreadyExists && read(file) == binary, "no-replace preserves existing bytes");
     require(collision.error().native() && collision.error().detail().find("settings.json") != std::string_view::npos, "atomic native/path diagnostic");
+    const auto staged = directory / "staged.bin";
+    const auto published = directory / "published.bin";
+    require(writeTextFileAtomically(staged, binary).has_value(), "stage publication bytes");
+    auto staged_cancel = publishStagedFileAtomically(staged, published, [] { return true; });
+    require(!staged_cancel && staged_cancel.error().code() == ErrorCode::Cancelled && read(staged) == binary && !std::filesystem::exists(published), "cancel preserves staged file");
+    require(publishStagedFileAtomically(staged, published).has_value() && read(published) == binary, "publish staged bytes without rewriting");
+    require(!std::filesystem::exists(staged), "successful publication consumes staging");
+    require(writeTextFileAtomically(staged, "keep staging").has_value(), "stage collision bytes");
+    auto staged_collision = publishStagedFileAtomically(staged, published);
+    require(!staged_collision && staged_collision.error().code() == ErrorCode::AlreadyExists && read(staged) == "keep staging" && read(published) == binary, "staged collision preserves both files");
     bool cancel = false;
     auto cancelled = writeFileAtomically(file, [&](FILE* stream) -> Status {
         std::fputs("discard", stream);
@@ -76,7 +86,7 @@ int runAtomicFileContracts() {
     const auto mask = ::umask(0022);
     const auto permission_result = writeTextFileAtomically(directory / "mode.json", "permissions");
     ::umask(mask);
-    struct stat state {};
+    struct stat state{};
     require(permission_result.has_value() && ::stat((directory / "mode.json").c_str(), &state) == 0 && (state.st_mode & 0777) == 0644, "published permissions honor umask");
 #endif
     for (const auto& entry : std::filesystem::directory_iterator(directory))

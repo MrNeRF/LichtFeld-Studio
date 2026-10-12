@@ -90,6 +90,13 @@ add_test(NAME MediaPythonBindingsContracts
 set_tests_properties(MediaPythonBindingsContracts PROPERTIES LABELS "media;cpu;offline;integration"
     TIMEOUT 180
     ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")
+if(APPLE)
+    add_library(media_reservation_crash SHARED reservation_crash.cpp)
+    target_compile_features(media_reservation_crash PRIVATE cxx_std_23)
+    add_dependencies(media_test_bindings media_reservation_crash)
+    set_property(TEST MediaPythonBindingsContracts APPEND PROPERTY ENVIRONMENT
+        "LFS_MEDIA_TEST_RESERVATION_SHIM=$<TARGET_FILE:media_reservation_crash>")
+endif()
 
 add_test(NAME MediaFloatExrUnitContracts COMMAND media_extraction_runner --float-exr-unit)
 add_test(NAME MediaAtomicFileContracts COMMAND media_extraction_runner --atomic-unit)

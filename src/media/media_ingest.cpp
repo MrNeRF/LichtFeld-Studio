@@ -68,6 +68,7 @@ namespace lfs::media {
                     ++accepted;
                 return result;
             }
+            SinkResult prepareComplete(const SinkSummary& s) override { return track(destination.prepareComplete(s)); }
             SinkResult complete(const SinkSummary& s) override {
                 accepted = s.frames_accepted;
                 return track(destination.complete(s));

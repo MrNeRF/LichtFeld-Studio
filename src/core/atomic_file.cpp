@@ -74,7 +74,7 @@ namespace lfs::core {
             const int fd = ::open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
             if (fd < 0)
                 return Status::failure(ioError(target, "reserve destination", errno));
-            struct stat owned {};
+            struct stat owned{};
             if (::fstat(fd, &owned) != 0) {
                 const int native = errno;
                 ::unlink(target.c_str());
@@ -84,7 +84,7 @@ namespace lfs::core {
             const int result = ::rename(source.c_str(), target.c_str());
             const int native = errno;
             if (result != 0) {
-                struct stat current {};
+                struct stat current{};
                 if (::lstat(target.c_str(), &current) == 0 &&
                     current.st_dev == owned.st_dev && current.st_ino == owned.st_ino)
                     ::unlink(target.c_str());
@@ -228,6 +228,31 @@ namespace lfs::core {
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): callbacks/filesystem failures retain their message in a structured error; RAII cleans only our temporary.
             return Status::failure(make_error({.code = ErrorCode::Internal, .domain = ErrorDomain::IO, .detail = std::format("Atomic write failed (path='{}', exception={})", path_to_utf8(target), error.what()), .detection = LFS_SOURCE_SITE_CURRENT()}));
+        }
+    }
+    Status publishStagedFileAtomically(const std::filesystem::path& staged, const std::filesystem::path& target,
+                                       const std::function<bool()>& cancelled) {
+        try {
+            if (staged.empty() || target.empty() || target.filename().empty() ||
+                staged.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
+                target.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
+                !std::filesystem::is_regular_file(std::filesystem::symlink_status(staged)))
+                return Status::failure(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Staged publication requires a regular non-symlink source and valid destination", .detection = LFS_SOURCE_SITE_CURRENT()}));
+            if (cancelled && cancelled())
+                return Status::failure(make_error({.code = ErrorCode::Cancelled, .domain = ErrorDomain::IO, .detail = "Staged publication cancelled: " + path_to_utf8(target), .detection = LFS_SOURCE_SITE_CURRENT()}));
+            Temporary temporary;
+            temporary.path = staged;
+            auto result = commit(temporary, target, false);
+            // Hard-link fallback leaves the source name. Cleanup is best-effort:
+            // a successful publication must never become a failed extraction.
+            if (result)
+                temporary.owned = true;
+            return result;
+        } catch (const Exception& error) {
+            return Status::failure(error.error());
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): staged publication failures retain the exception as a structured error; the source remains caller-owned.
+            return Status::failure(make_error({.code = ErrorCode::Internal, .domain = ErrorDomain::IO, .detail = std::format("Staged publication failed (path='{}', exception={})", path_to_utf8(target), error.what()), .detection = LFS_SOURCE_SITE_CURRENT()}));
         }
     }
     Status writeTextFileAtomically(const std::filesystem::path& target, std::string_view contents,

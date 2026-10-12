@@ -192,18 +192,34 @@ newly published images; progress describes the replayed selection.
 
 For a new image, the existing writer encodes into the checkpoint directory,
 then an immutable record of the expected encoded hash is atomically published
-before the image is published with no-replace. This ordering also covers process
-exit between record publication and image publication. No new atomic-file
-service is introduced. Staged images can remain after failure/cancellation;
-they are reused/replaced within the matching checkpoint namespace during replay.
+before the image is published with no-replace. The shared core publication
+primitive renames the staged image on the same filesystem, avoiding a second
+image write. Its older-filesystem hard-link/reservation fallbacks remain shared.
+Empty reservation files left by process death on exFAT are treated as unpublished:
+an initial identity is republished only before any frame record/image exists;
+an empty last record is regenerated; an empty recorded image is reconstructed
+only if its regenerated encoded digest matches. Nonempty corrupt files remain
+errors. Completion checks run before the previous manifest can be replaced.
+Staging cleanup cannot turn a committed image into a failed/unaccounted commit.
+Abandoned staged copies can remain even after a successful replay: retained
+final images return without re-encoding or removing an older staged copy.
 
 Checkpoint frequency is one record per image. Record reads are capped at 16 KiB;
-hashing/copying uses fixed-size buffers. File count grows linearly with selected
-images; decoding, retained-file hashing and transient staging/copy I/O have a
+hashing uses fixed-size buffers. File count grows linearly with selected
+images; decoding, input/pixel hashing, retained-file hashing and staging I/O have a
 cost. The final manifest retains its existing schema and overwrite policy,
-including EXR's explicit overwrite option. Checkpoints remain available after
+including EXR's explicit overwrite option. Replaying an already completed EXR
+sequence therefore requires `files.exr.overwrite = true` to replace its manifest
+(`--overwrite` in the CLI); retained images still are not overwritten.
+Application build/version participates in checkpoint identity, covering changes
+to the image encoder implementations as well as FFmpeg. Checkpoint format 1
+from the initial implementation is incompatible with format 2; no silent adoption.
+Each retained output is read/hashed once during replay, after pixel verification.
+Checkpoints remain available after
 completion. Resume cannot be combined with stale-output removal. Use one active
 extraction per output directory; concurrent extraction is not a supported mode.
+This assumes trusted local input/output directories: protection against another
+writer swapping files between verification and publication/open is not promised.
 No durable synchronization, global transaction or power-loss guarantee is added.
 
 ## Verification

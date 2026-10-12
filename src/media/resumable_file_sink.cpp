@@ -3,6 +3,7 @@
 #include "resumable_file_sink.hpp"
 #include "core/atomic_file.hpp"
 #include "core/path_utils.hpp"
+#include "git_version.h"
 #include "media/video_frame_extractor.hpp"
 #include <array>
 #include <fstream>
@@ -19,6 +20,19 @@ namespace lfs::media::detail {
         using Json = nlohmann::json;
         Error checkpointError(ErrorCode code, std::string message) {
             return make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+        bool emptyReservation(const std::filesystem::path& path) {
+            return std::filesystem::is_regular_file(std::filesystem::symlink_status(path)) &&
+                   std::filesystem::file_size(path) == 0;
+        }
+        SinkResult discardReservation(const std::filesystem::path& path) {
+            if (!emptyReservation(path))
+                return {};
+            std::error_code error;
+            std::filesystem::remove(path, error);
+            if (error)
+                return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Could not recover empty checkpoint reservation: " + core::path_to_utf8(path)));
+            return {};
         }
         struct Sha256 {
             std::unique_ptr<AVSHA, decltype(&av_free)> context{av_sha_alloc(), av_free};
@@ -107,7 +121,7 @@ namespace lfs::media::detail {
             return SinkResult::failure(input_digest.error());
         const auto& r = request_;
         const auto& f = output_.files;
-        identity_ = {{"checkpoint_version", 1}, {"pipeline_version", 1}, {"ffmpeg", av_version_info()}, {"codec_version", avcodec_version()}, {"codec_configuration", avcodec_configuration()}, {"input_sha256", *input_digest}};
+        identity_ = {{"checkpoint_version", 2}, {"pipeline_version", 1}, {"application_build", GIT_TAGGED_VERSION}, {"ffmpeg", av_version_info()}, {"codec_version", avcodec_version()}, {"codec_configuration", avcodec_configuration()}, {"input_sha256", *input_digest}};
         identity_["stream"] = session.source.selected_video_stream ? Json(*session.source.selected_video_stream) : Json(nullptr);
         identity_["selection"] = {static_cast<int>(r.selection.mode), r.selection.fps, r.selection.interval, r.start_seconds, r.end_seconds};
         identity_["geometry"] = {static_cast<int>(r.geometry.mode), r.geometry.scale, r.geometry.width, r.geometry.height, r.geometry.clockwise_rotation};
@@ -127,9 +141,26 @@ namespace lfs::media::detail {
         }
         if (!std::filesystem::is_directory(std::filesystem::symlink_status(checkpoint_)))
             return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint must be a non-symlink directory"));
-        if (!std::filesystem::exists(checkpoint_ / "identity.json") && !std::filesystem::is_empty(checkpoint_))
-            return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Cannot adopt a nonempty checkpoint directory without its identity"));
-        auto identity = publishRecord(checkpoint_ / "identity.json", identity_);
+        const auto identity_path = checkpoint_ / "identity.json";
+        if (!std::filesystem::exists(identity_path) || emptyReservation(identity_path)) {
+            // Before identity publication no image/record can have committed.
+            // Only its own interrupted atomic temporary/reservation is recoverable.
+            for (const auto& entry : std::filesystem::directory_iterator(checkpoint_)) {
+                auto name = core::path_to_utf8(entry.path().filename());
+#ifdef __APPLE__
+                // macOS may create AppleDouble companions on exFAT, including
+                // for the interrupted identity temporary and reservation.
+                if (name.starts_with("._"))
+                    name.erase(0, 2);
+#endif
+                if ((name != "identity.json" && !name.starts_with("identity.json.tmp-")) ||
+                    !std::filesystem::is_regular_file(entry.symlink_status()))
+                    return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Cannot adopt a nonempty checkpoint directory without its identity"));
+            }
+            if (auto recovered = discardReservation(identity_path); !recovered)
+                return recovered;
+        }
+        auto identity = publishRecord(identity_path, identity_);
         if (!identity)
             return identity;
         // Each record has bounded size; the sequence index is rebuilt by decoding
@@ -141,7 +172,16 @@ namespace lfs::media::detail {
                 ++recorded_;
         }
         for (std::size_t index = 0; index < recorded_; ++index) {
-            const auto record = readRecord(checkpoint_ / ("frame-" + std::to_string(index) + ".json"));
+            const auto record_path = checkpoint_ / ("frame-" + std::to_string(index) + ".json");
+            if (emptyReservation(record_path)) {
+                if (index + 1 != recorded_)
+                    return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Empty checkpoint reservation precedes committed records"));
+                if (auto recovered = discardReservation(record_path); !recovered)
+                    return recovered;
+                --recorded_;
+                break;
+            }
+            const auto record = readRecord(record_path);
             if (!record)
                 return SinkResult::failure(record.error());
             if (!record->is_object() || !record->contains("file") || !(*record)["file"].is_string() ||
@@ -150,14 +190,8 @@ namespace lfs::media::detail {
             const auto name = core::utf8_to_path((*record)["file"].get<std::string>());
             if (name != name.filename() || !io::isGeneratedFrameFilename(f.filename_pattern, core::path_to_utf8(name)))
                 return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Invalid checkpoint frame filename"));
-            const auto path = f.output_directory / name;
-            if (std::filesystem::exists(path)) {
-                const auto digest = fileDigest(path, cancelled_);
-                if (!digest)
-                    return SinkResult::failure(digest.error());
-                if (*digest != (*record)["file_sha256"].get<std::string>())
-                    return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint output is truncated or modified"));
-            }
+            // Verify retained encoded bytes once, when their selected pixels
+            // have also been regenerated in write(). No eager duplicate read.
         }
         accepted_ = 0;
         filenames_.clear();
@@ -195,6 +229,8 @@ namespace lfs::media::detail {
             if (record != expected || !old->contains("file_sha256") || !(*old)["file_sha256"].is_string())
                 return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint frame selection or pixels changed"));
             record = *old;
+            if (auto recovered = discardReservation(destination); !recovered)
+                return recovered;
             if (std::filesystem::exists(destination)) {
                 const auto digest = fileDigest(destination, cancelled_);
                 if (!digest)
@@ -230,39 +266,20 @@ namespace lfs::media::detail {
         record["file_sha256"] = *encoded_digest;
         if (auto saved = publishRecord(record_path, record); !saved)
             return saved;
-        const auto committed = core::writeFileAtomically(destination, [&](FILE* target) -> Status {
-            std::ifstream source(staged, std::ios::binary);
-            if (!source)
-                return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Could not open staged checkpoint image"));
-            std::array<char, 65536> buffer{};
-            Sha256 copied_digest;
-            while (source) {
-                if (cancelled_ && cancelled_())
-                    return SinkResult::failure(checkpointError(ErrorCode::Cancelled, "Checkpoint image publication cancelled"));
-                source.read(buffer.data(), buffer.size());
-                const auto bytes = static_cast<std::size_t>(source.gcount());
-                copied_digest.update(std::span(reinterpret_cast<const std::uint8_t*>(buffer.data()), bytes));
-                if (std::fwrite(buffer.data(), 1, bytes, target) != bytes)
-                    return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint image publication failed"));
-            }
-            if (!source.eof())
-                return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint staged image read failed"));
-            if (copied_digest.finish() != record["file_sha256"].get<std::string>())
-                return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Staged checkpoint image changed during publication"));
-            return {};
-        },
-                                                         {.overwrite = false, .durable = false, .create_directories = false, .cancelled = cancelled_});
+        const auto committed = core::publishStagedFileAtomically(staged, destination, cancelled_);
         if (!committed)
             return committed;
-        std::filesystem::remove(staged);
         ++accepted_;
         return {};
     }
 
-    SinkResult ResumableFileSink::complete(const SinkSummary&) {
-        active_ = false;
+    SinkResult ResumableFileSink::prepareComplete(const SinkSummary&) {
         if (accepted_ < recorded_)
             return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint contains frames absent from this extraction"));
+        return {};
+    }
+    SinkResult ResumableFileSink::complete(const SinkSummary&) {
+        active_ = false;
         return {};
     }
     void ResumableFileSink::abort(const SinkSummary&) noexcept { active_ = false; }

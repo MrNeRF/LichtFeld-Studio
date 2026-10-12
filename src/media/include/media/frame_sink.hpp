@@ -95,6 +95,9 @@ namespace lfs::media {
         virtual ~FrameSink() = default;
         virtual SinkResult begin(const SinkSession&) { return {}; }
         virtual SinkResult write(const FrameView&) = 0;
+        // Validate the finished sequence before dependent metadata is published.
+        // This does not complete the sink; failure is followed by abort.
+        virtual SinkResult prepareComplete(const SinkSummary&) { return {}; }
         virtual SinkResult complete(const SinkSummary&) { return {}; }
         virtual void abort(const SinkSummary&) noexcept {}
     };

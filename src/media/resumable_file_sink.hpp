@@ -12,6 +12,7 @@ namespace lfs::media::detail {
         ResumableFileSink(const IngestRequest&, const FileExtraction&);
         SinkResult begin(const SinkSession&) override;
         SinkResult write(const FrameView&) override;
+        SinkResult prepareComplete(const SinkSummary&) override;
         SinkResult complete(const SinkSummary&) override;
         void abort(const SinkSummary&) noexcept override;
 

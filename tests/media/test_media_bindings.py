@@ -156,6 +156,67 @@ class MediaBindings(unittest.TestCase):
         self.assertEqual(image.read_bytes(), original[:16])
         self.assertFalse((files.files.output_directory / "extraction_metadata.json").exists())
 
+    def test_resume_recovers_empty_publication_reservations(self):
+        for kind in ("identity", "record", "image"):
+            with self.subTest(reservation=kind):
+                files = self.resume_files(self.root / ("resume-empty-" + kind))
+                checkpoint = files.files.output_directory / ".media-ingest-checkpoint"
+                if kind == "identity":
+                    checkpoint.mkdir(parents=True)
+                    (checkpoint / "identity.json").touch()
+                    (checkpoint / "identity.json.tmp-interrupted").write_text("partial")
+                else:
+                    self.interrupt_resume(self.request(), files)
+                    image = next(files.files.output_directory.glob("frame_*.png"))
+                    if kind == "record":
+                        image.unlink()
+                        (checkpoint / "frame-0.json").write_bytes(b"")
+                    else:
+                        image.write_bytes(b"")
+                self.assertEqual(media.MediaIngest.extract_files(self.request(), files).frames_accepted, 4)
+                self.assertTrue(all(path.stat().st_size > 0 for path in files.files.output_directory.glob("frame_*.png")))
+
+    def test_resume_surplus_records_preserve_previous_manifest(self):
+        files = self.resume_files(self.root / "resume-surplus")
+        media.MediaIngest.extract_files(self.request(), files)
+        checkpoint = files.files.output_directory / ".media-ingest-checkpoint"
+        # Schema-valid extra record: only end-of-selection validation can reject it.
+        shutil.copyfile(checkpoint / "frame-0.json", checkpoint / "frame-4.json")
+        manifest = files.files.output_directory / "extraction_metadata.json"
+        before = (manifest.read_bytes(), manifest.stat().st_mtime_ns)
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(self.request(), files)
+        self.assertEqual((manifest.read_bytes(), manifest.stat().st_mtime_ns), before)
+
+    def test_resume_rejects_different_application_build(self):
+        files = self.resume_files(self.root / "resume-build")
+        self.interrupt_resume(self.request(), files)
+        identity = files.files.output_directory / ".media-ingest-checkpoint" / "identity.json"
+        value = json.loads(identity.read_text())
+        self.assertTrue(value["application_build"])
+        value["application_build"] += "-different-codecs"
+        identity.write_text(json.dumps(value))
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(self.request(), files)
+
+    def test_completed_exr_resume_requires_manifest_replacement(self):
+        request = self.request()
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        files = self.resume_files(self.root / "resume-complete-exr", media.FrameFileFormat.EXR)
+        media.MediaIngest.extract_files(request, files)
+        image = next(files.files.output_directory.glob("frame_*.exr"))
+        before = (image.read_bytes(), image.stat().st_mtime_ns)
+        manifest = files.files.output_directory / "extraction_metadata.json"
+        original_manifest = manifest.read_bytes()
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, files)
+        self.assertEqual(manifest.read_bytes(), original_manifest)
+        files.files.exr.overwrite = True
+        self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 4)
+        self.assertEqual((image.read_bytes(), image.stat().st_mtime_ns), before)
+
     def test_resume_reconstructs_missing_image_and_pending_publication(self):
         for label, file_format, extension in (("png", media.FrameFileFormat.PNG, "png"),
                                                ("jpeg", media.FrameFileFormat.JPEG, "jpg"),
@@ -185,8 +246,7 @@ class MediaBindings(unittest.TestCase):
         self.assertFalse(list(files.files.output_directory.glob("frame_*.png")))
         self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 4)
 
-    def test_resume_after_abrupt_process_exit(self):
-        directory = self.root / "resume-crash"
+    def resume_child(self, directory, environment=None, exit_after_progress=True):
         # Exit only this disposable child, after a completed image publication.
         program = r'''
 import os, sys
@@ -212,13 +272,35 @@ media.MediaIngest.extract_files(r, f, progress=lambda _: os._exit(73))
 '''
         if args.studio:
             program = program.replace("import media_test_bindings as media", "from lichtfeld import media")
+        if not exit_after_progress:
+            program = program.replace("progress=lambda _: os._exit(73)", "progress=lambda _: None")
         command = [sys.executable, "-c", program, str(args.module_dir.resolve()),
                    str(self.request().input), str(directory), str(args.runtime_dir.resolve()),
                    str(args.dependency_dir.resolve()) if args.dependency_dir else ""]
-        child = subprocess.run(command, capture_output=True, timeout=30)
+        return subprocess.run(command, capture_output=True, timeout=30, env=environment)
+
+    def test_resume_after_abrupt_process_exit(self):
+        directory = self.root / "resume-crash"
+        child = self.resume_child(directory)
         self.assertEqual(child.returncode, 73, child.stderr.decode(errors="replace"))
         self.assertEqual(len(list(directory.glob("frame_*.png"))), 1)
         self.assertEqual(media.MediaIngest.extract_files(self.request(), self.resume_files(directory)).frames_accepted, 4)
+
+    @unittest.skipUnless(sys.platform == "darwin" and os.environ.get("LFS_MEDIA_TEST_RESERVED_PUBLICATION") == "1",
+                         "requires explicit macOS/exFAT reserved-publication qualification")
+    def test_resume_after_exit_inside_reserved_publication(self):
+        shim = Path(os.environ["LFS_MEDIA_TEST_RESERVATION_SHIM"])
+        self.assertTrue(shim.is_file())
+        for name in ("identity.json", "frame-0.json", "frame_1.png"):
+            with self.subTest(reservation=name):
+                directory = self.root / ("reserved-crash-" + name)
+                environment = dict(os.environ, DYLD_INSERT_LIBRARIES=str(shim),
+                                   LFS_MEDIA_TEST_RESERVED_FILENAME=name)
+                child = self.resume_child(directory, environment, exit_after_progress=False)
+                self.assertEqual(child.returncode, 73, child.stderr.decode(errors="replace"))
+                reservation = directory / name if name.endswith(".png") else directory / ".media-ingest-checkpoint" / name
+                self.assertEqual(reservation.stat().st_size, 0)
+                self.assertEqual(media.MediaIngest.extract_files(self.request(), self.resume_files(directory)).frames_accepted, 4)
 
     def test_resume_refuses_to_adopt_legacy_output(self):
         request = self.request()
