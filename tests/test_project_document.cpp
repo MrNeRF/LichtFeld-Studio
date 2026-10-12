@@ -6142,6 +6142,47 @@ namespace {
         EXPECT_GT(reports.back().first, 0u);
     }
 
+    TEST(ProjectDocumentTest, ScopedUndoHydrationLeavesSiblingPayloadsDeferred) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "scoped-undo-hydration.licht";
+        write_phase_a_fixture(path);
+        auto document = require_result_ptr(ProjectDocument::open(
+            path, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        const std::array payload_uuids{
+            fixed_uuid(952), fixed_uuid(953), fixed_uuid(954)};
+
+        for (const auto target_uuid : payload_uuids) {
+            Scene live;
+            auto shell = document->stage_shell(live);
+            ASSERT_TRUE(shell) << lfs::format_for_developer(shell.error());
+            live.commitRestoreStage(std::move(*shell));
+            const std::array targets{target_uuid};
+            auto staged = document->stage_payload_hydration_for_nodes(
+                live, targets);
+            ASSERT_TRUE(staged) << lfs::format_for_developer(staged.error());
+            const auto report = ProjectDocument::commit_partial_hydration(
+                live, std::move(*staged), false);
+            EXPECT_EQ(report.hydrated_payload_units, 1u);
+            EXPECT_EQ(report.invalidated_payload_units, 0u);
+
+            for (const auto uuid : payload_uuids) {
+                const auto* node = live.getNodeByUuid(uuid);
+                ASSERT_NE(node, nullptr);
+                const bool selected = uuid == target_uuid;
+                EXPECT_EQ(node->payload_hydration,
+                          selected ? lfs::core::PayloadHydrationState::Loaded
+                                   : lfs::core::PayloadHydrationState::Unloaded);
+                if (node->type == lfs::core::NodeType::SPLAT) {
+                    EXPECT_EQ(static_cast<bool>(node->model), selected);
+                } else if (node->type == lfs::core::NodeType::POINTCLOUD) {
+                    EXPECT_EQ(static_cast<bool>(node->point_cloud), selected);
+                } else if (node->type == lfs::core::NodeType::MESH) {
+                    EXPECT_EQ(static_cast<bool>(node->mesh), selected);
+                }
+            }
+        }
+    }
+
     TEST(ProjectDocumentTest,
          OversizedSpltAutoDefersOnOpenAndStreamHydrates) {
         TemporaryDirectory temporary;

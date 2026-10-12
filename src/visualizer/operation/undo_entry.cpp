@@ -7,12 +7,14 @@
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
+#include "gui/gui_manager.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/training_setup.hpp"
 #include "undo_history.hpp"
+#include "visualizer_impl.hpp"
 #include <algorithm>
 #include <array>
 #include <cuda_runtime.h>
@@ -880,6 +882,9 @@ namespace lfs::vis::op {
 
             const bool capture_payload = mode == SceneGraphCaptureMode::FULL &&
                                          (capture_all_payloads || payload_uuids.contains(node.uuid));
+            if (capture_payload) {
+                snapshot.payload_hydration = node.payload_hydration;
+            }
             if (capture_payload && node.model) {
                 snapshot.payload_device = node.model->means_raw().device();
                 snapshot.model = cloneSplatData(*node.model);
@@ -938,6 +943,7 @@ namespace lfs::vis::op {
             std::vector<PreparedRestoreNode> nodes;
             lfs::core::SplatTensorAllocator combined_model_allocator;
             lfs::core::Scene::PerNodeSelectionSlices selection_slices;
+            bool restores_deferred_payload = false;
         };
 
         void flattenSnapshotTree(const SceneGraphNodeSnapshot& snapshot,
@@ -984,13 +990,15 @@ namespace lfs::vis::op {
             }
             switch (snapshot.type) {
             case lfs::core::NodeType::POINTCLOUD:
-                if (!snapshot.point_cloud) {
+                if (!snapshot.point_cloud &&
+                    snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
                     throw HistoryCorruptionError(
                         "Cannot restore point-cloud node '" + snapshot.name + "': payload is missing");
                 }
                 break;
             case lfs::core::NodeType::MESH:
-                if (!snapshot.mesh) {
+                if (!snapshot.mesh &&
+                    snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
                     throw HistoryCorruptionError(
                         "Cannot restore mesh node '" + snapshot.name + "': payload is missing");
                 }
@@ -1095,6 +1103,8 @@ namespace lfs::vis::op {
 
             for (const auto& item : flattened) {
                 const auto& snapshot = *item.snapshot;
+                plan.restores_deferred_payload |=
+                    snapshot.payload_hydration == lfs::core::PayloadHydrationState::Unloaded;
                 if (snapshot.name.empty()) {
                     throw HistoryCorruptionError(
                         "Cannot restore scene node " + snapshot.uuid.to_string() + ": display name is empty");
@@ -1176,6 +1186,7 @@ namespace lfs::vis::op {
                 desc.type = snapshot.type;
                 desc.name = restored_name;
                 desc.gaussian_count = snapshot.gaussian_count;
+                desc.payload_hydration = snapshot.payload_hydration;
 
                 try {
                     switch (snapshot.type) {
@@ -1189,18 +1200,24 @@ namespace lfs::vis::op {
                         }
                         break;
                     case lfs::core::NodeType::POINTCLOUD:
-                        if (!snapshot.point_cloud) {
+                        if (!snapshot.point_cloud &&
+                            snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
                             throw HistoryCorruptionError(
                                 "Cannot restore point-cloud node '" + snapshot.name + "': payload is missing");
                         }
-                        desc.point_cloud = clonePointCloud(*snapshot.point_cloud);
+                        if (snapshot.point_cloud) {
+                            desc.point_cloud = clonePointCloud(*snapshot.point_cloud);
+                        }
                         break;
                     case lfs::core::NodeType::MESH:
-                        if (!snapshot.mesh) {
+                        if (!snapshot.mesh &&
+                            snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
                             throw HistoryCorruptionError(
                                 "Cannot restore mesh node '" + snapshot.name + "': payload is missing");
                         }
-                        desc.mesh = cloneMeshData(*snapshot.mesh);
+                        if (snapshot.mesh) {
+                            desc.mesh = cloneMeshData(*snapshot.mesh);
+                        }
                         break;
                     case lfs::core::NodeType::CROPBOX:
                         if (!snapshot.cropbox) {
@@ -1886,14 +1903,78 @@ namespace lfs::vis::op {
             NodeLevel,
         };
 
+        const void* payloadStorageIdentity(const lfs::core::SceneNode& node) noexcept {
+            switch (node.type) {
+            case lfs::core::NodeType::SPLAT:
+                return node.model.get();
+            case lfs::core::NodeType::POINTCLOUD:
+                return node.point_cloud.get();
+            case lfs::core::NodeType::MESH:
+                return node.mesh.get();
+            default:
+                return nullptr;
+            }
+        }
+
         void requireTopologyProof(
             const lfs::core::Scene& scene,
             const SceneTopologyProof& recorded,
             const std::string_view entry_name,
             const SceneTopologyProof* allowed_compound_transition = nullptr,
-            const TopologyProofDepth depth = TopologyProofDepth::Payload) {
+            const TopologyProofDepth depth = TopologyProofDepth::Payload,
+            const std::unordered_map<lfs::core::Uuid, PendingHydratedPayload>* hydrated_nodes = nullptr) {
             SceneTopologyProof current =
                 captureTopologyProof(scene);
+            if (hydrated_nodes) {
+                for (auto& actual : current.nodes) {
+                    const auto pending = hydrated_nodes->find(actual.uuid);
+                    if (pending == hydrated_nodes->end()) {
+                        continue;
+                    }
+                    const auto* live = scene.getNodeByUuid(actual.uuid);
+                    if (!live || live->payload_hydration != lfs::core::PayloadHydrationState::Loaded ||
+                        live->payload_diverged != pending->second.payload_diverged ||
+                        !pending->second.storage_identity) {
+                        continue;
+                    }
+                    if (payloadStorageIdentity(*live) != pending->second.storage_identity) {
+                        throw std::runtime_error(
+                            "Cannot redo scene history after a deferred payload was replaced");
+                    }
+                    const bool has_payload =
+                        (live->type == lfs::core::NodeType::SPLAT && live->model) ||
+                        (live->type == lfs::core::NodeType::POINTCLOUD && live->point_cloud) ||
+                        (live->type == lfs::core::NodeType::MESH && live->mesh);
+                    if (!has_payload) {
+                        continue;
+                    }
+                    const auto expected = std::ranges::find_if(
+                        recorded.nodes, [&](const auto& node) {
+                            return node.uuid == actual.uuid && node.type == actual.type;
+                        });
+                    if (expected != recorded.nodes.end()) {
+                        if (live->type == lfs::core::NodeType::SPLAT &&
+                            scene.isNodeEffectivelyVisible(live->id)) {
+                            if (actual.primary_extent >= expected->primary_extent) {
+                                const auto added =
+                                    actual.primary_extent - expected->primary_extent;
+                                if (current.consolidated_extent >= added) {
+                                    current.consolidated_extent -= added;
+                                }
+                            } else {
+                                const auto removed =
+                                    expected->primary_extent - actual.primary_extent;
+                                if (current.consolidated_extent <=
+                                    std::numeric_limits<std::size_t>::max() - removed) {
+                                    current.consolidated_extent += removed;
+                                }
+                            }
+                        }
+                        actual.primary_extent = expected->primary_extent;
+                        actual.secondary_extent = expected->secondary_extent;
+                    }
+                }
+            }
             SceneTopologyProof node_level_expected;
             if (depth == TopologyProofDepth::NodeLevel) {
                 assert(!allowed_compound_transition &&
@@ -2103,6 +2184,7 @@ namespace lfs::vis::op {
           locked(other.locked),
           training_enabled(other.training_enabled),
           payload_diverged(other.payload_diverged),
+          payload_hydration(other.payload_hydration),
           gaussian_count(other.gaussian_count),
           centroid(other.centroid),
           order_index(other.order_index),
@@ -3544,7 +3626,8 @@ namespace lfs::vis::op {
                                           const SceneGraphStateSnapshot& current) {
         requireTopologyProof(
             scene_.getScene(),
-            expected_topology_, name_);
+            expected_topology_, name_, nullptr, TopologyProofDepth::Payload,
+            &pending_hydration_nodes_);
         auto& scene = scene_.getScene();
         auto uuids_to_remove = uuidsToRemove(desired, current);
         if (current.complete_root_order) {
@@ -3564,6 +3647,19 @@ namespace lfs::vis::op {
         // exhausted before the first removal so an invalid snapshot cannot partially
         // replace the live tree.
         auto restore_plan = prepareRestorePlan(scene_, desired, uuids_to_remove);
+        std::unordered_map<lfs::core::Uuid, PendingHydratedPayload> restored_deferred;
+        std::vector<lfs::core::Uuid> restored_deferred_uuids;
+        for (const auto& prepared : restore_plan.nodes) {
+            if (prepared.snapshot->payload_hydration ==
+                lfs::core::PayloadHydrationState::Unloaded) {
+                restored_deferred.emplace(
+                    prepared.snapshot->uuid,
+                    PendingHydratedPayload{
+                        .payload_diverged = prepared.snapshot->payload_diverged,
+                    });
+                restored_deferred_uuids.push_back(prepared.snapshot->uuid);
+            }
+        }
         const auto removal_roots = removalRoots(scene, uuids_to_remove);
         std::unordered_set<lfs::core::Uuid> desired_uuids;
         for (const auto& root : desired.roots)
@@ -3679,6 +3775,14 @@ namespace lfs::vis::op {
         }
         expected_topology_ =
             captureTopologyProof(scene, &desired);
+        pending_hydration_nodes_ = std::move(restored_deferred);
+        if (restore_plan.restores_deferred_payload) {
+            if (auto* gui = services().guiOrNull(); gui && gui->getViewer() &&
+                                                    gui->getViewer()->getSceneManager() == &scene_) {
+                gui->getViewer()->recoverDeferredProjectPayloadsAfterUndo(
+                    std::move(restored_deferred_uuids));
+            }
+        }
     }
 
     void SceneGraphPatchEntry::undo() {
@@ -3687,6 +3791,21 @@ namespace lfs::vis::op {
 
     void SceneGraphPatchEntry::redo() {
         applyState(after_, before_);
+    }
+
+    void SceneGraphPatchEntry::bindHydratedPayloadStorage(
+        const std::span<const lfs::core::Uuid> node_uuids) {
+        const auto& scene = scene_.getScene();
+        for (const auto& uuid : node_uuids) {
+            auto pending = pending_hydration_nodes_.find(uuid);
+            const auto* node = scene.getNodeByUuid(uuid);
+            if (pending == pending_hydration_nodes_.end() || !node ||
+                node->payload_hydration != lfs::core::PayloadHydrationState::Loaded ||
+                node->payload_diverged != pending->second.payload_diverged) {
+                continue;
+            }
+            pending->second.storage_identity = payloadStorageIdentity(*node);
+        }
     }
 
     size_t SceneGraphPatchEntry::estimatedBytes() const {

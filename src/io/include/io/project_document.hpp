@@ -418,6 +418,14 @@ namespace lfs::io::project {
             lfs::core::SplatTensorAllocator splat_allocator = {},
             std::function<void(std::size_t, std::size_t)> payload_progress = {}) const;
 
+        // Stage only these saved nodes for a partial payload commit after Undo.
+        [[nodiscard]] lfs::Result<ProjectHydrationPlan>
+        stage_payload_hydration_for_nodes(
+            lfs::core::Scene& destination,
+            std::span<const lfs::core::Uuid> node_uuids,
+            lfs::core::SplatTensorAllocator splat_allocator = {},
+            std::function<void(std::size_t, std::size_t)> payload_progress = {}) const;
+
         // Strict Phase B. This performs only assert-guarded moves/swaps and
         // cannot parse, perform IO, or allocate.
         [[nodiscard]] static ProjectDocumentHydrationReport
@@ -444,6 +452,13 @@ namespace lfs::io::project {
             std::span<const ReferenceOwnerBinding> additional_bindings = {}) const;
 
     private:
+        [[nodiscard]] lfs::Result<ProjectHydrationPlan>
+        stage_hydration_filtered(
+            lfs::core::Scene& destination,
+            const ScenePayloadResolver& external_payloads,
+            lfs::core::SplatTensorAllocator splat_allocator,
+            std::function<void(std::size_t, std::size_t)> payload_progress,
+            std::optional<std::span<const lfs::core::Uuid>> node_uuids) const;
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
         save_impl(
             const std::filesystem::path& path,

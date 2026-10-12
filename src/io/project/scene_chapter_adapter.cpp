@@ -586,7 +586,8 @@ namespace lfs::io::project {
             const SceneGraphChapter& chapter, lfs::core::Scene& scene,
             const ScenePayloadResolver& resolver,
             const bool defer_geometry_payloads,
-            const bool payload_units_only) {
+            const bool payload_units_only,
+            const std::unordered_set<lfs::core::Uuid>* selected_payload_nodes = nullptr) {
             UndistortCache undistort_cache;
             auto nodes = chapter.nodes();
             if (!nodes) {
@@ -626,7 +627,9 @@ namespace lfs::io::project {
                     if (type &&
                         (*type == lfs::core::NodeType::SPLAT ||
                          *type == lfs::core::NodeType::POINTCLOUD ||
-                         *type == lfs::core::NodeType::MESH)) {
+                         *type == lfs::core::NodeType::MESH) &&
+                        (!selected_payload_nodes ||
+                         selected_payload_nodes->contains(record.uuid))) {
                         geometry.push_back(record.uuid);
                     }
                 }
@@ -962,13 +965,14 @@ namespace lfs::io::project {
         const SceneGraphChapter& chapter,
         lfs::core::Scene& target,
         const ScenePayloadResolver& resolver,
-        const bool payload_units_only) {
+        const bool payload_units_only,
+        const std::unordered_set<lfs::core::Uuid>* selected_payload_nodes) {
         auto staged =
             lfs::core::Scene::createRestoreStage(target);
         if (auto populated =
                 populate_scene_stage(
                     chapter, *staged, resolver, false,
-                    payload_units_only);
+                    payload_units_only, selected_payload_nodes);
             !populated) {
             return std::move(populated).error();
         }

@@ -2247,6 +2247,130 @@ contract["check_selection_submode_follows_native_mode"](lf)
             viewer, viewer.work_queue_mutex_, viewer.work_queue_, true);
     }
 
+    TEST_F(VisualizerImplResetTest, UndoDeletedDeferredNodeAfterHydrationRestoresPayload) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto path = temporary_.path / "deferred-undo.licht";
+        write_splt_project(path, lfs::test::licht::make_splat(3), "Pending");
+
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.projectOpen(path, ProjectSwitchDisposition::DiscardChanges));
+        auto* manager = viewer.getSceneManager();
+        ASSERT_NE(manager, nullptr);
+        const auto* node = manager->getScene().getNode("Pending");
+        ASSERT_NE(node, nullptr);
+        ASSERT_EQ(node->payload_hydration,
+                  lfs::core::PayloadHydrationState::Unloaded);
+        const auto uuid = node->uuid;
+        ASSERT_TRUE(manager->removeNodesByIdsWithResult({node->id}, false));
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "complete";
+        }));
+        EXPECT_EQ(manager->getScene().getNodeByUuid(uuid), nullptr);
+
+        const auto undone = lfs::vis::op::undoHistory().undo();
+        ASSERT_TRUE(undone.success) << undone.error;
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto* restored = manager->getScene().getNodeByUuid(uuid);
+            return restored && restored->model && restored->model->size() == 3;
+        },
+                              std::chrono::seconds(3)));
+    }
+
+    TEST_F(VisualizerImplResetTest, RedoDeletedDeferredNodeAfterUndoHydrates) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto path = temporary_.path / "deferred-redo.licht";
+        write_splt_project(path, lfs::test::licht::make_splat(3), "Pending");
+
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.projectOpen(path, ProjectSwitchDisposition::DiscardChanges));
+        auto* manager = viewer.getSceneManager();
+        ASSERT_NE(manager, nullptr);
+        const auto* node = manager->getScene().getNode("Pending");
+        ASSERT_NE(node, nullptr);
+        ASSERT_EQ(node->payload_hydration,
+                  lfs::core::PayloadHydrationState::Unloaded);
+        const auto uuid = node->uuid;
+        ASSERT_TRUE(manager->removeNodesByIdsWithResult({node->id}, false));
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "complete";
+        }));
+        const auto undone = lfs::vis::op::undoHistory().undo();
+        ASSERT_TRUE(undone.success) << undone.error;
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto* restored = manager->getScene().getNodeByUuid(uuid);
+            return restored && restored->model && restored->model->size() == 3;
+        },
+                              std::chrono::seconds(3)));
+
+        const auto redone = lfs::vis::op::undoHistory().redo();
+        ASSERT_TRUE(redone.success) << redone.error;
+        EXPECT_EQ(manager->getScene().getNodeByUuid(uuid), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RedoRejectsReplacementOfHydratedDeferredPayload) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto path = temporary_.path / "deferred-redo-replaced.licht";
+        write_splt_project(path, lfs::test::licht::make_splat(3), "Pending");
+
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.projectOpen(path, ProjectSwitchDisposition::DiscardChanges));
+        auto* manager = viewer.getSceneManager();
+        ASSERT_NE(manager, nullptr);
+        const auto* node = manager->getScene().getNode("Pending");
+        ASSERT_NE(node, nullptr);
+        ASSERT_EQ(node->payload_hydration,
+                  lfs::core::PayloadHydrationState::Unloaded);
+        const auto uuid = node->uuid;
+        ASSERT_TRUE(manager->removeNodesByIdsWithResult({node->id}, false));
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "complete";
+        }));
+
+        const auto undone = lfs::vis::op::undoHistory().undo();
+        ASSERT_TRUE(undone.success) << undone.error;
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto* restored = manager->getScene().getNodeByUuid(uuid);
+            return restored && restored->model && restored->model->size() == 3;
+        },
+                              std::chrono::seconds(3)));
+        ASSERT_EQ(lfs::vis::op::undoHistory().redoCount(), 1u);
+
+        auto replacement = lfs::test::licht::make_splat(3);
+        replacement->means().fill_(7.0f);
+        const auto* replacement_identity = replacement.get();
+        manager->getScene().replaceNodeModel("Pending", std::move(replacement));
+        auto* const replaced = manager->getScene().getNodeByUuid(uuid);
+        ASSERT_NE(replaced, nullptr);
+        ASSERT_EQ(replaced->model.get(), replacement_identity);
+        ASSERT_FALSE(replaced->payload_diverged);
+
+        const auto redone = lfs::vis::op::undoHistory().redo();
+        EXPECT_FALSE(redone.success);
+        EXPECT_EQ(lfs::vis::op::undoHistory().redoCount(), 1u);
+        EXPECT_EQ(manager->getScene().getNodeByUuid(uuid), replaced);
+        EXPECT_EQ(replaced->model.get(), replacement_identity);
+        EXPECT_EQ(replaced->model->size(), 3);
+    }
+
     TEST_F(VisualizerImplResetTest,
            UiVisibilityWaitsForMatchingFrame) {
         VisualizerImpl viewer(projectOptions());

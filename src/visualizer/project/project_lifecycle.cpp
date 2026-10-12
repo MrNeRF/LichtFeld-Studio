@@ -8025,6 +8025,103 @@ namespace lfs::vis::project {
         return {};
     }
 
+    void ProjectLifecycle::recoverDeferredPayloadsAfterUndo(
+        std::vector<lfs::core::Uuid> node_uuids) {
+        if (hydration_.load(std::memory_order_acquire) != Hydration::Complete ||
+            !document_ || !document_->source_path()) {
+            return;
+        }
+        auto* manager = viewer_.getSceneManager();
+        if (!manager) {
+            return;
+        }
+        std::erase_if(node_uuids, [&](const lfs::core::Uuid& uuid) {
+            const auto* node = manager->getScene().getNodeByUuid(uuid);
+            return !node || node->payload_hydration !=
+                                lfs::core::PayloadHydrationState::Unloaded;
+        });
+        if (node_uuids.empty()) {
+            return;
+        }
+        const auto document = document_;
+        const auto source_path = *document->source_path();
+        const auto project_uuid = document->project_uuid();
+        const auto minimum_generation = document->generation();
+        const auto epoch = epoch_.load(std::memory_order_acquire);
+        auto allocator = manager->makeExternalSplatAllocator();
+
+        std::lock_guard lock(thread_mutex_);
+        hydration_threads_.emplace_back(
+            [this, document, source_path, project_uuid, minimum_generation,
+             epoch, allocator = std::move(allocator),
+             node_uuids = std::move(node_uuids)](const std::stop_token stop) mutable {
+                if (stop.stop_requested()) {
+                    return;
+                }
+                auto source = ProjectDocument::open(
+                    source_path,
+                    {.reader = {},
+                     .geometry = {},
+                     .defer_geometry_payloads = true,
+                     .skip_validation = true});
+                if (!source) {
+                    LOG_ERROR("Undo payload recovery could not open its source: {}",
+                              developerError(source.error()));
+                    return;
+                }
+                if (source->project_uuid() != project_uuid ||
+                    source->generation() < minimum_generation) {
+                    LOG_ERROR("Undo payload recovery source changed during reload");
+                    return;
+                }
+                if (stop.stop_requested() ||
+                    epoch_.load(std::memory_order_acquire) != epoch) {
+                    return;
+                }
+                auto* scene_manager = viewer_.getSceneManager();
+                if (!scene_manager) {
+                    return;
+                }
+                auto staged = source->stage_payload_hydration_for_nodes(
+                    scene_manager->getScene(), node_uuids,
+                    std::move(allocator));
+                if (!staged) {
+                    if (!stop.stop_requested()) {
+                        LOG_ERROR("Undo payload recovery failed: {}",
+                                  developerError(staged.error()));
+                    }
+                    return;
+                }
+                if (stop.stop_requested()) {
+                    return;
+                }
+                auto plan = std::make_shared<std::optional<lfs::io::project::ProjectHydrationPlan>>(
+                    std::move(*staged));
+                viewer_.postWork({
+                    .run = [this, document, epoch, plan, node_uuids] {
+                        if (epoch_.load(std::memory_order_acquire) != epoch ||
+                            document_ != document || !plan->has_value()) {
+                            return;
+                        }
+                        auto* scene_manager = viewer_.getSceneManager();
+                        if (!scene_manager) {
+                            return;
+                        }
+                        const auto report = ProjectDocument::commit_partial_hydration(
+                            scene_manager->getScene(), std::move(plan->value()), false);
+                        plan->reset();
+                        if (report.hydrated_payload_units > 0) {
+                            op::undoHistory().bindHydratedPayloadStorage(node_uuids);
+                            lfs::core::events::state::SceneChanged{
+                                .mutation_flags = static_cast<std::uint32_t>(
+                                    lfs::core::Scene::MutationType::MODEL_CHANGED)}
+                                .emit();
+                        }
+                    },
+                });
+            });
+    }
+
     lfs::Result<void>
     ProjectLifecycle::launchHydration(
         std::shared_ptr<ProjectDocument> document,

@@ -4554,6 +4554,14 @@ namespace lfs::vis {
         return project_lifecycle_->info();
     }
 
+    void VisualizerImpl::recoverDeferredProjectPayloadsAfterUndo(
+        std::vector<lfs::core::Uuid> node_uuids) {
+        if (project_lifecycle_) {
+            project_lifecycle_->recoverDeferredPayloadsAfterUndo(
+                std::move(node_uuids));
+        }
+    }
+
     ProjectDisplayInfo VisualizerImpl::projectGetDisplayInfo() {
         return project_lifecycle_ ? project_lifecycle_->displayInfo()
                                   : ProjectDisplayInfo{};

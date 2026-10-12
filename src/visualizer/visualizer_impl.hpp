@@ -159,6 +159,8 @@ namespace lfs::vis {
         projectHasPath() override;
         lfs::Result<ProjectInfo>
         projectGetInfo() override;
+        void recoverDeferredProjectPayloadsAfterUndo(
+            std::vector<lfs::core::Uuid> node_uuids);
         ProjectDisplayInfo projectGetDisplayInfo() override;
         lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
         projectGetLicense() override;

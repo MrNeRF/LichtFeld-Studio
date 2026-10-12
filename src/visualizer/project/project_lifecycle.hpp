@@ -260,6 +260,8 @@ namespace lfs::vis::project {
         boundDocument() const noexcept {
             return document_;
         }
+        void recoverDeferredPayloadsAfterUndo(
+            std::vector<lfs::core::Uuid> node_uuids);
         [[nodiscard]] bool isScratchBoundSession() const;
         [[nodiscard]] bool isBlankProject() const;
         [[nodiscard]] bool isBlankUntitledSession() const;

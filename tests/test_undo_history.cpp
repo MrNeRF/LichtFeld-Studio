@@ -2582,6 +2582,36 @@ TEST_F(UndoHistoryTest, DeleteUndoRedoUndoPreservesNodeUuid) {
     EXPECT_EQ(scene.getNodeByUuid(uuid)->uuid, uuid);
 }
 
+TEST_F(UndoHistoryTest, UndoDeleteRestoresUnloadedPayloadForHydration) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+    for (const auto type : {lfs::core::NodeType::SPLAT,
+                            lfs::core::NodeType::POINTCLOUD,
+                            lfs::core::NodeType::MESH}) {
+        SCOPED_TRACE(static_cast<int>(type));
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const auto id = scene.restoreNodeWithUuid(lfs::core::Scene::RestoreNodeDesc{
+            .uuid = uuid,
+            .type = type,
+            .name = "Pending " + std::to_string(static_cast<int>(type)),
+            .payload_hydration = lfs::core::PayloadHydrationState::Unloaded,
+        });
+        ASSERT_NE(id, lfs::core::NULL_NODE);
+        ASSERT_TRUE(scene_manager->removeNodesByIdsWithResult({id}, false));
+
+        const auto undone = lfs::vis::op::undoHistory().undo();
+        ASSERT_TRUE(undone.success) << undone.error;
+        const auto* restored = scene.getNodeByUuid(uuid);
+        ASSERT_NE(restored, nullptr);
+        EXPECT_EQ(restored->payload_hydration,
+                  lfs::core::PayloadHydrationState::Unloaded);
+        const auto redone = lfs::vis::op::undoHistory().redo();
+        ASSERT_TRUE(redone.success) << redone.error;
+        EXPECT_EQ(scene.getNodeByUuid(uuid), nullptr);
+    }
+}
+
 TEST_F(UndoHistoryTest, UndoDeleteFailsClosedWhenDeletedNameWasReused) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     lfs::vis::services().set(scene_manager.get());
