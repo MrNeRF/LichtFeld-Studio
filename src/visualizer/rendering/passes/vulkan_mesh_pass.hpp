@@ -58,6 +58,10 @@ namespace lfs::vis {
         glm::mat4 view_projection{1.0f};
         glm::vec3 camera_position{0.0f};
         glm::vec3 camera_backward{0.0f, 0.0f, 1.0f};
+        bool depth_view = false;
+        float depth_view_min = 0.0f;
+        float depth_view_max = 1.0f;
+        bool depth_grayscale = false;
         std::vector<VulkanMeshDrawItem> items;
         std::span<const VulkanMeshViewportPanel> panels;
         std::size_t frame_slot = 0;

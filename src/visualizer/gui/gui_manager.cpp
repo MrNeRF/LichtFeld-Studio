@@ -5365,6 +5365,10 @@ namespace lfs::vis::gui {
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
             params.mesh_camera_backward = mesh_frame.camera_backward;
+            params.mesh_depth_view = mesh_frame.depth_view;
+            params.mesh_depth_view_min = mesh_frame.depth_view_min;
+            params.mesh_depth_view_max = mesh_frame.depth_view_max;
+            params.mesh_depth_grayscale = mesh_frame.depth_grayscale;
             params.mesh_items = std::move(mesh_frame.items);
             params.mesh_panels = std::move(mesh_frame.panels);
             params.environment = std::move(mesh_frame.environment);
@@ -8022,6 +8026,10 @@ namespace lfs::vis::gui {
                 params.mesh_view_projection = frame.view_projection;
                 params.mesh_camera_position = frame.camera_position;
                 params.mesh_camera_backward = frame.camera_backward;
+                params.mesh_depth_view = frame.depth_view;
+                params.mesh_depth_view_min = frame.depth_view_min;
+                params.mesh_depth_view_max = frame.depth_view_max;
+                params.mesh_depth_grayscale = frame.depth_grayscale;
                 params.mesh_items = frame.items;
                 params.mesh_panels = frame.panels;
                 params.environment = frame.environment;

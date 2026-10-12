@@ -1017,6 +1017,10 @@ namespace lfs::vis {
             frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
             frame.camera_position = vp_data.translation;
             if (!frame_ctx.scene_state.meshes.empty()) {
+                frame.depth_view = settings.depth_view;
+                frame.depth_view_min = settings.depth_view_min;
+                frame.depth_view_max = settings.depth_view_max;
+                frame.depth_grayscale = settings.depth_visualization_mode == lfs::rendering::DepthVisualizationMode::Grayscale;
                 frame.camera_backward = vp_data.rotation[2];
                 frame.items = buildViewportMeshDrawItems(frame_ctx.scene_state, settings, frame.camera_backward);
             }

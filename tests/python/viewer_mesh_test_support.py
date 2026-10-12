@@ -41,7 +41,7 @@ def setup_mesh(endpoint):
     _editor(endpoint, "settings=lf.get_render_settings(); settings.mesh_backface_culling=False; settings.mesh_wireframe=False; settings.mesh_shadow_enabled=False")
 
 
-def viewport_image(endpoint, directory, name):
+def viewport_image(endpoint, directory, name, require_green=True):
     from PIL import Image
 
     path = directory / "bounds.json"
@@ -56,11 +56,12 @@ def viewport_image(endpoint, directory, name):
         image = window.crop((x, y, x + width, y + height))
         core = image.crop((80, 160, image.width - 35, image.height - 50))
         green_pixels = sum(g > 2 * max(r, b) for r, g, b in core.getdata())
-        if green_pixels > 100 and index >= 2:
+        if (not require_green or green_pixels > 100) and index >= 2:
             break
     window.save(directory / (name + "-window.png"))
     image.save(directory / (name + ".png"))
-    assert green_pixels > 100, "Generated mesh did not reach the viewport"
+    if require_green:
+        assert green_pixels > 100, "Generated mesh did not reach the viewport"
     return image
 
 

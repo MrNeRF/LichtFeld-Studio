@@ -1514,6 +1514,17 @@ if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
         RESOURCE_LOCK lfs_gui_gpu
         ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
     )
+    add_test(NAME lichtfeld.python.mesh_depth_view
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_depth_view_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_depth_view PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
     add_test(NAME lichtfeld.python.gui_evaluation_download_policy
         COMMAND ${Python_EXECUTABLE} -m pytest -q
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gui_evaluation_download_policy.py

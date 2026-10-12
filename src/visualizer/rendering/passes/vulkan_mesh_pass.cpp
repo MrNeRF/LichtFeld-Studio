@@ -87,12 +87,14 @@ namespace lfs::vis {
 
         struct LightUbo {
             float camera_pos[4];
-            float light_dir[4]; // xyz, w unused
-            float params[4];    // x = intensity, y = ambient, z = shadow_enabled
-            float selection[4]; // x = emphasized, y = dim others, zw = reserved
-            float light_vp[16]; // light view-projection (column-major) for shadow sampling
+            float light_dir[4];      // xyz, w unused
+            float params[4];         // x = intensity, y = ambient, z = shadow_enabled
+            float selection[4];      // x = emphasized, y = dim others, zw = reserved
+            float light_vp[16];      // light view-projection (column-major) for shadow sampling
+            float camera_forward[4]; // xyz = world-space view direction
+            float depth_view[4];     // x = enabled, y = near, z = far, w = grayscale
         };
-        static_assert(sizeof(LightUbo) == 128, "LightUbo layout");
+        static_assert(sizeof(LightUbo) == 160, "LightUbo layout");
 
         struct MaterialUbo {
             float base_color[4];
@@ -2265,6 +2267,13 @@ namespace lfs::vis {
             ubo.selection[2] = 0.0f;
             ubo.selection[3] = 0.0f;
             std::memcpy(ubo.light_vp, &light_vp[0][0], sizeof(ubo.light_vp));
+            ubo.camera_forward[0] = -params.camera_backward.x;
+            ubo.camera_forward[1] = -params.camera_backward.y;
+            ubo.camera_forward[2] = -params.camera_backward.z;
+            ubo.depth_view[0] = params.depth_view ? 1.0f : 0.0f;
+            ubo.depth_view[1] = params.depth_view_min;
+            ubo.depth_view[2] = params.depth_view_max;
+            ubo.depth_view[3] = params.depth_grayscale ? 1.0f : 0.0f;
             return writeBuffer(resources.allocation, &ubo, sizeof(ubo));
         }
 
@@ -2658,7 +2667,7 @@ namespace lfs::vis {
                 }
 
                 // Wireframe overlay drawn on top of the shaded mesh.
-                if (item.wireframe_overlay && wireframe_pipeline != VK_NULL_HANDLE) {
+                if (item.wireframe_overlay && !params.depth_view && wireframe_pipeline != VK_NULL_HANDLE) {
                     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe_pipeline);
                     const float line_width = context->hasWideLines()
                                                  ? std::clamp(item.wireframe_width,

@@ -14,6 +14,8 @@ layout(set = 0, binding = 0) uniform LightUbo {
     vec4 params;     // x = intensity, y = ambient, z = shadow_enabled, w unused
     vec4 selection;  // x = emphasized, y = dim others, zw = reserved
     mat4 light_vp;   // light view-projection (for sampling shadow map)
+    vec4 camera_forward; // xyz = world-space view direction
+    vec4 depth_view; // x = enabled, y = near, z = far, w = grayscale
 } u_light;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_shadow_map;
 
@@ -30,6 +32,33 @@ layout(set = 1, binding = 2) uniform sampler2D u_normal;
 layout(set = 1, binding = 3) uniform sampler2D u_metallic_roughness;
 
 const float PI = 3.14159265359;
+
+float normalizedDepth(float depth, float lo, float hi) {
+    lo = max(lo, 1.0e-4);
+    hi = max(hi, lo + 1.0e-4);
+    depth = clamp(depth, lo, hi);
+
+    const float linear_t = clamp((depth - lo) / max(hi - lo, 1.0e-5), 0.0, 1.0);
+    const float log_span = max(log2(hi / lo), 1.0e-4);
+    const float log_t = clamp(log2(depth / lo) / log_span, 0.0, 1.0);
+    const float log_weight = smoothstep(1.75, 24.0, hi / lo);
+    return smoothstep(0.0, 1.0, mix(linear_t, log_t, log_weight));
+}
+
+vec3 depthPalette(float near_t) {
+    near_t = clamp(near_t, 0.0, 1.0);
+    const vec3 far_0 = vec3(0.050, 0.040, 0.150);
+    const vec3 far_1 = vec3(0.060, 0.195, 0.500);
+    const vec3 mid_0 = vec3(0.000, 0.500, 0.650);
+    const vec3 mid_1 = vec3(0.360, 0.735, 0.410);
+    const vec3 near_0 = vec3(0.965, 0.820, 0.300);
+    const vec3 near_1 = vec3(0.985, 0.430, 0.125);
+    if (near_t < 0.20) return mix(far_0, far_1, smoothstep(0.00, 0.20, near_t));
+    if (near_t < 0.43) return mix(far_1, mid_0, smoothstep(0.20, 0.43, near_t));
+    if (near_t < 0.67) return mix(mid_0, mid_1, smoothstep(0.43, 0.67, near_t));
+    if (near_t < 0.86) return mix(mid_1, near_0, smoothstep(0.67, 0.86, near_t));
+    return mix(near_0, near_1, smoothstep(0.86, 1.00, near_t));
+}
 
 float distribution_ggx(vec3 N, vec3 H, float roughness) {
     float a = roughness * roughness;
@@ -78,6 +107,16 @@ float calculate_shadow(vec3 world_pos) {
 }
 
 void main() {
+    if (u_light.depth_view.x > 0.5) {
+        float hi = u_light.depth_view.z;
+        const float lo = u_light.depth_view.y;
+        if (hi <= lo + 1.0e-5) hi = lo + 1.0;
+        const float depth = dot(inWorldPos - u_light.camera_pos.xyz, u_light.camera_forward.xyz);
+        const float near_t = 1.0 - normalizedDepth(depth, lo, hi);
+        const vec3 color = u_light.depth_view.w > 0.5 ? vec3(near_t) : depthPalette(near_t);
+        outColor = vec4(color, 1.0);
+        return;
+    }
     vec4 albedo = u_material.base_color;
     if (u_material.roughness_flags.y > 0.5) {
         albedo *= texture(u_albedo, inTexcoord);
