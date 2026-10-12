@@ -1,5 +1,6 @@
 {
   "training.reset_before_strategy_change": "更改策略前请重置训练。",
+  "io.no_finite_seed_points": "点云中没有坐标为有限值的初始点。将使用随机初始化。",
   "ui.vram_window_1m": "1 分钟",
   "ui.vram_process_nvml_tooltip": "操作系统或 GPU 驱动程序报告的进程 GPU 内存。",
   "ui.vram_process_unavailable_tooltip": "无法获取进程 GPU 内存。设备使用量包括其他应用程序。",

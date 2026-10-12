@@ -1,5 +1,6 @@
 {
   "training.reset_before_strategy_change": "Reset de training voordat u de strategie wijzigt.",
+  "io.no_finite_seed_points": "De puntenwolk bevat geen beginpunten met eindige coördinaten. Er wordt willekeurige initialisatie gebruikt.",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "GPU-geheugen van het proces volgens het besturingssysteem of GPU-stuurprogramma.",
   "ui.vram_process_unavailable_tooltip": "GPU-geheugen van het proces is niet beschikbaar. Het apparaatgebruik omvat andere toepassingen.",

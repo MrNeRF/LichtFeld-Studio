@@ -24,7 +24,9 @@
 
 #include "core/camera_types.h"
 #include "core/error.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
+#include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
@@ -480,6 +482,171 @@ protected:
         return values;
     }
 };
+
+class SimplePlyPointCloudTest : public ::testing::Test {
+protected:
+    const fs::path temp_dir = fs::temp_directory_path() / "lfs_simple_ply_test";
+
+    void SetUp() override { fs::create_directories(temp_dir); }
+    void TearDown() override { fs::remove_all(temp_dir); }
+
+    template <typename T>
+    fs::path write_points(const std::vector<T>& positions, tinyply::Type type,
+                          bool binary = true, bool with_colors = true) {
+        const size_t count = positions.size() / 3;
+        std::vector<uint8_t> colors(positions.size());
+        for (size_t i = 0; i < colors.size(); ++i)
+            colors[i] = static_cast<uint8_t>(i + 10);
+        tinyply::PlyFile file;
+        file.add_properties_to_element("vertex", {"x", "y", "z"}, type, count,
+                                       reinterpret_cast<const uint8_t*>(positions.data()), tinyply::Type::INVALID, 0);
+        if (with_colors)
+            file.add_properties_to_element("vertex", {"red", "green", "blue"}, tinyply::Type::UINT8,
+                                           count, colors.data(), tinyply::Type::INVALID, 0);
+        const auto path = temp_dir / "points.ply";
+        std::ofstream out(path, std::ios::binary);
+        file.write(out, binary);
+        return path;
+    }
+
+    void expect_points(const PointCloud& cloud, const std::vector<float>& positions,
+                       const std::vector<uint8_t>& colors) {
+        ASSERT_EQ(cloud.size(), positions.size() / 3);
+        const auto means_cpu = cloud.means.cpu().contiguous();
+        const auto colors_cpu = cloud.colors.cpu().contiguous();
+        EXPECT_EQ(std::memcmp(means_cpu.ptr<float>(), positions.data(), positions.size() * sizeof(float)), 0);
+        EXPECT_EQ(std::memcmp(colors_cpu.ptr<uint8_t>(), colors.data(), colors.size()), 0);
+    }
+};
+
+TEST_F(SimplePlyPointCloudTest, FiltersNonFiniteCoordinatesAndKeepsMatchingColors) {
+    for (const float invalid : {std::numeric_limits<float>::quiet_NaN(),
+                                std::numeric_limits<float>::infinity(),
+                                -std::numeric_limits<float>::infinity()}) {
+        for (size_t axis = 0; axis < 3; ++axis) {
+            SCOPED_TRACE(axis);
+            std::vector<float> positions{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+            positions[axis] = invalid;
+            positions[6 + axis] = invalid;
+            const auto cloud = load_simple_ply_point_cloud(write_points(positions, tinyply::Type::FLOAT32));
+            expect_points(cloud, {4, 5, 6, 10, 11, 12}, {13, 14, 15, 19, 20, 21});
+        }
+    }
+}
+
+TEST_F(SimplePlyPointCloudTest, FiltersDoubleOverflowAfterFloatConversion) {
+    const std::vector<double> positions{1, 2, 3, std::numeric_limits<double>::max(), 5, 6,
+                                        7, 8, 9, 10, -std::numeric_limits<double>::infinity(), 12};
+    expect_points(load_simple_ply_point_cloud(write_points(positions, tinyply::Type::FLOAT64)),
+                  {1, 2, 3, 7, 8, 9}, {10, 11, 12, 16, 17, 18});
+}
+
+TEST_F(SimplePlyPointCloudTest, AllNonFiniteSeedsUseFiniteDatasetInitialization) {
+    save_image_u8(temp_dir / "frame.png",
+                  Tensor::full({8, 8, 3}, 127, Device::CPU, DataType::UInt8));
+    {
+        std::ofstream out(temp_dir / "transforms.json");
+        out << R"json({"w":8,"h":8,"camera_angle_x":0.8,"ply_file_path":"points.ply",
+            "frames":[{"file_path":"frame.png","transform_matrix":
+            [[1,0,0,0],[0,1,0,0],[0,0,1,2],[0,0,0,1]]}]})json";
+    }
+    auto loader = Loader::create();
+    auto missing = loader->load(temp_dir);
+    ASSERT_TRUE(missing) << missing.error().format();
+    const auto& missing_scene = std::get<LoadedScene>(missing->data);
+    ASSERT_TRUE(missing_scene.point_cloud);
+    ASSERT_GT(missing_scene.point_cloud->size(), 0);
+
+    auto& localization = lfs::event::LocalizationManager::getInstance();
+    constexpr auto warning_key = "io.no_finite_seed_points";
+    localization.setOverride(warning_key, "Localized seed fallback warning");
+    struct RestoreWarning {
+        ~RestoreWarning() {
+            lfs::event::LocalizationManager::getInstance().clearOverride("io.no_finite_seed_points");
+        }
+    } restore_warning;
+
+    write_points(std::vector<double>{
+                     std::numeric_limits<double>::quiet_NaN(), 0, 0,
+                     0, std::numeric_limits<double>::infinity(), 0,
+                     0, 0, -std::numeric_limits<double>::infinity(),
+                     std::numeric_limits<double>::max(), 0, 0},
+                 tinyply::Type::FLOAT64);
+    auto loaded = loader->load(temp_dir);
+    ASSERT_TRUE(loaded) << loaded.error().format();
+    ASSERT_TRUE(std::holds_alternative<LoadedScene>(loaded->data));
+    const auto& scene = std::get<LoadedScene>(loaded->data);
+    ASSERT_EQ(scene.cameras.size(), 1u);
+    ASSERT_TRUE(scene.point_cloud);
+    const auto expected_colors = missing_scene.point_cloud->colors.cpu().contiguous();
+    expect_points(*scene.point_cloud,
+                  missing_scene.point_cloud->means.cpu().to_vector(),
+                  std::vector<uint8_t>(expected_colors.ptr<uint8_t>(),
+                                       expected_colors.ptr<uint8_t>() + expected_colors.numel()));
+    EXPECT_NE(std::find(loaded->warnings.begin(), loaded->warnings.end(),
+                        "Localized seed fallback warning"),
+              loaded->warnings.end());
+
+    lfs::core::param::TrainingParameters params;
+    params.optimization.sh_degree = 0;
+    params.optimization.random = false;
+    auto model = init_model_from_pointcloud(params, loaded->scene_center, *scene.point_cloud);
+    ASSERT_TRUE(model) << model.error();
+    ASSERT_EQ(model->size(), scene.point_cloud->size());
+    for (const auto* tensor : {&model->means_raw(), &model->scaling_raw(), &model->rotation_raw(),
+                               &model->opacity_raw(), &model->sh0_raw()}) {
+        const auto values = tensor->cpu().to_vector();
+        EXPECT_TRUE(std::all_of(values.begin(), values.end(), [](float value) { return std::isfinite(value); }));
+    }
+}
+
+TEST_F(SimplePlyPointCloudTest, FilteredPointsWithoutColorsStayWhite) {
+    const std::vector<float> positions{1, 2, 3, 4, std::numeric_limits<float>::quiet_NaN(), 6, 7, 8, 9};
+    expect_points(load_simple_ply_point_cloud(write_points(positions, tinyply::Type::FLOAT32, true, false)),
+                  {1, 2, 3, 7, 8, 9}, std::vector<uint8_t>(6, 255));
+}
+
+TEST_F(SimplePlyPointCloudTest, FloatColorsKeepExistingConversionAfterFiltering) {
+    const std::vector<float> positions{1, 2, 3, 4, 5, 6, 7, 8, std::numeric_limits<float>::infinity()};
+    const std::vector<float> colors{0, 0.5f, 1, 0.25f, 0.75f, 1, 1, 0, 0};
+    tinyply::PlyFile file;
+    file.add_properties_to_element("vertex", {"x", "y", "z"}, tinyply::Type::FLOAT32, 3,
+                                   reinterpret_cast<const uint8_t*>(positions.data()), tinyply::Type::INVALID, 0);
+    file.add_properties_to_element("vertex", {"red", "green", "blue"}, tinyply::Type::FLOAT32, 3,
+                                   reinterpret_cast<const uint8_t*>(colors.data()), tinyply::Type::INVALID, 0);
+    const auto path = temp_dir / "float_colors.ply";
+    {
+        std::ofstream out(path, std::ios::binary);
+        file.write(out, true);
+    }
+    expect_points(load_simple_ply_point_cloud(path), {1, 2, 3, 4, 5, 6}, {0, 127, 255, 63, 191, 255});
+}
+
+TEST_F(SimplePlyPointCloudTest, FiniteFloatBoundariesRemainBitIdentical) {
+    const std::vector<float> positions{-0.0f, std::numeric_limits<float>::denorm_min(),
+                                       std::numeric_limits<float>::max(),
+                                       -std::numeric_limits<float>::max(), 0.0f, -1.0f};
+    expect_points(load_simple_ply_point_cloud(write_points(positions, tinyply::Type::FLOAT32)),
+                  positions, {10, 11, 12, 13, 14, 15});
+}
+
+TEST_F(SimplePlyPointCloudTest, FiniteInputsPreservePositionsAndColorsExactly) {
+    const std::vector<float> expected{1, 2, 3, 4, 5, 6};
+    const std::vector<uint8_t> colors{10, 11, 12, 13, 14, 15};
+    for (const bool binary : {false, true}) {
+        for (const bool with_colors : {false, true}) {
+            const auto expected_colors = with_colors ? colors : std::vector<uint8_t>(6, 255);
+            expect_points(load_simple_ply_point_cloud(write_points(expected, tinyply::Type::FLOAT32, binary, with_colors)),
+                          expected, expected_colors);
+            expect_points(load_simple_ply_point_cloud(write_points(std::vector<double>{1, 2, 3, 4, 5, 6}, tinyply::Type::FLOAT64, binary, with_colors)),
+                          expected, expected_colors);
+            expect_points(load_simple_ply_point_cloud(write_points(std::vector<int32_t>{1, 2, 3, 4, 5, 6}, tinyply::Type::INT32, binary, with_colors)),
+                          expected, expected_colors);
+            expect_points(load_simple_ply_point_cloud(write_points(std::vector<uint8_t>{1, 2, 3, 4, 5, 6}, tinyply::Type::UINT8, binary, with_colors)),
+                          expected, expected_colors);
+        }
+    }
+}
 
 // Test Loader creation
 TEST_F(PythonIOTest, LoaderCreation) {

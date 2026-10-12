@@ -4,6 +4,7 @@
 
 #include "io/loaders/blender_loader.hpp"
 #include "core/camera.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -415,14 +416,27 @@ namespace lfs::io {
             }
             if (std::filesystem::exists(pointcloud_path)) {
                 auto loaded_point_cloud = load_simple_ply_point_cloud(pointcloud_path, options);
-                point_cloud = std::make_shared<PointCloud>(
-                    convert_transforms_point_cloud_to_colmap_world(std::move(loaded_point_cloud)));
-                LOG_INFO("Loaded {} points from {}", point_cloud->size(),
-                         lfs::core::path_to_utf8(pointcloud_path.filename()));
+                if (loaded_point_cloud.size() > 0) {
+                    point_cloud = std::make_shared<PointCloud>(
+                        convert_transforms_point_cloud_to_colmap_world(std::move(loaded_point_cloud)));
+                    LOG_INFO("Loaded {} points from {}", point_cloud->size(),
+                             lfs::core::path_to_utf8(pointcloud_path.filename()));
+                } else {
+                    const auto& localization = lfs::event::LocalizationManager::getInstance();
+                    // Standalone/headless loaders can run before locale resources are initialized.
+                    warnings.emplace_back(localization.hasKey("io.no_finite_seed_points")
+                                              ? LOC("io.no_finite_seed_points")
+                                              : "The point cloud contains no finite seed points. Using random initialization.");
+                    LOG_WARN("{}", warnings.back());
+                }
             } else {
                 point_cloud = std::make_shared<PointCloud>(generate_random_point_cloud());
                 LOG_WARN("No PLY found, using {} random points", point_cloud->size());
                 warnings.emplace_back("No point cloud file found, using random initialization");
+            }
+
+            if (!point_cloud) {
+                point_cloud = std::make_shared<PointCloud>(generate_random_point_cloud());
             }
 
             // Centralize scene

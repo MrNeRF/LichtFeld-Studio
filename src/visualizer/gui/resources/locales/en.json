@@ -1,5 +1,6 @@
 {
   "training.reset_before_strategy_change": "Reset training before changing strategy.",
+  "io.no_finite_seed_points": "The point cloud contains no finite seed points. Using random initialization.",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Process GPU memory reported by the operating system or GPU driver.",
   "ui.vram_process_unavailable_tooltip": "Process GPU memory is unavailable. Device usage includes other applications.",
