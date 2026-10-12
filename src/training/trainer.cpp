@@ -8921,6 +8921,7 @@ namespace lfs::training {
             composite_target_alpha_ = params_.optimization.mask_mode == lfs::core::param::MaskMode::None &&
                                       params_.optimization.use_alpha_as_mask && alpha_available;
             if (composite_target_alpha_) {
+                aux_pipeline_config.alpha_is_transparency = true;
                 aux_pipeline_config.use_alpha_as_mask = true;
                 aux_pipeline_config.invert_masks = false;
                 aux_pipeline_config.mask_threshold = 0.0f;

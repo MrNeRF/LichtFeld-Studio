@@ -15,6 +15,14 @@ namespace lfs::core::cuda {
 #endif
     }
 
+    __host__ __device__ __forceinline__ float normalize_mask_u16_value(const std::uint16_t value) {
+#if defined(__CUDA_ARCH__)
+        return __fdiv_rn(static_cast<float>(value), 65535.0f);
+#else
+        return static_cast<float>(value) / 65535.0f;
+#endif
+    }
+
     // Explicit non-FTZ comparison: a positive subnormal cutoff excludes zero.
     __device__ __forceinline__ bool mask_value_at_least(const float value, const float threshold) {
         unsigned result;

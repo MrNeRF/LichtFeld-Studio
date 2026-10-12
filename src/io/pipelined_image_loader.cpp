@@ -4,6 +4,7 @@
 #include "io/pipelined_image_loader.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/cuda/mask_normalization.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/error_reporter.hpp"
 #include "core/image_io.hpp"
@@ -574,12 +575,12 @@ namespace lfs::io {
             if (!mask.is_valid())
                 return {};
             if (mask.dtype() == lfs::core::DataType::UInt8)
-                mask = mask.to(lfs::core::DataType::Float32) / 255.0f;
+                mask = lfs::core::cuda::normalize_mask_bytes(mask);
             else if (mask.dtype() == lfs::core::DataType::Bool)
                 mask = mask.to(lfs::core::DataType::Float32);
             mask = mask.clamp(0.0f, 1.0f);
             if (threshold > 0.0f)
-                mask = mask.ge(threshold).to(lfs::core::DataType::Float32);
+                mask = lfs::core::cuda::threshold_mask(mask, threshold).to(lfs::core::DataType::Float32);
             return mask.contiguous();
         }
 
@@ -2360,7 +2361,7 @@ namespace lfs::io {
 
             if (request.extract_alpha_as_mask) {
                 const auto rgb_key = make_cache_key(request.path, request.params);
-                const auto alpha_key = make_mask_cache_key(request.path, request.params);
+                const auto alpha_key = make_mask_cache_key(request.path, request.params) + (request.alpha_is_transparency ? "_transparency" : "");
                 auto cached_rgb = get_from_jpeg_cache(rgb_key);
                 auto cached_alpha = get_from_jpeg_cache(alpha_key);
 
@@ -2384,6 +2385,7 @@ namespace lfs::io {
                     mask_item.jpeg_data = cached_alpha;
                     mask_item.is_mask = true;
                     mask_item.mask_params = request.alpha_mask_params;
+                    mask_item.alpha_is_transparency = request.alpha_is_transparency;
                     mask_item.is_cache_hit = true;
                     hot_queue_.push(std::move(mask_item));
 
@@ -2397,6 +2399,7 @@ namespace lfs::io {
                     result.params = request.params;
                     result.cache_key = rgb_key;
                     result.alpha_as_mask = true;
+                    result.alpha_is_transparency = request.alpha_is_transparency;
                     result.alpha_mask_params = request.alpha_mask_params;
                     result.needs_processing = true;
                     result.undistort = request.undistort;
@@ -2773,13 +2776,13 @@ namespace lfs::io {
                                 // UINT8 streams decode to raw bytes; UINT16 streams (16-bit alpha)
                                 // decode to normalized Float32.
                                 auto raw = nvcodec->decode_jpeg2k_16bit_from_memory_gpu(
-                                    bytes, decode_stream_, false, true);
+                                    bytes, decode_stream_, false, true, !batch[i].alpha_is_transparency);
                                 mask_tensor = raw.dtype() == lfs::core::DataType::UInt8
-                                                  ? raw.to(lfs::core::DataType::Float32) / 255.0f
+                                                  ? lfs::core::cuda::normalize_mask_bytes(raw)
                                                   : raw;
                             } else {
                                 mask_tensor = nvcodec->load_image_from_memory_gpu(
-                                    bytes, 1, 0, decode_stream_, DecodeFormat::Grayscale);
+                                    bytes, 1, 0, decode_stream_, DecodeFormat::Mask);
                             }
 
                             if (!mask_tensor.is_valid() || mask_tensor.numel() == 0) {
@@ -2942,7 +2945,7 @@ namespace lfs::io {
                         item.undistort ? 1 : item.params.resize_factor,
                         item.undistort ? 0 : item.params.max_width,
                         nullptr,
-                        config_.use_16bit_color);
+                        config_.use_16bit_color, !item.alpha_is_transparency);
                     const size_t H = rgba.shape()[1];
                     const size_t W = rgba.shape()[2];
                     auto rgb = rgba.slice(0, 0, 3).contiguous();
@@ -2976,16 +2979,22 @@ namespace lfs::io {
                         cuda::launch_float32_hwc_to_uint16_hwc(
                             alpha.ptr<float>(), reinterpret_cast<uint16_t*>(alpha_u16.data_ptr()),
                             alpha_h, alpha_w, 1, nullptr);
-                        cuda::launch_uint16_hwc_to_float32_hwc(
-                            reinterpret_cast<const uint16_t*>(alpha_u16.data_ptr()), alpha.ptr<float>(),
-                            alpha_h, alpha_w, 1, nullptr);
+                        if (item.alpha_is_transparency) {
+                            cuda::launch_uint16_hwc_to_float32_hwc(
+                                reinterpret_cast<const uint16_t*>(alpha_u16.data_ptr()), alpha.ptr<float>(),
+                                alpha_h, alpha_w, 1, nullptr);
+                        } else {
+                            lfs::core::cuda::normalize_mask_u16(
+                                reinterpret_cast<const uint16_t*>(alpha_u16.data_ptr()), alpha.ptr<float>(),
+                                alpha_h * alpha_w, nullptr);
+                        }
                     }
 
                     if (is_nvcodec_available()) {
                         try {
                             write_derived_cache(*nvcodec, rgb, item.cache_key, nullptr, item.params);
 
-                            const auto alpha_key = make_mask_cache_key(item.path, item.params);
+                            const auto alpha_key = make_mask_cache_key(item.path, item.params) + (item.alpha_is_transparency ? "_transparency" : "");
                             auto alpha_jpeg = nvcodec->encode_grayscale_to_jpeg2k(alpha, nullptr, true, false);
                             put_in_jpeg_cache(alpha_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(alpha_jpeg)));
@@ -3025,7 +3034,7 @@ namespace lfs::io {
                                 item.path,
                                 item.undistort ? 1 : item.params.resize_factor,
                                 item.undistort ? 0 : item.params.max_width,
-                                aux_stream, DecodeFormat::Grayscale);
+                                aux_stream, item.is_mask ? DecodeFormat::Mask : DecodeFormat::Grayscale);
                             used_gpu = true;
                         } catch (...) {
                         }
@@ -3098,15 +3107,11 @@ namespace lfs::io {
                                 gpu_gray = gpu_gray.to(lfs::core::DataType::Float32).div(255.0f);
                             aux_tensor = lfs::core::resize_depth_prior(gpu_gray, target_h, target_w, aux_stream);
                         } else if (target_w != src_w || target_h != src_h) {
-                            aux_tensor = lfs::core::lanczos_resize_grayscale(gpu_gray, target_h, target_w, 2, aux_stream);
+                            aux_tensor = lfs::core::lanczos_resize_grayscale(gpu_gray, target_h, target_w, 2, aux_stream, true);
                         } else if (gpu_gray.dtype() == lfs::core::DataType::Float32) {
                             aux_tensor = std::move(gpu_gray);
                         } else {
-                            aux_tensor = lfs::core::Tensor::empty(
-                                lfs::core::TensorShape({static_cast<size_t>(target_h), static_cast<size_t>(target_w)}),
-                                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-                            cuda::launch_uint8_hw_to_float32_hw(
-                                gpu_gray.ptr<uint8_t>(), aux_tensor.ptr<float>(), target_h, target_w, aux_stream);
+                            aux_tensor = lfs::core::cuda::normalize_mask_bytes(gpu_gray);
                         }
                     }
 
@@ -3116,7 +3121,7 @@ namespace lfs::io {
                                          : "Depth preprocessing produced an invalid tensor");
                     }
                     if (item.is_mask && aux_tensor.dtype() == lfs::core::DataType::UInt8) {
-                        aux_tensor = aux_tensor.to(lfs::core::DataType::Float32) / 255.0f;
+                        aux_tensor = lfs::core::cuda::normalize_mask_bytes(aux_tensor);
                     }
                     const size_t H = aux_tensor.shape()[0];
                     const size_t W = aux_tensor.shape()[1];

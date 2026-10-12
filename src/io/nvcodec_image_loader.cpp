@@ -5,6 +5,7 @@
 #include "io/nvcodec_image_loader.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/cuda/mask_normalization.hpp"
 #include "core/environment.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
@@ -1190,7 +1191,7 @@ namespace lfs::io {
         DecodeFormat format,
         bool output_uint8) {
 
-        const bool is_grayscale = (format == DecodeFormat::Grayscale);
+        const bool is_grayscale = (format != DecodeFormat::RGB);
         const int num_channels = is_grayscale ? 1 : 3;
 
         const size_t decoder_idx = impl_->acquire_decoder();
@@ -1384,7 +1385,7 @@ namespace lfs::io {
         if (needs_resize) {
             if (is_grayscale) {
                 output_tensor = lanczos_resize_grayscale(resize_input_image, target_height, target_width,
-                                                         LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream));
+                                                         LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream), format == DecodeFormat::Mask);
             } else {
                 output_tensor = lanczos_resize(resize_input_image, target_height, target_width,
                                                LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream));
@@ -1404,11 +1405,15 @@ namespace lfs::io {
             if (is_grayscale) {
                 const auto shape = image_tensor_aux.shape();
                 const size_t H = shape[0], W = shape[1];
-                output_tensor = Tensor::empty(TensorShape({H, W}), Device::CUDA, DataType::Float32);
-                cuda::launch_uint8_hw_to_float32_hw(
-                    reinterpret_cast<const uint8_t*>(image_tensor_aux.data_ptr()),
-                    reinterpret_cast<float*>(output_tensor.data_ptr()),
-                    H, W, static_cast<cudaStream_t>(cuda_stream));
+                if (format == DecodeFormat::Mask) {
+                    output_tensor = lfs::core::cuda::normalize_mask_bytes(image_tensor_aux).reshape({H, W});
+                } else {
+                    output_tensor = Tensor::empty(TensorShape({H, W}), Device::CUDA, DataType::Float32);
+                    cuda::launch_uint8_hw_to_float32_hw(
+                        reinterpret_cast<const uint8_t*>(image_tensor_aux.data_ptr()),
+                        reinterpret_cast<float*>(output_tensor.data_ptr()),
+                        H, W, static_cast<cudaStream_t>(cuda_stream));
+                }
             } else {
                 const auto shape = image_tensor_aux.shape();
                 const size_t H = shape[0], W = shape[1], C = shape[2];
@@ -2207,7 +2212,8 @@ namespace lfs::io {
         const std::vector<uint8_t>& jpeg2k_data,
         void* cuda_stream,
         const bool synchronize,
-        const bool allow_uint8) {
+        const bool allow_uint8,
+        const bool exact_mask) {
 
         using namespace lfs::core;
 
@@ -2376,10 +2382,16 @@ namespace lfs::io {
         if (cuda_stream) {
             output_tensor.set_stream(static_cast<cudaStream_t>(cuda_stream));
         }
-        cuda::launch_uint16_hwc_to_float32_hwc(
-            reinterpret_cast<const uint16_t*>(decoded_tensor.data_ptr()),
-            output_tensor.ptr<float>(),
-            height, width, num_components, static_cast<cudaStream_t>(cuda_stream));
+        if (exact_mask) {
+            lfs::core::cuda::normalize_mask_u16(
+                reinterpret_cast<const uint16_t*>(decoded_tensor.data_ptr()), output_tensor.ptr<float>(),
+                height * width * num_components, static_cast<cudaStream_t>(cuda_stream));
+        } else {
+            cuda::launch_uint16_hwc_to_float32_hwc(
+                reinterpret_cast<const uint16_t*>(decoded_tensor.data_ptr()),
+                output_tensor.ptr<float>(),
+                height, width, num_components, static_cast<cudaStream_t>(cuda_stream));
+        }
 
         if (synchronize && cuda_stream) {
             if (const cudaError_t err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));

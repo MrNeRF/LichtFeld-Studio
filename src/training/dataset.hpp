@@ -391,8 +391,9 @@ namespace lfs::training {
         // Prior-world -> reconstruction-world rotation (row-major), identity unless resolved otherwise
         std::array<float, 9> normal_world_rotation{1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
         std::vector<std::array<float, 9>> normal_world_to_camera_by_source;
-        bool invert_masks = false;      // Invert mask values (1.0 - mask)
-        float mask_threshold = 0.0f;    // If > 0, values >= threshold become 1.0
+        bool invert_masks = false;   // Invert mask values (1.0 - mask)
+        float mask_threshold = 0.0f; // If > 0, values >= threshold become 1.0
+        bool alpha_is_transparency = false;
         bool use_alpha_as_mask = false; // Extract alpha channel from RGBA as mask
     };
 
@@ -550,6 +551,7 @@ namespace lfs::training {
                 request.mask_params.threshold = aux_config_.mask_threshold;
             } else if (aux_config_.use_alpha_as_mask && cam->has_alpha()) {
                 request.extract_alpha_as_mask = true;
+                request.alpha_is_transparency = aux_config_.alpha_is_transparency;
                 request.alpha_mask_params.invert = aux_config_.invert_masks;
                 request.alpha_mask_params.threshold = aux_config_.mask_threshold;
             }

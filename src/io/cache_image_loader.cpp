@@ -288,9 +288,9 @@ namespace lfs::io {
         }
 
         lfs::core::Tensor lanczos_to_chw(const lfs::core::Tensor& hwc, const int target_width, const int target_height,
-                                         const cudaStream_t stream) {
+                                         const cudaStream_t stream, const bool exact_mask_alpha = false) {
             hwc.sync_to_stream(stream);
-            auto resized = lfs::core::lanczos_resize(hwc, target_height, target_width, LANCZOS_KERNEL_SIZE, stream);
+            auto resized = lfs::core::lanczos_resize(hwc, target_height, target_width, LANCZOS_KERNEL_SIZE, stream, exact_mask_alpha);
             if (!resized.is_valid())
                 throw std::runtime_error("GPU Lanczos resize failed for CPU-decoded image");
             return resized;
@@ -299,7 +299,7 @@ namespace lfs::io {
         // Runs on the staging tensor's stream when the caller passed none, and synchronizes
         // before returning so every staging buffer outlives the kernels reading it.
         lfs::core::Tensor hwc_to_chw(const lfs::core::Tensor& hwc, const int resize_factor, const int max_width,
-                                     const bool output_uint8, const cudaStream_t requested_stream) {
+                                     const bool output_uint8, const cudaStream_t requested_stream, const bool exact_mask_alpha = false) {
             using namespace lfs::core;
             const size_t H = hwc.shape()[0];
             const size_t W = hwc.shape()[1];
@@ -316,9 +316,9 @@ namespace lfs::io {
                     source = Tensor::empty(hwc.shape(), Device::CUDA, DataType::Float32);
                     source.set_stream(stream);
                     cuda::launch_uint16_hwc_to_float32_hwc(
-                        static_cast<const uint16_t*>(hwc.data_ptr()), source.ptr<float>(), H, W, C, stream);
+                        static_cast<const uint16_t*>(hwc.data_ptr()), source.ptr<float>(), H, W, C, stream, exact_mask_alpha);
                 }
-                const auto resized = lanczos_to_chw(source, target_width, target_height, stream);
+                const auto resized = lanczos_to_chw(source, target_width, target_height, stream, exact_mask_alpha);
                 output = output_uint8 ? float_chw_to_uint8(resized, stream) : resized;
             } else {
                 output = Tensor::empty(TensorShape({C, H, W}), Device::CUDA,
@@ -329,11 +329,11 @@ namespace lfs::io {
                         static_cast<const uint16_t*>(hwc.data_ptr()), output.ptr<uint8_t>(), H, W, C, stream);
                 } else if (sixteen_bit) {
                     cuda::launch_uint16_hwc_to_float32_chw(
-                        static_cast<const uint16_t*>(hwc.data_ptr()), output.ptr<float>(), H, W, C, stream);
+                        static_cast<const uint16_t*>(hwc.data_ptr()), output.ptr<float>(), H, W, C, stream, exact_mask_alpha);
                 } else if (output_uint8) {
                     cuda::launch_uint8_hwc_to_uint8_chw(hwc.ptr<uint8_t>(), output.ptr<uint8_t>(), H, W, C, stream);
                 } else {
-                    cuda::launch_uint8_hwc_to_float32_chw(hwc.ptr<uint8_t>(), output.ptr<float>(), H, W, C, stream);
+                    cuda::launch_uint8_hwc_to_float32_chw(hwc.ptr<uint8_t>(), output.ptr<float>(), H, W, C, stream, exact_mask_alpha);
                 }
             }
             synchronize_decode_stream(stream);
@@ -379,14 +379,14 @@ namespace lfs::io {
 
     lfs::core::Tensor load_rgba_image_cpu_decoded(
         const std::filesystem::path& path, const int resize_factor, const int max_width, void* const cuda_stream,
-        const bool decode_16bit) {
+        const bool decode_16bit, const bool exact_mask_alpha) {
         using namespace lfs::core;
         const auto stream = static_cast<cudaStream_t>(cuda_stream);
         const auto finish = [&](const auto* data, const int width, const int height, const int channels) {
             if (!data || channels != 4)
                 throw std::runtime_error("Failed to decode RGBA image: " + path_to_utf8(path));
             return hwc_to_chw(upload_hwc(data, width, height, channels, stream),
-                              resize_factor, max_width, false, stream);
+                              resize_factor, max_width, false, stream, exact_mask_alpha);
         };
         if (decode_16bit) {
             auto [data, width, height, channels] = load_image_with_alpha_u16(path, 1, 0);

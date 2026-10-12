@@ -12,4 +12,6 @@ namespace lfs::core::cuda {
     LFS_CUDA_API Tensor normalize_mask_bytes(const Tensor& mask);
     // Binary mask comparison preserves subnormal cutoffs even in fast-math builds.
     LFS_CUDA_API Tensor threshold_mask(const Tensor& mask, float threshold);
+    // Alpha's existing 16-bit cache uses the same correctly rounded value domain.
+    LFS_CUDA_API void normalize_mask_u16(const std::uint16_t* input, float* output, size_t count, cudaStream_t stream);
 } // namespace lfs::core::cuda

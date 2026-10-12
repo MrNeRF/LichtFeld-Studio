@@ -32,6 +32,11 @@ namespace lfs::core::cuda {
             if (i < count)
                 output[i] = mask_value_at_least(input[i], threshold);
         }
+        __global__ void normalize_mask_u16_kernel(const std::uint16_t* input, float* output, size_t count) {
+            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (i < count)
+                output[i] = normalize_mask_u16_value(input[i]);
+        }
     } // namespace
 
     Tensor normalize_mask_bytes(const Tensor& mask) {
@@ -64,5 +69,11 @@ namespace lfs::core::cuda {
             LFS_CUDA_CHECK_MSG(cudaGetLastError(), "threshold mask");
         }
         return output;
+    }
+    void normalize_mask_u16(const std::uint16_t* input, float* output, const size_t count, cudaStream_t stream) {
+        if (!count)
+            return;
+        normalize_mask_u16_kernel<<<static_cast<unsigned>((count + threads - 1) / threads), threads, 0, stream>>>(input, output, count);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "normalize 16-bit mask");
     }
 } // namespace lfs::core::cuda

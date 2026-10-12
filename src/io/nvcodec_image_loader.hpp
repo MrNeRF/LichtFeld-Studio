@@ -21,8 +21,9 @@ namespace lfs::io {
      * @brief Output format for image decoding
      */
     enum class DecodeFormat {
-        RGB,      // 3-channel RGB [C,H,W] or [H,W,C]
-        Grayscale // 1-channel grayscale [H,W]
+        RGB,       // 3-channel RGB [C,H,W] or [H,W,C]
+        Grayscale, // 1-channel grayscale [H,W]
+        Mask       // Grayscale with correctly rounded byte mask normalization
     };
 
     /**
@@ -157,7 +158,8 @@ namespace lfs::io {
             const std::vector<uint8_t>& jpeg2k_data,
             void* cuda_stream = nullptr,
             bool synchronize = true,
-            bool allow_uint8 = false);
+            bool allow_uint8 = false,
+            bool exact_mask = false);
 
         std::vector<lfs::core::Tensor> decode_jpeg2k_16bit_batch_from_spans(
             const std::vector<std::pair<const uint8_t*, size_t>>& jpeg2k_spans,

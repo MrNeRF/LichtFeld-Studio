@@ -125,6 +125,7 @@ namespace lfs::io {
         int aux_target_height = 0;
         MaskParams mask_params;
         bool extract_alpha_as_mask = false;
+        bool alpha_is_transparency = false;
         MaskParams alpha_mask_params;
         const lfs::core::UndistortParams* undistort = nullptr;
     };
@@ -297,6 +298,7 @@ namespace lfs::io {
             int aux_target_height = 0;
             MaskParams mask_params; // Invert/threshold params (only used if is_mask)
             bool alpha_as_mask = false;
+            bool alpha_is_transparency = false;
             MaskParams alpha_mask_params;
             const lfs::core::UndistortParams* undistort = nullptr;
         };

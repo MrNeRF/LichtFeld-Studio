@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda/mask_normalization.cuh"
 #include "core/cuda_error.hpp"
 #include "image_format_kernels.cuh"
 #include <cassert>
@@ -81,6 +82,7 @@ namespace lfs::io::cuda {
         LFS_CUDA_LAUNCH_CHECK(stream, "io.image.flag_u8_sentinel_unchanged");
     }
 
+    template <bool ExactAlpha = false>
     __global__ void uint8_hwc_to_float32_chw_kernel(
         const uint8_t* __restrict__ input,
         float* __restrict__ output,
@@ -99,7 +101,12 @@ namespace lfs::io::cuda {
         const size_t h = tmp / W;
 
         const size_t out_idx = c * (H * W) + h * W + w;
-        output[out_idx] = static_cast<float>(input[idx]) * NORMALIZE_SCALE_U8;
+        if constexpr (ExactAlpha) {
+            output[out_idx] = c == 3 ? lfs::core::cuda::normalize_mask_byte(input[idx])
+                                     : static_cast<float>(input[idx]) * NORMALIZE_SCALE_U8;
+        } else {
+            output[out_idx] = static_cast<float>(input[idx]) * NORMALIZE_SCALE_U8;
+        }
     }
 
     __global__ void uint8_chw_to_float32_chw_kernel(
@@ -113,6 +120,7 @@ namespace lfs::io::cuda {
         output[idx] = static_cast<float>(input[idx]) * NORMALIZE_SCALE_U8;
     }
 
+    template <bool ExactAlpha = false>
     __global__ void uint16_hwc_to_float32_chw_kernel(
         const uint16_t* __restrict__ input,
         float* __restrict__ output,
@@ -131,7 +139,12 @@ namespace lfs::io::cuda {
         const size_t h = tmp / W;
 
         const size_t out_idx = c * (H * W) + h * W + w;
-        output[out_idx] = static_cast<float>(input[idx]) * NORMALIZE_SCALE_U16;
+        if constexpr (ExactAlpha) {
+            output[out_idx] = c == 3 ? lfs::core::cuda::normalize_mask_u16_value(input[idx])
+                                     : static_cast<float>(input[idx]) * NORMALIZE_SCALE_U16;
+        } else {
+            output[out_idx] = static_cast<float>(input[idx]) * NORMALIZE_SCALE_U16;
+        }
     }
 
     __global__ void float32_hwc_to_uint16_hwc_kernel(
@@ -147,6 +160,7 @@ namespace lfs::io::cuda {
         output[idx] = static_cast<uint16_t>(scaled + 0.5f);
     }
 
+    template <bool ExactAlpha = false>
     __global__ void uint16_hwc_to_float_hwc_kernel(
         const uint16_t* __restrict__ input,
         float* __restrict__ output,
@@ -155,7 +169,12 @@ namespace lfs::io::cuda {
         const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= total)
             return;
-        output[idx] = static_cast<float>(input[idx]) * NORMALIZE_SCALE_U16;
+        if constexpr (ExactAlpha) {
+            output[idx] = idx % 4 == 3 ? lfs::core::cuda::normalize_mask_u16_value(input[idx])
+                                       : static_cast<float>(input[idx]) * NORMALIZE_SCALE_U16;
+        } else {
+            output[idx] = static_cast<float>(input[idx]) * NORMALIZE_SCALE_U16;
+        }
     }
 
     __global__ void normal_chw_to_jpeg2k_hwc_kernel(
@@ -304,14 +323,20 @@ namespace lfs::io::cuda {
         const size_t height,
         const size_t width,
         const size_t channels,
-        cudaStream_t stream) {
+        cudaStream_t stream, bool exact_mask_alpha) {
 
         const size_t total = height * width * channels;
         const int num_blocks = static_cast<int>((total + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
-        uint8_hwc_to_float32_chw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
-            input, output, height, width, channels);
-        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u8_hwc_to_f32_chw");
+        if (channels == 4 && exact_mask_alpha) {
+            uint8_hwc_to_float32_chw_kernel<true><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+                input, output, height, width, channels);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u8_hwc_to_f32_chw");
+        } else {
+            uint8_hwc_to_float32_chw_kernel<false><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+                input, output, height, width, channels);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u8_hwc_to_f32_chw");
+        }
     }
 
     void launch_uint8_chw_to_float32_chw(
@@ -332,14 +357,20 @@ namespace lfs::io::cuda {
         size_t height,
         size_t width,
         size_t channels,
-        cudaStream_t stream) {
+        cudaStream_t stream, bool exact_mask_alpha) {
 
         const size_t total = height * width * channels;
         const int num_blocks = static_cast<int>((total + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
-        uint16_hwc_to_float32_chw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
-            input, output, height, width, channels);
-        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u16_hwc_to_f32_chw");
+        if (channels == 4 && exact_mask_alpha) {
+            uint16_hwc_to_float32_chw_kernel<true><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+                input, output, height, width, channels);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u16_hwc_to_f32_chw");
+        } else {
+            uint16_hwc_to_float32_chw_kernel<false><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+                input, output, height, width, channels);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u16_hwc_to_f32_chw");
+        }
     }
 
     void launch_normal_prior_u8_hwc_to_float32_chw(
@@ -412,14 +443,20 @@ namespace lfs::io::cuda {
         size_t height,
         size_t width,
         size_t channels,
-        cudaStream_t stream) {
+        cudaStream_t stream, bool exact_mask_alpha) {
 
         const size_t total = height * width * channels;
         const int num_blocks = static_cast<int>((total + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
-        uint16_hwc_to_float_hwc_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
-            input, output, total);
-        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u16_hwc_to_f32_hwc");
+        if (channels == 4 && exact_mask_alpha) {
+            uint16_hwc_to_float_hwc_kernel<true><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+                input, output, total);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u16_hwc_to_f32_hwc");
+        } else {
+            uint16_hwc_to_float_hwc_kernel<false><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+                input, output, total);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u16_hwc_to_f32_hwc");
+        }
     }
 
     void launch_normal_chw_to_jpeg2k_hwc(
@@ -541,7 +578,7 @@ namespace lfs::io::cuda {
         const float r = static_cast<float>(input[src + 0]) * NORMALIZE_SCALE_U8;
         const float g = static_cast<float>(input[src + 1]) * NORMALIZE_SCALE_U8;
         const float b = static_cast<float>(input[src + 2]) * NORMALIZE_SCALE_U8;
-        const float a = static_cast<float>(input[src + 3]) * NORMALIZE_SCALE_U8;
+        const float a = lfs::core::cuda::normalize_mask_byte(input[src + 3]);
 
         rgb_output[idx] = r;
         rgb_output[total + idx] = g;
@@ -563,7 +600,7 @@ namespace lfs::io::cuda {
         rgb_output[idx] = input[src + 0];
         rgb_output[total + idx] = input[src + 1];
         rgb_output[2 * total + idx] = input[src + 2];
-        alpha_output[idx] = static_cast<float>(input[src + 3]) * NORMALIZE_SCALE_U8;
+        alpha_output[idx] = lfs::core::cuda::normalize_mask_byte(input[src + 3]);
     }
 
     void launch_uint8_rgba_split_to_float32_rgb_and_alpha(
@@ -641,7 +678,7 @@ namespace lfs::io::cuda {
         if (idx >= total)
             return;
 
-        data[idx] = (data[idx] >= threshold) ? 1.0f : 0.0f;
+        data[idx] = lfs::core::cuda::mask_value_at_least(data[idx], threshold) ? 1.0f : 0.0f;
     }
 
     void launch_mask_threshold(
