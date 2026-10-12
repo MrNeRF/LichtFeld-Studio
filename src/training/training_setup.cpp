@@ -769,7 +769,8 @@ namespace lfs::training {
             }};
 
         LOG_INFO("Loading dataset from: {}", lfs::core::path_to_utf8(params.dataset.data_path));
-        return data_loader->load(params.dataset.data_path, load_options);
+        auto result = data_loader->load(params.dataset.data_path, load_options);
+        return result;
     }
 
     std::expected<void, std::string> loadTrainingDataIntoScene(

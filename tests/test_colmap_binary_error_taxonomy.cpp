@@ -1,7 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/localization_manager.hpp"
+#include "core/logger.hpp"
 #include "io/formats/colmap.hpp"
+#include "training/training_setup.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -10,6 +13,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <random>
 #include <string>
@@ -46,7 +50,8 @@ namespace {
                       const uint32_t camera_id,
                       const std::string_view name,
                       const double point_x = 0.0,
-                      const bool include_point = false) {
+                      const bool include_point = false,
+                      const uint64_t point_id = std::numeric_limits<uint64_t>::max()) {
         append_pod(bytes, id);
         append_pod(bytes, quaternion_w);
         append_pod(bytes, 0.0);
@@ -62,14 +67,15 @@ namespace {
         if (include_point) {
             append_pod(bytes, point_x);
             append_pod(bytes, 2.0);
-            append_pod(bytes, std::numeric_limits<uint64_t>::max());
+            append_pod(bytes, point_id);
         }
     }
 
     void append_point(std::vector<char>& bytes,
                       const uint64_t id,
                       const double x,
-                      const uint8_t red = 10) {
+                      const uint8_t red = 10,
+                      const bool include_track = false) {
         append_pod(bytes, id);
         append_pod(bytes, x);
         append_pod(bytes, 2.0);
@@ -78,7 +84,11 @@ namespace {
         bytes.push_back(static_cast<char>(20));
         bytes.push_back(static_cast<char>(30));
         append_pod(bytes, 0.25);
-        append_pod(bytes, uint64_t{0});
+        append_pod(bytes, uint64_t{include_track ? 1u : 0u});
+        if (include_track) {
+            append_pod(bytes, uint32_t{1});
+            append_pod(bytes, uint32_t{0});
+        }
     }
 
     class ColmapBinaryErrorTaxonomyTest : public ::testing::Test {
@@ -146,6 +156,100 @@ namespace {
     bool has_cuda_device() {
         int count = 0;
         return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
+    }
+
+    class WarningCapture {
+    public:
+        WarningCapture()
+            : token_(lfs::core::Logger::get().add_log_handler(
+                  [this](lfs::core::LogLevel level, const lfs::core::SourceSite&,
+                         std::string_view message) {
+                      if (level == lfs::core::LogLevel::Warn) {
+                          std::scoped_lock lock(mutex_);
+                          messages_.emplace_back(message);
+                      }
+                  })) {}
+
+        ~WarningCapture() { lfs::core::Logger::get().remove_log_handler(token_); }
+
+        [[nodiscard]] std::vector<std::string> messages() const {
+            std::scoped_lock lock(mutex_);
+            return messages_;
+        }
+
+    private:
+        lfs::core::LogHandlerToken token_;
+        mutable std::mutex mutex_;
+        std::vector<std::string> messages_;
+    };
+
+    TEST_F(ColmapBinaryErrorTaxonomyTest, TrainingLoadReportsSkippedInvalidPose) {
+        std::vector<char> images;
+        append_pod(images, uint64_t{2});
+        append_image(images, 1, 1.0, 1, "valid.png");
+        append_image(images, 2, 2.0, 1, "invalid.png");
+        write_bytes(temp_dir_ / "cameras.bin", valid_camera_file());
+        write_bytes(temp_dir_ / "images.bin", images);
+        write_png(temp_dir_ / "images" / "valid.png");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = temp_dir_;
+        auto& localization = lfs::event::LocalizationManager::getInstance();
+        localization.setOverride("io.colmap_skipped_invalid_pose", "localized pose warning: {}, {}, {}");
+        WarningCapture capture;
+        const auto result = lfs::training::loadTrainingData(params);
+        localization.clearOverride("io.colmap_skipped_invalid_pose");
+        ASSERT_TRUE(result) << result.error().format();
+        ASSERT_EQ(std::get<lfs::io::LoadedScene>(result->data).cameras.size(), 1u);
+        ASSERT_FALSE(result->warnings.empty());
+        EXPECT_TRUE(std::ranges::any_of(capture.messages(), [](const auto& message) {
+            return message.find("localized pose warning:") != std::string::npos &&
+                   message.find("image_id=2") != std::string::npos;
+        }));
+    }
+
+    TEST_F(ColmapBinaryErrorTaxonomyTest, TrainingLoadKeepsValidPoseWithoutSkipWarning) {
+        write_bytes(temp_dir_ / "cameras.bin", valid_camera_file());
+        write_bytes(temp_dir_ / "images.bin", valid_image_file());
+        write_png(temp_dir_ / "images" / "valid.png");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = temp_dir_;
+        WarningCapture capture;
+        const auto result = lfs::training::loadTrainingData(params);
+        ASSERT_TRUE(result) << result.error().format();
+        ASSERT_EQ(std::get<lfs::io::LoadedScene>(result->data).cameras.size(), 1u);
+        EXPECT_TRUE(std::ranges::none_of(result->warnings, [](const auto& warning) {
+            return warning.find("image(s) with an invalid pose") != std::string::npos;
+        }));
+        EXPECT_TRUE(std::ranges::none_of(capture.messages(), [](const auto& message) {
+            return message.find("COLMAP import skipped") != std::string::npos;
+        }));
+    }
+
+    TEST_F(ColmapBinaryErrorTaxonomyTest, ValidTrackFilteredLoadEmitsNoWarning) {
+        std::vector<char> images;
+        append_pod(images, uint64_t{1});
+        append_image(images, 1, 1.0, 1, "valid.png", 0.0, true, 1);
+        std::vector<char> points;
+        append_pod(points, uint64_t{1});
+        append_point(points, 1, 1.0, 10, true);
+        write_bytes(temp_dir_ / "cameras.bin", valid_camera_file());
+        write_bytes(temp_dir_ / "images.bin", images);
+        write_bytes(temp_dir_ / "points3D.bin", points);
+        write_png(temp_dir_ / "images" / "valid.png");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = temp_dir_;
+        params.dataset.min_track_length = 1;
+        WarningCapture capture;
+        const auto result = lfs::training::loadTrainingData(params);
+        ASSERT_TRUE(result) << result.error().format();
+        ASSERT_EQ(std::get<lfs::io::LoadedScene>(result->data).cameras.size(), 1u);
+        EXPECT_TRUE(std::ranges::any_of(result->warnings, [](const auto& warning) {
+            return warning.find("min track length filter") != std::string::npos;
+        }));
+        EXPECT_TRUE(capture.messages().empty());
     }
 
     TEST_F(ColmapBinaryErrorTaxonomyTest, SkipsInvalidBinaryCameraAndPreservesValidIntrinsics) {

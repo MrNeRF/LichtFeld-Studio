@@ -4,6 +4,7 @@
 
 #include "colmap.hpp"
 #include "core/assert.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -111,7 +112,8 @@ namespace lfs::io {
 
             [[nodiscard]] std::optional<Diagnostic> to_diagnostic(
                 const lfs::ErrorCode code,
-                const std::string_view noun) const {
+                const std::string_view noun,
+                const std::string_view localized_key = {}) const {
                 if (empty()) {
                     return std::nullopt;
                 }
@@ -122,10 +124,14 @@ namespace lfs::io {
                     }
                     joined += samples_[i];
                 }
+                const std::string message = !localized_key.empty() &&
+                                                    lfs::event::LocalizationManager::getInstance().hasKey(localized_key)
+                                                ? LOCF(localized_key, skipped_, samples_.size(), joined)
+                                                : std::format("COLMAP import skipped {} {} ({} sampled: {})",
+                                                              skipped_, noun, samples_.size(), joined);
                 return Diagnostic{
                     .code = code,
-                    .message = std::format("COLMAP import skipped {} {} ({} sampled: {})",
-                                           skipped_, noun, samples_.size(), joined),
+                    .message = message,
                     .fields = lfs::SmallFields{}
                                   .add("skipped_count", static_cast<std::int64_t>(skipped_))
                                   .add("sample_ids", joined),
@@ -136,6 +142,15 @@ namespace lfs::io {
             size_t skipped_ = 0;
             std::vector<std::string> samples_;
         };
+
+        void append_invalid_pose_warning(const SkipTally& tally, std::vector<Diagnostic>& warnings) {
+            if (auto diagnostic = tally.to_diagnostic(
+                    lfs::ErrorCode::DataLoss, "image(s) with an invalid pose",
+                    "io.colmap_skipped_invalid_pose")) {
+                LOG_WARN("{}", diagnostic->message);
+                warnings.push_back(std::move(*diagnostic));
+            }
+        }
 
         constexpr size_t CANCEL_POLL_INTERVAL = 64;
         constexpr size_t IMAGE_METADATA_PROBE_LIMIT = 8192;
@@ -1741,10 +1756,7 @@ namespace lfs::io {
             SkipTally point2d_tally;
             auto images = read_images_binary(file_path, options, &pose_tally, &point2d_tally);
             std::vector<Diagnostic> warnings;
-            if (auto diagnostic = pose_tally.to_diagnostic(
-                    lfs::ErrorCode::DataLoss, "image(s) with an invalid pose")) {
-                warnings.push_back(std::move(*diagnostic));
-            }
+            append_invalid_pose_warning(pose_tally, warnings);
             if (auto diagnostic = point2d_tally.to_diagnostic(
                     lfs::ErrorCode::DataLoss, "point2D observation(s)")) {
                 warnings.push_back(std::move(*diagnostic));
@@ -4417,10 +4429,7 @@ namespace lfs::io {
             if (auto diagnostic = camera_tally.to_diagnostic(lfs::ErrorCode::DataLoss, "camera(s)")) {
                 outcome.warnings.push_back(std::move(*diagnostic));
             }
-            if (auto diagnostic = pose_tally.to_diagnostic(
-                    lfs::ErrorCode::DataLoss, "image(s) with an invalid pose")) {
-                outcome.warnings.push_back(std::move(*diagnostic));
-            }
+            append_invalid_pose_warning(pose_tally, outcome.warnings);
             if (auto diagnostic = point2d_tally.to_diagnostic(
                     lfs::ErrorCode::DataLoss, "point2D observation(s)")) {
                 outcome.warnings.push_back(std::move(*diagnostic));
@@ -4539,10 +4548,7 @@ namespace lfs::io {
             if (auto diagnostic = camera_tally.to_diagnostic(lfs::ErrorCode::DataLoss, "camera(s)")) {
                 outcome.warnings.push_back(std::move(*diagnostic));
             }
-            if (auto diagnostic = pose_tally.to_diagnostic(
-                    lfs::ErrorCode::DataLoss, "image(s) with an invalid pose")) {
-                outcome.warnings.push_back(std::move(*diagnostic));
-            }
+            append_invalid_pose_warning(pose_tally, outcome.warnings);
             return outcome;
         } catch (const LoadCancelledError& e) {
             return make_error(ErrorCode::CANCELLED, e.what(), base);

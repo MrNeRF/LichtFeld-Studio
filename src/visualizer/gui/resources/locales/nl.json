@@ -3,6 +3,7 @@
   "io.mesh_no_triangle_faces": "Het meshbestand bevat geen driehoekige vlakken.",
   "io.no_finite_seed_points": "De puntenwolk bevat geen beginpunten met eindige coördinaten. Er wordt willekeurige initialisatie gebruikt.",
   "io.mesh_nonfinite_vertices": "De mesh bevat niet-eindige hoekpuntcoördinaten.",
+  "io.colmap_skipped_invalid_pose": "Bij de COLMAP-import zijn afbeeldingen met een ongeldige pose overgeslagen (aantal: {}; voorbeelden: {} [{}])",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "GPU-geheugen van het proces volgens het besturingssysteem of GPU-stuurprogramma.",
   "ui.vram_process_unavailable_tooltip": "GPU-geheugen van het proces is niet beschikbaar. Het apparaatgebruik omvat andere toepassingen.",

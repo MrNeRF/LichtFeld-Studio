@@ -3,6 +3,7 @@
   "io.mesh_no_triangle_faces": "Die Meshdatei enthält keine Dreiecksflächen.",
   "io.no_finite_seed_points": "Die Punktwolke enthält keine endlichen Ausgangspunkte. Die Initialisierung erfolgt zufällig.",
   "io.mesh_nonfinite_vertices": "Das Mesh enthält nicht endliche Scheitelpunktkoordinaten.",
+  "io.colmap_skipped_invalid_pose": "COLMAP-Import: Bilder mit ungültiger Pose übersprungen (Anzahl: {}; Beispiele: {} [{}])",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "GPU-Speicher des Prozesses laut Betriebssystem oder GPU-Treiber.",
   "ui.vram_process_unavailable_tooltip": "GPU-Speicher des Prozesses ist nicht verfügbar. Die Gerätenutzung umfasst andere Anwendungen.",
