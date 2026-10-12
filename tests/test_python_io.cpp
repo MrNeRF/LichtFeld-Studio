@@ -890,6 +890,70 @@ protected:
     }
 };
 
+class TransformsImagePathTest : public TransformsMaskTest {};
+
+TEST_F(TransformsImagePathTest, WindowsSeparatorsLoadBothFramesFromFolderAndJson) {
+    const auto root = temp_dir / "image_separators";
+    write_dataset(root, {{{"file_path", "images\\front\\first.png"}},
+                         {{"file_path", "images\\back\\second.png"}}});
+    write_png(root / "images/front/first.png", 2, 2);
+    write_png(root / "images/back/second.png", 2, 2);
+
+    for (const auto& source : {root, root / "transforms.json"}) {
+        SCOPED_TRACE(lfs::core::path_to_utf8(source));
+        auto result = Loader::create()->load(source);
+        ASSERT_TRUE(result) << result.error().format();
+        const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+        ASSERT_EQ(cameras.size(), 2u);
+        EXPECT_EQ(cameras[0]->image_path(), root / "images/front/first.png");
+        EXPECT_EQ(cameras[1]->image_path(), root / "images/back/second.png");
+    }
+}
+
+TEST_F(TransformsImagePathTest, ForwardSlashesAndExtensionlessPngStillLoad) {
+    const auto root = temp_dir / "image_controls";
+    write_dataset(root, {{{"file_path", "images/front/first.png"}},
+                         {{"file_path", "./train/second"}}});
+    write_png(root / "images/front/first.png", 2, 2);
+    write_png(root / "train/second.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_EQ(cameras[0]->image_path(), root / "images/front/first.png");
+    EXPECT_EQ(cameras[1]->image_path(), root / "./train/second.png");
+}
+
+TEST_F(TransformsImagePathTest, ImagesFolderFallbackAcceptsBothSeparatorStyles) {
+    const auto root = temp_dir / "images_fallback";
+    write_dataset(root, {{{"file_path", "first.png"}},
+                         {{"file_path", "nested\\second.png"}}});
+    write_png(root / "images/first.png", 2, 2);
+    write_png(root / "images/nested/second.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_EQ(cameras[0]->image_path(), root / "images/first.png");
+    EXPECT_EQ(cameras[1]->image_path(), root / "images/nested/second.png");
+}
+
+#ifndef _WIN32
+TEST_F(TransformsImagePathTest, ExistingLiteralBackslashFilenameTakesPrecedence) {
+    const auto root = temp_dir / "literal_image";
+    const auto literal_image = root / "images\\frame.png";
+    write_dataset(root, {{{"file_path", "images\\frame.png"}}});
+    write_png(literal_image, 2, 2);
+    write_png(root / "images/frame.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    EXPECT_EQ(std::get<LoadedScene>(result->data).cameras.front()->image_path(), literal_image);
+}
+#endif
+
 TEST_F(TransformsMaskTest, ExplicitPathsOverrideDiscoveryForFolderAndJson) {
     const auto root = temp_dir / "explicit_masks";
     write_dataset(root, {{{"file_path", "images/front/000001.png"}, {"mask_path", "labels/front.png"}},

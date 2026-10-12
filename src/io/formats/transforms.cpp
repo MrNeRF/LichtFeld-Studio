@@ -223,20 +223,36 @@ namespace lfs::io {
     std::filesystem::path GetTransformImagePath(
         const std::filesystem::path& dir_path,
         const std::string& frame_file_path) {
-        // Use utf8_to_path for proper Unicode handling since JSON is UTF-8 encoded
-        const auto file_path = lfs::core::utf8_to_path(frame_file_path);
-        auto image_path = dir_path / file_path;
-        auto images_image_path = dir_path / "images" / file_path;
-        // Use path concatenation for proper Unicode handling
-        auto image_path_png = image_path;
-        image_path_png += ".png";
-        if (std::filesystem::exists(image_path_png)) {
-            // blender data set has not extension, must assumes png
-            image_path = image_path_png;
-            LOG_TRACE("Using PNG extension for image: {}", lfs::core::path_to_utf8(image_path));
-        }
-        if (std::filesystem::exists(images_image_path) && std::filesystem::is_regular_file(images_image_path)) {
-            image_path = images_image_path;
+        const auto resolve = [&](const std::string& path_text) {
+            // Use utf8_to_path for proper Unicode handling since JSON is UTF-8 encoded
+            const auto file_path = lfs::core::utf8_to_path(path_text);
+            auto image_path = dir_path / file_path;
+            auto images_image_path = dir_path / "images" / file_path;
+            // Use path concatenation for proper Unicode handling
+            auto image_path_png = image_path;
+            image_path_png += ".png";
+            if (std::filesystem::exists(image_path_png)) {
+                // blender data set has not extension, must assumes png
+                image_path = image_path_png;
+                LOG_TRACE("Using PNG extension for image: {}", lfs::core::path_to_utf8(image_path));
+            }
+            if (std::filesystem::exists(images_image_path) && std::filesystem::is_regular_file(images_image_path)) {
+                image_path = images_image_path;
+            }
+            return image_path;
+        };
+
+        auto image_path = resolve(frame_file_path);
+        if (frame_file_path.find('\\') != std::string::npos) {
+            // A backslash can also be part of a POSIX filename; keep a working literal path.
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(image_path, ec)) {
+                auto portable_path = frame_file_path;
+                std::replace(portable_path.begin(), portable_path.end(), '\\', '/');
+                const auto alternate = resolve(portable_path);
+                if (std::filesystem::is_regular_file(alternate, ec))
+                    image_path = alternate;
+            }
         }
         return image_path;
     }
