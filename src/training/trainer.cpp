@@ -3538,9 +3538,8 @@ namespace lfs::training {
 
             if (include_ssim) {
                 SSIM ssim_metric(true);
-                snapshot.ssim = ssim_metric.compute(
-                    rendered, gt_image,
-                    ssim_evaluation_mask(mask, prepared->erode_ssim_mask, camera.image_name(), rendered.stream()));
+                snapshot.ssim = ssim_metric.compute_evaluation(
+                    rendered, gt_image, mask, prepared->erode_ssim_mask, camera.image_name());
             }
         } catch (const std::exception& e) {
             return std::unexpected(e.what());

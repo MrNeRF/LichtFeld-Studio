@@ -100,6 +100,11 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& img2,
         bool apply_valid_padding = false);
 
+    // Evaluation-only normalized masked windows, [N,C,H,W], without backward buffers.
+    lfs::core::Tensor masked_ssim_map_forward(
+        const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
+        const lfs::core::Tensor& mask);
+
     // Computes a full-resolution error map [H, W] from SSIM without allocating backward buffers.
     void ssim_error_map_forward(
         const lfs::core::Tensor& img1,

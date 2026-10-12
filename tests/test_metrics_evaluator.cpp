@@ -15,6 +15,7 @@
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
 #include "training/dataset.hpp"
+#include "training/metrics/eval_mask.hpp"
 #include "training/metrics/metrics.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 
@@ -1742,6 +1743,88 @@ TEST(MetricsEvaluator, DepthMaskSelectsSolidPixelsInsideTheRange) {
             for (size_t i = 0; i < mask.size(); ++i)
                 EXPECT_EQ(mask[i], invert ? 1 - expected_row[i % kW] : expected_row[i % kW])
                     << i << " invert " << invert << " gut " << gut;
+        }
+    }
+    std::filesystem::remove_all(tmp);
+}
+
+TEST(MetricsEvaluator, IgnoredPaintCannotChangeSidecarAlphaOrFolderScores) {
+    if (!torch::cuda::is_available())
+        GTEST_SKIP() << "CUDA not available";
+    ensure_image_loader();
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_masked_windows";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp / "masks");
+    constexpr int h = 48, w = 64;
+    for (const bool thin : {false, true}) {
+        for (const int source : {0, 1, 2}) {
+            SCOPED_TRACE(::testing::Message() << "thin=" << thin << " source=" << source);
+            std::vector<float> scores;
+            std::vector<float> psnrs;
+            for (const bool painted : {false, true}) {
+                const auto stem = std::to_string(thin) + "_" + std::to_string(source) + "_" + std::to_string(painted);
+                const auto image_path = tmp / (stem + ".png");
+                const auto mask_path = tmp / "masks" / (stem + ".png");
+                const int channels = source == 1 ? 4 : 3;
+                std::vector<uint8_t> pixels(h * w * channels, 128), weights(h * w, 255);
+                for (int y = 0; y < h; ++y) {
+                    for (int x = 0; x < w; ++x) {
+                        const int p = y * w + x;
+                        const bool keep = thin ? (x >= 30 && x < 34) : !(x >= 20 && x < 44 && y >= 14 && y < 34);
+                        weights[p] = keep ? 255 : 0;
+                        if (channels == 4)
+                            pixels[p * channels + 3] = weights[p];
+                        if (painted && !keep) {
+                            pixels[p * channels] = 255;
+                            pixels[p * channels + 1] = pixels[p * channels + 2] = 0;
+                        }
+                    }
+                }
+                ASSERT_TRUE(lfs::core::save_png(image_path, pixels.data(), w, h, channels, 8, 0));
+                ASSERT_TRUE(lfs::core::save_png(mask_path, weights.data(), w, h, 1, 8, 0));
+                auto cam = std::make_shared<Camera>(
+                    Tensor::eye(3, Device::CUDA), Tensor::zeros({3}, Device::CUDA),
+                    64.0f, 64.0f, 32.0f, 24.0f, Tensor{}, Tensor{}, CameraModelType::PINHOLE,
+                    image_path.filename().string(), image_path,
+                    source == 0 ? mask_path : std::filesystem::path{}, w, h, 0);
+                if (source == 1)
+                    cam->set_has_alpha(true);
+                auto dataset = std::make_shared<CameraDataset>(std::vector<std::shared_ptr<Camera>>{cam},
+                                                               DatasetConfig{}, CameraDataset::Split::ALL);
+                auto params = make_eval_params(tmp / ("out_" + stem));
+                params.optimization.mask_mode = lfs::core::param::MaskMode::Ignore;
+                params.optimization.mask_threshold = 0.5f;
+                params.optimization.use_alpha_as_mask = source == 1;
+                if (source == 2)
+                    params.optimization.eval_mask = "masks:" + (tmp / "masks").string();
+                if (source == 1) {
+                    ASSERT_TRUE(cam->has_alpha());
+                    auto gt = Tensor::full({3, h, w}, 128.0f / 255.0f, Device::CUDA);
+                    const auto direct_mask = lfs::training::load_eval_mask(
+                        cam.get(), gt, true, lfs::training::metrics_mask_config_from(params));
+                    ASSERT_TRUE(direct_mask.is_valid());
+                    EXPECT_LT(direct_mask.to(DataType::Float32).mean().item<float>(), 1.0f);
+                }
+                std::filesystem::create_directories(params.dataset.output_path);
+                MetricsEvaluator evaluator(params);
+                if (source == 2)
+                    ASSERT_TRUE(evaluator.install_eval_mask_source({0, 0, 0}).has_value());
+                const auto render = [](Camera&, Camera&, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+                    lfs::training::RenderOutput output;
+                    output.image = Tensor::full({3, h, w}, 128.0f / 255.0f, Device::CUDA);
+                    return lfs::training::EvaluationRenderResult{.output = std::move(output)};
+                };
+                const auto result = evaluator.evaluate_views(1, dataset, {.render = render}, Tensor::zeros({3}, Device::CUDA));
+                ASSERT_TRUE(result.valid);
+                ASSERT_EQ(result.views.size(), 1u);
+                ASSERT_TRUE(result.views[0].masked);
+                ASSERT_TRUE(std::isfinite(result.ssim));
+                scores.push_back(result.ssim);
+                psnrs.push_back(result.psnr);
+            }
+            ASSERT_EQ(scores.size(), 2u);
+            EXPECT_NEAR(scores[0], scores[1], 1e-6f);
+            EXPECT_EQ(psnrs[0], psnrs[1]);
         }
     }
     std::filesystem::remove_all(tmp);

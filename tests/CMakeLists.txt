@@ -695,6 +695,7 @@ set(TEST_FILES
     test_lens_priors.cpp
     test_metrics_evaluator.cpp
     test_metrics_eval_mask.cpp
+    test_masked_ssim_metrics.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
     test_nvcodec_sentinel_validation.cpp

@@ -1857,6 +1857,126 @@ namespace {
         }
     }
 
+    // Evaluation needs only the map: normalized masked moments, without backward
+    // partials or contrast buffers. Keep the unmasked kernels independent.
+    template <typename TargetT, typename MaskT>
+    __global__ void maskedSSIMMapCUDA(
+        int H, int W, int CH, const float* __restrict__ pred,
+        const TargetT* __restrict__ target, const MaskT* __restrict__ mask,
+        float* __restrict__ map) {
+        const auto block = cg::this_thread_block();
+        const int start_y = block.group_index().y * BLOCK_Y;
+        const int start_x = block.group_index().x * BLOCK_X;
+        const int py = start_y + threadIdx.y, px = start_x + threadIdx.x;
+        const int b = block.group_index().z;
+        __shared__ float samples[SHARED_Y][SHARED_X][2];
+        __shared__ float weights[SHARED_Y][SHARED_X];
+        __shared__ float horizontal[CONV_Y][CONV_X][5];
+        bool all_one = true;
+        for (int i = block.thread_rank(); i < SHARED_Y * SHARED_X; i += BLOCK_X * BLOCK_Y) {
+            const int y = i / SHARED_X, x = i % SHARED_X;
+            const int gy = start_y + y - HALO, gx = start_x + x - HALO;
+            // Byte masks represent binary support, as in the training loss.
+            // Preserve zero-valued image padding outside the image with unit support.
+            const float value = gx >= 0 && gx < W && gy >= 0 && gy < H
+                                    ? mask_value(mask, gy * W + gx)
+                                    : 1.0f;
+            weights[y][x] = value;
+            all_one = all_one && value == 1.0f;
+        }
+        const bool full_support = __syncthreads_and(all_one);
+        const bool kept = px < W && py < H && weights[threadIdx.y + HALO][threadIdx.x + HALO] > 0.0f;
+        if (!__syncthreads_or(kept)) {
+            if (px < W && py < H)
+                for (int c = 0; c < CH; ++c)
+                    map[(b * CH + c) * H * W + py * W + px] = 1.0f;
+            return;
+        }
+        float inv_mass = 1.0f;
+        if (!full_support) {
+            const int x = threadIdx.x + HALO;
+            for (int y = threadIdx.y; y < CONV_Y; y += BLOCK_Y) {
+                float mass = weights[y][x] * cGauss[HALO];
+#pragma unroll
+                for (int d = 1; d <= HALO; ++d)
+                    mass += (weights[y][x - d] + weights[y][x + d]) * cGauss[HALO - d];
+                horizontal[y][threadIdx.x][0] = mass;
+            }
+            block.sync();
+            const int y = threadIdx.y + HALO;
+            float mass = horizontal[y][threadIdx.x][0] * cGauss[HALO];
+#pragma unroll
+            for (int d = 1; d <= HALO; ++d)
+                mass += (horizontal[y - d][threadIdx.x][0] + horizontal[y + d][threadIdx.x][0]) * cGauss[HALO - d];
+            // Tiny support is neutral, including when subnormals are retained.
+            inv_mass = mass >= 1.0e-30f ? 1.0f / mass : 0.0f;
+            block.sync();
+        }
+        for (int c = 0; c < CH; ++c) {
+            for (int i = block.thread_rank(); i < SHARED_Y * SHARED_X; i += BLOCK_X * BLOCK_Y) {
+                const int y = i / SHARED_X, x = i % SHARED_X;
+                const int gy = start_y + y - HALO, gx = start_x + x - HALO;
+                const bool supported = weights[y][x] > 0.0f;
+                samples[y][x][0] = supported ? get_pix_value(pred, b, c, gy, gx, CH, H, W) : 0.0f;
+                samples[y][x][1] = supported ? get_pix_value(target, b, c, gy, gx, CH, H, W) : 0.0f;
+            }
+            block.sync();
+            const int x = threadIdx.x + HALO;
+            for (int y = threadIdx.y; y < CONV_Y; y += BLOCK_Y) {
+                float sx = 0, sxx = 0, sy = 0, syy = 0, sxy = 0;
+#pragma unroll
+                for (int d = 1; d <= HALO; ++d) {
+                    const float w = cGauss[HALO - d];
+                    const float xl = samples[y][x - d][0], xr = samples[y][x + d][0];
+                    const float yl = samples[y][x - d][1], yr = samples[y][x + d][1];
+                    if (full_support) {
+                        sx += (xl + xr) * w;
+                        sxx += (xl * xl + xr * xr) * w;
+                        sy += (yl + yr) * w;
+                        syy += (yl * yl + yr * yr) * w;
+                        sxy += (xl * yl + xr * yr) * w;
+                    } else {
+                        const float ml = weights[y][x - d] * w, mr = weights[y][x + d] * w;
+                        sx += xl * ml + xr * mr;
+                        sxx += xl * xl * ml + xr * xr * mr;
+                        sy += yl * ml + yr * mr;
+                        syy += yl * yl * ml + yr * yr * mr;
+                        sxy += xl * yl * ml + xr * yr * mr;
+                    }
+                }
+                const float cx = samples[y][x][0], cy = samples[y][x][1];
+                const float wc = full_support ? cGauss[HALO] : cGauss[HALO] * weights[y][x];
+                horizontal[y][threadIdx.x][0] = sx + cx * wc;
+                horizontal[y][threadIdx.x][1] = sxx + cx * cx * wc;
+                horizontal[y][threadIdx.x][2] = sy + cy * wc;
+                horizontal[y][threadIdx.x][3] = syy + cy * cy * wc;
+                horizontal[y][threadIdx.x][4] = sxy + cx * cy * wc;
+            }
+            block.sync();
+            const int y = threadIdx.y + HALO;
+            float moments[5] = {};
+#pragma unroll
+            for (int d = 1; d <= HALO; ++d)
+#pragma unroll
+                for (int k = 0; k < 5; ++k)
+                    moments[k] += (horizontal[y - d][threadIdx.x][k] + horizontal[y + d][threadIdx.x][k]) * cGauss[HALO - d];
+#pragma unroll
+            for (int k = 0; k < 5; ++k)
+                moments[k] = (moments[k] + horizontal[y][threadIdx.x][k] * cGauss[HALO]) * inv_mass;
+            if (px < W && py < H) {
+                const float mx = moments[0], my = moments[2];
+                const float xx = mx * mx, yy = my * my;
+                const float vx = moments[1] - xx, vy = moments[3] - yy;
+                const float xy = moments[4] - mx * my;
+                constexpr float C1 = 0.01f * 0.01f, C2 = 0.03f * 0.03f;
+                const float A = xx + yy + C1, B = vx + vy + C2;
+                const float C = 2.0f * mx * my + C1, D = 2.0f * xy + C2;
+                map[(b * CH + c) * H * W + py * W + px] = kept ? (C * D) / (A * B) : 1.0f;
+            }
+            block.sync();
+        }
+    }
+
     template <typename Fn>
     void dispatch_target_ptr(const lfs::core::Tensor& target, Fn&& fn) {
         if (target.dtype() == lfs::core::DataType::UInt8) {
@@ -2042,6 +2162,31 @@ namespace lfs::training::kernels {
                 .original_h = H,
                 .original_w = W,
                 .apply_valid_padding = apply_valid_padding}};
+    }
+
+    lfs::core::Tensor masked_ssim_map_forward(
+        const lfs::core::Tensor& pred_input, const lfs::core::Tensor& target_input,
+        const lfs::core::Tensor& mask_input) {
+        auto images = prepare_loss_images(pred_input, target_input);
+        auto& pred = images.prediction;
+        auto& target = images.target;
+        const auto dtype = mask_input.dtype();
+        const auto mask = prepare_loss_mask(
+            mask_input.to(lfs::core::Device::CUDA).to(dtype == lfs::core::DataType::UInt8 || dtype == lfs::core::DataType::Bool ? dtype : lfs::core::DataType::Float32), pred);
+        auto map = lfs::core::Tensor::empty(pred.shape(), lfs::core::Device::CUDA);
+        const int N = pred.shape()[0], C = pred.shape()[1], H = pred.shape()[2], W = pred.shape()[3];
+        const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, N);
+        const dim3 block(BLOCK_X, BLOCK_Y);
+        dispatch_target_ptr(target, [&](auto* target_ptr) {
+            using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(target_ptr)>>;
+            dispatch_mask_ptr(mask, [&](auto* mask_ptr) {
+                using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
+                maskedSSIMMapCUDA<TargetT, MaskT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+                    H, W, C, pred.ptr<float>(), target_ptr, mask_ptr, map.ptr<float>());
+                LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_metric_map");
+            });
+        });
+        return map;
     }
 
     void ssim_error_map_forward(

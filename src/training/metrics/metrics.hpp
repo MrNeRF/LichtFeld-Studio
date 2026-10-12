@@ -53,7 +53,14 @@ namespace lfs::training {
         float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
                       const lfs::core::Tensor& mask = {});
 
+        // Preserve complete-window scoring where available; normalize partial windows.
+        float compute_evaluation(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
+                                 const lfs::core::Tensor& mask, bool complete_windows_only,
+                                 std::string_view camera_name);
+
     private:
+        float compute_impl(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
+                           const lfs::core::Tensor& mask, bool normalize_windows);
         bool apply_valid_padding_;
     };
 
