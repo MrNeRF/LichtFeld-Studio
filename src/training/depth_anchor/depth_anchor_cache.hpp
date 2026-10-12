@@ -50,12 +50,11 @@ namespace lfs::training {
         int max_width,
         const DepthAnchorProgress& progress = {});
 
-    // Fingerprints only the inputs that both producers (trainer, preprocess) see
-    // identically and that meaningfully change the fit: per-camera intrinsics,
-    // pose, and depth-file identity (size+mtime). Cloud subsample (max_cap) and
-    // prior resolution are deliberately excluded — the robust fit is invariant to
-    // them, and they differ between the two producers.
+    // Fingerprints the fit's seed geometry, camera observations, intrinsics,
+    // pose, and depth-file metadata and content. Startup only: the cloud is
+    // copied to the host once. Different cloud subsets conservatively miss.
     [[nodiscard]] DepthAnchorFingerprint computeAnchorFingerprint(
+        const lfs::core::Tensor& means,
         const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras);
 
     // Sidecar lives next to the depth priors it aligns: derived from the shared

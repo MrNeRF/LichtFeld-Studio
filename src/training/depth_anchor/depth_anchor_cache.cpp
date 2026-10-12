@@ -327,6 +327,7 @@ namespace lfs::training {
     }
 
     DepthAnchorFingerprint computeAnchorFingerprint(
+        const lfs::core::Tensor& means,
         const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
 
         DepthAnchorFingerprint fingerprint;
@@ -334,6 +335,15 @@ namespace lfs::training {
 
         std::uint64_t hash = 0xcbf29ce484222325ull;
         hash_scalar(hash, kSchemaVersion);
+        // Keep the sidecar layout; invalidate keys made before geometry/content hashing.
+        constexpr std::uint64_t input_revision = 1;
+        hash_scalar(hash, input_revision);
+        const std::uint64_t point_values = means.is_valid() ? means.numel() : 0;
+        hash_scalar(hash, point_values);
+        if (point_values) {
+            const auto host = means.cpu().contiguous();
+            hash_bytes(hash, host.ptr<float>(), point_values * sizeof(float));
+        }
 
         std::vector<const lfs::core::Camera*> depth_cameras;
         depth_cameras.reserve(cameras.size());
@@ -373,6 +383,14 @@ namespace lfs::training {
                 }
             }
 
+            const auto& observations = cam->sfm_observations();
+            hash_scalar(hash, static_cast<std::uint64_t>(observations.size()));
+            for (const auto& observation : observations) {
+                hash_scalar(hash, observation.x);
+                hash_scalar(hash, observation.y);
+                hash_scalar(hash, observation.z);
+            }
+
             std::error_code ec;
             const auto size = std::filesystem::file_size(cam->depth_path(), ec);
             hash_scalar(hash, ec ? std::uint64_t{0} : static_cast<std::uint64_t>(size));
@@ -380,6 +398,16 @@ namespace lfs::training {
             const auto mtime = std::filesystem::last_write_time(cam->depth_path(), ec);
             const long long ticks = ec ? 0 : static_cast<long long>(mtime.time_since_epoch().count());
             hash_scalar(hash, ticks);
+
+            std::ifstream depth(cam->depth_path(), std::ios::binary);
+            std::array<char, 64 * 1024> buffer;
+            while (depth.read(buffer.data(), buffer.size()) || depth.gcount() > 0) {
+                hash_bytes(hash, buffer.data(), static_cast<std::size_t>(depth.gcount()));
+            }
+            if (!depth.eof() || depth.bad()) {
+                // An incomplete fingerprint must neither reuse nor publish a cache.
+                return {};
+            }
         }
 
         fingerprint.hash = hash;
@@ -400,7 +428,7 @@ namespace lfs::training {
         const std::filesystem::path& path,
         const RawDepthAnchorMap& anchors,
         const DepthAnchorFingerprint& fingerprint) {
-        if (path.empty()) {
+        if (path.empty() || fingerprint.version != kSchemaVersion) {
             return false;
         }
 
@@ -435,7 +463,7 @@ namespace lfs::training {
         const std::filesystem::path& path,
         const DepthAnchorFingerprint& expected) {
         std::error_code ec;
-        if (path.empty() || !std::filesystem::exists(path, ec)) {
+        if (expected.version != kSchemaVersion || path.empty() || !std::filesystem::exists(path, ec)) {
             return std::nullopt;
         }
         std::ifstream file(path, std::ios::binary);

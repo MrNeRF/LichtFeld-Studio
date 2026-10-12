@@ -924,7 +924,7 @@ namespace {
             }
             means = means.to(lfs::core::Device::CUDA);
 
-            const auto fingerprint = lfs::training::computeAnchorFingerprint(scene->cameras);
+            const auto fingerprint = lfs::training::computeAnchorFingerprint(means, scene->cameras);
 
             std::optional<indicators::ProgressBar> anchor_bar;
             lfs::training::DepthAnchorProgress progress;

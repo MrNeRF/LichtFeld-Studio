@@ -2437,7 +2437,7 @@ namespace lfs::training {
 
         nvtxRangePush("depth_anchors/fingerprint");
         const auto fingerprint_start = std::chrono::steady_clock::now();
-        const auto fingerprint = computeAnchorFingerprint(cameras);
+        const auto fingerprint = computeAnchorFingerprint(means, cameras);
         const auto fingerprint_ms = phase_ms(fingerprint_start);
         nvtxRangePop();
 
