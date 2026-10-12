@@ -949,17 +949,29 @@ namespace lfs::vis {
             if (!target ||
                 !target->unit ||
                 !target->unit->interop.valid() ||
-                target->unit->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
                 target->valid_size != params.scene_image_size ||
-                scene.source_generation == 0 ||
-                target->uploaded_source_generation != scene.source_generation) {
+                scene.source_generation == 0) {
+                return false;
+            }
+            // Params may be bound before recordFrameBarriers records this frame's
+            // upload, so a slot whose upload of the current content is queued is
+            // bound in its post-upload state; otherwise every new image would
+            // present without a scene image until a later frame re-binds it.
+            const bool upload_queued = std::ranges::any_of(
+                pending_frame_barriers_, [&](const PendingFrameBarrier& pending) {
+                    return pending.target == target.get() &&
+                           pending.source_generation == scene.source_generation;
+                });
+            if (!upload_queued &&
+                (target->unit->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
+                 target->uploaded_source_generation != scene.source_generation)) {
                 return false;
             }
 
             params.external_scene_image = target->unit->image.image;
             params.external_scene_image_view = target->unit->image.view;
-            params.external_scene_image_layout = target->unit->layout;
-            params.external_scene_image_generation = target->generation;
+            params.external_scene_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            params.external_scene_image_generation = upload_queued ? target->generation + 1 : target->generation;
             params.scene_image_size = target->valid_size;
             params.scene_image_alloc_size = target->alloc_size;
             return true;
