@@ -741,6 +741,7 @@ set(TEST_FILES
     test_image_io.cpp
     test_project_thumbnail_image.cpp
     test_mask_cache_endpoints.cpp
+    test_mask_color_consistency.cpp
     test_camera_mask_threshold.cpp
     test_camera_thumbnail_policy.cpp
     test_undistort.cpp

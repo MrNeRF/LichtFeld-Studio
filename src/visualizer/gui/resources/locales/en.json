@@ -1,4 +1,5 @@
 {
+  "io.mask_decode_failed": "Failed to decode mask",
   "io.dataset_image_unreadable_one": "Dataset image '{}' cannot be read. Its camera remains in the scene, but training may fail when it is used.",
   "io.dataset_image_unreadable_many": "{} dataset images cannot be read (examples: {}). Their cameras remain in the scene, but training may fail when they are used.",
   "training.unreadable_image": "A training image could not be read. Open Details for the file and decoder error.",

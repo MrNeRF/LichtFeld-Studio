@@ -1,4 +1,5 @@
 {
+  "io.mask_decode_failed": "No se pudo decodificar la máscara",
   "io.dataset_image_unreadable_one": "No se puede leer la imagen '{}' del conjunto de datos. Su cámara permanece en la escena, pero el entrenamiento puede fallar al usarla.",
   "io.dataset_image_unreadable_many": "No se pueden leer {} imágenes del conjunto de datos (ejemplos: {}). Sus cámaras permanecen en la escena, pero el entrenamiento puede fallar al usarlas.",
   "training.unreadable_image": "No se pudo leer una imagen de entrenamiento. Abra Detalles para ver el archivo y el error del decodificador.",

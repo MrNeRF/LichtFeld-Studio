@@ -1,4 +1,5 @@
 {
+  "io.mask_decode_failed": "Maske konnte nicht dekodiert werden",
   "io.dataset_image_unreadable_one": "Das Datensatzbild '{}' kann nicht gelesen werden. Die Kamera bleibt in der Szene, aber das Training kann bei seiner Verwendung fehlschlagen.",
   "io.dataset_image_unreadable_many": "{} Datensatzbilder können nicht gelesen werden (Beispiele: {}). Ihre Kameras bleiben in der Szene, aber das Training kann bei ihrer Verwendung fehlschlagen.",
   "training.unreadable_image": "Ein Trainingsbild konnte nicht gelesen werden. Unter Details finden Sie die Datei und den Decoderfehler.",

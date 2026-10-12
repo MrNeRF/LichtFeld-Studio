@@ -609,7 +609,8 @@ namespace lfs::core {
             .path = path,
             .resize_factor = warp_full_resolution ? 1 : resize_factor,
             .max_width = warp_full_resolution ? 0 : max_width,
-            .stream = _stream};
+            .stream = _stream,
+            .mask_grayscale = true};
 
         mask = load_image_cached(params);
 

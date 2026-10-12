@@ -1,4 +1,5 @@
 {
+  "io.mask_decode_failed": "Impossibile decodificare la maschera",
   "io.dataset_image_unreadable_one": "Impossibile leggere l’immagine '{}' del set di dati. La sua fotocamera resta nella scena, ma il suo utilizzo può interrompere l’addestramento.",
   "io.dataset_image_unreadable_many": "Impossibile leggere {} immagini del set di dati (esempi: {}). Le loro fotocamere restano nella scena, ma il loro utilizzo può interrompere l’addestramento.",
   "training.unreadable_image": "Impossibile leggere un’immagine di addestramento. Apri Dettagli per vedere il file e l’errore del decodificatore.",

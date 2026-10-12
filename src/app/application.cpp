@@ -97,7 +97,8 @@ namespace lfs::app {
                  .max_width = p.max_width,
                  .cuda_stream = p.stream,
                  .output_uint8 = p.output_uint8,
-                 .skip_blob_cache = p.skip_blob_cache});
+                 .skip_blob_cache = p.skip_blob_cache,
+                 .mask_grayscale = p.mask_grayscale});
         });
     }
 

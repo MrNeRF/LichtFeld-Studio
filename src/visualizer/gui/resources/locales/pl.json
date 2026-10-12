@@ -1,4 +1,5 @@
 {
+  "io.mask_decode_failed": "Nie udało się zdekodować maski",
   "io.dataset_image_unreadable_one": "Nie można odczytać obrazu zestawu danych '{}'. Jego kamera pozostaje w scenie, ale użycie obrazu może spowodować niepowodzenie treningu.",
   "io.dataset_image_unreadable_many": "Nie można odczytać {} obrazów zestawu danych (przykłady: {}). Ich kamery pozostają w scenie, ale użycie tych obrazów może spowodować niepowodzenie treningu.",
   "training.unreadable_image": "Nie można odczytać obrazu treningowego. Otwórz Szczegóły, aby zobaczyć plik i błąd dekodera.",

@@ -3040,6 +3040,14 @@ namespace lfs::io {
                         }
                     }
 
+                    if (!used_gpu && item.is_mask) {
+                        auto mask_params = item.params;
+                        mask_params.cuda_stream = aux_stream;
+                        mask_params.resize_factor = item.undistort ? 1 : item.params.resize_factor;
+                        mask_params.max_width = item.undistort ? 0 : item.params.max_width;
+                        aux_tensor = load_mask_image_cpu_decoded(item.path, mask_params).squeeze(0);
+                        used_gpu = true;
+                    }
                     if (!used_gpu) {
                         int src_w = 0;
                         int src_h = 0;

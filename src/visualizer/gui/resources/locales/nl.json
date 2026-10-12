@@ -1,4 +1,5 @@
 {
+  "io.mask_decode_failed": "Masker kon niet worden gedecodeerd",
   "io.dataset_image_unreadable_one": "Datasetafbeelding '{}' kan niet worden gelezen. De camera blijft in de scène, maar de training kan mislukken wanneer deze afbeelding wordt gebruikt.",
   "io.dataset_image_unreadable_many": "{} datasetafbeeldingen kunnen niet worden gelezen (voorbeelden: {}). Hun camera's blijven in de scène, maar de training kan mislukken wanneer ze worden gebruikt.",
   "training.unreadable_image": "Een trainingsafbeelding kon niet worden gelezen. Open Details voor het bestand en de decoderfout.",

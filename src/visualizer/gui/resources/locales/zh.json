@@ -1,4 +1,5 @@
 {
+  "io.mask_decode_failed": "无法解码遮罩",
   "io.dataset_image_unreadable_one": "无法读取数据集图像“{}”。对应的相机仍保留在场景中，但使用该图像时训练可能失败。",
   "io.dataset_image_unreadable_many": "无法读取 {} 张数据集图像（例如：{}）。对应的相机仍保留在场景中，但使用这些图像时训练可能失败。",
   "training.unreadable_image": "无法读取训练图像。打开“详细信息”查看文件和解码器错误。",
