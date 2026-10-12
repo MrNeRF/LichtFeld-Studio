@@ -2214,6 +2214,7 @@ namespace lfs::io {
                     (gpu_encoding_enabled || completed_count != estimated_total || completed_count == 0))
                     params.progress_callback(completed_count, completed_count, skipped_count);
 
+                check_sink(sink.prepareComplete({media::SinkOutcome::Completed, accepted_frames, {}}));
                 if (!custom_sink && params.generate_metadata && !saved_frames.empty()) {
                     const std::filesystem::path meta_path = params.output_dir / "extraction_metadata.json";
                     try {

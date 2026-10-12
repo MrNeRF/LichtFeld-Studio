@@ -23,4 +23,11 @@ namespace lfs::core {
         const std::filesystem::path&, const AtomicFileWriter&, const AtomicFileOptions& = {});
     [[nodiscard]] LFS_FILE_IO_API Status writeTextFileAtomically(
         const std::filesystem::path&, std::string_view, const AtomicFileOptions& = {});
+    // Publish a closed, regular staged file on the same filesystem without
+    // replacing the destination or copying its contents. No durability flush.
+    // Failure preserves the staged file; success consumes it where possible.
+    // An unsupported-filesystem reservation can remain empty after process death.
+    [[nodiscard]] LFS_FILE_IO_API Status publishStagedFileAtomically(
+        const std::filesystem::path& staged, const std::filesystem::path& target,
+        const std::function<bool()>& cancelled = {});
 } // namespace lfs::core
