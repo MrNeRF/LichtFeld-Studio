@@ -870,7 +870,19 @@ namespace lfs::vis {
         const RenderSettings& new_settings, const SceneUpscalerPresetUpdate preset_update) {
         if (auto result = validateSettingsFromUser(new_settings); !result)
             return result;
-        updateSettings(new_settings, DirtyFlag::ALL, preset_update);
+        const auto previous = getSettings();
+        const bool orthographic_selected = new_settings.orthographic && !previous.orthographic &&
+                                           previous.equirectangular;
+        if (new_settings.orthographic && new_settings.equirectangular) {
+            auto projection_settings = new_settings;
+            if (orthographic_selected)
+                projection_settings.equirectangular = false;
+            else
+                projection_settings.orthographic = false;
+            updateSettings(projection_settings, DirtyFlag::ALL, preset_update);
+        } else {
+            updateSettings(new_settings, DirtyFlag::ALL, preset_update);
+        }
         return {};
     }
 
@@ -924,6 +936,8 @@ namespace lfs::vis {
             return false;
         auto& target_state = viewState(target_view);
         RenderSettings sanitized_settings = new_settings;
+        if (sanitized_settings.equirectangular)
+            sanitized_settings.orthographic = false;
         if (const auto requested = sceneUpscalerBackendFromId(sanitized_settings.scene_upscaler);
             requested && !sceneUpscalerBackendAvailable(*requested)) {
             std::string previous_backend_id;
@@ -1185,6 +1199,8 @@ namespace lfs::vis {
                                        : 100.0f;
         }
         settings.orthographic = enabled;
+        if (enabled)
+            settings.equirectangular = false;
         updateSettings(settings, DirtyFlag::CAMERA);
     }
 

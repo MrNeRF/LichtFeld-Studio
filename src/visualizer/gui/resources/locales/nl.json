@@ -5234,5 +5234,7 @@
   "node_editor.ramp_hint": "Versleep kleurstops; klik om toe te voegen, dubbelklik of Delete om te verwijderen. Selecteer een stop om RGBA te wijzigen.",
   "node_editor.keyframe_hint": "Sleutelframe invoegen · Ctrl+klik of I onder de muisaanwijzer",
   "toolbar.asset_manager": "Projecten",
-  "training.reset_before_strategy_change": "Reset de training voordat u de strategie wijzigt."
+  "training.reset_before_strategy_change": "Reset de training voordat u de strategie wijzigt.",
+  "io.no_finite_seed_points": "De puntenwolk bevat geen beginpunten met eindige coördinaten. Er wordt willekeurige initialisatie gebruikt.",
+  "io.mesh_no_triangle_faces": "Het meshbestand bevat geen driehoekige vlakken."
 }

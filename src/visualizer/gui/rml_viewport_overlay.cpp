@@ -1204,7 +1204,8 @@ namespace lfs::vis::gui {
             // Admit them explicitly, as the sidebar's hasFocusedKeyboardTarget does.
             const bool text_focus = publishOverlayTextFocus(focused);
             const bool select_focus = !text_focus && rml_input::isSelectRelatedElement(focused);
-            if (text_focus || select_focus) {
+            if (text_focus || select_focus ||
+                (keyboard_event && rml_input::hasFocusedKeyboardTarget(focused))) {
                 wants_input_ = true;
                 auto* const handler = rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
                 for (const auto& event : input.input_events) {

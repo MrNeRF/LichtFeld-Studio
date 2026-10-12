@@ -652,6 +652,7 @@ class SectionBinding:
         self._handle = None
         self._edit_snapshots = {}
         self._cancelled_edits = set()
+        self._last_native_text = {}
         self.sync_text_bufs(publish=False)
 
     def input_key(self, prop_id):
@@ -719,23 +720,30 @@ class SectionBinding:
             precision=row["precision"],
         )
 
-    def sync_text_bufs(self, publish=True):
+    def sync_text_bufs(self, publish=True, *, properties=None, preserve_active=False,
+                       only_changed=False):
         changed = False
+        affected = False
         for row in self.rows:
+            if properties is not None and row["id"] not in properties:
+                continue
+            affected = True
             if row["kind"] != "number":
                 continue
             prop_id = row["id"]
             canonical = self.canonical_text(prop_id)
+            previous = self._last_native_text.get(prop_id)
+            self._last_native_text[prop_id] = canonical
+            if only_changed and previous == canonical:
+                continue
             if prop_id in self._edit_snapshots:
-                # Unrelated refreshes must not replace an uncommitted draft.
-                # A changed authoritative value (including rollback) still wins.
-                if self._edit_snapshots[prop_id] == canonical:
+                if preserve_active or self._edit_snapshots[prop_id] == canonical:
                     continue
                 self._edit_snapshots[prop_id] = canonical
             key = self.input_key(prop_id)
             changed |= self._text_bufs.get(key) != canonical
             self._text_bufs[key] = canonical
-        if publish:
+        if publish and affected:
             self._request_publish()
         return changed
 

@@ -5234,5 +5234,7 @@
   "node_editor.ramp_hint": "Przeciągaj znaczniki; kliknij, aby dodać, kliknij dwukrotnie lub Delete, aby usunąć. Zaznacz znacznik, aby zmienić RGBA.",
   "node_editor.keyframe_hint": "Wstaw klatkę kluczową · Ctrl+kliknięcie lub I po najechaniu kursorem",
   "toolbar.asset_manager": "Projekty",
-  "training.reset_before_strategy_change": "Zresetuj trening przed zmianą strategii."
+  "training.reset_before_strategy_change": "Zresetuj trening przed zmianą strategii.",
+  "io.no_finite_seed_points": "Chmura punktów nie zawiera punktów początkowych o skończonych współrzędnych. Zostanie użyta losowa inicjalizacja.",
+  "io.mesh_no_triangle_faces": "Plik siatki nie zawiera trójkątnych ścian."
 }

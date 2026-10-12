@@ -5234,5 +5234,7 @@
   "node_editor.ramp_hint": "Drag stops to move them. Click to add; double-click or Delete to remove. Select a stop to edit RGBA.",
   "node_editor.keyframe_hint": "Insert keyframe · Ctrl+click or I while hovering",
   "toolbar.asset_manager": "Projects",
-  "training.reset_before_strategy_change": "Reset training before changing strategy."
+  "training.reset_before_strategy_change": "Reset training before changing strategy.",
+  "io.no_finite_seed_points": "The point cloud contains no finite seed points. Using random initialization.",
+  "io.mesh_no_triangle_faces": "The mesh file contains no triangle faces."
 }

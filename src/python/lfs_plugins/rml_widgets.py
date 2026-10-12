@@ -199,6 +199,10 @@ class EscapeRevertController:
         """
         self._capture_binding(str(key))
 
+    def is_editing(self, key):
+        binding = self._bindings.get(str(key))
+        return binding is not None and binding.snapshot is not None
+
     def _restore_binding(self, key, event):
         binding = self._bindings.get(key)
         if binding is None or binding.element.parent() is None:

@@ -69,6 +69,7 @@ class ImagePreviewPanel(Panel):
         self._dragging = False
         self._drag_start_x = 0.0
         self._drag_start_y = 0.0
+        self._drag_dp_ratio = 1.0
         self._drag_start_pan_x = 0.0
         self._drag_start_pan_y = 0.0
         self._hover_image = False
@@ -78,6 +79,9 @@ class ImagePreviewPanel(Panel):
         self._handle = None
         self._dirty = True
         self._prev_image_index = -1
+        self._layout_show_info = None
+        self._layout_show_filmstrip = None
+        self._layout_pending = False
 
         self._active_layer = "a"
         self._crossfade_pending = False
@@ -174,6 +178,8 @@ class ImagePreviewPanel(Panel):
     def on_mount(self, doc):
         super().on_mount(doc)
         self._doc = doc
+        self._layout_show_info = None
+        self._layout_show_filmstrip = None
 
         for eid, handler in [
             ("nav-prev", lambda _ev: self._navigate(-1)),
@@ -237,6 +243,10 @@ class ImagePreviewPanel(Panel):
             self._dirty = True
 
         needs_redraw = False
+        if self._layout_pending:
+            self._layout_pending = False
+            self._update_main_image(doc, bool(self._image_paths))
+            needs_redraw = True
 
         if self._crossfade_pending:
             if time.monotonic() - self._crossfade_start >= CROSSFADE_DURATION:
@@ -538,6 +548,7 @@ class ImagePreviewPanel(Panel):
         if self._fit_to_window:
             return
         self._dragging = True
+        self._drag_dp_ratio = max(1.0, lf.ui.get_ui_scale())
         self._drag_start_x = float(event.get_parameter("mouse_x", "0"))
         self._drag_start_y = float(event.get_parameter("mouse_y", "0"))
         self._drag_start_pan_x = self._pan_x
@@ -551,8 +562,8 @@ class ImagePreviewPanel(Panel):
             return
         mx = float(event.get_parameter("mouse_x", "0"))
         my = float(event.get_parameter("mouse_y", "0"))
-        self._pan_x = self._drag_start_pan_x + (mx - self._drag_start_x)
-        self._pan_y = self._drag_start_pan_y + (my - self._drag_start_y)
+        self._pan_x = self._drag_start_pan_x + (mx - self._drag_start_x) / self._drag_dp_ratio
+        self._pan_y = self._drag_start_pan_y + (my - self._drag_start_y) / self._drag_dp_ratio
         self._mark_dirty()
 
     def _on_img_mouseover(self, _event):
@@ -677,6 +688,15 @@ class ImagePreviewPanel(Panel):
         self._update_nav_arrows(doc, has_images)
         self._update_view_controls(doc, has_images)
         self._update_status(doc, has_images)
+
+        if (self._show_info != self._layout_show_info
+                or self._show_filmstrip != self._layout_show_filmstrip):
+            self._layout_show_info = self._show_info
+            self._layout_show_filmstrip = self._show_filmstrip
+            # RmlUI resolves chrome visibility after this hook. Measure once more
+            # using the resulting viewport, without repeating metadata refresh.
+            self._layout_pending = True
+            self._request_model_update()
 
         if hasattr(self, '_handle'):
             self._handle.dirty("panel_label")
