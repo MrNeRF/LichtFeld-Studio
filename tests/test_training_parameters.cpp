@@ -136,6 +136,7 @@ namespace {
             {"growth_grad_threshold", {"mrnf"}},
             {"grow_fraction", {"mrnf"}},
             {"grow_until_iter", {"mrnf"}},
+            {"growth_exchange", {"mrnf"}},
             {"opacity_decay", {"mrnf"}},
             {"scale_decay", {"mrnf"}},
             {"means_noise_weight", {"mrnf"}},

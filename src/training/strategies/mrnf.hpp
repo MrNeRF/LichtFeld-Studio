@@ -23,6 +23,9 @@ namespace lfs::training::sh_value {
 }
 
 class MRNFStrategyTest_PermutationRepublishesFarMask_Test;
+class MRNFStrategyTest_GrowthExchangeFreesOnlySplatsLowInCoverageAndPeak_Test;
+class MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;
+class MRNFStrategyTest_RemoveGaussiansKeepsGrowthExchangeStateAligned_Test;
 class MRNFStrategyTest_LateLrAnnealDecaysOpacityAndColorAfterGrowth_Test;
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
@@ -132,6 +135,9 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
         friend class ::MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
         friend class ::MRNFStrategyTest_LateLrAnnealDecaysOpacityAndColorAfterGrowth_Test;
+        friend class ::MRNFStrategyTest_GrowthExchangeFreesOnlySplatsLowInCoverageAndPeak_Test;
+        friend class ::MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;
+        friend class ::MRNFStrategyTest_RemoveGaussiansKeepsGrowthExchangeStateAligned_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -140,20 +146,23 @@ namespace lfs::training {
 
         // Growth exchange (growth_exchange > 0). At max_cap MRNF's error-guided growth has
         // no budget; each refine frees the least important splats so growth can respend
-        // them. Importance is the peak per-pixel blend weight (FastGS backward; summed
-        // visibility elsewhere), kept as a leaky max that halves once per pass over the
-        // training views so splats seen only in rare views keep their score.
+        // them. A splat is least important when it ranks low both by coverage (summed blend
+        // weight) and by peak per-pixel blend weight (FastGS backward; coverage alone
+        // elsewhere). Both are leaky maxima that halve once per pass over the training
+        // views, so splats seen only in rare views keep their score.
         [[nodiscard]] bool growth_exchange_active(int iter) const;
         [[nodiscard]] float exchange_importance_decay() const;
         [[nodiscard]] int exchange_warmup_windows() const;
+        void reset_exchange_state();
         void update_exchange_importance();
-        // Frees up to count least important splats; nothing while growth has no demand.
-        size_t exchange_least_important(size_t count);
-        // Newly grown rows start with full importance, so they are not exchanged before
-        // they have been seen.
-        void protect_exchange_newborns();
+        // Frees up to count least important splats; nothing while growth has no candidates.
+        size_t exchange_least_important(size_t count, const lfs::core::Tensor& refine_candidates);
+        // Marks rows filled by growth as newborn: no importance yet and not ranked until a
+        // full pass over the training views has scored them.
+        void record_exchange_births();
         void refine(int iter);
-        void grow_and_split(int iter, int pruned_count);
+        // refine_candidates defaults to compute_refine_candidates().
+        void grow_and_split(int iter, int pruned_count, lfs::core::Tensor refine_candidates = {});
         // Splits the given parents and places their children (free slots first,
         // then appended rows) in chunks of at most chunk_rows children.
         // Returns {children placed in free slots, children appended}.
@@ -237,8 +246,10 @@ namespace lfs::training {
         lfs::core::Tensor _free_mask;
         bool _topology_frozen = false;
 
-        // Growth exchange state; transient (rebuilt after a resume or compaction).
-        lfs::core::Tensor _exchange_importance;         // [N] leaky max of the window signal
+        // Growth exchange state; transient (rebuilt after a resume).
+        lfs::core::Tensor _exchange_coverage;           // [N] leaky max of the window's summed blend weight
+        lfs::core::Tensor _exchange_peak;               // [N] leaky max of the window's peak blend weight
+        lfs::core::Tensor _exchange_birth;              // [N] window in which the row was last filled
         lfs::core::Tensor _exchange_dominance;          // [N] window peak blend weight (backward)
         lfs::core::Tensor _exchange_free_before_growth; // free slots right before growth
         int _exchange_windows = 0;                      // windows in the current importance memory
