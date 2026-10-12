@@ -206,6 +206,10 @@ class EscapeRevertController:
         element.add_event_listener("escapecancel", lambda event, k=binding_key: self._restore_binding(k, event))
         return element
 
+    def is_editing(self, key):
+        binding = self._bindings.get(str(key))
+        return binding is not None and binding.snapshot is not None
+
     def _restore_binding(self, key, event):
         binding = self._bindings.get(key)
         if binding is None or binding.element.parent() is None:

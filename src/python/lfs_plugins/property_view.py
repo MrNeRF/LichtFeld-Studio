@@ -691,14 +691,18 @@ class SectionBinding:
             precision=row["precision"],
         )
 
-    def sync_text_bufs(self, publish=True):
+    def sync_text_bufs(self, publish=True, *, properties=None, preserve_active=False):
+        affected = False
         for row in self.rows:
-            if row["kind"] != "number":
+            if properties is not None and row["id"] not in properties:
+                continue
+            affected = True
+            if row["kind"] != "number" or (preserve_active and row["id"] in self._edit_snapshots):
                 continue
             self._text_bufs[self.input_key(row["id"])] = self.canonical_text(
                 row["id"]
             )
-        if publish:
+        if publish and affected:
             self._request_publish()
 
     def update_draft(self, prop_id, value):

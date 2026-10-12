@@ -253,6 +253,10 @@ class TrainingPanel(Panel):
         self._psnr_tick_min = ""
         self._last_language_generation = -1
         self._reactive_binding = PanelStateBinding()
+        self._param_subscriptions = []
+        self._params_subscription_generation = 0
+        self._params_changed = set()
+        self._params_refresh_pending = False
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
         self._deferred_update_generation = 0
@@ -1052,27 +1056,34 @@ class TrainingPanel(Panel):
         else:
             self._mark_text_buf_dirty(key)
 
-    def _sync_text_bufs(self):
-        p = lf.optimization_params()
-        d = lf.dataset_params()
-        if p and p.has_params():
-            self._text_bufs["ppisp_activation_step_str"] = (
-                f"{_display_ppisp_activation_step(p):,}"
+    def _sync_text_bufs(self, changed=None):
+        preserve_active = changed is not None
+        strategy_changed = changed is not None and "optimization.strategy" in changed
+        manual_fields = {
+            "ppisp_activation_step_str": "optimization.ppisp_controller_activation_step",
+            "max_width_str": "dataset.max_width",
+            "test_every_str": "dataset.test_every",
+            "eval_mask_spec_str": "optimization.eval_mask",
+            "new_step_str": None,
+        }
+        for key, path in manual_fields.items():
+            affected = changed is None or path in changed or (
+                strategy_changed and path and path.startswith("optimization.")
             )
-        else:
-            self._text_bufs["ppisp_activation_step_str"] = ""
-        self._text_bufs["max_width_str"] = (
-            f"{d.max_width:,}" if d and d.has_params() else ""
-        )
-        self._text_bufs["test_every_str"] = (
-            f"{d.test_every:,}" if d and d.has_params() else "8"
-        )
-        self._text_bufs["new_step_str"] = f"{self._new_save_step:,}"
-        self._sync_bg_color_text_bufs(p)
+            if key == "ppisp_activation_step_str" and changed is not None:
+                affected |= bool(changed & {"optimization.iterations", "optimization.steps_scaler"})
+            if affected and not (preserve_active and self._escape_revert.is_editing(key)):
+                self._text_bufs[key] = self._canonical_text_buf_value(key)
+        if changed is None or strategy_changed or "optimization.bg_color" in changed:
+            self._sync_bg_color_text_bufs(preserve_active=preserve_active)
+        properties = None if changed is None or strategy_changed else {
+            path.removeprefix("optimization.") for path in changed
+            if path.startswith("optimization.")
+        }
         for binding in self._pv_bindings:
-            binding.sync_text_bufs()
+            binding.sync_text_bufs(properties=properties, preserve_active=preserve_active)
 
-    def _sync_bg_color_text_bufs(self, params=None):
+    def _sync_bg_color_text_bufs(self, params=None, *, preserve_active=False):
         if params is None:
             params = lf.optimization_params()
         color = (
@@ -1081,8 +1092,10 @@ class TrainingPanel(Panel):
             else (0.0, 0.0, 0.0)
         )
         for key, channel_index in BG_COLOR_CHANNELS:
-            self._text_bufs[key] = w.color_channel_text(color, channel_index)
-        self._text_bufs[BG_COLOR_HEX_KEY] = w.color_to_hex(color)
+            if not (preserve_active and self._escape_revert.is_editing(key)):
+                self._text_bufs[key] = w.color_channel_text(color, channel_index)
+        if not (preserve_active and self._escape_revert.is_editing(BG_COLOR_HEX_KEY)):
+            self._text_bufs[BG_COLOR_HEX_KEY] = w.color_to_hex(color)
 
     def _dirty_bg_color_bindings(self):
         if not self._handle:
@@ -1414,6 +1427,30 @@ class TrainingPanel(Panel):
             RuntimeState.language_generation,
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)
+        generation = self._params_subscription_generation
+        for group in ("optimization", "dataset"):
+            for prop in lf.ui.property_group_info(group).get("properties", ()):
+                path = f"{group}.{prop['id']}"
+                self._param_subscriptions.append(lf.on_property_change(
+                    path, lambda old, new, key=path: self._on_params_changed(
+                        key, generation, old, new
+                    )
+                ))
+
+    def _on_params_changed(self, path, generation, _old, _new):
+        if generation != self._params_subscription_generation:
+            return
+        self._params_changed.add(path)
+        # API batches emit one notification per property. Refresh once, on the
+        # UI update, after all values have been applied.
+        if not self._params_refresh_pending:
+            self._params_refresh_pending = True
+
+            def request():
+                if generation == self._params_subscription_generation:
+                    self._request_reactive_update()
+
+            lf.ui.schedule_on_ui_thread(request)
 
     def _sync_auto_scale_markers(self):
         d = lf.dataset_params()
@@ -1424,7 +1461,13 @@ class TrainingPanel(Panel):
             self._auto_scale_user_override = False
 
     def _unsubscribe_reactive_state(self):
+        self._params_subscription_generation += 1
+        self._params_changed.clear()
         self._reactive_binding.close()
+        for token in self._param_subscriptions:
+            lf.unsubscribe_property_change(token)
+        self._param_subscriptions.clear()
+        self._params_refresh_pending = False
 
     def _request_reactive_update(self):
         if self._handle:
@@ -1486,7 +1529,13 @@ class TrainingPanel(Panel):
             return False
         self._sync_auto_scale_markers()
 
-        dirty = self._flush_pv_publish()
+        params_changed = self._params_refresh_pending
+        self._params_refresh_pending = False
+        if params_changed:
+            changed, self._params_changed = self._params_changed, set()
+            self._sync_text_bufs(changed)
+            self._handle.dirty_all()
+        dirty = self._flush_pv_publish() or params_changed
         language_generation = RuntimeState.language_generation.value
         if language_generation != self._last_language_generation:
             self._last_language_generation = language_generation
@@ -1617,7 +1666,7 @@ class TrainingPanel(Panel):
             return False
         self._last_bg_color = c
         self._sync_render_background_to_training(params)
-        self._sync_bg_color_text_bufs(params)
+        self._sync_bg_color_text_bufs(params, preserve_active=True)
         swatch = doc.get_element_by_id("swatch-bg_color")
         if swatch:
             r = w.color_channel_byte(c, 0)

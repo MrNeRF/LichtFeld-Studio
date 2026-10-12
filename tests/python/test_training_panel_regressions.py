@@ -28,6 +28,7 @@ def _install_lf_stub(monkeypatch):
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,
         tr=lambda key: key,
+        property_group_info=lambda _group: {"properties": []},
     )
     lf_stub.optimization_params = lambda: None
     lf_stub.dataset_params = lambda: None
@@ -142,6 +143,7 @@ class _ParamsStub:
 class _StrategyParamsStub:
     def __init__(self):
         self._strategy = "mrnf"
+        self.eval_mask = ""
         self._slots = {
                 "mrnf": {
                 "max_cap": 5_000_000,
@@ -1985,3 +1987,252 @@ def test_camera_guidance_locales_use_gui_options():
 def test_trainer_error_api_without_manager(lf):
     assert lf.trainer_error() is None
     assert lf.trainer_error_key() is None
+
+
+@pytest.fixture
+def ready_panel_settings(training_panel_module, monkeypatch):
+    module = training_panel_module
+    callbacks = {}
+    monkeypatch.setattr(module.lf.ui, "schedule_on_ui_thread", lambda callback: callback(), raising=False)
+    next_token = iter(range(1000))
+
+    def subscribe(path, callback):
+        token = next(next_token)
+        callbacks[token] = (path, callback)
+        return token
+
+    monkeypatch.setattr(module.lf, "on_property_change", subscribe, raising=False)
+    monkeypatch.setattr(module.lf, "unsubscribe_property_change", callbacks.pop, raising=False)
+    monkeypatch.setattr(module.lf.ui, "property_group_info", lambda group: {
+        "properties": [{"id": name} for name in (
+            ("iterations", "max_cap", "enable_eval", "bg_mode", "strategy", "bg_color", "eval_mask", "ppisp_controller_activation_step", "steps_scaler")
+            if group == "optimization" else ("max_width", "test_every")
+        )]
+    })
+    params = _ParamsStub()
+    params.max_cap = 5_000_000
+    params.iterations = 30_000
+    dataset = _DatasetStub()
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.lf, "dataset_params", lambda: dataset)
+    monkeypatch.setattr(module, "RuntimeState", SimpleNamespace(**{
+        name: _make_signal(value) for name, value in {
+            "trainer_state": "ready", "language_generation": 0,
+            "iteration": 0, "num_gaussians": 0,
+        }.items()
+    }))
+    # Use the real native-signal facade for subscription lifetime tests.
+    native_state = import_module("lfs_plugins.ui").RuntimeState
+    for name in ("training_running", "training_state", "trainer_loaded", "total_iterations",
+                 "loss", "eval_psnr", "scene_generation"):
+        setattr(module.RuntimeState, name, getattr(native_state, name))
+    for name in ("iteration", "num_gaussians", "language_generation"):
+        setattr(module.RuntimeState, name, getattr(native_state, name))
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+    rows = [{"id": name, "kind": "number", "is_int": True, "precision": 0,
+             "strategies": (), "name": name, "label_key": "", "tooltip_key": "",
+             "step": 1, "min": 0, "max": 10_000_000, "items": []}
+            for name in ("iterations", "max_cap")]
+    binding = module.property_view.SectionBinding(
+        "limits", rows, lambda: params, panel._text_bufs, panel._queue_pv_publish)
+    panel._pv_bindings = (binding,)
+    for name in ("_sync_section_states", "_update_step_repeat", "_update_progress",
+                 "_update_save_steps", "_update_color_swatch", "_update_loss_graph",
+                 "_update_psnr_graph", "_flush_pv_publish"):
+        monkeypatch.setattr(panel, name, lambda *_args: False)
+    monkeypatch.setattr(panel._scrub_fields, "sync_all", lambda: False)
+    panel.on_update(None)
+    panel.on_update(None)
+    panel._handle = _HandleStub()
+    panel._subscribe_reactive_state()
+
+    def change(group, name, value):
+        target = params if group == "optimization" else dataset
+        old = getattr(target, name, None)
+        setattr(target, name, value)
+        for path, callback in list(callbacks.values()):
+            if path == f"{group}.{name}":
+                callback(old, value)
+
+    yield panel, params, dataset, binding, change, callbacks
+    panel._unsubscribe_reactive_state()
+
+
+def test_external_settings_refresh_ready_panel_before_start(ready_panel_settings):
+    panel, params, dataset, binding, change, _ = ready_panel_settings
+    change("optimization", "iterations", 600)
+    change("optimization", "max_cap", 100_000)
+    change("optimization", "bg_mode", "random")
+    assert panel._handle.request_update_count == 1
+    assert panel.on_update(None)
+    assert panel._text_bufs[binding.input_key("iterations")] == "600"
+    assert panel._text_bufs[binding.input_key("max_cap")] == "100,000"
+    assert panel._handle.dirty_all_count == 1
+    assert params.iterations == 600
+    assert dataset.test_every == 8
+
+
+def test_external_dataset_settings_refresh_text_fields(ready_panel_settings):
+    panel, _, _, _, change, _ = ready_panel_settings
+    change("dataset", "max_width", 1024)
+    change("dataset", "test_every", 16)
+    assert panel._handle.request_update_count == 1
+    panel.on_update(None)
+    assert panel._text_bufs["max_width_str"] == "1,024"
+    assert panel._text_bufs["test_every_str"] == "16"
+
+
+def test_settings_subscriptions_close_and_remount_once(ready_panel_settings):
+    panel, _, _, _, change, callbacks = ready_panel_settings
+    count = len(callbacks)
+    assert count == 11
+    panel._subscribe_reactive_state()
+    assert len(callbacks) == count
+    panel._unsubscribe_reactive_state()
+    assert not callbacks
+    change("optimization", "iterations", 600)
+    assert panel._handle.request_update_count == 0
+    panel._subscribe_reactive_state()
+    assert len(callbacks) == count
+    change("optimization", "iterations", 700)
+    assert panel._handle.request_update_count == 1
+
+
+def test_idle_updates_preserve_draft_and_do_not_republish(ready_panel_settings):
+    panel, _, _, binding, _, _ = ready_panel_settings
+    key = binding.input_key("iterations")
+    panel._text_bufs[key] = "123"
+    for _ in range(3):
+        assert panel.on_update(None) is False
+    assert panel._text_bufs[key] == "123"
+    assert panel._handle.dirty_all_count == 0
+    assert panel._handle.request_update_count == 0
+
+
+def test_settings_notification_defers_ui_work(
+    ready_panel_settings, training_panel_module, monkeypatch
+):
+    panel, _, _, _, change, _ = ready_panel_settings
+    scheduled = []
+    monkeypatch.setattr(training_panel_module.lf.ui, "schedule_on_ui_thread", scheduled.append)
+    change("optimization", "iterations", 600)
+    change("optimization", "max_cap", 100_000)
+    assert len(scheduled) == 1
+    assert panel._handle.request_update_count == 0
+    assert panel._handle.dirty_all_count == 0
+    scheduled.pop()()
+    assert panel._handle.request_update_count == 1
+    panel.on_update(None)
+    assert panel._handle.dirty_all_count == 1
+
+
+@pytest.mark.parametrize("changed_property", ["max_cap", "iterations"])
+def test_external_change_preserves_active_numeric_draft(ready_panel_settings, changed_property):
+    panel, params, _, binding, change, _ = ready_panel_settings
+    binding.begin_edit("iterations")
+    binding.update_draft("iterations", "123")
+    change("optimization", changed_property, 100_000)
+    panel.on_update(None)
+    assert panel._text_bufs[binding.input_key("iterations")] == "123"
+    if changed_property == "max_cap":
+        assert panel._text_bufs[binding.input_key("max_cap")] == "100,000"
+    binding.commit("iterations")
+    binding.finish_edit("iterations")
+    assert params.iterations == 123
+    change("optimization", "iterations", 700)
+    panel.on_update(None)
+    assert panel._text_bufs[binding.input_key("iterations")] == "700"
+
+
+class _DraftInput:
+    def __init__(self):
+        self.listeners = {}
+
+    def add_event_listener(self, name, callback):
+        self.listeners[name] = callback
+
+    def parent(self):
+        return self
+
+
+@pytest.mark.parametrize("key,group,prop,value", [
+    ("max_width_str", "dataset", "max_width", 1024),
+    ("test_every_str", "dataset", "test_every", 16),
+    ("eval_mask_spec_str", "optimization", "eval_mask", "changed"),
+    ("ppisp_activation_step_str", "optimization", "ppisp_controller_activation_step", 2000),
+    ("bg_color_hex", "optimization", "bg_color", (0.5, 0.25, 1.0)),
+    ("bg_color_r", "optimization", "bg_color", (0.5, 0.25, 1.0)),
+])
+def test_external_change_preserves_manual_draft(
+    ready_panel_settings, training_panel_module, key, group, prop, value
+):
+    panel, _, _, _, change, _ = ready_panel_settings
+    element = _DraftInput()
+    panel._escape_revert.bind(element, key,
+                             lambda: panel._canonical_text_buf_value(key),
+                             lambda snapshot: panel._restore_number_input_snapshot(key, snapshot))
+    element.listeners["focus"](None)
+    panel._text_bufs[key] = "123"
+    change("optimization", "max_cap", 100_000)
+    panel.on_update(None)
+    assert panel._text_bufs[key] == "123"
+    change(group, prop, value)
+    panel.on_update(None)
+    if prop == "bg_color":
+        training_panel_module.TrainingPanel._update_color_swatch(
+            panel, SimpleNamespace(get_element_by_id=lambda _id: None))
+    assert panel._text_bufs[key] == "123"
+    element.listeners["blur"](None)
+    change(group, prop, value)
+    panel.on_update(None)
+    assert panel._text_bufs[key] == panel._canonical_text_buf_value(key)
+
+
+def test_unrelated_notification_does_not_reset_unedited_buffers(ready_panel_settings):
+    panel, _, _, binding, change, _ = ready_panel_settings
+    key = binding.input_key("iterations")
+    panel._text_bufs[key] = "030000"
+    panel._text_bufs["new_step_str"] = "123"
+    change("dataset", "max_width", 1024)
+    panel.on_update(None)
+    assert panel._text_bufs[key] == "030000"
+    assert panel._text_bufs["new_step_str"] == "123"
+    assert panel._text_bufs["max_width_str"] == "1,024"
+
+
+def test_pending_settings_callback_does_not_cross_unmount(
+    ready_panel_settings, training_panel_module, monkeypatch
+):
+    panel, _, _, _, change, callbacks = ready_panel_settings
+    scheduled = []
+    monkeypatch.setattr(training_panel_module.lf.ui, "schedule_on_ui_thread", scheduled.append)
+    stale_callback = next(callback for path, callback in callbacks.values()
+                          if path == "optimization.iterations")
+    change("optimization", "iterations", 600)
+    assert len(scheduled) == 1
+    old_handle = panel._handle
+    panel.on_unmount(SimpleNamespace(remove_data_model=lambda _name: None))
+    scheduled[0]()
+    stale_callback(600, 700)
+    assert old_handle.request_update_count == 0
+    assert not panel._params_refresh_pending
+    panel._handle = _HandleStub()
+    panel._subscribe_reactive_state()
+    scheduled[0]()
+    stale_callback(700, 800)
+    assert panel._handle.request_update_count == 0
+    assert not panel._params_refresh_pending
+    change("optimization", "iterations", 900)
+    assert len(scheduled) == 2
+    scheduled[1]()
+    assert panel._handle.request_update_count == 1
+
+
+@pytest.mark.parametrize("prop,value,expected", [("iterations", 40000, "35,000"), ("steps_scaler", 2.0, "20,000")])
+def test_external_change_refreshes_derived_activation_step(ready_panel_settings, prop, value, expected):
+    panel, params, _, _, change, _ = ready_panel_settings
+    params.ppisp_controller_activation_step = -1
+    change("optimization", prop, value)
+    panel.on_update(None)
+    assert panel._text_bufs["ppisp_activation_step_str"] == expected
