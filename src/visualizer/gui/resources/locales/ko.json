@@ -2,6 +2,7 @@
   "training.reset_before_strategy_change": "전략을 변경하기 전에 훈련을 초기화하세요.",
   "io.mesh_no_triangle_faces": "메시 파일에 삼각형 면이 없습니다.",
   "io.no_finite_seed_points": "포인트 클라우드에 유한한 좌표를 가진 초기 점이 없습니다. 무작위로 초기화합니다.",
+  "io.mesh_nonfinite_vertices": "메시에 유한하지 않은 정점 좌표가 있습니다.",
   "ui.vram_window_1m": "1분",
   "ui.vram_process_nvml_tooltip": "운영 체제 또는 GPU 드라이버가 보고한 프로세스 GPU 메모리입니다.",
   "ui.vram_process_unavailable_tooltip": "프로세스 GPU 메모리를 확인할 수 없습니다. 장치 사용량에는 다른 애플리케이션이 포함됩니다.",

@@ -2,6 +2,7 @@
   "training.reset_before_strategy_change": "Reinicia el entrenamiento antes de cambiar de estrategia.",
   "io.mesh_no_triangle_faces": "El archivo de malla no contiene caras triangulares.",
   "io.no_finite_seed_points": "La nube de puntos no contiene puntos iniciales finitos. Se utilizará una inicialización aleatoria.",
+  "io.mesh_nonfinite_vertices": "La malla contiene coordenadas de vértices no finitas.",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Memoria GPU del proceso según el sistema operativo o el controlador GPU.",
   "ui.vram_process_unavailable_tooltip": "La memoria GPU del proceso no está disponible. El uso del dispositivo incluye otras aplicaciones.",

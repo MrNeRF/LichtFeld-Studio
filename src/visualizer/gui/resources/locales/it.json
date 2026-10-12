@@ -2,6 +2,7 @@
   "training.reset_before_strategy_change": "Reimposta l’addestramento prima di cambiare strategia.",
   "io.mesh_no_triangle_faces": "Il file della mesh non contiene facce triangolari.",
   "io.no_finite_seed_points": "La nuvola di punti non contiene punti iniziali finiti. Verrà utilizzata un’inizializzazione casuale.",
+  "io.mesh_nonfinite_vertices": "La mesh contiene coordinate dei vertici non finite.",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Memoria GPU del processo riportata dal sistema operativo o dal driver GPU.",
   "ui.vram_process_unavailable_tooltip": "Memoria GPU del processo non disponibile. L’utilizzo del dispositivo include altre applicazioni.",
