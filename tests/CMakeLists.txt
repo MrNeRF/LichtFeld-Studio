@@ -1432,6 +1432,18 @@ set_tests_properties(lichtfeld.python.point_cloud_lifetime PROPERTIES
     ENVIRONMENT_MODIFICATION "LFS_EXECUTABLE=set:$<TARGET_FILE:${PROJECT_NAME}>"
 )
 
+add_test(NAME lichtfeld.python.point_cloud_first_open
+    COMMAND ${Python_EXECUTABLE} -m pytest -q
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_project_point_cloud_first_open_runtime.py
+)
+set_tests_properties(lichtfeld.python.point_cloud_first_open PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "nightly;gpu;integration"
+    TIMEOUT 300
+    RUN_SERIAL TRUE
+    ENVIRONMENT_MODIFICATION "LFS_EXECUTABLE=set:$<TARGET_FILE:${PROJECT_NAME}>"
+)
+
 add_test(NAME lichtfeld.python.gpu
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         -m gpu

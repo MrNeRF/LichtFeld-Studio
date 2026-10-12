@@ -2120,7 +2120,9 @@ class TrainingPanel(Panel):
             return
         try:
             value = float(val)
-            if value == getattr(params, prop):
+            current = getattr(params, prop)
+            # Range controls can echo a rounded float when a saved value is bound.
+            if value == current or abs(value - current) <= 1e-6:
                 return
             params.set(prop, value)
             if self._handle:
