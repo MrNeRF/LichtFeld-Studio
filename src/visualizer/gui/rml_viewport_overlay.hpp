@@ -137,6 +137,7 @@ namespace lfs::vis::gui {
         bool syncBuiltinDocument(bool force);
         bool updateToolbarRoots();
         bool updateToolbarRailLayout();
+        bool updateViewportOverlayPanelLayout();
         bool applyToolbarPosition();
         void attachToolbarDragListeners();
         void resetToolbarDragListeners();

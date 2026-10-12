@@ -722,7 +722,7 @@ body {
 
 .viewport-transform-panel.viewport-export-panel {
     width: 470dp;
-    min-width: 470dp;
+    min-width: 0;
     max-width: 470dp;
     padding: 6dp 8dp;
     gap: 4dp;
@@ -731,20 +731,29 @@ body {
 
 .viewport-transform-panel.viewport-export-panel.has-custom {
     width: 624dp;
-    min-width: 624dp;
+    min-width: 0;
     max-width: 624dp;
 }
 
 .viewport-transform-panel.viewport-export-panel.has-alpha {
     width: 532dp;
-    min-width: 532dp;
+    min-width: 0;
     max-width: 532dp;
 }
 
 .viewport-transform-panel.viewport-export-panel.has-custom.has-alpha {
     width: 686dp;
-    min-width: 686dp;
+    min-width: 0;
     max-width: 686dp;
+}
+
+.viewport-transform-overlay > .viewport-transform-panel,
+.viewport-selection-overlay > .viewport-transform-panel,
+.viewport-depth-overlay > .viewport-transform-panel {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    flex-shrink: 1;
 }
 
 #transform-block .viewport-transform-panel {

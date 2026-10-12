@@ -698,6 +698,58 @@ namespace lfs::vis::gui {
         return changed;
     }
 
+    bool RmlViewportOverlay::updateViewportOverlayPanelLayout() {
+        if (!document_ || !rml_context_)
+            return false;
+
+        auto* const content = document_->GetElementById("viewport-content");
+        if (!content)
+            return false;
+
+        const float content_left = content->GetAbsoluteOffset(Rml::BoxArea::Border).x;
+        float toolbar_right = -1.0f;
+        for (const char* const id : {"primary-utility-toolbar", "secondary-utility-toolbar"}) {
+            auto* const toolbar = document_->GetElementById(id);
+            if (!toolbar || !toolbar->GetParentNode() || toolbar->GetParentNode()->IsClassSet("hidden"))
+                continue;
+
+            const auto offset = toolbar->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = toolbar->GetBox().GetSize(Rml::BoxArea::Border);
+            toolbar_right = std::max(toolbar_right, offset.x + size.x);
+        }
+
+        const float panel_left = toolbar_right < 0.0f
+                                     ? -1.0f
+                                     : toolbar_right - content_left +
+                                           8.0f * std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f);
+        bool changed = false;
+        for (const char* const id : {"transform-block",
+                                     "selection-block",
+                                     "depth-view-block",
+                                     "gt-compare-mode-block",
+                                     "viewport-export-block"}) {
+            auto* const overlay = document_->GetElementById(id);
+            if (!overlay)
+                continue;
+
+            if (panel_left < 0.0f) {
+                const auto* const current = overlay->GetProperty("left");
+                if (!current || current->ToString() != "12dp") {
+                    overlay->SetProperty("left", "12dp");
+                    changed = true;
+                }
+            } else {
+                const auto value = std::format("{:.1f}px", panel_left);
+                const auto* const current = overlay->GetProperty("left");
+                if (!current || current->ToString() != value) {
+                    overlay->SetProperty("left", value);
+                    changed = true;
+                }
+            }
+        }
+        return changed;
+    }
+
     float RmlViewportOverlay::toolbarFreeGap(const float toolbar_height) const {
         return std::min(toolbar_inset_,
                         std::max(0.0f, (vp_size_.y - std::max(toolbar_height, 0.0f)) * 0.5f));
@@ -1533,6 +1585,7 @@ namespace lfs::vis::gui {
         const int h = static_cast<int>(vp_size_.y);
         const bool size_changed = (w != last_render_w_ || h != last_render_h_);
         const bool toolbar_changed = updateToolbarRoots();
+        const bool content_offset_changed = viewport_content_offset_dirty_;
         updateViewportContentOffset();
         updateViewportContentClasses(toolbar_dpi);
         const bool python_document_dirty = lfs::python::consume_pending_rml_document_updates(document_);
@@ -1614,10 +1667,14 @@ namespace lfs::vis::gui {
             }
             if (vram_hud_ && vram_hud_->initializeGeometryAfterLayout())
                 rml_context_->Update();
-            updateToolbarRailLayout();
+            const bool rail_layout_changed = updateToolbarRailLayout();
             if (viewport_toolbar_position_ == "free" && applyToolbarPosition()) {
                 LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.toolbar_position", 0.25);
                 rml_context_->Update();
+            }
+            if (toolbar_changed || content_offset_changed || size_changed || dpi_changed || rail_layout_changed) {
+                if (updateViewportOverlayPanelLayout())
+                    rml_context_->Update();
             }
         }
 
