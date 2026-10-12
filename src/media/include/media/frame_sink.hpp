@@ -17,9 +17,11 @@ namespace lfs::media {
                                   RGBFloat32,
                                   RGBAFloat32 };
     enum class ColorUnits { Relative,
-                            Nits };
+                            Nits,
+                            SceneRelative };
     enum class FloatColorProfile { Sdr,
-                                   PqNits };
+                                   PqNits,
+                                   HlgScene };
     struct FrameColor {
         ColorTransfer transfer = ColorTransfer::Unspecified;
         ColorPrimaries primaries = ColorPrimaries::Unspecified;

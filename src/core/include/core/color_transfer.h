@@ -5,6 +5,7 @@
 #ifdef __cplusplus
 #include <cmath>
 namespace lfs::core::color {
+    using std::exp;
     using std::pow;
 #define LFS_COLOR_INLINE inline
 #else
@@ -27,6 +28,11 @@ namespace lfs::core::color {
     // Absolute cd/m2, without mastering-peak rescale.
     LFS_COLOR_INLINE float pqToNits(float v) {
         return 10000.0f * pqToLinear(v);
+    }
+    // BT.2100 inverse HLG OETF: relative scene light, normalized to [0,1].
+    // No display OOTF, system gamma, black lift or absolute luminance is applied.
+    LFS_COLOR_INLINE float hlgToSceneLinear(float v) {
+        return v <= 0.5f ? v * v / 3.0f : (exp((v - 0.55991073f) / 0.17883277f) + 0.28466892f) / 12.0f;
     }
 #undef LFS_COLOR_INLINE
 #ifdef __cplusplus

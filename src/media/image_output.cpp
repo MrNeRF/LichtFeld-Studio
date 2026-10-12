@@ -74,7 +74,7 @@ namespace lfs::media {
                 return SinkResult::failure(required.error());
             const auto& layout = frame.layout;
             const bool rgba = layout.format == FramePixelFormat::RGBAFloat32;
-            if (layout.color.units != ColorUnits::Relative && layout.color.units != ColorUnits::Nits)
+            if (outputOptionName(layout.color.units) == "unknown")
                 return SinkResult::failure(outputError(ErrorCode::InvalidArgument, "Unknown EXR sample units"));
             if (layout.format != FramePixelFormat::RGBFloat32 && !rgba)
                 return SinkResult::failure(outputError(ErrorCode::Unsupported, std::format("EXR requires float RGB/RGBA (format={})", int(layout.format))));
@@ -88,7 +88,7 @@ namespace lfs::media {
             const auto valid_time = [](const std::optional<Timestamp>& value) { return !value || (value->time_base.numerator > 0 && value->time_base.denominator > 0); };
             if (!valid_time(frame.info.source_timestamp) || !valid_time(frame.info.output_timestamp) || (frame.info.source_component_depth && *frame.info.source_component_depth <= 0))
                 return SinkResult::failure(outputError(ErrorCode::InvalidArgument, std::format("Invalid EXR timing/precision (source_time_valid={}, output_time_valid={}, depth={})", valid_time(frame.info.source_timestamp), valid_time(frame.info.output_timestamp), frame.info.source_component_depth.value_or(-1))));
-            std::vector<std::pair<std::string, std::string>> text{{"lfsTransfer", "linear"}, {"lfsUnits", layout.color.units == ColorUnits::Nits ? "cd/m2" : "relative"}, {"lfsAlpha", rgba ? "premultiplied" : "none"}};
+            std::vector<std::pair<std::string, std::string>> text{{"lfsTransfer", "linear"}, {"lfsUnits", std::string(outputOptionName(layout.color.units))}, {"lfsAlpha", rgba ? "premultiplied" : "none"}};
             if (!options.provenance.empty())
                 text.emplace_back("lfsProvenance", options.provenance);
             if (frame.info.origin != FrameOrigin::Unspecified)

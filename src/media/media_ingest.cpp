@@ -103,7 +103,7 @@ namespace lfs::media {
                     return failure(ErrorCode::InvalidArgument, "Input color overrides apply only to float SDR output", 0);
                 if (request.float_color_profile != FloatColorProfile::Sdr &&
                     (request.output_format != FramePixelFormat::RGBFloat32 || request.convert_hdr_to_sdr))
-                    return failure(ErrorCode::InvalidArgument, "PQ-nits requires float output without HDR tone mapping", 0);
+                    return failure(ErrorCode::InvalidArgument, "HDR float profiles require float output without HDR tone mapping", 0);
                 auto p = parameters(request);
                 if (files) {
                     p.allow_hardware_encode = !files->resume;

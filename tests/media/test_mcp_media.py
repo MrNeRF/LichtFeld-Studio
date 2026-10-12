@@ -89,23 +89,24 @@ class McpMedia(unittest.TestCase):
             self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")
             self.assertFalse(output.exists())
 
-    def test_pq_profile_job_and_explicit_units(self):
-        source=self.root/"pq.mkv"
-        subprocess.run([FFMPEG,"-v","error","-f","lavfi","-i",
-                        "testsrc2=size=64x48:rate=10:duration=0.5",
-                        "-vf","format=yuv444p10le,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=limited",
-                        "-c:v","ffv1","-level","3",str(source)],check=True,timeout=30)
-        result,output=self.invoke(input=str(source),format="exr",float_profile="pq-nits",exr_precision="float")
-        self.assertTrue(result["capabilities"]["rgb_float_pq"])
-        self.assertTrue(result["start"]["success"])
-        self.assertEqual(result["job"]["status"],"finished")
-        self.assertEqual(len(list(output.glob("*.exr"))),4)
-        metadata=json.loads((output/"extraction_metadata.json").read_text())
-        self.assertEqual(metadata["output"]["units"],"cd/m2")
-        self.assertEqual(metadata["output"]["color_profile"],"linear-pq-nits")
-        result,output=self.invoke(float_profile="pq-nits")
-        self.assertEqual(result["start"]["error"]["code"],"InvalidArgument")
-        self.assertFalse(output.exists())
+    def test_hdr_profile_job_and_explicit_units(self):
+        for hlg,profile,transfer in [(False,"pq-nits","smpte2084"),(True,"hlg-scene","arib-std-b67")]:
+            source=self.root/("hlg.mkv" if hlg else "pq.mkv")
+            subprocess.run([FFMPEG,"-v","error","-f","lavfi","-i",
+                            "testsrc2=size=64x48:rate=10:duration=0.5",
+                            "-vf",f"format=yuv444p10le,setparams=color_primaries=bt2020:color_trc={transfer}:colorspace=bt2020nc:range=limited",
+                            "-c:v","ffv1","-level","3",str(source)],check=True,timeout=30)
+            result,output=self.invoke(input=str(source),format="exr",float_profile=profile,exr_precision="float")
+            self.assertTrue(result["capabilities"]["rgb_float_hlg" if hlg else "rgb_float_pq"])
+            self.assertTrue(result["start"]["success"])
+            self.assertEqual(result["job"]["status"],"finished")
+            self.assertEqual(len(list(output.glob("*.exr"))),4)
+            metadata=json.loads((output/"extraction_metadata.json").read_text())
+            self.assertEqual(metadata["output"]["units"],"scene-relative" if hlg else "cd/m2")
+            self.assertEqual(metadata["output"]["color_profile"],"linear-hlg-scene" if hlg else "linear-pq-nits")
+            result,output=self.invoke(float_profile=profile)
+            self.assertEqual(result["start"]["error"]["code"],"InvalidArgument")
+            self.assertFalse(output.exists())
 
     def test_cancel_retains_typed_error_and_terminal_event(self):
         result, output = self.invoke(cancel=True)

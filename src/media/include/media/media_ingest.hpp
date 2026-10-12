@@ -77,6 +77,8 @@ namespace lfs::media {
         bool exr = true;
         bool rgb_float_pq = true;
         std::string_view float_pq_profile = "Opt-in PQ to linear cd/m2; declared BT709/BT2020 primaries preserved; encoded RGB clamped to [0,1]; no tone mapping, mastering rescale, HLG, LOG or Dolby Vision";
+        bool rgb_float_hlg = true;
+        std::string_view float_hlg_profile = "Opt-in HLG inverse OETF to relative scene-linear [0,1]; declared BT709/BT2020 primaries preserved; encoded RGB clamped to [0,1]; no display OOTF, absolute nits, tone mapping, mastering rescale, LOG or Dolby Vision";
         // Stable capability description shared by CLI, Python and MCP.
         std::string_view float_sdr_profile = "Integer RGB or planar/semiplanar YUV 8-16-bit, including subsampled chroma; Linear/sRGB/BT709 transfer; BT709/BT2020 primaries; explicit metadata or overrides; shared CPU reference and optional tensor backend; no HDR or alpha video";
     };

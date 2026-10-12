@@ -63,55 +63,57 @@ class MediaBindings(unittest.TestCase):
         request.allow_hardware_decode = False
         return request
 
-    def test_pq_units_survive_owned_surfaces_and_verified_file_resume(self):
-        source=self.root/"pq-bindings.mkv"
-        subprocess.run([os.environ.get("LFS_MEDIA_TEST_FFMPEG","ffmpeg"),"-v","error",
-                        "-f","lavfi","-i","testsrc2=size=64x32:rate=10:duration=1",
-                        "-vf","format=yuv444p10le,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=limited",
-                        "-c:v","ffv1","-level","3",str(source)],check=True,capture_output=True)
-        request=self.request()
-        request.input=source
-        request.output_format=media.FramePixelFormat.RGBFloat32
-        request.float_color_profile=media.FloatColorProfile.PqNits
-        request.end_seconds=.5
-        report,frames=media.MediaIngest.extract(request)
-        self.assertGreater(report.frames_accepted,0)
-        self.assertEqual(frames[0].layout.color.units,media.ColorUnits.Nits)
-        self.assertEqual(frames[0].layout.color.transfer,media.ColorTransfer.Linear)
-        self.assertEqual(frames[0].layout.color.primaries,media.ColorPrimaries.Bt2020)
-        snapshot=media.FrameSurface.from_bytes(frames[0].layout.width,frames[0].layout.height,
-                    frames[0].layout.format,frames[0].pixels,color=frames[0].layout.color,info=frames[0].info)
-        self.assertEqual(snapshot.layout.color.units,media.ColorUnits.Nits)
-        self.assertEqual(snapshot.pixels,frames[0].pixels)
-        files=media.FileExtraction()
-        files.files.format=media.FrameFileFormat.EXR
-        files.files.output_directory=self.root/"pq-resume"
-        files.files.exr.precision=media.ExrPrecision.Float
-        files.files.exr.overwrite=True
-        files.resume=True
-        files.write_metadata=True
-        def stop(progress):
-            if progress.processed>=2:
-                raise ValueError("interrupt PQ checkpoint")
-        with self.assertRaisesRegex(ValueError,"interrupt PQ checkpoint"):
-            media.MediaIngest.extract_files(request,files,progress=stop)
-        media.MediaIngest.extract_files(request,files)
-        def proof():
-            return {path.name:(path.read_bytes(),path.stat().st_mtime_ns) for path in files.files.output_directory.glob("*.exr")}
-        before=proof()
-        media.MediaIngest.extract_files(request,files)
-        self.assertEqual(proof(),before)
-        missing=next(iter(before))
-        (files.files.output_directory/missing).unlink()
-        media.MediaIngest.extract_files(request,files)
-        self.assertEqual((files.files.output_directory/missing).read_bytes(),before[missing][0])
-        manifest=json.loads((files.files.output_directory/"extraction_metadata.json").read_text())
-        self.assertEqual(manifest["output"]["units"],"cd/m2")
-        request.float_color_profile=media.FloatColorProfile.Sdr
-        with self.assertRaises(MEDIA_ERROR):
+    def test_hdr_units_survive_owned_surfaces_and_verified_file_resume(self):
+        for hlg,profile,transfer,units in [(False,media.FloatColorProfile.PqNits,"smpte2084",media.ColorUnits.Nits),
+                                           (True,media.FloatColorProfile.HlgScene,"arib-std-b67",media.ColorUnits.SceneRelative)]:
+            source=self.root/("hlg-bindings.mkv" if hlg else "pq-bindings.mkv")
+            subprocess.run([os.environ.get("LFS_MEDIA_TEST_FFMPEG","ffmpeg"),"-v","error",
+                            "-f","lavfi","-i","testsrc2=size=64x32:rate=10:duration=1",
+                            "-vf",f"format=yuv444p10le,setparams=color_primaries=bt2020:color_trc={transfer}:colorspace=bt2020nc:range=limited",
+                            "-c:v","ffv1","-level","3",str(source)],check=True,capture_output=True)
+            request=self.request()
+            request.input=source
+            request.output_format=media.FramePixelFormat.RGBFloat32
+            request.float_color_profile=profile
+            request.end_seconds=.5
+            report,frames=media.MediaIngest.extract(request)
+            self.assertGreater(report.frames_accepted,0)
+            self.assertEqual(frames[0].layout.color.units,units)
+            self.assertEqual(frames[0].layout.color.transfer,media.ColorTransfer.Linear)
+            self.assertEqual(frames[0].layout.color.primaries,media.ColorPrimaries.Bt2020)
+            snapshot=media.FrameSurface.from_bytes(frames[0].layout.width,frames[0].layout.height,
+                        frames[0].layout.format,frames[0].pixels,color=frames[0].layout.color,info=frames[0].info)
+            self.assertEqual(snapshot.layout.color.units,units)
+            self.assertEqual(snapshot.pixels,frames[0].pixels)
+            files=media.FileExtraction()
+            files.files.format=media.FrameFileFormat.EXR
+            files.files.output_directory=self.root/("hlg-resume" if hlg else "pq-resume")
+            files.files.exr.precision=media.ExrPrecision.Float
+            files.files.exr.overwrite=True
+            files.resume=True
+            files.write_metadata=True
+            def stop(progress):
+                if progress.processed>=2:
+                    raise ValueError("interrupt PQ checkpoint")
+            with self.assertRaisesRegex(ValueError,"interrupt PQ checkpoint"):
+                media.MediaIngest.extract_files(request,files,progress=stop)
             media.MediaIngest.extract_files(request,files)
-        self.assertEqual({name:data for name,(data,_) in proof().items()},
-                         {name:data for name,(data,_) in before.items()})
+            def proof():
+                return {path.name:(path.read_bytes(),path.stat().st_mtime_ns) for path in files.files.output_directory.glob("*.exr")}
+            before=proof()
+            media.MediaIngest.extract_files(request,files)
+            self.assertEqual(proof(),before)
+            missing=next(iter(before))
+            (files.files.output_directory/missing).unlink()
+            media.MediaIngest.extract_files(request,files)
+            self.assertEqual((files.files.output_directory/missing).read_bytes(),before[missing][0])
+            manifest=json.loads((files.files.output_directory/"extraction_metadata.json").read_text())
+            self.assertEqual(manifest["output"]["units"],"scene-relative" if hlg else "cd/m2")
+            request.float_color_profile=media.FloatColorProfile.Sdr
+            with self.assertRaises(MEDIA_ERROR):
+                media.MediaIngest.extract_files(request,files)
+            self.assertEqual({name:data for name,(data,_) in proof().items()},
+                             {name:data for name,(data,_) in before.items()})
 
     def test_probe_optional_inventory_unicode(self):
         self.assertTrue(media.MediaIngest.codec_build_info().ffmpeg_license)

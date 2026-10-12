@@ -13,6 +13,7 @@
 #include "media/hdr_renderer.hpp"
 #include "media/hdr_tonemap.hpp"
 #include "media/media_backends.hpp"
+#include "media/media_options.hpp"
 #include "media/media_probe_ffmpeg.hpp"
 #include "media/sws_packed_rgb.hpp"
 
@@ -1210,13 +1211,13 @@ namespace lfs::io {
                 std::unique_ptr<media::detail::LinearFrameConverter> linear_converter;
                 media::FrameColor output_color;
                 if (float_output) {
-                    if (dv_profile > 0 || (video_stream->codecpar->color_trc == AVCOL_TRC_SMPTE2084 && params.float_color_profile != media::FloatColorProfile::PqNits) || video_stream->codecpar->color_trc == AVCOL_TRC_ARIB_STD_B67 ||
+                    if (dv_profile > 0 || (video_stream->codecpar->color_trc == AVCOL_TRC_SMPTE2084 && params.float_color_profile != media::FloatColorProfile::PqNits) || (video_stream->codecpar->color_trc == AVCOL_TRC_ARIB_STD_B67 && params.float_color_profile != media::FloatColorProfile::HlgScene) ||
                         video_stream->codecpar->color_trc == AVCOL_TRC_LOG || video_stream->codecpar->color_trc == AVCOL_TRC_LOG_SQRT) {
                         failure_ = make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "Source HDR transfer or Dolby Vision is outside the selected float profile", .detection = LFS_SOURCE_SITE_CURRENT()});
                         throw std::runtime_error(std::string(failure_->detail()));
                     }
                     AVCodecParameters color_source = *video_stream->codecpar;
-                    if (params.float_color_profile == media::FloatColorProfile::PqNits) {
+                    if (params.float_color_profile != media::FloatColorProfile::Sdr) {
                         // Some HEVC containers omit color tags carried by the
                         // decoded frame. Read that declaration without losing the
                         // first frame or inventing primaries/transfer metadata.
@@ -1225,7 +1226,7 @@ namespace lfs::io {
                         const auto first = decoder_pump.next(frame, error);
                         if (first != DecoderPumpResult::Frame) {
                             if (first == DecoderPumpResult::EndOfStream)
-                                error = "PQ extraction requires a decoded source frame";
+                                error = "HDR float extraction requires a decoded source frame";
                             throw std::runtime_error(error);
                         }
                         prefetched_color_frame = true;
@@ -2374,27 +2375,38 @@ namespace lfs::io {
                             root["output"].erase("jpeg_quality");
                             root["output"]["pixel_format"] = "linear_rgb_float32";
                             const bool pq_nits = output_color.units == media::ColorUnits::Nits;
-                            root["output"]["color_space"] = std::string(output_color.primaries == media::ColorPrimaries::Bt709 ? "linear BT709, " : "linear BT2020, ") + (pq_nits ? "cd/m2" : "relative");
-                            root["output"]["units"] = pq_nits ? "cd/m2" : "relative";
+                            const bool hlg_scene = output_color.units == media::ColorUnits::SceneRelative;
+                            const std::string units(media::outputOptionName(output_color.units));
+                            root["output"]["color_space"] = std::string(output_color.primaries == media::ColorPrimaries::Bt709 ? "linear BT709, " : "linear BT2020, ") + units;
+                            root["output"]["units"] = units;
                             root["output"]["compression"] = params.exr_compression == media::ExrCompression::ZIP ? "zip" : "none";
                             root["output"]["alpha"] = "none";
                             const int component_depth = input_bit_depth > 0 ? input_bit_depth : source_bit_depth;
                             root["output"]["source_component_depth"] = component_depth > 0 ? nlohmann::json(component_depth) : nlohmann::json(nullptr);
-                            root["output"]["color_profile"] = pq_nits ? "linear-pq-nits" : "linear-sdr";
+                            root["output"]["color_profile"] = pq_nits ? "linear-pq-nits" : hlg_scene ? "linear-hlg-scene"
+                                                                                                     : "linear-sdr";
+                            if (hlg_scene) {
+                                root["output"]["encoded_rgb_policy"] = "clamp to [0,1] before HLG inverse OETF";
+                                root["output"]["linear_domain"] = "scene";
+                                root["output"]["hlg_scene_normalization"] = "Eprime=1 maps to E=1";
+                                root["output"]["display_ootf"] = false;
+                                root["output"]["mastering_rescale"] = false;
+                            }
                             if (pq_nits) {
                                 root["output"]["encoded_rgb_policy"] = "clamp to [0,1] before PQ EOTF";
                                 root["output"]["pq_reference_peak_nits"] = 10000;
                                 root["output"]["mastering_rescale"] = false;
                             }
-                            root["output"]["input_transfer"] = linear_converter->inputTransfer() == media::ColorTransfer::Pq ? "smpte2084" : linear_converter->inputTransfer() == media::ColorTransfer::Linear ? "linear"
-                                                                                                                                         : linear_converter->inputTransfer() == media::ColorTransfer::Srgb     ? "srgb"
-                                                                                                                                                                                                               : "bt709";
+                            root["output"]["input_transfer"] = linear_converter->inputTransfer() == media::ColorTransfer::Hlg ? "arib-std-b67" : linear_converter->inputTransfer() == media::ColorTransfer::Pq   ? "smpte2084"
+                                                                                                                                             : linear_converter->inputTransfer() == media::ColorTransfer::Linear ? "linear"
+                                                                                                                                             : linear_converter->inputTransfer() == media::ColorTransfer::Srgb   ? "srgb"
+                                                                                                                                                                                                                 : "bt709";
                             if (linear_converter->inputTransfer() == media::ColorTransfer::Unspecified)
                                 root["output"]["input_transfer"] = nullptr;
                             root["output"]["transfer_override"] = params.input_color.transfer != media::ColorTransfer::Unspecified;
                             root["output"]["primaries_override"] = params.input_color.primaries != media::ColorPrimaries::Unspecified;
                             root["output"]["resize_filter"] = "area reduction / bilinear enlargement in linear light";
-                            root["output"]["sharpness_domain"] = params.sharpness.enabled ? (pq_nits ? "linear cd/m2 divided by 10000, clipped quantized RGB8 proxy" : "clipped quantized linear RGB8 proxy") : "disabled";
+                            root["output"]["sharpness_domain"] = params.sharpness.enabled ? (pq_nits ? "linear cd/m2 divided by 10000, clipped quantized RGB8 proxy" : (hlg_scene ? "clipped quantized scene-linear RGB8 proxy" : "clipped quantized linear RGB8 proxy")) : "disabled";
                         }
                         root["processing"] = {
                             {"decoder", {

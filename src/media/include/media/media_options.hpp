@@ -53,7 +53,12 @@ namespace lfs::media {
     // Metadata/layout preflight, also used by the Studio dialog before Start.
     template <>
     inline constexpr auto outputOptionValues<FloatColorProfile> = std::array{
-        NamedOption{FloatColorProfile::Sdr, "sdr"sv}, NamedOption{FloatColorProfile::PqNits, "pq-nits"sv}};
+        NamedOption{FloatColorProfile::Sdr, "sdr"sv}, NamedOption{FloatColorProfile::PqNits, "pq-nits"sv},
+        NamedOption{FloatColorProfile::HlgScene, "hlg-scene"sv}};
+    template <>
+    inline constexpr auto outputOptionValues<ColorUnits> = std::array{
+        NamedOption{ColorUnits::Relative, "relative"sv}, NamedOption{ColorUnits::Nits, "cd/m2"sv},
+        NamedOption{ColorUnits::SceneRelative, "scene-relative"sv}};
     [[nodiscard]] LFS_MEDIA_API SinkResult validateFloatSource(const StreamDescription&, FloatColorProfile, FrameColor = {});
     [[nodiscard]] LFS_MEDIA_API SinkResult validateFloatSdrSource(const StreamDescription&, FrameColor = {});
     // Same validation for extraction, file sinks and independently produced EXR.

@@ -61,6 +61,23 @@ int runFloatExrUnitContracts() {
     require(!validateFloatSource(color_source, FloatColorProfile::PqNits), "metadata-only PQ preflight cannot invent frame-only transfer");
     color_source.color.transfer = "arib-std-b67";
     require(!validateFloatSource(color_source, FloatColorProfile::PqNits), "PQ profile does not adopt HLG");
+    require(validateFloatSource(color_source, FloatColorProfile::HlgScene).has_value(), "declared HLG scene preflight accepted");
+    require(!validateFloatSdrSource(color_source), "default SDR does not adopt HLG");
+    require(!validateFloatSource(color_source, FloatColorProfile::HlgScene, assumptions), "HLG scene rejects relabeling overrides");
+    color_source.color.transfer = "smpte2084";
+    require(!validateFloatSource(color_source, FloatColorProfile::HlgScene), "HLG scene does not adopt PQ");
+    color_source.color.transfer = "arib-std-b67";
+    color_source.color.primaries.reset();
+    require(!validateFloatSource(color_source, FloatColorProfile::HlgScene), "HLG scene does not infer missing primaries");
+    color_source.color.primaries = "bt2020";
+    color_source.color.transfer.reset();
+    require(!validateFloatSource(color_source, FloatColorProfile::HlgScene), "HLG scene does not infer missing transfer");
+    color_source.pixel_format = "gbrp16le";
+    color_source.color.transfer = "arib-std-b67";
+    color_source.color.range.reset();
+    require(!validateFloatSource(color_source, FloatColorProfile::HlgScene), "HLG RGB requires explicit full range");
+    color_source.color.range = "pc";
+    require(validateFloatSource(color_source, FloatColorProfile::HlgScene).has_value(), "HLG RGB full range accepted");
     const auto directory = std::filesystem::temp_directory_path() / ("lfs-float-exr-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directory(directory);
     struct Cleanup {

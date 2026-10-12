@@ -77,7 +77,7 @@ namespace {
                              "  [--name PATTERN] [--metadata] [--resume] [--sharpness THRESHOLD] [--window]\n"
                              "  [--algorithm laplacian|tenengrad|combined] [--candidates N] [--hdr-to-sdr] [--quiet]\n"
                              "  EXR: [--exr-precision half|float] [--exr-compression zip|none] [--overwrite]\n"
-                             "       [--float-profile sdr|pq-nits] [--input-transfer auto|linear|srgb|bt709] [--input-primaries auto|bt709|bt2020]\n";
+                             "       [--float-profile sdr|pq-nits|hlg-scene] [--input-transfer auto|linear|srgb|bt709] [--input-primaries auto|bt709|bt2020]\n";
                 return 0;
             }
             if (args.size() == 2 && args[1] == "version") {
@@ -87,7 +87,7 @@ namespace {
             }
             if (args.size() == 2 && args[1] == "capabilities") {
                 const auto c = MediaIngest::capabilities();
-                std::cout << json{{"schema_version", 1}, {"success", true}, {"software_decode", c.software_decode}, {"rgb8", c.rgb8}, {"png", c.png}, {"jpeg", c.jpeg}, {"hardware_decode", c.hardware_decode}, {"hdr_to_sdr", c.hdr_to_sdr}, {"rgb_float_sdr", c.rgb_float_sdr}, {"exr", c.exr}, {"float_sdr_profile", c.float_sdr_profile}, {"rgb_float_pq", c.rgb_float_pq}, {"float_pq_profile", c.float_pq_profile}}.dump() << '\n';
+                std::cout << json{{"schema_version", 1}, {"success", true}, {"software_decode", c.software_decode}, {"rgb8", c.rgb8}, {"png", c.png}, {"jpeg", c.jpeg}, {"hardware_decode", c.hardware_decode}, {"hdr_to_sdr", c.hdr_to_sdr}, {"rgb_float_sdr", c.rgb_float_sdr}, {"exr", c.exr}, {"float_sdr_profile", c.float_sdr_profile}, {"rgb_float_pq", c.rgb_float_pq}, {"float_pq_profile", c.float_pq_profile}, {"rgb_float_hlg", c.rgb_float_hlg}, {"float_hlg_profile", c.float_hlg_profile}}.dump() << '\n';
                 return 0;
             }
             if (args.size() < 3 || (args[1] != "probe" && args[1] != "extract"))

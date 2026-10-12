@@ -69,10 +69,14 @@ class ColorUnits(enum.Enum):
 
     Nits = 1
 
+    SceneRelative = 2
+
 class FloatColorProfile(enum.Enum):
     Sdr = 0
 
     PqNits = 1
+
+    HlgScene = 2
 
 class FrameOrigin(enum.Enum):
     Unspecified = 0
@@ -648,6 +652,12 @@ class IngestCapabilities:
 
     @property
     def float_pq_profile(self) -> str: ...
+
+    @property
+    def rgb_float_hlg(self) -> bool: ...
+
+    @property
+    def float_hlg_profile(self) -> str: ...
 
 class CodecBuildInfo:
     @property

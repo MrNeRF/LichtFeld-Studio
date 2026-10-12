@@ -317,7 +317,7 @@ namespace lfs::app {
                                [](const json&) {
                                    const auto caps = MediaIngest::capabilities();
                                    const auto codecs = MediaIngest::codecBuildInfo();
-                                   return json{{"success", true}, {"software_decode", caps.software_decode}, {"rgb8", caps.rgb8}, {"png", caps.png}, {"jpeg", caps.jpeg}, {"hardware_decode", caps.hardware_decode}, {"hdr_to_sdr", caps.hdr_to_sdr}, {"rgb_float_sdr", caps.rgb_float_sdr}, {"exr", caps.exr}, {"float_sdr_profile", caps.float_sdr_profile}, {"rgb_float_pq", caps.rgb_float_pq}, {"float_pq_profile", caps.float_pq_profile}, {"ffmpeg_version", codecs.ffmpeg_version}, {"ffmpeg_license", codecs.ffmpeg_license}, {"ffmpeg_configuration", codecs.ffmpeg_configuration}};
+                                   return json{{"success", true}, {"software_decode", caps.software_decode}, {"rgb8", caps.rgb8}, {"png", caps.png}, {"jpeg", caps.jpeg}, {"hardware_decode", caps.hardware_decode}, {"hdr_to_sdr", caps.hdr_to_sdr}, {"rgb_float_sdr", caps.rgb_float_sdr}, {"exr", caps.exr}, {"float_sdr_profile", caps.float_sdr_profile}, {"rgb_float_pq", caps.rgb_float_pq}, {"float_pq_profile", caps.float_pq_profile}, {"rgb_float_hlg", caps.rgb_float_hlg}, {"float_hlg_profile", caps.float_hlg_profile}, {"ffmpeg_version", codecs.ffmpeg_version}, {"ffmpeg_license", codecs.ffmpeg_license}, {"ffmpeg_configuration", codecs.ffmpeg_configuration}};
                                });
         registry.register_tool(mcp::McpTool{
                                    .name = "media.probe",

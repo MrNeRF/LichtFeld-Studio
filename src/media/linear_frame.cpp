@@ -28,25 +28,27 @@ namespace lfs::media {
             for (int i = 0; i < 3; ++i)
                 if (desc->comp[i].depth < 8 || desc->comp[i].depth > 16 || desc->comp[i].depth + desc->comp[i].shift > 32 || desc->comp[i].step <= 0)
                     return fail("Linear EXR requires 8-16 bit components");
-            if (profile != FloatColorProfile::Sdr && profile != FloatColorProfile::PqNits)
+            if (profile != FloatColorProfile::Sdr && profile != FloatColorProfile::PqNits && profile != FloatColorProfile::HlgScene)
                 return fail("Unknown float color profile");
-            if (profile == FloatColorProfile::PqNits &&
-                (transfer != ColorTransfer::Pq || overrides.transfer != ColorTransfer::Unspecified || overrides.primaries != ColorPrimaries::Unspecified))
-                return fail("PQ-nits requires declared PQ transfer and primaries without input overrides");
-            if (transfer == ColorTransfer::Hlg || transfer == ColorTransfer::Log || transfer == ColorTransfer::LogSqrt ||
+            const bool hdr_profile = profile != FloatColorProfile::Sdr;
+            const auto required_transfer = profile == FloatColorProfile::PqNits ? ColorTransfer::Pq : ColorTransfer::Hlg;
+            if (hdr_profile && (transfer != required_transfer || overrides.transfer != ColorTransfer::Unspecified || overrides.primaries != ColorPrimaries::Unspecified))
+                return fail("HDR float profiles require their declared transfer and primaries without input overrides");
+            if ((transfer == ColorTransfer::Hlg && profile != FloatColorProfile::HlgScene) || transfer == ColorTransfer::Log || transfer == ColorTransfer::LogSqrt ||
                 (transfer == ColorTransfer::Pq && profile != FloatColorProfile::PqNits))
                 return fail("PQ, HLG and logarithmic transfer are outside the linear SDR profile");
             transfer = overrides.transfer != ColorTransfer::Unspecified ? overrides.transfer : transfer;
             primaries = overrides.primaries != ColorPrimaries::Unspecified ? overrides.primaries : primaries;
             if (transfer != ColorTransfer::Linear && transfer != ColorTransfer::Srgb && transfer != ColorTransfer::Bt709 &&
-                !(profile == FloatColorProfile::PqNits && transfer == ColorTransfer::Pq))
+                !(profile == FloatColorProfile::PqNits && transfer == ColorTransfer::Pq) &&
+                !(profile == FloatColorProfile::HlgScene && transfer == ColorTransfer::Hlg))
                 return fail("Linear EXR requires Linear, sRGB or BT709 transfer; supply an input override for missing metadata");
             if (primaries != ColorPrimaries::Bt709 && primaries != ColorPrimaries::Bt2020)
                 return fail("Linear EXR requires BT709 or BT2020 primaries; supply an input override for missing metadata");
             if (desc->flags & AV_PIX_FMT_FLAG_RGB) {
-                if (range == ColorRange::Limited || (profile == FloatColorProfile::PqNits && range != ColorRange::Full))
-                    return fail(profile == FloatColorProfile::PqNits
-                                    ? "PQ-nits RGB requires explicitly declared full range"
+                if (range == ColorRange::Limited || (hdr_profile && range != ColorRange::Full))
+                    return fail(hdr_profile
+                                    ? "HDR float RGB requires explicitly declared full range"
                                     : "Limited-range RGB is outside the linear SDR profile");
             } else {
                 if (!(desc->flags & AV_PIX_FMT_FLAG_PLANAR))
@@ -83,11 +85,12 @@ namespace lfs::media::detail {
     Result<FrameColor> LinearFrameConverter::outputColor() const {
         const auto color = overrides_.primaries != ColorPrimaries::Unspecified ? overrides_.primaries : static_cast<ColorPrimaries>(source_.color_primaries);
         if (color != ColorPrimaries::Bt709 && color != ColorPrimaries::Bt2020)
-            return unsupported(profile_ == FloatColorProfile::PqNits
-                                   ? "PQ-nits requires declared BT709 or BT2020 primaries without input overrides"
+            return unsupported(profile_ != FloatColorProfile::Sdr
+                                   ? "HDR float requires declared BT709 or BT2020 primaries without input overrides"
                                    : "Linear EXR requires declared BT709 or BT2020 primaries; supply an input override for missing metadata");
         return FrameColor{ColorTransfer::Linear, color, AlphaMode::None,
-                          profile_ == FloatColorProfile::PqNits ? ColorUnits::Nits : ColorUnits::Relative};
+                          profile_ == FloatColorProfile::PqNits ? ColorUnits::Nits : profile_ == FloatColorProfile::HlgScene ? ColorUnits::SceneRelative
+                                                                                                                             : ColorUnits::Relative};
     }
     SinkResult LinearFrameConverter::convert(const AVFrame& frame, int width, int height, uint8_t* destination) {
         const auto* desc = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(frame.format));
@@ -116,8 +119,9 @@ namespace lfs::media::detail {
         parameters.height = frame.height;
         parameters.rgb = source.rgb;
         parameters.big_endian = source.big_endian;
-        parameters.transfer = curve == ColorTransfer::Pq ? 3 : curve == ColorTransfer::Srgb ? 1
-                                                           : curve == ColorTransfer::Bt709  ? 2
+        parameters.transfer = curve == ColorTransfer::Hlg ? 4 : curve == ColorTransfer::Pq  ? 3
+                                                            : curve == ColorTransfer::Srgb  ? 1
+                                                            : curve == ColorTransfer::Bt709 ? 2
                                                                                             : 0;
         const auto chroma = chromaMapping(source.chroma_location, source.chroma_w, source.chroma_h);
         parameters.chroma_x_scale = chroma[0];

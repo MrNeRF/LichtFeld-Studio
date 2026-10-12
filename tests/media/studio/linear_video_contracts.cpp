@@ -246,73 +246,77 @@ int main(int argc, char** argv) {
         // Planar RGB16 and shifted semiplanar 10-bit 4:2:0, in both byte
         // orders. Independent analytic values cover native/reduced/enlarged
         // extents; the resize oracle operates on linear luminance, not codes.
-        for (const bool rgb : {false, true}) {
-            for (const bool big_endian : {false, true}) {
-                VideoColorParameters pq{};
-                pq.width = 4;
-                pq.height = 2;
-                pq.rgb = rgb;
-                pq.big_endian = big_endian;
-                pq.transfer = 3;
-                std::vector<uint8_t> samples(rgb ? 48 : 24);
-                const auto store = [&](size_t offset, unsigned code) {
-                    samples[offset] = uint8_t(big_endian ? code >> 8 : code);
-                    samples[offset + 1] = uint8_t(big_endian ? code : code >> 8);
-                };
-                if (rgb) {
-                    for (unsigned c = 0; c < 3; ++c) {
-                        pq.component[c] = {c * 16, 8, 2, 0, 16, 4, 2};
-                        pq.scale[c] = 1.f / 65535;
-                        pq.decode[c * 3 + c] = 1;
+        for (const unsigned transfer : {3u, 4u}) {
+            for (const bool rgb : {false, true}) {
+                for (const bool big_endian : {false, true}) {
+                    VideoColorParameters pq{};
+                    pq.width = 4;
+                    pq.height = 2;
+                    pq.rgb = rgb;
+                    pq.big_endian = big_endian;
+                    pq.transfer = transfer;
+                    std::vector<uint8_t> samples(rgb ? 48 : 24);
+                    const auto store = [&](size_t offset, unsigned code) {
+                        samples[offset] = uint8_t(big_endian ? code >> 8 : code);
+                        samples[offset + 1] = uint8_t(big_endian ? code : code >> 8);
+                    };
+                    if (rgb) {
+                        for (unsigned c = 0; c < 3; ++c) {
+                            pq.component[c] = {c * 16, 8, 2, 0, 16, 4, 2};
+                            pq.scale[c] = 1.f / 65535;
+                            pq.decode[c * 3 + c] = 1;
+                            for (unsigned y = 0; y < 2; ++y)
+                                for (unsigned x = 0; x < 4; ++x)
+                                    store(c * 16 + y * 8 + x * 2, 5000 + x * 12000 + c * 3000);
+                        }
+                    } else {
+                        pq.component[0] = {0, 8, 2, 6, 10, 4, 2};
+                        pq.component[1] = {16, 8, 4, 6, 10, 2, 1};
+                        pq.component[2] = {18, 8, 4, 6, 10, 2, 1};
+                        pq.chroma_x_scale = pq.chroma_y_scale = .5f;
+                        pq.chroma_y_offset = -.25f;
+                        const std::array matrix{1.f, 0.f, 1.4746f, 1.f, -.164553127f, -.571353127f, 1.f, 1.8814f, 0.f};
+                        std::copy(matrix.begin(), matrix.end(), pq.decode);
+                        pq.scale[0] = 1.f / 876;
+                        pq.bias[0] = 64.f / 876;
+                        pq.scale[1] = pq.scale[2] = 1.f / 896;
+                        pq.bias[1] = pq.bias[2] = 512.f / 896;
                         for (unsigned y = 0; y < 2; ++y)
                             for (unsigned x = 0; x < 4; ++x)
-                                store(c * 16 + y * 8 + x * 2, 5000 + x * 12000 + c * 3000);
+                                store(y * 8 + x * 2, (64 + x * 280) << 6);
+                        for (unsigned offset = 16; offset < 24; offset += 2)
+                            store(offset, 512 << 6);
                     }
-                } else {
-                    pq.component[0] = {0, 8, 2, 6, 10, 4, 2};
-                    pq.component[1] = {16, 8, 4, 6, 10, 2, 1};
-                    pq.component[2] = {18, 8, 4, 6, 10, 2, 1};
-                    pq.chroma_x_scale = pq.chroma_y_scale = .5f;
-                    pq.chroma_y_offset = -.25f;
-                    const std::array matrix{1.f, 0.f, 1.4746f, 1.f, -.164553127f, -.571353127f, 1.f, 1.8814f, 0.f};
-                    std::copy(matrix.begin(), matrix.end(), pq.decode);
-                    pq.scale[0] = 1.f / 876;
-                    pq.bias[0] = 64.f / 876;
-                    pq.scale[1] = pq.scale[2] = 1.f / 896;
-                    pq.bias[1] = pq.bias[2] = 512.f / 896;
-                    for (unsigned y = 0; y < 2; ++y)
-                        for (unsigned x = 0; x < 4; ++x)
-                            store(y * 8 + x * 2, (64 + x * 280) << 6);
-                    for (unsigned offset = 16; offset < 24; offset += 2)
-                        store(offset, 512 << 6);
-                }
-                const auto reference = [&](int x, int c) {
-                    const double code = rgb ? (5000 + std::clamp(x, 0, 3) * 12000 + c * 3000) / 65535.
-                                            : std::clamp(x, 0, 3) * 280 / 876.;
-                    const double p = std::pow(code, 32. / 2523);
-                    return 10000 * std::pow(std::max(p - 3424. / 4096, 0.) /
-                                                (2413. / 128 - 2392. / 128 * p),
-                                            16384. / 2610);
-                };
-                for (const int width : {2, 4, 8}) {
-                    const int height = width / 2;
-                    std::vector<uint8_t> converted(width * height * 12);
-                    const auto converted_result = convert(samples, pq, width, height, converted);
-                    if (!converted_result)
-                        throw std::runtime_error(std::string(converted_result.error().detail()));
-                    for (int y = 0; y < height; ++y)
-                        for (int x = 0; x < width; ++x)
-                            for (int c = 0; c < 3; ++c) {
-                                const double sx = (x + .5) * 4 / width - .5;
-                                const int ix = int(std::floor(sx));
-                                const double fraction = sx - ix;
-                                const double expected_value = width == 2 ? (reference(x * 2, c) + reference(x * 2 + 1, c)) / 2
-                                                                         : reference(ix, c) * (1 - fraction) + reference(ix + 1, c) * fraction;
-                                float actual;
-                                std::memcpy(&actual, converted.data() + ((y * width + x) * 3 + c) * 4, 4);
-                                if (std::abs(actual - expected_value) > std::max(5e-5, expected_value * 2e-4))
-                                    throw std::runtime_error("PQ endian/layout/linear resize differs from independent reference");
-                            }
+                    const auto reference = [&](int x, int c) {
+                        const double code = rgb ? (5000 + std::clamp(x, 0, 3) * 12000 + c * 3000) / 65535.
+                                                : std::clamp(x, 0, 3) * 280 / 876.;
+                        if (transfer == 4)
+                            return code <= .5 ? code * code / 3 : (std::exp((code - .55991073) / .17883277) + .28466892) / 12;
+                        const double p = std::pow(code, 32. / 2523);
+                        return 10000 * std::pow(std::max(p - 3424. / 4096, 0.) /
+                                                    (2413. / 128 - 2392. / 128 * p),
+                                                16384. / 2610);
+                    };
+                    for (const int width : {2, 4, 8}) {
+                        const int height = width / 2;
+                        std::vector<uint8_t> converted(width * height * 12);
+                        const auto converted_result = convert(samples, pq, width, height, converted);
+                        if (!converted_result)
+                            throw std::runtime_error(std::string(converted_result.error().detail()));
+                        for (int y = 0; y < height; ++y)
+                            for (int x = 0; x < width; ++x)
+                                for (int c = 0; c < 3; ++c) {
+                                    const double sx = (x + .5) * 4 / width - .5;
+                                    const int ix = int(std::floor(sx));
+                                    const double fraction = sx - ix;
+                                    const double expected_value = width == 2 ? (reference(x * 2, c) + reference(x * 2 + 1, c)) / 2
+                                                                             : reference(ix, c) * (1 - fraction) + reference(ix + 1, c) * fraction;
+                                    float actual;
+                                    std::memcpy(&actual, converted.data() + ((y * width + x) * 3 + c) * 4, 4);
+                                    if (std::abs(actual - expected_value) > (transfer == 4 ? std::max(1e-7, expected_value * 2e-6) : std::max(5e-5, expected_value * 2e-4)))
+                                        throw std::runtime_error("HDR endian/layout/linear resize differs from independent reference");
+                                }
+                    }
                 }
             }
         }
@@ -364,7 +368,7 @@ int main(int argc, char** argv) {
             source[33 + 2 * i] = 40 + (i * 31) % 190;
         }
         double maximum_error = 0;
-        for (const unsigned transfer : {2u, 3u}) {
+        for (const unsigned transfer : {2u, 3u, 4u}) {
             color.transfer = transfer;
             output.resize(8 * 4 * 12);
             result = convert(source, color, 8, 4, output);
@@ -387,13 +391,12 @@ int main(int argc, char** argv) {
                         std::memcpy(&actual, output.data() + ((y * 8 + x) * 3 + c) * 4, 4);
                         const double value = encoded[c];
                         const double p = std::pow(std::clamp(value, 0., 1.), 32. / 2523);
-                        const double expected = transfer == 3  ? 10000 * std::pow(std::max(p - 3424. / 4096, 0.) /
-                                                                                      (2413. / 128 - 2392. / 128 * p),
-                                                                                  16384. / 2610)
-                                                : value < .081 ? value / 4.5
-                                                               : std::pow((value + .099) / 1.099, 1 / .45);
+                        const double bounded = std::clamp(value, 0., 1.);
+                        const double expected = transfer == 4 ? (bounded <= .5 ? bounded * bounded / 3 : (std::exp((bounded - .55991073) / .17883277) + .28466892) / 12) : transfer == 3 ? 10000 * std::pow(std::max(p - 3424. / 4096, 0.) / (2413. / 128 - 2392. / 128 * p), 16384. / 2610)
+                                                                                                                                                                       : value < .081    ? value / 4.5
+                                                                                                                                                                                         : std::pow((value + .099) / 1.099, 1 / .45);
                         if (std::abs(actual - expected) > (transfer == 3 ? std::max(5e-5, expected * 2e-4) : 3e-6))
-                            throw std::runtime_error("Varied 4:2:0 chroma differs from independent SDR/PQ reference");
+                            throw std::runtime_error("Varied 4:2:0 chroma differs from independent SDR/PQ/HLG reference");
                         if (transfer == 2)
                             maximum_error = std::max(maximum_error, std::abs(actual - expected));
                     }

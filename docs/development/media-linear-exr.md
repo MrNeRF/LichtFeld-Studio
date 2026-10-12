@@ -164,7 +164,7 @@ separate capabilities. Matrix/range and transfer/primaries are independent.
 | Other transfer or primaries | Unsupported unless covered by an explicit permitted override; no implicit gamut conversion | BT.470M transfer and BT.470BG primaries rejection fixtures |
 | Chroma subsampling and location | 4:2:0/4:2:2/4:4:4; location-aware reconstruction | Raw-code and FFprobe siting references; source codes verified before comparison |
 | Float resize/rotation | Area reduction, bilinear enlargement in linear light, sample-preserving quarter turns | Analytic resize/rotation and checkerboard references |
-| Linear float RGB/RGBA to EXR | HALF/FLOAT, BT.709/BT.2020 chromaticities, explicit relative or cd/m2 units; alpha policy explicit | Independent EXR binary reader, FFmpeg HALF/ZIP reader and writer units |
+| Linear float RGB/RGBA to EXR | HALF/FLOAT, BT.709/BT.2020 chromaticities, explicit relative, scene-relative or cd/m2 units; alpha policy explicit | Independent EXR binary reader, FFmpeg HALF/ZIP reader and writer units |
 | RGB8 PNG/JPEG and video export | Existing display/quantization contracts; not a linear HDR master path | Extraction pixel contracts, frozen CPU producer and native video round trips |
 | HDR to SDR | Existing host renderer, explicit request; output is dithered RGB8 sRGB/BT.709 | Existing HDR renderer tests; not evidence of HDR-preserving EXR support |
 | Dolby Vision | Existing format-specific host handling where metadata is available; excluded from float SDR profile | Existing HDR contracts; no generic vendor/model or enhancement-layer claim |
@@ -192,7 +192,8 @@ skips do not qualify another backend.
 ### Gates before extending HDR or LOG
 
 1. Define the output contract first: PQ has an absolute luminance interpretation,
-   HLG requires a declared rendering/viewing policy, and scene-referred LOG needs
+   HLG must distinguish relative scene light from a declared display/viewing
+   policy; scene-referred LOG needs
    the actual curve and gamut. Existing relative-linear SDR EXR must not silently
    change units or acquire a display tone map.
 2. Decide how source mastering/content-light metadata, unknown values and any
@@ -263,7 +264,7 @@ upload/readback contract and backend-selection/error policy. This does not add
 native decoded-GPU HDR ingest or GPU EXR encoding. Existing HDR-display PQ math
 uses the same normalized EOTF without changing its display tonemap policy.
 
-Independent tests cover 40 matrix/transfer/range combinations (30 SDR + 10 PQ),
+Independent tests cover 50 matrix/transfer/range combinations (30 SDR + 10 PQ + 10 HLG),
 raw RGB16 absolute references including the 10,000 endpoint, HALF/FLOAT units,
 linear resize, owned surfaces, MCP, resume/replay/reconstruction and rejection of
 SDR/HLG/LOG or overrides under PQ. Two HEVC streams with identical decoded
@@ -278,5 +279,52 @@ extents. Sharpness-enabled extraction preserves the unscored EXR bytes. The
 shared normalized HDR EOTF matches the previous float expression over all 14-bit
 codes; existing HDR renderer contracts remain part of qualification.
 Synthetic references do not qualify every real HDR bitstream, metadata change,
-Dolby Vision profile or damaged stream. HLG, vendor LOG, BT.2020 CL and Dolby
-Vision remain unsupported by this float profile.
+Dolby Vision profile or damaged stream. HLG requires its separate scene-linear profile below; vendor LOG, BT.2020 CL and
+Dolby Vision remain unsupported by these float profiles.
+
+
+## Opt-in HLG scene-linear extraction
+
+`FloatColorProfile::HlgScene` / `--float-profile hlg-scene` / MCP
+`float_profile: "hlg-scene"` decodes the declared ARIB STD-B67 HLG signal with
+the inverse OETF from [ITU-R BT.2100-3](https://www.itu.int/dms_pubrec/itu-r/rec/bt/R-REC-BT.2100-3-202502-I%21%21PDF-E.pdf).
+The result is relative **scene-linear** RGB normalized so encoded 1 maps to
+scene-light 1 (within floating-point rounding), and encoded 0.5 maps to 1/12.
+This is not the HLG display EOTF: no display OOTF, system gamma, reference display
+peak/black lift, viewing environment or conversion to absolute cd/m2 is applied.
+A display-linear HLG profile would require a separate explicit display contract;
+it is not inferred from mastering metadata or silently assigned a 1000-nit peak.
+
+Only declared HLG with BT.709 or BT.2020 primaries is accepted. Primaries are
+retained, not converted; BT.709-tagged input support is not a claim of full
+BT.2100 production conformance. Input transfer/primaries overrides are rejected.
+Integer RGB/YUV 8–16-bit layout/range/matrix/siting validation is shared with PQ;
+RGB requires explicit full range. Reconstructed encoded RGB is clamped to [0,1]
+before inverse OETF. Missing declarations, PQ under HLG, HLG under PQ, LOG,
+Dolby Vision and BT.2020 CL fail rather than being relabeled.
+
+The existing CPU/Tensor conversion, first-frame prefetch, trim/selection, linear
+resize/rotation, file sink and verified resume paths are reused. `ColorUnits::SceneRelative`
+is preserved by owned surfaces and written as EXR `lfsUnits="scene-relative"`.
+The manifest identifies `linear-hlg-scene`, `linear_domain="scene"`, normalization,
+no display OOTF and no mastering rescale. HALF/FLOAT keep the existing precision,
+compression and failure contracts. The non-default profile and units participate
+in resume identity; SDR/PQ checkpoint semantics remain unchanged.
+
+Sharpness uses a clipped, quantized scene-linear RGB8 proxy. It is not a
+perceptual HDR metric and can discard dark detail; it does not change master
+samples. CLI/Python/MCP expose the explicit profile and capability description;
+the GUI remains on its existing SDR contract. Existing HLG-to-SDR rendering uses
+its display policy and is not changed by scene-linear extraction.
+
+```sh
+media-ingest extract hlg.mkv --output scene-frames --format exr \
+  --float-profile hlg-scene --exr-precision float --interval 1
+```
+
+Reference coverage includes curve branch/endpoints, 50 matrix/transfer/range
+combinations, HALF/FLOAT units/primaries, linear resize, byte-order/layout Tensor
+references, frame-only HEVC color declarations, trim, mastering independence,
+midstream transfer/primaries rejection, API/MCP and verified resume/replay.
+Synthetic fixtures do not qualify every camera, damaged stream, HLG grading
+convention or external application's interpretation of custom EXR attributes.
