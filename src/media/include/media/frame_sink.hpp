@@ -9,6 +9,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::media {
@@ -98,6 +99,8 @@ namespace lfs::media {
         // Validate the finished sequence before dependent metadata is published.
         // This does not complete the sink; failure is followed by abort.
         virtual SinkResult prepareComplete(const SinkSummary&) { return {}; }
+        // Effective provider selected by file sinks, including verified replay.
+        virtual std::string_view imageEncoderBackend() const noexcept { return "cpu"; }
         virtual SinkResult complete(const SinkSummary&) { return {}; }
         virtual void abort(const SinkSummary&) noexcept {}
     };

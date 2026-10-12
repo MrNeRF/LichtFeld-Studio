@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "media/media_ingest.hpp"
+#include "media_backends.hpp"
 #include <nlohmann/json.hpp>
 
 namespace lfs::media::detail {
@@ -13,6 +14,7 @@ namespace lfs::media::detail {
         SinkResult begin(const SinkSession&) override;
         SinkResult write(const FrameView&) override;
         SinkResult prepareComplete(const SinkSummary&) override;
+        std::string_view imageEncoderBackend() const noexcept override { return gpu_jpeg_ ? "nvimagecodec_cuda" : "cpu"; }
         SinkResult complete(const SinkSummary&) override;
         void abort(const SinkSummary&) noexcept override;
 
@@ -22,6 +24,7 @@ namespace lfs::media::detail {
         std::function<bool()> cancelled_;
         std::filesystem::path checkpoint_;
         nlohmann::json identity_;
+        std::unique_ptr<GpuJpegEncoder> gpu_jpeg_;
         std::size_t accepted_ = 0;
         std::size_t recorded_ = 0;
         std::unordered_set<std::filesystem::path> filenames_;

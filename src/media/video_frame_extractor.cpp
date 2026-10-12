@@ -2320,7 +2320,7 @@ namespace lfs::io {
                                                  {"output", convert_hdr_to_sdr ? "sRGB transfer, BT.709 primaries, full range, 8-bit dithered" : "source"},
                                              }},
                             {"image_encoder", {
-                                                  {"backend", used_gpu_encoding ? "nvimagecodec_cuda" : "cpu"},
+                                                  {"backend", used_gpu_encoding ? "nvimagecodec_cuda" : sink.imageEncoderBackend()},
                                                   {"batch_size", used_gpu_encoding ? jpeg_batch_size : 1},
                                               }},
                             {"frame_selection", {

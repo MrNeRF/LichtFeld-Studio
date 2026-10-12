@@ -56,6 +56,7 @@ namespace lfs::media {
             std::optional<Error> last_error;
             std::size_t accepted = 0;
             explicit TrackingSink(FrameSink& value) : destination(value) {}
+            std::string_view imageEncoderBackend() const noexcept override { return destination.imageEncoderBackend(); }
             SinkResult track(SinkResult value) {
                 if (!value)
                     last_error = value.error();
