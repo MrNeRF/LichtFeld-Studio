@@ -197,7 +197,8 @@ TEST(GradientResidual, FiniteDifferencesWithSoftMaskAndBoundaryGather) {
     auto gradient = Tensor::zeros_like(image);
     static_cast<void>(gradient_residual_loss_gradient(image, target, mask, gradient, 1.8f, workspace));
     const auto analytical = gradient.cpu().to_vector();
-    constexpr float epsilon = .0005f;
+    // At 0.0005, loss changes approach single-precision output resolution.
+    constexpr float epsilon = .002f;
     for (const size_t index : {size_t{0}, size_t{16 * SIDE + 16}, size_t{PIXELS + 14 * SIDE + 17}, size_t{2 * PIXELS + 18 * SIDE + 15}, size_t{11 * SIDE + 12}}) {
         auto plus = pixels, minus = pixels;
         plus[index] += epsilon;
