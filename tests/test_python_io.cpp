@@ -792,6 +792,54 @@ TEST_F(TransformsMaskTest, UnicodePathsWorkForExplicitAndImplicitMasks) {
     }
 }
 
+TEST_F(TransformsMaskTest, ExplicitMasksAcceptWindowsSeparators) {
+    const auto root = temp_dir / "mask_separators";
+    const auto relative_mask = fs::path(u8"labels/cam \u00e8/mask \u6d4b\u8bd5.png");
+    const auto mask = root / relative_mask;
+    write_png(root / "images/frame.png", 2, 2);
+    write_png(mask, 2, 2);
+    const std::vector<std::string> paths = {
+        lfs::core::path_to_utf8(relative_mask),
+        "./" + lfs::core::path_to_utf8(relative_mask),
+        "../mask_separators/" + lfs::core::path_to_utf8(relative_mask),
+        lfs::core::path_to_utf8(mask)};
+    for (const auto& path : paths) {
+        for (const auto* separator : {"/", "\\", "\\\\", "/\\"}) {
+            std::string mask_text;
+            for (const char ch : path)
+                mask_text += ch == '/' ? std::string(separator) : std::string(1, ch);
+            SCOPED_TRACE(mask_text);
+            write_dataset(root, {{{"file_path", "images/frame.png"}, {"mask_path", mask_text}}});
+            for (const auto& input : {root, root / "transforms.json"}) {
+                for (const bool load_masks : {false, true}) {
+                    auto result = Loader::create()->load(input, {.load_masks = load_masks});
+                    ASSERT_TRUE(result) << result.error().format();
+                    const auto& camera = std::get<LoadedScene>(result->data).cameras.front();
+                    ASSERT_TRUE(fs::is_regular_file(camera->mask_path()));
+                    EXPECT_TRUE(fs::equivalent(camera->mask_path(), mask));
+                    EXPECT_TRUE(camera->has_mask());
+                }
+            }
+        }
+    }
+}
+
+#ifndef _WIN32
+TEST_F(TransformsMaskTest, ExistingLiteralBackslashMaskTakesPrecedence) {
+    const auto root = temp_dir / "literal_mask";
+    const auto literal_mask = root / "labels\\mask.png";
+    write_png(root / "images/frame.png", 2, 2);
+    write_png(literal_mask, 2, 2);
+    write_png(root / "labels/mask.png", 2, 2);
+    write_dataset(root, {{{"file_path", "images/frame.png"}, {"mask_path", "labels\\mask.png"}}});
+    auto result = Loader::create()->load(root, {.load_masks = true});
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& camera = std::get<LoadedScene>(result->data).cameras.front();
+    EXPECT_EQ(camera->mask_path(), literal_mask);
+    EXPECT_TRUE(camera->has_mask());
+}
+#endif
+
 TEST_F(TransformsMaskTest, MissingExplicitMaskNeverFallsBackToGuessedMask) {
     const auto root = temp_dir / "missing_explicit_mask";
     write_dataset(root, {{{"file_path", "images/frame.png"}, {"mask_path", "labels/missing.png"}}});

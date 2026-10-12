@@ -9,6 +9,7 @@
 #include "core/tensor.hpp"
 #include "formats/colmap.hpp"
 #include "tinyply.hpp"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -629,8 +630,20 @@ namespace lfs::io {
                 lfs::core::Tensor T = w2c.slice(0, 0, 3).slice(1, 3, 4).squeeze(1);
 
                 camdata._image_path = GetTransformImagePath(dir_path, frame.file_path);
-                if (!frame.mask_path.empty())
+                if (!frame.mask_path.empty()) {
                     camdata._mask_path = dir_path / lfs::core::utf8_to_path(frame.mask_path);
+                    if (frame.mask_path.find('\\') != std::string::npos) {
+                        // Preserve literal backslashes in existing POSIX filenames.
+                        std::error_code ec;
+                        if (!std::filesystem::is_regular_file(camdata._mask_path, ec)) {
+                            auto portable_path = frame.mask_path;
+                            std::replace(portable_path.begin(), portable_path.end(), '\\', '/');
+                            const auto mask_path = dir_path / lfs::core::utf8_to_path(portable_path);
+                            if (std::filesystem::is_regular_file(mask_path, ec))
+                                camdata._mask_path = mask_path;
+                        }
+                    }
+                }
                 camdata._has_image = [&] {
                     std::error_code exists_error;
                     return std::filesystem::is_regular_file(camdata._image_path, exists_error);
