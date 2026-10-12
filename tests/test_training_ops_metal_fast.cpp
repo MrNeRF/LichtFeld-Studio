@@ -692,8 +692,6 @@ namespace {
             check_forward(fc);
     }
 
-    // Zero moments and a zero image gradient leave every parameter bit-identical,
-    // as the parity fixture expects.
     TEST_P(PortableFastRaster, GrowingSortCapacityPreservesRender) {
         const auto& table = fast_ops();
         if (table.set_instance_capacity_for_testing == nullptr)
@@ -731,6 +729,8 @@ namespace {
         }
     }
 
+    // Zero moments and a zero image gradient leave every parameter bit-identical,
+    // as the parity fixture expects.
     TEST_P(PortableFastRaster, ZeroGradientLeavesParametersUnchanged) {
         Scene s = make_scene(40, 3, 64, 48, 3u);
         Gpu g = upload_scene(s, ops::ShStorage::Q16);
