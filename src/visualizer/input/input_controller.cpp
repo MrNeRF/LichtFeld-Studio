@@ -360,6 +360,41 @@ namespace lfs::vis {
                 return false;
             }
         }
+
+        void resetViewportToHome(Viewport& target_viewport, const Viewport& primary_viewport) {
+            target_viewport.camera.resetToHome();
+
+            auto* const rendering = services().renderingOrNull();
+            if (!rendering)
+                return;
+
+            auto settings = rendering->getSettings();
+            if (!settings.orthographic)
+                return;
+
+            constexpr float kMinDistance = 0.01f;
+            constexpr float kMinScale = 1.0f;
+            constexpr float kMaxScale = 10000.0f;
+            constexpr float kDefaultScale = 100.0f;
+            const float distance = glm::length(target_viewport.camera.home_pivot - target_viewport.camera.home_t);
+            float scale = kDefaultScale;
+            if (target_viewport.windowSize.y > 0 && distance > kMinDistance) {
+                const float vfov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
+                const float half_tan_fov = std::tan(glm::radians(vfov) * 0.5f);
+                scale = std::clamp(static_cast<float>(target_viewport.windowSize.y) /
+                                       (2.0f * distance * half_tan_fov),
+                                   kMinScale, kMaxScale);
+            }
+
+            if (&target_viewport == &primary_viewport) {
+                settings.ortho_scale = scale;
+                if (target_viewport.ortho_scale_override)
+                    target_viewport.ortho_scale_override = scale;
+                rendering->updateSettings(settings);
+            } else {
+                target_viewport.ortho_scale_override = scale;
+            }
+        }
     } // namespace
 
     InputController* InputController::instance_ = nullptr;
@@ -371,13 +406,13 @@ namespace lfs::vis {
             cmd::GoToCamView::when([this](const auto& e) { handleGoToCamView(e); });
 
         reset_camera_handler_id_ = cmd::ResetCamera::when([this](const auto&) {
-            viewport_.camera.resetToHome();
+            resetViewportToHome(viewport_, viewport_);
             publishCameraMove();
         });
 
         dataset_load_completed_handler_id_ = state::DatasetLoadCompleted::when([this](const auto& e) {
             if (e.success) {
-                viewport_.camera.resetToHome();
+                resetViewportToHome(viewport_, viewport_);
                 publishCameraMove();
             }
         });
@@ -1930,7 +1965,7 @@ namespace lfs::vis {
                 return;
 
             case input::Action::CAMERA_RESET_HOME:
-                activeKeyboardViewport().camera.resetToHome();
+                resetViewportToHome(activeKeyboardViewport(), viewport_);
                 publishCameraMove(&activeKeyboardViewport());
                 return;
 
