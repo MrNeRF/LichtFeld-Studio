@@ -2616,6 +2616,7 @@
     "export_streamed_lod": "无法导出“{}”：模型太大，无法装入内存，正在从磁盘流式加载。",
     "export_extension_required": "导出文件名必须以 {} 结尾。",
     "export_extension_warning": "导出的 {} 数据文件没有常用扩展名，其他应用可能无法识别。",
+    "export_sh_degree_range": "所选模型的 SH 阶数必须介于 0 和 {} 之间。",
     "video_encoder_unavailable": "视频编码器不可用",
     "scene_manager_unavailable": "场景管理器不可用",
     "no_model_selected": "未选择要导出的模型",

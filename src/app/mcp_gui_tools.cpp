@@ -1826,6 +1826,12 @@ namespace lfs::app {
             splat.set_sh_degree(target_degree);
         }
 
+        std::optional<int> requested_export_sh_degree(const json& args) {
+            if (!args.contains("sh_degree"))
+                return std::nullopt;
+            return args.at("sh_degree").get<int>();
+        }
+
         struct BorrowExportPlan {
             core::Scene::MergeStorageMode storage_mode = core::Scene::MergeStorageMode::Clone;
             std::optional<std::shared_lock<std::shared_mutex>> model_lock;
@@ -1895,7 +1901,7 @@ namespace lfs::app {
                                                             const std::vector<std::string>& node_names,
                                                             const core::ExportFormat format,
                                                             const std::filesystem::path& path,
-                                                            const int sh_degree,
+                                                            const std::optional<int> sh_degree,
                                                             const bool include_provenance = true,
                                                             io::SsogSaveOptions ssog_options = {}) {
             if (core::scene_export_path_status(format, path) == core::SceneExportPathStatus::Conflict)
@@ -1920,6 +1926,14 @@ namespace lfs::app {
             if (splats.empty())
                 return std::unexpected("The requested node set does not contain any splat nodes");
 
+            if (sh_degree) {
+                int max_sh_degree = 0;
+                for (const auto& [model, _] : splats)
+                    max_sh_degree = std::max(max_sh_degree, model->get_max_sh_degree());
+                if (*sh_degree < 0 || *sh_degree > max_sh_degree)
+                    return std::unexpected(LOCF(lichtfeld::Strings::Runtime::EXPORT_SH_DEGREE_RANGE, max_sh_degree));
+            }
+
             auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
             auto merged = core::Scene::mergeSplatsWithTransforms(splats, borrow_plan.storage_mode);
             if (!merged)
@@ -1933,7 +1947,8 @@ namespace lfs::app {
                 }
             } cleanup{merged};
 
-            truncate_sh_degree(*merged, sh_degree);
+            if (sh_degree)
+                truncate_sh_degree(*merged, *sh_degree);
             borrow_plan.model_lock.reset();
 
             const auto stamp = include_provenance ? make_gui_export_stamp(scene_manager)
@@ -3728,7 +3743,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -3772,7 +3787,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -3823,7 +3838,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -3876,7 +3891,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -3920,7 +3935,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -3963,7 +3978,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -4006,7 +4021,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -4049,7 +4064,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {

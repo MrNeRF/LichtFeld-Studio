@@ -2616,6 +2616,7 @@
     "export_streamed_lod": "No se puede exportar \"{}\": el modelo es demasiado grande para la memoria y se transmite desde el disco.",
     "export_extension_required": "El nombre del archivo de exportación debe terminar en {}.",
     "export_extension_warning": "Los datos {} exportados no tienen su extensión habitual. Es posible que otras aplicaciones no los reconozcan.",
+    "export_sh_degree_range": "El grado SH debe estar entre 0 y {} para el modelo seleccionado.",
     "video_encoder_unavailable": "Codificador de vídeo no disponible",
     "scene_manager_unavailable": "El gestor de escenas no está disponible",
     "no_model_selected": "No se ha seleccionado ningún modelo para exportar",
