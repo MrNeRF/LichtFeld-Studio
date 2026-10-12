@@ -210,6 +210,11 @@ malformed checkpoints and modified/truncated output files fail without replacing
 those files. Missing recorded images can be reconstructed only when their
 regenerated encoded bytes match the recorded hash.
 
+Checkpoint hashing uses the project's existing OpenSSL SHA-256 provider through
+a private media dependency. The algorithm, input bytes and checkpoint digest
+format are unchanged; input, selected pixel rows and encoded files are still
+verified in full.
+
 The extractor replays decoding and selection from the original start to preserve
 VFR timestamps, naming, deduplication and sharpness windows. It verifies retained
 file bytes and regenerated selected pixels. Verified images are not re-encoded
@@ -229,6 +234,13 @@ The extractor's detailed upload/JPEG/file-write timing counters cover its native
 writer, not checkpoint sink work; use total elapsed time for resume comparisons.
 Accepted-frame and manifest counts include verified retained images as well as
 newly published images; progress describes the replayed selection.
+
+Sparse hardware FPS extraction can continue decoding between nearby targets
+instead of seeking repeatedly into the same GOP. The decision compares the
+remaining timestamp gap with the preroll observed after the preceding seek;
+farther targets still seek. This applies to ordinary extraction and replay,
+preserves the first-frame-at-or-after-target selection, and does not enable
+sparse seeking for sharpness, interval, software or Dolby Vision paths.
 
 For a new image, the existing writer encodes into the checkpoint directory,
 then an immutable record of the expected encoded hash is atomically published
