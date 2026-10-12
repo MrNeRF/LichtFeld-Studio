@@ -182,6 +182,11 @@ malformed checkpoints and modified/truncated output files fail without replacing
 those files. Missing recorded images can be reconstructed only when their
 regenerated encoded bytes match the recorded hash.
 
+Checkpoint hashing uses the project's existing OpenSSL SHA-256 provider through
+a private media dependency. The algorithm, input bytes and checkpoint digest
+format are unchanged; input, selected pixel rows and encoded files are still
+verified in full.
+
 The extractor replays decoding and selection from the original start to preserve
 VFR timestamps, naming, deduplication and sharpness windows. It verifies retained
 file bytes and regenerated selected pixels. Verified images are not re-encoded
