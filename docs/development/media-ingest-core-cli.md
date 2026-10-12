@@ -186,7 +186,9 @@ The extractor replays decoding and selection from the original start to preserve
 VFR timestamps, naming, deduplication and sharpness windows. It verifies retained
 file bytes and regenerated selected pixels. Verified images are not re-encoded
 or rewritten. Resume uses the CPU file encoders; the existing hardware decode
-option remains explicit. It is not a promise of faster decoding.
+option remains explicit. Input, pixel and retained-output verification still
+cost CPU time and I/O. A verified replay can be slower than a fresh ordinary
+extraction, particularly for JPEG; resume promises verified reuse, not a speedup.
 Accepted-frame and manifest counts include verified retained images as well as
 newly published images; progress describes the replayed selection.
 
