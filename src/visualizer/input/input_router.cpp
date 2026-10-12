@@ -72,14 +72,22 @@ namespace lfs::vis::input {
     }
 
     void InputRouter::endMouseButton(const int action) {
+        endMouseButton(action, -1.0, -1.0);
+    }
+
+    void InputRouter::endMouseButton(const int action, const double x, const double y) {
         if (action != ACTION_RELEASE) {
             return;
         }
 
+        const bool unmatched_release = pressed_mouse_buttons_ == 0;
         pressed_mouse_buttons_ = std::max(pressed_mouse_buttons_ - 1, 0);
         if (pressed_mouse_buttons_ == 0) {
             state_.pointer_capture = InputTarget::None;
         }
+        if (unmatched_release && keyboardFocus() == InputTarget::None &&
+            x >= 0.0 && y >= 0.0 && hoverTarget(x, y) == InputTarget::Viewport)
+            focusViewportKeyboard();
     }
 
     void InputRouter::syncPressedMouseButtons(const bool any_buttons_pressed) {

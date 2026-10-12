@@ -1150,7 +1150,7 @@ namespace lfs::vis {
             const int action = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) ? input::ACTION_PRESS : input::ACTION_RELEASE;
             input_router_.beginMouseButton(action, position.x, position.y);
             input_controller_->handleMouseButton(button, action, position.x, position.y);
-            input_router_.endMouseButton(action);
+            input_router_.endMouseButton(action, position.x, position.y);
             break;
         }
 

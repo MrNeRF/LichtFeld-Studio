@@ -37,6 +37,7 @@ namespace lfs::vis::input {
         void onWindowFocusLost();
         void beginMouseButton(int action, double x, double y);
         void endMouseButton(int action);
+        void endMouseButton(int action, double x, double y);
         void syncPressedMouseButtons(bool any_buttons_pressed);
         void focusViewportKeyboard();
 

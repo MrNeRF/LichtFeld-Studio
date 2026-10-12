@@ -1084,6 +1084,46 @@ namespace lfs::vis {
         EXPECT_EQ(router.pointerTarget(2500.0, 2500.0), input::InputTarget::None);
     }
 
+    TEST_F(InputControllerFocusTest, UnmatchedViewportReleaseRestoresKeyboardFocusAfterWindowHide) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0);
+        ASSERT_EQ(router.keyboardFocus(), input::InputTarget::Viewport);
+        router.onWindowFocusLost();
+        ASSERT_EQ(router.keyboardFocus(), input::InputTarget::None);
+
+        router.endMouseButton(input::ACTION_RELEASE, 40.0, 50.0);
+
+        EXPECT_EQ(router.keyboardFocus(), input::InputTarget::Viewport);
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::None);
+    }
+
+    TEST_F(InputControllerFocusTest, UnmatchedReleasePreservesOtherFocusTargets) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        router.endMouseButton(input::ACTION_RELEASE, 2500.0, 2500.0);
+        EXPECT_EQ(router.keyboardFocus(), input::InputTarget::None);
+
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.any_item_active = true;
+        router.endMouseButton(input::ACTION_RELEASE, 40.0, 50.0);
+        EXPECT_EQ(router.keyboardFocus(), input::InputTarget::Gui);
+
+        focus.reset();
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0);
+        router.endMouseButton(input::ACTION_RELEASE, 40.0, 50.0);
+        EXPECT_EQ(router.keyboardFocus(), input::InputTarget::Viewport);
+    }
+
     TEST_F(InputControllerFocusTest, HoverTargetIgnoresPointerCapture) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
