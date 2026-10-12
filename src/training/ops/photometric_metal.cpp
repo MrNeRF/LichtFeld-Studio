@@ -35,7 +35,8 @@ namespace lfs::training {
         enum : uint32_t { kLossNone = 0,
                           kLossSsimMean = 1,
                           kLossFused = 2,
-                          kLossMasked = 3 };
+                          kLossMasked = 3,
+                          kLossMaskedMap = 4 };
 
         // The workspace variants of ssim.cu's LossWorkspaceArena, with its byte
         // layout: fields 256-byte aligned in one UInt8 block, exact on variant
@@ -541,6 +542,13 @@ namespace lfs::training {
             return value;
         }
 
+        Tensor photo_masked_metric_map(const Tensor& predicted, const Tensor& target, const Tensor& mask) {
+            const Images images = prepare(predicted, {}, target, mask);
+            auto map = Tensor::empty(images.prediction.shape(), Device::GPU);
+            ssim_forward(images, {.ssim_map = map}, kLossMaskedMap, false, 1.f, false);
+            return map;
+        }
+
         void photo_error_map(PhotoSaved& saved, const Tensor& predicted, const Tensor& target, Tensor& error,
                              const bool contrast_structure_only) {
             auto& state = state_of(saved);
@@ -615,6 +623,7 @@ namespace lfs::training {
             .create = photo_create,
             .evaluate = photo_evaluate,
             .metric = photo_metric,
+            .masked_metric_map = photo_masked_metric_map,
             .error_map = photo_error_map,
             .map_to_error = photo_map_to_error,
             .workspace_bytes = photo_workspace_bytes,

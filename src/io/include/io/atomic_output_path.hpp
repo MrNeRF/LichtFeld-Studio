@@ -7,6 +7,7 @@
 #include <chrono>
 #include <filesystem>
 #include <format>
+#include <string>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -24,6 +25,36 @@ namespace lfs::io {
         PreserveExtension
     };
 
+    inline std::filesystem::path make_atomic_temp_output_path_for_suffix(
+        const std::filesystem::path& output_path,
+        const std::string& suffix,
+        AtomicOutputTempName name_style = AtomicOutputTempName::AppendSuffix) {
+        std::filesystem::path temporary;
+        if (name_style == AtomicOutputTempName::PreserveExtension && output_path.has_extension()) {
+            auto temp_name = output_path.stem();
+            temp_name += suffix;
+            temp_name += output_path.extension();
+            temporary = output_path.parent_path() / temp_name;
+        } else {
+            temporary = output_path;
+            temporary += suffix;
+        }
+
+        if (temporary.filename().native().size() <= 255)
+            return temporary;
+
+#ifdef _WIN32
+        const auto process_id = GetCurrentProcessId();
+#else
+        const auto process_id = ::getpid();
+#endif
+        auto short_name = std::filesystem::path(std::format(".lfs.{}", process_id));
+        short_name += suffix;
+        if (name_style == AtomicOutputTempName::PreserveExtension && output_path.has_extension())
+            short_name += output_path.extension();
+        return output_path.parent_path() / short_name;
+    }
+
     inline std::filesystem::path make_atomic_temp_output_path(
         const std::filesystem::path& output_path,
         AtomicOutputTempName name_style = AtomicOutputTempName::AppendSuffix) {
@@ -38,16 +69,7 @@ namespace lfs::io {
         const auto unique_suffix =
             std::format(".{}.{}.{}.tmp", ticks, process_id, counter.fetch_add(1, std::memory_order_relaxed));
 
-        if (name_style == AtomicOutputTempName::PreserveExtension && output_path.has_extension()) {
-            auto temp_name = output_path.stem();
-            temp_name += unique_suffix;
-            temp_name += output_path.extension();
-            return output_path.parent_path() / temp_name;
-        }
-
-        auto temporary = output_path;
-        temporary += unique_suffix;
-        return temporary;
+        return make_atomic_temp_output_path_for_suffix(output_path, unique_suffix, name_style);
     }
 
 } // namespace lfs::io

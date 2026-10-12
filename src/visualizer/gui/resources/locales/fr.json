@@ -5234,5 +5234,7 @@
   "node_editor.ramp_hint": "Déplacez les étapes ; cliquez pour ajouter, double-cliquez ou Suppr pour retirer. Sélectionnez une étape pour régler RVBA.",
   "node_editor.keyframe_hint": "Insérer une image clé · Ctrl+clic ou I au survol",
   "toolbar.asset_manager": "Projets",
-  "training.reset_before_strategy_change": "Réinitialisez l’entraînement avant de changer de stratégie."
+  "training.reset_before_strategy_change": "Réinitialisez l’entraînement avant de changer de stratégie.",
+  "io.no_finite_seed_points": "Le nuage de points ne contient aucun point initial fini. Une initialisation aléatoire sera utilisée.",
+  "io.mesh_no_triangle_faces": "Le fichier de maillage ne contient aucune face triangulaire."
 }

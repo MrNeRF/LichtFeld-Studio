@@ -246,6 +246,7 @@ namespace lfs::vis {
             // expose their dependency and leave the wait on the GPU.
             bool synchronize_output = false;
             bool orthographic = false;
+            bool equirectangular = false;
             float ortho_scale = 1.0f;
             float focal_y = 1.0f;
             float voxel_size = 0.01f;

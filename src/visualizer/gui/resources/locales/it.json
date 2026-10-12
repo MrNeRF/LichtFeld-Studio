@@ -5234,5 +5234,7 @@
   "node_editor.ramp_hint": "Trascina le tappe; clic per aggiungere, doppio clic o Canc per rimuovere. Seleziona una tappa per modificare RGBA.",
   "node_editor.keyframe_hint": "Inserisci fotogramma chiave · Ctrl+clic oppure I al passaggio del puntatore",
   "toolbar.asset_manager": "Progetti",
-  "training.reset_before_strategy_change": "Reimposta l’addestramento prima di cambiare strategia."
+  "training.reset_before_strategy_change": "Reimposta l’addestramento prima di cambiare strategia.",
+  "io.no_finite_seed_points": "La nuvola di punti non contiene punti iniziali finiti. Verrà utilizzata un’inizializzazione casuale.",
+  "io.mesh_no_triangle_faces": "Il file della mesh non contiene facce triangolari."
 }

@@ -5234,5 +5234,7 @@
   "node_editor.ramp_hint": "ストップをドラッグして移動。クリックで追加、ダブルクリックまたはDeleteで削除。選択するとRGBAを編集できます。",
   "node_editor.keyframe_hint": "キーフレームを挿入 · Ctrl+クリック、またはポインターを重ねて I",
   "toolbar.asset_manager": "プロジェクト",
-  "training.reset_before_strategy_change": "戦略を変更する前にトレーニングをリセットしてください。"
+  "training.reset_before_strategy_change": "戦略を変更する前にトレーニングをリセットしてください。",
+  "io.no_finite_seed_points": "点群に有限の座標を持つ初期点がありません。ランダムに初期化します。",
+  "io.mesh_no_triangle_faces": "メッシュファイルに三角形の面がありません。"
 }

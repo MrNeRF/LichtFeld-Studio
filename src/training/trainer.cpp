@@ -2171,7 +2171,7 @@ namespace lfs::training {
 
         lfs::core::push_gpu_range("depth_anchors/fingerprint");
         const auto fingerprint_start = std::chrono::steady_clock::now();
-        const auto fingerprint = computeAnchorFingerprint(cameras);
+        const auto fingerprint = computeAnchorFingerprint(means, cameras);
         const auto fingerprint_ms = phase_ms(fingerprint_start);
         lfs::core::pop_gpu_range();
 
@@ -3249,9 +3249,8 @@ namespace lfs::training {
 
             if (include_ssim) {
                 SSIM ssim_metric(true);
-                snapshot.ssim = ssim_metric.compute(
-                    rendered, gt_image,
-                    ssim_evaluation_mask(mask, prepared->erode_ssim_mask, camera.image_name()));
+                snapshot.ssim = ssim_metric.compute_evaluation(
+                    rendered, gt_image, mask, prepared->erode_ssim_mask, camera.image_name());
             }
         } catch (const std::exception& e) {
             return std::unexpected(e.what());

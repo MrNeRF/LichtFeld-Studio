@@ -51,6 +51,9 @@ namespace lfs::gpu_ops {
             PhotoSaved&, In predicted, In target,
             bool maps, bool valid_padding);
 
+        // Map of normalized masked SSIM windows, with no backward workspace.
+        Tensor (*masked_metric_map)(In predicted, In target, In mask);
+
         void (*error_map)(
             PhotoSaved&, In predicted, In target,
             Out error, bool contrast_structure_only);

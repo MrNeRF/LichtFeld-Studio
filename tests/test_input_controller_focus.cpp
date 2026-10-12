@@ -17,6 +17,7 @@
 #include "input/input_controller.hpp"
 #include "input/input_router.hpp"
 #include "input/key_codes.hpp"
+#include "input/sdl_key_mapping.hpp"
 #include "internal/viewport.hpp"
 #include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
@@ -30,6 +31,7 @@
 #include "visualizer/visualizer.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
+#include <array>
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
@@ -2522,6 +2524,66 @@ namespace lfs::vis {
                         .has_value());
     }
 
+    TEST_F(InputControllerFocusTest, NumberRowToolShortcutsFollowPhysicalKeysAcrossLayouts) {
+        struct Layout {
+            const char* name;
+            std::array<SDL_Keycode, 6> keycodes;
+        };
+        const std::array layouts = {
+            Layout{"us", {SDLK_1, SDLK_2, SDLK_3, SDLK_4, SDLK_5, SDLK_6}},
+            Layout{"be", {SDLK_AMPERSAND, static_cast<SDL_Keycode>(0xe9), SDLK_DBLAPOSTROPHE, SDLK_APOSTROPHE, SDLK_LEFTPAREN, static_cast<SDL_Keycode>(0xa7)}},
+            Layout{"fr", {SDLK_AMPERSAND, static_cast<SDL_Keycode>(0xe9), SDLK_DBLAPOSTROPHE, SDLK_APOSTROPHE, SDLK_LEFTPAREN, SDLK_MINUS}},
+        };
+        const std::array expected_tools = {
+            ToolType::Selection,
+            ToolType::Translate,
+            ToolType::Rotate,
+            ToolType::Scale,
+            ToolType::Mirror,
+            ToolType::Align,
+        };
+        const std::array selection_modes = {
+            input::Action::SELECT_MODE_CENTERS,
+            input::Action::SELECT_MODE_RECTANGLE,
+            input::Action::SELECT_MODE_POLYGON,
+            input::Action::SELECT_MODE_LASSO,
+            input::Action::SELECT_MODE_RINGS,
+            input::Action::SELECT_MODE_COLOR,
+        };
+
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        lfs::event::ScopedHandler handlers;
+        int tool_mode = -1;
+        handlers.subscribe<core::events::tools::SetToolbarTool>(
+            [&](const auto& event) { tool_mode = event.tool_mode; });
+
+        for (const auto& layout : layouts) {
+            for (size_t i = 0; i < expected_tools.size(); ++i) {
+                SCOPED_TRACE(std::string(layout.name) + " key " + std::to_string(i + 1));
+                const auto scancode = static_cast<SDL_Scancode>(SDL_SCANCODE_1 + i);
+                const int physical_key = input::sdlScancodeToAppKey(scancode);
+                const int logical_key = input::sdlShortcutKeyToAppKey(scancode, layout.keycodes[i]);
+                EXPECT_EQ(logical_key, input::KEY_1 + static_cast<int>(i));
+
+                tool_mode = -1;
+                controller.handleKey(physical_key, logical_key, scancode,
+                                     input::ACTION_PRESS, input::KEYMOD_NONE);
+                EXPECT_EQ(tool_mode, static_cast<int>(expected_tools[i]));
+                controller.handleKey(physical_key, logical_key, scancode,
+                                     input::ACTION_RELEASE, input::KEYMOD_NONE);
+
+                EXPECT_EQ(controller.getBindings().getActionForKey(input::ToolMode::GLOBAL,
+                                                                   logical_key, input::MODIFIER_CTRL),
+                          selection_modes[i]);
+            }
+        }
+    }
+
     TEST_F(InputControllerFocusTest, ToolLocalOperationalShortcutsDoNotResolveAcrossModes) {
         Viewport viewport(200, 200);
         lfs::vis::TestViewTargets controller_views{viewport};
@@ -2732,6 +2794,50 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager.settingsForView(view).split_view_mode, SplitViewMode::GTComparison);
         core::events::cmd::ResetCamera{}.emit();
         EXPECT_EQ(rendering_manager.settingsForView(view).split_view_mode, SplitViewMode::Disabled);
+    }
+
+    TEST_F(InputControllerFocusTest, UnmatchedViewportReleaseRestoresKeyboardFocusAfterWindowHide) {
+        Viewport viewport(200, 200);
+        lfs::vis::TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
+        controller.updateViewportBounds(0.0f, 0.0f, 200.0f, 200.0f);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0, {});
+        ASSERT_EQ(router.keyboardFocus(), input::InputTarget::Viewport);
+        router.onWindowFocusLost();
+        ASSERT_EQ(router.keyboardFocus(), input::InputTarget::None);
+
+        router.endMouseButton(input::ACTION_RELEASE, 40.0, 50.0);
+
+        EXPECT_EQ(router.keyboardFocus(), input::InputTarget::Viewport);
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::None);
+    }
+
+    TEST_F(InputControllerFocusTest, UnmatchedReleasePreservesOtherFocusTargets) {
+        Viewport viewport(200, 200);
+        lfs::vis::TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
+        controller.updateViewportBounds(0.0f, 0.0f, 200.0f, 200.0f);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        router.endMouseButton(input::ACTION_RELEASE, 2500.0, 2500.0);
+        EXPECT_EQ(router.keyboardFocus(), input::InputTarget::None);
+
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.any_item_active = true;
+        router.endMouseButton(input::ACTION_RELEASE, 40.0, 50.0);
+        EXPECT_EQ(router.keyboardFocus(), input::InputTarget::Gui);
+
+        focus.reset();
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0, {});
+        router.endMouseButton(input::ACTION_RELEASE, 40.0, 50.0);
+        EXPECT_EQ(router.keyboardFocus(), input::InputTarget::Viewport);
     }
 
 } // namespace lfs::vis

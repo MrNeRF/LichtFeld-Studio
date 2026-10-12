@@ -2969,7 +2969,8 @@ namespace {
                                                    expected.translation[1],
                                                    expected.translation[2]));
         EXPECT_FLOAT_EQ(view->settings.focal_length_mm, 73.0f);
-        EXPECT_TRUE(view->settings.orthographic);
+        EXPECT_TRUE(view->settings.equirectangular);
+        EXPECT_FALSE(view->settings.orthographic);
         EXPECT_TRUE(view->settings.point_cloud_mode);
         EXPECT_TRUE(view->settings.depth_view);
         EXPECT_TRUE(view->settings.show_camera_frustums);
