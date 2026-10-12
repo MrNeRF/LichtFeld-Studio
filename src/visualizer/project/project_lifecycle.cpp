@@ -20,6 +20,7 @@
 #include "core/modal_request.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
+#include "core/persisted_settings.hpp"
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/error_event_bridge.hpp"
@@ -2086,20 +2087,14 @@ namespace lfs::vis::project {
                 return fail<ProjectLifecycleSettings>(
                     lfs::ErrorCode::DataLoss,
                     "Project lifecycle settings are invalid.",
-                    "expected an object with version 1 or 2",
+                    "expected an object",
                     "settings.version");
             }
-            const int version =
-                json.value("version", 0);
-            if (version != 1 && version != 2) {
-                return fail<ProjectLifecycleSettings>(
-                    lfs::ErrorCode::DataLoss,
-                    "Project lifecycle settings are invalid.",
-                    "expected an object with version 1 or 2",
-                    "settings.version");
-            }
+            const auto version = lfs::core::persisted_settings::field<std::uint64_t>(json, "version", 2);
+            if (version > 2)
+                LOG_WARN("Reading newer project lifecycle settings version {}", version);
             settings.reopen_last_project =
-                json.value("reopen_last_project", true);
+                lfs::core::persisted_settings::field<bool>(json, "reopen_last_project", true);
             // Version 1 defaulted auto_save_on_close to true.
             // Migrate once to the prompt-first default (false);
             // only an explicit re-enable under version 2 survives.
@@ -2107,100 +2102,80 @@ namespace lfs::vis::project {
                 settings.auto_save_on_close = false;
             } else {
                 settings.auto_save_on_close =
-                    json.value(
-                        "auto_save_on_close", false);
+                    lfs::core::persisted_settings::field<bool>(json, "auto_save_on_close", false);
             }
             settings.embed_dataset_by_default =
-                json.value("embed_dataset_by_default", false);
+                lfs::core::persisted_settings::field<bool>(json, "embed_dataset_by_default", false);
             settings.autosave_interval_seconds =
-                json.value(
-                    "autosave_interval_seconds",
-                    std::uint64_t{5 * 60});
+                lfs::core::persisted_settings::field<std::uint64_t>(json, "autosave_interval_seconds", 5 * 60);
             settings
                 .autosave_dirty_epoch_threshold =
                 std::max<std::uint64_t>(
                     1,
-                    json.value(
-                        "autosave_dirty_epoch_threshold",
-                        std::uint64_t{20}));
+                    lfs::core::persisted_settings::field<std::uint64_t>(json, "autosave_dirty_epoch_threshold", 20));
             settings.autosave_quiet_seconds =
-                json.value(
-                    "autosave_quiet_seconds",
-                    std::uint64_t{2});
+                lfs::core::persisted_settings::field<std::uint64_t>(json, "autosave_quiet_seconds", 2);
             const auto entries = json.find("mru");
             if (entries != json.end()) {
-                if (!entries->is_array()) {
-                    return fail<ProjectLifecycleSettings>(
-                        lfs::ErrorCode::DataLoss,
-                        "The recent-project list is invalid.",
-                        "mru must be an array", "settings.mru");
-                }
-                for (const auto& entry : *entries) {
-                    if (!entry.is_object()) {
-                        continue;
+                if (!entries->is_array())
+                    LOG_WARN("Invalid recent-project list in settings; using an empty list");
+                if (entries->is_array())
+                    for (const auto& entry : *entries) {
+                        if (!entry.is_object()) {
+                            LOG_WARN("Invalid recent-project entry in settings; skipping it");
+                            continue;
+                        }
+                        const auto uuid =
+                            lfs::core::Uuid::from_string(
+                                lfs::core::persisted_settings::field<std::string>(entry, "project_uuid", {}));
+                        const auto path_text =
+                            lfs::core::persisted_settings::field<std::string>(entry, "last_known_path", {});
+                        if (!uuid || uuid->is_nil() ||
+                            path_text.empty()) {
+                            LOG_WARN("Invalid recent-project identity or path in settings; skipping it");
+                            continue;
+                        }
+                        settings.mru.push_back({
+                            .project_uuid = *uuid,
+                            .last_known_path =
+                                lfs::core::utf8_to_path(
+                                    path_text),
+                        });
                     }
-                    const auto uuid =
-                        lfs::core::Uuid::from_string(
-                            entry.value(
-                                "project_uuid",
-                                std::string{}));
-                    const auto path_text =
-                        entry.value(
-                            "last_known_path",
-                            std::string{});
-                    if (!uuid || uuid->is_nil() ||
-                        path_text.empty()) {
-                        continue;
-                    }
-                    settings.mru.push_back({
-                        .project_uuid = *uuid,
-                        .last_known_path =
-                            lfs::core::utf8_to_path(
-                                path_text),
-                    });
-                }
             }
             const auto dismissed =
                 json.find("dismissed_recovery");
             if (dismissed != json.end()) {
-                if (!dismissed->is_array()) {
-                    return fail<ProjectLifecycleSettings>(
-                        lfs::ErrorCode::DataLoss,
-                        "The dismissed-recovery list is invalid.",
-                        "dismissed_recovery must be an array",
-                        "settings.dismissed_recovery");
-                }
-                for (const auto& entry : *dismissed) {
-                    if (!entry.is_object()) {
-                        continue;
+                if (!dismissed->is_array())
+                    LOG_WARN("Invalid dismissed-recovery list in settings; using an empty list");
+                if (dismissed->is_array())
+                    for (const auto& entry : *dismissed) {
+                        if (!entry.is_object()) {
+                            LOG_WARN("Invalid dismissed-recovery entry in settings; skipping it");
+                            continue;
+                        }
+                        const auto path_text =
+                            lfs::core::persisted_settings::field<std::string>(entry, "sidecar_path", {});
+                        if (path_text.empty()) {
+                            LOG_WARN("Invalid dismissed-recovery path in settings; skipping it");
+                            continue;
+                        }
+                        DismissedRecoveryEntry item;
+                        item.sidecar_path =
+                            lfs::core::utf8_to_path(
+                                path_text)
+                                .lexically_normal();
+                        item.autosave_sequence =
+                            lfs::core::persisted_settings::field<std::uint64_t>(entry, "autosave_sequence", 0);
+                        if (const auto commit =
+                                lfs::core::Uuid::from_string(
+                                    lfs::core::persisted_settings::field<std::string>(entry, "commit_uuid", {}));
+                            commit) {
+                            item.commit_uuid = *commit;
+                        }
+                        settings.dismissed_recovery.push_back(
+                            std::move(item));
                     }
-                    const auto path_text =
-                        entry.value(
-                            "sidecar_path",
-                            std::string{});
-                    if (path_text.empty()) {
-                        continue;
-                    }
-                    DismissedRecoveryEntry item;
-                    item.sidecar_path =
-                        lfs::core::utf8_to_path(
-                            path_text)
-                            .lexically_normal();
-                    item.autosave_sequence =
-                        entry.value(
-                            "autosave_sequence",
-                            std::uint64_t{0});
-                    if (const auto commit =
-                            lfs::core::Uuid::from_string(
-                                entry.value(
-                                    "commit_uuid",
-                                    std::string{}));
-                        commit) {
-                        item.commit_uuid = *commit;
-                    }
-                    settings.dismissed_recovery.push_back(
-                        std::move(item));
-                }
             }
             return settings;
         } catch (const std::exception& exception) {
@@ -2240,7 +2215,7 @@ namespace lfs::vis::project {
                      entry.commit_uuid.to_string()},
                 });
             }
-            const Json json{
+            const Json updates{
                 {"version", 2},
                 {"reopen_last_project",
                  settings.reopen_last_project},
@@ -2261,6 +2236,9 @@ namespace lfs::vis::project {
                 {"dismissed_recovery",
                  std::move(dismissed)},
             };
+            const Json json = lfs::core::persisted_settings::mergeForWrite(
+                path, updates, "version", 2, nullptr,
+                {{"mru", "project_uuid"}, {"dismissed_recovery", "sidecar_path"}});
             if (const auto written = lfs::core::writeTextFileAtomically(
                     path, json.dump(2) + '\n');
                 !written) {
