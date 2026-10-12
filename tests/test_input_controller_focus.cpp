@@ -125,6 +125,35 @@ namespace lfs::vis {
         };
     } // namespace
 
+    TEST_F(InputControllerFocusTest, NavigationModeChangesRequestGuiRedraw) {
+        using Mode = InputController::CameraNavigationMode;
+        const Mode modes[] = {Mode::Orbit, Mode::Trackball, Mode::FPV, Mode::Drone};
+        for (const auto from : modes) {
+            for (const auto to : modes) {
+                SCOPED_TRACE(std::string(InputController::cameraNavigationModeName(from)) + " -> " +
+                             InputController::cameraNavigationModeName(to));
+                Viewport viewport(200, 200);
+                InputController controller(nullptr, viewport);
+                viewport.camera.t = glm::vec3(0.0f, 0.0f, 5.0f);
+                viewport.camera.R = glm::mat3(1.0f);
+                viewport.camera.setPivot(glm::vec3(0.0f));
+                controller.setCameraNavigationMode(from);
+                const auto before = python::redraw_request_generation();
+                const auto position = viewport.camera.t;
+                const auto rotation = viewport.camera.R;
+                const auto pivot = viewport.camera.getPivot();
+
+                controller.setCameraNavigationMode(to);
+
+                EXPECT_EQ(controller.cameraNavigationMode(), to);
+                EXPECT_EQ(python::redraw_request_generation(), before + (from != to ? 1 : 0));
+                EXPECT_EQ(viewport.camera.t, position);
+                EXPECT_EQ(viewport.camera.R, rotation);
+                EXPECT_EQ(viewport.camera.getPivot(), pivot);
+            }
+        }
+    }
+
     TEST_F(InputControllerFocusTest, InitializationRestoresRememberedCameraControls) {
         const auto root = std::filesystem::temp_directory_path() / "lfs_InitializationRestoresRememberedCameraControls";
         std::filesystem::remove_all(root);
