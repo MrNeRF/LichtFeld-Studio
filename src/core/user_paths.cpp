@@ -210,54 +210,12 @@ namespace lfs::core {
         backupAndRemoveFile(const std::filesystem::path& source,
                             const std::filesystem::path& backup_root,
                             const std::string_view category) {
-            std::error_code error;
-            if (!std::filesystem::exists(source, error)) {
-                if (error)
-                    return userPathError(
-                        lfs::ErrorCode::Unavailable,
-                        "The user settings file could not be inspected.",
-                        std::format("Unable to inspect settings file '{}': {}",
-                                    path_to_utf8(source), error.message()),
-                        source);
+            auto backup = backupFile(source, backup_root, category);
+            if (!backup)
+                return backup.error();
+            if (!backup.value())
                 return std::optional<std::filesystem::path>{};
-            }
-            if (!std::filesystem::is_regular_file(source, error) || error)
-                return userPathError(
-                    lfs::ErrorCode::InvalidArgument,
-                    "The user settings file cannot be reset.",
-                    std::format("Settings reset requires a regular file '{}': {}",
-                                path_to_utf8(source), error.message()),
-                    source);
-
-            const auto now = std::chrono::system_clock::now().time_since_epoch();
-            const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
-            const auto sequence = g_temporary_file_sequence.fetch_add(1, std::memory_order_relaxed);
-            const auto destination = backup_root /
-                                     std::format("reset-{}-{}-{}-{}", category, millis,
-                                                 currentProcessId(), sequence) /
-                                     source.filename();
-            std::filesystem::create_directories(destination.parent_path(), error);
-            if (error)
-                return userPathError(
-                    lfs::ErrorCode::PermissionDenied,
-                    "The settings backup directory could not be created.",
-                    std::format("Unable to create reset backup directory '{}': {}",
-                                path_to_utf8(destination.parent_path()), error.message()),
-                    destination.parent_path());
-            if (!std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, error))
-                return userPathError(
-                    lfs::ErrorCode::DataLoss,
-                    "The user settings backup could not be created.",
-                    std::format("Unable to back up settings file '{}' to '{}': {}",
-                                path_to_utf8(source), path_to_utf8(destination), error.message()),
-                    source);
-            if (!std::filesystem::exists(destination, error) || error)
-                return userPathError(
-                    lfs::ErrorCode::DataLoss,
-                    "The user settings backup could not be verified.",
-                    std::format("Unable to verify reset backup '{}': {}",
-                                path_to_utf8(destination), error.message()),
-                    destination);
+            std::error_code error;
             if (!std::filesystem::remove(source, error) || error)
                 return userPathError(
                     lfs::ErrorCode::PermissionDenied,
@@ -265,8 +223,67 @@ namespace lfs::core {
                     std::format("Backed up '{}' but could not reset it: {}",
                                 path_to_utf8(source), error.message()),
                     source);
-            return std::optional<std::filesystem::path>{destination};
+            return backup.value();
         }
+
+    } // namespace
+
+    lfs::Result<std::optional<std::filesystem::path>>
+    backupFile(const std::filesystem::path& source,
+               const std::filesystem::path& backup_root,
+               const std::string_view category) {
+        std::error_code error;
+        if (!std::filesystem::exists(source, error)) {
+            if (error)
+                return userPathError(
+                    lfs::ErrorCode::Unavailable,
+                    "The user settings file could not be inspected.",
+                    std::format("Unable to inspect settings file '{}': {}",
+                                path_to_utf8(source), error.message()),
+                    source);
+            return std::optional<std::filesystem::path>{};
+        }
+        if (!std::filesystem::is_regular_file(source, error) || error)
+            return userPathError(
+                lfs::ErrorCode::InvalidArgument,
+                "The user settings file cannot be reset.",
+                std::format("Settings reset requires a regular file '{}': {}",
+                            path_to_utf8(source), error.message()),
+                source);
+
+        const auto now = std::chrono::system_clock::now().time_since_epoch();
+        const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+        const auto sequence = g_temporary_file_sequence.fetch_add(1, std::memory_order_relaxed);
+        const auto destination = backup_root /
+                                 std::format("reset-{}-{}-{}-{}", category, millis,
+                                             currentProcessId(), sequence) /
+                                 source.filename();
+        std::filesystem::create_directories(destination.parent_path(), error);
+        if (error)
+            return userPathError(
+                lfs::ErrorCode::PermissionDenied,
+                "The settings backup directory could not be created.",
+                std::format("Unable to create reset backup directory '{}': {}",
+                            path_to_utf8(destination.parent_path()), error.message()),
+                destination.parent_path());
+        if (!std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, error))
+            return userPathError(
+                lfs::ErrorCode::DataLoss,
+                "The user settings backup could not be created.",
+                std::format("Unable to back up settings file '{}' to '{}': {}",
+                            path_to_utf8(source), path_to_utf8(destination), error.message()),
+                source);
+        if (!std::filesystem::exists(destination, error) || error)
+            return userPathError(
+                lfs::ErrorCode::DataLoss,
+                "The user settings backup could not be verified.",
+                std::format("Unable to verify reset backup '{}': {}",
+                            path_to_utf8(destination), error.message()),
+                destination);
+        return std::optional<std::filesystem::path>{destination};
+    }
+
+    namespace {
 
         [[nodiscard]] lfs::Status
         writeDefaultPreferences(const std::filesystem::path& destination) {

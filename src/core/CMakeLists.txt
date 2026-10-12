@@ -109,6 +109,7 @@ set(CORE_SOURCES
         mesh_data.cpp
         system_info.cpp
         user_paths.cpp
+        persisted_settings.cpp
         legacy_settings_migration.cpp
 )
 
