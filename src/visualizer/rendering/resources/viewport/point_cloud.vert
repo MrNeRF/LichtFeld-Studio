@@ -55,6 +55,7 @@ const int FLAG_HAS_PREVIEW     = 1 << 6;
 const int FLAG_PREVIEW_ADD     = 1 << 7;
 const int FLAG_HAS_DELETED     = 1 << 9;
 const int FLAG_CROP_ELLIPSOID  = 1 << 10;
+const int FLAG_EQUIRECTANGULAR = 1 << 11;
 const uint SELECTION_GROUP_MAX = 255u;
 const uint SELECTION_PREVIEW_COLOR_INDEX = 256u;
 const float SELECTION_COMMITTED_BLEND = 0.75;
@@ -135,23 +136,40 @@ void main() {
     }
 
     vec4 view_pos = pc.view * vec4(ws, 1.0);
-    vec4 clip = pc.view_proj * vec4(ws, 1.0);
+    bool equirectangular = (PC_FLAGS & FLAG_EQUIRECTANGULAR) != 0;
+    bool orthographic = (PC_FLAGS & FLAG_ORTHOGRAPHIC) != 0;
+    float view_z_positive = -view_pos.z;
+    vec4 clip;
+    if (equirectangular) {
+        float distance = length(view_pos.xyz);
+        if (distance <= 1e-6) {
+            reject();
+            return;
+        }
+        const float pi = 3.14159265358979323846;
+        // At the poles longitude is arbitrary; avoid atan(0, 0).
+        float longitude = (view_pos.x == 0.0 && view_pos.z == 0.0)
+                              ? 0.0 : atan(view_pos.x, -view_pos.z);
+        float latitude = asin(clamp(view_pos.y / distance, -1.0, 1.0));
+        clip = pc.view_proj * vec4(0.0, 0.0, -distance, 1.0);
+        clip.xy = vec2(longitude / pi, -2.0 * latitude / pi) * clip.w;
+        view_z_positive = distance;
+    } else {
+        clip = pc.view_proj * vec4(ws, 1.0);
+        if (!orthographic && view_z_positive < 1e-4) {
+            reject();
+            return;
+        }
+    }
 
     if (abs(clip.w) <= 1e-6) {
         reject();
         return;
     }
 
-    bool orthographic = (PC_FLAGS & FLAG_ORTHOGRAPHIC) != 0;
-    float view_z_positive = -view_pos.z;
-    if (!orthographic && view_z_positive < 1e-4) {
-        reject();
-        return;
-    }
-
     float voxel = max(pc.voxel_focal_ortho.x, 1e-5);
     float radius_px;
-    if (orthographic) {
+    if (orthographic && !equirectangular) {
         float pixels_per_world = max(pc.voxel_focal_ortho.z, 1e-5);
         radius_px = max(1.0, ceil(voxel * pixels_per_world * 0.5));
     } else {

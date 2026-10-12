@@ -99,6 +99,7 @@ namespace lfs::vis {
             glm::vec3 background_color{0.0f};
             bool transparent_background = false;
             bool orthographic = false;
+            bool equirectangular = false;
             float ortho_scale = 1.0f;
             float focal_y = 1.0f;
             float voxel_size = 0.01f;

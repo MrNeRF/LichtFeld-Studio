@@ -83,6 +83,7 @@ namespace lfs::vis {
             kFlagDepthViewGrayscale = 1 << 8,
             kFlagHasDeletedMask = 1 << 9,
             kFlagCropEllipsoid = 1 << 10,
+            kFlagEquirectangular = 1 << 11,
         };
         struct PushConstants {
             float view_proj[16];        // 64
@@ -302,6 +303,13 @@ namespace lfs::vis {
                                 bool has_transform_indices, bool has_selection,
                                 bool has_preview_selection, bool has_deleted_mask) {
             std::memcpy(pc.view_proj, glm::value_ptr(req.view_projection), sizeof(pc.view_proj));
+            if (req.equirectangular) {
+                // Panorama XY comes from angles in view space. Project radial
+                // distance with the existing depth projection so readback keeps
+                // the same depth encoding for both cold and cached samples.
+                const glm::mat4 projection = req.view_projection * glm::inverse(req.view);
+                std::memcpy(pc.view_proj, glm::value_ptr(projection), sizeof(pc.view_proj));
+            }
             std::memcpy(pc.view, glm::value_ptr(req.view), sizeof(pc.view));
 
             const bool has_crop = req.crop.has_value() || req.crop_ellipsoid.has_value();
@@ -347,6 +355,9 @@ namespace lfs::vis {
             }
             if (req.orthographic) {
                 flags |= kFlagOrthographic;
+            }
+            if (req.equirectangular) {
+                flags |= kFlagEquirectangular;
             }
             if (has_transform_indices) {
                 flags |= kFlagHasIndices;

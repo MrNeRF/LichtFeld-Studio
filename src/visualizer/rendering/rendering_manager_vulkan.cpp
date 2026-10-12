@@ -3997,6 +3997,7 @@ namespace lfs::vis {
                 vk_req.background_color = pc_request.frame_view.background_color;
                 vk_req.transparent_background = pc_request.transparent_background;
                 vk_req.orthographic = pc_request.frame_view.orthographic;
+                vk_req.equirectangular = pc_request.render.equirectangular;
                 vk_req.ortho_scale = pc_request.frame_view.ortho_scale;
                 vk_req.focal_y = focal_y;
                 vk_req.voxel_size = pc_request.render.voxel_size;
