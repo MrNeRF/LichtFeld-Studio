@@ -8,6 +8,7 @@
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "formats/colmap.hpp"
+#include "ply_property_order.hpp"
 #include "tinyply.hpp"
 #include <algorithm>
 #include <array>
@@ -808,6 +809,10 @@ namespace lfs::io {
             throw_if_load_cancel_requested(options, "Transforms PLY read cancelled");
             file.read(ss);
             throw_if_load_cancel_requested(options, "Transforms PLY read cancelled");
+
+            detail::order_ply_vertex_properties(file, *vertices, {"x", "y", "z"}, options);
+            if (has_colors && colors)
+                detail::order_ply_vertex_properties(file, *colors, {"red", "green", "blue"}, options);
 
             // Get vertex count
             const size_t vertex_count = vertices->count;

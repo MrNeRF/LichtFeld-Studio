@@ -6,12 +6,15 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "io/formats/ply.hpp"
+#include "io/formats/transforms.hpp"
 #include "io/loaders/ply_loader.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -24,6 +27,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -923,3 +927,110 @@ TEST_F(PlyErrorTaxonomyTest, SplatExportRepairsOpacityAfterDeletedRowFiltering) 
     EXPECT_FLOAT_EQ(unchanged[2], original[2]);
     EXPECT_TRUE(std::isnan(unchanged[3]));
 }
+
+namespace {
+    // Properties are written individually so the fixture does not share the reader's packing assumptions.
+    class PlyPropertyOrderTest : public PlyErrorTaxonomyTest,
+                                 public ::testing::WithParamInterface<std::tuple<int, int, int, int>> {
+    protected:
+        template <typename T>
+        static void write_scalar(std::ofstream& out, T value, int encoding) {
+            if (encoding == 0) {
+                out << +value << ' ';
+                return;
+            }
+            std::array<char, sizeof(T)> bytes;
+            std::memcpy(bytes.data(), &value, sizeof(T));
+            if ((encoding == 2) != (std::endian::native == std::endian::big))
+                std::reverse(bytes.begin(), bytes.end());
+            out.write(bytes.data(), bytes.size());
+        }
+    };
+
+    TEST_P(PlyPropertyOrderTest, NamedFieldsPreservePositionsColorsAndNormals) {
+        const auto [encoding, order, position_type, color_type] = GetParam();
+        const std::array<std::string, 3> encodings{"ascii", "binary_little_endian", "binary_big_endian"};
+        const std::array<std::string, 4> position_types{"float", "double", "int", "uchar"};
+        const std::array<std::string, 4> color_types{"uchar", "float", "char", "double"};
+        const std::array<std::string, 10> names{"x", "y", "z", "red", "green", "blue", "nx", "ny", "nz", "confidence"};
+        const std::array<std::array<int, 10>, 4> orders{{
+            {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+            {3, 0, 5, 2, 4, 1, 8, 6, 7, 9},
+            {2, 1, 0, 3, 4, 5, 7, 8, 6, 9},
+            {0, 1, 2, 5, 3, 4, 6, 7, 8, 9},
+        }};
+        const auto input = path("named_properties.ply");
+        {
+            std::ofstream out(input, std::ios::binary);
+            out << "ply\nformat " << encodings[encoding] << " 1.0\nelement vertex 4\n";
+            for (int p : orders[order]) {
+                if (p >= 3 && p <= 5 && color_type >= 4)
+                    continue;
+                const auto type = p < 3   ? position_types[position_type]
+                                  : p < 6 ? color_types[color_type]
+                                  : p < 9 ? "double"
+                                          : "uchar";
+                out << "property " << type << ' ' << names[p] << '\n';
+            }
+            out << "end_header\n";
+            for (int row = 0; row < 4; ++row) {
+                for (int p : orders[order]) {
+                    const int value = 1 + row * 10 + p;
+                    if (p < 3) {
+                        switch (position_type) {
+                        case 0: write_scalar(out, float(value), encoding); break;
+                        case 1: write_scalar(out, double(value), encoding); break;
+                        case 2: write_scalar(out, int32_t(value), encoding); break;
+                        case 3: write_scalar(out, uint8_t(value), encoding); break;
+                        }
+                    } else if (p < 6) {
+                        switch (color_type) {
+                        case 0: write_scalar(out, uint8_t(value), encoding); break;
+                        case 1: write_scalar(out, float(p - 3) * 0.5f, encoding); break;
+                        case 2: write_scalar(out, int8_t(value), encoding); break;
+                        case 3: write_scalar(out, double(value), encoding); break;
+                        }
+                    } else if (p < 9) {
+                        write_scalar(out, double(value), encoding);
+                    } else {
+                        write_scalar(out, uint8_t(value), encoding);
+                    }
+                }
+                if (encoding == 0)
+                    out << '\n';
+            }
+        }
+        auto check = [&](const lfs::core::PointCloud& cloud, bool simple) {
+            const auto means = cloud.means.cpu().to_vector();
+            const auto colors = cloud.colors.cpu().to_vector();
+            ASSERT_EQ(means.size(), 12);
+            ASSERT_EQ(colors.size(), 12);
+            for (int row = 0; row < 4; ++row) {
+                for (int axis = 0; axis < 3; ++axis) {
+                    EXPECT_EQ(means[row * 3 + axis], 1 + row * 10 + axis);
+                    const int expected = color_type == 1                                  ? (axis == 0 ? 0 : axis == 1 ? 127
+                                                                                                                       : 255)
+                                         : color_type == 0 || (simple && color_type == 2) ? 4 + row * 10 + axis
+                                                                                          : 255;
+                    EXPECT_EQ(colors[row * 3 + axis], expected);
+                }
+            }
+            if (!simple) {
+                const auto normals = cloud.normals.cpu().to_vector();
+                ASSERT_EQ(normals.size(), 12);
+                for (int i = 0; i < 12; ++i)
+                    EXPECT_EQ(normals[i], 7 + (i / 3) * 10 + i % 3);
+            }
+        };
+        check(lfs::io::load_simple_ply_point_cloud(input, {}), true);
+        if (position_type < 2) {
+            const auto cloud = lfs::io::load_ply_point_cloud(input, {});
+            ASSERT_TRUE(cloud.has_value()) << cloud.error();
+            check(*cloud, false);
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(EncodingsAndTypes, PlyPropertyOrderTest,
+                             ::testing::Combine(::testing::Range(0, 3), ::testing::Range(0, 4),
+                                                ::testing::Range(0, 4), ::testing::Range(0, 5)));
+} // namespace

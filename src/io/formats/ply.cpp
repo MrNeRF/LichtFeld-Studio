@@ -17,6 +17,7 @@
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/error.hpp"
 #include "io/ply_export_internal.hpp"
+#include "ply_property_order.hpp"
 #include "tinyply.hpp"
 #include <algorithm>
 #include <array>
@@ -4279,6 +4280,12 @@ namespace lfs::io {
             throw_if_load_cancel_requested(options, "PLY read cancelled");
             ply.read(file);
             throw_if_load_cancel_requested(options, "PLY read cancelled");
+
+            detail::order_ply_vertex_properties(ply, *vertices, {"x", "y", "z"}, options);
+            if (has_colors && colors)
+                detail::order_ply_vertex_properties(ply, *colors, {"red", "green", "blue"}, options);
+            if (has_normals && normals)
+                detail::order_ply_vertex_properties(ply, *normals, {"nx", "ny", "nz"}, options);
 
             const size_t N = vertices->count;
             if (N == 0) {
