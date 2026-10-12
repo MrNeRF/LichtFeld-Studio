@@ -304,6 +304,9 @@ namespace lfs::python {
                 if (!get_keymap_bindings())
                     return;
                 KeyTrigger trigger{key, modifiers, false};
+                if (!InputBindings::isValidTriggerForAction(action, trigger))
+                    throw nb::value_error(lfs::event::LocalizationManager::getInstance().get(
+                        "input_settings.invalid_binding"));
                 get_keymap_bindings()->setBinding(mode, action, trigger);
             },
             nb::arg("mode"), nb::arg("action"), nb::arg("key"), nb::arg("modifiers") = 0,
@@ -316,6 +319,8 @@ namespace lfs::python {
                     return false;
                 const auto trigger = triggerFromDict(trigger_dict);
                 if (!trigger)
+                    return false;
+                if (!InputBindings::isValidTriggerForAction(action, *trigger))
                     return false;
                 get_keymap_bindings()->setBinding(mode, action, *trigger);
                 return true;

@@ -684,6 +684,15 @@ set(TEST_FILES
     test_navigation_up_axis.cpp
     test_input_controller_focus.cpp
     test_input_layout_chords.cpp
+    test_keymap_legacy_ids.cpp
+    test_keymap_future_profile.cpp
+    test_keymap_damaged_profile.cpp
+    test_keymap_active_profile.cpp
+    test_keymap_trigger_validation.cpp
+    test_keymap_rejected_import.cpp
+    test_keymap_named_save.cpp
+    test_keymap_extended_keys.cpp
+    test_keymap_side_mouse.cpp
     test_ordered_input_dispatch.cpp
     test_python_editor_input.cpp
     test_input_controller_dataset_load.cpp

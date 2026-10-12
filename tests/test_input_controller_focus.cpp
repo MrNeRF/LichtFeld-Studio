@@ -1826,6 +1826,7 @@ namespace lfs::vis {
         namespace fs = std::filesystem;
         const fs::path data_dir = fs::path(PROJECT_ROOT_PATH) / "tests/data/keymap_defaults";
         const fs::path output = fs::temp_directory_path() / "lfs_keymap_history_result.json";
+        const fs::path saved_profile = fs::temp_directory_path() / "lfs_keymap_history_source.json";
         input::InputBindings defaults;
         ASSERT_TRUE(defaults.saveProfileToFile(output));
         const auto expected = nlohmann::json::parse(std::ifstream(output))["bindings"];
@@ -1833,8 +1834,15 @@ namespace lfs::vis {
             if (entry.path().extension() != ".json")
                 continue;
             SCOPED_TRACE(entry.path().filename().string());
+            auto release_file = nlohmann::json::parse(std::ifstream(entry.path()));
+            for (auto& binding : release_file["bindings"])
+                binding.erase("action_symbol"); // Test files as written by the release saver.
+            {
+                std::ofstream saved(saved_profile);
+                saved << release_file.dump(2);
+            }
             input::InputBindings loaded;
-            ASSERT_TRUE(loaded.loadProfileFromFile(entry.path()));
+            ASSERT_TRUE(loaded.loadProfileFromFile(saved_profile));
             ASSERT_TRUE(loaded.saveProfileToFile(output));
             const auto actual = nlohmann::json::parse(std::ifstream(output))["bindings"];
             EXPECT_EQ(actual, expected);
@@ -1861,6 +1869,7 @@ namespace lfs::vis {
             }
         }
         fs::remove(output);
+        fs::remove(saved_profile);
     }
 
     TEST_F(InputControllerFocusTest, HistoricalProfileKeepsUserRebindRemovalAndAddition) {
@@ -1927,7 +1936,7 @@ namespace lfs::vis {
         const fs::path profile = fs::temp_directory_path() / "lfs_keymap_future_default.json";
         const nlohmann::json saved = {
             {"name", "Default"},
-            {"version", 30},
+            {"version", 31},
             {"bindings", {{{"mode", 0}, {"action", static_cast<int>(input::Action::CAMERA_ORBIT)}, {"description", "Camera Orbit"}, {"trigger_type", "drag"}, {"button", static_cast<int>(input::MouseButton::RIGHT)}, {"modifiers", 0}}}},
             {"overrides", {{"bindings", nlohmann::json::array()}, {"removed", nlohmann::json::array()}}}};
         {
@@ -2151,7 +2160,7 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 30"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 31"), std::string::npos); // PROFILE_VERSION
         EXPECT_NE(contents.find("Gallery Primary Action"), std::string::npos);
         EXPECT_NE(contents.find("Copy Gallery Link"), std::string::npos);
         EXPECT_NE(contents.find("Refresh Assets"), std::string::npos);

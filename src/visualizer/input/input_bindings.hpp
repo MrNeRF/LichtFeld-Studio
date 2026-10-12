@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -173,6 +174,8 @@ namespace lfs::vis::input {
         LEFT = static_cast<int>(AppMouseButton::LEFT),
         RIGHT = static_cast<int>(AppMouseButton::RIGHT),
         MIDDLE = static_cast<int>(AppMouseButton::MIDDLE),
+        BACK = static_cast<int>(AppMouseButton::BACK),
+        FORWARD = static_cast<int>(AppMouseButton::FORWARD),
     };
 
     struct KeyTrigger {
@@ -292,6 +295,7 @@ namespace lfs::vis::input {
         InputBindings();
 
         void loadProfile(const std::string& name);
+        bool saveProfile(const std::string& name);
         bool saveProfile(const std::string& name) const;
         bool loadProfileFromFile(const std::filesystem::path& path);
         bool saveProfileToFile(const std::filesystem::path& path) const;
@@ -301,12 +305,18 @@ namespace lfs::vis::input {
 
         static std::optional<std::filesystem::path> getConfigDir();
         [[nodiscard]] static bool isValidProfileName(std::string_view name) noexcept;
+        [[nodiscard]] static bool isValidTriggerForAction(Action action,
+                                                          const InputTrigger& trigger) noexcept;
         [[nodiscard]] static bool isPersistenceEnabled() noexcept;
         static void setPersistenceEnabled(bool enabled) noexcept;
 
         // Query effective bindings. Mode-local bindings are checked first; actions
         // marked as inherited then fall back to GLOBAL.
         Action getActionForKey(ToolMode mode, int key, int modifiers) const;
+        Action getActionForShortcut(ToolMode mode, int physical_key, int logical_key,
+                                    int modifiers) const;
+        Action getActionForShortcut(ToolMode mode, int physical_key, int logical_key,
+                                    int modifiers, int printed_punctuation) const;
         Action getActionForMouseButton(ToolMode mode, MouseButton button, int modifiers, bool is_double_click = false) const;
         // held_keys: non-modifier keys currently held in press order; chord lookup
         // checks newest first (e.g. R+Scroll for Camera Roll). Pass an empty list
@@ -364,6 +374,7 @@ namespace lfs::vis::input {
         std::string current_profile_name_;
         std::vector<Binding> bindings_;
         std::set<std::pair<ToolMode, Action>> disabled_bindings_;
+        std::shared_ptr<int> callback_lifetime_ = std::make_shared<int>(0);
         std::uint64_t bindings_revision_ = 0;
 
         using KeyMapKey = std::tuple<ToolMode, int, int>;
@@ -386,10 +397,16 @@ namespace lfs::vis::input {
 
         void rebuildLookupMaps();
         void notifyBindingsChanged();
+        bool saveProfileToFile(const std::filesystem::path& path,
+                               std::string_view profile_name) const;
+        void persistActiveProfileName() const;
 
         size_t migrateLoadedProfile(int version);
         size_t collapseRedundantModeBindings(int version);
         [[nodiscard]] bool isDisabled(ToolMode mode, Action action) const;
+        [[nodiscard]] std::vector<std::pair<ToolMode, Action>> unreachableCoreActions() const;
+        void restoreUnreachableCoreActions();
+        void warnAboutUnreachableCoreActions();
     };
 
     LFS_VIS_API std::string getActionName(Action action);

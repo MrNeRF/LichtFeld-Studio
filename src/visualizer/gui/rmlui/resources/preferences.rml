@@ -294,6 +294,11 @@
                         data-attr-data-btn-action="row.button_action"
                         data-attr-data-action-id="row.action_id"
                         data-attr-data-mode-id="row.mode_id">{{ row.button_label }}</button>
+                <button class="btn btn--secondary preferences-rebind-btn preferences-clear-btn"
+                        data-if="row.show_clear"
+                        data-btn-action="clear"
+                        data-attr-data-action-id="row.action_id"
+                        data-attr-data-mode-id="row.mode_id">{{ row.clear_label }}</button>
               </div>
             </div>
           </div>

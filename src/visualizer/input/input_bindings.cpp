@@ -3,15 +3,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "input/input_bindings.hpp"
+#include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/source_site.hpp"
 #include "core/user_paths.hpp"
 #include "input/generated_keymap_defaults.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -26,7 +29,72 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 30; // Store user changes relative to defaults.
+        void notifyNewerProfile() {
+            lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                .error = lfs::make_error({
+                    .code = lfs::ErrorCode::Unsupported,
+                    .domain = lfs::ErrorDomain::App,
+                    .severity = lfs::Severity::Warning,
+                    .user_message = lfs::event::LocalizationManager::getInstance().get(
+                        "input_settings.newer_profile_unchanged"),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }),
+                .surface = lfs::ErrorSurface::Toast,
+                .actions = {},
+                .operation_id = lfs::OperationId::generate(),
+            });
+        }
+
+        bool hasValidStoredBindings(const nlohmann::json& stored) {
+            if (!stored.is_object() || !stored.contains("version") ||
+                !stored["version"].is_number_integer() ||
+                !stored.contains("bindings") || !stored["bindings"].is_array())
+                return false;
+            const auto valid_entry = [](const nlohmann::json& binding) {
+                if (!binding.is_object() || !binding.contains("action") ||
+                    !binding["action"].is_number_integer() ||
+                    !binding.contains("trigger_type") || !binding["trigger_type"].is_string())
+                    return false;
+                const auto type = binding["trigger_type"].get<std::string>();
+                const char* required = nullptr;
+                if (type == "key")
+                    required = "key";
+                else if (type == "mouse_button" || type == "drag")
+                    required = "button";
+                return (required == nullptr ||
+                        (binding.contains(required) && binding[required].is_number_integer())) &&
+                       (required != nullptr || type == "scroll");
+            };
+            if (!std::ranges::all_of(stored["bindings"], valid_entry))
+                return false;
+            if (stored.contains("overrides")) {
+                const auto& overrides = stored["overrides"];
+                if (!overrides.is_object() || !overrides.contains("bindings") ||
+                    !overrides["bindings"].is_array() ||
+                    !std::ranges::all_of(overrides["bindings"], valid_entry) ||
+                    !overrides.contains("removed") || !overrides["removed"].is_array())
+                    return false;
+            }
+            return true;
+        }
+
+        void notifyDamagedProfileBackedUp() {
+            lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                .error = lfs::make_error({
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::App,
+                    .severity = lfs::Severity::Warning,
+                    .user_message = lfs::event::LocalizationManager::getInstance().get(
+                        "input_settings.damaged_profile_backed_up"),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }),
+                .surface = lfs::ErrorSurface::Toast,
+                .actions = {},
+                .operation_id = lfs::OperationId::generate(),
+            });
+        }
+
+        constexpr int PROFILE_VERSION = 31; // Store changes to individual defaults.
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
         constexpr Action LAST_ACTION = Action::ASSET_REFRESH;
@@ -129,6 +197,37 @@ namespace lfs::vis::input {
             return binding.dump();
         }
 
+        [[nodiscard]] bool matchesStoredTrigger(const nlohmann::json& stored,
+                                                const InputTrigger& current) {
+            const std::string type = stored.value("trigger_type", "");
+            return std::visit([&](const auto& trigger) {
+                using T = std::decay_t<decltype(trigger)>;
+                if constexpr (std::is_same_v<T, KeyTrigger>)
+                    return type == "key" && stored.value("key", KEY_UNKNOWN) == trigger.key &&
+                           stored.value("modifiers", 0) == trigger.modifiers &&
+                           stored.value("on_repeat", false) == trigger.on_repeat;
+                else if constexpr (std::is_same_v<T, MouseButtonTrigger>)
+                    return type == "mouse_button" &&
+                           stored.value("button", -1) == static_cast<int>(trigger.button) &&
+                           stored.value("modifiers", 0) == trigger.modifiers &&
+                           stored.value("double_click", false) == trigger.double_click;
+                else if constexpr (std::is_same_v<T, MouseScrollTrigger>)
+                    return type == "scroll" &&
+                           stored.value("modifiers", 0) == trigger.modifiers &&
+                           (stored.contains("chord_key")
+                                ? std::optional<int>(stored.at("chord_key").get<int>())
+                                : std::nullopt) == trigger.chord_key;
+                else
+                    return type == "drag" &&
+                           stored.value("button", -1) == static_cast<int>(trigger.button) &&
+                           stored.value("modifiers", 0) == trigger.modifiers &&
+                           (stored.contains("chord_key")
+                                ? std::optional<int>(stored.at("chord_key").get<int>())
+                                : std::nullopt) == trigger.chord_key;
+            },
+                              current);
+        }
+
         [[nodiscard]] std::optional<Action> findActionBySymbol(std::string_view symbol) {
             for (const auto& [name, value] : kCurrentActionSymbols) {
                 if (name == symbol)
@@ -229,9 +328,23 @@ namespace lfs::vis::input {
         const auto config_dir = getConfigDir();
         if (g_persistence_enabled.load(std::memory_order_acquire) &&
             config_dir) {
-            const auto saved_path = *config_dir / "Default.json";
-            if (std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path))
-                return;
+            std::string selected = "Default";
+            std::ifstream marker;
+            const auto marker_path = *config_dir / ".active-profile";
+            if (std::filesystem::exists(marker_path) &&
+                lfs::core::open_file_for_read(marker_path, marker)) {
+                std::getline(marker, selected);
+                if (!isValidProfileName(selected))
+                    selected = "Default";
+            }
+            for (const auto& name : {selected, std::string("Default")}) {
+                const auto saved_path = *config_dir / (name + ".json");
+                if (!std::filesystem::is_symlink(saved_path) &&
+                    std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path)) {
+                    current_profile_name_ = name;
+                    return;
+                }
+            }
         }
 
         auto profile = createDefaultProfile();
@@ -239,6 +352,7 @@ namespace lfs::vis::input {
         bindings_ = std::move(profile.bindings);
         disabled_bindings_.clear();
         rebuildLookupMaps();
+        persistActiveProfileName();
     }
 
     void InputBindings::loadProfile(const std::string& name) {
@@ -261,7 +375,16 @@ namespace lfs::vis::input {
             return;
         }
         const auto path = *config_dir / (name + ".json");
+        if (std::filesystem::is_symlink(path)) {
+            LOG_WARN("Refusing symbolic link input profile '{}': file is outside the keymap directory", name);
+            return;
+        }
         if (std::filesystem::exists(path) && loadProfileFromFile(path)) {
+            const bool corrected_name = current_profile_name_ != name;
+            current_profile_name_ = name;
+            persistActiveProfileName();
+            if (corrected_name)
+                notifyBindingsChanged();
             return;
         }
 
@@ -272,13 +395,14 @@ namespace lfs::vis::input {
             disabled_bindings_.clear();
             rebuildLookupMaps();
             notifyBindingsChanged();
+            persistActiveProfileName();
         } else {
             LOG_WARN("Unknown profile '{}', using default", name);
             loadProfile("Default");
         }
     }
 
-    bool InputBindings::saveProfile(const std::string& name) const {
+    bool InputBindings::saveProfile(const std::string& name) {
         if (!isValidProfileName(name)) {
             LOG_WARN("Refusing invalid input profile name");
             return false;
@@ -291,7 +415,41 @@ namespace lfs::vis::input {
             return false;
         }
         const auto path = *config_dir / (name + ".json");
-        return saveProfileToFile(path);
+        if (std::filesystem::is_symlink(path)) {
+            LOG_WARN("Refusing symbolic link input profile '{}': file is outside the keymap directory", name);
+            return false;
+        }
+        if (!saveProfileToFile(path, name))
+            return false;
+        current_profile_name_ = name;
+        persistActiveProfileName();
+        notifyBindingsChanged();
+        return true;
+    }
+
+    bool InputBindings::saveProfile(const std::string& name) const {
+        if (!isValidProfileName(name) ||
+            !g_persistence_enabled.load(std::memory_order_acquire))
+            return false;
+        const auto config_dir = getConfigDir();
+        if (!config_dir)
+            return false;
+        const auto path = *config_dir / (name + ".json");
+        return !std::filesystem::is_symlink(path) && saveProfileToFile(path, name);
+    }
+
+    void InputBindings::persistActiveProfileName() const {
+        if (!g_persistence_enabled.load(std::memory_order_acquire) ||
+            !isValidProfileName(current_profile_name_))
+            return;
+        const auto config_dir = getConfigDir();
+        if (!config_dir)
+            return;
+        const auto written = lfs::core::writeTextFileAtomically(
+            *config_dir / ".active-profile", current_profile_name_ + "\n");
+        if (!written)
+            LOG_WARN("Could not remember active input profile '{}': {}",
+                     current_profile_name_, lfs::format_for_developer(written.error()));
     }
 
     bool InputBindings::isValidProfileName(const std::string_view name) noexcept {
@@ -328,6 +486,33 @@ namespace lfs::vis::input {
         return true;
     }
 
+    bool InputBindings::isValidTriggerForAction(const Action action,
+                                                const InputTrigger& trigger) noexcept {
+        const int modifiers = std::visit([](const auto& value) { return value.modifiers; }, trigger);
+        if ((modifiers & ~MODIFIER_MASK) != 0)
+            return false;
+        const auto allowed = describe(action).allowed_kinds;
+        if (const auto* key = std::get_if<KeyTrigger>(&trigger)) {
+            if (!(allowed & TRIGGER_KIND_KEY) || key->key == KEY_UNKNOWN)
+                return false;
+            switch (action) {
+            case Action::CAMERA_MOVE_FORWARD:
+            case Action::CAMERA_MOVE_BACKWARD:
+            case Action::CAMERA_MOVE_LEFT:
+            case Action::CAMERA_MOVE_RIGHT:
+            case Action::CAMERA_MOVE_UP:
+            case Action::CAMERA_MOVE_DOWN:
+                return (modifiers & (MODIFIER_CTRL | MODIFIER_ALT | MODIFIER_SUPER)) == 0;
+            default: return true;
+            }
+        }
+        if (std::holds_alternative<MouseButtonTrigger>(trigger))
+            return (allowed & TRIGGER_KIND_MOUSE_BUTTON) != 0;
+        if (std::holds_alternative<MouseScrollTrigger>(trigger))
+            return (allowed & TRIGGER_KIND_MOUSE_SCROLL) != 0;
+        return (allowed & TRIGGER_KIND_MOUSE_DRAG) != 0;
+    }
+
     std::optional<std::filesystem::path> InputBindings::getConfigDir() {
         const auto paths = lfs::core::UserPaths::resolve();
         if (paths)
@@ -346,10 +531,68 @@ namespace lfs::vis::input {
     }
 
     bool InputBindings::saveProfileToFile(const std::filesystem::path& path) const {
+        return saveProfileToFile(path, current_profile_name_);
+    }
+
+    bool InputBindings::saveProfileToFile(const std::filesystem::path& path,
+                                          const std::string_view profile_name) const {
         using json = nlohmann::json;
 
+        std::error_code file_error;
+        if (std::filesystem::exists(path, file_error)) {
+            if (std::filesystem::is_symlink(path, file_error) || file_error) {
+                LOG_WARN("Refusing to overwrite symbolic link input profile '{}': file is unchanged",
+                         lfs::core::path_to_utf8(path));
+                return false;
+            }
+            std::ifstream existing;
+            if (!lfs::core::open_file_for_read(path, existing)) {
+                LOG_WARN("Cannot read existing input profile '{}'; file is unchanged",
+                         lfs::core::path_to_utf8(path));
+                return false;
+            }
+            const json stored = json::parse(existing, nullptr, false);
+            if (stored.is_object()) {
+                const auto version = stored.find("version");
+                if (version != stored.end() && version->is_number_integer() &&
+                    *version > PROFILE_VERSION) {
+                    LOG_WARN("Refusing to overwrite newer input profile '{}'; file is unchanged",
+                             lfs::core::path_to_utf8(path));
+                    notifyNewerProfile();
+                    return false;
+                }
+            }
+            if (!hasValidStoredBindings(stored)) {
+                bool backed_up = false;
+                std::filesystem::path backup;
+                for (int attempt = 0; attempt < 100 && !backed_up; ++attempt) {
+                    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+                    backup = path;
+                    backup += ".damaged-" + std::to_string(stamp) +
+                              "-" + std::to_string(attempt) + ".bak";
+                    backed_up = std::filesystem::copy_file(
+                        path, backup, std::filesystem::copy_options::none, file_error);
+                    if (file_error && file_error != std::errc::file_exists)
+                        break;
+                    file_error.clear();
+                }
+                const auto source_size = std::filesystem::file_size(path, file_error);
+                const auto backup_size = backed_up
+                                             ? std::filesystem::file_size(backup, file_error)
+                                             : std::uintmax_t(-1);
+                if (!backed_up || file_error || source_size != backup_size) {
+                    LOG_ERROR("Could not preserve damaged input profile '{}'; file is unchanged",
+                              lfs::core::path_to_utf8(path));
+                    return false;
+                }
+                LOG_WARN("Damaged input profile preserved at '{}' before saving",
+                         lfs::core::path_to_utf8(backup));
+                notifyDamagedProfileBackedUp();
+            }
+        }
+
         json j;
-        j["name"] = current_profile_name_;
+        j["name"] = std::string(profile_name);
         j["version"] = PROFILE_VERSION;
 
         json bindings_array = json::array();
@@ -394,7 +637,6 @@ namespace lfs::vis::input {
         j["bindings"] = bindings_array;
 
         const auto defaults = createDefaultProfile().bindings;
-        std::set<std::pair<ToolMode, Action>> changed = disabled_bindings_;
         const auto same_trigger = [](const InputTrigger& lhs, const InputTrigger& rhs) {
             if (lhs.index() != rhs.index())
                 return false;
@@ -415,29 +657,38 @@ namespace lfs::vis::input {
             },
                               lhs);
         };
+        json overrides = {{"bindings", json::array()},
+                          {"removed", json::array()},
+                          {"disabled", json::array()}};
+        std::map<std::pair<ToolMode, Action>, int> default_slots;
         for (const auto& def : defaults) {
-            if (!std::ranges::any_of(bindings_, [&](const Binding& b) {
+            const int slot = default_slots[{def.mode, def.action}]++;
+            if (std::ranges::any_of(bindings_, [&](const Binding& b) {
                     return b.mode == def.mode && b.action == def.action &&
                            same_trigger(b.trigger, def.trigger);
                 }))
-                changed.insert({def.mode, def.action});
+                continue;
+            overrides["removed"].push_back({{"mode", static_cast<int>(def.mode)},
+                                            {"action", static_cast<int>(def.action)},
+                                            {"description", getActionName(def.action)},
+                                            {"slot", slot}});
         }
-        for (const auto& b : bindings_) {
+        for (size_t i = 0; i < bindings_.size(); ++i) {
+            const auto& b = bindings_[i];
             if (!std::ranges::any_of(defaults, [&](const Binding& def) {
                     return b.mode == def.mode && b.action == def.action &&
                            same_trigger(b.trigger, def.trigger);
                 }))
-                changed.insert({b.mode, b.action});
-        }
-        json overrides = {{"bindings", json::array()}, {"removed", json::array()}};
-        for (const auto& [mode, action] : changed) {
-            overrides["removed"].push_back({{"mode", static_cast<int>(mode)},
-                                            {"action", static_cast<int>(action)},
-                                            {"description", getActionName(action)}});
-        }
-        for (size_t i = 0; i < bindings_.size(); ++i) {
-            if (changed.contains({bindings_[i].mode, bindings_[i].action}))
                 overrides["bindings"].push_back(bindings_array[i]);
+        }
+        for (const auto& [mode, action] : disabled_bindings_) {
+            if (std::ranges::any_of(bindings_, [&](const Binding& b) {
+                    return b.mode == mode && b.action == action;
+                }))
+                continue;
+            overrides["disabled"].push_back({{"mode", static_cast<int>(mode)},
+                                             {"action", static_cast<int>(action)},
+                                             {"description", getActionName(action)}});
         }
         j["overrides"] = std::move(overrides);
 
@@ -458,6 +709,7 @@ namespace lfs::vis::input {
 
     bool InputBindings::loadProfileFromFile(const std::filesystem::path& path) {
         using json = nlohmann::json;
+        InputBindings previous = *this;
 
         try {
             std::ifstream file;
@@ -469,8 +721,14 @@ namespace lfs::vis::input {
             const json j = json::parse(file);
             file.close();
             const int version = j.value("version", 0);
+            if (version > PROFILE_VERSION) {
+                LOG_WARN("Cannot load newer input profile version {} from '{}'; file is unchanged",
+                         version, lfs::core::path_to_utf8(path));
+                notifyNewerProfile();
+                return false;
+            }
             const std::string profile_name = j.value("name", "Custom");
-            const bool override_format = version >= 30 && version <= PROFILE_VERSION &&
+            const bool override_format = version == PROFILE_VERSION &&
                                          j.contains("overrides") && j["overrides"].is_object() &&
                                          j["overrides"].contains("bindings") &&
                                          j["overrides"].contains("removed");
@@ -478,9 +736,9 @@ namespace lfs::vis::input {
             std::set<std::string> historical_keys;
             std::set<std::string> stale_default_keys;
             std::set<std::pair<int, int>> stale_default_actions;
-            std::set<std::pair<int, int>> changed_historical_actions;
             std::unordered_map<int, Action> historical_actions;
             json historical_bindings = json::array();
+            json historical_action_symbols = json::object();
             if (!override_format && version < PROFILE_VERSION && version >= 2) {
                 size_t best_matches = 0;
                 size_t best_difference = std::numeric_limits<size_t>::max();
@@ -494,7 +752,8 @@ namespace lfs::vis::input {
                 for (const auto& snapshot : kHistoricalKeymapDefaults) {
                     if (snapshot.version != version)
                         continue;
-                    const auto candidate = json::parse(snapshot.json)["bindings"];
+                    const auto snapshot_data = json::parse(snapshot.json());
+                    const auto& candidate = snapshot_data["bindings"];
                     size_t matches = 0;
                     for (const auto& b : candidate)
                         matches += stored_keys.contains(bindingKey(b));
@@ -504,18 +763,42 @@ namespace lfs::vis::input {
                         best_matches = matches;
                         best_difference = difference;
                         historical_bindings = candidate;
+                        historical_action_symbols = snapshot_data.value("actions", json::object());
                     }
                 }
-                if (historical_bindings.empty() || best_matches * 2 < historical_bindings.size()) {
+                // Sparse hand-written files predate complete saved profiles and
+                // still need the explicit compatibility migrations below.
+                if (historical_bindings.empty() ||
+                    (stored_bindings.size() < 10 &&
+                     best_matches * 2 < historical_bindings.size())) {
                     historical_bindings = json::array();
                 } else {
+                    for (auto it = historical_action_symbols.begin();
+                         it != historical_action_symbols.end(); ++it) {
+                        if (const auto mapped = findActionBySymbol(it.value().get<std::string>()))
+                            historical_actions.emplace(std::stoi(it.key()), *mapped);
+                    }
                     const auto current_defaults = createDefaultProfile().bindings;
                     for (const auto& b : historical_bindings) {
                         historical_keys.insert(bindingKey(b));
-                        if (const auto mapped = findActionBySymbol(b.value("action_symbol", "")))
-                            historical_actions.emplace(b.value("action", 0), *mapped);
-                        if (!stored_keys.contains(bindingKey(b)))
-                            changed_historical_actions.insert({b.value("mode", 0), b.value("action", 0)});
+                        const auto old_mode = static_cast<ToolMode>(b.value("mode", 0));
+                        const auto old_description = toLowerCopy(b.value("description", ""));
+                        std::optional<Action> named_default;
+                        for (const auto& def : current_defaults) {
+                            if (def.mode != old_mode ||
+                                toLowerCopy(def.description) != old_description)
+                                continue;
+                            if (named_default && *named_default != def.action) {
+                                named_default.reset();
+                                break;
+                            }
+                            named_default = def.action;
+                        }
+                        const int old_id = b.value("action", 0);
+                        if (named_default)
+                            historical_actions[old_id] = *named_default;
+                        else if (const auto mapped = findActionBySymbol(b.value("action_symbol", "")))
+                            historical_actions.try_emplace(old_id, *mapped);
                     }
                     for (const auto& snapshot : kHistoricalKeymapDefaults) {
                         if (snapshot.version >= version)
@@ -523,7 +806,7 @@ namespace lfs::vis::input {
                         // Earlier loaders could resave old defaults with a newer version.
                         // Only discard residues with a shifted action ID or a mode
                         // binding now inherited globally; keep ambiguous rebinds.
-                        const json prior_profile = json::parse(snapshot.json);
+                        const json prior_profile = json::parse(snapshot.json());
                         for (const auto& old : prior_profile["bindings"]) {
                             const auto key = bindingKey(old);
                             if (historical_keys.contains(key) || !stored_keys.contains(key))
@@ -552,11 +835,6 @@ namespace lfs::vis::input {
                                                           static_cast<int>(*action)});
                         }
                     }
-                    for (const auto& b : stored_bindings) {
-                        if (!historical_keys.contains(bindingKey(b)) &&
-                            !stale_default_keys.contains(bindingKey(b)))
-                            changed_historical_actions.insert({b.value("mode", 0), b.value("action", 0)});
-                    }
                 }
             }
 
@@ -577,11 +855,11 @@ namespace lfs::vis::input {
 
             for (const auto& b : stored_bindings) {
                 const bool user_added = !historical_bindings.empty() &&
-                                        !stale_default_keys.contains(bindingKey(b)) &&
-                                        changed_historical_actions.contains(
-                                            {b.value("mode", 0), b.value("action", 0)});
+                                        !historical_keys.contains(bindingKey(b)) &&
+                                        !stale_default_keys.contains(bindingKey(b));
                 const int mode_value = b.value("mode", 0);
                 int action_value = b["action"].get<int>();
+                const bool has_historical_action = historical_actions.contains(action_value);
                 if (const auto mapped = historical_actions.find(action_value);
                     mapped != historical_actions.end())
                     action_value = static_cast<int>(mapped->second);
@@ -635,7 +913,7 @@ namespace lfs::vis::input {
                 // match the current name for that integer action, the enum was
                 // reshuffled between profile saves — re-resolve by description
                 // so the binding still drives the intended action.
-                if (b.contains("description")) {
+                if (b.contains("description") && !has_historical_action) {
                     const auto stored_desc = b["description"].get<std::string>();
                     const auto current_name = getActionName(binding.action);
                     if (toLowerCopy(stored_desc) != toLowerCopy(current_name)) {
@@ -678,6 +956,8 @@ namespace lfs::vis::input {
                 }
 
                 binding = normalizeLoadedBinding(std::move(binding));
+                if (!isValidTriggerForAction(binding.action, binding.trigger))
+                    throw std::runtime_error("invalid or unreachable input binding");
                 if (user_added)
                     user_additions.push_back(binding);
 
@@ -699,38 +979,75 @@ namespace lfs::vis::input {
             if (override_format || !historical_bindings.empty()) {
                 if (override_format)
                     user_additions = std::move(bindings_);
-                const json& removed = override_format ? j["overrides"]["removed"] : historical_bindings;
-                std::set<std::string> stored_keys;
-                if (!override_format) {
+                bindings_ = createDefaultProfile().bindings;
+                std::set<std::tuple<ToolMode, Action, int>> removed_slots;
+                if (override_format) {
+                    for (const auto& removed : j["overrides"]["removed"]) {
+                        removed_slots.insert({static_cast<ToolMode>(removed.at("mode").get<int>()),
+                                              static_cast<Action>(removed.at("action").get<int>()),
+                                              removed.at("slot").get<int>()});
+                    }
+                    if (j["overrides"].contains("disabled")) {
+                        for (const auto& disabled : j["overrides"]["disabled"]) {
+                            disabled_bindings_.insert(
+                                {static_cast<ToolMode>(disabled.at("mode").get<int>()),
+                                 static_cast<Action>(disabled.at("action").get<int>())});
+                        }
+                    }
+                } else {
+                    std::set<std::string> stored_keys;
                     for (const auto& b : stored_bindings)
                         stored_keys.insert(bindingKey(b));
-                }
-                bindings_ = createDefaultProfile().bindings;
-                for (const auto& b : removed) {
-                    if (!override_format &&
-                        (stored_keys.contains(bindingKey(b)) ||
-                         stale_default_actions.contains({b.value("mode", 0),
-                                                         static_cast<int>(historical_actions.contains(b.value("action", 0))
-                                                                              ? historical_actions.at(b.value("action", 0))
-                                                                              : static_cast<Action>(b.value("action", 0)))})))
-                        continue;
-                    const auto mode = static_cast<ToolMode>(b.value("mode", 0));
-                    Action action = static_cast<Action>(b.value("action", 0));
-                    if (!override_format) {
-                        if (const auto mapped = historical_actions.find(static_cast<int>(action));
+                    std::map<std::pair<int, int>, int> historical_slots;
+                    for (const auto& old : historical_bindings) {
+                        const int old_mode = old.value("mode", 0);
+                        const int old_action = old.value("action", 0);
+                        const int slot = historical_slots[{old_mode, old_action}]++;
+                        if (stored_keys.contains(bindingKey(old)))
+                            continue;
+                        Action action = static_cast<Action>(old_action);
+                        if (const auto mapped = historical_actions.find(old_action);
                             mapped != historical_actions.end())
                             action = mapped->second;
+                        else if (const auto named = findActionBySymbol(old.value("action_symbol", "")))
+                            action = *named;
+                        else if (const auto named = findActionByDescription(old.value("description", "")))
+                            action = *named;
+                        if (stale_default_actions.contains({old_mode, static_cast<int>(action)}))
+                            continue;
+                        Binding normalized{static_cast<ToolMode>(old_mode), KeyTrigger{KEY_UNKNOWN},
+                                           action, getActionName(action)};
+                        normalized = normalizeLoadedBinding(std::move(normalized));
+                        int current_slot = 0;
+                        int matched_slot = slot;
+                        for (const auto& def : bindings_) {
+                            if (def.mode != normalized.mode || def.action != normalized.action)
+                                continue;
+                            if (matchesStoredTrigger(old, def.trigger)) {
+                                matched_slot = current_slot;
+                                break;
+                            }
+                            ++current_slot;
+                        }
+                        removed_slots.insert({normalized.mode, normalized.action, matched_slot});
+                        if (normalized.mode != ToolMode::GLOBAL &&
+                            std::ranges::any_of(bindings_, [&](const Binding& def) {
+                                return def.mode == ToolMode::GLOBAL &&
+                                       def.action == normalized.action &&
+                                       describe(def.action).inherits_from_global;
+                            }) &&
+                            !std::ranges::any_of(bindings_, [&](const Binding& def) {
+                                return def.mode == normalized.mode &&
+                                       def.action == normalized.action;
+                            }))
+                            disabled_bindings_.insert({normalized.mode, normalized.action});
                     }
-                    if (const auto resolved = findActionByDescription(b.value("description", "")))
-                        action = *resolved;
-                    Binding normalized{mode, KeyTrigger{KEY_UNKNOWN}, action, getActionName(action)};
-                    normalized = normalizeLoadedBinding(std::move(normalized));
-                    disabled_bindings_.insert({normalized.mode, normalized.action});
                 }
-                for (const auto& added : user_additions)
-                    disabled_bindings_.insert({added.mode, added.action});
+                std::map<std::pair<ToolMode, Action>, int> current_slots;
                 std::erase_if(bindings_, [&](const Binding& b) {
-                    return disabled_bindings_.contains({b.mode, b.action});
+                    const int slot = current_slots[{b.mode, b.action}]++;
+                    return removed_slots.contains({b.mode, b.action, slot}) ||
+                           disabled_bindings_.contains({b.mode, b.action});
                 });
                 for (const auto& added : user_additions) {
                     std::erase_if(bindings_, [&](const Binding& b) {
@@ -751,6 +1068,7 @@ namespace lfs::vis::input {
             }
 
             rebuildLookupMaps();
+            warnAboutUnreachableCoreActions();
 
             // Auto-persist the canonical Default profile so disk stays current
             // after a versioned migration. User-imported files are left untouched;
@@ -769,6 +1087,7 @@ namespace lfs::vis::input {
             notifyBindingsChanged();
             return true;
         } catch (const std::exception& e) {
+            *this = std::move(previous);
             LOG_ERROR("Failed to load profile: {}", e.what());
             return false;
         }
@@ -1005,6 +1324,34 @@ namespace lfs::vis::input {
         return Action::NONE;
     }
 
+    Action InputBindings::getActionForShortcut(const ToolMode mode, const int physical_key,
+                                               const int logical_key, const int modifiers) const {
+        return getActionForShortcut(mode, physical_key, logical_key, modifiers, KEY_UNKNOWN);
+    }
+
+    Action InputBindings::getActionForShortcut(const ToolMode mode, const int physical_key,
+                                               const int logical_key, const int modifiers,
+                                               const int printed_punctuation) const {
+        if (logical_key != KEY_UNKNOWN) {
+            if (const auto action = getActionForKey(mode, logical_key, modifiers);
+                action != Action::NONE)
+                return action;
+        }
+        if (physical_key != KEY_UNKNOWN && physical_key != logical_key) {
+            if (const auto action = getActionForKey(mode, physical_key, modifiers);
+                action != Action::NONE)
+                return action;
+        }
+        // When Shift is needed to print the symbol shown in a shortcut, the
+        // layout's Shift is part of typing that symbol. Exact Shift shortcuts
+        // above keep precedence over this printed-character fallback.
+        if ((modifiers & MODIFIER_SHIFT) != 0 && printed_punctuation != KEY_UNKNOWN) {
+            return getActionForKey(mode, printed_punctuation,
+                                   modifiers & ~MODIFIER_SHIFT);
+        }
+        return Action::NONE;
+    }
+
     Action InputBindings::getActionForMouseButton(ToolMode mode, MouseButton button, int modifiers, bool is_double_click) const {
         const int mods = modifiers & MODIFIER_MASK;
         const auto find_in_mode = [&](ToolMode query_mode, const bool double_click) -> Action {
@@ -1187,6 +1534,10 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::setBinding(ToolMode mode, Action action, const InputTrigger& trigger) {
+        if (!isValidTriggerForAction(action, trigger)) {
+            LOG_WARN("Refusing invalid or unreachable input binding for '{}'", getActionName(action));
+            return;
+        }
         std::erase_if(bindings_, [mode, action](const Binding& b) {
             return b.mode == mode && b.action == action;
         });
@@ -1207,6 +1558,161 @@ namespace lfs::vis::input {
 
     bool InputBindings::isDisabled(ToolMode mode, Action action) const {
         return disabled_bindings_.contains({mode, action});
+    }
+
+    std::vector<std::pair<ToolMode, Action>> InputBindings::unreachableCoreActions() const {
+        constexpr std::array core_actions = {
+            Action::CAMERA_ORBIT,
+            Action::CAMERA_PAN,
+            Action::CAMERA_ZOOM,
+            Action::SELECTION_REPLACE,
+            Action::SELECTION_ADD,
+            Action::SELECTION_REMOVE,
+            Action::DELETE_SELECTED,
+            Action::DELETE_NODE,
+            Action::UNDO,
+            Action::REDO,
+            Action::TOOL_SELECT,
+            Action::TOOL_TRANSLATE,
+            Action::TOOL_ROTATE,
+            Action::TOOL_SCALE,
+            Action::TOOL_MIRROR,
+            Action::TOOL_ALIGN,
+            Action::CANCEL_POLYGON,
+        };
+        const auto defaults = createDefaultProfile().bindings;
+        const auto applies = [](const Binding& binding, const ToolMode mode) {
+            return binding.mode == mode ||
+                   (binding.mode == ToolMode::GLOBAL &&
+                    describe(binding.action).inherits_from_global);
+        };
+        const auto dispatches = [this](const Binding& binding, const ToolMode mode) {
+            return std::visit([&](const auto& trigger) {
+                using T = std::decay_t<decltype(trigger)>;
+                if constexpr (std::is_same_v<T, KeyTrigger>)
+                    return getActionForKey(mode, trigger.key, trigger.modifiers) == binding.action;
+                else if constexpr (std::is_same_v<T, MouseButtonTrigger>)
+                    return getActionForMouseButton(mode, trigger.button, trigger.modifiers,
+                                                   trigger.double_click) == binding.action;
+                else if constexpr (std::is_same_v<T, MouseScrollTrigger>)
+                    return getActionForScroll(mode, trigger.modifiers,
+                                              trigger.chord_key
+                                                  ? std::vector<int>{*trigger.chord_key}
+                                                  : std::vector<int>{}) == binding.action;
+                else
+                    return getActionForDrag(mode, trigger.button, trigger.modifiers,
+                                            trigger.chord_key
+                                                ? std::vector<int>{*trigger.chord_key}
+                                                : std::vector<int>{}) == binding.action;
+            },
+                              binding.trigger);
+        };
+
+        std::vector<std::pair<ToolMode, Action>> missing;
+        for (const auto mode : kAllToolModes) {
+            for (const auto action : core_actions) {
+                const bool required = std::ranges::any_of(defaults, [&](const Binding& b) {
+                    return b.action == action && applies(b, mode);
+                });
+                if (!required)
+                    continue;
+                const bool reachable = std::ranges::any_of(bindings_, [&](const Binding& b) {
+                    return b.action == action && applies(b, mode) &&
+                           (b.mode == mode || !isDisabled(mode, action)) &&
+                           dispatches(b, mode);
+                });
+                if (!reachable)
+                    missing.emplace_back(mode, action);
+            }
+        }
+        return missing;
+    }
+
+    void InputBindings::restoreUnreachableCoreActions() {
+        const auto missing = unreachableCoreActions();
+        const auto defaults = createDefaultProfile().bindings;
+        bool changed = false;
+        const auto is_reachable = [this](const ToolMode mode, const Action action) {
+            const auto remaining = unreachableCoreActions();
+            return !std::ranges::contains(remaining, std::pair{mode, action});
+        };
+        for (const auto& [mode, action] : missing) {
+            changed |= disabled_bindings_.erase({mode, action}) > 0;
+            if (is_reachable(mode, action))
+                continue;
+            for (const auto& def : defaults) {
+                if (def.action != action ||
+                    (def.mode != mode &&
+                     !(def.mode == ToolMode::GLOBAL &&
+                       describe(action).inherits_from_global)))
+                    continue;
+                Binding restored = def;
+                restored.mode = mode;
+                bool added_for_action = false;
+                const auto try_add = [&](const InputTrigger& trigger) {
+                    if (findConflict(mode, trigger, action))
+                        return false;
+                    restored.trigger = trigger;
+                    bindings_.push_back(restored);
+                    rebuildLookupMaps();
+                    changed = true;
+                    added_for_action = true;
+                    return true;
+                };
+                if (try_add(restored.trigger))
+                    break;
+                for (const int modifiers : {MODIFIER_CTRL | MODIFIER_ALT,
+                                            MODIFIER_SHIFT | MODIFIER_ALT,
+                                            MODIFIER_CTRL | MODIFIER_SHIFT | MODIFIER_ALT}) {
+                    auto alternate = restored.trigger;
+                    std::visit([&](auto& t) { t.modifiers = modifiers; }, alternate);
+                    if (try_add(alternate))
+                        break;
+                }
+                if (added_for_action)
+                    break;
+            }
+        }
+        if (!changed)
+            return;
+        rebuildLookupMaps();
+        notifyBindingsChanged();
+        if (const auto still_missing = unreachableCoreActions(); !still_missing.empty())
+            LOG_WARN("{} core input actions remain unreachable after restore", still_missing.size());
+        if (isValidProfileName(current_profile_name_))
+            (void)saveProfile(current_profile_name_);
+    }
+
+    void InputBindings::warnAboutUnreachableCoreActions() {
+        const auto missing = unreachableCoreActions();
+        if (missing.empty())
+            return;
+        LOG_WARN("Input profile '{}' leaves {} core actions unreachable",
+                 current_profile_name_, missing.size());
+        const std::weak_ptr<int> lifetime = callback_lifetime_;
+        auto& localization = lfs::event::LocalizationManager::getInstance();
+        lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+            .error = lfs::make_error({
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::App,
+                .severity = lfs::Severity::Warning,
+                .user_message = localization.get("input_settings.core_actions_unreachable"),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }),
+            .surface = lfs::ErrorSurface::Modal,
+            .actions = {
+                lfs::ErrorAction{
+                    .kind = lfs::ErrorActionKind::Custom,
+                    .label = localization.get("input_settings.restore_core_actions"),
+                    .on_invoke = [this, lifetime](lfs::OperationId) {
+                        if (lifetime.lock())
+                            restoreUnreachableCoreActions();
+                    },
+                },
+                lfs::ErrorAction{.kind = lfs::ErrorActionKind::Dismiss},
+            },
+            .operation_id = lfs::OperationId::generate(),
+        });
     }
 
     std::optional<BindingConflict> InputBindings::findConflict(
@@ -1748,6 +2254,8 @@ namespace lfs::vis::input {
     }
 
     std::string getKeyName(const int key) {
+        if (key >= KEY_F13 && key <= KEY_F24)
+            return "F" + std::to_string(13 + key - KEY_F13);
         switch (key) {
         case KEY_A: return "A";
         case KEY_B: return "B";
@@ -1790,6 +2298,7 @@ namespace lfs::vis::input {
         case KEY_ESCAPE: return "Escape";
         case KEY_TAB: return "Tab";
         case KEY_BACKSPACE: return "Backspace";
+        case KEY_INSERT: return "Insert";
         case KEY_DELETE: return "Delete";
         case KEY_HOME: return "Home";
         case KEY_END: return "End";
@@ -1846,6 +2355,10 @@ namespace lfs::vis::input {
         case MouseButton::LEFT: return "LMB";
         case MouseButton::RIGHT: return "RMB";
         case MouseButton::MIDDLE: return "MMB";
+        case MouseButton::BACK:
+            return lfs::event::LocalizationManager::getInstance().get("input_settings.mouse_back");
+        case MouseButton::FORWARD:
+            return lfs::event::LocalizationManager::getInstance().get("input_settings.mouse_forward");
         default: return "Mouse?";
         }
     }
@@ -1915,9 +2428,11 @@ namespace lfs::vis::input {
         if (key == KEY_UNKNOWN) {
             key = (logical_key != KEY_UNKNOWN) ? logical_key : physical_key;
         }
+        if (key == KEY_UNKNOWN)
+            return;
 
-        // ESC always exits capture, regardless of whether KEY is an allowed kind.
-        if (key == KEY_ESCAPE) {
+        // Escape cancels capture except when capturing its own Cancel action.
+        if (key == KEY_ESCAPE && capture_state_.action != Action::CANCEL_POLYGON) {
             cancelCapture();
             return;
         }
@@ -1943,7 +2458,24 @@ namespace lfs::vis::input {
             return;
         }
 
-        const KeyTrigger trigger{key, mods, false};
+        const auto repeat_for_action = [&](const std::vector<Binding>& candidates)
+            -> std::optional<bool> {
+            for (const auto& binding : candidates) {
+                if (binding.mode == capture_state_.mode &&
+                    binding.action == capture_state_.action) {
+                    if (const auto* prior = std::get_if<KeyTrigger>(&binding.trigger))
+                        return prior->on_repeat;
+                }
+            }
+            return std::nullopt;
+        };
+        auto repeat = repeat_for_action(bindings_);
+        if (!repeat)
+            repeat = repeat_for_action(createDefaultProfile().bindings);
+        const bool on_repeat = repeat.value_or(false);
+        const KeyTrigger trigger{key, mods, on_repeat};
+        if (!isValidTriggerForAction(capture_state_.action, trigger))
+            return;
         setBinding(capture_state_.mode, capture_state_.action, trigger);
         capture_state_.captured = trigger;
         capture_state_.active = false;

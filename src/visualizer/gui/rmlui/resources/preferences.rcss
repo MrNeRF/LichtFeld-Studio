@@ -318,6 +318,10 @@ body.floating-panel {
     padding: 1dp 6dp;
 }
 
+.preferences-clear-btn {
+    min-width: 44dp;
+}
+
 .preferences-capture-disabled {
     opacity: 0.4;
     pointer-events: none;

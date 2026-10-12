@@ -330,6 +330,7 @@ def preferences_panel_module(monkeypatch):
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",
+        bindings_revision=lambda: 0,
         get_tool_mode_name=lambda mode: str(mode),
         get_action_name=lambda value: str(value),
         get_trigger=lambda *_a, **_k: None,
