@@ -544,7 +544,7 @@ namespace lfs::training {
                 request.params.undistort = request.undistort;
             }
 
-            if (aux_config_.load_masks && cam->has_mask()) {
+            if (aux_config_.load_masks && !cam->has_in_memory_mask() && cam->has_mask()) {
                 request.mask_path = cam->mask_path();
                 request.mask_params.invert = aux_config_.invert_masks;
                 request.mask_params.threshold = aux_config_.mask_threshold;

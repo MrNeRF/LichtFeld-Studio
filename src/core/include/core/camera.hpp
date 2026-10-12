@@ -310,6 +310,8 @@ namespace lfs::core {
         int _image_width = 0;
         int _image_height = 0;
         bool _image_size_loaded = false;
+        int _source_image_width = 0;
+        int _source_image_height = 0;
 
         // GPU tensors (computed on demand)
         Tensor _world_view_transform;
