@@ -118,6 +118,11 @@ class StudioBackends(unittest.TestCase):
             self.assertLess(error, 3, f"NVENC retained frame {index} was overwritten: {error}")
 
     def test_native_decode_jpeg_rotation_and_scoring(self):
+        reference = json.loads(subprocess.check_output([
+            FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_frames",
+            "-show_streams", "-of", "json", str(self.source)]))
+        expected_pts = {int(frame["best_effort_timestamp"]) for frame in reference["frames"]}
+        expected_time_base = [int(part) for part in reference["streams"][0]["time_base"].split("/")]
         for options in ({}, {"jpeg":True}, {"jpeg":True,"rotation":90},
                         {"jpeg":True,"rotation":180}, {"jpeg":True,"rotation":270},
                         {"jpeg":True,"scale":0.5},
@@ -128,6 +133,11 @@ class StudioBackends(unittest.TestCase):
                 self.assertEqual(actual["accepted"],len(metadata["frames"]))
                 self.assertGreater(actual["accepted"],0)
                 self.assertIn("nvdec",json.dumps(metadata))
+                self.assertTrue(metadata["processing"]["decoder"]["hardware_requested"])
+                self.assertEqual(metadata["input"]["video"]["time_base"], expected_time_base)
+                for frame in metadata["frames"]:
+                    self.assertIn(frame["source_pts"], expected_pts)
+                    self.assertEqual(frame["timestamp_origin"], "best_effort")
                 expected_size = [96,128] if options.get("rotation") in (90,270) else [128,96]
                 if options.get("scale"):
                     expected_size = [64,48]

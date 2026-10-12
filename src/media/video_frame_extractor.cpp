@@ -1501,6 +1501,13 @@ namespace lfs::io {
                     double timestamp;
                     int source_frame;
                     double sharpness_score;
+                    std::optional<int64_t> source_pts;
+                    media::TimestampOrigin timestamp_origin;
+                };
+                const auto frame_metadata = [](const media::FrameInfo& info, double timestamp, int source_frame, double score) {
+                    return BatchFrameMeta{timestamp, source_frame, score,
+                                          info.source_timestamp ? std::optional<int64_t>(info.source_timestamp->ticks) : std::nullopt,
+                                          info.timestamp_origin};
                 };
                 std::vector<BatchFrameMeta> batch_meta;
                 std::size_t batch_idx = 0;
@@ -1535,9 +1542,7 @@ namespace lfs::io {
                 int in_window_frame_count = 0;
                 struct FrameSaveInfo {
                     std::string filename;
-                    double timestamp;
-                    int source_frame;
-                    double sharpness_score;
+                    BatchFrameMeta frame;
                 };
                 std::vector<FrameSaveInfo> saved_frames;
                 std::unordered_set<std::filesystem::path> emitted_filenames;
@@ -1587,9 +1592,7 @@ namespace lfs::io {
                             used_gpu_encoding = true;
                             if (!custom_sink && params.generate_metadata && i < batch_meta.size()) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(batch_filenames[i].filename()),
-                                                        batch_meta[i].timestamp,
-                                                        batch_meta[i].source_frame,
-                                                        batch_meta[i].sharpness_score});
+                                                        batch_meta[i]});
                             }
                         }
                     }
@@ -1674,8 +1677,8 @@ namespace lfs::io {
                     emit_rgb(write_w, write_h, write_data, best->info, best->score);
                     ++written_count;
                     if (!custom_sink && params.generate_metadata) {
-                        saved_frames.push_back({lfs::core::path_to_utf8(fname.filename()), best->timestamp,
-                                                best->source_frame, best->score});
+                        saved_frames.push_back({lfs::core::path_to_utf8(fname.filename()),
+                                                frame_metadata(best->info, best->timestamp, best->source_frame, best->score)});
                     }
                     finish_selected_frame();
                     window_best.reset();
@@ -1739,7 +1742,7 @@ namespace lfs::io {
                         void* dst_ptr = gpu_jpeg->queueHardware(batch_idx);
                         batch_gpu_ptrs.push_back(dst_ptr);
                         batch_filenames.push_back(filename);
-                        batch_meta.push_back({current_frame_time, current_src_frame, frame_score});
+                        batch_meta.push_back(frame_metadata(current_info, current_frame_time, current_src_frame, frame_score));
                         batch_idx++;
 
                         if (batch_idx >= jpeg_batch_size) {
@@ -1837,7 +1840,7 @@ namespace lfs::io {
 
                             batch_gpu_ptrs.push_back(dst_ptr);
                             batch_filenames.push_back(filename);
-                            batch_meta.push_back({current_frame_time, current_src_frame, frame_score});
+                            batch_meta.push_back(frame_metadata(current_info, current_frame_time, current_src_frame, frame_score));
                             batch_idx++;
 
                             if (batch_idx >= jpeg_batch_size) {
@@ -1848,9 +1851,7 @@ namespace lfs::io {
                             ++written_count;
                             if (!custom_sink && params.generate_metadata) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
-                                                        current_frame_time,
-                                                        current_src_frame,
-                                                        frame_score});
+                                                        frame_metadata(current_info, current_frame_time, current_src_frame, frame_score)});
                             }
                         }
                     }
@@ -1930,7 +1931,7 @@ namespace lfs::io {
 
                         batch_gpu_ptrs.push_back(dst_ptr);
                         batch_filenames.push_back(filename);
-                        batch_meta.push_back({current_frame_time, current_src_frame, frame_score});
+                        batch_meta.push_back(frame_metadata(current_info, current_frame_time, current_src_frame, frame_score));
                         batch_idx++;
 
                         if (batch_idx >= jpeg_batch_size) {
@@ -1941,9 +1942,7 @@ namespace lfs::io {
                         ++written_count;
                         if (!custom_sink && params.generate_metadata) {
                             saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
-                                                    current_frame_time,
-                                                    current_src_frame,
-                                                    frame_score});
+                                                    frame_metadata(current_info, current_frame_time, current_src_frame, frame_score)});
                         }
                     }
 
@@ -2220,6 +2219,9 @@ namespace lfs::io {
                     try {
                         nlohmann::json root;
                         root["schema_version"] = 2;
+                        root["provenance"] = {{"ffmpeg_version", av_version_info()},
+                                              {"avcodec_version", avcodec_version()},
+                                              {"avformat_version", avformat_version()}};
 
                         // Structured fields are intentionally kept alongside
                         // the legacy top-level keys below, so existing tools
@@ -2273,6 +2275,15 @@ namespace lfs::io {
                                         {"source_bit_depth", input_bit_depth > 0 ? input_bit_depth : source_bit_depth},
                                     }},
                         };
+                        // Static timing belongs to the selected stream, not every
+                        // frame. Preserve unknown start separately from the effective
+                        // origin used by the legacy relative-seconds calculation.
+                        root["input"]["video"]["stream_index"] = video_stream_idx;
+                        root["input"]["video"]["time_base"] = {video_stream->time_base.num, video_stream->time_base.den};
+                        root["input"]["video"]["start_pts"] = video_stream->start_time != AV_NOPTS_VALUE
+                                                                  ? nlohmann::json(video_stream->start_time)
+                                                                  : nlohmann::json(nullptr);
+                        root["input"]["video"]["relative_origin_pts"] = stream_start_timestamp;
                         root["output"] = {
                             {"format", params.format == ImageFormat::PNG ? "png" : params.format == ImageFormat::EXR ? "exr"
                                                                                                                      : "jpg"},
@@ -2310,6 +2321,7 @@ namespace lfs::io {
                         root["processing"] = {
                             {"decoder", {
                                             {"backend", saw_hardware_frame ? decoder_backend : "ffmpeg_software"},
+                                            {"hardware_requested", params.allow_hardware_decode},
                                             {"name", codec && codec->name ? codec->name : "unknown"},
                                             {"threads", using_hw_decode ? 0 : codec_ctx->thread_count},
                                         }},
@@ -2407,9 +2419,12 @@ namespace lfs::io {
                         auto& frames = root["frames"];
                         for (const auto& f : saved_frames) {
                             frames.push_back({{"file", f.filename},
-                                              {"timestamp", f.timestamp},
-                                              {"source_frame", f.source_frame},
-                                              {"sharpness_score", f.sharpness_score}});
+                                              {"timestamp", f.frame.timestamp},
+                                              {"source_frame", f.frame.source_frame},
+                                              {"sharpness_score", f.frame.sharpness_score},
+                                              {"source_pts", f.frame.source_pts ? nlohmann::json(*f.frame.source_pts) : nlohmann::json(nullptr)},
+                                              {"timestamp_origin", f.frame.timestamp_origin == media::TimestampOrigin::BestEffort ? "best_effort" : f.frame.timestamp_origin == media::TimestampOrigin::Presentation ? "presentation"
+                                                                                                                                                                                                                     : "missing"}});
                         }
 
                         // SDR historically replaces its manifest; float output has

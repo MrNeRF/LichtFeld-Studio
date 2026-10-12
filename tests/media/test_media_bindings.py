@@ -311,7 +311,19 @@ media.MediaIngest.extract_files(r, f, progress=lambda _: os._exit(73))
         files.files.format = media.FrameFileFormat.EXR
         files.files.exr.precision = media.ExrPrecision.Float
         self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, len(frames))
-        self.assertTrue((files.files.output_directory / "extraction_metadata.json").is_file())
+        manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text())
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["output"]["bit_depth"], 32)
+        self.assertFalse(manifest["processing"]["decoder"]["hardware_requested"])
+        self.assertEqual(manifest["output"]["input_transfer"], "linear")
+        self.assertTrue(manifest["output"]["transfer_override"])
+        self.assertEqual(len(manifest["frames"]), len(frames))
+        for entry, surface in zip(manifest["frames"], frames):
+            self.assertEqual(entry["source_pts"], surface.info.source_timestamp.ticks)
+            self.assertEqual(entry["timestamp_origin"], "best_effort")
+            self.assertEqual(manifest["input"]["video"]["time_base"],
+                             [surface.info.source_timestamp.time_base.numerator,
+                              surface.info.source_timestamp.time_base.denominator])
         color = media.FrameColor()
         color.transfer = media.ColorTransfer.Linear
         color.primaries = media.ColorPrimaries.Bt709
