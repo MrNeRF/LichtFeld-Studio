@@ -193,3 +193,64 @@ def test_numeric_text_uses_ui_decimal_separator(monkeypatch, language, text, exp
     scrub._commit_edit_value(state)
 
     assert values["scale"] == expected
+
+
+def test_numeric_text_commits_when_tab_moves_focus():
+    module = import_module("lfs_plugins.scrub_fields")
+    values = {"scale": 1.0}
+    scrub = module.ScrubFieldController(
+        {"scale": module.ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")},
+        values.__getitem__, values.__setitem__)
+    attach_fields(scrub)
+    state = scrub._fields["scale"]
+    state.editing = True
+    state.input_el.set_attribute("value", "0.5")
+    state.input_el.blur = lambda: scrub._on_input_blur("scale", Event())
+
+    event = Event(key_identifier=70)  # Rml::Input::KI_TAB
+    scrub._on_keydown(event)
+    state.input_el.blur()
+
+    assert values["scale"] == 0.5
+    assert not state.editing
+    assert not event.stopped
+
+def test_numeric_text_commits_when_mouse_click_moves_focus_away():
+    module = import_module("lfs_plugins.scrub_fields")
+    values = {"scale": 1.0}
+    scrub = module.ScrubFieldController(
+        {"scale": module.ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")},
+        values.__getitem__, values.__setitem__)
+    attach_fields(scrub)
+    state = scrub._fields["scale"]
+    state.editing = True
+    state.input_el.set_attribute("value", "0.5")
+
+    # A mouse click on another control causes blur without a key event.
+    state.input_el.blur = lambda: scrub._on_input_blur("scale", Event())
+    state.input_el.blur()
+
+    assert values["scale"] == 0.5
+    assert not state.editing
+
+
+def test_escape_then_mouse_click_away_keeps_numeric_edit_cancelled():
+    module = import_module("lfs_plugins.scrub_fields")
+    values = {"scale": 1.0}
+    scrub = module.ScrubFieldController(
+        {"scale": module.ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")},
+        values.__getitem__, values.__setitem__)
+    attach_fields(scrub)
+    state = scrub._fields["scale"]
+    state.editing = True
+    state.edit_value_before = 1.0
+    state.input_el.set_attribute("value", "0.5")
+    state.input_el.blur = lambda: scrub._on_input_blur("scale", Event())
+
+    scrub._on_keydown(Event(key_identifier=module.KI_ESCAPE))
+    # The click-away blur after Escape must not reapply the discarded text.
+    state.input_el.blur()
+
+    assert values["scale"] == 1.0
+    assert not state.editing
+

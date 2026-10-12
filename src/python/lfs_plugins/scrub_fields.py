@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import rml_widgets as w
-from .rml_keys import KI_ESCAPE
+from .rml_keys import KI_ESCAPE, KI_TAB
 
 
 DRAG_THRESHOLD_PX = 4.0
@@ -222,6 +222,14 @@ class ScrubFieldController:
 
     def _on_keydown(self, event) -> None:
         key = int(event.get_parameter("key_identifier", "0"))
+        if key == KI_TAB:
+            for state in self._fields.values():
+                if state.editing:
+                    state.commit_on_blur = True
+                    self._commit_edit_value(state)
+                    return
+            return
+
         if key != KI_ESCAPE:
             return
 
@@ -268,6 +276,7 @@ class ScrubFieldController:
             self._exit_edit(state)
             return
 
+        self._commit_edit_value(state)
         self._exit_edit(state)
 
     def _cancel_other_edits(self, current_prop: str) -> None:
