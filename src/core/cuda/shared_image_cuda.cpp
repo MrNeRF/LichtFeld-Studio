@@ -37,6 +37,7 @@ namespace lfs::core {
             case ImageConversion::NormalCHWToJ2KHWC: kernels::launch_normal_chw_to_jpeg2k_hwc(f32, out_f32, h, w, stream); break;
             case ImageConversion::J2KHWCToNormalCHW: kernels::launch_jpeg2k_hwc_to_normal_chw(f32, out_f32, h, w, stream); break;
             case ImageConversion::NormalPriorU8: kernels::launch_normal_prior_u8_hwc_to_float32_chw(u8, out_f32, h, w, transform, stream); break;
+            case ImageConversion::NormalPriorF32: kernels::launch_normal_prior_f32_hwc_to_float32_chw(f32, out_f32, h, w, transform, stream); break;
             case ImageConversion::NormalPriorU16: kernels::launch_normal_prior_u16_hwc_to_float32_chw(u16, out_f32, h, w, transform, stream); break;
             case ImageConversion::U8HWCToU8CHW: kernels::launch_uint8_hwc_to_uint8_chw(u8, out_u8, h, w, c, stream); break;
             case ImageConversion::U16HWCToU8CHW: kernels::launch_uint16_hwc_to_uint8_chw(u16, out_u8, h, w, c, stream); break;

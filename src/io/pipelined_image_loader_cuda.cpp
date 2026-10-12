@@ -1488,10 +1488,7 @@ namespace lfs::io {
                             {3, static_cast<size_t>(src_h), static_cast<size_t>(src_w)}),
                         lfs::core::Device::GPU, lfs::core::DataType::Float32);
                     if (normal_float) {
-                        cuda::launch_normal_prior_f32_hwc_to_float32_chw(
-                            gpu_staging.ptr<float>(), normal_tensor.ptr<float>(),
-                            static_cast<size_t>(src_h), static_cast<size_t>(src_w),
-                            prior_transform, sidecar_stream);
+                        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(gpu_staging, normal_tensor, lfs::gpu_ops::ImageConversion::NormalPriorF32, static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3, prior_transform);
                     } else if (normal_16bit) {
                         lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(gpu_staging, normal_tensor, lfs::gpu_ops::ImageConversion::NormalPriorU16, static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3, prior_transform);
                     } else {
