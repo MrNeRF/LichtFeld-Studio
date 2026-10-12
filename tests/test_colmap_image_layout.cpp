@@ -1668,7 +1668,8 @@ TEST_F(ColmapImageLayoutTest, UnreadableImageHeaderDoesNotRejectCameraImport) {
     ASSERT_TRUE(loaded) << loaded.error().format();
     ASSERT_EQ(std::get<0>(loaded->value).size(), 1u);
     EXPECT_TRUE(std::get<0>(loaded->value).front()->has_image());
-    EXPECT_TRUE(loaded->warnings.empty());
+    ASSERT_EQ(loaded->warnings.size(), 1u);
+    EXPECT_NE(loaded->warnings.front().message.find("frame.jpg"), std::string::npos);
 }
 
 TEST_F(ColmapImageLayoutTest, NerfNestedDuplicateSidecars) {

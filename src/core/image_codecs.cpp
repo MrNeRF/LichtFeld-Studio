@@ -72,13 +72,14 @@ namespace lfs::core::image_codecs {
             return true;
         }
 
-        bool read_prefix(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error) {
+        bool read_prefix(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error,
+                         const std::size_t limit = 32) {
             std::ifstream file(path, std::ios::binary);
             if (!file) {
                 error = "Could not open file " + path_to_utf8(path);
                 return false;
             }
-            data.resize(32);
+            data.resize(limit);
             file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
             data.resize(static_cast<std::size_t>(file.gcount()));
             if (file.bad()) {
@@ -828,7 +829,7 @@ namespace lfs::core::image_codecs {
 #ifndef _WIN32
             if (hdr && target.sample_type == SampleType::Float32) {
                 const int descriptor = open(path.c_str(), O_RDONLY);
-                struct stat file_status {};
+                struct stat file_status{};
                 if (descriptor >= 0 && fstat(descriptor, &file_status) == 0 && file_status.st_size > 0 &&
                     file_status.st_size <= std::numeric_limits<int>::max()) {
                     const auto size = static_cast<std::size_t>(file_status.st_size);
@@ -1006,6 +1007,49 @@ namespace lfs::core::image_codecs {
         if (size >= kPngSignature.size() && std::equal(kPngSignature.begin(), kPngSignature.end(), data))
             return decode_png_memory_to_buffer(data, size, target, result, error);
         error = "Unsupported image buffer format";
+        return false;
+    }
+
+    bool probe_bounded_header(const std::filesystem::path& path, std::string& error) {
+        constexpr std::size_t kReadLimit = 4096;
+        std::vector<std::uint8_t> header;
+        if (!read_prefix(path, header, error, kReadLimit))
+            return false;
+
+        if (is_png(header)) {
+            if (header.size() >= 26 && std::memcmp(header.data() + 12, "IHDR", 4) == 0 &&
+                std::any_of(header.begin() + 16, header.begin() + 20, [](auto byte) { return byte != 0; }) &&
+                std::any_of(header.begin() + 20, header.begin() + 24, [](auto byte) { return byte != 0; }))
+                return true;
+            error = "Invalid PNG header";
+            return false;
+        }
+        if (is_webp(header)) {
+            int width = 0;
+            int height = 0;
+            if (WebPGetInfo(header.data(), header.size(), &width, &height))
+                return true;
+            error = "Invalid WebP header";
+            return false;
+        }
+        if (is_tiff(header) || is_exr(header)) {
+            if (header.size() >= 16)
+                return true;
+            error = "Incomplete image header";
+            return false;
+        }
+        if (is_jpeg(header) || is_bmp(header) || is_hdr(header) || lower_extension(path) == ".tga") {
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+            if (stbi_info_from_memory(header.data(), static_cast<int>(header.size()), &width, &height, &channels))
+                return true;
+            // Large metadata can put the dimensions beyond the prefix. Keep this advisory
+            // check inconclusive so a valid image remains accepted for the later loader.
+            if (header.size() == kReadLimit)
+                return true;
+        }
+        error = "Unrecognized or incomplete image header";
         return false;
     }
 

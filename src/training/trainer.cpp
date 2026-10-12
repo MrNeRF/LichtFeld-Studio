@@ -21,6 +21,7 @@
 #include "core/cuda_error.hpp"
 #include "core/cuda_error_typed.hpp"
 #include "core/environment.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/exif.hpp"
 #include "core/image_io.hpp"
@@ -9167,10 +9168,17 @@ namespace lfs::training {
         } catch (const lfs::Exception& e) {
             append_terminal_error(e.error());
         } catch (const std::exception& e) {
+            const std::string_view detail = e.what();
+            const bool image_read_error = detail.starts_with("Image probe failed:");
+            const auto& localization = lfs::event::LocalizationManager::getInstance();
             append_terminal_error(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Internal,
                 .domain = lfs::ErrorDomain::Training,
-                .user_message = "Training failed.",
+                .user_message = image_read_error
+                                    ? (localization.hasKey("training.unreadable_image")
+                                           ? LOC("training.unreadable_image")
+                                           : "A training image could not be read. Open Details for the file and decoder error.")
+                                    : "Training failed.",
                 .detail = std::format("Training failed: {}", e.what()),
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));

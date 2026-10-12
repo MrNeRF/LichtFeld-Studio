@@ -1,4 +1,7 @@
 {
+  "io.dataset_image_unreadable_one": "Das Datensatzbild '{}' kann nicht gelesen werden. Die Kamera bleibt in der Szene, aber das Training kann bei seiner Verwendung fehlschlagen.",
+  "io.dataset_image_unreadable_many": "{} Datensatzbilder können nicht gelesen werden (Beispiele: {}). Ihre Kameras bleiben in der Szene, aber das Training kann bei ihrer Verwendung fehlschlagen.",
+  "training.unreadable_image": "Ein Trainingsbild konnte nicht gelesen werden. Unter Details finden Sie die Datei und den Decoderfehler.",
   "training.reset_before_strategy_change": "Setzen Sie das Training zurück, bevor Sie die Strategie ändern.",
   "io.mesh_no_triangle_faces": "Die Meshdatei enthält keine Dreiecksflächen.",
   "io.no_finite_seed_points": "Die Punktwolke enthält keine endlichen Ausgangspunkte. Die Initialisierung erfolgt zufällig.",

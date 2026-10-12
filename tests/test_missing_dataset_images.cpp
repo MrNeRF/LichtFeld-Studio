@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_io.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
@@ -11,6 +12,7 @@
 #include "io/loaders/colmap_loader.hpp"
 #include "training/dataset.hpp"
 
+#include <algorithm>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
@@ -75,6 +77,21 @@ namespace {
             out.write(reinterpret_cast<const char*>(png), sizeof(png));
             out.close();
             ASSERT_TRUE(out.good()) << "Failed to write " << path;
+        }
+
+        void write_valid_png(const fs::path& path) {
+            const unsigned char pixel[] = {64, 128, 192};
+            fs::create_directories(path.parent_path());
+            ASSERT_TRUE(lfs::core::save_png(path, pixel, 1, 1, 3, 8, 6));
+            const auto [decoded, width, height, channels] = lfs::core::load_image(path);
+            ASSERT_NE(decoded, nullptr);
+            EXPECT_EQ(width, 1);
+            EXPECT_EQ(height, 1);
+            EXPECT_EQ(channels, 3);
+            EXPECT_EQ(decoded[0], pixel[0]);
+            EXPECT_EQ(decoded[1], pixel[1]);
+            EXPECT_EQ(decoded[2], pixel[2]);
+            lfs::core::free_image(decoded);
         }
 
         void write_colmap_text(const fs::path& dataset_dir, const std::vector<std::string>& image_names) {
@@ -241,6 +258,34 @@ TEST_F(MissingDatasetImagesTest, ColmapTextLoadsWhenOneImageIsMissing) {
     ASSERT_NO_FATAL_FAILURE(expect_partial_missing(cameras, warnings, "missing.png", "present.png"));
 }
 
+TEST_F(MissingDatasetImagesTest, ColmapTextReportsUnreadableImageWithoutChangingCameras) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "colmap_unreadable";
+    write_colmap_text(dataset_dir, {"present.png", "unreadable.png"});
+    write_png(dataset_dir / "images" / "present.png");
+    write_text_file(dataset_dir / "images" / "unreadable.png", "");
+
+    lfs::io::ColmapLoader loader;
+    auto result = loader.load(dataset_dir, {});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    auto* scene = std::get_if<lfs::io::LoadedScene>(&result->data);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_EQ(scene->cameras.size(), 2u);
+    EXPECT_TRUE(scene->cameras[0]->has_image());
+    EXPECT_TRUE(scene->cameras[1]->has_image());
+    EXPECT_TRUE(std::any_of(result->warnings.begin(), result->warnings.end(), [](const auto& warning) {
+        return warning.find("unreadable.png") != std::string::npos;
+    }));
+
+    lfs::training::DatasetConfig config;
+    lfs::training::CameraDataset training(scene->cameras, config,
+                                          lfs::training::CameraDataset::Split::ALL);
+    EXPECT_EQ(training.size(), 2u);
+}
+
 TEST_F(MissingDatasetImagesTest, ColmapTextAllMissingFails) {
     const fs::path dataset_dir = temp_dir_ / "colmap_text_all_missing";
     write_colmap_text(dataset_dir, {"missing_a.png", "missing_b.png"});
@@ -392,6 +437,65 @@ TEST_F(MissingDatasetImagesTest, TransformsImagePathKeepsExistingResolutionPrece
     EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "frame.PNG"), dataset_dir / "frame.PNG");
     EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "photo"), dataset_dir / "photo");
     EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "missing"), dataset_dir / "missing");
+}
+
+TEST_F(MissingDatasetImagesTest, TransformsReportsUnreadableImageWithoutChangingCameras) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "transforms_unreadable";
+    write_transforms(dataset_dir, {"present.png", "unreadable.png"});
+    write_png(dataset_dir / "present.png");
+    write_text_file(dataset_dir / "unreadable.png", "non-image bytes");
+
+    lfs::io::BlenderLoader loader;
+    auto result = loader.load(dataset_dir, {});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    auto* scene = std::get_if<lfs::io::LoadedScene>(&result->data);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_EQ(scene->cameras.size(), 2u);
+    EXPECT_TRUE(scene->cameras[0]->has_image());
+    EXPECT_TRUE(scene->cameras[1]->has_image());
+    EXPECT_TRUE(std::any_of(result->warnings.begin(), result->warnings.end(), [](const auto& warning) {
+        return warning.find("unreadable.png") != std::string::npos;
+    }));
+
+    lfs::training::DatasetConfig config;
+    lfs::training::CameraDataset training(scene->cameras, config,
+                                          lfs::training::CameraDataset::Split::ALL);
+    EXPECT_EQ(training.size(), 2u);
+}
+
+TEST_F(MissingDatasetImagesTest, TransformsMislabelledPngProbeAvoidsPixelDecode) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "transforms_mislabelled_png";
+    write_transforms(dataset_dir, {"first.jpg", "second.jpg", "third.jpg", "broken.jpg"});
+    for (const auto* name : {"first.jpg", "second.jpg", "third.jpg"})
+        write_valid_png(dataset_dir / name);
+    write_text_file(dataset_dir / "broken.jpg", "not an image");
+
+    const auto decodes_before = lfs::core::image_info_full_decode_count_for_testing();
+    lfs::io::BlenderLoader loader;
+    auto result = loader.load(dataset_dir, {});
+    const auto decode_count = lfs::core::image_info_full_decode_count_for_testing() - decodes_before;
+
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    auto* scene = std::get_if<lfs::io::LoadedScene>(&result->data);
+    ASSERT_NE(scene, nullptr);
+    EXPECT_EQ(scene->cameras.size(), 4u);
+    for (const auto* name : {"first.jpg", "second.jpg", "third.jpg"}) {
+        EXPECT_FALSE(std::any_of(result->warnings.begin(), result->warnings.end(), [name](const auto& warning) {
+            return warning.find(name) != std::string::npos;
+        }));
+    }
+    EXPECT_TRUE(std::any_of(result->warnings.begin(), result->warnings.end(), [](const auto& warning) {
+        return warning.find("broken.jpg") != std::string::npos;
+    }));
+    EXPECT_EQ(decode_count, 0u);
 }
 
 TEST_F(MissingDatasetImagesTest, TransformsAllMissingFails) {

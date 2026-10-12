@@ -2790,6 +2790,7 @@ namespace lfs::io {
         PriorResolutionSummary prior_resolutions;
         SkipTally image_tally;
         std::vector<std::string> missing_images;
+        std::vector<std::string> unreadable_images;
 
         struct CameraAssemblyEntry {
             std::shared_ptr<Camera> camera;
@@ -2797,6 +2798,7 @@ namespace lfs::io {
             const CameraDataIntermediate* camera_data = nullptr;
             std::array<float, 3> position{};
             bool missing_image = false;
+            bool unreadable_image = false;
             bool depth_matched = false;
             bool normal_matched = false;
             std::array<int, 4> depth_sizes{}, normal_sizes{};
@@ -3033,7 +3035,8 @@ namespace lfs::io {
                             }
                         }
                     } catch (const std::exception& e) {
-                        LOG_DEBUG("Could not check image aspect ratio for '{}': {}", img.name, e.what());
+                        output.unreadable_image = true;
+                        LOG_DEBUG("Could not read dataset image '{}': {}", img.name, e.what());
                     }
                 }
                 if (image_file_present && options.load_masks && !mask_path.empty()) {
@@ -3167,6 +3170,9 @@ namespace lfs::io {
                 if (output.missing_image) {
                     missing_images.push_back(output.image->name);
                 }
+                if (output.unreadable_image) {
+                    unreadable_images.push_back(output.image->name);
+                }
                 prior_resolutions.add(output.depth_sizes, false);
                 prior_resolutions.add(output.normal_sizes, true);
                 depth_matched_count += output.depth_matched ? 1 : 0;
@@ -3288,6 +3294,10 @@ namespace lfs::io {
         if (!missing_images.empty()) {
             warnings.push_back(missing_dataset_images_diagnostic(missing_images));
             notify_missing_dataset_images(missing_images);
+        }
+        if (!unreadable_images.empty()) {
+            warnings.push_back(unreadable_dataset_images_diagnostic(unreadable_images));
+            notify_unreadable_dataset_images(unreadable_images);
         }
         return LoadOutcome<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>{
             std::make_tuple(std::move(cameras), scene_center), std::move(warnings)};

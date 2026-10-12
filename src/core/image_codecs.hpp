@@ -56,6 +56,7 @@ namespace lfs::core::image_codecs {
     }
 
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error);
+    bool probe_bounded_header(const std::filesystem::path& path, std::string& error);
     bool decode(const std::filesystem::path& path, Image& result, std::string& error);
     bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
     bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);

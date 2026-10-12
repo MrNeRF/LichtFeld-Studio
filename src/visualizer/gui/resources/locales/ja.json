@@ -1,4 +1,7 @@
 {
+  "io.dataset_image_unreadable_one": "データセット画像「{}」を読み取れません。カメラはシーンに残りますが、この画像を使用すると学習が失敗する可能性があります。",
+  "io.dataset_image_unreadable_many": "{} 枚のデータセット画像を読み取れません（例: {}）。カメラはシーンに残りますが、これらの画像を使用すると学習が失敗する可能性があります。",
+  "training.unreadable_image": "学習画像を読み取れませんでした。ファイルとデコーダーのエラーは「詳細」を開いて確認してください。",
   "training.reset_before_strategy_change": "戦略を変更する前にトレーニングをリセットしてください。",
   "io.mesh_no_triangle_faces": "メッシュファイルに三角形の面がありません。",
   "io.no_finite_seed_points": "点群に有限の座標を持つ初期点がありません。ランダムに初期化します。",

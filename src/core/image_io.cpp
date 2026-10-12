@@ -37,6 +37,7 @@ namespace {
 
     constexpr int DEFAULT_JPEG_QUALITY = 95;
     constexpr std::size_t kJpegExifReadLimit = 64u * 1024u;
+    std::atomic<std::uint64_t> image_info_full_decode_count{0};
 
     struct JpegExifData {
         std::vector<std::uint8_t> thumbnail;
@@ -636,11 +637,20 @@ namespace lfs::core {
         std::string error;
         if (!image_codecs::probe(p, probe, error)) {
             image_codecs::Image decoded;
+            image_info_full_decode_count.fetch_add(1, std::memory_order_relaxed);
             if (!image_codecs::decode(p, decoded, error))
                 throw std::runtime_error("Image probe failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
             return {decoded.width, decoded.height, decoded.channels};
         }
         return {probe.width, probe.height, probe.channels};
+    }
+
+    std::uint64_t image_info_full_decode_count_for_testing() noexcept {
+        return image_info_full_decode_count.load(std::memory_order_relaxed);
+    }
+
+    bool probe_image_header_bounded(const std::filesystem::path& p, std::string& error) {
+        return image_codecs::probe_bounded_header(p, error);
     }
 
     std::tuple<unsigned char*, int, int, int>

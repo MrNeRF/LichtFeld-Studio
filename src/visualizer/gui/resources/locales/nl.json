@@ -1,4 +1,7 @@
 {
+  "io.dataset_image_unreadable_one": "Datasetafbeelding '{}' kan niet worden gelezen. De camera blijft in de scène, maar de training kan mislukken wanneer deze afbeelding wordt gebruikt.",
+  "io.dataset_image_unreadable_many": "{} datasetafbeeldingen kunnen niet worden gelezen (voorbeelden: {}). Hun camera's blijven in de scène, maar de training kan mislukken wanneer ze worden gebruikt.",
+  "training.unreadable_image": "Een trainingsafbeelding kon niet worden gelezen. Open Details voor het bestand en de decoderfout.",
   "training.reset_before_strategy_change": "Reset de training voordat u de strategie wijzigt.",
   "io.mesh_no_triangle_faces": "Het meshbestand bevat geen driehoekige vlakken.",
   "io.no_finite_seed_points": "De puntenwolk bevat geen beginpunten met eindige coördinaten. Er wordt willekeurige initialisatie gebruikt.",

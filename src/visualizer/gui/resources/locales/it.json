@@ -1,4 +1,7 @@
 {
+  "io.dataset_image_unreadable_one": "Impossibile leggere l’immagine '{}' del set di dati. La sua fotocamera resta nella scena, ma il suo utilizzo può interrompere l’addestramento.",
+  "io.dataset_image_unreadable_many": "Impossibile leggere {} immagini del set di dati (esempi: {}). Le loro fotocamere restano nella scena, ma il loro utilizzo può interrompere l’addestramento.",
+  "training.unreadable_image": "Impossibile leggere un’immagine di addestramento. Apri Dettagli per vedere il file e l’errore del decodificatore.",
   "training.reset_before_strategy_change": "Reimposta l’addestramento prima di cambiare strategia.",
   "io.mesh_no_triangle_faces": "Il file della mesh non contiene facce triangolari.",
   "io.no_finite_seed_points": "La nuvola di punti non contiene punti iniziali finiti. Verrà utilizzata un’inizializzazione casuale.",
