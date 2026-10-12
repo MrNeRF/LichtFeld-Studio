@@ -197,6 +197,8 @@ decoded pixels still pass through host memory for checkpoint verification.
 The existing hardware decode option remains explicit. Input, pixel and retained-output verification still
 cost CPU time and I/O. A verified replay can be slower than a fresh ordinary
 extraction, particularly for JPEG; resume promises verified reuse, not a speedup.
+The extractor's detailed upload/JPEG/file-write timing counters cover its native
+writer, not checkpoint sink work; use total elapsed time for resume comparisons.
 Accepted-frame and manifest counts include verified retained images as well as
 newly published images; progress describes the replayed selection.
 
