@@ -909,6 +909,10 @@ namespace lfs::vis {
         std::uint64_t point_cloud_last_frame_serial_ = 0;
         std::uint64_t point_cloud_data_revision_ = 0;
         std::uint64_t point_cloud_preview_selection_revision_ = 0;
+        // One texel keeps mesh-only independent panels renderable without
+        // allocating or uploading a full-size background each frame.
+        std::shared_ptr<lfs::core::Tensor> mesh_only_split_background_;
+        glm::vec4 mesh_only_split_background_color_{-1.0f};
         VulkanContext* last_vulkan_context_ = nullptr;
         std::atomic<bool> vksplat_terminal_release_pending_{false};
         std::chrono::steady_clock::time_point vksplat_idle_since_{};
