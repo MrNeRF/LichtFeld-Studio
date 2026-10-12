@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """MCP PLY export keeps the source SH layout unless a lower degree is requested."""
 
-import json
+import hashlib
 import struct
 
 import pytest
@@ -11,6 +11,8 @@ from runtime_test_app import isolated_app
 from test_render_on_demand_idle import _call, _tool
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
+
+_BASELINE_SH3_PLY_CONTENT_SHA256 = "797bce55539bd1683663646c9e5ef12673cb3cd93c501eaf0def9e502e6c1e0a"
 
 
 def _model(path, degree):
@@ -32,7 +34,27 @@ def _rest_count(path):
     return sum(line.startswith(b"property float f_rest_") for line in header.splitlines())
 
 
-def test_mcp_ply_export_preserves_available_sh_and_rejects_over_high(tmp_path):
+def _without_build_provenance(data):
+    marker = b"comment lichtfeld_provenance "
+    start = data.index(marker)
+    end = data.index(b"\n", start)
+    return data[:start] + b"comment lichtfeld_provenance <build-specific>\n" + data[end + 1:]
+
+
+def _lower_duplicate_sh_degree(endpoint, source_name, degree):
+    duplicate = _tool(endpoint, "scene_duplicate_node", {"name": source_name})
+    assert duplicate["success"], duplicate
+    duplicate_name = duplicate["nodes"][0]["name"]
+    result = _tool(endpoint, "editor_run", {
+        "code": "import lichtfeld as lf\n"
+                f"lf.get_scene().get_node({duplicate_name!r}).splat_data().set_max_sh_degree({degree})",
+        "show_console": False, "wait_for_completion": True, "timeout_ms": 10000,
+    })
+    assert result.get("completed") and "Traceback" not in result.get("output", {}).get("text", ""), result
+    return duplicate_name
+
+
+def test_mcp_ply_export_preserves_available_sh_and_clamps_requested_degree(tmp_path):
     with isolated_app(tmp_path) as endpoint:
         for degree in range(4):
             source = tmp_path / f"source-{degree}.ply"
@@ -54,27 +76,46 @@ def test_mcp_ply_export_preserves_available_sh_and_rejects_over_high(tmp_path):
                 "path": str(lower), "sh_degree": 0, "include_provenance": False})["success"]
             assert _rest_count(lower) == 0
 
-            if degree < 3:
-                rejected = tmp_path / f"rejected-{degree}.ply"
-                result = _call(endpoint, "tools/call", {"name": "scene_export_ply", "arguments": {
-                    "path": str(rejected), "sh_degree": degree + 1}})
-                assert result["isError"], result
-                assert not rejected.exists()
+            over_high = tmp_path / f"over-high-{degree}.ply"
+            clamped = _tool(endpoint, "scene_export_ply", {
+                "path": str(over_high), "sh_degree": degree + 3, "include_provenance": False})
+            assert clamped["success"], clamped
+            assert "warning" in clamped, clamped
+            assert f"clamped to {degree}" in clamped["warning"].lower(), clamped
+            assert _rest_count(over_high) == 3 * ((degree + 1) ** 2 - 1)
+            assert over_high.read_bytes() == default.read_bytes()
 
-        invalid = tmp_path / "invalid.ply"
-        for degree in (-1, 4):
-            result = _call(endpoint, "tools/call", {"name": "scene_export_ply", "arguments": {
-                "path": str(invalid), "sh_degree": degree}})
-            assert result["isError"], result
-            assert not invalid.exists()
+        # The default SH3 path stays byte-identical to an explicit SH3 request.
+        sh3_default = (tmp_path / "default-3.ply").read_bytes()
+        assert sh3_default == (tmp_path / "explicit-3.ply").read_bytes()
+        # The minimal provenance comment embeds the build commit; compare all other bytes
+        # against a SH3 export from the pre-fix build.
+        sh3_content = _without_build_provenance(sh3_default)
+        assert hashlib.sha256(sh3_content).hexdigest() == _BASELINE_SH3_PLY_CONTENT_SHA256
+
+        models = [node["name"] for node in _tool(endpoint, "scene_list_nodes")["nodes"]
+                  if node["type"] == "splat"]
+        assert len(models) == 1, models
+        lower_model = _lower_duplicate_sh_degree(endpoint, models[0], 1)
+        mixed_nodes = [models[0], lower_model]
+        mixed_path = tmp_path / "mixed-clamped.ply"
+        mixed_result = _tool(endpoint, "scene_export_ply", {
+            "path": str(mixed_path), "nodes": mixed_nodes, "sh_degree": 3,
+            "include_provenance": False})
+        assert mixed_result["success"], mixed_result
+        assert "warning" in mixed_result, mixed_result
+        assert "clamped to 1" in mixed_result["warning"].lower(), mixed_result
+        assert _rest_count(mixed_path) == 9
 
         for format_name, extension in (("sog", ".sog"), ("ssog", ".ssog"),
                                        ("spz", ".spz"), ("usd", ".usd"),
                                        ("usdz_nurec", ".usdz"), ("html", ".html"),
                                        ("rad", ".rad")):
-            rejected = tmp_path / f"rejected-{format_name}{extension}"
-            result = _call(endpoint, "tools/call", {"name": f"scene_export_{format_name}", "arguments": {
-                "path": str(rejected), "sh_degree": 4}})
-            assert result["isError"], result
-            assert "SH degree" in json.dumps(result), result
-            assert not rejected.exists()
+            clamped_path = tmp_path / f"clamped-{format_name}{extension}"
+            result = _tool(endpoint, f"scene_export_{format_name}", {
+                "path": str(clamped_path), "nodes": mixed_nodes, "sh_degree": 4,
+                "include_provenance": False})
+            assert result["success"], result
+            assert "warning" in result, result
+            assert "clamped to 1" in result["warning"].lower(), result
+            assert clamped_path.exists(), clamped_path

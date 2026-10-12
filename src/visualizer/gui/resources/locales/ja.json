@@ -2616,7 +2616,7 @@
     "export_streamed_lod": "「{}」をエクスポートできません: モデルが大きすぎてメモリに収まらず、ディスクからストリーミングされています。",
     "export_extension_required": "エクスポートするファイル名は {} で終わる必要があります。",
     "export_extension_warning": "エクスポートした{}データのファイル名には通常の拡張子がありません。他のアプリで認識されない可能性があります。",
-    "export_sh_degree_range": "選択したモデルのSH次数は0から{}の範囲で指定してください。",
+    "export_sh_degree_clamped": "要求された SH 次数は、選択したモデルに合わせて {} に制限されました。",
     "video_encoder_unavailable": "ビデオエンコーダーを利用できません",
     "scene_manager_unavailable": "シーンマネージャーを利用できません",
     "no_model_selected": "エクスポートするモデルが選択されていません",

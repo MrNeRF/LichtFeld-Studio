@@ -2615,7 +2615,7 @@
     "export_streamed_lod": "Can't export \"{}\": the model is too large to fit in memory and streams from disk.",
     "export_extension_required": "Export file name must end with {}.",
     "export_extension_warning": "Exported {} data to a file without its usual extension. Other apps may not recognize it.",
-    "export_sh_degree_range": "SH degree must be between 0 and {} for the selected model.",
+    "export_sh_degree_clamped": "Requested SH degree was clamped to {} for the selected models.",
     "video_encoder_unavailable": "Video encoder not available",
     "scene_manager_unavailable": "Scene manager is not available",
     "no_model_selected": "No model selected for export",
