@@ -159,6 +159,28 @@ TEST_F(MeshLoaderTest, MissingFileReturnsError) {
     EXPECT_FALSE(loader_.load(temp_dir_ / "missing.obj").has_value());
 }
 
+TEST_F(MeshLoaderTest, RejectsMeshesWithoutTriangleFaces) {
+    const std::array cases{
+        std::pair{"vertices_only.obj", std::string("v 0 0 0\nv 1 0 0\nv 0 1 0\n")},
+        std::pair{"unparsed.obj", std::string("this is not an obj\n\0\1\2 random bytes \n", 37)}};
+    for (const auto& [filename, contents] : cases) {
+        const auto path = temp_dir_ / filename;
+        std::ofstream out(path, std::ios::binary);
+        out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+        out.close();
+        ASSERT_TRUE(out.good());
+        for (const bool geometry_only : {false, true}) {
+            SCOPED_TRACE(std::string(filename) + (geometry_only ? " geometry" : " render"));
+            lfs::io::LoadOptions options;
+            options.mesh_geometry_only = geometry_only;
+            const auto result = loader_.load(path, options);
+            ASSERT_FALSE(result.has_value());
+            EXPECT_EQ(result.error().code, lfs::io::ErrorCode::CORRUPTED_DATA);
+            EXPECT_FALSE(result.error().message.empty());
+        }
+    }
+}
+
 // Both import modes bake placement; geometry-only loads omit render attributes.
 TEST_F(MeshLoaderTest, GeometryOnlyBakesNodeTransformAndSkipsRenderAttributes) {
     const auto gltf_path = temp_dir_ / "transformed.gltf";

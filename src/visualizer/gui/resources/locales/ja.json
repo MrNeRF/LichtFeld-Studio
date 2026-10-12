@@ -1,5 +1,6 @@
 {
   "training.reset_before_strategy_change": "戦略を変更する前にトレーニングをリセットしてください。",
+  "io.mesh_no_triangle_faces": "メッシュファイルに三角形の面がありません。",
   "io.no_finite_seed_points": "点群に有限の座標を持つ初期点がありません。ランダムに初期化します。",
   "ui.vram_window_1m": "1 分",
   "ui.vram_process_nvml_tooltip": "OS または GPU ドライバーが報告するプロセスの GPU メモリ。",

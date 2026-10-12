@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mesh_loader.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "io/error.hpp"
 #include "io/mesh/texture_loader.hpp"
+#include <algorithm>
 #include <array>
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
@@ -440,6 +442,8 @@ namespace lfs::io {
         sub_meshes.reserve(scene->mNumMeshes);
         mesh_material_indices.reserve(scene->mNumMeshes);
         const auto append_mesh = [&](const unsigned int i, const aiMatrix4x4& transform) {
+            if (scene->mMeshes[i]->mNumVertices == 0)
+                return;
             sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i], options.mesh_geometry_only, transform));
             mesh_material_indices.push_back(scene->mMeshes[i]->mMaterialIndex);
             LOG_DEBUG("  mesh[{}]: {} verts, {} faces, material_index={}",
@@ -464,6 +468,16 @@ namespace lfs::io {
                 }
             };
             visit(visit, scene->mRootNode, aiMatrix4x4());
+        }
+
+        if (std::none_of(sub_meshes.begin(), sub_meshes.end(),
+                         [](const MeshData& mesh) { return mesh.face_count() > 0; })) {
+            const auto& localization = lfs::event::LocalizationManager::getInstance();
+            return make_error(ErrorCode::CORRUPTED_DATA,
+                              localization.hasKey("io.mesh_no_triangle_faces")
+                                  ? LOC("io.mesh_no_triangle_faces")
+                                  : "The mesh file contains no triangle faces.",
+                              path);
         }
 
         if (options.progress) {

@@ -1,5 +1,6 @@
 {
   "training.reset_before_strategy_change": "Réinitialisez l’entraînement avant de changer de stratégie.",
+  "io.mesh_no_triangle_faces": "Le fichier de maillage ne contient aucune face triangulaire.",
   "io.no_finite_seed_points": "Le nuage de points ne contient aucun point initial fini. Une initialisation aléatoire sera utilisée.",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Mémoire GPU du processus indiquée par le système ou le pilote GPU.",

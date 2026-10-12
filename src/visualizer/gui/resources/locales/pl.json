@@ -1,5 +1,6 @@
 {
   "training.reset_before_strategy_change": "Zresetuj trening przed zmianą strategii.",
+  "io.mesh_no_triangle_faces": "Plik siatki nie zawiera trójkątnych ścian.",
   "io.no_finite_seed_points": "Chmura punktów nie zawiera punktów początkowych o skończonych współrzędnych. Zostanie użyta losowa inicjalizacja.",
   "ui.vram_window_1m": "1 min",
   "ui.vram_process_nvml_tooltip": "Pamięć GPU procesu zgłaszana przez system operacyjny lub sterownik GPU.",
