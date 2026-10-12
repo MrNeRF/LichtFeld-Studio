@@ -15,6 +15,21 @@ namespace {
         EXPECT_EQ(lfs::vis::gui::sdlScancodeToRml(SDL_SCANCODE_A), Rml::Input::KI_A);
     }
 
+    TEST(SdlRmlKeyMappingTest, TextEditingShortcutsFollowLayoutKeycodes) {
+        using namespace lfs::vis::gui;
+        for (const SDL_Keycode keycode : {SDLK_A, SDLK_C, SDLK_X, SDLK_V, SDLK_Z, SDLK_Y}) {
+            EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Q, keycode, SDL_KMOD_CTRL),
+                      sdlKeycodeToRml(keycode));
+            EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Q, keycode, SDL_KMOD_GUI),
+                      sdlKeycodeToRml(keycode));
+        }
+        EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_A, SDLK_Q, SDL_KMOD_CTRL), Rml::Input::KI_Q);
+        EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Y, SDLK_Z, SDL_KMOD_CTRL), Rml::Input::KI_Z);
+        EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Z, SDLK_Y, SDL_KMOD_CTRL), Rml::Input::KI_Y);
+        EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Q, SDLK_A, SDL_KMOD_NONE), Rml::Input::KI_Q);
+        EXPECT_EQ(sdlTextShortcutToRml(SDL_SCANCODE_Q, SDLK_A, static_cast<SDL_Keymod>(SDL_KMOD_CTRL | SDL_KMOD_ALT)), Rml::Input::KI_Q);
+    }
+
     TEST(SdlRmlKeyMappingTest, EqualsKeyMapsToOemPlus) {
         EXPECT_EQ(lfs::vis::gui::sdlKeycodeToRml(SDLK_EQUALS), Rml::Input::KI_OEM_PLUS);
         EXPECT_EQ(lfs::vis::gui::sdlScancodeToRml(SDL_SCANCODE_EQUALS), Rml::Input::KI_OEM_PLUS);

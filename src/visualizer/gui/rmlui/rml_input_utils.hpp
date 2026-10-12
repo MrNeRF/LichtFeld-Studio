@@ -164,7 +164,9 @@ namespace lfs::vis::gui::rml_input {
         if (wantsTextInput(focused) &&
             ((sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) || sc == SDL_SCANCODE_KP_PERIOD))
             return false;
-        const auto key = sdlScancodeToRml(sc);
+        const auto key = editable
+                             ? sdlTextShortcutToRml(sc, event.keycode, event.modifiers)
+                             : sdlScancodeToRml(sc);
         if (key == Rml::Input::KI_UNKNOWN)
             return false;
         const int mods = sdlModsToRml(event.modifiers & SDL_KMOD_CTRL,
