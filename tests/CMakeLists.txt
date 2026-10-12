@@ -387,7 +387,10 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     )
     set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        TIMEOUT 30
+        # This aggregate runs hundreds of cases, including repeated real-time
+        # tooltip reveal delays across locales and scales. Allow slower CI hosts
+        # to finish without changing individual contracts or disabling coverage.
+        TIMEOUT 120
     )
     if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_PANEL_LAYOUT_TESTS AND NOT BUILD_TEMPORAL_CPU_TESTS)
         return()
