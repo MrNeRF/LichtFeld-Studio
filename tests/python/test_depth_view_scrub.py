@@ -3,6 +3,7 @@
 """Depth range cancellation and shared numeric scrub guards."""
 
 from importlib import import_module
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -162,3 +163,33 @@ def test_independent_scalar_drag_cancel_release_and_threshold():
     scrub._on_body_mousemove(Event(mouse_x=83))
     scrub._on_body_mouseup(Event())
     assert values["scale"] == pytest.approx(0.83, abs=1e-15)
+
+
+@pytest.mark.parametrize("language,text,expected", [
+    ("de", "0,5", 0.5),
+    ("fr", "0,5", 0.5),
+    ("es", "0,5", 0.5),
+    ("it", "0,5", 0.5),
+    ("nl", "0,5", 0.5),
+    ("pl", "0,5", 0.5),
+    ("de", "0.5", 0.5),
+    ("fr", "0.5", 0.5),
+    ("en", "0.5", 0.5),
+    ("en", "0,5", 1.0),
+])
+def test_numeric_text_uses_ui_decimal_separator(monkeypatch, language, text, expected):
+    module = import_module("lfs_plugins.scrub_fields")
+    monkeypatch.setitem(sys.modules, "lichtfeld", SimpleNamespace(
+        ui=SimpleNamespace(get_current_language=lambda: language)))
+    values = {"scale": 1.0}
+    scrub = module.ScrubFieldController(
+        {"scale": module.ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")},
+        values.__getitem__, values.__setitem__)
+    attach_fields(scrub)
+    state = scrub._fields["scale"]
+    state.editing = True
+    state.input_el.set_attribute("value", text)
+
+    scrub._commit_edit_value(state)
+
+    assert values["scale"] == expected

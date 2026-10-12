@@ -326,6 +326,15 @@ class ScrubFieldController:
         if not text:
             return
 
+        if text.count(",") == 1 and "." not in text:
+            try:
+                import lichtfeld as lf
+                language = lf.ui.get_current_language()
+            except (ImportError, AttributeError):
+                language = "en"
+            if language in {"de", "es", "fr", "it", "nl", "pl"}:
+                text = text.replace(",", ".")
+
         try:
             if state.spec.data_type is int:
                 value = int(float(text))
