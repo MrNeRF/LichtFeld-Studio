@@ -696,7 +696,8 @@ namespace lfs::training {
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
         lfs::core::Tensor applyPPISPForEval(const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) const;
         void log_eval_appearance() const;
-        void evaluate_at(int iteration);
+        void evaluate_at(int iteration, std::stop_token stop_token = {});
+        bool service_evaluation_controls(int iteration, std::stop_token stop_token);
         [[nodiscard]] lfs::core::param::TrainingParameters params_for_project_snapshot() const;
         [[nodiscard]] std::function<std::uint64_t(std::uint64_t)> release_image_cache_for_snapshot() const;
         [[nodiscard]] TrainingProgress::Phase get_progress_phase(
@@ -1018,6 +1019,7 @@ namespace lfs::training {
         std::atomic<bool> stop_requested_{false};
         std::atomic<bool> is_paused_{false};
         std::atomic<bool> is_running_{false};
+        std::atomic<bool> evaluation_active_{false};
         std::atomic<bool> training_complete_{false};
         std::atomic<bool> saving_model_{false};
         std::atomic<bool> ready_to_start_{false};

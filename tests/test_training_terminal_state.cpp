@@ -30,6 +30,22 @@ namespace lfs::training {
         static void handle_controls(Trainer& trainer, const int iteration) {
             trainer.handle_control_requests(iteration, {});
         }
+
+        static bool service_evaluation_controls(Trainer& trainer, const int iteration) {
+            return trainer.service_evaluation_controls(iteration, {});
+        }
+
+        static bool stop_requested(const Trainer& trainer) {
+            return trainer.stop_requested_.load();
+        }
+
+        static void set_stop_requested(Trainer& trainer, const bool stop_requested) {
+            trainer.stop_requested_.store(stop_requested);
+        }
+
+        static void set_evaluation_active(Trainer& trainer, const bool active) {
+            trainer.evaluation_active_.store(active);
+        }
     };
 } // namespace lfs::training
 
@@ -113,6 +129,47 @@ namespace {
         EXPECT_EQ(trainer_->get_progress_iteration(), 1400);
         EXPECT_EQ(trainer_->get_current_iteration(), 1400);
         EXPECT_EQ(Access::snapshot_iteration(*trainer_), 1400);
+    }
+
+    TEST_F(TrainingTerminalStateTest, PauseDuringEvaluationReportsTheCompletedStep) {
+        using Access = lfs::training::TrainerPausedProgressTestAccess;
+        Access::set_iteration(*trainer_, 400, false);
+        Access::set_evaluation_active(*trainer_, true);
+        int paused_iteration = -1;
+        trainer_->setOnPaused([&](const int iteration) { paused_iteration = iteration; });
+
+        trainer_->request_pause();
+        Access::handle_controls(*trainer_, 400);
+        ASSERT_TRUE(trainer_->is_paused());
+        EXPECT_EQ(paused_iteration, 400);
+        EXPECT_EQ(trainer_->get_progress_iteration(), 400);
+        EXPECT_EQ(Access::snapshot_iteration(*trainer_), 400);
+
+        trainer_->request_resume();
+        Access::handle_controls(*trainer_, 400);
+        EXPECT_FALSE(trainer_->is_paused());
+        EXPECT_EQ(trainer_->get_progress_iteration(), 400);
+        Access::set_evaluation_active(*trainer_, false);
+    }
+
+    TEST_F(TrainingTerminalStateTest, StopDuringPausedEvaluationCancelsAtBoundary) {
+        using Access = lfs::training::TrainerPausedProgressTestAccess;
+        Access::set_iteration(*trainer_, 400, false);
+        Access::set_evaluation_active(*trainer_, true);
+
+        trainer_->request_stop();
+        EXPECT_FALSE(Access::service_evaluation_controls(*trainer_, 400));
+        EXPECT_TRUE(Access::stop_requested(*trainer_));
+
+        Access::set_stop_requested(*trainer_, false);
+        trainer_->request_pause();
+        Access::handle_controls(*trainer_, 400);
+        ASSERT_TRUE(trainer_->is_paused());
+
+        trainer_->request_stop();
+        EXPECT_FALSE(Access::service_evaluation_controls(*trainer_, 400));
+        EXPECT_TRUE(Access::stop_requested(*trainer_));
+        Access::set_evaluation_active(*trainer_, false);
     }
 
     TEST_F(TrainingTerminalStateTest, UnregisterCancelsAlreadyPendingCallback) {

@@ -89,6 +89,7 @@ namespace lfs::training {
         int num_gaussians = 0;
         int iteration = 0;
         bool valid = false;
+        bool cancelled = false;
         std::optional<float> normal_angle_deg;
         std::optional<float> depth_absrel;
         float bias_r = 0.0f;
@@ -100,6 +101,9 @@ namespace lfs::training {
         std::vector<ViewMetrics> views;
 
         [[nodiscard]] std::string to_string() const {
+            if (cancelled) {
+                return "Evaluation stopped";
+            }
             if (!valid) {
                 return "No valid evaluation images";
             }
@@ -391,14 +395,16 @@ namespace lfs::training {
                              const lfs::core::SplatData& splatData,
                              std::shared_ptr<CameraDataset> val_dataset,
                              lfs::core::Tensor& background,
-                             lfs::io::PipelinedImageLoader* image_loader = nullptr);
+                             lfs::io::PipelinedImageLoader* image_loader = nullptr,
+                             std::function<bool()> on_view_boundary = {});
 
         // Scores what source.render returns for each view against the view's reference image.
         EvalMetrics evaluate_views(int iteration,
                                    std::shared_ptr<CameraDataset> val_dataset,
                                    const EvaluationViewSource& source,
                                    const lfs::core::Tensor& background,
-                                   lfs::io::PipelinedImageLoader* image_loader = nullptr);
+                                   lfs::io::PipelinedImageLoader* image_loader = nullptr,
+                                   std::function<bool()> on_view_boundary = {});
 
         // Save final report
         void save_report() const {

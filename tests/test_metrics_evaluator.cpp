@@ -1645,6 +1645,114 @@ TEST(MetricsEvaluatorJson, WritesTheTrainingConfigAndPerImageMetricsNextToTheCsv
     std::filesystem::remove_all(tmp);
 }
 
+TEST(MetricsEvaluatorControlTest, CallsControlBetweenViewsWithoutChangingScores) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_control";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kWidth = 16;
+    constexpr int kHeight = 12;
+    const auto first_path = tmp / "first.png";
+    const auto second_path = tmp / "second.png";
+    write_rgb_png(first_path, 126, 126, 126, kHeight, kWidth);
+    write_rgb_png(second_path, 20, 200, 60, kHeight, kWidth);
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{
+            make_eval_camera(first_path, {}, kWidth, kHeight),
+            make_eval_camera(second_path, {}, kWidth, kHeight)},
+        DatasetConfig{}, CameraDataset::Split::ALL);
+    auto splat = make_front_facing_splat();
+    auto background = Tensor::zeros({3}, Device::CUDA);
+
+    auto plain_params = make_eval_params(tmp / "plain");
+    auto controlled_params = make_eval_params(tmp / "controlled");
+    std::filesystem::create_directories(plain_params.dataset.output_path);
+    std::filesystem::create_directories(controlled_params.dataset.output_path);
+    MetricsEvaluator plain(plain_params);
+    MetricsEvaluator controlled(controlled_params);
+    const auto reference = plain.evaluate(1, splat, dataset, background);
+    std::size_t boundaries = 0;
+    const auto actual = controlled.evaluate(
+        1, splat, dataset, background, nullptr,
+        [&] {
+            ++boundaries;
+            return true;
+        });
+
+    ASSERT_TRUE(reference.valid);
+    ASSERT_TRUE(actual.valid);
+    ASSERT_EQ(reference.views.size(), 2u);
+    ASSERT_EQ(actual.views.size(), reference.views.size());
+    EXPECT_EQ(boundaries, 3u);
+    for (std::size_t i = 0; i < actual.views.size(); ++i) {
+        ASSERT_TRUE(actual.views[i].psnr.has_value());
+        ASSERT_TRUE(reference.views[i].psnr.has_value());
+        ASSERT_TRUE(actual.views[i].ssim.has_value());
+        ASSERT_TRUE(reference.views[i].ssim.has_value());
+        EXPECT_EQ(std::bit_cast<std::uint32_t>(*actual.views[i].psnr),
+                  std::bit_cast<std::uint32_t>(*reference.views[i].psnr));
+        EXPECT_EQ(std::bit_cast<std::uint32_t>(*actual.views[i].ssim),
+                  std::bit_cast<std::uint32_t>(*reference.views[i].ssim));
+    }
+    std::filesystem::remove_all(tmp);
+}
+
+TEST(MetricsEvaluatorControlTest, StopDuringPausedFinalEvaluationCancelsWithoutPartialMetrics) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_stop_control";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kWidth = 16;
+    constexpr int kHeight = 12;
+    const auto first_path = tmp / "first.png";
+    const auto second_path = tmp / "second.png";
+    write_rgb_png(first_path, 126, 126, 126, kHeight, kWidth);
+    write_rgb_png(second_path, 20, 200, 60, kHeight, kWidth);
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{
+            make_eval_camera(first_path, {}, kWidth, kHeight),
+            make_eval_camera(second_path, {}, kWidth, kHeight)},
+        DatasetConfig{}, CameraDataset::Split::ALL);
+    auto splat = make_front_facing_splat();
+    auto background = Tensor::zeros({3}, Device::CUDA);
+
+    auto params = make_eval_params(tmp / "output");
+    std::filesystem::create_directories(params.dataset.output_path);
+    MetricsEvaluator evaluator(params);
+    std::size_t boundaries = 0;
+    bool paused = true;
+    bool stop_requested = false;
+    const auto result = evaluator.evaluate(
+        1, splat, dataset, background, nullptr,
+        [&] {
+            ++boundaries;
+            if (boundaries == 2) {
+                stop_requested = true;
+                paused = false;
+            }
+            return !stop_requested;
+        });
+
+    EXPECT_EQ(boundaries, 2u);
+    EXPECT_TRUE(stop_requested);
+    EXPECT_FALSE(paused);
+    EXPECT_FALSE(result.valid);
+    EXPECT_EQ(result.views.size(), 1u);
+    EXPECT_FALSE(std::filesystem::exists(params.dataset.output_path / "per_image_metrics.json"));
+    std::ifstream csv(params.dataset.output_path / "metrics.csv");
+    ASSERT_TRUE(csv.good());
+    EXPECT_EQ(std::count(std::istreambuf_iterator<char>(csv), std::istreambuf_iterator<char>(), '\n'), 1);
+    std::filesystem::remove_all(tmp);
+}
+
 TEST(ViewEvaluationJson, StepsBeyondTheLastIterationAreReported) {
     using lfs::training::unreachable_eval_steps;
     EXPECT_EQ(unreachable_eval_steps({7000, 10000, 200000}, 30000), (std::vector<size_t>{200000}));

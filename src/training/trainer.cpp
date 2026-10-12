@@ -5703,6 +5703,25 @@ namespace lfs::training {
         }
     }
 
+    bool Trainer::service_evaluation_controls(int iteration, std::stop_token stop_token) {
+        if (!pause_requested_.load(std::memory_order_acquire) &&
+            !stop_requested_.load(std::memory_order_acquire) &&
+            !stop_token.stop_requested()) {
+            return true;
+        }
+
+        handle_control_requests(iteration, stop_token);
+        while (is_paused_.load(std::memory_order_acquire) &&
+               !stop_requested_.load(std::memory_order_acquire) &&
+               !stop_token.stop_requested()) {
+            consume_requested_project_snapshot(project_snapshot_iteration());
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            handle_control_requests(iteration, stop_token);
+        }
+        return !stop_requested_.load(std::memory_order_acquire) &&
+               !stop_token.stop_requested();
+    }
+
     inline float inv_weight_piecewise(int step, int max_steps) {
         // Phases by fraction of training
         const float phase = std::max(0.f, std::min(1.f, step / float(std::max(1, max_steps))));
@@ -8339,12 +8358,22 @@ namespace lfs::training {
                         eval_ppisp_exif_.store(0);
                         eval_ppisp_nearest_.store(0);
                         const auto evaluation_image_loader = getActiveImageLoader();
+                        evaluation_active_.store(true, std::memory_order_release);
+                        auto evaluation_guard = makeScopeGuard([this] {
+                            evaluation_active_.store(false, std::memory_order_release);
+                        });
                         auto metrics = evaluator_->evaluate(iter,
                                                             strategy_->get_model(),
                                                             val_dataset_,
                                                             background_,
-                                                            evaluation_image_loader.get());
-                        if (!metrics.valid) {
+                                                            evaluation_image_loader.get(),
+                                                            [this, iter, stop_token] {
+                                                                return service_evaluation_controls(iter, stop_token);
+                                                            });
+                        service_evaluation_controls(iter, stop_token);
+                        if (metrics.cancelled) {
+                            LOG_INFO("Final evaluation stopped at iteration {}", iter);
+                        } else if (!metrics.valid) {
                             auto error = lfs::make_error(lfs::ErrorInit{
                                 .code = lfs::ErrorCode::FailedPrecondition,
                                 .domain = lfs::ErrorDomain::Training,
@@ -8590,18 +8619,31 @@ namespace lfs::training {
         return result;
     }
 
-    void Trainer::evaluate_at(const int iteration) {
+    void Trainer::evaluate_at(const int iteration, std::stop_token stop_token) {
         evaluator_->print_evaluation_header(iteration);
         lfs::diagnostics::VramProfiler::instance().mark("evaluation");
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
         eval_ppisp_nearest_.store(0);
         const auto evaluation_image_loader = getActiveImageLoader();
+        evaluation_active_.store(true, std::memory_order_release);
+        auto evaluation_guard = makeScopeGuard([this] {
+            evaluation_active_.store(false, std::memory_order_release);
+        });
         auto metrics = evaluator_->evaluate(iteration,
                                             strategy_->get_model(),
                                             val_dataset_,
                                             background_,
-                                            evaluation_image_loader.get());
+                                            evaluation_image_loader.get(),
+                                            [this, iteration, stop_token] {
+                                                return service_evaluation_controls(iteration, stop_token);
+                                            });
+        service_evaluation_controls(iteration, stop_token);
+        if (metrics.cancelled) {
+            LOG_INFO("Evaluation stopped at iteration {}", iteration);
+            photometric_loss_.arena().shrink_to_required();
+            return;
+        }
         if (!metrics.valid) {
             auto error = lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::FailedPrecondition,
@@ -9146,7 +9188,7 @@ namespace lfs::training {
             if (iter > get_total_iterations() &&
                 evaluator_->is_enabled() &&
                 evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations())) {
-                evaluate_at(current_iteration_.load());
+                evaluate_at(current_iteration_.load(), stop_token);
             }
 
             clearActiveImageLoader();
@@ -9508,7 +9550,7 @@ namespace lfs::training {
 
     int Trainer::project_snapshot_iteration() const {
         const int current = current_iteration_.load();
-        if (is_paused_.load() && current > 0) {
+        if (is_paused_.load() && !evaluation_active_.load() && current > 0) {
             return current - 1;
         }
         return current;
