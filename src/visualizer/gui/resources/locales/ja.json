@@ -1563,6 +1563,8 @@
     "status_label": "ステータス: %s"
   },
   "input_settings": {
+    "invalid_profile_name": "無効なプロファイル名です。パス区切り文字や予約文字を含まない名前を使用してください。",
+    "profile_save_failed": "入力プロファイルを保存できませんでした。",
     "active_profile": "アクティブプロファイル",
     "save_current_profile": "現在のプロファイルを保存",
     "reset_to_default": "デフォルトにリセット",

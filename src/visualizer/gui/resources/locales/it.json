@@ -1563,6 +1563,8 @@
     "status_label": "Stato: %s"
   },
   "input_settings": {
+    "invalid_profile_name": "Nome del profilo non valido. Usa un nome semplice senza separatori di percorso o caratteri riservati.",
+    "profile_save_failed": "Impossibile salvare il profilo di input.",
     "active_profile": "Profilo Attivo",
     "save_current_profile": "Salva Profilo Corrente",
     "reset_to_default": "Ripristina Predefinito",

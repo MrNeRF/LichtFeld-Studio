@@ -242,6 +242,10 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::loadProfile(const std::string& name) {
+        if (!isValidProfileName(name)) {
+            LOG_WARN("Refusing invalid input profile name");
+            return;
+        }
         if (!g_persistence_enabled.load(std::memory_order_acquire)) {
             auto profile = createDefaultProfile();
             current_profile_name_ = profile.name;
@@ -274,16 +278,54 @@ namespace lfs::vis::input {
         }
     }
 
-    void InputBindings::saveProfile(const std::string& name) const {
+    bool InputBindings::saveProfile(const std::string& name) const {
+        if (!isValidProfileName(name)) {
+            LOG_WARN("Refusing invalid input profile name");
+            return false;
+        }
         if (!g_persistence_enabled.load(std::memory_order_acquire))
-            return;
+            return false;
         const auto config_dir = getConfigDir();
         if (!config_dir) {
             LOG_WARN("Cannot save input profile '{}': user keymap directory is unavailable", name);
-            return;
+            return false;
         }
         const auto path = *config_dir / (name + ".json");
-        saveProfileToFile(path);
+        return saveProfileToFile(path);
+    }
+
+    bool InputBindings::isValidProfileName(const std::string_view name) noexcept {
+        if (name.empty() || name.size() > 128 || name == "." ||
+            name.find("..") != std::string_view::npos ||
+            name.find(" .") != std::string_view::npos ||
+            name.front() == ' ' || name.back() == ' ' || name.back() == '.')
+            return false;
+        for (const unsigned char c : name) {
+            if (c < 0x20 || c == 0x7f || c == '/' || c == '\\' || c == '<' ||
+                c == '>' || c == ':' || c == '"' || c == '|' || c == '?' || c == '*')
+                return false;
+        }
+        const auto stem = name.substr(0, name.find('.'));
+        char upper[8]{};
+        if (stem.size() >= sizeof(upper))
+            return true;
+        for (size_t i = 0; i < stem.size(); ++i) {
+            const unsigned char c = static_cast<unsigned char>(stem[i]);
+            upper[i] = static_cast<char>(std::toupper(c));
+        }
+        const std::string_view device(upper, stem.size());
+        if (device == "CON" || device == "PRN" || device == "AUX" || device == "NUL" ||
+            device == "CONIN$" || device == "CONOUT$" || device == "CLOCK$")
+            return false;
+        if (device.size() == 4 &&
+            (device.substr(0, 3) == "COM" || device.substr(0, 3) == "LPT") &&
+            device[3] >= '0' && device[3] <= '9')
+            return false;
+        if (device.size() == 5 &&
+            (device.substr(0, 3) == "COM" || device.substr(0, 3) == "LPT") &&
+            (device.substr(3) == "¹" || device.substr(3) == "²" || device.substr(3) == "³"))
+            return false;
+        return true;
     }
 
     std::optional<std::filesystem::path> InputBindings::getConfigDir() {
@@ -900,7 +942,7 @@ namespace lfs::vis::input {
             for (const auto& entry : std::filesystem::directory_iterator(*config_dir)) {
                 if (entry.path().extension() == ".json") {
                     const std::string name = lfs::core::path_to_utf8(entry.path().stem());
-                    if (name != "Default") {
+                    if (name != "Default" && isValidProfileName(name)) {
                         profiles.push_back(name);
                     }
                 }

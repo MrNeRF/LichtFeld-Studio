@@ -1563,6 +1563,8 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
+    "invalid_profile_name": "Ongeldige profielnaam. Gebruik een eenvoudige naam zonder padscheidingstekens of gereserveerde tekens.",
+    "profile_save_failed": "Het invoerprofiel kon niet worden opgeslagen.",
     "active_profile": "Actief Profiel",
     "save_current_profile": "Huidig Profiel Opslaan",
     "reset_to_default": "Reset naar Standaard",

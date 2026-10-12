@@ -292,7 +292,7 @@ namespace lfs::vis::input {
         InputBindings();
 
         void loadProfile(const std::string& name);
-        void saveProfile(const std::string& name) const;
+        bool saveProfile(const std::string& name) const;
         bool loadProfileFromFile(const std::filesystem::path& path);
         bool saveProfileToFile(const std::filesystem::path& path) const;
         std::vector<std::string> getAvailableProfiles() const;
@@ -300,6 +300,7 @@ namespace lfs::vis::input {
         std::uint64_t getBindingsRevision() const { return bindings_revision_; }
 
         static std::optional<std::filesystem::path> getConfigDir();
+        [[nodiscard]] static bool isValidProfileName(std::string_view name) noexcept;
         [[nodiscard]] static bool isPersistenceEnabled() noexcept;
         static void setPersistenceEnabled(bool enabled) noexcept;
 

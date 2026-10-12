@@ -538,6 +538,46 @@ def test_keymap_selecting_the_active_profile_does_not_reload_it(keymap_bindings_
     assert loads == ["Studio"]
 
 
+def test_python_save_profile_rejects_path_names_without_touching_outside_file(tmp_path):
+    root = Path(__file__).parents[2]
+    source = (root / "src/python/lfs/py_keymap.cpp").read_text()
+    start = source.index('"save_profile",')
+    end = source.index('"export_profile",', start)
+    binding = source[start:end]
+    validate = binding.index("InputBindings::isValidProfileName(name)")
+    error = binding.index("throw nb::value_error", validate)
+    save = binding.index("get_keymap_bindings()->saveProfile(name)")
+    assert validate < error < save
+
+    module_dir = root / "build/src/python"
+    if not any(module_dir.glob("lichtfeld*.so")):
+        return
+    outside = tmp_path / "config/x.json"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("sentinel")
+    script = """
+import sys
+from pathlib import Path
+import lichtfeld
+target = Path(sys.argv[1])
+try:
+    lichtfeld.keymap.save_profile('../x')
+except ValueError:
+    pass
+else:
+    raise AssertionError('unsafe profile name was accepted')
+assert target.read_text() == 'sentinel'
+"""
+    env = dict(__import__("os").environ)
+    env["PYTHONPATH"] = str(module_dir)
+    result = __import__("subprocess").run(
+        [sys.executable, "-c", script, str(outside)],
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert outside.read_text() == "sentinel"
+
+
 def test_keymap_builds_binding_rows_with_capture_state(keymap_bindings_module):
     prefs, state = keymap_bindings_module
     panel, _model = _bind_panel(prefs)

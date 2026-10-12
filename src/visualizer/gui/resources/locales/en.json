@@ -1561,6 +1561,8 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
+    "invalid_profile_name": "Invalid profile name. Use a simple name without path separators or reserved characters.",
+    "profile_save_failed": "Could not save the input profile.",
     "active_profile": "Active Profile",
     "save_current_profile": "Save Current Profile",
     "reset_to_default": "Reset to Default",

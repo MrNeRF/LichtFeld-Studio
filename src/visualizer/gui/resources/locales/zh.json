@@ -1563,6 +1563,8 @@
     "status_label": "状态：%s"
   },
   "input_settings": {
+    "invalid_profile_name": "配置文件名称无效。请使用不含路径分隔符或保留字符的简单名称。",
+    "profile_save_failed": "无法保存输入配置文件。",
     "active_profile": "活动配置文件",
     "save_current_profile": "保存当前配置文件",
     "reset_to_default": "重置为默认",

@@ -2162,6 +2162,76 @@ namespace lfs::vis {
         std::filesystem::remove_all(root, filesystem_error);
     }
 
+    TEST_F(InputControllerFocusTest, ProfileNamesCannotEscapeTheKeymapDirectory) {
+        namespace fs = std::filesystem;
+        const auto root = fs::temp_directory_path() / "lfs_keymap_name_boundary";
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        const ScopedEnvironmentVariable home("LFS_HOME", root.string());
+        const auto paths = core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        ASSERT_TRUE(paths->ensureDirectories());
+        const auto outside = (paths->keymapDir() /
+                              "../../data/asset_library/library.json")
+                                 .lexically_normal();
+        fs::create_directories(outside.parent_path());
+        {
+            std::ofstream file(outside);
+            file << "catalog sentinel";
+        }
+
+        input::InputBindings::setPersistenceEnabled(true);
+        input::InputBindings bindings;
+        bindings.saveProfile("../../data/asset_library/library");
+        bindings.saveProfile("CON");
+        bindings.saveProfile("parent\\child");
+        input::InputBindings::setPersistenceEnabled(false);
+        std::string contents;
+        {
+            std::ifstream file(outside);
+            std::getline(file, contents);
+        }
+        EXPECT_EQ(contents, "catalog sentinel");
+        EXPECT_FALSE(fs::exists(paths->keymapDir() / "CON.json"));
+        EXPECT_FALSE(fs::exists(paths->keymapDir() / "parent\\child.json"));
+        fs::remove_all(root, ec);
+    }
+
+    TEST_F(InputControllerFocusTest, ProfileNamesRejectPlatformReservedPaths) {
+        for (const std::string_view name : {
+                 "",
+                 ".",
+                 "..",
+                 "my..profile",
+                 "parent/child",
+                 "parent\\child",
+                 "/absolute",
+                 "C:\\absolute",
+                 "CON",
+                 "con.txt",
+                 "CON .txt",
+                 "PRN",
+                 "AUX",
+                 "NUL",
+                 "COM1",
+                 "COM¹",
+                 "LPT9",
+                 "LPT²",
+                 "name:",
+                 "name?",
+                 "name*",
+                 "end.",
+                 "end ",
+             }) {
+            SCOPED_TRACE(std::string(name));
+            EXPECT_FALSE(input::InputBindings::isValidProfileName(name));
+        }
+        for (const std::string_view name : {"Default", "My Map", "custom_v2", "scene-keys"}) {
+            SCOPED_TRACE(std::string(name));
+            EXPECT_TRUE(input::InputBindings::isValidProfileName(name));
+        }
+    }
+
     TEST_F(InputControllerFocusTest, WindowProfileMigratesWithoutReusingWindowActionIds) {
         const auto path = std::filesystem::temp_directory_path() / "lfs_keymap_v28.json";
         {

@@ -1563,6 +1563,8 @@
     "status_label": "상태: %s"
   },
   "input_settings": {
+    "invalid_profile_name": "잘못된 프로필 이름입니다. 경로 구분자나 예약 문자가 없는 이름을 사용하세요.",
+    "profile_save_failed": "입력 프로필을 저장할 수 없습니다.",
     "active_profile": "활성 프로필",
     "save_current_profile": "현재 프로필 저장",
     "reset_to_default": "기본값으로 재설정",

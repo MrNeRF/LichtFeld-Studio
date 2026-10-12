@@ -1563,6 +1563,8 @@
     "status_label": "Stan: %s"
   },
   "input_settings": {
+    "invalid_profile_name": "Nieprawidłowa nazwa profilu. Użyj prostej nazwy bez separatorów ścieżki i znaków zastrzeżonych.",
+    "profile_save_failed": "Nie udało się zapisać profilu wejściowego.",
     "active_profile": "Aktywny Profil",
     "save_current_profile": "Zapisz Bieżący Profil",
     "reset_to_default": "Resetuj do Domyślnych",
