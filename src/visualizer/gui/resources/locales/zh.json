@@ -1569,6 +1569,7 @@
     "profile_save_failed": "无法保存输入配置文件。",
     "invalid_binding": "此快捷键不能用于该操作。",
     "damaged_profile_backed_up": "保存前已备份损坏的按键映射。原始文件保存在配置文件旁边。",
+    "invalid_entries_skipped": "已跳过并保留的按键映射项位置（从 1 开始）：",
     "newer_profile_unchanged": "此按键映射由较新版本保存，未加载或更改。",
     "core_actions_unreachable": "此按键映射中的部分重要快捷键无法使用。您可以仅恢复这些操作。",
     "restore_core_actions": "恢复这些操作的默认设置",

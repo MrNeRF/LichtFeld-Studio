@@ -180,8 +180,7 @@ namespace lfs::vis::input {
     }
 
     int sdlShortcutKeyToAppKey(const SDL_Scancode scancode, const SDL_Keycode keycode) {
-        return sdlShortcutKeyToAppKey(scancode, keycode,
-                                      SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false));
+        return sdlShortcutKeyToAppKey(scancode, keycode, keycode);
     }
 
     int sdlShortcutKeyToAppKey(const SDL_Scancode scancode, const SDL_Keycode keycode,

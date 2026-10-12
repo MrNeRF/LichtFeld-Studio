@@ -1569,6 +1569,7 @@
     "profile_save_failed": "入力プロファイルを保存できませんでした。",
     "invalid_binding": "このショートカットはこの操作には使用できません。",
     "damaged_profile_backed_up": "破損したキーマップを保存前にバックアップしました。元のファイルはプロファイルの隣に保存されています。",
+    "invalid_entries_skipped": "スキップして保持したキーマップ項目の位置（1から）: ",
     "newer_profile_unchanged": "このキーマップは新しいバージョンで保存されました。読み込みも変更も行っていません。",
     "core_actions_unreachable": "このキーマップでは一部の重要なショートカットを使用できません。該当する操作だけを復元できます。",
     "restore_core_actions": "これらの操作の既定設定を復元",

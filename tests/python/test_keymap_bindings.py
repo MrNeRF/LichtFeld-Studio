@@ -640,59 +640,32 @@ def test_keymap_ensure_rows_does_not_rebuild_on_first_update(keymap_bindings_mod
 
 
 def test_keymap_editor_import_export_use_native_json_dialogs(keymap_bindings_module, tmp_path):
-    prefs, state = keymap_bindings_module
-    panel, _model = _bind_panel(prefs)
-    section = panel._keymap
-    profile_path = tmp_path / "roundtrip.json"
-    dialog_calls = []
-    prefs.lf.ui.save_json_file_dialog = lambda default_name: (
-        dialog_calls.append(("save", default_name)) or str(profile_path)
-    )
-    prefs.lf.ui.open_json_file_dialog = lambda: (
-        dialog_calls.append(("open",)) or str(profile_path)
-    )
-    state.triggers[(prefs.lf.keymap.ToolMode.GLOBAL,
-                    prefs.lf.keymap.Action.TOOL_SCALE)] = {"key": 74}
-
-    def export_profile(path):
-        Path(path).write_text(json.dumps({"scale": state.triggers[
-            (prefs.lf.keymap.ToolMode.GLOBAL, prefs.lf.keymap.Action.TOOL_SCALE)]}))
-        return True
+    prefs, state = keymap_bindings_module; section = _bind_panel(prefs)[0]._keymap
+    profile_path, dialog_calls = tmp_path / "roundtrip.json", []
+    prefs.lf.ui.save_json_file_dialog = lambda name: (dialog_calls.append(("save", name)) or str(profile_path))
+    prefs.lf.ui.open_json_file_dialog = lambda: (dialog_calls.append(("open",)) or str(profile_path))
+    key = (prefs.lf.keymap.ToolMode.GLOBAL, prefs.lf.keymap.Action.TOOL_SCALE)
+    state.triggers[key] = {"key": 74}; prefs.lf.keymap.export_profile = lambda path: Path(path).write_text(json.dumps({"scale": state.triggers[key]})) or True
 
     def import_profile(path):
-        state.triggers[(prefs.lf.keymap.ToolMode.GLOBAL,
-                        prefs.lf.keymap.Action.TOOL_SCALE)] = json.loads(
-                            Path(path).read_text())["scale"]
+        state.triggers[key] = json.loads(Path(path).read_text())["scale"]
         state.bindings_revision[0] += 1
         return True
-
-    prefs.lf.keymap.export_profile = export_profile
     prefs.lf.keymap.import_profile = import_profile
-    section._on_export_profile(None, None, None)
-    assert profile_path.exists()
-    state.triggers.clear()
-    section._on_import_profile(None, None, None)
-    assert state.triggers[(prefs.lf.keymap.ToolMode.GLOBAL,
-                           prefs.lf.keymap.Action.TOOL_SCALE)] == {"key": 74}
-    assert dialog_calls == [("save", "Default.json"), ("open",)]
+    section._on_export_profile(None, None, None); assert profile_path.exists()
+    state.triggers.clear(); section._on_import_profile(None, None, None)
+    assert state.triggers[key] == {"key": 74} and dialog_calls == [("save", "Default.json"), ("open",)]
 
 
 def test_keymap_editor_clear_one_binding_without_reset(keymap_bindings_module):
-    prefs, state = keymap_bindings_module
-    panel, _model = _bind_panel(prefs)
-    section = panel._keymap
-    mode = prefs.lf.keymap.ToolMode.GLOBAL
-    scale = prefs.lf.keymap.Action.TOOL_SCALE
+    prefs, state = keymap_bindings_module; section = _bind_panel(prefs)[0]._keymap
+    mode, scale = prefs.lf.keymap.ToolMode.GLOBAL, prefs.lf.keymap.Action.TOOL_SCALE
     state.triggers[(mode, scale)] = {"type": "key", "key": 52, "modifiers": 0}
     section._rebuild_binding_rows(mode)
-    row = next(row for row in section._handle.records["binding_rows"]
-               if row.get("action_id") == str(scale.value))
-    assert row["show_clear"] is True
-    assert row["clear_label"] == "input_settings.clear_binding"
+    row = next(r for r in section._handle.records["binding_rows"] if r.get("action_id") == str(scale.value))
+    assert row["show_clear"] is True and row["clear_label"] == "input_settings.clear_binding"
 
-    button = _ElementStub()
-    button.attributes = {"data-btn-action": "clear", "data-action-id": str(scale.value),
-                         "data-mode-id": str(mode.value)}
+    button = _ElementStub(); button.attributes = {"data-btn-action": "clear", "data-action-id": str(scale.value), "data-mode-id": str(mode.value)}
     section._on_table_click(_EventStub(button))
     assert state.cleared == [(mode, scale)]
 
@@ -703,54 +676,30 @@ def test_keymap_rows_follow_api_binding_revision_without_idle_rebuild(keymap_bin
     section = panel._keymap
     mode = prefs.lf.keymap.ToolMode.GLOBAL
     action = prefs.lf.keymap.Action.CAMERA_ORBIT
-    prefs.lf.keymap.get_trigger_description = lambda value, selected_mode: (
-        str(state.triggers.get((selected_mode, value), "unbound"))
-    )
+    prefs.lf.keymap.get_trigger_description = lambda value, selected_mode: str(state.triggers.get((selected_mode, value), "unbound"))
     rebuilds = []
     original = model.handle.update_record_list
 
     def record_rebuild(name, rows):
-        if name == "binding_rows":
-            rebuilds.append(rows)
+        if name == "binding_rows": rebuilds.append(rows)
         original(name, rows)
 
     model.handle.update_record_list = record_rebuild
-    section.ensure_binding_rows()
-    doc = _DocStub()
-    panel.on_update(doc)
-    assert len(rebuilds) == 1
+    section.ensure_binding_rows(); doc = _DocStub()
+    panel.on_update(doc); assert len(rebuilds) == 1
 
-    state.triggers[(mode, action)] = "J"
-    state.bindings_revision[0] += 1
-    panel.on_update(doc)
-    assert len(rebuilds) == 2
-    orbit_row = next(row for row in rebuilds[-1] if row.get("action_id") == str(action.value))
-    assert orbit_row["desc_text"] == "J"
-
-    panel.on_update(doc)
-    assert len(rebuilds) == 2
-
-    del state.triggers[(mode, action)]
-    state.bindings_revision[0] += 1
-    panel.on_update(doc)
-    assert len(rebuilds) == 3
-    orbit_row = next(row for row in rebuilds[-1] if row.get("action_id") == str(action.value))
-    assert orbit_row["desc_text"] == "unbound"
-
-    # Importing over the active profile leaves its name unchanged.
-    state.triggers[(mode, action)] = "K"
-    state.bindings_revision[0] += 1
-    panel.on_update(doc)
-    assert len(rebuilds) == 4
-    orbit_row = next(row for row in rebuilds[-1] if row.get("action_id") == str(action.value))
-    assert orbit_row["desc_text"] == "K"
-
-    state.current_profile[0] = "Studio"
-    state.bindings_revision[0] += 1
-    panel.on_update(doc)
-    assert len(rebuilds) == 5
-    panel.on_update(doc)
-    assert len(rebuilds) == 5
+    def changed(desc, count):
+        panel.on_update(doc); assert len(rebuilds) == count
+        row = next(r for r in rebuilds[-1] if r.get("action_id") == str(action.value))
+        assert row["desc_text"] == desc
+        panel.on_update(doc); assert len(rebuilds) == count
+    state.triggers[(mode, action)] = "J"; state.bindings_revision[0] += 1; changed("J", 2)
+    del state.triggers[(mode, action)]; state.bindings_revision[0] += 1; changed("unbound", 3)
+    # An import and a profile switch each update once; idle frames do not rebuild.
+    state.triggers[(mode, action)] = "K"; state.bindings_revision[0] += 1; changed("K", 4)
+    state.current_profile[0] = "Studio"; state.bindings_revision[0] += 1
+    panel.on_update(doc); assert len(rebuilds) == 5
+    panel.on_update(doc); assert len(rebuilds) == 5
 
 
 def test_keymap_marks_conflicting_binding_rows(keymap_bindings_module):
@@ -866,23 +815,14 @@ def test_keymap_capture_conflict_cancel_restores_previous_trigger(keymap_binding
 
 def test_keymap_unmount_restores_binding_with_pending_conflict(keymap_bindings_module):
     prefs, state = keymap_bindings_module
-    panel, _model = _bind_panel(prefs)
-    section = panel._keymap
+    section = _bind_panel(prefs)[0]._keymap
     section._doc = _DocStub(with_conflict_overlay=True)
-    mode = prefs.lf.keymap.ToolMode.GLOBAL
-    action = prefs.lf.keymap.Action.CAMERA_MOVE_BACKWARD
+    mode, action = prefs.lf.keymap.ToolMode.GLOBAL, prefs.lf.keymap.Action.CAMERA_MOVE_BACKWARD
     previous_trigger = {"type": "key", "key": 83, "modifiers": 0}
-    section._pending_conflict = {
-        "mode": mode,
-        "action": action,
-        "other_mode": mode,
-        "other_action": prefs.lf.keymap.Action.CAMERA_MOVE_FORWARD,
-        "previous_trigger": previous_trigger,
-    }
-
-    section.on_unmount()
-
-    assert state.cleared == [(mode, action)]
+    section._pending_conflict = {"mode": mode, "action": action, "other_mode": mode,
+                                 "other_action": prefs.lf.keymap.Action.CAMERA_MOVE_FORWARD,
+                                 "previous_trigger": previous_trigger}
+    section.on_unmount(); assert state.cleared == [(mode, action)]
     assert state.set_triggers == [(mode, action, previous_trigger)]
     assert section._pending_conflict is None
 

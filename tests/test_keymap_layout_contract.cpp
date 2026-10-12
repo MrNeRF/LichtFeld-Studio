@@ -1,8 +1,7 @@
-/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
- * SPDX-License-Identifier: GPL-3.0-or-later */
-
 #include "input/input_bindings.hpp"
 #include "input/sdl_key_mapping.hpp"
+#include "keymap_history_helpers.hpp"
+#include <SDL3/SDL_keyboard.h>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -12,6 +11,7 @@
 
 namespace lfs::vis::input {
     namespace {
+        using KeymapTest = test::KeymapTest;
         struct LayoutKey {
             SDL_Scancode scancode = SDL_SCANCODE_UNKNOWN;
             SDL_Keycode unshifted = SDLK_UNKNOWN;
@@ -53,7 +53,11 @@ namespace lfs::vis::input {
                 const auto symbol = static_cast<SDL_Keycode>(
                     key >= KEY_A && key <= KEY_Z ? key + ('a' - 'A') : key);
                 for (const auto& row : layout) {
-                    if (row.unshifted == symbol)
+                    // The top number row is reserved for physical digit
+                    // shortcuts, even if it prints punctuation here.
+                    if (row.unshifted == symbol &&
+                        !(row.scancode >= SDL_SCANCODE_1 &&
+                          row.scancode <= SDL_SCANCODE_0))
                         return row.scancode;
                 }
             }
@@ -77,14 +81,9 @@ namespace lfs::vis::input {
             }
         }
 
-        TEST(KeymapLayoutContractTest, EveryDefaultKeyDispatchesAcrossSavedLayouts) {
+        TEST_F(KeymapTest, EveryDefaultKeyDispatchesAcrossSavedLayouts) {
             const std::filesystem::path root =
                 std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/keymap_layouts";
-            struct RestorePersistence {
-                bool enabled = InputBindings::isPersistenceEnabled();
-                ~RestorePersistence() { InputBindings::setPersistenceEnabled(enabled); }
-            } restore;
-            InputBindings::setPersistenceEnabled(false);
             const InputBindings bindings;
             const auto defaults = InputBindings::createDefaultProfile();
             size_t layouts = 0;
@@ -133,12 +132,7 @@ namespace lfs::vis::input {
             EXPECT_EQ(layouts, 19u);
         }
 
-        TEST(KeymapLayoutContractTest, PrintedCommaAndEqualReachTheirNamedActions) {
-            struct RestorePersistence {
-                bool enabled = InputBindings::isPersistenceEnabled();
-                ~RestorePersistence() { InputBindings::setPersistenceEnabled(enabled); }
-            } restore;
-            InputBindings::setPersistenceEnabled(false);
+        TEST_F(KeymapTest, PrintedCommaAndEqualReachTheirNamedActions) {
             const auto root = std::filesystem::path(PROJECT_ROOT_PATH) /
                               "tests/data/keymap_layouts";
             InputBindings bindings;
@@ -167,12 +161,7 @@ namespace lfs::vis::input {
             }
         }
 
-        TEST(KeymapLayoutContractTest, PieMenuUsesPhysicalTopLeftKeyAcrossLayouts) {
-            struct RestorePersistence {
-                bool enabled = InputBindings::isPersistenceEnabled();
-                ~RestorePersistence() { InputBindings::setPersistenceEnabled(enabled); }
-            } restore;
-            InputBindings::setPersistenceEnabled(false);
+        TEST_F(KeymapTest, PieMenuUsesPhysicalTopLeftKeyAcrossLayouts) {
             const auto root = std::filesystem::path(PROJECT_ROOT_PATH) /
                               "tests/data/keymap_layouts";
             const InputBindings bindings;
@@ -194,12 +183,7 @@ namespace lfs::vis::input {
             }
         }
 
-        TEST(KeymapLayoutContractTest, PrintedSymbolsOnDigitRowsBeatPhysicalFallback) {
-            struct RestorePersistence {
-                bool enabled = InputBindings::isPersistenceEnabled();
-                ~RestorePersistence() { InputBindings::setPersistenceEnabled(enabled); }
-            } restore;
-            InputBindings::setPersistenceEnabled(false);
+        TEST_F(KeymapTest, PrintedSymbolsOnDigitRowsBeatPhysicalFallback) {
             InputBindings bindings;
             const auto defaults = InputBindings::createDefaultProfile();
             const auto root = std::filesystem::path(PROJECT_ROOT_PATH) /

@@ -1569,6 +1569,7 @@
     "profile_save_failed": "입력 프로필을 저장할 수 없습니다.",
     "invalid_binding": "이 단축키는 이 동작에 사용할 수 없습니다.",
     "damaged_profile_backed_up": "손상된 키 맵을 저장하기 전에 백업했습니다. 원본 파일은 프로필 옆에 보관됩니다.",
+    "invalid_entries_skipped": "건너뛰고 보존한 키 맵 항목의 위치 (1부터): ",
     "newer_profile_unchanged": "이 키맵은 최신 버전에서 저장되었습니다. 불러오거나 변경하지 않았습니다.",
     "core_actions_unreachable": "이 키맵의 일부 필수 단축키를 사용할 수 없습니다. 해당 동작만 복원할 수 있습니다.",
     "restore_core_actions": "이 동작의 기본값 복원",

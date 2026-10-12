@@ -1,16 +1,18 @@
-/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
- * SPDX-License-Identifier: GPL-3.0-or-later */
-
+#include "core/error_bus.hpp"
 #include "input/input_bindings.hpp"
+#include "keymap_history_helpers.hpp"
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <thread>
 
 namespace lfs::vis::input {
     namespace {
+        using KeymapTest = test::KeymapTest;
         bool sameDispatchTrigger(const InputTrigger& lhs, const InputTrigger& rhs) {
             if (lhs.index() != rhs.index())
                 return false;
@@ -31,27 +33,30 @@ namespace lfs::vis::input {
                               lhs);
         }
 
-        bool activeInMode(const Binding& binding, ToolMode mode) {
-            return binding.mode == mode ||
-                   (binding.mode == ToolMode::GLOBAL &&
-                    describe(binding.action).inherits_from_global);
+        bool activeInMode(const Binding& binding, ToolMode mode,
+                          const Profile& profile) {
+            if (binding.mode == mode)
+                return true;
+            if (binding.mode != ToolMode::GLOBAL ||
+                !describe(binding.action).inherits_from_global)
+                return false;
+            // A mode binding with the same gesture replaces the inherited
+            // action; the global gesture is no longer effective there.
+            return !std::ranges::any_of(profile.bindings, [&](const Binding& local) {
+                return local.mode == mode &&
+                       sameDispatchTrigger(local.trigger, binding.trigger);
+            });
         }
-
-        struct RestorePersistence {
-            bool enabled = InputBindings::isPersistenceEnabled();
-            ~RestorePersistence() { InputBindings::setPersistenceEnabled(enabled); }
-        };
-
-        TEST(KeymapDefaultContractTest, NoDefaultTriggersCollideWithinAnEffectiveMode) {
+        TEST_F(KeymapTest, NoDefaultTriggersCollideWithinAnEffectiveMode) {
             const auto profile = InputBindings::createDefaultProfile();
             for (const auto mode : kAllToolModes) {
                 for (size_t i = 0; i < profile.bindings.size(); ++i) {
                     const auto& a = profile.bindings[i];
-                    if (!activeInMode(a, mode))
+                    if (!activeInMode(a, mode, profile))
                         continue;
                     for (size_t j = i + 1; j < profile.bindings.size(); ++j) {
                         const auto& b = profile.bindings[j];
-                        if (!activeInMode(b, mode))
+                        if (!activeInMode(b, mode, profile))
                             continue;
                         EXPECT_FALSE(sameDispatchTrigger(a.trigger, b.trigger))
                             << "mode " << static_cast<int>(mode) << ": "
@@ -61,9 +66,7 @@ namespace lfs::vis::input {
             }
         }
 
-        TEST(KeymapDefaultContractTest, CoreActionsDispatchInEveryRequiredMode) {
-            RestorePersistence restore;
-            InputBindings::setPersistenceEnabled(false);
+        TEST_F(KeymapTest, CoreActionsDispatchInEveryRequiredMode) {
             const InputBindings bindings;
             for (const auto mode : kAllToolModes) {
                 SCOPED_TRACE(static_cast<int>(mode));
@@ -76,6 +79,9 @@ namespace lfs::vis::input {
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_Y, MODIFIER_CTRL), Action::REDO);
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_ESCAPE, MODIFIER_NONE),
                           Action::CANCEL_POLYGON);
+                if (mode == ToolMode::SELECTION)
+                    EXPECT_EQ(bindings.getActionForKey(mode, KEY_ENTER, MODIFIER_CTRL),
+                              Action::ASSET_GALLERY_PRIMARY);
                 constexpr std::array tools = {Action::TOOL_SELECT, Action::TOOL_TRANSLATE,
                                               Action::TOOL_ROTATE, Action::TOOL_SCALE,
                                               Action::TOOL_MIRROR, Action::TOOL_ALIGN};
@@ -108,7 +114,7 @@ namespace lfs::vis::input {
             }
         }
 
-        TEST(KeymapDefaultContractTest, EveryNamedActionHasALabelInEveryLocale) {
+        TEST_F(KeymapTest, EveryNamedActionHasALabelInEveryLocale) {
             const auto root = std::filesystem::path(PROJECT_ROOT_PATH) /
                               "src/visualizer/gui/resources/locales";
             size_t locale_count = 0;
@@ -132,10 +138,8 @@ namespace lfs::vis::input {
             EXPECT_EQ(locale_count, 10u);
         }
 
-        TEST(KeymapDefaultContractTest, EditorCaptureRoundTripsEveryDefaultTrigger) {
+        TEST_F(KeymapTest, EditorCaptureRoundTripsEveryDefaultTrigger) {
             const auto defaults = InputBindings::createDefaultProfile();
-            RestorePersistence restore;
-            InputBindings::setPersistenceEnabled(false);
             for (const auto& binding : defaults.bindings) {
                 SCOPED_TRACE(getActionName(binding.action) + " mode " +
                              std::to_string(static_cast<int>(binding.mode)));
@@ -199,6 +203,95 @@ namespace lfs::vis::input {
                                                    *captured);
                 EXPECT_EQ(dispatched, binding.action);
             }
+        }
+
+        class CoreShortcutWarning final : public lfs::NativeErrorConsumer {
+        public:
+            void on_error(const lfs::ErrorNotification& notification,
+                          const lfs::ErrorDeliveryInfo&) noexcept override {
+                if (notification.error.code() != lfs::ErrorCode::FailedPrecondition ||
+                    notification.surface != lfs::ErrorSurface::Modal)
+                    return;
+                try {
+                    ++count;
+                    message = std::string(notification.error.user_message());
+                    for (const auto& candidate : notification.actions) {
+                        if (candidate.kind == lfs::ErrorActionKind::Custom)
+                            restore = candidate;
+                    }
+                } catch (...) {
+                }
+            }
+            int count = 0;
+            std::string message;
+            std::optional<lfs::ErrorAction> restore;
+        };
+
+        TEST_F(KeymapTest, WarnsThenRestoresOnlyUnreachableCoreActions) {
+            const std::filesystem::path path =
+                std::filesystem::temp_directory_path() / "lfs_broken_keymap_core.json";
+            InputBindings bindings;
+            ASSERT_TRUE(bindings.saveProfileToFile(path));
+            auto file = nlohmann::json::parse(std::ifstream(path));
+            for (const auto& [mode, action] : {
+                     std::pair{ToolMode::GLOBAL, Action::CAMERA_ORBIT},
+                     std::pair{ToolMode::SELECTION, Action::SELECTION_REPLACE},
+                     std::pair{ToolMode::SELECTION, Action::DELETE_SELECTED},
+                 }) {
+                file["overrides"]["removed"].push_back(
+                    {{"mode", static_cast<int>(mode)},
+                     {"action", static_cast<int>(action)},
+                     {"description", getActionName(action)},
+                     {"slot", 0}});
+            }
+            file["overrides"]["bindings"].push_back(
+                {{"mode", static_cast<int>(ToolMode::SELECTION)},
+                 {"action", static_cast<int>(Action::TOGGLE_UI)},
+                 {"description", getActionName(Action::TOGGLE_UI)},
+                 {"trigger_type", "key"},
+                 {"key", KEY_F9},
+                 {"modifiers", 0},
+                 {"on_repeat", false}});
+            {
+                std::ofstream output(path);
+                output << file.dump(2);
+            }
+
+            CoreShortcutWarning warning;
+            auto subscription = lfs::ErrorBus::instance().subscribe(warning);
+            ASSERT_TRUE(bindings.loadProfileFromFile(path));
+            EXPECT_EQ(warning.count, 1);
+            ASSERT_FALSE(warning.message.empty());
+            ASSERT_TRUE(warning.restore.has_value());
+            EXPECT_FALSE(warning.restore->label.empty());
+            EXPECT_EQ(bindings.getActionForDrag(ToolMode::SELECTION, MouseButton::MIDDLE, 0),
+                      Action::NONE);
+            EXPECT_EQ(bindings.getActionForDrag(ToolMode::SELECTION, MouseButton::LEFT, 0),
+                      Action::NONE);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::SELECTION, KEY_DELETE, 0),
+                      Action::NONE);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::SELECTION, KEY_F9, 0),
+                      Action::TOGGLE_UI);
+
+            warning.restore->on_invoke(lfs::OperationId::generate());
+            EXPECT_EQ(bindings.getActionForDrag(ToolMode::SELECTION, MouseButton::MIDDLE, 0),
+                      Action::CAMERA_ORBIT);
+            EXPECT_EQ(bindings.getActionForDrag(ToolMode::SELECTION, MouseButton::LEFT, 0),
+                      Action::SELECTION_REPLACE);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::SELECTION, KEY_DELETE, 0),
+                      Action::DELETE_SELECTED);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::SELECTION, KEY_F9, 0),
+                      Action::TOGGLE_UI);
+            ASSERT_TRUE(bindings.saveProfileToFile(path));
+            const auto restored = nlohmann::json::parse(std::ifstream(path));
+            EXPECT_EQ(std::ranges::count_if(restored["bindings"], [](const auto& entry) {
+                          return entry.value("action", -1) ==
+                                     static_cast<int>(Action::CAMERA_ORBIT) &&
+                                 entry.value("mode", -1) !=
+                                     static_cast<int>(ToolMode::GLOBAL);
+                      }),
+                      0);
+            std::filesystem::remove(path);
         }
     } // namespace
 } // namespace lfs::vis::input

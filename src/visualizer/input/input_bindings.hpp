@@ -13,6 +13,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
 #include <string>
@@ -314,12 +315,8 @@ namespace lfs::vis::input {
         // marked as inherited then fall back to GLOBAL.
         Action getActionForKey(ToolMode mode, int key, int modifiers) const;
         Action getActionForShortcut(ToolMode mode, int physical_key, int logical_key,
-                                    int modifiers) const;
-        Action getActionForShortcut(ToolMode mode, int physical_key, int logical_key,
-                                    int modifiers, int printed_punctuation) const;
-        Action getActionForShortcut(ToolMode mode, int physical_key, int logical_key,
-                                    int modifiers, int printed_punctuation,
-                                    bool shift_needed_for_printed_key) const;
+                                    int modifiers, int printed_punctuation = KEY_UNKNOWN,
+                                    bool shift_needed_for_printed_key = false) const;
         Action getActionForMouseButton(ToolMode mode, MouseButton button, int modifiers, bool is_double_click = false) const;
         // held_keys: non-modifier keys currently held in press order; chord lookup
         // checks newest first (e.g. R+Scroll for Camera Roll). Pass an empty list
@@ -376,6 +373,7 @@ namespace lfs::vis::input {
 
         std::string current_profile_name_;
         std::vector<Binding> bindings_;
+        std::vector<nlohmann::json> preserved_profile_entries_;
         std::set<std::pair<ToolMode, Action>> disabled_bindings_;
         std::shared_ptr<int> callback_lifetime_ = std::make_shared<int>(0);
         std::uint64_t bindings_revision_ = 0;
@@ -400,6 +398,7 @@ namespace lfs::vis::input {
 
         void rebuildLookupMaps();
         void notifyBindingsChanged();
+        [[nodiscard]] std::optional<std::filesystem::path> profilePath(std::string_view name) const;
         bool saveProfileToFile(const std::filesystem::path& path,
                                std::string_view profile_name) const;
         void persistActiveProfileName() const;

@@ -1569,6 +1569,7 @@
     "profile_save_failed": "Het invoerprofiel kon niet worden opgeslagen.",
     "invalid_binding": "Deze sneltoets kan niet voor deze actie worden gebruikt.",
     "damaged_profile_backed_up": "Een beschadigde toetsenindeling is vóór het opslaan bewaard. Het oorspronkelijke bestand staat naast het profiel.",
+    "invalid_entries_skipped": "Overgeslagen en bewaarde toetsindelingen op posities vanaf 1: ",
     "newer_profile_unchanged": "Deze toetsindeling is met een nieuwere versie opgeslagen. Ze is niet geladen of gewijzigd.",
     "core_actions_unreachable": "Sommige belangrijke sneltoetsen in deze indeling werken niet. U kunt alleen die acties herstellen.",
     "restore_core_actions": "Standaardinstellingen voor deze acties herstellen",

@@ -1567,6 +1567,7 @@
     "profile_save_failed": "Could not save the input profile.",
     "invalid_binding": "This shortcut cannot be used for that action.",
     "damaged_profile_backed_up": "A damaged key map was backed up before saving. Your original file is preserved beside the profile.",
+    "invalid_entries_skipped": "Skipped and preserved key map entries at 1-based positions: ",
     "newer_profile_unchanged": "This key map was saved by a newer version. It was not loaded or changed.",
     "core_actions_unreachable": "Some essential shortcuts in this key map cannot be used. You can restore only those actions.",
     "restore_core_actions": "Restore defaults for these actions",
