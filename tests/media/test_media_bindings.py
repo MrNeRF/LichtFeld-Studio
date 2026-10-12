@@ -3,6 +3,7 @@
 """Production Media Ingest bindings: GIL, ownership, file parity and callbacks."""
 import argparse
 import errno
+import hashlib
 import importlib.util
 import json
 import os
@@ -138,6 +139,24 @@ class MediaBindings(unittest.TestCase):
                 manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text())
                 self.assertEqual(len(manifest["frames"]), 4)
                 self.assertEqual(len(list((files.files.output_directory / ".media-ingest-checkpoint").glob("frame-*.json"))), 4)
+
+    def test_resume_sha256_matches_independent_input_pixels_and_files(self):
+        request = self.request()
+        _, frames = media.MediaIngest.extract(request)
+        files = self.resume_files(self.root / "resume-sha256")
+        media.MediaIngest.extract_files(request, files)
+        checkpoint = files.files.output_directory / ".media-ingest-checkpoint"
+        identity = json.loads((checkpoint / "identity.json").read_text())
+        self.assertEqual(identity["input_sha256"], hashlib.sha256(request.input.read_bytes()).hexdigest())
+        for index, frame in enumerate(frames):
+            record = json.loads((checkpoint / f"frame-{index}.json").read_text())
+            digest = hashlib.sha256()
+            for row in range(frame.layout.height):
+                start = row * frame.layout.row_stride
+                digest.update(frame.pixels[start:start + frame.layout.width * 3])
+            self.assertEqual(record["pixels_sha256"], digest.hexdigest())
+            self.assertEqual(record["file_sha256"], hashlib.sha256(
+                (files.files.output_directory / record["file"]).read_bytes()).hexdigest())
 
     def test_resume_rejects_changed_request_and_corrupt_output(self):
         request = self.request()
