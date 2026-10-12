@@ -13,6 +13,7 @@
 #include "operator/ops/depth_window_ops.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include "window/window_manager.hpp"
 #include <algorithm>
 
@@ -222,8 +223,11 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleRenderSettingsChanged(const ui::RenderSettingsChanged& event) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
+        std::unique_lock<std::mutex> lock(settings_mutex_);
         auto settings = activeSettingsLocked();
+        const bool projection_changed = event.equirectangular &&
+                                        (*event.equirectangular != settings.equirectangular ||
+                                         (*event.equirectangular && settings.orthographic));
         if (event.sh_degree) {
             settings.sh_degree = *event.sh_degree;
             LOG_TRACE("SH_DEGREE changed to: {}", settings.sh_degree);
@@ -247,6 +251,8 @@ namespace lfs::vis {
         }
         if (event.equirectangular) {
             settings.equirectangular = *event.equirectangular;
+            if (settings.equirectangular)
+                settings.orthographic = false;
             LOG_TRACE("Equirectangular rendering: {}",
                       settings.equirectangular ? "enabled" : "disabled");
         }
@@ -256,6 +262,11 @@ namespace lfs::vis {
             markViewDirty(view_source_.activeView(), DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND, lfs::vis::FrameReason::SceneChange);
 
         storeActiveSettingsLocked(settings);
+        lock.unlock();
+        if (projection_changed) {
+            auto& generation = app_store().render_settings_generation;
+            generation.set(generation.get() + 1);
+        }
     }
 
     void RenderingManager::handleWindowResized() {

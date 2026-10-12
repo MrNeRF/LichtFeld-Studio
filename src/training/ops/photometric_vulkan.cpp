@@ -253,6 +253,39 @@ namespace lfs::training {
             }
             return loss * -1.f + 1.f;
         }
+        Tensor masked_metric_map(In predicted, In target, In mask) {
+            auto a = image(predicted, false), t = image(target, true);
+            LFS_ASSERT_MSG(a.shape() == t.shape(), "Photometric image shapes must match");
+            LFS_ASSERT_MSG(mask.is_valid() && mask.device() == Device::GPU &&
+                               (mask.ndim() == 2 || (mask.ndim() == 3 && mask.shape()[0] == 1)) &&
+                               (mask.dtype() == DataType::Float32 || mask.dtype() == DataType::UInt8 || mask.dtype() == DataType::Bool),
+                           "Photometric mask must be GPU float, byte or bool HW or 1HW");
+            auto m = mask.contiguous();
+            if (m.ndim() == 3)
+                m = m.squeeze(0);
+            LFS_ASSERT_MSG(m.shape()[0] == a.shape()[2] && m.shape()[1] == a.shape()[3], "Photometric mask shape must match");
+            auto map = Tensor::empty(a.shape(), Device::GPU);
+            Params p{};
+            p.corrected = address(a);
+            p.target = address(t);
+            p.mask = address(m);
+            p.ssim = address(map);
+            p.count = static_cast<uint32_t>(a.numel());
+            p.channels = a.shape()[1];
+            p.height = a.shape()[2];
+            p.width = a.shape()[3];
+            p.batch = a.shape()[0];
+            p.stage = 1;
+            p.path = static_cast<uint32_t>(PhotoPath::MaskedFused);
+            p.target_byte = t.dtype() == DataType::UInt8;
+            p.mask_byte = m.dtype() != DataType::Float32;
+            p.weight = 1.0f;
+            const size_t tiles = ((size_t(p.width) + 15) / 16) * ((size_t(p.height) + 15) / 16) * p.batch * p.channels;
+            const std::array reads{ref(a), ref(t), ref(m)};
+            const std::array writes{ref(map)};
+            vulkan::dispatch("photometric_fused", p, reads, writes, vulkan::groups(tiles * 256), p.stage | (p.path << 3));
+            return map;
+        }
         void map_to_error(In map, Out error) {
             LFS_ASSERT_MSG(map.is_valid() && map.dtype() == DataType::Float32 && map.is_contiguous() &&
                                map.ndim() == 4 && map.shape()[0] == 1 && map.shape()[1] > 0 && map.shape()[2] > 0 && map.shape()[3] > 0,
@@ -321,7 +354,7 @@ namespace lfs::training {
             s.required = s.capacity = 0;
             s.kind = PhotoPath::L1;
         }
-        const PhotometricOps ops{create, evaluate, metric, error_map, map_to_error, workspace_bytes, shrink, reset};
+        const PhotometricOps ops{create, evaluate, metric, masked_metric_map, error_map, map_to_error, workspace_bytes, shrink, reset};
     } // namespace
     const gpu_ops::PhotometricOps& vulkan_photometric_ops() { return ops; }
 } // namespace lfs::training

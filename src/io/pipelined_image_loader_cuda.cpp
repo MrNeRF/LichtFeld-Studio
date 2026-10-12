@@ -20,6 +20,7 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <charconv>
@@ -42,6 +43,27 @@
 namespace lfs::io {
 
     namespace {
+        constexpr std::array<uint8_t, 8> FLOAT_DEPTH_MAGIC{'L', 'F', 'D', 'E', 'P', 'T', 'H', 1};
+        constexpr size_t FLOAT_DEPTH_HEADER_BYTES = 16;
+
+        bool is_float_depth_cache(const std::vector<uint8_t>& bytes) {
+            return bytes.size() >= FLOAT_DEPTH_HEADER_BYTES &&
+                   std::memcmp(bytes.data(), FLOAT_DEPTH_MAGIC.data(), FLOAT_DEPTH_MAGIC.size()) == 0;
+        }
+
+        lfs::core::Tensor decode_float_depth_cache(const std::vector<uint8_t>& bytes, cudaStream_t stream) {
+            std::array<uint32_t, 2> dimensions{};
+            std::memcpy(dimensions.data(), bytes.data() + FLOAT_DEPTH_MAGIC.size(), sizeof(dimensions));
+            const auto [height, width] = dimensions;
+            const uint64_t pixels = uint64_t(height) * width;
+            const size_t payload_bytes = bytes.size() - FLOAT_DEPTH_HEADER_BYTES;
+            if (height == 0 || width == 0 || payload_bytes % sizeof(float) != 0 || pixels != payload_bytes / sizeof(float))
+                throw std::runtime_error("Invalid float depth cache dimensions");
+            auto cpu = lfs::core::Tensor::empty(
+                {size_t(height), size_t(width)}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+            std::memcpy(cpu.data_ptr(), bytes.data() + FLOAT_DEPTH_HEADER_BYTES, cpu.bytes());
+            return cpu.to(lfs::core::Device::GPU, stream);
+        }
 
         constexpr int DEFAULT_DECODER_POOL_SIZE = 8;
 
@@ -668,7 +690,7 @@ namespace lfs::io {
                                                    const PrefetchedImage& item,
                                                    const SidecarCacheFormat kind,
                                                    void* cuda_stream) {
-        if (!jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
+        if (kind != SidecarCacheFormat::DepthFloat && !jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
             return;
         }
 
@@ -678,7 +700,15 @@ namespace lfs::io {
             // transforms. Depth [H,W] is quantized as round(v*65535). Normals
             // [3,H,W] in [-1,1] are mapped to HWC [0,1] as (n+1)/2 before the same
             // u16 quantization; hot decode reverses that map with <= 1/65535 loss.
-            if (kind == SidecarCacheFormat::Depth) {
+            if (kind == SidecarCacheFormat::DepthFloat) {
+                const auto cpu = tensor.cpu();
+                bytes.resize(FLOAT_DEPTH_HEADER_BYTES + cpu.bytes());
+                const std::array<uint32_t, 2> dimensions{
+                    static_cast<uint32_t>(tensor.shape()[0]), static_cast<uint32_t>(tensor.shape()[1])};
+                std::memcpy(bytes.data(), FLOAT_DEPTH_MAGIC.data(), FLOAT_DEPTH_MAGIC.size());
+                std::memcpy(bytes.data() + FLOAT_DEPTH_MAGIC.size(), dimensions.data(), sizeof(dimensions));
+                std::memcpy(bytes.data() + FLOAT_DEPTH_HEADER_BYTES, cpu.data_ptr(), cpu.bytes());
+            } else if (kind == SidecarCacheFormat::Depth) {
                 bytes = nvcodec.encode_grayscale_to_jpeg2k(tensor, cuda_stream);
             } else {
                 if (tensor.ndim() != 3 || tensor.shape()[0] != 3) {
@@ -697,7 +727,10 @@ namespace lfs::io {
             put_in_jpeg_cache(item.cache_key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
         } catch (...) {
             const auto message = describe_current_exception("non-standard nvImageCodec exception");
-            if (jpeg2k_cache_available_.exchange(false)) {
+            if (kind == SidecarCacheFormat::DepthFloat) {
+                LOG_DEBUG("[PipelinedImageLoader] Float depth cache write skipped for {}: {}",
+                          lfs::core::path_to_utf8(item.path), message);
+            } else if (jpeg2k_cache_available_.exchange(false)) {
                 LOG_ERROR("[PipelinedImageLoader] JPEG 2000 sidecar cache encode unavailable ({}); "
                           "depth/normal training continues without a sidecar cache.",
                           message);
@@ -961,13 +994,18 @@ namespace lfs::io {
                     try {
                         batch[i].params.cuda_stream = queue_stream(*decode_queue_);
                         if (batch[i].is_depth || batch[i].is_normal) {
+                            if (batch[i].is_depth && batch[i].jpeg_data && is_float_depth_cache(*batch[i].jpeg_data)) {
+                                complete_sidecar(batch[i], decode_float_depth_cache(*batch[i].jpeg_data, queue_stream(*decode_queue_)));
+                                continue;
+                            }
                             size_t pair_index = batch.size();
                             for (size_t j = i + 1; j < batch.size(); ++j) {
                                 if (!decoded_as_pair[j] &&
                                     batch[j].sequence_id == batch[i].sequence_id &&
                                     batch[j].is_depth != batch[i].is_depth &&
                                     (batch[j].is_depth || batch[j].is_normal) &&
-                                    batch[i].jpeg_data && batch[j].jpeg_data) {
+                                    batch[i].jpeg_data && batch[j].jpeg_data &&
+                                    !(batch[j].is_depth && is_float_depth_cache(*batch[j].jpeg_data))) {
                                     pair_index = j;
                                     break;
                                 }
@@ -1225,6 +1263,7 @@ namespace lfs::io {
                     const lfs::core::CUDAStreamGuard stream_guard(aux_stream);
                     lfs::core::Tensor aux_tensor;
                     bool used_gpu = false;
+                    bool float_depth = false;
                     // nvimagecodec and the uint8 path truncate to 8 bits; 16-bit
                     // depth priors must keep their precision.
                     const bool depth_16bit =
@@ -1269,17 +1308,32 @@ namespace lfs::io {
                             lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(gpu_staging, gpu_gray, lfs::gpu_ops::ImageConversion::U16HWCToF32HWC, static_cast<size_t>(src_h), static_cast<size_t>(src_w), 1, {});
                         } else {
                             const auto [gray_data, w, h] = load_grayscale_stb(item.path);
-                            if (!gray_data)
+                            if (gray_data) {
+                                src_w = w;
+                                src_h = h;
+                                auto cpu_tensor = lfs::core::Tensor::empty(
+                                    {static_cast<size_t>(src_h), static_cast<size_t>(src_w)},
+                                    lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+                                std::memcpy(cpu_tensor.data_ptr(), gray_data, cpu_tensor.bytes());
+                                gpu_gray = cpu_tensor.to(lfs::core::Device::GPU, aux_stream);
+                                stbi_image_free(gray_data);
+                            } else if (item.is_depth) {
+                                const auto [data, width, height, channels] = lfs::core::load_image_float(item.path);
+                                const std::unique_ptr<float, decltype(&lfs::core::free_image_float)> pixels(
+                                    data, lfs::core::free_image_float);
+                                if (pixels && channels == 1) {
+                                    float_depth = lfs::core::image_quantization_step(item.path) == 0.0f;
+                                    src_w = width;
+                                    src_h = height;
+                                    auto cpu_tensor = lfs::core::Tensor::from_blob(
+                                        pixels.get(), {static_cast<size_t>(src_h), static_cast<size_t>(src_w)},
+                                        lfs::core::Device::CPU, lfs::core::DataType::Float32);
+                                    gpu_gray = cpu_tensor.to(lfs::core::Device::GPU, aux_stream);
+                                    synchronize_async_upload_before_free(gpu_gray.stream(), "depth");
+                                }
+                            }
+                            if (!gpu_gray.is_valid())
                                 throw std::runtime_error(item.is_mask ? "Failed to decode mask" : "Failed to decode depth");
-                            src_w = w;
-                            src_h = h;
-                            auto cpu_tensor = lfs::core::Tensor::empty(
-                                lfs::core::TensorShape({static_cast<size_t>(src_h), static_cast<size_t>(src_w)}),
-                                lfs::core::Device::CPU,
-                                lfs::core::DataType::UInt8);
-                            std::memcpy(cpu_tensor.data_ptr(), gray_data, cpu_tensor.bytes());
-                            gpu_gray = cpu_tensor.to(lfs::core::Device::GPU, aux_stream);
-                            stbi_image_free(gray_data);
                         }
 
                         const auto [target_w, target_h] = sidecar_target_size(item, src_w, src_h);
@@ -1354,7 +1408,8 @@ namespace lfs::io {
                         try_complete_pair(item.sequence_id, item.loader_generation,
                                           std::nullopt, std::move(aux_tensor));
                     } else {
-                        write_sidecar_cache(*nvcodec, aux_tensor, item, SidecarCacheFormat::Depth, sidecar_stream);
+                        write_sidecar_cache(*nvcodec, aux_tensor, item,
+                                            float_depth ? SidecarCacheFormat::DepthFloat : SidecarCacheFormat::Depth, sidecar_stream);
                         auto ready_event = record_sidecar_ready_event(sidecar_stream);
                         try_complete_pair(
                             item.sequence_id,
@@ -1380,6 +1435,7 @@ namespace lfs::io {
                     // kernel; the loss re-normalizes per pixel, so resampling
                     // shrinkage is fine.
                     const bool normal_16bit = stbi_is_16_bit(path_utf8.c_str());
+                    bool normal_float = false;
                     lfs::core::Tensor gpu_staging;
                     if (normal_16bit) {
                         stbi_us* const rgb16 = stbi_load_16(path_utf8.c_str(), &src_w, &src_h, &channels, 3);
@@ -1396,16 +1452,28 @@ namespace lfs::io {
                         stbi_image_free(rgb16);
                     } else {
                         stbi_uc* const rgb8 = stbi_load(path_utf8.c_str(), &src_w, &src_h, &channels, 3);
-                        if (!rgb8)
-                            throw std::runtime_error("Failed to decode normal map");
-                        auto cpu_tensor = lfs::core::Tensor::from_blob(
-                            rgb8,
-                            lfs::core::TensorShape(
-                                {static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3}),
-                            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-                        gpu_staging = cpu_tensor.to(lfs::core::Device::GPU, sidecar_stream);
-                        synchronize_async_upload_before_free(gpu_staging.stream(), "normal");
-                        stbi_image_free(rgb8);
+                        if (rgb8) {
+                            auto cpu_tensor = lfs::core::Tensor::from_blob(
+                                rgb8, {static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3},
+                                lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+                            gpu_staging = cpu_tensor.to(lfs::core::Device::GPU, sidecar_stream);
+                            synchronize_async_upload_before_free(gpu_staging.stream(), "normal");
+                            stbi_image_free(rgb8);
+                        } else {
+                            auto [pixels, width, height, count] = lfs::core::load_image_float(item.path);
+                            const std::unique_ptr<float, decltype(&lfs::core::free_image_float)> owned(
+                                pixels, &lfs::core::free_image_float);
+                            if (!pixels || count != 3)
+                                throw std::runtime_error("Failed to decode normal map");
+                            src_w = width;
+                            src_h = height;
+                            normal_float = true;
+                            auto cpu_tensor = lfs::core::Tensor::from_blob(
+                                pixels, {static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3},
+                                lfs::core::Device::CPU, lfs::core::DataType::Float32);
+                            gpu_staging = cpu_tensor.to(lfs::core::Device::GPU, sidecar_stream);
+                            synchronize_async_upload_before_free(gpu_staging.stream(), "normal");
+                        }
                     }
 
                     lfs::gpu_ops::NormalPriorTransform prior_transform;
@@ -1419,7 +1487,9 @@ namespace lfs::io {
                         lfs::core::TensorShape(
                             {3, static_cast<size_t>(src_h), static_cast<size_t>(src_w)}),
                         lfs::core::Device::GPU, lfs::core::DataType::Float32);
-                    if (normal_16bit) {
+                    if (normal_float) {
+                        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(gpu_staging, normal_tensor, lfs::gpu_ops::ImageConversion::NormalPriorF32, static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3, prior_transform);
+                    } else if (normal_16bit) {
                         lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(gpu_staging, normal_tensor, lfs::gpu_ops::ImageConversion::NormalPriorU16, static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3, prior_transform);
                     } else {
                         lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(gpu_staging, normal_tensor, lfs::gpu_ops::ImageConversion::NormalPriorU8, static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3, prior_transform);

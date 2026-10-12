@@ -84,12 +84,13 @@ namespace {
     };
 
     constexpr Tol kExact{0, 0};
-    constexpr Tol kReduce{1e-5, 1e-5}; // photometric, geometry, mask, extra-loss reductions
-    constexpr Tol kRaster{1e-4, 1e-4}; // blended raster outputs
-    constexpr Tol kAdam{1e-6, 1e-5};   // optimizer parameters after a short step
-    constexpr Tol kConv{1e-4, 1e-4};   // lpips / bilateral / ppisp float math
-    constexpr Tol kHalf{1e-3, 1e-3};   // fp16-stored outputs: one half-precision step
-    constexpr Tol kMcmc{1e-8, 1e-6};   // seeded stochastic transforms and activated scales
+    constexpr Tol kReduce{1e-5, 1e-5};                // photometric, geometry, mask, extra-loss reductions
+    constexpr Tol kMaskedFusedGradient{1.5e-5, 1e-5}; // half-rounded masked window partials
+    constexpr Tol kRaster{1e-4, 1e-4};                // blended raster outputs
+    constexpr Tol kAdam{1e-6, 1e-5};                  // optimizer parameters after a short step
+    constexpr Tol kConv{1e-4, 1e-4};                  // lpips / bilateral / ppisp float math
+    constexpr Tol kHalf{1e-3, 1e-3};                  // fp16-stored outputs: one half-precision step
+    constexpr Tol kMcmc{1e-8, 1e-6};                  // seeded stochastic transforms and activated scales
     // 200-step synthetic loss. Two CUDA runs drift by a few thousandths; the
     // raster blend is an atomic reduction, so the limit is abs + rel*|expected|.
     constexpr Tol kLoss{1e-2, 1e-2};
@@ -432,7 +433,8 @@ namespace {
                 keep(out.snapshot, backend, std::string("photometric.evaluate.") + path.name + ".cs_map", saved.cs_map, kReduce);
             }
             keep(out.snapshot, backend, std::string("photometric.evaluate.") + path.name + ".loss", loss, kReduce);
-            keep(out.snapshot, backend, std::string("photometric.evaluate.") + path.name + ".grad", grad_corrected, kReduce);
+            keep(out.snapshot, backend, std::string("photometric.evaluate.") + path.name + ".grad", grad_corrected,
+                 path.path == ops::PhotoPath::MaskedFused ? kMaskedFusedGradient : kReduce);
             keep(out.snapshot, backend, std::string("photometric.evaluate.") + path.name + ".grad_raw", grad_raw, kReduce);
         }
         const Tensor metric = table->metric(saved, predicted, metric_target, false, true);

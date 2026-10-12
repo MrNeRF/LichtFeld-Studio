@@ -8097,12 +8097,19 @@ namespace lfs::vis {
                     HIGS_DEPTH_WAVE_INSTANCES));
             }
         }
+        bool lod_feedback_changed = false;
+        bool lod_feedback_received = false;
+        std::optional<std::size_t> lod_rendered_capacity;
         while (const auto lod_stats = renderer_.pollDeferredLodSelectionStats()) {
             const auto& identity = lod_stats->identity;
             auto* feedback = gpu_lod_feedback_.find({identity.target});
             if (!feedback || identity.model_generation != lod_feedback_model_generation_ ||
                 identity.tree_generation != lod_feedback_tree_generation_)
                 continue;
+            if (identity.target == target.value) {
+                lod_feedback_received = true;
+                lod_rendered_capacity = lod_stats->rendered_capacity;
+            }
             auto& lod_feedback = *feedback;
             // Start the next frame at the threshold that actually fit. The
             // gradual controller can refine it, but cannot undo same-frame repair.
@@ -8227,6 +8234,9 @@ namespace lfs::vis {
                     0.05f,
                     64.0f);
             }
+            if (identity.target == target.value)
+                lod_feedback_changed |= lod_stats->threshold_scale <= 1.0f &&
+                                        lod_feedback.pixel_scale_feedback != previous_feedback;
             if (overflowed || std::abs(lod_feedback.pixel_scale_feedback - previous_feedback) > 0.01f) {
                 LOG_PERF(
                     "vksplat.lod_gpu_selection candidates={} capacity={} overflow={} feedback={:.3f}",
@@ -9233,7 +9243,9 @@ namespace lfs::vis {
             .completion_semaphore = sceneTimelineHandle(render_complete_timeline_),
             .completion_value = completion_value,
             .lod_page_generation = lod_page_generation,
-            .lod_streaming_active = lod_streaming_active,
+            .lod_streaming_active = lod_streaming_active ||
+                                    (gpu_lod_select_dispatch_active &&
+                                     (!lod_feedback_received || lod_rendered_capacity != gpu_lod_select_capacity || lod_feedback_changed)),
         };
     }
 

@@ -344,19 +344,34 @@ namespace lfs::io {
                         samples = host_uint16(data, image_shape(height, width, channels), stbi_image_free);
                     } else {
                         stbi_uc* const data = stbi_load(path_utf8.c_str(), &width, &height, &source_channels, channels);
-                        if (!data)
-                            throw std::runtime_error(item.is_depth ? "Failed to decode depth" : "Failed to decode normal map");
-                        samples = host_uint8(data, image_shape(height, width, channels), stbi_image_free);
+                        if (data) {
+                            samples = host_uint8(data, image_shape(height, width, channels), stbi_image_free);
+                        } else {
+                            auto [pixels, w, h, count] = lfs::core::load_image_float(item.path);
+                            if (!pixels || count != channels) {
+                                if (pixels)
+                                    lfs::core::free_image_float(pixels);
+                                throw std::runtime_error(item.is_depth ? "Failed to decode depth" : "Failed to decode normal map");
+                            }
+                            width = w;
+                            height = h;
+                            samples = Tensor::from_blob(pixels, image_shape(height, width, channels),
+                                                        Device::CPU, DataType::Float32)
+                                          .clone();
+                            lfs::core::free_image_float(pixels);
+                        }
                     }
                     samples = to_device(upload, samples);
 
                     const auto [target_w, target_h] = sidecar_target_size(item, width, height);
                     Tensor prior;
                     if (item.is_depth) {
-                        prior = sixteen_bit ? samples.to(DataType::Float32).mul(UINT16_SCALE)
-                                            : samples.to(DataType::Float32).div(255.0f);
+                        prior = samples.dtype() == DataType::Float32 ? samples
+                                : sixteen_bit                        ? samples.to(DataType::Float32).mul(UINT16_SCALE)
+                                                                     : samples.to(DataType::Float32).div(255.0f);
                     } else {
-                        prior = decode_normal_prior(samples, sixteen_bit ? UINT16_SCALE : UINT8_SCALE,
+                        prior = decode_normal_prior(samples, samples.dtype() == DataType::Float32 ? 1.0f : sixteen_bit ? UINT16_SCALE
+                                                                                                                       : UINT8_SCALE,
                                                     item.normal_srgb, item.normal_flip_yz,
                                                     item.normal_transform_world_to_camera ? &item.normal_world_to_camera
                                                                                           : nullptr);

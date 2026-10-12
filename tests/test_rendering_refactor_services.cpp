@@ -3,6 +3,7 @@
 
 #include "core/camera.hpp"
 #include "core/editor_context.hpp"
+#include "core/error.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
@@ -19,11 +20,14 @@
 #include "gui/volume_guide_visibility.hpp"
 #include "input/key_codes.hpp"
 #include "io/cache_image_loader.hpp"
+#include "io/loader.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "operator/ops/depth_window_ops.hpp"
 #include "operator/ops/selection_ops.hpp"
+#include "project/session_state.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/graphics_external_tensor.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
@@ -31,6 +35,7 @@
 #include "screen/screen_service.hpp"
 #include "selection/selection_service.hpp"
 #include "tools/selection_tool.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/gt_comparison_cache_utils.hpp"
 #include "visualizer/rendering/gt_comparison_geometry.hpp"
@@ -47,6 +52,8 @@
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
+#include "window/vulkan_context.hpp"
+#include "window/window_manager.hpp"
 
 #include <algorithm>
 #include <array>
@@ -54,6 +61,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -372,6 +380,142 @@ namespace lfs::vis {
             scene.addCamera("source", group, std::move(camera));
         }
     } // namespace
+
+    class GTComparisonAsyncTest : public RenderingManagerEventsTest {
+    protected:
+        void SetUp() override {
+            RenderingManagerEventsTest::SetUp();
+            int devices = 0;
+            if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0 || !std::getenv("DISPLAY"))
+                GTEST_SKIP() << "Requires CUDA and a Vulkan display";
+            window = std::make_unique<WindowManager>("GT comparison test", 128, 128);
+            ASSERT_TRUE(window->init());
+            scene = std::make_unique<SceneManager>();
+            auto model = makeTestSplat(0.0f);
+            const auto allocator = [this](lfs::core::TensorShape shape, size_t capacity,
+                                          lfs::core::DataType dtype, std::string_view name) {
+                auto tensor = makeGraphicsExternalTensor(*window->getGraphicsContext(), std::move(shape),
+                                                         dtype, capacity, std::string(name).c_str());
+                if (!tensor)
+                    throw std::runtime_error(lfs::format_for_developer(tensor.error()));
+                return std::move(*tensor);
+            };
+            const auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model, allocator);
+            ASSERT_TRUE(migrated) << migrated.error().format();
+            scene->getScene().addSplat("Model", std::move(model));
+            addDatasetCameraWithImage(*scene);
+            scene->changeContentType(SceneManager::ContentType::SplatFiles);
+            services().set(scene.get());
+            manager = std::make_unique<RenderingManager>(manager_views);
+            manager->retainVisibleViews({manager_views.activeView()});
+            settings = manager->getSettings();
+            settings.split_view_mode = SplitViewMode::GTComparison;
+            settings.gt_comparison_mode = GTComparisonMode::Normal;
+            settings.show_camera_frustums = false;
+            manager->updateSettings(settings);
+            viewport.frameBufferSize = {128, 128};
+        }
+
+        void TearDown() override {
+            manager.reset();
+            scene.reset();
+            window.reset();
+            RenderingManagerEventsTest::TearDown();
+        }
+
+        void render() {
+            (void)manager->frameDemandLedger().plan(FrameClock::now());
+            last = manager->renderFrame({.view = manager_views.activeView(),
+                                         .viewport = viewport,
+                                         .settings = settings,
+                                         .scene_manager = scene.get(),
+                                         .graphics_context = window->getGraphicsContext()});
+        }
+
+        void settle() {
+            const auto deadline = FrameClock::now() + std::chrono::seconds(5);
+            while ((manager->pollDirtyState() || !last.matches_viewport_extent) &&
+                   FrameClock::now() < deadline) {
+                render();
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            EXPECT_FALSE(manager->pollDirtyState()) << "GT readback must return to idle";
+            EXPECT_TRUE(last.matches_viewport_extent);
+        }
+
+        void refreshReference() {
+            // Manual redraws are the workaround, and provide an independent
+            // settled reference for the image expected without further input.
+            for (int i = 0; i < 3; ++i) {
+                manager->markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
+                render();
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            settle();
+        }
+
+        screen::ScreenService manager_views;
+        std::unique_ptr<WindowManager> window;
+        std::unique_ptr<SceneManager> scene;
+        std::unique_ptr<RenderingManager> manager;
+        Viewport viewport{128, 128};
+        RenderSettings settings;
+        ViewportFrameResult last;
+    };
+
+    TEST_F(GTComparisonAsyncTest, DepthModeCompletesWithoutFurtherInput) {
+        refreshReference();
+        ASSERT_TRUE(last.split_right_image);
+        const auto normal = last.split_right_image->cpu().clone();
+        settings.gt_comparison_mode = GTComparisonMode::Depth;
+        manager->updateSettings(settings);
+        render();
+        EXPECT_TRUE(manager->pollDirtyState()) << "Pending depth readback needs a follow-up frame";
+        settle();
+        ASSERT_TRUE(last.split_right_image);
+        const auto automatic = last.split_right_image->cpu().clone();
+        refreshReference();
+        ASSERT_TRUE(last.split_right_image);
+        const auto expected = last.split_right_image->cpu();
+        ASSERT_EQ(automatic.bytes(), expected.bytes());
+        EXPECT_EQ(std::memcmp(automatic.data_ptr(), expected.data_ptr(), expected.bytes()), 0)
+            << "Idle depth image differs from the same mode after manual redraw";
+        EXPECT_NE(std::memcmp(normal.data_ptr(), expected.data_ptr(), expected.bytes()), 0);
+    }
+
+    TEST_F(GTComparisonAsyncTest, NormalResizeCompletesWithoutFurtherInput) {
+        refreshReference();
+        viewport.frameBufferSize = {192, 192};
+        viewport.windowSize = {192, 192};
+        manager->markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
+        render();
+        settle();
+        ASSERT_TRUE(last.split_right_image);
+        const auto automatic = last.split_right_image->cpu().clone();
+        refreshReference();
+        ASSERT_TRUE(last.split_right_image);
+        const auto expected = last.split_right_image->cpu();
+        ASSERT_EQ(automatic.bytes(), expected.bytes());
+        EXPECT_EQ(std::memcmp(automatic.data_ptr(), expected.data_ptr(), expected.bytes()), 0);
+    }
+
+    TEST_F(GTComparisonAsyncTest, RgbAndOverlayRefreshKeepSettledPixelsAndIdle) {
+        for (const auto mode : {GTComparisonMode::RGB, GTComparisonMode::Normal, GTComparisonMode::Depth}) {
+            settings.gt_comparison_mode = mode;
+            manager->updateSettings(settings);
+            refreshReference();
+            const auto generation = last.image_generation;
+            const auto right = last.split_right_image;
+            const auto right_generation = last.split_right_image_generation;
+            manager->markDirty(DirtyFlag::OVERLAY, FrameReason::Overlay);
+            render();
+            EXPECT_FALSE(manager->pollDirtyState());
+            EXPECT_EQ(last.image_generation, generation);
+            const auto after = last.split_right_image;
+            EXPECT_EQ(after, right);
+            EXPECT_EQ(last.split_right_image_generation, right_generation);
+        }
+    }
 
     class SceneManagerRenderStateTest : public ::testing::Test {
     protected:
@@ -2176,6 +2320,169 @@ namespace lfs::vis {
                                      (2.0f * distance_to_pivot *
                                       std::tan(glm::radians(lfs::rendering::focalLengthToVFov(50.0f)) * 0.5f));
         EXPECT_NEAR(ortho_settings.ortho_scale, expected_scale, 1e-4f);
+    }
+
+    TEST_F(RenderingManagerEventsTest, OrthographicSelectionLeavesPanorama) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+        for (const auto backend : {Backend::ThreeDgs, Backend::ThreeDgut}) {
+            for (const float height : {0.0f, 900.0f}) {
+                screen::ScreenService manager_views;
+                RenderingManager manager{manager_views};
+                auto settings = manager.getSettings();
+                settings.raster_backend = backend;
+                settings.gut = lfs::rendering::isGutBackend(backend);
+                manager.updateSettings(settings);
+                auto event = lfs::core::events::ui::RenderSettingsChanged{};
+                event.equirectangular = true;
+                event.emit();
+
+                const auto generation = app_store().render_settings_generation.get();
+                manager.setOrthographic(true, height, 7.5f);
+                const auto selected = manager.getSettings();
+                EXPECT_GT(app_store().render_settings_generation.get(), generation);
+                EXPECT_TRUE(selected.orthographic);
+                EXPECT_FALSE(selected.equirectangular);
+                EXPECT_EQ(selected.raster_backend, backend);
+                EXPECT_EQ(selected.gut, lfs::rendering::isGutBackend(backend));
+                EXPECT_FLOAT_EQ(selected.focal_length_mm, settings.focal_length_mm);
+            }
+        }
+    }
+
+    TEST_F(RenderingManagerEventsTest, PanoramaEventLeavesOrthographic) {
+        screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        manager.setOrthographic(true, 900.0f, 7.5f);
+        const float scale = manager.getSettings().ortho_scale;
+        const auto generation = app_store().render_settings_generation.get();
+        auto event = lfs::core::events::ui::RenderSettingsChanged{};
+        event.equirectangular = true;
+        event.emit();
+        EXPECT_GT(app_store().render_settings_generation.get(), generation);
+        EXPECT_TRUE(manager.getSettings().equirectangular);
+        EXPECT_FALSE(manager.getSettings().orthographic);
+        EXPECT_FLOAT_EQ(manager.getSettings().ortho_scale, scale);
+    }
+
+    TEST_F(RenderingManagerEventsTest, UserProjectionChangesSelectRequestedProjection) {
+        screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        manager.setOrthographic(true, 900.0f, 7.5f);
+        auto settings = manager.getSettings();
+        settings.equirectangular = true;
+        ASSERT_TRUE(manager.updateSettingsFromUser(settings));
+        EXPECT_TRUE(manager.getSettings().equirectangular);
+        EXPECT_FALSE(manager.getSettings().orthographic);
+
+        settings = manager.getSettings();
+        settings.orthographic = true;
+        settings.ortho_scale = 73.0f;
+        ASSERT_TRUE(manager.updateSettingsFromUser(settings));
+        EXPECT_TRUE(manager.getSettings().orthographic);
+        EXPECT_FALSE(manager.getSettings().equirectangular);
+        EXPECT_FLOAT_EQ(manager.getSettings().ortho_scale, 73.0f);
+        EXPECT_EQ(manager.getSettings().raster_backend, lfs::rendering::GaussianRasterBackend::ThreeDgs);
+    }
+
+    TEST_F(RenderingManagerEventsTest, DisablingOrthographicPreservesPanorama) {
+        screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        auto event = lfs::core::events::ui::RenderSettingsChanged{};
+        event.equirectangular = true;
+        event.emit();
+        const auto before = manager.getSettings();
+        manager.setOrthographic(false, 900.0f, 7.5f);
+        const auto after = manager.getSettings();
+        EXPECT_TRUE(after.equirectangular);
+        EXPECT_FALSE(after.orthographic);
+        EXPECT_FLOAT_EQ(after.ortho_scale, before.ortho_scale);
+        EXPECT_EQ(after.raster_backend, before.raster_backend);
+    }
+
+    TEST_F(RenderingManagerEventsTest, RestoredConflictingProjectionUsesPanorama) {
+        for (const auto backend : {lfs::rendering::GaussianRasterBackend::ThreeDgs,
+                                   lfs::rendering::GaussianRasterBackend::ThreeDgut}) {
+            for (const bool already_orthographic : {false, true}) {
+                screen::ScreenService manager_views;
+                RenderingManager manager{manager_views};
+                manager.setOrthographic(already_orthographic, 900.0f, 7.5f);
+                auto saved = manager.getSettings();
+                saved.orthographic = true;
+                saved.equirectangular = true;
+                saved.ortho_scale = 73.0f;
+                saved.focal_length_mm = 35.0f;
+                saved.raster_backend = backend;
+                const auto json = project::renderSettingsToProjectJson(saved);
+                const auto original_json = json.dump();
+                auto restored = project::renderSettingsFromProjectJson(json, manager.getSettings());
+                ASSERT_TRUE(restored);
+                // Match the settings restoration used by the VIEW chapter.
+                manager.updateSettings(*restored);
+                const auto effective = manager.getSettings();
+                EXPECT_TRUE(effective.equirectangular);
+                EXPECT_FALSE(effective.orthographic);
+                EXPECT_FLOAT_EQ(effective.ortho_scale, saved.ortho_scale);
+                EXPECT_FLOAT_EQ(effective.focal_length_mm, saved.focal_length_mm);
+                EXPECT_EQ(effective.raster_backend, lfs::rendering::GaussianRasterBackend::ThreeDgut);
+                EXPECT_EQ(json.dump(), original_json);
+                EXPECT_TRUE(json.at("orthographic").get<bool>());
+                EXPECT_TRUE(json.at("equirectangular").get<bool>());
+
+                // Subsequent split restoration applies the effective settings again.
+                manager.updateSettings(effective);
+                EXPECT_FALSE(manager.getSettings().orthographic);
+                EXPECT_TRUE(manager.getSettings().equirectangular);
+            }
+        }
+    }
+
+    TEST_F(RenderingManagerEventsTest, RestoredValidProjectionsPreserveSavedSettings) {
+        for (const auto backend : {lfs::rendering::GaussianRasterBackend::ThreeDgs,
+                                   lfs::rendering::GaussianRasterBackend::ThreeDgut}) {
+            for (const int projection : {0, 1, 2}) {
+                screen::ScreenService manager_views;
+                RenderingManager manager{manager_views};
+                auto saved = manager.getSettings();
+                saved.orthographic = projection == 1;
+                saved.equirectangular = projection == 2;
+                saved.ortho_scale = 73.0f;
+                saved.focal_length_mm = 35.0f;
+                saved.raster_backend = backend;
+                const auto restored = project::renderSettingsFromProjectJson(
+                    project::renderSettingsToProjectJson(saved));
+                ASSERT_TRUE(restored);
+                manager.updateSettings(*restored);
+                const auto effective = manager.getSettings();
+                EXPECT_EQ(effective.orthographic, saved.orthographic);
+                EXPECT_EQ(effective.equirectangular, saved.equirectangular);
+                EXPECT_FLOAT_EQ(effective.ortho_scale, saved.ortho_scale);
+                EXPECT_FLOAT_EQ(effective.focal_length_mm, saved.focal_length_mm);
+                EXPECT_EQ(effective.raster_backend, restored->raster_backend);
+            }
+        }
+    }
+
+    TEST_F(RenderingManagerEventsTest, UserSettingsPreserveUnchangedProjection) {
+        for (const int projection : {0, 1, 2}) {
+            screen::ScreenService manager_views;
+            RenderingManager manager{manager_views};
+            auto settings = manager.getSettings();
+            settings.orthographic = projection == 1;
+            settings.equirectangular = projection == 2;
+            settings.ortho_scale = 73.0f;
+            manager.updateSettings(settings);
+            const auto before = manager.getSettings();
+
+            settings = before;
+            settings.show_grid = !settings.show_grid;
+            ASSERT_TRUE(manager.updateSettingsFromUser(settings));
+            const auto after = manager.getSettings();
+            EXPECT_EQ(after.orthographic, before.orthographic);
+            EXPECT_EQ(after.equirectangular, before.equirectangular);
+            EXPECT_FLOAT_EQ(after.ortho_scale, before.ortho_scale);
+            EXPECT_FLOAT_EQ(after.focal_length_mm, before.focal_length_mm);
+            EXPECT_EQ(after.raster_backend, before.raster_backend);
+        }
     }
 
     TEST_F(RenderingManagerEventsTest, OrthographicLeaveKeepsFocalLength) {

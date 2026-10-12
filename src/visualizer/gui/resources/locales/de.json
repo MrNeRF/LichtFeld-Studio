@@ -5234,5 +5234,7 @@
   "node_editor.ramp_hint": "Marken ziehen; klicken zum Hinzufügen, doppelklicken oder Entf zum Löschen. Marke auswählen, um RGBA zu ändern.",
   "node_editor.keyframe_hint": "Schlüsselbild einfügen · Strg+Klick oder I beim Darüberfahren",
   "toolbar.asset_manager": "Projekte",
-  "training.reset_before_strategy_change": "Setzen Sie das Training zurück, bevor Sie die Strategie ändern."
+  "training.reset_before_strategy_change": "Setzen Sie das Training zurück, bevor Sie die Strategie ändern.",
+  "io.no_finite_seed_points": "Die Punktwolke enthält keine endlichen Ausgangspunkte. Die Initialisierung erfolgt zufällig.",
+  "io.mesh_no_triangle_faces": "Die Meshdatei enthält keine Dreiecksflächen."
 }

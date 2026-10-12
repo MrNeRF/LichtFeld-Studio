@@ -32,6 +32,38 @@ namespace {
         ASSERT_TRUE(stream);
     }
 
+    TEST(AtomicOutputPathTest, LongLegalNameCanBeCommitted) {
+        const auto directory = fs::temp_directory_path() / "lfs_atomic_long_name";
+        fs::create_directories(directory);
+        for (const auto style : {lfs::io::AtomicOutputTempName::AppendSuffix,
+                                 lfs::io::AtomicOutputTempName::PreserveExtension}) {
+            const auto output = directory / (std::string(250, 'x') + ".usd");
+            SCOPED_TRACE(static_cast<int>(style));
+            write_file(output, "old");
+            lfs::io::ScopedAtomicOutputFile replacement(output, style);
+            EXPECT_EQ(replacement.temp_path().parent_path(), directory);
+            if (style == lfs::io::AtomicOutputTempName::PreserveExtension)
+                EXPECT_EQ(replacement.temp_path().extension(), ".usd");
+            write_file(replacement.temp_path(), "new");
+            ASSERT_TRUE(replacement.commit().has_value());
+            EXPECT_EQ(read_file(output), "new");
+        }
+        std::error_code ec;
+        fs::remove_all(directory, ec);
+        EXPECT_FALSE(ec);
+    }
+
+    TEST(AtomicOutputPathTest, ShortNameKeepsExistingNaming) {
+        const auto output = fs::temp_directory_path() / "normal.usd";
+        const auto appended = lfs::io::make_atomic_temp_output_path(output);
+        const auto preserved = lfs::io::make_atomic_temp_output_path(
+            output, lfs::io::AtomicOutputTempName::PreserveExtension);
+        EXPECT_TRUE(appended.filename().string().starts_with("normal.usd."));
+        EXPECT_TRUE(appended.filename().string().ends_with(".tmp"));
+        EXPECT_TRUE(preserved.filename().string().starts_with("normal."));
+        EXPECT_TRUE(preserved.filename().string().ends_with(".tmp.usd"));
+    }
+
 #ifndef _WIN32
     TEST(CheckpointAtomicReplaceFaultTest, KillAtEveryCommitBoundaryLeavesValidCheckpoint) {
         const auto directory = fs::temp_directory_path() /

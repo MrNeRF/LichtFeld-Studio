@@ -318,6 +318,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        test_point_cloud_vulkan_projection.cpp
         test_align_transform.cpp
         test_orthographic_zoom.cpp
         test_ui_visibility_transition.cpp
@@ -1178,6 +1179,7 @@ set(TEST_FILES
     test_expanded_tensor_ops.cpp
     test_bool_any_all.cpp
     test_fused_l1_ssim.cpp
+    test_masked_ssim_window.cpp
     test_densify_error_map.cpp
     test_screen_share.cpp
     test_loss_workspace_union.cpp
@@ -1227,6 +1229,7 @@ set(TEST_FILES
     test_view_render_state.cpp
     test_rml_pointer_routing.cpp
     test_point_cloud_raster_orientation.cpp
+    test_point_cloud_vulkan_projection.cpp
     test_theme_registry.cpp
     test_viewport.cpp
     test_navigation_up_axis.cpp
@@ -1247,6 +1250,7 @@ set(TEST_FILES
     test_lens_priors.cpp
     test_metrics_evaluator.cpp
     test_metrics_eval_mask.cpp
+    test_masked_ssim_metrics.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
     test_nvcodec_sentinel_validation.cpp
@@ -1615,6 +1619,34 @@ if(COMMAND lfs_enable_fast_cxx_compile)
     lfs_enable_fast_cxx_compile(lichtfeld_tests)
 endif()
 
+# Exercise the production SSIM translation unit with Debug's subnormal semantics,
+# independently of the application's Release fast-math flags.
+add_executable(masked_ssim_noftz_tests
+    test_main.cpp
+    test_masked_ssim_window.cpp
+    ${CMAKE_SOURCE_DIR}/src/training/kernels/ssim.cu
+)
+set_target_properties(masked_ssim_noftz_tests PROPERTIES
+    CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON
+    CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(masked_ssim_noftz_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/training ${CUDAToolkit_INCLUDE_DIRS})
+target_compile_definitions(masked_ssim_noftz_tests PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
+target_compile_options(masked_ssim_noftz_tests PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--ftz=false --prec-div=true --prec-sqrt=true --extended-lambda --expt-relaxed-constexpr>)
+target_link_libraries(masked_ssim_noftz_tests PRIVATE
+    lfs_training lfs_core GTest::gtest CUDA::cudart)
+if(MSVC)
+    target_compile_definitions(masked_ssim_noftz_tests PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>)
+    target_compile_options(masked_ssim_noftz_tests PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
+endif()
+add_test(NAME masked_ssim_noftz COMMAND masked_ssim_noftz_tests
+    --gtest_filter=MaskedSSIMWindowTest.SparseSupportRemainsFinite:MaskedSSIMWindowTest.TinyWindowSupportApproachesUnsupported)
+set_tests_properties(masked_ssim_noftz PROPERTIES LABELS "gpu")
+
 # Tensor-library hardening is intentionally isolated from the default test
 # tiers.  During the hardening phases these oracle tests are expected to expose
 # known failures, and crash-prone reproducers must not terminate the monolithic
@@ -1887,8 +1919,11 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_validator.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preferences_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_registry.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_depth_view_scrub.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rendering_panel_regressions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rendering_panel_simplify.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_layout.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_pan_scale.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rmlui_image_sources.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_runtime_state.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scripts_panel.py
@@ -2047,6 +2082,28 @@ set_tests_properties(lichtfeld.python.gpu PROPERTIES
 
 # Owns its Xvfb display, GUI process and generated inputs; requires a Linux GPU.
 if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
+    add_test(NAME lichtfeld.python.gt_compare_reconstruction
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gt_compare_reconstruction.py
+    )
+    set_tests_properties(lichtfeld.python.gt_compare_reconstruction PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.lod_budget_recovery
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_lod_budget_recovery_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.lod_budget_recovery PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
     add_test(NAME lichtfeld.python.capture_environment
         COMMAND ${Python_EXECUTABLE} -m pytest -q
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_render_capture_environment.py

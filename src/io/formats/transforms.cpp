@@ -8,6 +8,7 @@
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "formats/colmap.hpp"
+#include "ply_property_order.hpp"
 #include "tinyply.hpp"
 #include <algorithm>
 #include <array>
@@ -805,6 +806,10 @@ namespace lfs::io {
             file.read(ss);
             throw_if_load_cancel_requested(options, "Transforms PLY read cancelled");
 
+            detail::order_ply_vertex_properties(file, *vertices, {"x", "y", "z"}, options);
+            if (has_colors && colors)
+                detail::order_ply_vertex_properties(file, *colors, {"red", "green", "blue"}, options);
+
             // Get vertex count
             const size_t vertex_count = vertices->count;
             LOG_DEBUG("Loaded {} vertices from PLY file", vertex_count);
@@ -884,7 +889,36 @@ namespace lfs::io {
                 color_tensor = lfs::core::Tensor::full({static_cast<size_t>(vertex_count), 3}, 255, Device::CPU, DataType::UInt8);
             }
 
-            LOG_INFO("Successfully loaded PLY point cloud with {} points", vertex_count);
+            // Validate after conversion so double values overflowing float32 are removed too.
+            // Compact positions and colors together before either tensor reaches the GPU.
+            size_t finite_count = 0;
+            auto* color_ptr = color_tensor.ptr<uint8_t>();
+            for (size_t i = 0; i < vertex_count; ++i) {
+                if ((i % 4096) == 0) {
+                    throw_if_load_cancel_requested(options, "Transforms PLY point validation cancelled");
+                }
+                const float* point = pos_ptr + i * 3;
+                if (!std::isfinite(point[0]) || !std::isfinite(point[1]) || !std::isfinite(point[2])) {
+                    continue;
+                }
+                if (finite_count != i) {
+                    std::copy_n(point, 3, pos_ptr + finite_count * 3);
+                    std::copy_n(color_ptr + i * 3, 3, color_ptr + finite_count * 3);
+                }
+                ++finite_count;
+            }
+            if (finite_count != vertex_count) {
+                LOG_WARN("Removed {} PLY points with non-finite coordinates; keeping {} points",
+                         vertex_count - finite_count, finite_count);
+                if (finite_count == 0) {
+                    // Let the dataset loader use its existing no-point-cloud initialization.
+                    return {};
+                }
+                positions = positions.slice(0, 0, finite_count);
+                color_tensor = color_tensor.slice(0, 0, finite_count);
+            }
+
+            LOG_INFO("Successfully loaded PLY point cloud with {} points", finite_count);
             throw_if_load_cancel_requested(options, "Transforms PLY upload cancelled");
 
             // Move to CUDA for GPU rendering

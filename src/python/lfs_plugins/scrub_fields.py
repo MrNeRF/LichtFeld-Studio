@@ -36,6 +36,7 @@ class _ScrubFieldState:
     editing: bool = False
     drag_start_mouse_x: float = 0.0
     edit_value_before: float = 0.0
+    edit_snapshot: object = None
     commit_on_blur: bool = False
     cancel_on_blur: bool = False
 
@@ -45,10 +46,14 @@ class ScrubFieldController:
 
     def __init__(self, specs: dict[str, ScrubFieldSpec],
                  get_value: Callable[[str], float],
-                 set_value: Callable[[str, float], None]):
+                 set_value: Callable[[str, float], None], *,
+                 capture_edit: Callable[[str], object] | None = None,
+                 restore_edit: Callable[[str, object], None] | None = None):
         self._specs = dict(specs)
         self._get_value = get_value
         self._set_value = set_value
+        self._capture_edit = capture_edit
+        self._restore_edit = restore_edit
         self._doc = None
         self._fields: dict[str, _ScrubFieldState] = {}
         self._active_prop: str | None = None
@@ -183,6 +188,7 @@ class ScrubFieldController:
         mx = self._event_mouse_x(event)
         state.dragging = False
         state.drag_start_mouse_x = mx
+        state.edit_snapshot = self._capture_edit(prop) if self._capture_edit else None
         state.edit_value_before = self._safe_value(prop)
         self._active_prop = prop
 
@@ -292,6 +298,7 @@ class ScrubFieldController:
         state.editing = True
         state.commit_on_blur = False
         state.cancel_on_blur = False
+        state.edit_snapshot = self._capture_edit(state.prop) if self._capture_edit else None
         state.edit_value_before = self._safe_value(state.prop)
         state.field.set_class("is-editing", True)
         text = self._format_value(state.spec, state.edit_value_before)
@@ -307,7 +314,11 @@ class ScrubFieldController:
         self._sync_field(state)
 
     def _restore_edit_value(self, state: _ScrubFieldState) -> None:
-        self._apply_value(state, state.edit_value_before)
+        if self._restore_edit:
+            self._restore_edit(state.prop, state.edit_snapshot)
+            self._sync_field(state)
+        else:
+            self._apply_value(state, state.edit_value_before)
         state.input_el.set_attribute("value", self._format_value(state.spec, state.edit_value_before))
 
     def _commit_edit_value(self, state: _ScrubFieldState) -> None:

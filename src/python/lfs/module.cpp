@@ -398,7 +398,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                    -> lfs::Result<void> {
+                -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -3338,6 +3338,7 @@ NB_MODULE(lichtfeld, m) {
                     throw nb::value_error("Open a viewport with a representable orthographic extent");
                 auto settings = rm->getSettings();
                 settings.orthographic = true;
+                settings.equirectangular = false;
                 settings.ortho_scale = scale;
                 rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
                 lfs::vis::apply_set_ortho_scale(std::nullopt);
