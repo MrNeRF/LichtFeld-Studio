@@ -254,3 +254,28 @@ def test_escape_then_mouse_click_away_keeps_numeric_edit_cancelled():
     assert values["scale"] == 1.0
     assert not state.editing
 
+@pytest.mark.parametrize("text,expected", [
+    ("1e309", 100),
+    ("inf", 100),
+    ("-inf", 1),
+    ("999999999999999999999999999999", 100),
+    ("12", 12),
+    ("nan", 11),
+])
+def test_integer_scrub_handles_out_of_range_text_without_callback_exception(text, expected):
+    module = import_module("lfs_plugins.scrub_fields")
+    values = {"speed": 11}
+    scrub = module.ScrubFieldController(
+        {"speed": module.ScrubFieldSpec(1, 100, 1, "%d", data_type=int)},
+        values.__getitem__, values.__setitem__)
+    attach_fields(scrub)
+    state = scrub._fields["speed"]
+    state.editing = True
+    state.input_el.set_attribute("value", text)
+    state.input_el.blur = lambda: scrub._on_input_blur("speed", Event())
+
+    scrub._on_input_change("speed", Event(linebreak=True))
+
+    assert values["speed"] == expected
+    assert not state.editing
+

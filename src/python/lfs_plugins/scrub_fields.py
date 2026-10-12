@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Callable
 
 from . import rml_widgets as w
@@ -345,11 +346,15 @@ class ScrubFieldController:
                 text = text.replace(",", ".")
 
         try:
+            parsed = float(text)
             if state.spec.data_type is int:
-                value = int(float(text))
+                if math.isnan(parsed):
+                    return
+                bounded = max(state.spec.min_value, min(state.spec.max_value, parsed))
+                value = int(bounded)
             else:
-                value = float(text)
-        except (TypeError, ValueError):
+                value = parsed
+        except (TypeError, ValueError, OverflowError):
             return
 
         self._apply_value(state, value)
