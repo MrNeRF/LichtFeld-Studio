@@ -413,6 +413,7 @@ namespace lfs::vis {
         editor_context_.setActiveTool(ToolType::None);
         editor_context_.clearActiveOperator();
         trainer_manager_.reset();
+        training_memory_detail::shutdownHeapTrimWorker();
         tool_context_.reset();
         if (gui_manager_) {
             gui_manager_->shutdown();
@@ -3278,6 +3279,7 @@ namespace lfs::vis {
         if (trainer_manager_) {
             trainer_manager_.reset();
         }
+        training_memory_detail::shutdownHeapTrimWorker();
 
         // Clean up tool context
         tool_context_.reset();

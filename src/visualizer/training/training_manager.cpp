@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <cuda_runtime.h>
@@ -48,10 +49,101 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+
 namespace lfs::vis {
+
+    namespace {
+#ifdef __GLIBC__
+        std::atomic<training_memory_detail::ClearTrainerTrimHook> clear_trainer_trim_hook{nullptr};
+
+        class HeapTrimWorker {
+        public:
+            HeapTrimWorker()
+                : worker_([this] { run(); }) {}
+
+            ~HeapTrimWorker() {
+                shutdown();
+            }
+
+            void shutdown() {
+                {
+                    std::lock_guard lock(mutex_);
+                    stopping_ = true;
+                }
+                condition_.notify_one();
+                if (worker_.joinable())
+                    worker_.join();
+            }
+
+            void request() {
+                {
+                    std::lock_guard lock(mutex_);
+                    if (stopping_) {
+                        if (worker_.joinable())
+                            return;
+                        stopping_ = false;
+                        worker_ = std::thread([this] { run(); });
+                    }
+                    pending_ = true;
+                }
+                condition_.notify_one();
+            }
+
+        private:
+            void run() {
+                std::unique_lock lock(mutex_);
+                while (true) {
+                    condition_.wait(lock, [this] { return stopping_ || pending_; });
+                    if (stopping_ && !pending_)
+                        return;
+                    pending_ = false;
+                    lock.unlock();
+                    if (const auto hook = clear_trainer_trim_hook.load(std::memory_order_acquire))
+                        hook();
+                    else
+                        (void)malloc_trim(0);
+                    lock.lock();
+                }
+            }
+
+            std::mutex mutex_;
+            std::condition_variable condition_;
+            std::thread worker_;
+            bool pending_ = false;
+            bool stopping_ = false;
+        };
+
+        HeapTrimWorker& heap_trim_worker() {
+            static HeapTrimWorker worker;
+            return worker;
+        }
+
+        void shutdown_heap_trim_worker() {
+            heap_trim_worker().shutdown();
+        }
+#else
+        void shutdown_heap_trim_worker() {}
+#endif
+    } // namespace
+
+    void training_memory_detail::setClearTrainerTrimHookForTesting(ClearTrainerTrimHook hook) noexcept {
+#ifdef __GLIBC__
+        clear_trainer_trim_hook.store(hook, std::memory_order_release);
+#else
+        (void)hook;
+#endif
+    }
+
+    void training_memory_detail::shutdownHeapTrimWorker() noexcept {
+        shutdown_heap_trim_worker();
+    }
 
     using namespace lfs::core::events;
 
@@ -1087,11 +1179,13 @@ namespace lfs::vis {
         // Pause events and no-thread stops do not run TrainingEnd's clear_snapshot.
         lfs::training::CommandCenter::instance().reset_snapshot();
 
+        [[maybe_unused]] bool released_trainer = false;
         {
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             if (scene_) {
                 scene_->setLiveModelMutex(nullptr);
             }
+            released_trainer = trainer_ != nullptr;
             trainer_.reset();
             trainer_generation_.fetch_add(1, std::memory_order_release);
             // Model tensors retain their own shared ownership while edit/view mode
@@ -1105,6 +1199,15 @@ namespace lfs::vis {
         // Trainer::shutdown() trims before Tensor-valued members are destroyed.
         // Trim again after destruction so those returned blocks do not survive clear.
         lfs::core::Tensor::trim_memory_pool();
+#ifdef __GLIBC__
+        if (released_trainer) {
+            try {
+                heap_trim_worker().request();
+            } catch (const std::system_error& error) {
+                LOG_WARN("Could not schedule background heap trim: {}", error.what());
+            }
+        }
+#endif
 
         if (state_machine_.getState() != TrainingState::Idle && !state_machine_.transitionTo(TrainingState::Idle)) {
             LOG_WARN("Failed to transition to Idle");
