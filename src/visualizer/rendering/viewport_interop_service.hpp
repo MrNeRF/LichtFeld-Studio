@@ -116,12 +116,12 @@ namespace lfs::vis {
         ViewportInteropService(const ViewportInteropService&) = delete;
         ViewportInteropService& operator=(const ViewportInteropService&) = delete;
 
-        void setSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
-                           glm::ivec2 size,
-                           bool flip_y,
-                           std::uint64_t generation,
-                           VkSemaphore completion_semaphore = VK_NULL_HANDLE,
-                           std::uint64_t completion_value = 0);
+        LFS_VIS_API void setSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
+                                       glm::ivec2 size,
+                                       bool flip_y,
+                                       std::uint64_t generation,
+                                       VkSemaphore completion_semaphore = VK_NULL_HANDLE,
+                                       std::uint64_t completion_value = 0);
         void setExternalSceneImage(VkImage image,
                                    VkImageView image_view,
                                    VkImageLayout layout,
@@ -142,19 +142,19 @@ namespace lfs::vis {
         void clearDepthBlitImage();
 
         // Throws std::runtime_error on hard interop failure (callers catch).
-        void prepareFrame(VulkanContext& context, bool resize_deferring);
+        LFS_VIS_API void prepareFrame(VulkanContext& context, bool resize_deferring);
 
         // Roll back layout commits and discard unrecorded frame barriers on
         // every GUI frame that may endFrame, including export-locked frames that
         // skip prepareFrame uploads. prepareFrame calls this at its head.
-        void syncUnsubmittedLayoutCommits(VulkanContext& context);
+        LFS_VIS_API void syncUnsubmittedLayoutCommits(VulkanContext& context);
 
-        void recordFrameBarriers(VkCommandBuffer frame_cb, VulkanContext& context);
+        LFS_VIS_API void recordFrameBarriers(VkCommandBuffer frame_cb, VulkanContext& context);
 
-        void bindViewportParams(VulkanViewportPassParams& params,
-                                std::size_t frame_slot,
-                                bool export_locked,
-                                bool resize_deferring) const;
+        LFS_VIS_API void bindViewportParams(VulkanViewportPassParams& params,
+                                            std::size_t frame_slot,
+                                            bool export_locked,
+                                            bool resize_deferring) const;
 
         struct FrameCompletion {
             VkSemaphore semaphore = VK_NULL_HANDLE;
