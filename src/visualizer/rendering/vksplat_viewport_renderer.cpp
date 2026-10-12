@@ -8639,7 +8639,9 @@ namespace lfs::vis {
                     HIGS_DEPTH_WAVE_INSTANCES));
             }
         }
-        if (const auto lod_stats = renderer_.pollDeferredLodSelectionStats()) {
+        bool lod_feedback_changed = false;
+        const auto lod_stats = renderer_.pollDeferredLodSelectionStats();
+        if (lod_stats) {
             // Start the next frame at the threshold that actually fit. The
             // gradual controller can refine it, but cannot undo same-frame repair.
             if (std::isfinite(lod_stats->threshold_scale) && lod_stats->threshold_scale > 1.0f) {
@@ -8763,6 +8765,11 @@ namespace lfs::vis {
                     0.05f,
                     64.0f);
             }
+            // Keep refining an underfilled cut without waiting for camera input.
+            // Same-frame budget repair already found a fitting cut; retrying its
+            // damped refinement at rest can cycle across a discrete tree level.
+            lod_feedback_changed = lod_stats->threshold_scale <= 1.0f &&
+                                   gpu_lod_pixel_scale_feedback_ != previous_feedback;
             if (overflowed || std::abs(gpu_lod_pixel_scale_feedback_ - previous_feedback) > 0.01f) {
                 LOG_PERF(
                     "vksplat.lod_gpu_selection candidates={} capacity={} overflow={} feedback={:.3f}",
@@ -9691,6 +9698,12 @@ namespace lfs::vis {
               gpu_lod_frozen_frames_ < kLodAdmissionFrozenFrames) ||
              !lod_upload_engine_.idle() ||
              lod_fades_active);
+        // The readback describes a previous submission. Keep rendering until
+        // feedback for the current budget is available and its refinement ends.
+        const bool lod_feedback_active =
+            gpu_lod_select_dispatch_active &&
+            (!lod_stats || lod_stats->rendered_capacity != gpu_lod_select_capacity ||
+             lod_feedback_changed);
         return RenderResult{
             .image = output.image.image,
             .image_view = output.image.view,
@@ -9706,7 +9719,7 @@ namespace lfs::vis {
             .completion_semaphore = render_complete_timeline_,
             .completion_value = completion_value,
             .lod_page_generation = lod_page_generation,
-            .lod_streaming_active = lod_streaming_active,
+            .lod_streaming_active = lod_streaming_active || lod_feedback_active,
         };
     }
 
