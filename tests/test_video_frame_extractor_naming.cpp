@@ -5,6 +5,7 @@
 #include "core/image_io.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
 #include "io/video/frame_color_range.hpp"
+#include "io/video/probed_stream_rewind.hpp"
 #include "io/video/video_encoder.hpp"
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
@@ -18,6 +19,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/error.h>
 #include <libswscale/swscale.h>
 }
 
@@ -28,6 +30,7 @@ extern "C" {
 #include <bit>
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -38,6 +41,10 @@ extern "C" {
 #include <thread>
 #include <tuple>
 #include <vector>
+
+#if defined(__linux__)
+#include <sys/stat.h>
+#endif
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
@@ -71,6 +78,19 @@ namespace {
 
         std::filesystem::path path;
     };
+
+#if defined(__linux__)
+    uint64_t processReadChars() {
+        std::ifstream io("/proc/self/io");
+        std::string key;
+        uint64_t value = std::numeric_limits<uint64_t>::max();
+        while (io >> key >> value) {
+            if (key == "rchar:")
+                return value;
+        }
+        return std::numeric_limits<uint64_t>::max();
+    }
+#endif
 
     struct CudaFloatBuffer {
         explicit CudaFloatBuffer(const std::size_t count) {
@@ -171,6 +191,15 @@ namespace {
                 ++count;
         }
         return count;
+    }
+
+    uint64_t hashFile(const std::filesystem::path& path) {
+        std::ifstream input(path, std::ios::binary);
+        uint64_t hash = 14695981039346656037ull;
+        char byte = 0;
+        while (input.get(byte))
+            hash = (hash ^ static_cast<uint8_t>(byte)) * 1099511628211ull;
+        return hash;
     }
 
     nlohmann::json readMetadata(const std::filesystem::path& output_dir) {
@@ -390,7 +419,8 @@ namespace lfs::gui {
 namespace {
     bool writeProbedVideoWithRate(const std::filesystem::path& path, const char* container,
                                   AVCodecID codec_id, int frame_count, int leading_frames,
-                                  int rate_numerator, int rate_denominator, bool variable_rate = false);
+                                  int rate_numerator, int rate_denominator,
+                                  bool variable_rate = false, int frame_pattern_step = 8);
 
     class FpsTestRenderInterface final : public Rml::RenderInterface {
     public:
@@ -1541,7 +1571,8 @@ namespace {
     // the video stream (MPEG-TS, or MPEG-4 Part 2 in MP4 with leading frames before an edit list).
     bool writeProbedVideoWithRate(const std::filesystem::path& path, const char* const container,
                                   const AVCodecID codec_id, const int frame_count, const int leading_frames,
-                                  const int rate_numerator, const int rate_denominator, const bool variable_rate) {
+                                  const int rate_numerator, const int rate_denominator,
+                                  const bool variable_rate, const int frame_pattern_step) {
         AVFormatContext* format = nullptr;
         const std::string path_utf8 = path.string();
         if (avformat_alloc_output_context2(&format, nullptr, container, path_utf8.c_str()) < 0 || !format)
@@ -1589,7 +1620,8 @@ namespace {
             ok = av_frame_make_writable(frame) >= 0;
             for (int y = 0; y < frame->height; ++y)
                 for (int x = 0; x < frame->width; ++x)
-                    frame->data[0][y * frame->linesize[0] + x] = static_cast<uint8_t>((x + y + index * 8) & 255);
+                    frame->data[0][y * frame->linesize[0] + x] =
+                        static_cast<uint8_t>((x + y + index * frame_pattern_step) & 255);
             for (int plane = 1; plane < 3; ++plane)
                 for (int y = 0; y < frame->height / 2; ++y)
                     for (int x = 0; x < frame->width / 2; ++x)
@@ -2005,6 +2037,127 @@ TEST(VideoDecoderFallback, OddSizedH264444OpensSeeksAndExtracts) {
 
 TEST(VideoDecoderFallback, H264420StillOpensSeeksAndExtracts) {
     checkDecoderFixture("h264_420.mp4", 64, 48);
+}
+
+TEST(VideoDecoderFallback, LongRawH264PreviewOpenReadsOnlyTheProbeWindow) {
+    TempDir temp("long_raw_h264_probe");
+    const auto source = temp.path / "long_stream.h264";
+    constexpr int frame_count = 300000;
+    ASSERT_TRUE(writeProbedVideoWithRate(source, "h264", AV_CODEC_ID_H264,
+                                         frame_count, 0, 30, 1, false, 3));
+    const auto source_size = std::filesystem::file_size(source);
+    ASSERT_GT(source_size, 8 * 1024 * 1024);
+
+    lfs::io::VideoPlayer player;
+#if defined(__linux__)
+    const auto bytes_before_open = processReadChars();
+#endif
+    ASSERT_TRUE(player.open(source)) << player.takeError();
+#if defined(__linux__)
+    const auto bytes_after_open = processReadChars();
+    ASSERT_NE(bytes_before_open, std::numeric_limits<uint64_t>::max());
+    ASSERT_NE(bytes_after_open, std::numeric_limits<uint64_t>::max());
+    const auto open_read_bytes = bytes_after_open - bytes_before_open;
+    EXPECT_LT(open_read_bytes, source_size / 2)
+        << "VideoPlayer::open read " << open_read_bytes
+        << " of " << source_size << " source bytes";
+#endif
+    EXPECT_NE(player.currentFrameData(), nullptr);
+    EXPECT_DOUBLE_EQ(player.duration(), 0.0);
+    player.close();
+}
+
+TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipKeepsFrameHashes) {
+    TempDir temp("timestamped_frame_hashes");
+    const auto source = temp.path / "timestamped.mp4";
+    constexpr int frame_count = 6;
+    ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4,
+                                         frame_count, 0, 25, 1, false, 3));
+
+    auto params = extractionParams(source, temp.path / "frames");
+    params.end_time = -1.0;
+    VideoFrameExtractor extractor;
+    std::string error;
+    ASSERT_TRUE(extractor.extract(params, error)) << error;
+    ASSERT_EQ(countPngFiles(params.output_dir), frame_count);
+
+    const std::vector<uint64_t> expected_hashes{
+        10352205363336413648ull, 7130132853937651006ull,
+        5101170480245039264ull, 7651893699709116084ull,
+        16033737104459939555ull, 3741773652504481905ull};
+    std::vector<uint64_t> hashes;
+    for (int index = 1; index <= frame_count; ++index) {
+        const auto frame = params.output_dir / ("frame_" + std::to_string(index) + ".png");
+        ASSERT_TRUE(std::filesystem::exists(frame));
+        hashes.push_back(hashFile(frame));
+    }
+    EXPECT_EQ(hashes, expected_hashes);
+}
+
+#if defined(__linux__)
+TEST(VideoDecoderFallback, TimestampedInputWithoutDurationKeepsTheExistingError) {
+    TempDir temp("timestamped_without_duration");
+    const auto source = temp.path / "timestamped.ts";
+    ASSERT_TRUE(writeProbedVideoWithRate(source, "mpegts", AV_CODEC_ID_MPEG2VIDEO,
+                                         8, 0, 25, 1, false, 3));
+    const auto fifo = temp.path / "timestamped.fifo";
+    ASSERT_EQ(::mkfifo(fifo.c_str(), 0600), 0);
+
+    std::thread writer([&] {
+        std::ifstream input(source, std::ios::binary);
+        std::ofstream output(fifo, std::ios::binary);
+        output << input.rdbuf();
+    });
+    auto params = extractionParams(fifo, temp.path / "frames");
+    params.end_time = -1.0;
+    VideoFrameExtractor extractor;
+    std::string error;
+    const bool extracted = extractor.extract(params, error);
+    writer.join();
+
+    EXPECT_FALSE(extracted);
+    EXPECT_EQ(error, "Could not determine video duration");
+}
+#endif
+
+TEST(VideoDecoderFallback, RawH264WithoutPacketTimestampsOpensAndExtracts) {
+    TempDir temp("raw_h264_no_timestamps");
+    const auto source = temp.path / "raw_stream.mp4";
+    constexpr int frame_count = 12;
+    ASSERT_TRUE(writeProbedVideoWithRate(source, "h264", AV_CODEC_ID_H264,
+                                         frame_count, 0, 30, 1, false));
+
+    AVFormatContext* format = nullptr;
+    ASSERT_EQ(avformat_open_input(&format, source.string().c_str(), nullptr, nullptr), 0);
+    AVPacket* packet = av_packet_alloc();
+    ASSERT_NE(packet, nullptr);
+    ASSERT_EQ(av_read_frame(format, packet), 0);
+    EXPECT_EQ(packet->pts, AV_NOPTS_VALUE);
+    EXPECT_EQ(packet->dts, AV_NOPTS_VALUE);
+    av_packet_free(&packet);
+    avformat_close_input(&format);
+
+    lfs::io::VideoPlayer player;
+    ASSERT_TRUE(player.open(source)) << player.takeError();
+    EXPECT_NE(player.currentFrameData(), nullptr);
+    const double fps = player.fps();
+    ASSERT_GT(fps, 1.0);
+    ASSERT_LT(fps, 1000.0);
+    EXPECT_DOUBLE_EQ(player.duration(), 0.0);
+    const double seek_time = 5.0 / fps;
+    player.seek(seek_time);
+    EXPECT_NEAR(player.currentTime(), seek_time, 0.001);
+    player.close();
+
+    auto params = extractionParams(source, temp.path / "frames");
+    params.end_time = -1.0;
+    VideoFrameExtractor extractor;
+    std::string error;
+    ASSERT_TRUE(extractor.extract(params, error)) << error;
+    EXPECT_EQ(countPngFiles(params.output_dir), frame_count);
+    for (int number = 1; number <= frame_count; ++number)
+        EXPECT_TRUE(std::filesystem::exists(params.output_dir /
+                                            ("frame_" + std::to_string(number) + ".png")));
 }
 
 TEST(VideoDecoderFallback, FailedReplacementClearsDialogPathsAndCanRecover) {

@@ -8,6 +8,7 @@
 #include "hdr_libplacebo.hpp"
 #include "hdr_tonemap.hpp"
 #include "video/frame_color_range.hpp"
+#include "video/probed_stream_rewind.hpp"
 #include "video/sws_packed_rgb.hpp"
 
 extern "C" {
@@ -220,6 +221,8 @@ namespace lfs::io {
                 return false;
             }
 
+            video::limitUntimedVideoProbe(fmt_ctx_);
+
             // Select the video stream before probing codec-level metadata.
             video_stream_idx_ = findUsableHeaderVideoStream(fmt_ctx_);
             // avformat_find_stream_info frees its per-stream probe state; a second call on the
@@ -246,7 +249,9 @@ namespace lfs::io {
             if (!stream_info_probed && avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
                 LOG_WARN("VideoPlayer: could not complete video-only stream metadata probe");
             }
-            av_seek_frame(fmt_ctx_, video_stream_idx_, 0, AVSEEK_FLAG_BACKWARD);
+            (void)video::rewindProbedVideoStream(fmt_ctx_, video_stream_idx_);
+            untimed_stream_ = fmt_ctx_->iformat &&
+                              (fmt_ctx_->iformat->flags & AVFMT_NOTIMESTAMPS) != 0;
 
             AVStream* const stream = fmt_ctx_->streams[video_stream_idx_];
             const AVCodecID codec_id = stream->codecpar->codec_id;
@@ -441,18 +446,21 @@ namespace lfs::io {
             }
             frame_size_ = static_cast<size_t>(width_) * height_ * 3;
 
-            total_frames_ = stream->nb_frames;
-            if (total_frames_ > 0) {
-                duration_ = static_cast<double>(total_frames_) / fps_;
-            } else if (fmt_ctx_->duration != AV_NOPTS_VALUE && fmt_ctx_->duration > 0) {
-                duration_ = static_cast<double>(fmt_ctx_->duration) / AV_TIME_BASE;
-            } else if (stream->duration != AV_NOPTS_VALUE && stream->duration > 0) {
-                duration_ = static_cast<double>(stream->duration) * time_base_;
+            total_frames_.store(untimed_stream_ ? 0 : stream->nb_frames);
+            if (!untimed_stream_ && total_frames_.load() > 0) {
+                duration_.store(static_cast<double>(total_frames_.load()) / fps_);
+            } else if (!untimed_stream_ && fmt_ctx_->duration != AV_NOPTS_VALUE &&
+                       fmt_ctx_->duration > 0) {
+                duration_.store(static_cast<double>(fmt_ctx_->duration) / AV_TIME_BASE);
+            } else if (!untimed_stream_ && stream->duration != AV_NOPTS_VALUE &&
+                       stream->duration > 0) {
+                duration_.store(static_cast<double>(stream->duration) * time_base_);
             } else {
-                duration_ = 0.0;
+                duration_.store(0.0);
             }
-            if (total_frames_ <= 0 && duration_ > 0.0)
-                total_frames_ = static_cast<int64_t>(std::llround(duration_ * fps_));
+            if (total_frames_.load() <= 0 && duration_.load() > 0.0)
+                total_frames_.store(static_cast<int64_t>(
+                    std::llround(duration_.load() * fps_)));
 
             frame_ = av_frame_alloc();
             sw_frame_ = av_frame_alloc();
@@ -574,6 +582,9 @@ namespace lfs::io {
             stream_start_timestamp_ = 0;
             next_fallback_timestamp_ = 0;
             frame_duration_timestamp_ = 1;
+            duration_.store(0.0);
+            total_frames_.store(0);
+            untimed_stream_ = false;
             display_width_ = 0;
             display_height_ = 0;
             display_gpu_rotation_ = false;
@@ -619,7 +630,10 @@ namespace lfs::io {
             }
 
             pause();
-            seconds = std::clamp(seconds, 0.0, duration_);
+            const double current_duration = duration_.load();
+            seconds = current_duration > 0.0
+                          ? std::clamp(seconds, 0.0, current_duration)
+                          : std::max(seconds, 0.0);
             const long double timestamp_value =
                 static_cast<long double>(stream_start_timestamp_) +
                 std::round(static_cast<long double>(seconds) / time_base_);
@@ -725,7 +739,8 @@ namespace lfs::io {
 
             if (frame_queue_.empty()) {
                 lock.unlock();
-                if (eof_reached_ && target_pts >= duration_ - presentation_slack) {
+                if (eof_reached_ &&
+                    target_pts >= duration_.load() - presentation_slack) {
                     is_playing_ = false;
                 }
                 return false;
@@ -793,9 +808,9 @@ namespace lfs::io {
             return error;
         }
         [[nodiscard]] double currentTime() const { return current_time_; }
-        [[nodiscard]] double duration() const { return duration_; }
+        [[nodiscard]] double duration() const { return duration_.load(); }
         [[nodiscard]] int64_t currentFrameNumber() const { return current_frame_; }
-        [[nodiscard]] int64_t totalFrames() const { return total_frames_; }
+        [[nodiscard]] int64_t totalFrames() const { return total_frames_.load(); }
         [[nodiscard]] double fps() const { return fps_; }
 
     private:
@@ -834,13 +849,15 @@ namespace lfs::io {
         }
 
         [[nodiscard]] int64_t decodedFrameTimestamp() {
-            int64_t timestamp = frame_->best_effort_timestamp;
-            if (timestamp == AV_NOPTS_VALUE)
+            // CUVID can return timestamps in its own clock when packets have no PTS.
+            const bool untimed = (fmt_ctx_->iformat->flags & AVFMT_NOTIMESTAMPS) != 0;
+            int64_t timestamp = untimed ? AV_NOPTS_VALUE : frame_->best_effort_timestamp;
+            if (timestamp == AV_NOPTS_VALUE && !untimed)
                 timestamp = frame_->pts;
             if (timestamp == AV_NOPTS_VALUE)
                 timestamp = next_fallback_timestamp_;
 
-            const int64_t duration = frame_->duration > 0
+            const int64_t duration = !untimed && frame_->duration > 0
                                          ? frame_->duration
                                          : frame_duration_timestamp_;
             const int64_t positive_duration = std::max<int64_t>(duration, 1);
@@ -913,8 +930,11 @@ namespace lfs::io {
         }
 
         void performSeek(const int64_t timestamp) {
-            const int seek_result =
-                av_seek_frame(fmt_ctx_, video_stream_idx_, timestamp, AVSEEK_FLAG_BACKWARD);
+            const bool untimed = (fmt_ctx_->iformat->flags & AVFMT_NOTIMESTAMPS) != 0;
+            const int seek_result = untimed
+                                        ? av_seek_frame(fmt_ctx_, -1, 0, AVSEEK_FLAG_BYTE)
+                                        : av_seek_frame(fmt_ctx_, video_stream_idx_, timestamp,
+                                                        AVSEEK_FLAG_BACKWARD);
             if (seek_result < 0) {
                 setError("Video seek failed: " + ffmpegError(seek_result));
                 resetDecoderPumpState();
@@ -925,7 +945,7 @@ namespace lfs::io {
             resetDecoderPumpState();
             eof_reached_ = false;
             decode_failed_ = false;
-            next_fallback_timestamp_ = timestamp;
+            next_fallback_timestamp_ = untimed ? stream_start_timestamp_ : timestamp;
             if (hdr_renderer_)
                 hdr_renderer_->reset();
 
@@ -1129,8 +1149,9 @@ namespace lfs::io {
         int height_ = 0;
         double fps_ = 0;
         double time_base_ = 0;
-        double duration_ = 0;
-        int64_t total_frames_ = 0;
+        mutable std::atomic<double> duration_{0.0};
+        mutable std::atomic<int64_t> total_frames_{0};
+        bool untimed_stream_ = false;
         size_t frame_size_ = 0;
         int rotation_ = 0;
         bool is_hdr_ = false;

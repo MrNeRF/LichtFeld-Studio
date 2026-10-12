@@ -538,7 +538,8 @@ namespace lfs::gui {
         const bool video_path_changed = path != video_path_;
         video_path_ = path;
         trim_start_ = 0.0f;
-        trim_end_ = static_cast<float>(player_->duration());
+        const double duration = player_->duration();
+        trim_end_ = duration > 0.0 ? static_cast<float>(duration) : -1.0f;
         trim_end_is_auto_ = true;
         custom_width_ = std::max(16, player_->sourceWidth());
         custom_height_ = std::max(16, player_->sourceHeight());
@@ -1515,7 +1516,8 @@ namespace lfs::gui {
         } else if (id == "btn-trim-reset" && player_->isOpen()) {
             trim_end_is_auto_ = true;
             trim_start_ = 0.0f;
-            trim_end_ = static_cast<float>(player_->duration());
+            const double duration = player_->duration();
+            trim_end_ = duration > 0.0 ? static_cast<float>(duration) : -1.0f;
             controls_dirty_ = true;
             markContentDirty();
         } else if (id == "btn-start") {
