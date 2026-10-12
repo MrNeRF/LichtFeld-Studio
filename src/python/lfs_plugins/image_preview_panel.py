@@ -78,6 +78,9 @@ class ImagePreviewPanel(Panel):
         self._handle = None
         self._dirty = True
         self._prev_image_index = -1
+        self._layout_show_info = None
+        self._layout_show_filmstrip = None
+        self._layout_pending = False
 
         self._active_layer = "a"
         self._crossfade_pending = False
@@ -174,6 +177,8 @@ class ImagePreviewPanel(Panel):
     def on_mount(self, doc):
         super().on_mount(doc)
         self._doc = doc
+        self._layout_show_info = None
+        self._layout_show_filmstrip = None
 
         for eid, handler in [
             ("nav-prev", lambda _ev: self._navigate(-1)),
@@ -237,6 +242,10 @@ class ImagePreviewPanel(Panel):
             self._dirty = True
 
         needs_redraw = False
+        if self._layout_pending:
+            self._layout_pending = False
+            self._update_main_image(doc, bool(self._image_paths))
+            needs_redraw = True
 
         if self._crossfade_pending:
             if time.monotonic() - self._crossfade_start >= CROSSFADE_DURATION:
@@ -677,6 +686,15 @@ class ImagePreviewPanel(Panel):
         self._update_nav_arrows(doc, has_images)
         self._update_view_controls(doc, has_images)
         self._update_status(doc, has_images)
+
+        if (self._show_info != self._layout_show_info
+                or self._show_filmstrip != self._layout_show_filmstrip):
+            self._layout_show_info = self._show_info
+            self._layout_show_filmstrip = self._show_filmstrip
+            # RmlUI resolves chrome visibility after this hook. Measure once more
+            # using the resulting viewport, without repeating metadata refresh.
+            self._layout_pending = True
+            self._request_model_update()
 
         if hasattr(self, '_handle'):
             self._handle.dirty("panel_label")
