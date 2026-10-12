@@ -47,6 +47,30 @@ namespace lfs::vis {
 
         constexpr auto kVksplatIdleScratchReleaseDelay = std::chrono::seconds{3};
 
+        [[nodiscard]] lfs::Result<void> validateEnvironmentMapForUser(
+            const std::filesystem::path& path) {
+            try {
+                rendering::probeEnvironmentImage(path);
+                return {};
+            } catch (const std::exception& failure) {
+                auto error = lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::App,
+                    .user_message = LOCF("runtime.environment_map_failed", core::path_to_utf8(path.filename())),
+                    .detail = failure.what(),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+                LOG_WARN("{}", failure.what());
+                lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                    .error = error,
+                    .surface = lfs::ErrorSurface::Toast,
+                    .actions = {},
+                    .operation_id = lfs::OperationId::generate(),
+                });
+                return lfs::Result<void>::failure(std::move(error));
+            }
+        }
+
         [[nodiscard]] bool applySparkLodViewerDefaults(RenderSettings& settings) {
             bool changed = false;
 
@@ -529,25 +553,8 @@ namespace lfs::vis {
         }
         if (validate_environment) {
             const auto path = core::utf8_to_path(new_settings.environment_map_path);
-            try {
-                rendering::probeEnvironmentImage(path);
-            } catch (const std::exception& failure) {
-                auto error = lfs::make_error(lfs::ErrorInit{
-                    .code = lfs::ErrorCode::InvalidArgument,
-                    .domain = lfs::ErrorDomain::App,
-                    .user_message = LOCF("runtime.environment_map_failed", core::path_to_utf8(path.filename())),
-                    .detail = failure.what(),
-                    .detection = LFS_SOURCE_SITE_CURRENT(),
-                });
-                LOG_WARN("{}", failure.what());
-                lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
-                    .error = error,
-                    .surface = lfs::ErrorSurface::Toast,
-                    .actions = {},
-                    .operation_id = lfs::OperationId::generate(),
-                });
-                return lfs::Result<void>::failure(std::move(error));
-            }
+            if (const auto result = validateEnvironmentMapForUser(path); !result)
+                return result;
         }
         if (new_settings.orthographic && new_settings.equirectangular) {
             auto projection_settings = new_settings;
@@ -563,6 +570,14 @@ namespace lfs::vis {
             updateSettings(new_settings);
         }
         return {};
+    }
+
+    void RenderingManager::restoreSettingsFromProject(const RenderSettings& settings) {
+        if (settings.environment_mode == EnvironmentBackgroundMode::Equirectangular) {
+            (void)validateEnvironmentMapForUser(
+                core::utf8_to_path(settings.environment_map_path));
+        }
+        updateSettings(settings);
     }
 
     void RenderingManager::updateSettings(const RenderSettings& new_settings) {

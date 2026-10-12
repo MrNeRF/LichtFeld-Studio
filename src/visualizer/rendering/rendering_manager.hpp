@@ -293,6 +293,7 @@ namespace lfs::vis {
         [[nodiscard]] lfs::Result<void> updateSettingsFromUser(const RenderSettings& settings);
 
         // Settings management (also used for restoring saved state).
+        void restoreSettingsFromProject(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
         RenderSettings getSettings() const;

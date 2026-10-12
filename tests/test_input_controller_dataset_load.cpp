@@ -196,6 +196,40 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().environment_exposure, 1.0f);
     }
 
+    TEST_F(InputControllerDatasetLoadTest, RestoringMissingEnvironmentMapReportsWithoutDroppingSettings) {
+        class Consumer final : public lfs::NativeErrorConsumer {
+        public:
+            void on_error(const lfs::ErrorNotification& notification,
+                          const lfs::ErrorDeliveryInfo&) noexcept override {
+                ++count;
+                surface = notification.surface;
+            }
+            int count = 0;
+            lfs::ErrorSurface surface = lfs::ErrorSurface::StatusOnly;
+        } consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        RenderingManager manager;
+        auto restored = manager.getSettings();
+        restored.environment_mode = EnvironmentBackgroundMode::Equirectangular;
+        restored.environment_map_path = "missing_saved_environment.hdr";
+        restored.environment_exposure = 1.25f;
+
+        // This mirrors the VIEW chapter restore path. It must keep accepting the
+        // saved settings while reporting a missing custom map to the user.
+        manager.restoreSettingsFromProject(restored);
+
+        EXPECT_EQ(consumer.count, 1);
+        EXPECT_EQ(consumer.surface, lfs::ErrorSurface::Toast);
+        EXPECT_EQ(manager.getSettings().environment_mode, restored.environment_mode);
+        EXPECT_EQ(manager.getSettings().environment_map_path, restored.environment_map_path);
+        EXPECT_FLOAT_EQ(manager.getSettings().environment_exposure, restored.environment_exposure);
+
+        restored.environment_map_path = lfs::core::path_to_utf8(environment_path_);
+        manager.restoreSettingsFromProject(restored);
+        EXPECT_EQ(consumer.count, 1);
+        EXPECT_EQ(manager.getSettings().environment_map_path, restored.environment_map_path);
+    }
+
     TEST_F(InputControllerDatasetLoadTest, SingleDroppedVideoShowsVideoExtractor) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);

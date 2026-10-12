@@ -3262,7 +3262,7 @@ namespace lfs::vis::project {
             restored->gut =
                 lfs::rendering::isGutBackend(
                     restored->raster_backend);
-            rendering->updateSettings(*restored);
+            rendering->restoreSettingsFromProject(*restored);
 
             // The service transition creates/copies secondary panel state;
             // saved cameras therefore apply only after this call.
