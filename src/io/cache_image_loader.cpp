@@ -20,12 +20,14 @@
 #include <algorithm>
 #include <bit>
 #include <cassert>
+#include <cctype>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <fstream>
 #include <iomanip>
 #include <memory>
 #include <sstream>
+#include <tuple>
 #include <type_traits>
 
 #ifdef __linux__
@@ -395,6 +397,42 @@ namespace lfs::io {
         using namespace lfs::core;
         const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
         const CUDAStreamGuard guard(stream);
+        auto extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        if (extension == ".tif" || extension == ".tiff") {
+            // The pipeline, Camera and source-RGB fill all need the same UInt16
+            // source values before resizing onto the existing byte cache grid.
+            std::tuple<float*, int, int, int> decoded{nullptr, 0, 0, 0};
+            try {
+                decoded = load_image_float(path);
+            } catch (...) {
+                LOG_DEBUG("TIFF mask precision decode unavailable; retrying the regular decoder");
+            }
+            auto [data, width, height, channels] = decoded;
+            const std::unique_ptr<float, decltype(&free_image_float)> pixels(data, &free_image_float);
+            if (pixels && width > 0 && height > 0 && channels > 0) {
+                const auto cpu = Tensor::from_blob(
+                    pixels.get(), TensorShape({static_cast<size_t>(height), static_cast<size_t>(width), static_cast<size_t>(channels)}),
+                    Device::CPU, DataType::Float32);
+                const auto image = cpu.to(Device::CUDA, stream);
+                synchronize_decode_stream(stream);
+                const auto first = image.slice(2, 0, 1).squeeze(2);
+                auto source = channels < 3
+                                  ? first.contiguous()
+                                  : (first * 77.0f + image.slice(2, 1, 2).squeeze(2) * 150.0f +
+                                     image.slice(2, 2, 3).squeeze(2) * 29.0f) /
+                                        256.0f;
+                const auto [target_w, target_h] = resized_image_dimensions(width, height, params.resize_factor, params.max_width);
+                if (target_w != width || target_h != height)
+                    source = lanczos_resize_grayscale(source, target_h, target_w, 2, stream, true);
+                synchronize_decode_stream(stream);
+                source.set_stream(getCurrentCUDAStream());
+                return source.unsqueeze(0);
+            }
+            // An unusual TIFF still gets the pre-existing byte-decoder fallback.
+        }
         int width = 0, height = 0, channels = 0;
         const std::unique_ptr<unsigned char, decltype(&stbi_image_free)> gray(
             stbi_load(path_to_utf8(path).c_str(), &width, &height, &channels, 1), &stbi_image_free);

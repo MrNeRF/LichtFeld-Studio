@@ -570,6 +570,7 @@ set(TEST_FILES
     test_mask_loss.cpp
     test_mask_preprocess_fusion.cpp
     test_mask_memory_alignment.cpp
+    test_mask_tiff_consistency.cpp
     test_roi_weight_map.cpp
     test_mesh_mask_kernels.cpp
     test_flip.cpp

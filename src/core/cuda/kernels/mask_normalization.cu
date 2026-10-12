@@ -37,15 +37,23 @@ namespace lfs::core::cuda {
             if (i < count)
                 output[i] = normalize_mask_u16_value(input[i]);
         }
+        __device__ __forceinline__ std::uint8_t mask_grid_byte(const float value) {
+            return static_cast<std::uint8_t>(fminf(fmaxf(__fmul_rn(value, 255.f), 0.f), 255.f));
+        }
         template <bool KeepBytes>
         __global__ void quantize_mask_grid_kernel(float* values, std::uint8_t* bytes, size_t count) {
             const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
             if (i >= count)
                 return;
-            const auto byte = static_cast<std::uint8_t>(fminf(fmaxf(__fmul_rn(values[i], 255.f), 0.f), 255.f));
+            const auto byte = mask_grid_byte(values[i]);
             values[i] = normalize_mask_byte(byte);
             if constexpr (KeepBytes)
                 bytes[i] = byte;
+        }
+        __global__ void mask_values_to_bytes_kernel(const float* values, std::uint8_t* bytes, size_t count) {
+            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (i < count)
+                bytes[i] = mask_grid_byte(values[i]);
         }
     } // namespace
 
@@ -100,6 +108,20 @@ namespace lfs::core::cuda {
             else
                 quantize_mask_grid_kernel<false><<<blocks, threads, 0, stream>>>(mask.ptr<float>(), nullptr, mask.numel());
             LFS_CUDA_CHECK_MSG(cudaGetLastError(), "quantize mask cache grid");
+        }
+        return bytes;
+    }
+    Tensor mask_values_to_byte_grid(const Tensor& mask) {
+        LFS_ASSERT(mask.device() == Device::CUDA && mask.dtype() == DataType::Float32);
+        const auto stream = mask.stream();
+        const CUDAStreamGuard guard(stream);
+        const auto values = mask.contiguous();
+        values.sync_to_stream(stream);
+        auto bytes = Tensor::empty(values.shape(), Device::CUDA, DataType::UInt8);
+        if (values.numel()) {
+            const auto blocks = static_cast<unsigned>((values.numel() + threads - 1) / threads);
+            mask_values_to_bytes_kernel<<<blocks, threads, 0, stream>>>(values.ptr<float>(), bytes.ptr<std::uint8_t>(), values.numel());
+            LFS_CUDA_CHECK_MSG(cudaGetLastError(), "quantize shared mask source");
         }
         return bytes;
     }

@@ -25,12 +25,14 @@ namespace lfs::io {
                 return value;
         }
         template <typename T>
-        __global__ void make_keep(const T* image, const float* mask, uint8_t* keep, unsigned* first,
+        __global__ void make_keep(const T* image, const float* mask, const uint8_t* mask_bytes, uint8_t* keep, unsigned* first,
                                   unsigned count, int channels, bool alpha, bool invert, float threshold, bool high_band) {
             const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
             unsigned candidate = missing;
             if (i < count) {
-                float value = alpha ? alpha_value(image[static_cast<size_t>(i) * channels + 3]) : mask[i];
+                float value = alpha        ? alpha_value(image[static_cast<size_t>(i) * channels + 3])
+                              : mask_bytes ? lfs::core::cuda::normalize_mask_byte(mask_bytes[i])
+                                           : mask[i];
                 if (invert)
                     value = __fsub_rn(1.f, value);
                 const bool retained = high_band         ? value > (250.5f / 255.0f)
@@ -102,8 +104,10 @@ namespace lfs::io {
         void launch(lfs::core::Tensor& image, const lfs::core::Tensor& mask, const MaskedImageFill& policy,
                     uint8_t* keep, unsigned* first, cudaStream_t stream) {
             const int h = image.shape()[0], w = image.shape()[1], c = image.shape()[2];
+            const float* values = policy.alpha || mask.dtype() == lfs::core::DataType::UInt8 ? nullptr : mask.ptr<float>();
+            const uint8_t* bytes = !policy.alpha && mask.dtype() == lfs::core::DataType::UInt8 ? mask.ptr<uint8_t>() : nullptr;
             make_keep<<<(static_cast<size_t>(h) * w + 255) / 256, 256, 0, stream>>>(
-                static_cast<const T*>(image.data_ptr()), policy.alpha ? nullptr : mask.ptr<float>(), keep, first,
+                static_cast<const T*>(image.data_ptr()), values, bytes, keep, first,
                 h * w, c, policy.alpha, policy.invert, policy.threshold, policy.keep_high_band);
             LFS_CUDA_CHECK_MSG(cudaGetLastError(), "classify source mask for image fill");
             fill_rgb<<<dim3((w + tile - 1) / tile, (h + tile - 1) / tile), tile * tile, 0, stream>>>(

@@ -17,4 +17,6 @@ namespace lfs::core::cuda {
     // Put a sidecar on the existing truncated-byte cache grid in place. Optional
     // byte output is already ready for the lossless cache encoder.
     LFS_CUDA_API Tensor quantize_mask_to_byte_grid(Tensor& mask, bool keep_bytes = true);
+    // Produce the same bytes without changing a source mask shared with a resize.
+    LFS_CUDA_API Tensor mask_values_to_byte_grid(const Tensor& mask);
 } // namespace lfs::core::cuda

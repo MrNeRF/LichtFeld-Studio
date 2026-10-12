@@ -58,8 +58,9 @@ namespace lfs::io {
     // until the GPU conversion.
     LFS_IO_API lfs::core::Tensor load_rgb_image_cpu_decoded(
         const std::filesystem::path& path, const LoadParams& params, bool decode_16bit = false);
-    // Mask luminance is decoded to bytes before normalization/resampling, matching
-    // the training sidecar path. Returns Float32 [1,H,W].
+    // Standard mask luminance uses bytes; TIFF keeps source precision until the
+    // same downstream byte-grid step used by Camera and the training pipeline.
+    // Returns Float32 [1,H,W].
     LFS_IO_API lfs::core::Tensor load_mask_image_cpu_decoded(
         const std::filesystem::path& path, const LoadParams& params);
     // The upload and resize half of load_rgb_image_cpu_decoded, for RGB pixels already decoded on the host by

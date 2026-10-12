@@ -24,6 +24,7 @@
 #include <array>
 #include <bit>
 #include <cassert>
+#include <cctype>
 #include <cerrno>
 #include <charconv>
 #include <cstdlib>
@@ -2495,58 +2496,55 @@ namespace lfs::io {
             }
 
             if (request.mask_path) {
-                if (!is_regular_file_no_throw(*request.mask_path)) {
-                    LOG_DEBUG("[PipelinedImageLoader] Skipping missing mask {}", lfs::core::path_to_utf8(*request.mask_path));
-                    std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
-                    fail_sidecar_locked(request.sequence_id, request.loader_generation,
-                                        SidecarKind::Mask,
-                                        *request.mask_path, "file does not exist or is not a regular file", lock);
-                } else {
-                    PrefetchedImage mask_result;
-                    mask_result.sequence_id = request.sequence_id;
-                    mask_result.loader_generation = request.loader_generation;
-                    mask_result.path = *request.mask_path;
-                    mask_result.params = request.params;
-                    mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params);
-                    mask_result.is_mask = true;
-                    mask_result.mask_params = request.mask_params;
-                    mask_result.undistort = request.undistort;
+                PrefetchedImage mask_result;
+                mask_result.sequence_id = request.sequence_id;
+                mask_result.loader_generation = request.loader_generation;
+                mask_result.path = *request.mask_path;
+                mask_result.params = request.params;
+                mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params);
+                mask_result.is_mask = true;
+                mask_result.mask_params = request.mask_params;
+                mask_result.undistort = request.undistort;
 
-                    try {
-                        if (auto cached = get_from_jpeg_cache(mask_result.cache_key)) {
-                            mask_result.jpeg_data = cached;
-                            mask_result.is_cache_hit = true;
-                            hot_queue_.push(std::move(mask_result));
-                            std::lock_guard<std::mutex> lock(stats_mutex_);
-                            ++stats_.mask_cache_hits;
-                        } else {
-                            mask_result.raw_bytes = read_file(*request.mask_path);
-                            mask_result.is_original_jpeg = is_jpeg_data(mask_result.raw_bytes);
-                            mask_result.is_cache_hit = false;
-
-                            {
-                                std::lock_guard<std::mutex> lock(stats_mutex_);
-                                stats_.total_bytes_read += mask_result.raw_bytes.size();
-                            }
-
-                            mask_result.needs_processing = true;
-                            if (cold_rgb && cold_rgb->fill_masked_rgb && cold_rgb->rgb_mask_path) {
-                                auto source = std::make_shared<std::promise<lfs::core::Tensor>>();
-                                cold_rgb->rgb_mask_source = source->get_future().share();
-                                mask_result.mask_source_promise = std::move(source);
-                            }
-                            cold_queue_.push(std::move(mask_result));
-                            std::lock_guard<std::mutex> lock(stats_mutex_);
-                            ++stats_.mask_cache_misses;
-                        }
-                    } catch (const std::exception& e) {
-                        LOG_WARN("[PipelinedImageLoader] Mask prefetch error {}: {} - continuing without mask",
-                                 lfs::core::path_to_utf8(*request.mask_path), e.what());
+                try {
+                    if (auto cached = get_from_jpeg_cache(mask_result.cache_key)) {
+                        mask_result.jpeg_data = cached;
+                        mask_result.is_cache_hit = true;
+                        hot_queue_.push(std::move(mask_result));
+                        std::lock_guard<std::mutex> lock(stats_mutex_);
+                        ++stats_.mask_cache_hits;
+                    } else if (!is_regular_file_no_throw(*request.mask_path)) {
+                        LOG_DEBUG("[PipelinedImageLoader] Skipping missing mask {}", lfs::core::path_to_utf8(*request.mask_path));
                         std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
                         fail_sidecar_locked(request.sequence_id, request.loader_generation,
-                                            SidecarKind::Mask,
-                                            *request.mask_path, e.what(), lock);
+                                            SidecarKind::Mask, *request.mask_path,
+                                            "file does not exist or is not a regular file", lock);
+                    } else {
+                        mask_result.raw_bytes = read_file(*request.mask_path);
+                        mask_result.is_original_jpeg = is_jpeg_data(mask_result.raw_bytes);
+                        mask_result.is_cache_hit = false;
+
+                        {
+                            std::lock_guard<std::mutex> lock(stats_mutex_);
+                            stats_.total_bytes_read += mask_result.raw_bytes.size();
+                        }
+
+                        mask_result.needs_processing = true;
+                        if (cold_rgb && cold_rgb->fill_masked_rgb && cold_rgb->rgb_mask_path) {
+                            auto source = std::make_shared<std::promise<lfs::core::Tensor>>();
+                            cold_rgb->rgb_mask_source = source->get_future().share();
+                            mask_result.mask_source_promise = std::move(source);
+                        }
+                        cold_queue_.push(std::move(mask_result));
+                        std::lock_guard<std::mutex> lock(stats_mutex_);
+                        ++stats_.mask_cache_misses;
                     }
+                } catch (const std::exception& e) {
+                    LOG_WARN("[PipelinedImageLoader] Mask prefetch error {}: {} - continuing without mask",
+                             lfs::core::path_to_utf8(*request.mask_path), e.what());
+                    std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
+                    fail_sidecar_locked(request.sequence_id, request.loader_generation,
+                                        SidecarKind::Mask, *request.mask_path, e.what(), lock);
                 }
             }
 
@@ -3067,6 +3065,11 @@ namespace lfs::io {
                     bool used_gpu = false;
                     bool float_depth = false;
                     bool share_processed_mask_source = false;
+                    auto extension = item.path.extension().string();
+                    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
+                        return static_cast<char>(std::tolower(ch));
+                    });
+                    const bool explicit_tiff_mask = item.is_mask && (extension == ".tif" || extension == ".tiff");
                     // nvimagecodec and the uint8 path truncate to 8 bits; 16-bit
                     // depth priors must keep their precision.
                     const bool depth_16bit =
@@ -3074,7 +3077,7 @@ namespace lfs::io {
 
                     // Depth sidecars keep their first-touch 16-bit PNG precision by
                     // decoding with stb before the processed tensor is transcoded.
-                    if (is_nvcodec_available() && !item.is_depth) {
+                    if (is_nvcodec_available() && !item.is_depth && !explicit_tiff_mask) {
                         try {
                             const NvcodecSlotGuard slot;
                             aux_tensor = nvcodec->load_image_gpu(
@@ -3095,7 +3098,7 @@ namespace lfs::io {
                         aux_tensor = load_mask_image_cpu_decoded(item.path, mask_params).squeeze(0);
                         used_gpu = true;
                     }
-                    if (item.mask_source_promise) {
+                    if (item.mask_source_promise && used_gpu) {
                         if (!aux_tensor.is_valid() || aux_tensor.ndim() != 2)
                             throw std::runtime_error("Mask preprocessing produced an invalid tensor");
                         const int src_h = static_cast<int>(aux_tensor.shape()[0]);
@@ -3404,10 +3407,16 @@ namespace lfs::io {
                     std::optional<MaskedImageFill> fill;
                     if (item.fill_masked_rgb && (item.rgb_mask_path || item.rgb_mask)) {
                         lfs::core::Tensor mask;
+                        auto mask_extension = item.rgb_mask_path ? item.rgb_mask_path->extension().string() : std::string{};
+                        std::transform(mask_extension.begin(), mask_extension.end(), mask_extension.begin(), [](unsigned char ch) {
+                            return static_cast<char>(std::tolower(ch));
+                        });
+                        const bool tiff_sidecar = mask_extension == ".tif" || mask_extension == ".tiff";
+                        const bool from_sidecar = !item.rgb_mask || item.rgb_mask_source.valid();
                         if (item.rgb_mask)
                             mask = *item.rgb_mask;
                         else {
-                            if (is_nvcodec_available()) {
+                            if (is_nvcodec_available() && !tiff_sidecar) {
                                 try {
                                     const NvcodecSlotGuard slot;
                                     mask = nvcodec->load_image_gpu(*item.rgb_mask_path, 1, 0, nullptr, DecodeFormat::Mask);
@@ -3418,6 +3427,8 @@ namespace lfs::io {
                             if (!mask.is_valid())
                                 mask = load_mask_image_cpu_decoded(*item.rgb_mask_path, {}).squeeze(0);
                         }
+                        if (from_sidecar && tiff_sidecar && mask.dtype() == lfs::core::DataType::Float32)
+                            mask = lfs::core::cuda::mask_values_to_byte_grid(mask);
                         fill.emplace(MaskedImageFill{.mask = std::move(mask), .invert = item.mask_params.invert, .threshold = item.mask_params.threshold, .keep_high_band = item.mask_keep_high_band, .resize_factor = item.params.resize_factor, .max_width = item.params.max_width});
                         item.params.masked_fill = &*fill;
                     }
