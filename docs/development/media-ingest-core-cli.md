@@ -179,6 +179,9 @@ metadata API or a second manifest. Consumers should tolerate additional keys.
   relative-seconds calculation, which uses zero when the stream start is absent.
 - Each frame's `source_pts` is the original integer timestamp, or `null` when
   absent. `timestamp_origin` is `best_effort`, `presentation`, or `missing`.
+  Relative seconds are calculated by subtracting the stream origin in ticks
+  before scaling. This preserves the first frame and FPS sampling boundaries
+  when the stream starts at a nonzero timestamp, including native decoding.
   Missing source timing is not replaced with a synthetic integer PTS. The legacy
   `timestamp` remains the extraction's relative seconds; `source_frame` remains
   its legacy nominal-rate-derived number, not a decoded ordinal. The timebase is

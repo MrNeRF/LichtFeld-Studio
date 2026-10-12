@@ -178,13 +178,17 @@ namespace lfs::io {
                                                    const double time_base,
                                                    const int frame_index,
                                                    const double fallback_fps,
-                                                   const double stream_start_seconds) {
+                                                   const int64_t stream_start_timestamp) {
             int64_t timestamp = frame->best_effort_timestamp;
             if (timestamp == AV_NOPTS_VALUE)
                 timestamp = frame->pts;
             if (timestamp != AV_NOPTS_VALUE && std::isfinite(time_base) && time_base > 0.0)
-                return static_cast<double>(timestamp) * time_base -
-                       stream_start_seconds;
+                // Subtract in ticks before scaling: fused multiply/subtract
+                // can otherwise turn the first frame into a negative epsilon.
+                // Widen first so opposite-sign int64 timestamps cannot overflow.
+                return static_cast<double>((static_cast<long double>(timestamp) -
+                                            static_cast<long double>(stream_start_timestamp)) *
+                                           time_base);
             return static_cast<double>(frame_index) / std::max(fallback_fps, 0.001);
         }
 
@@ -1207,8 +1211,6 @@ namespace lfs::io {
 
                 const int64_t stream_start_timestamp =
                     video_stream->start_time == AV_NOPTS_VALUE ? 0 : video_stream->start_time;
-                const double stream_start_seconds =
-                    static_cast<double>(stream_start_timestamp) * time_base;
                 const auto stream_timestamp_for_time =
                     [&](const double seconds) {
                         const long double timestamp =
@@ -1992,7 +1994,7 @@ namespace lfs::io {
                 const auto process_sequential_frame = [&](AVFrame* const decoded_frame) {
                     const double frame_time = frameTimestampSeconds(
                         decoded_frame, time_base, decoded_frame_count - 1,
-                        video_fps, stream_start_seconds);
+                        video_fps, stream_start_timestamp);
                     if (frame_time < start_time)
                         return false;
                     const bool past_end =
@@ -2143,9 +2145,9 @@ namespace lfs::io {
                                 throw std::runtime_error(error);
                             }
 
-                            const double frame_time =
-                                static_cast<double>(timestamp) * time_base -
-                                stream_start_seconds;
+                            const double frame_time = frameTimestampSeconds(
+                                frame, time_base, decoded_frame_count - 1,
+                                video_fps, stream_start_timestamp);
                             if (first_frame_after_seek) {
                                 observed_seek_preroll = std::max(0.0, target_time - frame_time);
                                 first_frame_after_seek = false;

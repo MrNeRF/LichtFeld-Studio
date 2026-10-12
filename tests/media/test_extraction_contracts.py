@@ -545,6 +545,47 @@ class ExtractionContracts(unittest.TestCase):
                     self.assertTrue((output / frame["file"]).is_file())
                 self.assertEqual(json.loads(json.dumps(manifest)), manifest)
 
+    def test_offset_h264_keeps_first_frame_and_exact_sampling_boundaries(self):
+        source = self.root / "offset-h264.mp4"
+        subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+                        "testsrc2=size=128x96:rate=30:duration=2", "-vf", "setpts=PTS+2/TB",
+                        "-c:v", "libx264", "-bf", "3", "-pix_fmt", "yuv420p", str(source)],
+                       check=True, capture_output=True)
+        reference = json.loads(subprocess.check_output([
+            FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_frames", "-of", "json", str(source)]))
+        for options, indices in (({"interval": 1}, list(range(31))),
+                                 ({"mode": "fps", "fps": 5}, [0, 6, 12, 18, 24])):
+            with self.subTest(options=options):
+                result, output = self.extract(input=str(source), end=1, **options)
+                self.completed(result)
+                frames = self.metadata(output)["frames"]
+                self.assertEqual([frame["source_pts"] for frame in frames],
+                                 [int(reference["frames"][i]["best_effort_timestamp"]) for i in indices])
+                self.assertEqual(frames[0]["timestamp"], 0)
+
+    def test_manifest_identifies_video_after_audio_and_ignores_second_video(self):
+        source = self.root / "multiple-streams.mkv"
+        subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+                        "sine=frequency=440:duration=1", "-i", str(self.corpus / "cfr-asymmetric.nut"),
+                        "-f", "lavfi", "-i", "color=red:size=96x64:rate=10:duration=1",
+                        "-map", "0:a", "-map", "1:v", "-map", "2:v", "-c:a", "pcm_s16le",
+                        "-c:v", "ffv1", str(source)], check=True, capture_output=True)
+        reference = json.loads(subprocess.check_output([
+            FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_streams",
+            "-show_frames", "-of", "json", str(source)]))
+        stream = reference["streams"][0]
+        self.assertEqual(stream["index"], 1)
+        result, output = self.extract(input=str(source))
+        self.completed(result)
+        self.assert_frames(output, [0, 1, 2, 3])
+        manifest = self.metadata(output)
+        self.assertEqual(manifest["source_size"], [64, 32])
+        self.assertEqual(manifest["input"]["video"]["stream_index"], 1)
+        self.assertEqual(manifest["input"]["video"]["time_base"],
+                         [int(part) for part in stream["time_base"].split("/")])
+        self.assertEqual([frame["source_pts"] for frame in manifest["frames"]],
+                         [int(frame["best_effort_timestamp"]) for frame in reference["frames"][:4]])
+
     def test_manifest_does_not_invent_missing_source_pts(self):
         elementary = self.root / "missing-pts.m2v"
         source = self.root / "missing-pts.avi"

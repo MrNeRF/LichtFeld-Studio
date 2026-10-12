@@ -47,6 +47,43 @@ class StudioBackends(unittest.TestCase):
         self.assertTrue(actual["cuda_diagnostics"])
         return actual,output
 
+    def test_native_manifest_preserves_offset_reordered_pts(self):
+        source = self.root / "offset-reordered.mkv"
+        subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+                        "sine=frequency=440:duration=4", "-itsoffset", "2", "-f", "lavfi", "-i",
+                        "testsrc2=size=128x96:rate=30:duration=4", "-map", "0:a", "-map", "1:v",
+                        "-c:a", "pcm_s16le", "-c:v", "libx264", "-bf", "3", "-g", "120",
+                        "-pix_fmt", "yuv420p", str(source)], check=True, timeout=30)
+        reference = json.loads(subprocess.check_output([
+            FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_streams",
+            "-show_frames", "-of", "json", str(source)]))
+        stream = reference["streams"][0]
+        self.assertEqual(stream["index"], 1)
+        self.assertTrue(any(frame["pict_type"] == "B" for frame in reference["frames"]))
+        for options in ({}, {"fps": 2}):
+            with self.subTest(options=options):
+                _, output = self.invoke(input=str(source), end_seconds=3, **options)
+                manifest = json.loads((output / "extraction_metadata.json").read_text())
+                self.assertIn("nvdec", json.dumps(manifest))
+                timing = manifest["input"]["video"]
+                self.assertEqual(timing["stream_index"], 1)
+                self.assertGreater(timing["start_pts"], 0)
+                self.assertEqual(timing["time_base"], [int(p) for p in stream["time_base"].split("/")])
+                expected = {int(frame["best_effort_timestamp"]) for frame in reference["frames"]}
+                self.assertTrue(manifest["frames"])
+                self.assertEqual(manifest["frames"][0]["source_pts"],
+                                 int(reference["frames"][0]["best_effort_timestamp"]))
+                self.assertEqual(manifest["frames"][0]["timestamp"], 0)
+                if "fps" in options:
+                    self.assertEqual([frame["timestamp"] for frame in manifest["frames"]],
+                                     [0, .5, 1, 1.5, 2, 2.5])
+                for frame in manifest["frames"]:
+                    self.assertIn(frame["source_pts"], expected)
+                    self.assertEqual(frame["timestamp_origin"], "best_effort")
+                    seconds = ((frame["source_pts"] - timing["relative_origin_pts"])
+                               * timing["time_base"][0] / timing["time_base"][1])
+                    self.assertAlmostEqual(frame["timestamp"], seconds, places=6)
+
     def test_shared_player_uses_native_decode_and_seeks(self):
         actual, _ = self.invoke(operation="native-preview")
         self.assertTrue(actual["hardware_decode"])
