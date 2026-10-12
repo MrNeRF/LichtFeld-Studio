@@ -166,6 +166,8 @@ This is per-file publication, not an atomic transaction of a whole sequence,
 a checkpoint/resume protocol or a power-loss durability guarantee. Once a
 manifest is published, later cancellation cannot undo that commit.
 
+## Verification
+
 Configure the application with its existing preset/toolchain and enable
 `BUILD_TESTS`, `BUILD_FORMAT_TESTS` or `BUILD_VISUALIZER_TESTS`. The root
 `media_contracts` target builds the production consumers and media test runners.
