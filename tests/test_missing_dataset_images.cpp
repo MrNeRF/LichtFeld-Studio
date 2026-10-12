@@ -363,6 +363,37 @@ TEST_F(MissingDatasetImagesTest, TransformsLoadsWhenOneImageIsMissing) {
     ASSERT_NO_FATAL_FAILURE(expect_partial_missing(scene->cameras, result->warnings, "missing.png", "present.png"));
 }
 
+TEST_F(MissingDatasetImagesTest, TransformsImagePathResolvesUppercasePngWithoutExtension) {
+    const fs::path dataset_dir = temp_dir_ / "uppercase_png";
+    write_text_file(dataset_dir / "images_8/frame-one.PNG", "image");
+    write_text_file(dataset_dir / "images_8/frame-two.PNG", "image");
+
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "images_8/frame-one"),
+              dataset_dir / "images_8/frame-one.PNG");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "images_8/frame-two"),
+              dataset_dir / "images_8/frame-two.PNG");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "images_8\\frame-one"),
+              dataset_dir / "images_8/frame-one.PNG");
+}
+
+TEST_F(MissingDatasetImagesTest, TransformsImagePathKeepsExistingResolutionPrecedence) {
+    const fs::path dataset_dir = temp_dir_ / "path_precedence";
+    write_text_file(dataset_dir / "frame", "image");
+    write_text_file(dataset_dir / "frame.png", "image");
+    write_text_file(dataset_dir / "frame.PNG", "image");
+    write_text_file(dataset_dir / "images/frame", "image");
+    write_text_file(dataset_dir / "photo.JPG", "image");
+
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "frame"), dataset_dir / "images/frame");
+    fs::remove(dataset_dir / "images/frame");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "frame"), dataset_dir / "frame.png");
+    fs::remove(dataset_dir / "frame.png");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "frame"), dataset_dir / "frame");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "frame.PNG"), dataset_dir / "frame.PNG");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "photo"), dataset_dir / "photo");
+    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "missing"), dataset_dir / "missing");
+}
+
 TEST_F(MissingDatasetImagesTest, TransformsAllMissingFails) {
     const fs::path dataset_dir = temp_dir_ / "transforms_all_missing";
     write_transforms(dataset_dir, {"missing_a.png", "missing_b.png"});

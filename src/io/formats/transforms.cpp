@@ -235,6 +235,13 @@ namespace lfs::io {
                 // blender data set has not extension, must assumes png
                 image_path = image_path_png;
                 LOG_TRACE("Using PNG extension for image: {}", lfs::core::path_to_utf8(image_path));
+            } else if (!file_path.has_extension() && !std::filesystem::exists(image_path)) {
+                auto image_path_upper_png = image_path;
+                image_path_upper_png += ".PNG";
+                if (std::filesystem::exists(image_path_upper_png)) {
+                    image_path = image_path_upper_png;
+                    LOG_TRACE("Using PNG extension for image: {}", lfs::core::path_to_utf8(image_path));
+                }
             }
             if (std::filesystem::exists(images_image_path) && std::filesystem::is_regular_file(images_image_path)) {
                 image_path = images_image_path;
