@@ -3151,5 +3151,7 @@
   "runtime.import_out_of_memory": "Onvoldoende GPU-geheugen",
   "runtime.import_batch_kept": "De overige bestanden zijn geladen en blijven beschikbaar in de scène.",
   "runtime.import_render_failed": "Dit bestand kon niet worden voorbereid voor weergave",
-  "training.iterations_must_exceed_current": "Het maximale aantal iteraties moet hoger zijn dan de huidige trainingsstap."
+  "training.iterations_must_exceed_current": "Het maximale aantal iteraties moet hoger zijn dan de huidige trainingsstap.",
+  "runtime.camera_fov_out_of_range": "fov_degrees moet eindig zijn, groter dan 0 en kleiner dan 180 graden",
+  "runtime.camera_fov_clamped": "De aangevraagde fov_degrees is begrensd op {:.2f} graden"
 }

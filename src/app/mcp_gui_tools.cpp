@@ -2920,6 +2920,8 @@ namespace lfs::app {
                 });
             });
 
+        const float camera_fov_min = lfs::rendering::focalLengthToVFov(lfs::rendering::MAX_FOCAL_LENGTH_MM);
+        const float camera_fov_max = lfs::rendering::focalLengthToVFov(lfs::rendering::MIN_FOCAL_LENGTH_MM);
         registry.register_tool(
             McpTool{
                 .name = "camera.set_view",
@@ -2932,7 +2934,7 @@ namespace lfs::app {
                         {"up", number_array_schema(3, "Optional up vector [x,y,z], defaults to [0,1,0]")},
                         {"fov_degrees", json{{"type", "number"}, {"description", "Optional vertical field of view in degrees"}}}},
                     .required = {"eye", "target"}}},
-            [viewer_impl](const json& args) -> json {
+            [viewer_impl, camera_fov_min, camera_fov_max](const json& args) -> json {
                 auto eye = optional_vec3_arg(args, "eye");
                 if (!eye)
                     return mcp::invalid_argument_result(eye.error(), "eye");
@@ -2948,11 +2950,19 @@ namespace lfs::app {
                     return mcp::invalid_argument_result(*error, "eye");
 
                 const glm::vec3 up_value = up->value_or(glm::vec3(0.0f, 1.0f, 0.0f));
-                const std::optional<float> fov = args.contains("fov_degrees")
-                                                     ? std::optional<float>(args["fov_degrees"].get<float>())
-                                                     : std::nullopt;
+                std::optional<float> fov;
+                bool fov_was_clamped = false;
+                if (args.contains("fov_degrees")) {
+                    const float requested_fov = args["fov_degrees"].get<float>();
+                    if (!std::isfinite(requested_fov) || requested_fov <= 0.0f || requested_fov >= 180.0f) {
+                        return mcp::invalid_argument_result(
+                            LOC("runtime.camera_fov_out_of_range"), "fov_degrees");
+                    }
+                    fov_was_clamped = requested_fov < camera_fov_min || requested_fov > camera_fov_max;
+                    fov = std::clamp(requested_fov, camera_fov_min, camera_fov_max);
+                }
 
-                return post_and_wait(viewer_impl, [eye = **eye, target = **target, up_value, fov]() -> json {
+                return post_and_wait(viewer_impl, [eye = **eye, target = **target, up_value, fov, fov_was_clamped]() -> json {
                     vis::apply_set_view(vis::SetViewParams{
                         .eye = {eye.x, eye.y, eye.z},
                         .target = {target.x, target.y, target.z},
@@ -2962,9 +2972,14 @@ namespace lfs::app {
                         vis::apply_set_fov(*fov);
 
                     const auto info = vis::get_current_view_info();
-                    if (!info)
-                        return json{{"success", true}};
-                    return view_info_json(*info);
+                    json result = info ? view_info_json(*info) : json{{"success", true}};
+                    if (fov) {
+                        result["fov_degrees"] = *fov;
+                        result["fov_clamped"] = fov_was_clamped;
+                        if (fov_was_clamped)
+                            result["warning"] = LOCF("runtime.camera_fov_clamped", *fov);
+                    }
+                    return result;
                 });
             });
 

@@ -3151,5 +3151,7 @@
   "runtime.import_out_of_memory": "GPU メモリが不足しています",
   "runtime.import_batch_kept": "他のファイルは読み込まれており、引き続きシーンで使用できます。",
   "runtime.import_render_failed": "このファイルを描画する準備ができませんでした",
-  "training.iterations_must_exceed_current": "最大反復回数は現在の学習ステップより大きくする必要があります。"
+  "training.iterations_must_exceed_current": "最大反復回数は現在の学習ステップより大きくする必要があります。",
+  "runtime.camera_fov_out_of_range": "fov_degrees は有限値で、0 度より大きく 180 度より小さい値にしてください",
+  "runtime.camera_fov_clamped": "指定された fov_degrees は {:.2f} 度に制限されました"
 }

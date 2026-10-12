@@ -3151,5 +3151,7 @@
   "runtime.import_out_of_memory": "GPU 显存不足",
   "runtime.import_batch_kept": "其他文件已加载，仍可在场景中使用。",
   "runtime.import_render_failed": "无法准备此文件以进行渲染",
-  "training.iterations_must_exceed_current": "最大迭代次数必须大于当前训练步数。"
+  "training.iterations_must_exceed_current": "最大迭代次数必须大于当前训练步数。",
+  "runtime.camera_fov_out_of_range": "fov_degrees 必须是有限值，且大于 0 度、小于 180 度",
+  "runtime.camera_fov_clamped": "请求的 fov_degrees 已限制为 {:.2f} 度"
 }

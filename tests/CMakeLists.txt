@@ -1421,6 +1421,18 @@ add_test(NAME lichtfeld.python.point_cloud_lifetime
 )
 
 if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
+    add_test(NAME lichtfeld.python.camera_set_view_validation
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_camera_set_view_validation.py
+    )
+    set_tests_properties(lichtfeld.python.camera_set_view_validation PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
+    )
+
     add_test(NAME lichtfeld.python.scene_export_path
         COMMAND ${Python_EXECUTABLE} -m pytest -q
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scene_export_path_runtime.py
