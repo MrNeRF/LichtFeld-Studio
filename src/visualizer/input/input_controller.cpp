@@ -1781,14 +1781,22 @@ namespace lfs::vis {
             return;
 
         const auto tool_mode = getCurrentToolMode();
-        const int printed_punctuation = (mods & input::MODIFIER_SHIFT) != 0 && scancode > 0
-                                            ? input::sdlPrintedPunctuationToAppKey(
-                                                  SDL_GetKeyFromScancode(
-                                                      static_cast<SDL_Scancode>(scancode),
-                                                      SDL_KMOD_SHIFT, false))
-                                            : input::KEY_UNKNOWN;
+        SDL_Keymod sdl_modifiers = SDL_KMOD_NONE;
+        if (mods & input::MODIFIER_SHIFT)
+            sdl_modifiers |= SDL_KMOD_SHIFT;
+        const auto key_scancode = static_cast<SDL_Scancode>(scancode);
+        const auto printed_keycode = scancode > 0
+                                         ? SDL_GetKeyFromScancode(key_scancode, sdl_modifiers, false)
+                                         : SDLK_UNKNOWN;
+        const auto unshifted_keycode = scancode > 0
+                                           ? SDL_GetKeyFromScancode(key_scancode, SDL_KMOD_NONE, false)
+                                           : SDLK_UNKNOWN;
+        const int printed_punctuation = input::sdlPrintedKeyToAppKey(printed_keycode);
+        const bool shift_needed_for_printed_key =
+            (mods & input::MODIFIER_SHIFT) != 0 && printed_keycode != unshifted_keycode;
         auto bound_action = bindings_.getActionForShortcut(
-            tool_mode, physical_key, logical_key, mods, printed_punctuation);
+            tool_mode, physical_key, logical_key, mods, printed_punctuation,
+            shift_needed_for_printed_key);
         if (bound_action == input::Action::NONE) {
             bound_action = resolveCrossToolActivationShortcut(
                 bindings_, tool_mode, physical_key, logical_key, mods);

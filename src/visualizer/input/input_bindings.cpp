@@ -1332,6 +1332,38 @@ namespace lfs::vis::input {
     Action InputBindings::getActionForShortcut(const ToolMode mode, const int physical_key,
                                                const int logical_key, const int modifiers,
                                                const int printed_punctuation) const {
+        return getActionForShortcut(mode, physical_key, logical_key, modifiers,
+                                    printed_punctuation, false);
+    }
+
+    Action InputBindings::getActionForShortcut(const ToolMode mode, const int physical_key,
+                                               const int logical_key, const int modifiers,
+                                               const int printed_punctuation,
+                                               const bool shift_needed_for_printed_key) const {
+        // Try the exact printed chord before a number-row position. When Shift
+        // changes the produced symbol, retry without that layout-only Shift if
+        // no exact printed chord is bound (for example, Ctrl+4 on AZERTY).
+        if (printed_punctuation != KEY_UNKNOWN) {
+            if (const auto action = getActionForKey(mode, printed_punctuation, modifiers);
+                action != Action::NONE)
+                return action;
+            if (shift_needed_for_printed_key) {
+                if (const auto action = getActionForKey(
+                        mode, printed_punctuation, modifiers & ~MODIFIER_SHIFT);
+                    action != Action::NONE)
+                    return action;
+            }
+        }
+        // A non-number-row position may print a digit on another layout.
+        // Digit shortcuts reserve the physical top row, so that glyph must
+        // not hide a punctuation binding at this position.
+        if (physical_key != KEY_UNKNOWN && physical_key != logical_key &&
+            logical_key >= KEY_0 && logical_key <= KEY_9 &&
+            !(physical_key >= KEY_0 && physical_key <= KEY_9)) {
+            if (const auto action = getActionForKey(mode, physical_key, modifiers);
+                action != Action::NONE)
+                return action;
+        }
         if (logical_key != KEY_UNKNOWN) {
             if (const auto action = getActionForKey(mode, logical_key, modifiers);
                 action != Action::NONE)
@@ -1341,13 +1373,6 @@ namespace lfs::vis::input {
             if (const auto action = getActionForKey(mode, physical_key, modifiers);
                 action != Action::NONE)
                 return action;
-        }
-        // When Shift is needed to print the symbol shown in a shortcut, the
-        // layout's Shift is part of typing that symbol. Exact Shift shortcuts
-        // above keep precedence over this printed-character fallback.
-        if ((modifiers & MODIFIER_SHIFT) != 0 && printed_punctuation != KEY_UNKNOWN) {
-            return getActionForKey(mode, printed_punctuation,
-                                   modifiers & ~MODIFIER_SHIFT);
         }
         return Action::NONE;
     }

@@ -218,6 +218,27 @@ namespace lfs::vis::input {
         }
     }
 
+    int sdlPrintedKeyToAppKey(const SDL_Keycode keycode) {
+        const int key = sdlKeycodeToAppKey(keycode);
+        if (key >= KEY_0 && key <= KEY_9)
+            return key;
+        switch (key) {
+        case KEY_APOSTROPHE:
+        case KEY_COMMA:
+        case KEY_MINUS:
+        case KEY_PERIOD:
+        case KEY_SLASH:
+        case KEY_SEMICOLON:
+        case KEY_EQUAL:
+        case KEY_LEFT_BRACKET:
+        case KEY_BACKSLASH:
+        case KEY_RIGHT_BRACKET:
+        case KEY_GRAVE_ACCENT:
+            return key;
+        default: return KEY_UNKNOWN;
+        }
+    }
+
     int sdlModsToAppMods(SDL_Keymod sdl_mods) {
         int mods = KEYMOD_NONE;
         if (sdl_mods & SDL_KMOD_SHIFT)

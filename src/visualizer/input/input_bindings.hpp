@@ -317,6 +317,9 @@ namespace lfs::vis::input {
                                     int modifiers) const;
         Action getActionForShortcut(ToolMode mode, int physical_key, int logical_key,
                                     int modifiers, int printed_punctuation) const;
+        Action getActionForShortcut(ToolMode mode, int physical_key, int logical_key,
+                                    int modifiers, int printed_punctuation,
+                                    bool shift_needed_for_printed_key) const;
         Action getActionForMouseButton(ToolMode mode, MouseButton button, int modifiers, bool is_double_click = false) const;
         // held_keys: non-modifier keys currently held in press order; chord lookup
         // checks newest first (e.g. R+Scroll for Camera Roll). Pass an empty list
