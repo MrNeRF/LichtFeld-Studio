@@ -545,6 +545,32 @@ class ExtractionContracts(unittest.TestCase):
                     self.assertTrue((output / frame["file"]).is_file())
                 self.assertEqual(json.loads(json.dumps(manifest)), manifest)
 
+    def test_manifest_does_not_invent_missing_source_pts(self):
+        elementary = self.root / "missing-pts.m2v"
+        source = self.root / "missing-pts.avi"
+        subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+                        "testsrc2=size=64x32:rate=10:duration=1", "-c:v", "mpeg2video",
+                        "-b:v", "2M", "-f", "mpeg2video", str(elementary)], check=True, capture_output=True)
+        # AVI supplies a known duration; the decoder's final delayed frame
+        # has neither best-effort nor presentation PTS. Set the container
+        # rate explicitly rather than inheriting the raw parser's guess.
+        subprocess.run([FFMPEG, "-v", "error", "-i", str(elementary),
+                        "-c", "copy", "-r", "10", str(source)], check=True, capture_output=True)
+        reference = json.loads(subprocess.check_output([
+            FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_frames", "-of", "json", str(source)]))
+        self.assertNotIn("best_effort_timestamp", reference["frames"][-1])
+        self.assertNotIn("pts", reference["frames"][-1])
+        result, output = self.extract(input=str(source), interval=3, end=1)
+        self.completed(result)
+        frames = self.metadata(output)["frames"]
+        self.assertEqual(len(frames), 4)
+        for selected, decoded_index in zip(frames[:-1], (0, 3, 6)):
+            self.assertEqual(selected["source_pts"], int(reference["frames"][decoded_index]["best_effort_timestamp"]))
+            self.assertEqual(selected["timestamp_origin"], "best_effort")
+        self.assertIsNone(frames[-1]["source_pts"])
+        self.assertEqual(frames[-1]["timestamp_origin"], "missing")
+        self.assertAlmostEqual(frames[-1]["timestamp"], .9, places=6)
+
     def test_fps_sampling_selects_requested_times(self):
         result, output = self.extract(mode="fps", fps=5)
         self.completed(result)

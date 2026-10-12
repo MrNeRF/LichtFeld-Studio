@@ -193,6 +193,11 @@ remain authoritative. No projection, vendor metadata or unknown calibration is
 inferred. These additions use the shared extractor for legacy, CLI, Python and
 host file extraction; custom in-memory sinks retain their existing `FrameInfo`.
 Manifest publication and overwrite policies are unchanged.
+When metadata is requested, publication failure is terminal rather than a
+best-effort warning; already published images are not rolled back. PNG/JPEG
+metadata is opt-in, while EXR retains its mandatory manifest and explicit
+overwrite policy. Verified replay and missing-image reconstruction retain the
+same selected source timestamps as uninterrupted extraction.
 
 ## Verified image-sequence resume
 

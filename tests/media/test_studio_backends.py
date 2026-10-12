@@ -186,11 +186,19 @@ class StudioBackends(unittest.TestCase):
                 self.assertEqual(metadata["performance"]["selected_frames"], 4 * fps)
                 probe = json.loads(subprocess.check_output([
                     FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_frames",
-                    "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", str(self.source)]))
+                    "-show_streams", "-show_entries", "frame=best_effort_timestamp_time,best_effort_timestamp:stream=index,time_base,start_pts",
+                    "-of", "json", str(self.source)]))
                 timestamps = [float(frame["best_effort_timestamp_time"]) for frame in probe["frames"]]
+                source_pts = {float(frame["best_effort_timestamp_time"]): int(frame["best_effort_timestamp"])
+                              for frame in probe["frames"]}
+                timing = metadata["input"]["video"]
+                self.assertEqual(timing["stream_index"], probe["streams"][0]["index"])
+                self.assertEqual(timing["time_base"], [int(part) for part in probe["streams"][0]["time_base"].split("/")])
                 for index, frame in enumerate(metadata["frames"]):
                     expected = next(value for value in timestamps if value + 1e-7 >= index / fps)
                     self.assertAlmostEqual(frame["timestamp"], expected, places=6)
+                    self.assertEqual(frame["source_pts"], source_pts[expected])
+                    self.assertEqual(frame["timestamp_origin"], "best_effort")
                 if label == "long":
                     self.assertLessEqual(metadata["performance"]["decoded_frames"], 150)
                 if label == "short":
