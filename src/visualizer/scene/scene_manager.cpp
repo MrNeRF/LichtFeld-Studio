@@ -6051,6 +6051,12 @@ namespace lfs::vis {
     }
 
 #if LFS_BUILD_TRAINER
+    void SceneManager::setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp) {
+        // Construct the default controller where its type is complete, rather
+        // than in every translation unit that includes scene_manager.hpp.
+        setAppearanceModel(std::move(ppisp), nullptr, false);
+    }
+
     void SceneManager::setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
                                           std::unique_ptr<lfs::training::PPISPControllerPool> controller,
                                           const bool training_viewport) {

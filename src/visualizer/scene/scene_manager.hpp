@@ -353,8 +353,9 @@ namespace lfs::vis {
 
         void setAppearanceModel(std::unique_ptr<AppearanceTensorModel> model);
 #if LFS_BUILD_TRAINER
+        void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp);
         void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
-                                std::unique_ptr<lfs::training::PPISPControllerPool> controller = nullptr,
+                                std::unique_ptr<lfs::training::PPISPControllerPool> controller,
                                 bool training_viewport = false);
         [[nodiscard]] lfs::training::PPISP* getAppearancePPISP() { return appearance_ppisp_.get(); }
         [[nodiscard]] lfs::training::PPISPControllerPool* getAppearanceControllerPool() { return appearance_controller_pool_.get(); }
