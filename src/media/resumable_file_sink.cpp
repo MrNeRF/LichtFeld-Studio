@@ -9,11 +9,10 @@
 #include <array>
 #include <fstream>
 #include <memory>
+#include <openssl/evp.h>
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
-#include <libavutil/mem.h>
-#include <libavutil/sha.h>
 }
 
 namespace lfs::media::detail {
@@ -36,17 +35,20 @@ namespace lfs::media::detail {
             return {};
         }
         struct Sha256 {
-            std::unique_ptr<AVSHA, decltype(&av_free)> context{av_sha_alloc(), av_free};
+            std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context{EVP_MD_CTX_new(), EVP_MD_CTX_free};
             Sha256() {
-                if (!context || av_sha_init(context.get(), 256) != 0)
+                if (!context || EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1)
                     throw std::runtime_error("Could not initialize checkpoint SHA-256");
             }
             void update(std::span<const std::uint8_t> bytes) {
-                av_sha_update(context.get(), bytes.data(), bytes.size());
+                if (EVP_DigestUpdate(context.get(), bytes.data(), bytes.size()) != 1)
+                    throw std::runtime_error("Could not update checkpoint SHA-256");
             }
             std::string finish() {
                 std::array<std::uint8_t, 32> digest{};
-                av_sha_final(context.get(), digest.data());
+                unsigned int size = 0;
+                if (EVP_DigestFinal_ex(context.get(), digest.data(), &size) != 1 || size != digest.size())
+                    throw std::runtime_error("Could not finalize checkpoint SHA-256");
                 constexpr char hex[] = "0123456789abcdef";
                 std::string result;
                 result.reserve(64);

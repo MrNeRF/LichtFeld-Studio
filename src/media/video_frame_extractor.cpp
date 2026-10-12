@@ -355,7 +355,7 @@ namespace lfs::io {
             }
             if (!timestamps_available)
                 return {false, "timestamps_unavailable"};
-            return {true, "sparse_fps_keyframe_seek"};
+            return {true, "sparse_fps_adaptive_keyframe_seek"};
         }
 
         void write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
@@ -2069,34 +2069,50 @@ namespace lfs::io {
 
                 bool sparse_seek_fallback = false;
                 if (use_sparse_keyframe_seek) {
+                    double observed_seek_preroll = 0.0;
                     for (std::size_t target_index = 0;
                          target_index < fps_target_count; ++target_index) {
                         throw_if_cancelled();
                         const double target_time = fpsSampleTime(
                             start_time, end_time, target_fps, target_index);
-                        const int64_t target_timestamp =
-                            stream_timestamp_for_time(target_time);
-                        const int seek_result = av_seek_frame(
-                            fmt_ctx, video_stream_idx, target_timestamp,
-                            AVSEEK_FLAG_BACKWARD);
-                        if (seek_result < 0) {
-                            LOG_WARN(
-                                "Sparse extraction seek failed at {:.6f}s ({}); "
-                                "continuing sequentially",
-                                target_time, ffmpegError(seek_result));
-                            sparse_seek_fallback = true;
-                            frame_selection_reason =
-                                "sparse_seek_failed_sequential_fallback";
-                            next_capture_time = target_time;
-                            break;
+                        // Keep decoding when reaching the next target costs no
+                        // more than the preroll observed after the previous seek.
+                        // Seeking repeatedly into a long GOP otherwise decodes
+                        // the same prefix for every selected frame.
+                        const bool seek_to_target = !has_retained_frame ||
+                                                    target_time - retained_frame_time >
+                                                        observed_seek_preroll + 1.0 / video_fps;
+                        if (!seek_to_target && retained_frame_time >= target_time &&
+                            retained_frame_time < end_time) {
+                            process_selected_frame(sparse_previous_frame, retained_frame_time);
+                            continue;
                         }
+                        if (seek_to_target) {
+                            const int64_t target_timestamp =
+                                stream_timestamp_for_time(target_time);
+                            const int seek_result = av_seek_frame(
+                                fmt_ctx, video_stream_idx, target_timestamp,
+                                AVSEEK_FLAG_BACKWARD);
+                            if (seek_result < 0) {
+                                LOG_WARN(
+                                    "Sparse extraction seek failed at {:.6f}s ({}); "
+                                    "continuing sequentially",
+                                    target_time, ffmpegError(seek_result));
+                                sparse_seek_fallback = true;
+                                frame_selection_reason =
+                                    "sparse_seek_failed_sequential_fallback";
+                                next_capture_time = target_time;
+                                break;
+                            }
 
-                        ++keyframe_seek_count;
-                        avcodec_flush_buffers(codec_ctx);
-                        decoder_pump.resetAfterSeek();
-                        av_frame_unref(sparse_previous_frame);
-                        has_retained_frame = false;
+                            ++keyframe_seek_count;
+                            avcodec_flush_buffers(codec_ctx);
+                            decoder_pump.resetAfterSeek();
+                            av_frame_unref(sparse_previous_frame);
+                            has_retained_frame = false;
+                        }
                         bool found_target = false;
+                        bool first_frame_after_seek = seek_to_target;
 
                         while (!found_target) {
                             throw_if_cancelled();
@@ -2130,6 +2146,10 @@ namespace lfs::io {
                             const double frame_time =
                                 static_cast<double>(timestamp) * time_base -
                                 stream_start_seconds;
+                            if (first_frame_after_seek) {
+                                observed_seek_preroll = std::max(0.0, target_time - frame_time);
+                                first_frame_after_seek = false;
+                            }
                             const double frame_duration = frame->duration > 0
                                                               ? static_cast<double>(frame->duration) * time_base
                                                               : 1.0 / video_fps;
