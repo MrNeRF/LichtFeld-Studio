@@ -318,7 +318,6 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
-        test_point_cloud_vulkan_projection.cpp
         test_align_transform.cpp
         test_orthographic_zoom.cpp
         test_ui_visibility_transition.cpp
@@ -342,6 +341,12 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_vram_hud_geometry.cpp
         test_vram_hud_header_click.cpp
     )
+    # Match the renderer sources in src/visualizer: Metal builds (including
+    # Vulkan-graphics/Metal-tensor hybrids) use the Metal scene renderer and
+    # do not compile PointCloudVulkanRenderer.
+    if(NOT LFS_TENSOR_METAL)
+        list(APPEND LICHTFELD_VISUALIZER_TEST_SOURCES test_point_cloud_vulkan_projection.cpp)
+    endif()
     if(NOT LFS_HAS_CUDA)
         # CUDA builds run these in lichtfeld_tests.
         list(APPEND LICHTFELD_VISUALIZER_TEST_SOURCES
