@@ -1212,11 +1212,11 @@ namespace lfs::vis::gui {
             tooltip_.setHover({}, nullptr);
         }
 
-        // Forward keyboard + text input whenever an RmlUi element on this context owns focus
-        // (e.g. the Annotations / Drill-down filter <input>). This must run regardless of
-        // over_interactive, because a text input keeps focus even when the mouse roams away.
+        // Focused scrub fields and selects need keys too, including when the
+        // pointer leaves the overlay. Only text controls request text input.
         if (auto* focused = rml_context_->GetFocusElement()) {
-            if (publishOverlayTextFocus(focused)) {
+            if (publishOverlayTextFocus(focused) ||
+                (keyboard_event && rml_input::hasFocusedKeyboardTarget(focused))) {
                 wants_input_ = true;
                 auto* const handler = rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
                 for (const auto& event : input.input_events) {

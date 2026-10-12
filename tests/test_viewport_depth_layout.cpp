@@ -1,10 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/gui_focus_state.hpp"
+#include "gui/panel_input_utils.hpp"
 #include "gui/rml_viewport_overlay.hpp"
+#include "input/frame_input_buffer.hpp"
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/RenderInterface.h>
+#include <SDL3/SDL_scancode.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -18,6 +22,8 @@ namespace lfs::vis::gui {
     public:
         static void attach(RmlViewportOverlay& overlay, Rml::ElementDocument* document) {
             overlay.document_ = document;
+            overlay.rml_context_ = document->GetContext();
+            overlay.vp_size_ = {920, 840};
             overlay.toolbar_position_preference_dirty_ = false;
         }
         static bool update(RmlViewportOverlay& overlay) { return overlay.updateToolbarRoots(); }
@@ -96,6 +102,53 @@ namespace {
         int width_ = 920;
     };
 
+    struct OverlayKeyListener : Rml::EventListener {
+        int presses = 0;
+        void ProcessEvent(Rml::Event& event) override {
+            ++presses;
+            event.StopPropagation();
+        }
+    };
+
+    TEST_F(ViewportDepthLayoutTest, NonTextControlReceivesEscapeAwayFromPointer) {
+        layout(false);
+        auto* field = panel()->AppendChild(document_->CreateElement("div"));
+        context_->Update();
+        ASSERT_TRUE(field->Focus());
+        OverlayKeyListener listener;
+        document_->AddEventListener("keydown", &listener, true);
+        lfs::vis::gui::guiFocusState() = {};
+        lfs::vis::gui::PanelInputState input{};
+        input.mouse_x = 800;
+        input.mouse_y = 500;
+        input.input_events.push_back({.kind = lfs::vis::FrameInputEventKind::KeyDown,
+                                      .scancode = SDL_SCANCODE_ESCAPE});
+        overlay_.processInput(input);
+        EXPECT_EQ(listener.presses, 1);
+        EXPECT_FALSE(lfs::vis::gui::guiFocusState().want_text_input);
+        document_->RemoveEventListener("keydown", &listener, true);
+    }
+
+    TEST_F(ViewportDepthLayoutTest, TextControlStillReceivesKeysAwayFromPointer) {
+        layout(false);
+        auto* field = panel()->AppendChild(document_->CreateElement("input"));
+        field->SetAttribute("type", "text");
+        context_->Update();
+        ASSERT_TRUE(field->Focus());
+        OverlayKeyListener listener;
+        document_->AddEventListener("keydown", &listener, true);
+        lfs::vis::gui::guiFocusState() = {};
+        lfs::vis::gui::PanelInputState input{};
+        input.mouse_x = 800;
+        input.mouse_y = 500;
+        input.input_events.push_back({.kind = lfs::vis::FrameInputEventKind::KeyDown,
+                                      .scancode = SDL_SCANCODE_A});
+        overlay_.processInput(input);
+        EXPECT_EQ(listener.presses, 1);
+        EXPECT_TRUE(lfs::vis::gui::guiFocusState().want_text_input);
+        document_->RemoveEventListener("keydown", &listener, true);
+    }
+
     TEST_F(ViewportDepthLayoutTest, SplitDepthBarLeavesAxisMarkersReachable) {
         for (const float scale : {1.0f, 1.5f, 2.0f}) {
             SCOPED_TRACE(scale);
@@ -166,6 +219,30 @@ namespace {
                 layout(false, 1.0f, divider, width);
                 EXPECT_FLOAT_EQ(top(), 5);
             }
+        }
+    }
+
+    TEST_F(ViewportDepthLayoutTest, DISABLED_InputPerUpdateCost) {
+        layout(false);
+        auto* field = panel()->AppendChild(document_->CreateElement("div"));
+        context_->Update();
+        ASSERT_TRUE(field->Focus());
+        lfs::vis::gui::PanelInputState input{};
+        input.mouse_x = 800;
+        input.mouse_y = 500;
+        for (const bool drag : {false, true}) {
+            input.mouse_down[0] = drag;
+            std::array<double, 9> timings{};
+            for (auto& elapsed : timings) {
+                const auto start = std::chrono::steady_clock::now();
+                for (int i = 0; i < 20000; ++i) {
+                    lfs::vis::gui::guiFocusState() = {};
+                    overlay_.processInput(input);
+                }
+                elapsed = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / 20000;
+            }
+            std::sort(timings.begin(), timings.end());
+            RecordProperty(drag ? "drag_update_us" : "idle_update_us", std::to_string(timings[4]));
         }
     }
 
