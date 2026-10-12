@@ -31,7 +31,8 @@ namespace lfs::gpu_ops {
         U8HWCToU8CHW,
         U16HWCToU8CHW,
         F32CHWToU8CHW,
-        U8HWToF32HW
+        U8HWToF32HW,
+        NormalPriorF32
     };
     enum class MaskTransform { Invert,
                                Threshold };
