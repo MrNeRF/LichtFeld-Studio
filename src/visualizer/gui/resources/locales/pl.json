@@ -1493,7 +1493,9 @@
     "cannot_open": "Nie można otworzyć"
   },
   "file_drop": {
-    "blocked_during_training": "Zatrzymaj trening przed załadowaniem nowej sceny."
+    "blocked_during_training": "Zatrzymaj trening przed załadowaniem nowej sceny.",
+    "cancelled_by_new_project": "Operacja Nowy projekt anulowała upuszczenie tego pliku. Upuść plik ponownie, aby go wczytać.",
+    "cancelled_by_project_switch": "Upuszczony plik nie został wczytany, ponieważ rozpoczęto operację na projekcie. Upuść go ponownie, aby go wczytać."
   },
   "export_dialog": {
     "folder_name": "Nazwa folderu",

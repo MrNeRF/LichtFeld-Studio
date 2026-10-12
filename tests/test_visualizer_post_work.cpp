@@ -7309,6 +7309,158 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_NE(viewer.getScene().getNode("cancel-current"), nullptr);
     }
 
+    TEST_F(VisualizerImplResetTest, DropDuringNewProjectPromptReportsCancellation) {
+        VisualizerImpl viewer(projectOptions());
+        viewer.getScene().addSplat("previous", lfs::test::licht::make_splat(2));
+        viewer.getSceneManager()->changeContentType(SceneManager::ContentType::SplatFiles);
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        core::ModalRequest request;
+        request.title = "New Project";
+        request.buttons = {{"Continue", "primary"}, {"Cancel", "secondary"}};
+        request.on_result = [](const core::ModalResult& result) {
+            if (result.button_label == "Continue")
+                core::events::cmd::NewProject{.discard_changes = true}.emit();
+        };
+        viewer.getGuiManager()->modalOverlay()->enqueue(std::move(request));
+
+        const auto dropped = makeSplatFixture("dropped");
+        std::vector<core::events::state::SplatFileLoadFailed> failures;
+        core::events::state::SplatFileLoadFailed::when([&](const auto& event) {
+            failures.push_back(event);
+        });
+        controller.handleFileDrop({core::path_to_utf8(dropped)});
+        ASSERT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_EQ(viewer.getScene().getNode("dropped"), nullptr);
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Continue"));
+        ASSERT_EQ(failures.size(), 1u);
+        EXPECT_EQ(failures.front().path, dropped);
+        EXPECT_EQ(failures.front().error, LOC("file_drop.cancelled_by_new_project"));
+        EXPECT_EQ(viewer.getScene().getNode("previous"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("dropped"), nullptr);
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+        const auto modal = viewer.getGuiManager()->modalOverlay()->current();
+        ASSERT_TRUE(modal);
+        EXPECT_EQ(modal->title, LOC(lichtfeld::Strings::ErrorModal::FILE_OPEN_FAILED));
+    }
+
+    TEST_F(VisualizerImplResetTest, MultiFileDropDuringNewProjectPromptReportsEveryFile) {
+        VisualizerImpl viewer(projectOptions());
+        viewer.getScene().addSplat("previous", lfs::test::licht::make_splat(2));
+        viewer.getSceneManager()->changeContentType(SceneManager::ContentType::SplatFiles);
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        core::ModalRequest request;
+        request.title = "New Project";
+        request.buttons = {{"Continue", "primary"}};
+        request.on_result = [](const core::ModalResult&) {
+            core::events::cmd::NewProject{.discard_changes = true}.emit();
+        };
+        viewer.getGuiManager()->modalOverlay()->enqueue(std::move(request));
+
+        const auto first = makeSplatFixture("first-drop");
+        const auto second = makeSplatFixture("second-drop");
+        std::vector<std::filesystem::path> failures;
+        core::events::state::SplatFileLoadFailed::when([&](const auto& event) {
+            failures.push_back(event.path);
+        });
+        controller.handleFileDrop({core::path_to_utf8(first), core::path_to_utf8(second)});
+        ASSERT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Continue"));
+        EXPECT_EQ(failures, (std::vector<std::filesystem::path>{first, second}));
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+        EXPECT_EQ(viewer.getScene().getNode("first-drop"), nullptr);
+        EXPECT_EQ(viewer.getScene().getNode("second-drop"), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, DropDuringCancelledNewProjectPromptLoadsIntoOriginalScene) {
+        VisualizerImpl viewer(projectOptions());
+        viewer.getScene().addSplat("previous", lfs::test::licht::make_splat(2));
+        viewer.getSceneManager()->changeContentType(SceneManager::ContentType::SplatFiles);
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        core::ModalRequest request;
+        request.title = "New Project";
+        request.buttons = {{"Continue", "primary"}, {"Cancel", "secondary"}};
+        request.on_result = [](const core::ModalResult& result) {
+            if (result.button_label == "Continue")
+                core::events::cmd::NewProject{.discard_changes = true}.emit();
+        };
+        viewer.getGuiManager()->modalOverlay()->enqueue(std::move(request));
+
+        controller.handleFileDrop({core::path_to_utf8(makeSplatFixture("dropped"))});
+        ASSERT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Cancel"));
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil([&] {
+            tasks.pollImportCompletion();
+            return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+        }));
+        EXPECT_NE(viewer.getScene().getNode("previous"), nullptr);
+        EXPECT_NE(viewer.getScene().getNode("dropped"), nullptr);
+    }
+
+    TEST_F(VisualizerImplResetTest, DropDuringOpenProjectPromptReportsCancellation) {
+        const auto replacement = temporary_.path / "replacement.licht";
+        write_empty_project(replacement);
+        VisualizerImpl viewer(projectOptions());
+        viewer.getScene().addSplat("previous", lfs::test::licht::make_splat(2));
+        viewer.getSceneManager()->changeContentType(SceneManager::ContentType::SplatFiles);
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        core::ModalRequest request;
+        request.title = "Open Project";
+        request.buttons = {{"Continue", "primary"}, {"Cancel", "secondary"}};
+        request.on_result = [replacement](const core::ModalResult& result) {
+            if (result.button_label == "Continue")
+                core::events::cmd::ProjectOpen{.path = replacement, .discard_changes = true}.emit();
+        };
+        viewer.getGuiManager()->modalOverlay()->enqueue(std::move(request));
+
+        const auto dropped = makeSplatFixture("dropped");
+        std::vector<core::events::state::SplatFileLoadFailed> failures;
+        core::events::state::SplatFileLoadFailed::when([&](const auto& event) {
+            failures.push_back(event);
+        });
+        controller.handleFileDrop({core::path_to_utf8(dropped)});
+        ASSERT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Continue"));
+        ASSERT_EQ(failures.size(), 1u);
+        EXPECT_EQ(failures.front().path, dropped);
+        EXPECT_EQ(failures.front().error, LOC("file_drop.cancelled_by_project_switch"));
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+    }
+
+    TEST_F(VisualizerImplResetTest, DropDuringCreateProjectPromptReportsCancellation) {
+        const auto destination = temporary_.path / "created.licht";
+        VisualizerImpl viewer(projectOptions());
+        viewer.getScene().addSplat("previous", lfs::test::licht::make_splat(2));
+        viewer.getSceneManager()->changeContentType(SceneManager::ContentType::SplatFiles);
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        core::ModalRequest request;
+        request.title = "Create Project";
+        request.buttons = {{"Continue", "primary"}, {"Cancel", "secondary"}};
+        request.on_result = [destination](const core::ModalResult& result) {
+            if (result.button_label == "Continue")
+                core::events::cmd::ProjectCreate{.path = destination, .discard_changes = true}.emit();
+        };
+        viewer.getGuiManager()->modalOverlay()->enqueue(std::move(request));
+
+        const auto dropped = makeSplatFixture("dropped");
+        std::vector<core::events::state::SplatFileLoadFailed> failures;
+        core::events::state::SplatFileLoadFailed::when([&](const auto& event) {
+            failures.push_back(event);
+        });
+        controller.handleFileDrop({core::path_to_utf8(dropped)});
+        ASSERT_TRUE(viewer.getDataLoader()->hasPendingImports());
+        ASSERT_TRUE(viewer.getGuiManager()->modalOverlay()->dismiss("Continue"));
+        ASSERT_EQ(failures.size(), 1u);
+        EXPECT_EQ(failures.front().path, dropped);
+        EXPECT_EQ(failures.front().error, LOC("file_drop.cancelled_by_project_switch"));
+        EXPECT_FALSE(viewer.getDataLoader()->hasPendingImports());
+    }
+
     TEST_F(VisualizerImplResetTest, HistoryClearDropsQueuedSingleRequests) {
         VisualizerImpl viewer(projectOptions());
         Viewport viewport(200, 200);

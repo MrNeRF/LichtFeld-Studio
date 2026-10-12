@@ -1493,7 +1493,9 @@
     "cannot_open": "열 수 없음"
   },
   "file_drop": {
-    "blocked_during_training": "새 장면을 불러오기 전에 학습을 중지하세요."
+    "blocked_during_training": "새 장면을 불러오기 전에 학습을 중지하세요.",
+    "cancelled_by_new_project": "새 프로젝트 작업으로 이 파일 놓기가 취소되었습니다. 파일을 다시 놓아 불러오세요.",
+    "cancelled_by_project_switch": "프로젝트 작업이 시작되어 놓은 파일을 불러오지 못했습니다. 파일을 다시 놓아 불러오세요."
   },
   "export_dialog": {
     "folder_name": "폴더 이름",

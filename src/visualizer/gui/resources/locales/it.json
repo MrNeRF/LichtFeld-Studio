@@ -1493,7 +1493,9 @@
     "cannot_open": "Impossibile aprire"
   },
   "file_drop": {
-    "blocked_during_training": "Arresta l'addestramento prima di caricare una nuova scena."
+    "blocked_during_training": "Arresta l'addestramento prima di caricare una nuova scena.",
+    "cancelled_by_new_project": "L’azione Nuovo progetto ha annullato il rilascio del file. Rilascia di nuovo il file per caricarlo.",
+    "cancelled_by_project_switch": "Il file rilasciato non è stato caricato perché è iniziata un’operazione sul progetto. Rilascialo di nuovo per caricarlo."
   },
   "export_dialog": {
     "folder_name": "Nome della cartella",

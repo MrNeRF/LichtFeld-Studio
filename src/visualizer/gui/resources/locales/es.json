@@ -1493,7 +1493,9 @@
     "cannot_open": "No se puede abrir"
   },
   "file_drop": {
-    "blocked_during_training": "Detén el entrenamiento antes de cargar una escena nueva."
+    "blocked_during_training": "Detén el entrenamiento antes de cargar una escena nueva.",
+    "cancelled_by_new_project": "La acción Nuevo proyecto canceló esta entrega de archivo. Suelta el archivo de nuevo para cargarlo.",
+    "cancelled_by_project_switch": "El archivo soltado no se cargó porque se inició una operación de proyecto. Suéltalo de nuevo para cargarlo."
   },
   "export_dialog": {
     "folder_name": "Nombre de carpeta",

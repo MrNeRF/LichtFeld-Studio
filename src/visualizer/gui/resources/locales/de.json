@@ -1493,7 +1493,9 @@
     "cannot_open": "Kann nicht öffnen"
   },
   "file_drop": {
-    "blocked_during_training": "Beenden Sie das Training, bevor Sie eine neue Szene laden."
+    "blocked_during_training": "Beenden Sie das Training, bevor Sie eine neue Szene laden.",
+    "cancelled_by_new_project": "Die Aktion „Neues Projekt“ hat diese Dateiablage abgebrochen. Legen Sie die Datei erneut ab, um sie zu laden.",
+    "cancelled_by_project_switch": "Die abgelegte Datei wurde nicht geladen, weil ein Projektvorgang gestartet wurde. Legen Sie sie erneut ab, um sie zu laden."
   },
   "export_dialog": {
     "folder_name": "Ordnername",

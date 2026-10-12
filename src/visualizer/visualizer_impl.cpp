@@ -3601,7 +3601,7 @@ namespace lfs::vis {
         }
         if (gui_manager_) {
             if (data_loader_)
-                data_loader_->cancelPendingImports();
+                data_loader_->rejectPendingImports(LOC("file_drop.cancelled_by_new_project"));
             gui_manager_->asyncTasks().cancelImport(false);
         }
 
@@ -3734,7 +3734,7 @@ namespace lfs::vis {
         }
         if (gui_manager_) {
             if (data_loader_)
-                data_loader_->cancelPendingImports();
+                data_loader_->rejectPendingImports(LOC("file_drop.cancelled_by_project_switch"));
             gui_manager_->asyncTasks().cancelImport(false);
         }
         pending_view_paths_.clear();

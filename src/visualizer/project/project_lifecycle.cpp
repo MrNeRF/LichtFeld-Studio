@@ -7872,7 +7872,7 @@ namespace lfs::vis::project {
         }
         // Every project-open entry point reaches this committed switch boundary.
         if (auto* loader = viewer_.getDataLoader())
-            loader->cancelPendingImports();
+            loader->rejectPendingImports(LOC("file_drop.cancelled_by_project_switch"));
         if (auto* gui = viewer_.getGuiManager())
             gui->asyncTasks().cancelImport(false);
         viewer_.deactivateProjectTools();

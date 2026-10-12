@@ -1493,7 +1493,9 @@
     "cannot_open": "開けません"
   },
   "file_drop": {
-    "blocked_during_training": "新しいシーンを読み込む前にトレーニングを停止してください。"
+    "blocked_during_training": "新しいシーンを読み込む前にトレーニングを停止してください。",
+    "cancelled_by_new_project": "新しいプロジェクトの操作により、このファイルのドロップは取り消されました。読み込むにはもう一度ドロップしてください。",
+    "cancelled_by_project_switch": "プロジェクトの操作が開始されたため、ドロップしたファイルは読み込まれませんでした。読み込むにはもう一度ドロップしてください。"
   },
   "export_dialog": {
     "folder_name": "フォルダー名",

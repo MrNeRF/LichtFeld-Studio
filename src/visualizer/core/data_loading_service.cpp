@@ -171,6 +171,21 @@ namespace lfs::vis {
         }
     }
 
+    void DataLoadingService::rejectPendingImports(const std::string& reason) {
+        auto rejected = std::move(pending_imports_);
+        pending_imports_.clear();
+        for (const auto& command : rejected) {
+            const auto report = [&](const std::filesystem::path& path) {
+                lfs::core::events::state::SplatFileLoadFailed{.path = path, .error = reason}.emit();
+            };
+            if (command.paths.empty())
+                report(command.path);
+            else
+                for (const auto& path : command.paths)
+                    report(path);
+        }
+    }
+
     void DataLoadingService::handleLoadCheckpointForTrainingCommand(
         const std::filesystem::path& checkpoint_path,
         const std::filesystem::path& dataset_path,

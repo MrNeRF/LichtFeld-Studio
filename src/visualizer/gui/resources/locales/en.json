@@ -1491,7 +1491,9 @@
     "cannot_open": "Cannot Open"
   },
   "file_drop": {
-    "blocked_during_training": "Stop training before loading a new scene."
+    "blocked_during_training": "Stop training before loading a new scene.",
+    "cancelled_by_new_project": "The New Project action canceled this file drop. Drop the file again to load it.",
+    "cancelled_by_project_switch": "The dropped file was not loaded because a project operation was started. Drop it again to load it."
   },
   "export_dialog": {
     "folder_name": "Folder name",

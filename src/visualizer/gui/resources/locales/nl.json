@@ -1493,7 +1493,9 @@
     "cannot_open": "Kan niet openen"
   },
   "file_drop": {
-    "blocked_during_training": "Stop de training voordat je een nieuwe scène laadt."
+    "blocked_during_training": "Stop de training voordat je een nieuwe scène laadt.",
+    "cancelled_by_new_project": "De actie Nieuw project heeft deze bestandsplaatsing geannuleerd. Zet het bestand opnieuw neer om het te laden.",
+    "cancelled_by_project_switch": "Het neergezette bestand is niet geladen omdat een projectbewerking is gestart. Zet het opnieuw neer om het te laden."
   },
   "export_dialog": {
     "folder_name": "Mapnaam",
