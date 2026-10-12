@@ -86,7 +86,12 @@ if(TARGET nvjpeg_ext)
 endif()
 add_test(NAME MediaStudioBackendContracts COMMAND ${Python_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/../test_studio_backends.py --runner $<TARGET_FILE:media_studio_runner>)
+add_test(NAME MediaExactFrameBoundaryNvdec COMMAND ${Python_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../test_exact_frame_boundaries.py
+        --studio-runner $<TARGET_FILE:media_studio_runner>)
 set_tests_properties(MediaStudioBackendContracts PROPERTIES LABELS "media;gpu;integration" TIMEOUT 300
+    SKIP_RETURN_CODE 77 ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")
+set_tests_properties(MediaExactFrameBoundaryNvdec PROPERTIES LABELS "media;gpu;integration" TIMEOUT 300
     SKIP_RETURN_CODE 77 ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")
 if(WIN32)
     set_tests_properties(MediaStudioBackendContracts PROPERTIES ENVIRONMENT_MODIFICATION

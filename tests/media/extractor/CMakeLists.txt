@@ -31,6 +31,12 @@ add_test(NAME MediaExtractionContracts
 set_tests_properties(MediaExtractionContracts PROPERTIES LABELS "media;cpu;offline;integration"
     TIMEOUT 180
     ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")
+add_test(NAME MediaExactFrameBoundarySoftware
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../test_exact_frame_boundaries.py
+        --runner $<TARGET_FILE:media_extraction_runner>)
+set_tests_properties(MediaExactFrameBoundarySoftware PROPERTIES
+    LABELS "media;cpu;offline;integration" TIMEOUT 300
+    ENVIRONMENT "LFS_MEDIA_TEST_FFMPEG=${LFS_MEDIA_TEST_FFMPEG};LFS_MEDIA_TEST_FFPROBE=${LFS_MEDIA_TEST_FFPROBE}")
 if(WIN32)
     set_tests_properties(MediaExtractionContracts PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")

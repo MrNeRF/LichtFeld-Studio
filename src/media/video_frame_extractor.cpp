@@ -22,6 +22,7 @@ extern "C" {
 #include <libavutil/dovi_meta.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/mathematics.h>
 #include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
@@ -190,6 +191,121 @@ namespace lfs::io {
                                             static_cast<long double>(stream_start_timestamp)) *
                                            time_base);
             return static_cast<double>(frame_index) / std::max(fallback_fps, 0.001);
+        }
+
+        [[nodiscard]] int64_t frameTimestampTicks(const AVFrame* const frame) {
+            if (frame->best_effort_timestamp != AV_NOPTS_VALUE)
+                return frame->best_effort_timestamp;
+            return frame->pts;
+        }
+
+        [[nodiscard]] int64_t timestampAtOrAfterTime(const double seconds,
+                                                     const AVRational stream_time_base,
+                                                     const int64_t stream_start_timestamp) {
+            const AVRational time = av_d2q(seconds, 1000000000);
+            if (time.den <= 0 || stream_time_base.num <= 0 || stream_time_base.den <= 0)
+                throw std::invalid_argument("Invalid extraction parameters: trim range exceeds stream timestamp limits");
+            const int64_t relative_timestamp = av_rescale_q_rnd(
+                1, time, stream_time_base,
+                static_cast<AVRounding>(AV_ROUND_UP | AV_ROUND_PASS_MINMAX));
+            if (relative_timestamp == std::numeric_limits<int64_t>::min() ||
+                relative_timestamp == std::numeric_limits<int64_t>::max() ||
+                (relative_timestamp > 0 &&
+                 stream_start_timestamp > std::numeric_limits<int64_t>::max() - relative_timestamp) ||
+                (relative_timestamp < 0 &&
+                 stream_start_timestamp < std::numeric_limits<int64_t>::min() - relative_timestamp))
+                throw std::invalid_argument("Invalid extraction parameters: trim range exceeds stream timestamp limits");
+            return stream_start_timestamp + relative_timestamp;
+        }
+
+        struct TimestampBoundary {
+            int64_t first_at_or_after;
+            bool exact_tick;
+        };
+
+        [[nodiscard]] TimestampBoundary timestampBoundary(
+            const double seconds, const AVRational stream_time_base,
+            const int64_t stream_start_timestamp) {
+            const AVRational time = av_d2q(seconds, 1000000000);
+            const int64_t ceil_timestamp = timestampAtOrAfterTime(
+                seconds, stream_time_base, stream_start_timestamp);
+            const int64_t floor_relative = av_rescale_q_rnd(
+                1, time, stream_time_base,
+                static_cast<AVRounding>(AV_ROUND_DOWN | AV_ROUND_PASS_MINMAX));
+            if ((floor_relative > 0 &&
+                 stream_start_timestamp > std::numeric_limits<int64_t>::max() - floor_relative) ||
+                (floor_relative < 0 &&
+                 stream_start_timestamp < std::numeric_limits<int64_t>::min() - floor_relative))
+                throw std::invalid_argument("Invalid extraction parameters: trim range exceeds stream timestamp limits");
+            const int64_t floor_timestamp = stream_start_timestamp + floor_relative;
+            return {ceil_timestamp, floor_timestamp == ceil_timestamp};
+        }
+
+        [[nodiscard]] AVRational fpsTargetTime(const double start_time,
+                                               const double target_fps,
+                                               const std::size_t sample_index) {
+            if (sample_index > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+                throw std::invalid_argument("Invalid extraction parameters: requested frame count exceeds supported limits");
+            const AVRational start = av_d2q(start_time, 1000000000);
+            const AVRational fps = av_d2q(target_fps, 1000000);
+            if (start.den <= 0 || fps.num <= 0 || fps.den <= 0)
+                throw std::invalid_argument("Invalid extraction parameters: trim range exceeds stream timestamp limits");
+            const AVRational sample = av_mul_q(
+                AVRational{static_cast<int>(sample_index), 1}, av_inv_q(fps));
+            return av_add_q(start, sample);
+        }
+
+        // Compare decoded PTS against the first stream tick at or after the
+        // rational FPS target; seconds remain presentation metadata only.
+        [[nodiscard]] int64_t fpsTargetTimestamp(const double start_time,
+                                                 const double target_fps,
+                                                 const std::size_t sample_index,
+                                                 const AVRational stream_time_base,
+                                                 const int64_t stream_start_timestamp) {
+            if (stream_time_base.num <= 0 || stream_time_base.den <= 0)
+                throw std::invalid_argument("Invalid extraction parameters: trim range exceeds stream timestamp limits");
+            const AVRational target_time = fpsTargetTime(start_time, target_fps, sample_index);
+            const int64_t relative_timestamp = av_rescale_q_rnd(
+                1, target_time, stream_time_base,
+                static_cast<AVRounding>(AV_ROUND_UP | AV_ROUND_PASS_MINMAX));
+            if (relative_timestamp == std::numeric_limits<int64_t>::min() ||
+                relative_timestamp == std::numeric_limits<int64_t>::max() ||
+                (relative_timestamp > 0 &&
+                 stream_start_timestamp > std::numeric_limits<int64_t>::max() - relative_timestamp) ||
+                (relative_timestamp < 0 &&
+                 stream_start_timestamp < std::numeric_limits<int64_t>::min() - relative_timestamp))
+                throw std::invalid_argument("Invalid extraction parameters: trim range exceeds stream timestamp limits");
+            return stream_start_timestamp + relative_timestamp;
+        }
+
+        [[nodiscard]] bool frameCoversFpsTarget(const double start_time,
+                                                const double target_fps,
+                                                const std::size_t sample_index,
+                                                const AVRational stream_time_base,
+                                                const int64_t stream_start_timestamp,
+                                                const int64_t frame_timestamp,
+                                                const int64_t frame_duration) {
+            if (frame_duration <= 0)
+                return false;
+            const AVRational target_time = fpsTargetTime(start_time, target_fps, sample_index);
+            const int64_t target_ceil = fpsTargetTimestamp(
+                start_time, target_fps, sample_index, stream_time_base,
+                stream_start_timestamp);
+            const int64_t target_floor_relative = av_rescale_q_rnd(
+                1, target_time, stream_time_base,
+                static_cast<AVRounding>(AV_ROUND_DOWN | AV_ROUND_PASS_MINMAX));
+            if ((target_floor_relative > 0 &&
+                 stream_start_timestamp > std::numeric_limits<int64_t>::max() - target_floor_relative) ||
+                (target_floor_relative < 0 &&
+                 stream_start_timestamp < std::numeric_limits<int64_t>::min() - target_floor_relative))
+                return false;
+            const int64_t target_floor = stream_start_timestamp + target_floor_relative;
+            if (frame_timestamp > std::numeric_limits<int64_t>::max() - frame_duration)
+                return false;
+            const int64_t frame_end = frame_timestamp + frame_duration;
+            return target_floor == target_ceil
+                       ? frame_timestamp <= target_ceil && target_ceil < frame_end
+                       : frame_timestamp < target_ceil && target_ceil <= frame_end;
         }
 
         [[nodiscard]] int pixelFormatBitDepth(const AVCodecParameters* const parameters) {
@@ -1213,21 +1329,9 @@ namespace lfs::io {
                     video_stream->start_time == AV_NOPTS_VALUE ? 0 : video_stream->start_time;
                 const auto stream_timestamp_for_time =
                     [&](const double seconds) {
-                        const long double timestamp =
-                            static_cast<long double>(stream_start_timestamp) +
-                            std::round(static_cast<long double>(seconds) /
-                                       time_base);
-                        if (timestamp <
-                                static_cast<long double>(
-                                    std::numeric_limits<int64_t>::min()) ||
-                            timestamp >
-                                static_cast<long double>(
-                                    std::numeric_limits<int64_t>::max())) {
-                            throw std::invalid_argument(
-                                "Invalid extraction parameters: trim range "
-                                "exceeds stream timestamp limits");
-                        }
-                        return static_cast<int64_t>(timestamp);
+                        return timestampAtOrAfterTime(
+                            seconds, video_stream->time_base,
+                            stream_start_timestamp);
                     };
 
                 if (video_duration <= 0.0 && params.end_time < 0.0) {
@@ -1292,6 +1396,15 @@ namespace lfs::io {
                         ? calculateFpsSampleCount(start_time, end_time,
                                                   target_fps)
                         : 0;
+                const auto fps_timestamp_for_index = [&](const std::size_t index) {
+                    return fpsTargetTimestamp(start_time, target_fps, index,
+                                              video_stream->time_base,
+                                              stream_start_timestamp);
+                };
+                const TimestampBoundary start_timestamp_boundary = timestampBoundary(
+                    start_time, video_stream->time_base, stream_start_timestamp);
+                const TimestampBoundary end_timestamp_boundary = timestampBoundary(
+                    end_time, video_stream->time_base, stream_start_timestamp);
                 if (fps_target_count >
                     static_cast<std::size_t>(
                         std::numeric_limits<int>::max())) {
@@ -1311,6 +1424,11 @@ namespace lfs::io {
                 if (params.mode == ExtractionMode::FPS && video_fps > 0 && target_fps > 0)
                     window_est_frames = static_cast<int>(std::round(video_fps / target_fps));
                 window_est_frames = std::max(1, window_est_frames);
+                std::size_t next_fps_target_index = 0;
+                int64_t next_fps_target_timestamp =
+                    params.mode == ExtractionMode::FPS && fps_target_count > 0
+                        ? fps_timestamp_for_index(0)
+                        : AV_NOPTS_VALUE;
 
                 media::SinkSession session;
                 if (external_sink)
@@ -1639,14 +1757,31 @@ namespace lfs::io {
                     throw_if_cancelled();
                 };
 
-                auto should_extract_frame = [&](const double frame_time) {
+                auto should_extract_frame = [&](const AVFrame* const decoded_frame,
+                                                const double frame_time) {
                     bool should_extract = false;
                     if (params.mode == ExtractionMode::FPS) {
-                        should_extract = frame_time + 1.0e-6 >= next_capture_time;
-                        if (should_extract) {
+                        const int64_t timestamp = frameTimestampTicks(decoded_frame);
+                        if (timestamp != AV_NOPTS_VALUE) {
+                            while (next_fps_target_index < fps_target_count &&
+                                   timestamp >= next_fps_target_timestamp) {
+                                should_extract = true;
+                                ++next_fps_target_index;
+                                if (next_fps_target_index < fps_target_count)
+                                    next_fps_target_timestamp = fps_timestamp_for_index(next_fps_target_index);
+                            }
+                            if (next_fps_target_index < fps_target_count)
+                                next_capture_time = fpsSampleTime(start_time, end_time, target_fps,
+                                                                  next_fps_target_index);
+                        } else if (frame_time + 1.0e-6 >= next_capture_time) {
+                            should_extract = true;
                             do {
                                 next_capture_time += target_interval;
-                            } while (next_capture_time <= frame_time + 1.0e-6);
+                                ++next_fps_target_index;
+                            } while (next_fps_target_index < fps_target_count &&
+                                     next_capture_time <= frame_time + 1.0e-6);
+                            if (next_fps_target_index < fps_target_count)
+                                next_fps_target_timestamp = fps_timestamp_for_index(next_fps_target_index);
                         }
                     } else {
                         should_extract = in_trim_frame_count % frame_step == 0;
@@ -1962,6 +2097,8 @@ namespace lfs::io {
                 media::FrameInfo retained_info;
                 double retained_frame_time = 0.0;
                 double retained_frame_duration = 0.0;
+                int64_t retained_frame_timestamp = AV_NOPTS_VALUE;
+                int64_t retained_frame_duration_ticks = 0;
                 const auto retain_frame =
                     [&](AVFrame* const retained_source, const double frame_time,
                         const double frame_duration) {
@@ -1974,6 +2111,9 @@ namespace lfs::io {
                             throw std::runtime_error(error);
                         }
                         has_retained_frame = true;
+                        retained_frame_timestamp = frameTimestampTicks(retained_source);
+                        retained_frame_duration_ticks =
+                            std::max<int64_t>(0, retained_source->duration);
                         retained_info = frame_info(retained_source, frame_time);
                         retained_frame_time = frame_time;
                         retained_frame_duration = frame_duration;
@@ -1995,12 +2135,22 @@ namespace lfs::io {
                     const double frame_time = frameTimestampSeconds(
                         decoded_frame, time_base, decoded_frame_count - 1,
                         video_fps, stream_start_timestamp);
-                    if (frame_time < start_time)
+                    const int64_t timestamp = frameTimestampTicks(decoded_frame);
+                    if ((timestamp != AV_NOPTS_VALUE &&
+                         timestamp < start_timestamp_boundary.first_at_or_after) ||
+                        (timestamp == AV_NOPTS_VALUE && frame_time < start_time))
                         return false;
                     const bool past_end =
                         params.mode == ExtractionMode::FPS
-                            ? frame_time >= end_time
-                            : !extract_to_stream_end && frame_time > end_time;
+                            ? (timestamp != AV_NOPTS_VALUE
+                                   ? timestamp >= end_timestamp_boundary.first_at_or_after
+                                   : frame_time >= end_time)
+                            : !extract_to_stream_end &&
+                                  (timestamp != AV_NOPTS_VALUE
+                                       ? (end_timestamp_boundary.exact_tick
+                                              ? timestamp > end_timestamp_boundary.first_at_or_after
+                                              : timestamp >= end_timestamp_boundary.first_at_or_after)
+                                       : frame_time > end_time);
                     if (past_end)
                         return true;
 
@@ -2017,10 +2167,19 @@ namespace lfs::io {
                     current_frame_time = frame_time;
                     current_src_frame = source_frame_for_time(frame_time);
                     if (params.sharpness.enabled && params.sharpness.window_mode) {
-                        const int window_index = params.mode == ExtractionMode::FPS
-                                                     ? static_cast<int>(std::floor(
-                                                           (frame_time - start_time) / target_interval))
-                                                     : in_window_frame_count / frame_step;
+                        int window_index = in_window_frame_count / frame_step;
+                        if (params.mode == ExtractionMode::FPS) {
+                            if (timestamp != AV_NOPTS_VALUE) {
+                                window_index = current_window_idx;
+                                while (static_cast<std::size_t>(window_index + 1) < fps_target_count &&
+                                       timestamp >= fps_timestamp_for_index(
+                                                        static_cast<std::size_t>(window_index + 1)))
+                                    ++window_index;
+                            } else {
+                                window_index = static_cast<int>(std::floor(
+                                    (frame_time - start_time) / target_interval));
+                            }
+                        }
                         if (window_index != current_window_idx) {
                             flush_window();
                             current_window_idx = window_index;
@@ -2059,7 +2218,7 @@ namespace lfs::io {
                             process_frame_hw(decoded_frame);
                         else
                             process_frame_sw(decoded_frame);
-                    } else if (should_extract_frame(frame_time)) {
+                    } else if (should_extract_frame(decoded_frame, frame_time)) {
                         if (using_hw_decode &&
                             decoded_frame->format == hw_decoder_state.pixel_format)
                             process_frame_hw(decoded_frame);
@@ -2077,13 +2236,18 @@ namespace lfs::io {
                         throw_if_cancelled();
                         const double target_time = fpsSampleTime(
                             start_time, end_time, target_fps, target_index);
-                        const int64_t target_timestamp = stream_timestamp_for_time(target_time);
+                        const int64_t target_timestamp = fps_timestamp_for_index(target_index);
                         const AVIndexEntry* target_keyframe = avformat_index_get_entry_from_timestamp(
                             video_stream, target_timestamp, AVSEEK_FLAG_BACKWARD);
                         // Prefer the demuxer index: seeking helps only when it
                         // lands beyond the frame already retained by the decoder.
                         bool seek_to_target = !has_retained_frame;
-                        if (has_retained_frame && retained_frame_time < target_time) {
+                        const bool retained_at_or_after_target =
+                            has_retained_frame &&
+                            (retained_frame_timestamp != AV_NOPTS_VALUE
+                                 ? retained_frame_timestamp >= target_timestamp
+                                 : retained_frame_time >= target_time);
+                        if (has_retained_frame && !retained_at_or_after_target) {
                             if (target_keyframe && (target_keyframe->flags & AVINDEX_KEYFRAME) &&
                                 target_keyframe->timestamp <= target_timestamp) {
                                 seek_to_target = target_keyframe->timestamp >
@@ -2093,8 +2257,10 @@ namespace lfs::io {
                                                  observed_seek_preroll + 1.0 / video_fps;
                             }
                         }
-                        if (!seek_to_target && retained_frame_time >= target_time &&
-                            retained_frame_time < end_time) {
+                        if (!seek_to_target && retained_at_or_after_target &&
+                            (retained_frame_timestamp != AV_NOPTS_VALUE
+                                 ? retained_frame_timestamp < end_timestamp_boundary.first_at_or_after
+                                 : retained_frame_time < end_time)) {
                             process_selected_frame(sparse_previous_frame, retained_frame_time);
                             continue;
                         }
@@ -2131,9 +2297,18 @@ namespace lfs::io {
                                 throw std::runtime_error(error);
                             if (result == DecoderPumpResult::EndOfStream) {
                                 if (has_retained_frame &&
-                                    frameCoversSampleTime(
-                                        retained_frame_time,
-                                        retained_frame_duration, target_time)) {
+                                    ((retained_frame_timestamp != AV_NOPTS_VALUE &&
+                                      retained_frame_duration_ticks > 0)
+                                         ? frameCoversFpsTarget(
+                                               start_time, target_fps, target_index,
+                                               video_stream->time_base,
+                                               stream_start_timestamp,
+                                               retained_frame_timestamp,
+                                               retained_frame_duration_ticks)
+                                         : frameCoversSampleTime(
+                                               retained_frame_time,
+                                               retained_frame_duration,
+                                               target_time))) {
                                     process_selected_frame(
                                         sparse_previous_frame,
                                         retained_frame_time);
@@ -2166,16 +2341,25 @@ namespace lfs::io {
                             const double frame_duration = frame->duration > 0
                                                               ? static_cast<double>(frame->duration) * time_base
                                                               : 1.0 / video_fps;
-                            if (frame_time < target_time) {
+                            if (timestamp < target_timestamp) {
                                 retain_frame(frame, frame_time, frame_duration);
                                 continue;
                             }
 
-                            if (frame_time >= end_time) {
+                            if (timestamp >= end_timestamp_boundary.first_at_or_after) {
                                 if (has_retained_frame &&
-                                    frameCoversSampleTime(
-                                        retained_frame_time,
-                                        retained_frame_duration, target_time)) {
+                                    ((retained_frame_timestamp != AV_NOPTS_VALUE &&
+                                      retained_frame_duration_ticks > 0)
+                                         ? frameCoversFpsTarget(
+                                               start_time, target_fps, target_index,
+                                               video_stream->time_base,
+                                               stream_start_timestamp,
+                                               retained_frame_timestamp,
+                                               retained_frame_duration_ticks)
+                                         : frameCoversSampleTime(
+                                               retained_frame_time,
+                                               retained_frame_duration,
+                                               target_time))) {
                                     process_selected_frame(
                                         sparse_previous_frame,
                                         retained_frame_time);
@@ -2223,13 +2407,30 @@ namespace lfs::io {
                            params.mode == ExtractionMode::FPS &&
                            !params.sharpness.window_mode && has_retained_frame &&
                            saved_count + skipped_count < estimated_total &&
-                           next_capture_time < end_time &&
-                           frameCoversSampleTime(retained_frame_time,
-                                                 retained_frame_duration,
-                                                 next_capture_time)) {
+                           next_fps_target_index < fps_target_count &&
+                           ((retained_frame_timestamp != AV_NOPTS_VALUE &&
+                             retained_frame_duration_ticks > 0)
+                                ? frameCoversFpsTarget(
+                                      start_time, target_fps,
+                                      next_fps_target_index,
+                                      video_stream->time_base,
+                                      stream_start_timestamp,
+                                      retained_frame_timestamp,
+                                      retained_frame_duration_ticks)
+                                : frameCoversSampleTime(
+                                      retained_frame_time,
+                                      retained_frame_duration,
+                                      next_capture_time))) {
                         process_selected_frame(sparse_previous_frame,
                                                retained_frame_time);
-                        next_capture_time += target_interval;
+                        ++next_fps_target_index;
+                        if (next_fps_target_index < fps_target_count) {
+                            next_fps_target_timestamp =
+                                fps_timestamp_for_index(next_fps_target_index);
+                            next_capture_time = fpsSampleTime(
+                                start_time, end_time, target_fps,
+                                next_fps_target_index);
+                        }
                     }
                 }
 
