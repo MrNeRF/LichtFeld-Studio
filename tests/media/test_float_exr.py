@@ -229,6 +229,42 @@ class FloatEXR(unittest.TestCase):
                 # Precision is qualified separately against analytic unclipped YUV at 2e-6.
                 self.assertAlmostEqual(max(0,min(1,value)),reference[i*3+channel]/65535,delta=1/255)
 
+    def test_float_color_profile_rejects_unsupported_tags_without_relabeling_hdr(self):
+        raw=struct.pack("<"+"H"*384,*([512]*384))
+        cases=[("smpte2084","bt2020","bt2020nc","limited"),
+               ("arib-std-b67","bt2020","bt2020nc","limited"),
+               ("log100","bt709","bt709","limited"),
+               ("log316","bt709","bt709","limited"),
+               ("bt470m","bt709","bt709","limited"),
+               ("linear","bt470bg","bt709","limited"),
+               ("linear","bt709","bt2020c","limited"),
+               ("linear","bt709","unknown","limited")]
+        for index,(transfer,primaries,matrix,levels) in enumerate(cases):
+            with self.subTest(transfer=transfer,primaries=primaries,matrix=matrix,range=levels):
+                source=self.root/f"unsupported-color-{index}.mkv"
+                run([FFMPEG,"-v","error","-f","rawvideo","-pixel_format","yuv444p10le",
+                     "-video_size","16x8","-framerate","10","-i","pipe:0",
+                     "-vf",f"setparams=color_primaries={primaries}:color_trc={transfer}:colorspace={matrix}:range={levels}",
+                     "-c:v","ffv1","-level","3",source],raw)
+                probe=json.loads(run([FFPROBE,"-v","error","-show_streams","-of","json",source]))["streams"][0]
+                self.assertEqual(probe["pix_fmt"],"yuv444p10le")
+                self.assertEqual(run([FFMPEG,"-v","error","-i",source,"-f","rawvideo",
+                                      "-pix_fmt","yuv444p10le","pipe:1"]),raw)
+                self.assertEqual(probe.get("color_transfer","unknown"),transfer)
+                self.assertEqual(probe.get("color_primaries","unknown"),primaries)
+                self.assertEqual(probe.get("color_space","unknown"),matrix)
+                self.assertEqual(probe.get("color_range","unknown"),"tv" if levels=="limited" else "unknown")
+                overrides=[[]]
+                if transfer in ("smpte2084","arib-std-b67","log100","log316"):
+                    overrides.append(["--input-transfer","linear","--input-primaries","bt709"])
+                for attempt,flags in enumerate(overrides):
+                    output=self.root/f"unsupported-color-out-{index}-{attempt}"
+                    result=self.invoke("extract",source,"--output",output,"--format","exr","--quiet",*flags,code=3)
+                    self.assertEqual(result["error"]["code"],"Unsupported")
+                    # Frame validation may occur after sink begin, leaving an
+                    # empty directory. No image or manifest may be published.
+                    self.assertEqual(list(output.rglob("*")),[])
+
     def test_yuv_nominal_range_superwhites_and_matrix_analytic(self):
         # No RGB intermediate in the fixture: encoded Y/Cb/Cr are the reference.
         count=16*8
@@ -236,7 +272,9 @@ class FloatEXR(unittest.TestCase):
         cb=[512,512,512,512,64,960,512,512]*16
         cr=[512,512,512,512,512,512,64,960]*16
         raw=struct.pack("<"+"H"*(3*count),*(yy+cb+cr))
-        for matrix,kr,kb,primaries in [("bt709",.2126,.0722,"bt709"),("smpte170m",.299,.114,"bt709"),("bt2020nc",.2627,.0593,"bt2020")]:
+        for matrix,kr,kb,primaries in [("bt709",.2126,.0722,"bt709"),("smpte170m",.299,.114,"bt709"),
+                                       ("bt470bg",.299,.114,"bt709"),("smpte240m",.2122,.0865,"bt709"),
+                                       ("bt2020nc",.2627,.0593,"bt2020")]:
             for curve in ["linear","srgb","bt709"]:
                 for full in [False,True]:
                     with self.subTest(matrix=matrix,curve=curve,full=full):

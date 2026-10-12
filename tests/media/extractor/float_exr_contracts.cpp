@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/image_codecs.hpp"
 #include "media/media_ingest.hpp"
+#include "media/media_options.hpp"
 #include "media/video_frame_extractor.hpp"
 #include <OpenEXR/openexr.h>
 #include <array>
@@ -30,6 +31,23 @@ namespace {
 } // namespace
 int runFloatExrUnitContracts() {
     using namespace lfs::media;
+    // FFV1 supplies a nominal range when none is tagged; use the public
+    // preflight boundary to exercise genuinely absent range and matrix.
+    StreamDescription color_source;
+    color_source.pixel_format = "yuv444p10le";
+    color_source.color.transfer = "linear";
+    color_source.color.primaries = "bt709";
+    color_source.color.matrix = "bt709";
+    const FrameColor assumptions{ColorTransfer::Linear, ColorPrimaries::Bt709, AlphaMode::None};
+    require(validateFloatSdrSource(color_source).error().code() == lfs::ErrorCode::Unsupported,
+            "missing YUV range is not inferred");
+    require(!validateFloatSdrSource(color_source, assumptions), "transfer override cannot supply missing YUV range");
+    color_source.color.range = "tv";
+    require(validateFloatSdrSource(color_source).has_value(), "explicit limited YUV range accepted");
+    color_source.color.matrix.reset();
+    require(!validateFloatSdrSource(color_source, assumptions), "transfer override cannot supply missing YUV matrix");
+    color_source.color.matrix = "bt2020c";
+    require(!validateFloatSdrSource(color_source), "constant-luminance matrix is not treated as NCL");
     const auto directory = std::filesystem::temp_directory_path() / ("lfs-float-exr-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directory(directory);
     struct Cleanup {

@@ -19,7 +19,7 @@ Set `IngestRequest::output_format` to `RGBFloat32`. The software decoder feeds
 integer RGB or planar/semiplanar YUV of 8–16 component bits, including 4:2:0,
 4:2:2 and 4:4:4. Components are unpacked directly at source precision; YUV uses
 chroma-location-aware sampling and an unclipped float matrix with
-declared BT.709, BT.601 or BT.2020 NCL and full/limited range. Inverse transfer
+declared BT.709, BT.601, SMPTE 240M or BT.2020 NCL and full/limited range. Inverse transfer
 supports Linear, sRGB and BT.709. Output retains BT.709 or BT.2020 primaries;
 it does not convert primaries or claim physical luminance units.
 
@@ -142,3 +142,70 @@ Tensor program against independent analytic references on available native GPUs.
 Hosted Windows/Linux tests are CPU-only. Native GPU regression qualification must
 run separately on physical hardware. See `tests/media/README.md` for root test
 invocation and fixture/tool requirements; synthetic tests need no media downloads.
+
+## Color and backend contract matrix
+
+This inventory describes existing behavior. A format being decodable does not
+imply that its transfer, gamut or mastering metadata can be preserved by every
+output path. Decoder availability, color conversion and image encoding are
+separate capabilities. Matrix/range and transfer/primaries are independent.
+
+| Input or operation | Current contract | Reference or boundary test |
+| --- | --- | --- |
+| Integer SDR RGB/YUV, 8–16 bits to float | Linear, sRGB and BT.709 inverse transfer; BT.709 or BT.2020 primaries retained | `test_transfers_and_linear_resize_rotation_reference`, `test_yuv_depths_and_subsampled_reference` |
+| YUV limited/full range | Explicit range required; negative and superwhite RGB retained | `test_yuv_nominal_range_superwhites_and_matrix_analytic` |
+| YUV matrix | BT.709, BT.470BG/SMPTE 170M, SMPTE 240M, BT.2020 NCL supported | Independent raw-code analytic reference, five matrices × three curves × two ranges |
+| Missing YUV matrix/range or BT.2020 CL | Unsupported for float extraction; no resolution-based guess or substitution of NCL | Public preflight units and actual tagged-file rejection; transfer/primaries overrides cannot supply matrix/range |
+| Missing transfer/primaries | Explicit supported overrides required for float output | `test_unknown_hdr_and_yuv_colorimetry` |
+| PQ, HLG, Log, LogSqrt to float/EXR | Unsupported; an SDR override cannot relabel a known HDR/LOG source | `test_float_color_profile_rejects_unsupported_tags_without_relabeling_hdr` |
+| Other transfer or primaries | Unsupported unless covered by an explicit permitted override; no implicit gamut conversion | BT.470M transfer and BT.470BG primaries rejection fixtures |
+| Chroma subsampling and location | 4:2:0/4:2:2/4:4:4; location-aware reconstruction | Raw-code and FFprobe siting references; source codes verified before comparison |
+| Float resize/rotation | Area reduction, bilinear enlargement in linear light, sample-preserving quarter turns | Analytic resize/rotation and checkerboard references |
+| Linear float RGB/RGBA to EXR | HALF/FLOAT, BT.709/BT.2020 chromaticities, relative units; alpha policy explicit | Independent EXR binary reader, FFmpeg HALF/ZIP reader and writer units |
+| RGB8 PNG/JPEG and video export | Existing display/quantization contracts; not a linear HDR master path | Extraction pixel contracts, frozen CPU producer and native video round trips |
+| HDR to SDR | Existing host renderer, explicit request; output is dithered RGB8 sRGB/BT.709 | Existing HDR renderer tests; not evidence of HDR-preserving EXR support |
+| Dolby Vision | Existing format-specific host handling where metadata is available; excluded from float SDR profile | Existing HDR contracts; no generic vendor/model or enhancement-layer claim |
+
+`validateFloatSdrSource` is the public metadata/layout preflight also used by
+Studio. Extraction validates decoded frames as well: a frame-level rejection
+after sink initialization can leave an empty output directory, but must publish
+no image or manifest. Tests distinguish that from a successful conversion.
+FFV1 may supply nominal range when no range was tagged; absent-range validation
+therefore uses the public preflight directly rather than a mislabeled fixture.
+
+| Layer | Headless media/CLI | Studio host | Remaining boundary |
+| --- | --- | --- | --- |
+| Float video decode | Software FFmpeg | Also deliberately software for this profile | Native decoded-GPU float import is not implemented |
+| Linear conversion | Shared C++ sampler, CPU/TBB | Existing Tensor adapter, selected CUDA/Vulkan/Metal when available | Adapter uploads host planes and reads float output back to CPU; device-resident ingest is not implied |
+| No linear GPU renderer available | Shared CPU sampler | Factory can return no renderer, using that CPU sampler | Failure after choosing a renderer is propagated; no universal automatic GPU-error fallback |
+| HDR display conversion | Unsupported without a registered HDR host | Vulkan builds use `libplacebo_vulkan`; other builds use the existing Tensor HDR implementation | Compile-time provider choice, not an automatic runtime fallback chain; renderer initialization can fail |
+| Image output | CPU PNG/JPEG/EXR services | Existing optional CUDA JPEG encoder; EXR remains CPU | No GPU EXR encoder; resume pins its selected JPEG provider |
+
+Runtime registration is not proof that a device or renderer can initialize.
+Capability discovery must not be used as a numerical color reference. Native
+backend tests assert the backend actually exercised; CPU results and hardware
+skips do not qualify another backend.
+
+### Gates before extending HDR or LOG
+
+1. Define the output contract first: PQ has an absolute luminance interpretation,
+   HLG requires a declared rendering/viewing policy, and scene-referred LOG needs
+   the actual curve and gamut. Existing relative-linear SDR EXR must not silently
+   change units or acquire a display tone map.
+2. Decide how source mastering/content-light metadata, unknown values and any
+   assumptions are represented. The existing HDR detector can use mastering
+   metadata heuristics; detection alone is not an inverse-transfer policy.
+3. Specify preservation versus conversion of primaries, out-of-gamut and negative
+   samples, clipping, precision, alpha and resize order. Do not infer a camera
+   LOG curve or vendor calibration from file extension or component depth.
+4. Add independent numerical references and representative real inputs before
+   claiming a new transfer/gamut combination. Current synthetic SDR tests do not
+   qualify all HDR mastering combinations, LOG vendors or Dolby Vision profiles.
+5. Qualify each selected native backend and its explicit CPU/error policy on
+   Windows, Linux and macOS. Reuse existing color math, Tensor programs, writer
+   and backend registration; introduce only the missing contract or operation.
+
+These gates do not require adding new codecs first. HEVC/HEIF/AVIF availability,
+license/build inventory and CPU/hardware codec fallback remain a separate
+increment. GPU import and batching require measured benefit and explicit device,
+ownership and synchronization contracts.
