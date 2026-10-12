@@ -450,6 +450,7 @@ namespace lfs::vis {
         // Renderer reset frees ring cells; clear manager GT ticket state so the
         // next frame does not poll a stale ticket id against a fresh ring.
         gt_async_depth_ticket_ = 0;
+        gt_async_refresh_pending_ = false;
         gt_async_depth_dest_ = {};
         gt_async_ticket_mode_ = GTComparisonMode::RGB;
         gt_async_ticket_intrinsics_.reset();

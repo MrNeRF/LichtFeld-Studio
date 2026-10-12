@@ -973,6 +973,7 @@ namespace lfs::vis {
         // #1574 GT depth/normal async hold-then-swap: at most one outstanding ticket.
         // Panel keeps gt_async_held_display_ until the next ticket delivers (never blank).
         std::uint64_t gt_async_depth_ticket_ = 0;
+        bool gt_async_refresh_pending_ = false;
         lfs::core::Tensor gt_async_depth_dest_{};
         GTComparisonMode gt_async_ticket_mode_ = GTComparisonMode::RGB;
         std::optional<lfs::rendering::CameraIntrinsics> gt_async_ticket_intrinsics_;

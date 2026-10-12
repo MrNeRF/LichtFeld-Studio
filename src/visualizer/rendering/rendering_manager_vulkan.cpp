@@ -2317,6 +2317,7 @@ namespace lfs::vis {
                         vksplat_viewport_renderer_->reset();
                         // Clear GT async ticket host state after ring teardown.
                         gt_async_depth_ticket_ = 0;
+                        gt_async_refresh_pending_ = false;
                         gt_async_depth_dest_ = {};
                         gt_async_ticket_mode_ = GTComparisonMode::RGB;
                         gt_async_ticket_intrinsics_.reset();
@@ -2496,7 +2497,11 @@ namespace lfs::vis {
         // Camera thumbnails are uploaded and composited by the GUI viewport
         // pass. Reuse the cached splat image for an overlay-only refresh; a
         // thumbnail must never turn a stream-in update into a full splat pass.
-        if (!vksplat_viewport_resize &&
+        const bool gt_readback_pending =
+            gt_async_depth_ticket_ != 0 &&
+            splitViewUsesGTComparison(frame_settings.split_view_mode) &&
+            frame_settings.gt_comparison_mode != GTComparisonMode::RGB;
+        if (!vksplat_viewport_resize && !gt_readback_pending &&
             (frame_dirty == 0 || frame_dirty == DirtyFlag::OVERLAY) &&
             has_cached_viewport_output) {
             LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
@@ -3257,6 +3262,11 @@ namespace lfs::vis {
                             std::string compare_error;
 
                             if (gt_mode != GTComparisonMode::RGB) {
+                                // Overlay-only follow-ups deliver the pending image without
+                                // starting another readback. Preserve real changes that arrive
+                                // while the previous camera's ticket is still in flight.
+                                gt_async_refresh_pending_ |=
+                                    (frame_dirty & ~(DirtyFlag::OVERLAY | DirtyFlag::SPLIT_POSITION)) != 0;
                                 // #1574 hold-then-swap: never host-wait the GT depth ticket on the
                                 // render thread. Poll any outstanding ticket; swap into the held
                                 // display when Ready; submit at most one new ticket when free. The
@@ -3384,7 +3394,8 @@ namespace lfs::vis {
                                         }
                                     }
 
-                                    if (compare_error.empty() && gt_async_depth_ticket_ == 0) {
+                                    if (compare_error.empty() && gt_async_depth_ticket_ == 0 &&
+                                        gt_async_refresh_pending_) {
                                         request.depth_view = false;
                                         vksplat_viewport_renderer_->setDepthCaptureMode(true, true);
                                         struct DepthCaptureModeGuard {
@@ -3427,6 +3438,7 @@ namespace lfs::vis {
                                                     gt_async_depth_dest_ = {};
                                                 } else {
                                                     gt_async_depth_ticket_ = *ticket;
+                                                    gt_async_refresh_pending_ = false;
                                                     gt_async_ticket_mode_ = gt_mode;
                                                     gt_async_ticket_intrinsics_ =
                                                         request.frame_view.intrinsics_override;
@@ -3435,6 +3447,11 @@ namespace lfs::vis {
                                                 }
                                             }
                                         }
+                                    }
+
+                                    if (gt_async_depth_ticket_ != 0) {
+                                        markDirty(DirtyFlag::OVERLAY, FrameReason::AsyncCompletion,
+                                                  "gt_depth_readback");
                                     }
 
                                     if (gt_async_held_display_ && gt_async_held_display_->is_valid()) {
@@ -3463,6 +3480,7 @@ namespace lfs::vis {
                                     gt_async_depth_dest_ = {};
                                 }
                                 gt_async_held_display_.reset();
+                                gt_async_refresh_pending_ = false;
                                 const bool use_point_cloud_compare =
                                     frame_settings.point_cloud_mode || !has_visible_gaussian_model;
                                 if (use_point_cloud_compare && has_visible_gaussian_model) {

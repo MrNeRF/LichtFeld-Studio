@@ -15,8 +15,10 @@
 #include "core/tensor.hpp"
 #include "gui/volume_guide_visibility.hpp"
 #include "io/cache_image_loader.hpp"
+#include "io/loader.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/vulkan_external_tensor.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/gt_comparison_cache_utils.hpp"
 #include "visualizer/rendering/render_pass.hpp"
@@ -29,12 +31,15 @@
 #include "visualizer/rendering/viewport_request_builder.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
+#include "window/vulkan_context.hpp"
+#include "window/window_manager.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
@@ -330,6 +335,136 @@ namespace lfs::vis {
             scene.addCamera("source", group, std::move(camera));
         }
     } // namespace
+
+    class GTComparisonAsyncTest : public RenderingManagerEventsTest {
+    protected:
+        void SetUp() override {
+            RenderingManagerEventsTest::SetUp();
+            int devices = 0;
+            if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0 || !std::getenv("DISPLAY"))
+                GTEST_SKIP() << "Requires CUDA and a Vulkan display";
+            window = std::make_unique<WindowManager>("GT comparison test", 128, 128);
+            ASSERT_TRUE(window->init());
+            scene = std::make_unique<SceneManager>();
+            auto model = makeTestSplat(0.0f);
+            const auto allocator = [this](lfs::core::TensorShape shape, size_t capacity,
+                                          lfs::core::DataType dtype, std::string_view name) {
+                auto tensor = makeVulkanExternalTensor(*window->getVulkanContext(), std::move(shape),
+                                                       dtype, capacity, std::string(name).c_str());
+                if (!tensor)
+                    throw std::runtime_error(tensor.error());
+                return std::move(*tensor);
+            };
+            const auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model, allocator);
+            ASSERT_TRUE(migrated) << migrated.error().format();
+            scene->getScene().addSplat("Model", std::move(model));
+            addDatasetCameraWithImage(*scene);
+            scene->changeContentType(SceneManager::ContentType::SplatFiles);
+            services().set(scene.get());
+            manager = std::make_unique<RenderingManager>();
+            settings = manager->getSettings();
+            settings.split_view_mode = SplitViewMode::GTComparison;
+            settings.gt_comparison_mode = GTComparisonMode::Normal;
+            settings.show_camera_frustums = false;
+            manager->updateSettings(settings);
+            viewport.frameBufferSize = {128, 128};
+        }
+
+        void TearDown() override {
+            manager.reset();
+            scene.reset();
+            window.reset();
+            RenderingManagerEventsTest::TearDown();
+        }
+
+        void render() {
+            (void)manager->frameDemandLedger().plan(FrameClock::now());
+            last = manager->renderVulkanFrame({.viewport = viewport,
+                                               .settings = settings,
+                                               .scene_manager = scene.get(),
+                                               .vulkan_context = window->getVulkanContext()});
+        }
+
+        void settle() {
+            const auto deadline = FrameClock::now() + std::chrono::seconds(5);
+            while (manager->pollDirtyState() && FrameClock::now() < deadline) {
+                render();
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            EXPECT_FALSE(manager->pollDirtyState()) << "GT readback must return to idle";
+        }
+
+        void refreshReference() {
+            // Manual redraws are the workaround, and provide an independent
+            // settled reference for the image expected without further input.
+            for (int i = 0; i < 3; ++i) {
+                manager->markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
+                render();
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            settle();
+        }
+
+        std::unique_ptr<WindowManager> window;
+        std::unique_ptr<SceneManager> scene;
+        std::unique_ptr<RenderingManager> manager;
+        Viewport viewport{128, 128};
+        RenderSettings settings;
+        RenderingManager::VulkanFrameResult last;
+    };
+
+    TEST_F(GTComparisonAsyncTest, DepthModeCompletesWithoutFurtherInput) {
+        refreshReference();
+        ASSERT_TRUE(manager->getVulkanMeshFrame().split_view.right.image);
+        const auto normal = manager->getVulkanMeshFrame().split_view.right.image->cpu().clone();
+        settings.gt_comparison_mode = GTComparisonMode::Depth;
+        manager->updateSettings(settings);
+        render();
+        EXPECT_TRUE(manager->pollDirtyState()) << "Pending depth readback needs a follow-up frame";
+        settle();
+        ASSERT_TRUE(manager->getVulkanMeshFrame().split_view.right.image);
+        const auto automatic = manager->getVulkanMeshFrame().split_view.right.image->cpu().clone();
+        refreshReference();
+        ASSERT_TRUE(manager->getVulkanMeshFrame().split_view.right.image);
+        const auto expected = manager->getVulkanMeshFrame().split_view.right.image->cpu();
+        ASSERT_EQ(automatic.bytes(), expected.bytes());
+        EXPECT_EQ(std::memcmp(automatic.data_ptr(), expected.data_ptr(), expected.bytes()), 0)
+            << "Idle depth image differs from the same mode after manual redraw";
+        EXPECT_NE(std::memcmp(normal.data_ptr(), expected.data_ptr(), expected.bytes()), 0);
+    }
+
+    TEST_F(GTComparisonAsyncTest, NormalResizeCompletesWithoutFurtherInput) {
+        refreshReference();
+        viewport.frameBufferSize = {192, 192};
+        viewport.windowSize = {192, 192};
+        manager->markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
+        render();
+        settle();
+        ASSERT_TRUE(manager->getVulkanMeshFrame().split_view.right.image);
+        const auto automatic = manager->getVulkanMeshFrame().split_view.right.image->cpu().clone();
+        refreshReference();
+        ASSERT_TRUE(manager->getVulkanMeshFrame().split_view.right.image);
+        const auto expected = manager->getVulkanMeshFrame().split_view.right.image->cpu();
+        ASSERT_EQ(automatic.bytes(), expected.bytes());
+        EXPECT_EQ(std::memcmp(automatic.data_ptr(), expected.data_ptr(), expected.bytes()), 0);
+    }
+
+    TEST_F(GTComparisonAsyncTest, RgbAndOverlayRefreshKeepSettledPixelsAndIdle) {
+        for (const auto mode : {GTComparisonMode::RGB, GTComparisonMode::Normal, GTComparisonMode::Depth}) {
+            settings.gt_comparison_mode = mode;
+            manager->updateSettings(settings);
+            refreshReference();
+            const auto generation = last.image_generation;
+            const auto right = manager->getVulkanMeshFrame().split_view.right;
+            manager->markDirty(DirtyFlag::OVERLAY, FrameReason::Overlay);
+            render();
+            EXPECT_FALSE(manager->pollDirtyState());
+            EXPECT_EQ(last.image_generation, generation);
+            const auto after = manager->getVulkanMeshFrame().split_view.right;
+            EXPECT_EQ(after.image, right.image);
+            EXPECT_EQ(after.external_image_generation, right.external_image_generation);
+        }
+    }
 
     class SceneManagerRenderStateTest : public ::testing::Test {
     protected:
