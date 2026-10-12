@@ -48,6 +48,14 @@ int runFloatExrUnitContracts() {
     require(!validateFloatSdrSource(color_source, assumptions), "transfer override cannot supply missing YUV matrix");
     color_source.color.matrix = "bt2020c";
     require(!validateFloatSdrSource(color_source), "constant-luminance matrix is not treated as NCL");
+    color_source.color.matrix = "bt2020nc";
+    color_source.color.primaries = "bt2020";
+    color_source.color.transfer = "smpte2084";
+    require(validateFloatSource(color_source, FloatColorProfile::PqNits).has_value(), "explicit PQ preflight accepted");
+    require(!validateFloatSdrSource(color_source), "default SDR preflight still rejects PQ");
+    require(!validateFloatSource(color_source, FloatColorProfile::PqNits, assumptions), "PQ rejects SDR relabeling");
+    color_source.color.transfer = "arib-std-b67";
+    require(!validateFloatSource(color_source, FloatColorProfile::PqNits), "PQ profile does not adopt HLG");
     const auto directory = std::filesystem::temp_directory_path() / ("lfs-float-exr-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directory(directory);
     struct Cleanup {

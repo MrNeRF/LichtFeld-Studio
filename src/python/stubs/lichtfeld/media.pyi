@@ -64,6 +64,16 @@ class AlphaMode(enum.Enum):
 
     Premultiplied = 2
 
+class ColorUnits(enum.Enum):
+    Relative = 0
+
+    Nits = 1
+
+class FloatColorProfile(enum.Enum):
+    Sdr = 0
+
+    PqNits = 1
+
 class FrameOrigin(enum.Enum):
     Unspecified = 0
 
@@ -93,6 +103,12 @@ class FrameColor:
 
     @alpha.setter
     def alpha(self, arg: AlphaMode, /) -> None: ...
+
+    @property
+    def units(self) -> ColorUnits: ...
+
+    @units.setter
+    def units(self, arg: ColorUnits, /) -> None: ...
 
 class ExrOutputOptions:
     def __init__(self) -> None: ...
@@ -309,6 +325,12 @@ class IngestRequest:
 
     @input_color.setter
     def input_color(self, arg: FrameColor, /) -> None: ...
+
+    @property
+    def float_color_profile(self) -> FloatColorProfile: ...
+
+    @float_color_profile.setter
+    def float_color_profile(self, arg: FloatColorProfile, /) -> None: ...
 
 class FileFrameSinkOptions:
     def __init__(self) -> None: ...
@@ -620,6 +642,12 @@ class IngestCapabilities:
 
     @property
     def float_sdr_profile(self) -> str: ...
+
+    @property
+    def rgb_float_pq(self) -> bool: ...
+
+    @property
+    def float_pq_profile(self) -> str: ...
 
 class CodecBuildInfo:
     @property

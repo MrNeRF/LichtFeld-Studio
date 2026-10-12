@@ -68,6 +68,7 @@ namespace lfs::core::color {
             for (uint channel = 0u; channel < 3u; ++channel) {
                 float value = parameters.decode[channel * 3u] * a + parameters.decode[channel * 3u + 1u] * b + parameters.decode[channel * 3u + 2u] * c;
                 result.channel[channel] = parameters.transfer == 1u ? srgbToLinear(value) : parameters.transfer == 2u ? bt709ToLinear(value)
+                                                                                        : parameters.transfer == 3u   ? pqToNits(max(0.0f, min(1.0f, value)))
                                                                                                                       : value;
             }
             return result;

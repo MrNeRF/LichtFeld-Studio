@@ -229,6 +229,7 @@ namespace lfs::app {
                     {"exr_compression", {{"type", "string"}, {"enum", option_names<ExrCompression>()}}},
                     {"overwrite", boolean},
                     {"input_transfer", {{"type", "string"}, {"enum", option_names<ColorTransfer>()}}},
+                    {"float_profile", {{"type", "string"}, {"enum", option_names<FloatColorProfile>()}}},
                     {"input_primaries", {{"type", "string"}, {"enum", option_names<ColorPrimaries>()}}},
                     {"filename_pattern", {{"type", "string"}}},
                     {"write_metadata", boolean}};
@@ -295,6 +296,10 @@ namespace lfs::app {
                 throw Exception(primaries.error());
             request.input_color.transfer = *transfer;
             request.input_color.primaries = *primaries;
+            const auto profile = parseOutputOption<FloatColorProfile>(args.value("float_profile", "sdr"));
+            if (!profile)
+                throw Exception(profile.error());
+            request.float_color_profile = *profile;
             return request;
         }
     } // namespace
@@ -312,7 +317,7 @@ namespace lfs::app {
                                [](const json&) {
                                    const auto caps = MediaIngest::capabilities();
                                    const auto codecs = MediaIngest::codecBuildInfo();
-                                   return json{{"success", true}, {"software_decode", caps.software_decode}, {"rgb8", caps.rgb8}, {"png", caps.png}, {"jpeg", caps.jpeg}, {"hardware_decode", caps.hardware_decode}, {"hdr_to_sdr", caps.hdr_to_sdr}, {"rgb_float_sdr", caps.rgb_float_sdr}, {"exr", caps.exr}, {"float_sdr_profile", caps.float_sdr_profile}, {"ffmpeg_version", codecs.ffmpeg_version}, {"ffmpeg_license", codecs.ffmpeg_license}, {"ffmpeg_configuration", codecs.ffmpeg_configuration}};
+                                   return json{{"success", true}, {"software_decode", caps.software_decode}, {"rgb8", caps.rgb8}, {"png", caps.png}, {"jpeg", caps.jpeg}, {"hardware_decode", caps.hardware_decode}, {"hdr_to_sdr", caps.hdr_to_sdr}, {"rgb_float_sdr", caps.rgb_float_sdr}, {"exr", caps.exr}, {"float_sdr_profile", caps.float_sdr_profile}, {"rgb_float_pq", caps.rgb_float_pq}, {"float_pq_profile", caps.float_pq_profile}, {"ffmpeg_version", codecs.ffmpeg_version}, {"ffmpeg_license", codecs.ffmpeg_license}, {"ffmpeg_configuration", codecs.ffmpeg_configuration}};
                                });
         registry.register_tool(mcp::McpTool{
                                    .name = "media.probe",
@@ -341,7 +346,7 @@ namespace lfs::app {
                                    files.files.output_directory = core::utf8_to_path(args.at("output_directory").get<std::string>());
                                    const auto format = args.value("format", "png");
                                    const bool exr = format == "exr";
-                                   if ((!exr && (args.contains("exr_precision") || args.contains("exr_compression") || args.contains("overwrite") || args.contains("input_transfer") || args.contains("input_primaries"))) || (exr && (args.contains("jpeg_quality") || args.value("convert_hdr_to_sdr", false))))
+                                   if ((!exr && (args.contains("exr_precision") || args.contains("exr_compression") || args.contains("overwrite") || args.contains("input_transfer") || args.contains("input_primaries") || args.contains("float_profile"))) || (exr && (args.contains("jpeg_quality") || args.value("convert_hdr_to_sdr", false))))
                                        return mcp::invalid_argument_result("EXR options require EXR; EXR does not accept JPEG quality or HDR to SDR", "media.extract");
                                    const auto parsed_format = parseOutputOption<FrameFileFormat>(format);
                                    const auto precision = parseOutputOption<ExrPrecision>(args.value("exr_precision", "half"));

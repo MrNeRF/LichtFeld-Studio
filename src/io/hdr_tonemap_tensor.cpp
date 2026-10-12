@@ -214,9 +214,7 @@ namespace lfs::io {
         }
 
         float pqEotf(float x) {
-            x = std::pow(std::fmax(x, 0.0f), 1.0f / PQ_M2);
-            x = std::fmax(x - PQ_C1, 0.0f) / (PQ_C2 - PQ_C3 * x);
-            return std::pow(x, 1.0f / PQ_M1);
+            return core::color::pqToLinear(x);
         }
 
         // gamut_mapping.c's PQ EOTF: 1024 steps, linearly interpolated.

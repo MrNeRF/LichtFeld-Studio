@@ -104,9 +104,7 @@ float2 read_chroma(uint packed) {
 }
 
 float pq_eotf(float x) {
-    x = pow(max(x, 0.0), 1.0 / PQ_M2);
-    x = max(x - PQ_C1, 0.0) / (PQ_C2 - PQ_C3 * x);
-    return pow(x, 1.0 / PQ_M1);
+    return pqToLinear(x);
 }
 
 float3 pq_eotf(float3 v) {

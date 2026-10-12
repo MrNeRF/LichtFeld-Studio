@@ -72,6 +72,9 @@ def uncompressed_exr(path):
     return width, height, channels, attrs, pixels
 
 def inverse(value, curve):
+    if curve == "pq":
+        p=max(0,min(1,value))**(32/2523)
+        return 10000*(max(p-3424/4096,0)/(2413/128-2392/128*p))**(16384/2610)
     if curve == "srgb":
         return value/12.92 if value <= .04045 else ((value+.055)/1.055)**2.4
     if curve == "bt709":
@@ -229,6 +232,93 @@ class FloatEXR(unittest.TestCase):
                 # Precision is qualified separately against analytic unclipped YUV at 2e-6.
                 self.assertAlmostEqual(max(0,min(1,value)),reference[i*3+channel]/65535,delta=1/255)
 
+    def test_pq_nits_profile_preserves_absolute_units_primaries_and_linear_resize(self):
+        codes=[0,1,1024,16384,32768,49152,65534,65535]*16
+        raw=struct.pack("<"+"H"*384,*(codes*3))
+        source=self.root/"pq-master.mkv"
+        run([FFMPEG,"-v","error","-f","rawvideo","-pixel_format","gbrp16le",
+             "-video_size","16x8","-framerate","10","-i","pipe:0",
+             "-vf","setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=gbr:range=full",
+             "-c:v","ffv1","-level","3",source],raw)
+        self.assertEqual(run([FFMPEG,"-v","error","-i",source,"-f","rawvideo","-pix_fmt","gbrp16le","pipe:1"]),raw)
+        def pq(code):
+            p=(code/65535)**(32/2523)
+            return 10000*(max(p-3424/4096,0)/(2413/128-2392/128*p))**(16384/2610)
+        expected=[pq(code) for code in codes]
+        for precision in ("float","half"):
+            output=self.root/f"pq-{precision}"
+            self.invoke("extract",source,"--output",output,"--format","exr","--float-profile","pq-nits",
+                        "--exr-precision",precision,"--exr-compression","none","--quiet")
+            _,_,_,attrs,pixels=uncompressed_exr(output/"frame_1.exr")
+            self.assertEqual(attrs["lfsUnits"][1],b"cd/m2")
+            self.assertEqual(attrs["lfsTransfer"][1],b"linear")
+            for actual,reference in zip(struct.unpack("<8f",attrs["chromaticities"][1]),
+                                        (.708,.292,.170,.797,.131,.046,.3127,.3290)):
+                self.assertAlmostEqual(actual,reference,delta=1e-7)
+            for channel in "RGB":
+                for actual,reference in zip(pixels[channel],expected):
+                    self.assertAlmostEqual(actual,reference,delta=max(5e-5,reference*(.001 if precision=="half" else .0002)))
+                self.assertEqual(pixels[channel][-1],10000)
+            manifest=json.loads((output/"extraction_metadata.json").read_text())
+            self.assertEqual(manifest["output"]["units"],"cd/m2")
+            self.assertEqual(manifest["output"]["color_profile"],"linear-pq-nits")
+            self.assertEqual(manifest["output"]["input_transfer"],"smpte2084")
+            self.assertFalse(manifest["output"]["mastering_rescale"])
+            self.assertFalse(manifest["output"]["hdr_to_sdr"])
+            self.assertEqual(manifest["processing"]["decoder"]["backend"],"ffmpeg_software")
+        output=self.root/"pq-resize"
+        self.invoke("extract",source,"--output",output,"--format","exr","--float-profile","pq-nits",
+                    "--exr-precision","float","--exr-compression","none","--size","2","1","--quiet")
+        w,h,_,_,pixels=uncompressed_exr(output/"frame_1.exr")
+        self.assertEqual((w,h),(2,1))
+        for channel in "RGB":
+            for actual in pixels[channel]:
+                self.assertAlmostEqual(actual,sum(expected[:8])/8,delta=sum(expected[:8])/8*.0002)
+        for flags in (["--input-transfer","linear"], ["--input-primaries","bt709"]):
+            output=self.root/("pq-override-"+flags[0])
+            result=self.invoke("extract",source,"--output",output,"--format","exr","--float-profile","pq-nits",*flags,"--quiet",code=3)
+            self.assertEqual(result["error"]["code"],"Unsupported")
+            self.assertEqual(list(output.rglob("*")),[])
+        output=self.root/"sdr-as-pq"
+        result=self.invoke("extract",self.input,"--output",output,"--format","exr","--float-profile","pq-nits","--quiet",code=3)
+        self.assertEqual(result["error"]["code"],"Unsupported")
+        self.assertEqual(list(output.rglob("*")),[])
+
+    def test_pq_mastering_metadata_does_not_rescale_absolute_samples(self):
+        encoded=[]
+        for peak in (1000,4000):
+            source=self.root/f"pq-mastering-{peak}.mkv"
+            run([FFMPEG,"-v","error","-f","lavfi","-i","testsrc2=size=64x32:rate=10:duration=0.4",
+                 "-pix_fmt","yuv420p10le","-color_primaries","bt2020","-color_trc","smpte2084","-colorspace","bt2020nc",
+                 "-c:v","libx265","-x265-params",
+                 f"pools=1:frame-threads=1:lossless=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L({peak*10000},1):max-cll={peak},400",source])
+            probe=json.loads(run([FFPROBE,"-v","error","-show_frames","-of","json",source]))
+            self.assertEqual(probe["frames"][0]["color_transfer"],"smpte2084")
+            self.assertEqual(probe["frames"][0]["color_primaries"],"bt2020")
+            side=probe["frames"][0]["side_data_list"]
+            light=next(item for item in side if item["side_data_type"]=="Content light level metadata")
+            self.assertEqual(light["max_content"],peak)
+            self.assertTrue(any(item["side_data_type"]=="Mastering display metadata" for item in side))
+            raw=run([FFMPEG,"-v","error","-i",source,"-f","rawvideo","-pix_fmt","yuv420p10le","pipe:1"])
+            output=self.root/f"pq-mastering-out-{peak}"
+            self.invoke("extract",source,"--output",output,"--interval","1","--format","exr","--float-profile","pq-nits",
+                        "--exr-precision","float","--exr-compression","none","--quiet")
+            images=sorted(output.glob("*.exr"))
+            self.assertEqual(len(images),4,"color prefetch must preserve the first decoded frame")
+            metadata=json.loads((output/"extraction_metadata.json").read_text())
+            self.assertEqual([round(frame["timestamp"],6) for frame in metadata["frames"]],[0.0,0.1,0.2,0.3])
+            self.assertEqual(metadata["performance"]["decoded_frames"],4)
+            trimmed=self.root/f"pq-mastering-trim-{peak}"
+            self.invoke("extract",source,"--output",trimmed,"--interval","1","--format","exr","--float-profile","pq-nits",
+                        "--start","0.2","--exr-precision","float","--exr-compression","none","--quiet")
+            self.assertEqual([image.read_bytes() for image in sorted(trimmed.glob("*.exr"))],
+                             [image.read_bytes() for image in images[2:]])
+            trim_metadata=json.loads((trimmed/"extraction_metadata.json").read_text())
+            self.assertGreater(trim_metadata["performance"]["decoded_frames"],len(trim_metadata["frames"]),
+                               "decode cost must include color prefetch discarded by a trim seek")
+            encoded.append((raw,[image.read_bytes() for image in images]))
+        self.assertEqual(encoded[0],encoded[1],"mastering peak must not change PQ's absolute EOTF or encoded EXR")
+
     def test_float_color_profile_rejects_unsupported_tags_without_relabeling_hdr(self):
         raw=struct.pack("<"+"H"*384,*([512]*384))
         cases=[("smpte2084","bt2020","bt2020nc","limited"),
@@ -275,10 +365,10 @@ class FloatEXR(unittest.TestCase):
         for matrix,kr,kb,primaries in [("bt709",.2126,.0722,"bt709"),("smpte170m",.299,.114,"bt709"),
                                        ("bt470bg",.299,.114,"bt709"),("smpte240m",.2122,.0865,"bt709"),
                                        ("bt2020nc",.2627,.0593,"bt2020")]:
-            for curve in ["linear","srgb","bt709"]:
+            for curve in ["linear","srgb","bt709","pq"]:
                 for full in [False,True]:
                     with self.subTest(matrix=matrix,curve=curve,full=full):
-                        transfer="iec61966-2-1" if curve=="srgb" else curve
+                        transfer="smpte2084" if curve=="pq" else "iec61966-2-1" if curve=="srgb" else curve
                         range_name="full" if full else "limited"
                         source=self.root/f"matrix-{matrix}-{curve}-{full}.mkv"
                         run([FFMPEG,"-v","error","-f","rawvideo","-pixel_format","yuv444p10le","-video_size","16x8","-framerate","10","-i","pipe:0",
@@ -286,7 +376,8 @@ class FloatEXR(unittest.TestCase):
                         decoded=run([FFMPEG,"-v","error","-i",source,"-f","rawvideo","-pix_fmt","yuv444p10le","-color_range","pc" if full else "tv","pipe:1"])
                         self.assertEqual(decoded,raw,"fixture preserves all source YUV codes")
                         output=self.root/f"matrix-out-{matrix}-{curve}-{full}"
-                        self.invoke("extract",source,"--output",output,"--format","exr","--exr-precision","float","--exr-compression","none","--quiet")
+                        flags=["--float-profile","pq-nits"] if curve=="pq" else []
+                        self.invoke("extract",source,"--output",output,"--format","exr","--exr-precision","float","--exr-compression","none",*flags,"--quiet")
                         _,_,_,_,pixels=uncompressed_exr(output/"frame_1.exr")
                         for i in range(count):
                             y=yy[i]/1023 if full else (yy[i]-64)/876
@@ -294,8 +385,9 @@ class FloatEXR(unittest.TestCase):
                             r=(cr[i]-512)/(1023 if full else 896)
                             encoded=[y+2*(1-kr)*r,y-2*kb*(1-kb)/(1-kr-kb)*b-2*kr*(1-kr)/(1-kr-kb)*r,y+2*(1-kb)*b]
                             for name,value in zip("RGB",encoded):
-                                self.assertAlmostEqual(pixels[name][i],inverse(value,curve),delta=2e-6)
-                        if not full:
+                                reference=inverse(value,curve)
+                                self.assertAlmostEqual(pixels[name][i],reference,delta=max(5e-5,reference*.0002) if curve=="pq" else 2e-6)
+                        if not full and curve!="pq":
                             self.assertGreater(pixels["R"][0],1)
                             self.assertLess(pixels["R"][1],0)
 

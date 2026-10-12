@@ -1,4 +1,4 @@
-# Linear SDR frames and EXR output
+# Linear frames and EXR output
 
 `lfs_media` provides `RGBFloat32` and `RGBAFloat32` CPU frame views and immutable
 owning surfaces. `RGB8` remains the default for ingest, preview and PNG/JPEG.
@@ -13,9 +13,11 @@ Rendered/external writers do not require source frame ordinals or fake PTS.
 Optional `source_component_depth` describes decoded source precision rather than
 the output representation.
 
-## Qualified extraction profile
+## Default SDR extraction profile
 
-Set `IngestRequest::output_format` to `RGBFloat32`. The software decoder feeds
+Set `IngestRequest::output_format` to `RGBFloat32`. The default
+`FloatColorProfile::Sdr` profile is described here; the explicit PQ profile is
+specified below. The software decoder feeds
 integer RGB or planar/semiplanar YUV of 8–16 component bits, including 4:2:0,
 4:2:2 and 4:4:4. Components are unpacked directly at source precision; YUV uses
 chroma-location-aware sampling and an unclipped float matrix with
@@ -80,7 +82,8 @@ Cancellation is checked before work, between chunks and before commit. It cannot
 interrupt an arbitrary filesystem call. Chunk scratch is bounded to 64 MiB;
 provenance is bounded to 1 MiB. No OpenImageIO dependency is introduced.
 
-Headers record chromaticities, linear transfer, relative units, alpha convention,
+Headers record chromaticities, linear transfer, explicit sample units (relative
+by default, or cd/m2), alpha convention,
 optional provenance, origin, source/output timestamps and source component depth.
 `FileFrameSink` still names decoded frames by the existing source ordinal.
 EXR extraction requires float output and always creates schema-3 metadata with
@@ -157,11 +160,11 @@ separate capabilities. Matrix/range and transfer/primaries are independent.
 | YUV matrix | BT.709, BT.470BG/SMPTE 170M, SMPTE 240M, BT.2020 NCL supported | Independent raw-code analytic reference, five matrices × three curves × two ranges |
 | Missing YUV matrix/range or BT.2020 CL | Unsupported for float extraction; no resolution-based guess or substitution of NCL | Public preflight units and actual tagged-file rejection; transfer/primaries overrides cannot supply matrix/range |
 | Missing transfer/primaries | Explicit supported overrides required for float output | `test_unknown_hdr_and_yuv_colorimetry` |
-| PQ, HLG, Log, LogSqrt to float/EXR | Unsupported; an SDR override cannot relabel a known HDR/LOG source | `test_float_color_profile_rejects_unsupported_tags_without_relabeling_hdr` |
+| PQ, HLG, Log, LogSqrt under the default SDR profile | Unsupported; an SDR override cannot relabel a known HDR/LOG source | `test_float_color_profile_rejects_unsupported_tags_without_relabeling_hdr` |
 | Other transfer or primaries | Unsupported unless covered by an explicit permitted override; no implicit gamut conversion | BT.470M transfer and BT.470BG primaries rejection fixtures |
 | Chroma subsampling and location | 4:2:0/4:2:2/4:4:4; location-aware reconstruction | Raw-code and FFprobe siting references; source codes verified before comparison |
 | Float resize/rotation | Area reduction, bilinear enlargement in linear light, sample-preserving quarter turns | Analytic resize/rotation and checkerboard references |
-| Linear float RGB/RGBA to EXR | HALF/FLOAT, BT.709/BT.2020 chromaticities, relative units; alpha policy explicit | Independent EXR binary reader, FFmpeg HALF/ZIP reader and writer units |
+| Linear float RGB/RGBA to EXR | HALF/FLOAT, BT.709/BT.2020 chromaticities, explicit relative or cd/m2 units; alpha policy explicit | Independent EXR binary reader, FFmpeg HALF/ZIP reader and writer units |
 | RGB8 PNG/JPEG and video export | Existing display/quantization contracts; not a linear HDR master path | Extraction pixel contracts, frozen CPU producer and native video round trips |
 | HDR to SDR | Existing host renderer, explicit request; output is dithered RGB8 sRGB/BT.709 | Existing HDR renderer tests; not evidence of HDR-preserving EXR support |
 | Dolby Vision | Existing format-specific host handling where metadata is available; excluded from float SDR profile | Existing HDR contracts; no generic vendor/model or enhancement-layer claim |
@@ -209,3 +212,63 @@ These gates do not require adding new codecs first. HEVC/HEIF/AVIF availability,
 license/build inventory and CPU/hardware codec fallback remain a separate
 increment. GPU import and batching require measured benefit and explicit device,
 ownership and synchronization contracts.
+
+
+## Explicit PQ luminance profile
+
+The default `FloatColorProfile::Sdr` contract remains relative-linear SDR.
+`FloatColorProfile::PqNits` explicitly accepts integer PQ RGB/YUV sources and
+produces linear RGB in absolute cd/m2. CLI uses `--float-profile pq-nits` with
+`--format exr`; MCP uses `float_profile: "pq-nits"`; C++/Python use
+`IngestRequest.float_color_profile`. `FrameColor.units` distinguishes
+`ColorUnits::Relative` from `ColorUnits::Nits`, including owned memory surfaces.
+The existing GUI continues to use its SDR profile/preflight.
+
+```sh
+media-ingest extract pq-source.mkv --output pq-exr --format exr \
+  --float-profile pq-nits --interval 1 --exr-precision float
+```
+
+The PQ source must declare SMPTE ST 2084 transfer and BT.709 or BT.2020 primaries.
+Input transfer/primaries overrides are rejected for this profile; missing values
+are not supplied from resolution, bit depth, mastering metadata or an extension.
+Frame declarations can supply tags omitted by the container. PQ extraction reads
+the first decoded frame before starting the sink, then retains it for normal
+selection; an explicit trim seek resets the prefetch. Subsequent color changes
+remain errors. The public `validateFloatSource` metadata preflight is conservative:
+missing container tags require decoded-frame validation and are not proof that
+the bitstream lacks those tags. `validateFloatSdrSource` retains its existing
+contract.
+
+YUV uses the same supported matrix/range/siting reconstruction as SDR. PQ RGB
+requires full range. Encoded RGB is clamped to the PQ domain [0,1] after YUV
+reconstruction, then the shared PQ EOTF produces absolute luminance with a
+10,000 cd/m2 reference peak. Primaries are retained; no tone map, gamut conversion
+or rescale to mastering-display/MaxCLL peak occurs. HALF and FLOAT EXR preserve
+these units through `lfsUnits = "cd/m2"` and the existing chromaticities attribute.
+The manifest reports the explicit profile, units, clipping domain and reference
+peak. This is luminance calibration, not a display-ready exposure policy.
+The standard reference is [ITU-R BT.2100](https://www.itu.int/rec/R-REC-BT.2100).
+
+Resize still operates on linear samples before image encoding. Sharpness reuses
+the existing RGB8 scorer with a documented linear proxy: PQ nits divided by
+10,000, clamped and quantized to RGB8. This proxy can discard low-luminance detail;
+it is not a perceptual HDR sharpness metric. The float master is not normalized
+or quantized by that scoring path. Resume identity distinguishes non-default
+profile and units; replay retains encoder pinning and complete verification.
+
+The conversion is shared by CPU and the existing CUDA/Vulkan/Metal Tensor
+programs. The headless path remains CPU; Studio adapters retain the existing
+upload/readback contract and backend-selection/error policy. This does not add
+native decoded-GPU HDR ingest or GPU EXR encoding. Existing HDR-display PQ math
+uses the same normalized EOTF without changing its display tonemap policy.
+
+Independent tests cover 40 matrix/transfer/range combinations (30 SDR + 10 PQ),
+raw RGB16 absolute references including the 10,000 endpoint, HALF/FLOAT units,
+linear resize, owned surfaces, MCP, resume/replay/reconstruction and rejection of
+SDR/HLG/LOG or overrides under PQ. Two HEVC streams with identical decoded
+samples and different mastering/MaxCLL peaks produce identical EXR samples; the
+fixture verifies actual frame tags, first-frame preservation and trim output.
+Synthetic references do not qualify every real HDR bitstream, metadata change,
+Dolby Vision profile or damaged stream. HLG, vendor LOG, BT.2020 CL and Dolby
+Vision remain unsupported by this float profile.

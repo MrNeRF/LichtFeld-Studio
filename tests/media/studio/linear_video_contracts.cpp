@@ -326,6 +326,20 @@ int main(int argc, char** argv) {
             if (std::abs(actual - expected[c]) > 1e-6)
                 throw std::runtime_error("Packed RGB10 loses shifted components");
         }
+        // PQ uses an independent double-precision EOTF reference and absolute
+        // luminance; it must not reuse the SDR normalized-output contract.
+        color.transfer = 3;
+        result = convert(source, color, 1, 1, output);
+        if (!result)
+            throw std::runtime_error(std::string(result.error().detail()));
+        for (size_t c = 0; c < 3; ++c) {
+            const double p = std::pow(double(expected[c]), 32.0 / 2523.0);
+            const double nits = 10000 * std::pow(std::max(p - 3424.0 / 4096, 0.0) / (2413.0 / 128 - 2392.0 / 128 * p), 16384.0 / 2610);
+            float actual;
+            std::memcpy(&actual, output.data() + c * 4, 4);
+            if (std::abs(actual - nits) > std::max(5e-5, nits * 2e-4))
+                throw std::runtime_error("PQ conversion differs from absolute-luminance reference");
+        }
         auto bytes = make_bytes(source, cpu ? core::Device::CPU : core::Device::GPU);
         auto tensor = core::video_to_linear_rgb(bytes, color, 1, 1);
         if (!tensor || tensor->device() != bytes.device() || core::gpu_backend_of(*tensor) != core::gpu_backend_of(bytes))

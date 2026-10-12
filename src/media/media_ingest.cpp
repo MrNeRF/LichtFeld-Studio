@@ -49,6 +49,7 @@ namespace lfs::media {
             p.convert_hdr_to_sdr = request.convert_hdr_to_sdr;
             p.output_format = request.output_format;
             p.input_color = request.input_color;
+            p.float_color_profile = request.float_color_profile;
             return p;
         }
         struct TrackingSink final : FrameSink {
@@ -95,10 +96,14 @@ namespace lfs::media {
                 if (request.output_format != FramePixelFormat::RGB8 && request.output_format != FramePixelFormat::RGBFloat32)
                     return failure(ErrorCode::Unsupported, "Ingest supports RGB8 or integer SDR to linear RGBFloat32", 0);
                 if (outputOptionName(request.input_color.transfer) == "unknown" ||
-                    outputOptionName(request.input_color.primaries) == "unknown" || request.input_color.alpha != AlphaMode::None)
+                    outputOptionName(request.input_color.primaries) == "unknown" || request.input_color.alpha != AlphaMode::None ||
+                    request.input_color.units != ColorUnits::Relative || outputOptionName(request.float_color_profile) == "unknown")
                     return failure(ErrorCode::InvalidArgument, "Invalid input color override", 0);
                 if (request.output_format == FramePixelFormat::RGB8 && (request.input_color.transfer != ColorTransfer::Unspecified || request.input_color.primaries != ColorPrimaries::Unspecified))
                     return failure(ErrorCode::InvalidArgument, "Input color overrides apply only to float SDR output", 0);
+                if (request.float_color_profile != FloatColorProfile::Sdr &&
+                    (request.output_format != FramePixelFormat::RGBFloat32 || request.convert_hdr_to_sdr))
+                    return failure(ErrorCode::InvalidArgument, "PQ-nits requires float output without HDR tone mapping", 0);
                 auto p = parameters(request);
                 if (files) {
                     p.allow_hardware_encode = !files->resume;

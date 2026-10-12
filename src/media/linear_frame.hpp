@@ -12,7 +12,7 @@ namespace lfs::media::detail {
     // Integer SDR through shared color primitives and the optional tensor host.
     class LinearFrameConverter {
     public:
-        LinearFrameConverter(const AVCodecParameters&, FrameColor overrides);
+        LinearFrameConverter(const AVCodecParameters&, FrameColor overrides, FloatColorProfile profile = FloatColorProfile::Sdr);
         ~LinearFrameConverter();
         LinearFrameConverter(const LinearFrameConverter&) = delete;
         LinearFrameConverter& operator=(const LinearFrameConverter&) = delete;
@@ -23,6 +23,7 @@ namespace lfs::media::detail {
     private:
         AVCodecParameters source_{};
         FrameColor overrides_;
+        FloatColorProfile profile_;
         ColorTransfer transfer_ = ColorTransfer::Unspecified;
         std::vector<uint8_t> planes_;
         std::unique_ptr<LinearVideoRenderer> renderer_;

@@ -119,6 +119,7 @@ namespace lfs::io {
             bool allow_hardware_decode = true;
             media::FramePixelFormat output_format = media::FramePixelFormat::RGB8;
             media::FrameColor input_color;
+            media::FloatColorProfile float_color_profile = media::FloatColorProfile::Sdr;
             media::ExrPrecision exr_precision = media::ExrPrecision::Half;
             media::ExrCompression exr_compression = media::ExrCompression::ZIP;
             bool overwrite_metadata = false;

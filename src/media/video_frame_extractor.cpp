@@ -1190,15 +1190,55 @@ namespace lfs::io {
                     throw std::runtime_error(std::string(failure_->detail()));
                 }
                 const std::size_t frame_size = layout.rgb_bytes * (float_output ? 4 : 1);
+                frame = av_frame_alloc();
+                sw_frame = av_frame_alloc();
+                packet = av_packet_alloc();
+                if (!frame || !sw_frame || !packet) {
+                    error = "Failed to allocate frame/packet";
+                    throw std::runtime_error(error);
+                }
+                DecoderPump decoder_pump(fmt_ctx, codec_ctx, packet, video_stream_idx);
+                bool prefetched_color_frame = false;
+                int discarded_color_probe_frames = 0;
+                const auto next_decoded_frame = [&]() {
+                    if (prefetched_color_frame) {
+                        prefetched_color_frame = false;
+                        return DecoderPumpResult::Frame;
+                    }
+                    return decoder_pump.next(frame, error);
+                };
                 std::unique_ptr<media::detail::LinearFrameConverter> linear_converter;
                 media::FrameColor output_color;
                 if (float_output) {
-                    if (dv_profile > 0 || video_stream->codecpar->color_trc == AVCOL_TRC_SMPTE2084 || video_stream->codecpar->color_trc == AVCOL_TRC_ARIB_STD_B67 ||
+                    if (dv_profile > 0 || (video_stream->codecpar->color_trc == AVCOL_TRC_SMPTE2084 && params.float_color_profile != media::FloatColorProfile::PqNits) || video_stream->codecpar->color_trc == AVCOL_TRC_ARIB_STD_B67 ||
                         video_stream->codecpar->color_trc == AVCOL_TRC_LOG || video_stream->codecpar->color_trc == AVCOL_TRC_LOG_SQRT) {
                         failure_ = make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "HDR/Dolby Vision is outside the float SDR profile", .detection = LFS_SOURCE_SITE_CURRENT()});
                         throw std::runtime_error(std::string(failure_->detail()));
                     }
-                    linear_converter = std::make_unique<media::detail::LinearFrameConverter>(*video_stream->codecpar, params.input_color);
+                    AVCodecParameters color_source = *video_stream->codecpar;
+                    if (params.float_color_profile == media::FloatColorProfile::PqNits) {
+                        // Some HEVC containers omit color tags carried by the
+                        // decoded frame. Read that declaration without losing the
+                        // first frame or inventing primaries/transfer metadata.
+                        if (params.cancel_requested && params.cancel_requested())
+                            throw ExtractionCancelled{};
+                        const auto first = decoder_pump.next(frame, error);
+                        if (first != DecoderPumpResult::Frame) {
+                            if (first == DecoderPumpResult::EndOfStream)
+                                error = "PQ extraction requires a decoded source frame";
+                            throw std::runtime_error(error);
+                        }
+                        prefetched_color_frame = true;
+                        if (frame->color_trc != AVCOL_TRC_UNSPECIFIED)
+                            color_source.color_trc = frame->color_trc;
+                        if (frame->color_primaries != AVCOL_PRI_UNSPECIFIED)
+                            color_source.color_primaries = frame->color_primaries;
+                        if (frame->colorspace != AVCOL_SPC_UNSPECIFIED)
+                            color_source.color_space = frame->colorspace;
+                        if (frame->color_range != AVCOL_RANGE_UNSPECIFIED)
+                            color_source.color_range = frame->color_range;
+                    }
+                    linear_converter = std::make_unique<media::detail::LinearFrameConverter>(color_source, params.input_color, params.float_color_profile);
                     const auto color = linear_converter->outputColor();
                     if (!color) {
                         failure_ = color.error();
@@ -1339,6 +1379,11 @@ namespace lfs::io {
                             start_time, ffmpegError(seek_result));
                     } else {
                         avcodec_flush_buffers(codec_ctx);
+                        decoder_pump.resetAfterSeek();
+                        if (prefetched_color_frame)
+                            ++discarded_color_probe_frames;
+                        prefetched_color_frame = false;
+                        av_frame_unref(frame);
                         LOG_INFO("Seeking to start time: {:.2f}s", start_time);
                     }
                 }
@@ -1346,15 +1391,6 @@ namespace lfs::io {
                 if (needs_scale) {
                     LOG_INFO("Output resolution: {}x{} (from {}x{})", out_width, out_height, src_width, src_height);
                 }
-
-                frame = av_frame_alloc();
-                sw_frame = av_frame_alloc();
-                packet = av_packet_alloc();
-                if (!frame || !sw_frame || !packet) {
-                    error = "Failed to allocate frame/packet";
-                    throw std::runtime_error(error);
-                }
-                DecoderPump decoder_pump(fmt_ctx, codec_ctx, packet, video_stream_idx);
 
                 cpu_contiguous_buffer = new uint8_t[frame_size];
 
@@ -1884,7 +1920,7 @@ namespace lfs::io {
                             for (size_t i = 0; i < scoring_proxy.size(); ++i) {
                                 float value = 0;
                                 std::memcpy(&value, cpu_contiguous_buffer + i * sizeof(float), sizeof(float));
-                                scoring_proxy[i] = static_cast<uint8_t>(std::lround(std::clamp(value, 0.f, 1.f) * 255.f));
+                                scoring_proxy[i] = static_cast<uint8_t>(std::lround(std::clamp(value * (output_color.units == media::ColorUnits::Nits ? .0001f : 1.f), 0.f, 1.f) * 255.f));
                             }
                             score_pixels = scoring_proxy.data();
                         }
@@ -2126,7 +2162,7 @@ namespace lfs::io {
                         while (!found_target) {
                             throw_if_cancelled();
                             const DecoderPumpResult result =
-                                decoder_pump.next(frame, error);
+                                next_decoded_frame();
                             if (result == DecoderPumpResult::Error)
                                 throw std::runtime_error(error);
                             if (result == DecoderPumpResult::EndOfStream) {
@@ -2208,7 +2244,7 @@ namespace lfs::io {
                             break;
                         }
                         const DecoderPumpResult result =
-                            decoder_pump.next(frame, error);
+                            next_decoded_frame();
                         if (result == DecoderPumpResult::EndOfStream) {
                             reached_eof = true;
                             break;
@@ -2337,20 +2373,28 @@ namespace lfs::io {
                             root["output"]["bit_depth"] = params.exr_precision == media::ExrPrecision::Half ? 16 : 32;
                             root["output"].erase("jpeg_quality");
                             root["output"]["pixel_format"] = "linear_rgb_float32";
-                            root["output"]["color_space"] = output_color.primaries == media::ColorPrimaries::Bt709 ? "linear BT709, relative" : "linear BT2020, relative";
+                            const bool pq_nits = output_color.units == media::ColorUnits::Nits;
+                            root["output"]["color_space"] = std::string(output_color.primaries == media::ColorPrimaries::Bt709 ? "linear BT709, " : "linear BT2020, ") + (pq_nits ? "cd/m2" : "relative");
+                            root["output"]["units"] = pq_nits ? "cd/m2" : "relative";
                             root["output"]["compression"] = params.exr_compression == media::ExrCompression::ZIP ? "zip" : "none";
                             root["output"]["alpha"] = "none";
                             const int component_depth = input_bit_depth > 0 ? input_bit_depth : source_bit_depth;
                             root["output"]["source_component_depth"] = component_depth > 0 ? nlohmann::json(component_depth) : nlohmann::json(nullptr);
-                            root["output"]["color_profile"] = "linear-sdr";
-                            root["output"]["input_transfer"] = linear_converter->inputTransfer() == media::ColorTransfer::Linear ? "linear" : linear_converter->inputTransfer() == media::ColorTransfer::Srgb ? "srgb"
-                                                                                                                                                                                                              : "bt709";
+                            root["output"]["color_profile"] = pq_nits ? "linear-pq-nits" : "linear-sdr";
+                            if (pq_nits) {
+                                root["output"]["encoded_rgb_policy"] = "clamp to [0,1] before PQ EOTF";
+                                root["output"]["pq_reference_peak_nits"] = 10000;
+                                root["output"]["mastering_rescale"] = false;
+                            }
+                            root["output"]["input_transfer"] = linear_converter->inputTransfer() == media::ColorTransfer::Pq ? "smpte2084" : linear_converter->inputTransfer() == media::ColorTransfer::Linear ? "linear"
+                                                                                                                                         : linear_converter->inputTransfer() == media::ColorTransfer::Srgb     ? "srgb"
+                                                                                                                                                                                                               : "bt709";
                             if (linear_converter->inputTransfer() == media::ColorTransfer::Unspecified)
                                 root["output"]["input_transfer"] = nullptr;
                             root["output"]["transfer_override"] = params.input_color.transfer != media::ColorTransfer::Unspecified;
                             root["output"]["primaries_override"] = params.input_color.primaries != media::ColorPrimaries::Unspecified;
                             root["output"]["resize_filter"] = "area reduction / bilinear enlargement in linear light";
-                            root["output"]["sharpness_domain"] = params.sharpness.enabled ? "clipped quantized linear RGB8 proxy" : "disabled";
+                            root["output"]["sharpness_domain"] = params.sharpness.enabled ? (pq_nits ? "linear cd/m2 divided by 10000, clipped quantized RGB8 proxy" : "clipped quantized linear RGB8 proxy") : "disabled";
                         }
                         root["processing"] = {
                             {"decoder", {
@@ -2382,7 +2426,7 @@ namespace lfs::io {
                                                 }},
                         };
                         root["performance"] = {
-                            {"decoded_frames", decoded_frame_count},
+                            {"decoded_frames", decoded_frame_count + discarded_color_probe_frames},
                             {"selected_frames", saved_count},
                             {"written_frames", written_count},
                             {"discarded_frames", skipped_count},
@@ -2494,7 +2538,7 @@ namespace lfs::io {
                     LOG_INFO("HDR extraction timing: total={:.3f}s decoded={} selected={} written={} init={:.3f}s "
                              "render={:.3f}s readback={:.3f}s rgba_to_rgb={:.3f}s cuda_upload={:.3f}s "
                              "jpeg_encode={:.3f}s file_write={:.3f}s",
-                             elapsedSeconds(extraction_started), decoded_frame_count, saved_count, written_count,
+                             elapsedSeconds(extraction_started), decoded_frame_count + discarded_color_probe_frames, saved_count, written_count,
                              hdr_timing_total.initialization_seconds, hdr_timing_total.render_seconds,
                              hdr_timing_total.readback_seconds, hdr_timing_total.rgba_to_rgb_seconds,
                              cuda_upload_seconds, jpeg_encode_seconds, jpeg_write_seconds);

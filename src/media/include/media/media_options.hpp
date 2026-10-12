@@ -51,6 +51,10 @@ namespace lfs::media {
         return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = std::format("Unsupported media option (value='{}')", text), .detection = LFS_SOURCE_SITE_CURRENT()});
     }
     // Metadata/layout preflight, also used by the Studio dialog before Start.
+    template <>
+    inline constexpr auto outputOptionValues<FloatColorProfile> = std::array{
+        NamedOption{FloatColorProfile::Sdr, "sdr"sv}, NamedOption{FloatColorProfile::PqNits, "pq-nits"sv}};
+    [[nodiscard]] LFS_MEDIA_API SinkResult validateFloatSource(const StreamDescription&, FloatColorProfile, FrameColor = {});
     [[nodiscard]] LFS_MEDIA_API SinkResult validateFloatSdrSource(const StreamDescription&, FrameColor = {});
     // Same validation for extraction, file sinks and independently produced EXR.
     [[nodiscard]] LFS_MEDIA_API SinkResult validateExrOutputOptions(const ExrOutputOptions&);

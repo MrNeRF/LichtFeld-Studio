@@ -16,10 +16,15 @@ namespace lfs::media {
     enum class FramePixelFormat { RGB8,
                                   RGBFloat32,
                                   RGBAFloat32 };
+    enum class ColorUnits { Relative,
+                            Nits };
+    enum class FloatColorProfile { Sdr,
+                                   PqNits };
     struct FrameColor {
         ColorTransfer transfer = ColorTransfer::Unspecified;
         ColorPrimaries primaries = ColorPrimaries::Unspecified;
         AlphaMode alpha = AlphaMode::None;
+        ColorUnits units = ColorUnits::Relative;
     };
     [[nodiscard]] constexpr std::size_t pixelBytes(FramePixelFormat format) {
         switch (format) {

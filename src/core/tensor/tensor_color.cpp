@@ -72,7 +72,7 @@ namespace lfs::core {
         if (!bytes.is_valid() || bytes.dtype() != DataType::UInt8 || bytes.ndim() != 1 || !bytes.is_contiguous() ||
             !width || !height || uint64_t(width) * height > UINT32_MAX / 3 ||
             !color.width || !color.height || color.width > INT_MAX || color.height > INT_MAX ||
-            color.rgb > 1 || color.big_endian > 1 || color.transfer > 2)
+            color.rgb > 1 || color.big_endian > 1 || color.transfer > 3)
             return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::Tensor, .detail = std::format("Video conversion requires contiguous UInt8 storage and addressable positive extents (valid={}, shape={}, dtype={}, source={}x{}, output={}x{}, rgb={}, endian={}, transfer={})", bytes.is_valid(), bytes.shape().str(), static_cast<int>(bytes.dtype()), color.width, color.height, width, height, color.rgb, color.big_endian, color.transfer), .detection = LFS_SOURCE_SITE_CURRENT()});
         for (size_t i = 0; i < 3; ++i) {
             const auto& c = color.component[i];

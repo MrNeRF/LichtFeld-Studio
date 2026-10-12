@@ -152,6 +152,10 @@ namespace lfs::media::detail {
         identity_["files"] = {f.filename_pattern, static_cast<int>(f.format), f.jpeg_quality, static_cast<int>(f.exr.precision), static_cast<int>(f.exr.compression), f.exr.provenance};
         identity_["layout"] = {session.output.width, session.output.height, static_cast<int>(session.output.format), static_cast<int>(session.output.color.transfer), static_cast<int>(session.output.color.primaries)};
         identity_["metadata"] = output_.write_metadata;
+        if (r.float_color_profile != FloatColorProfile::Sdr)
+            identity_["float_color_profile"] = static_cast<int>(r.float_color_profile);
+        if (session.output.color.units != ColorUnits::Relative)
+            identity_["sample_units"] = static_cast<int>(session.output.color.units);
         identity_["hardware_decode"] = r.allow_hardware_decode;
         std::filesystem::create_directories(f.output_directory);
         if (std::filesystem::is_symlink(std::filesystem::symlink_status(f.output_directory)))
