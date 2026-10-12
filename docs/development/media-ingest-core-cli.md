@@ -166,6 +166,46 @@ This is per-file publication, not an atomic transaction of a whole sequence,
 a checkpoint/resume protocol or a power-loss durability guarantee. Once a
 manifest is published, later cancellation cannot undo that commit.
 
+## Verified image-sequence resume
+
+`media-ingest extract ... --resume` and `FileExtraction.resume = true` opt into
+checkpointed file extraction. Defaults and ordinary extraction remain unchanged.
+PNG, JPEG and SDR linear EXR are supported through the existing file writers.
+This option does not resume an interrupted encoded video or a custom memory sink.
+
+The `.media-ingest-checkpoint` directory contains a versioned input/request
+identity and one bounded immutable JSON record per selected image. Input identity
+uses a streaming SHA-256 of the complete input; stream, selection, geometry,
+sharpness, color, output encoding and pipeline/build identity must match. An
+existing extraction without a checkpoint is not adopted. Changed requests,
+malformed checkpoints and modified/truncated output files fail without replacing
+those files. Missing recorded images can be reconstructed only when their
+regenerated encoded bytes match the recorded hash.
+
+The extractor replays decoding and selection from the original start to preserve
+VFR timestamps, naming, deduplication and sharpness windows. It verifies retained
+file bytes and regenerated selected pixels. Verified images are not re-encoded
+or rewritten. Resume uses the CPU file encoders; the existing hardware decode
+option remains explicit. It is not a promise of faster decoding.
+Accepted-frame and manifest counts include verified retained images as well as
+newly published images; progress describes the replayed selection.
+
+For a new image, the existing writer encodes into the checkpoint directory,
+then an immutable record of the expected encoded hash is atomically published
+before the image is published with no-replace. This ordering also covers process
+exit between record publication and image publication. No new atomic-file
+service is introduced. Staged images can remain after failure/cancellation;
+they are reused/replaced within the matching checkpoint namespace during replay.
+
+Checkpoint frequency is one record per image. Record reads are capped at 16 KiB;
+hashing/copying uses fixed-size buffers. File count grows linearly with selected
+images; decoding, retained-file hashing and transient staging/copy I/O have a
+cost. The final manifest retains its existing schema and overwrite policy,
+including EXR's explicit overwrite option. Checkpoints remain available after
+completion. Resume cannot be combined with stale-output removal. Use one active
+extraction per output directory; concurrent extraction is not a supported mode.
+No durable synchronization, global transaction or power-loss guarantee is added.
+
 ## Verification
 
 Configure the application with its existing preset/toolchain and enable
@@ -180,8 +220,6 @@ backends. Shared leaf modules are the same targets used by the application.
 cmake --build build --target media_contracts --config Release --parallel 2
 ctest --test-dir build -C Release -L media --output-on-failure --no-tests=error
 ```
-
-## Verification
 
 Contracts compare independent RGB/PTS references, legacy output bytes/names/
 metadata, probe/preview behavior, sink ownership/budgets/lifecycle, actual writer

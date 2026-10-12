@@ -122,6 +122,7 @@ namespace lfs::io {
             media::ExrPrecision exr_precision = media::ExrPrecision::Half;
             media::ExrCompression exr_compression = media::ExrCompression::ZIP;
             bool overwrite_metadata = false;
+            bool allow_hardware_encode = true;
         };
 
         struct ValidatedLayout {

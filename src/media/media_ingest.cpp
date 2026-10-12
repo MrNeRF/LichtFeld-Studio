@@ -4,6 +4,7 @@
 #include "media/media_options.hpp"
 #include "media/video_frame_extractor.hpp"
 #include "media_backends.hpp"
+#include "resumable_file_sink.hpp"
 #include <cmath>
 #include <exception>
 extern "C" {
@@ -98,6 +99,7 @@ namespace lfs::media {
                     return failure(ErrorCode::InvalidArgument, "Input color overrides apply only to float SDR output", 0);
                 auto p = parameters(request);
                 if (files) {
+                    p.allow_hardware_encode = !files->resume;
                     p.output_dir = files->files.output_directory;
                     p.filename_pattern = files->files.filename_pattern;
                     p.format = files->files.format == FrameFileFormat::PNG ? io::ImageFormat::PNG : files->files.format == FrameFileFormat::EXR ? io::ImageFormat::EXR
@@ -146,7 +148,11 @@ namespace lfs::media {
                     p.cancel_requested = file_options.exr.cancelled;
                 }
                 FileFrameSink file_sink(std::move(file_options));
-                TrackingSink tracked(sink ? *sink : static_cast<FrameSink&>(file_sink));
+                std::unique_ptr<detail::ResumableFileSink> resume_sink;
+                if (files && files->resume)
+                    resume_sink = std::make_unique<detail::ResumableFileSink>(request, *files);
+                TrackingSink tracked(sink ? *sink : resume_sink ? static_cast<FrameSink&>(*resume_sink)
+                                                                : static_cast<FrameSink&>(file_sink));
                 const bool ok = sink ? engine.extractToSink(p, tracked, error) : engine.extractFilesToSink(p, tracked, error);
                 accepted = tracked.accepted;
                 if (!ok) {

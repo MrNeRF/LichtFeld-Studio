@@ -57,6 +57,9 @@ namespace lfs::media {
     struct FileExtraction {
         FileFrameSinkOptions files;
         bool write_metadata = false;
+        // Opt-in verified image-sequence replay. Existing output without a
+        // compatible checkpoint is never adopted or overwritten.
+        bool resume = false;
     };
     struct IngestReport {
         std::size_t frames_accepted = 0;

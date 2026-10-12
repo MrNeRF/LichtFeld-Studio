@@ -1356,7 +1356,7 @@ namespace lfs::io {
 
                 cpu_contiguous_buffer = new uint8_t[frame_size];
 
-                if (!custom_sink && params.allow_hardware_decode && params.format == ImageFormat::JPG)
+                if (!custom_sink && params.allow_hardware_decode && params.allow_hardware_encode && params.format == ImageFormat::JPG)
                     gpu_jpeg = media::detail::createGpuJpegEncoder({src_width, src_height,
                                                                     out_width, out_height, estimated_total, params.rotation, using_hw_decode,
                                                                     needs_scale, convert_hdr_to_sdr});

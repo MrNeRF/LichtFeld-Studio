@@ -74,7 +74,7 @@ namespace {
                              "media-ingest extract INPUT --output DIRECTORY [--fps N | --interval N]\n"
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
                              "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr] [--quality N]\n"
-                             "  [--name PATTERN] [--metadata] [--sharpness THRESHOLD] [--window]\n"
+                             "  [--name PATTERN] [--metadata] [--resume] [--sharpness THRESHOLD] [--window]\n"
                              "  [--algorithm laplacian|tenengrad|combined] [--candidates N] [--hdr-to-sdr] [--quiet]\n"
                              "  EXR: [--exr-precision half|float] [--exr-compression zip|none] [--overwrite]\n"
                              "       [--input-transfer auto|linear|srgb|bt709] [--input-primaries auto|bt709|bt2020]\n";
@@ -161,6 +161,8 @@ namespace {
                     request.input_color.primaries = parse<ColorPrimaries>(value());
                 } else if (flag == "--metadata")
                     output.write_metadata = true;
+                else if (flag == "--resume")
+                    output.resume = true;
                 else if (flag == "--quiet")
                     quiet = true;
                 else if (flag == "--hdr-to-sdr")
