@@ -2689,6 +2689,7 @@
     "edge_off_help": "Bord de 1 à 2 selon X : NON. Met le plan à niveau sans rotation supplémentaire."
   },
   "toast": {
+    "camera_training_next_run": "Les changements de caméra s’appliqueront au prochain entraînement. L’entraînement en cours conserve ses images actuelles.",
     "trainer_not_restored": {
       "title": "Entraîneur non restauré",
       "message": "Le modèle du projet est disponible pour la visualisation, mais l'entraînement n'a pas pu être repris. Vérifiez le chemin du jeu de données et les journaux."

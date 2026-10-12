@@ -2689,6 +2689,7 @@
     "edge_off_help": "Bordo da 1 a 2 lungo X: NO. Livella il piano senza la rotazione aggiuntiva."
   },
   "toast": {
+    "camera_training_next_run": "Le modifiche alle camere si applicheranno al prossimo addestramento. Quello in corso continuerà a usare le immagini attuali.",
     "trainer_not_restored": {
       "title": "Trainer non ripristinato",
       "message": "Il modello del progetto è disponibile per la visualizzazione, ma non è stato possibile riprendere l'addestramento. Controlla il percorso del dataset e i log."

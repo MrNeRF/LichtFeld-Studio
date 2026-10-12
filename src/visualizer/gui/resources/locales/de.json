@@ -2689,6 +2689,7 @@
     "edge_off_help": "Kante 1–2 entlang X: AUS. Richtet die Ebene ohne die zusätzliche Drehung aus."
   },
   "toast": {
+    "camera_training_next_run": "Kameraänderungen gelten erst beim nächsten Trainingslauf. Dieser Lauf verwendet weiterhin die bisherigen Bilder.",
     "trainer_not_restored": {
       "title": "Trainer nicht wiederhergestellt",
       "message": "Das Projektmodell ist zum Anzeigen verfügbar, aber das Training konnte nicht fortgesetzt werden. Prüfen Sie den Dataset-Pfad und die Protokolle."

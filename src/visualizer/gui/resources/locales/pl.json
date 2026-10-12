@@ -2689,6 +2689,7 @@
     "edge_off_help": "Krawędź od 1 do 2 wzdłuż X: WYŁ. Poziomuje płaszczyznę bez dodatkowego obrotu."
   },
   "toast": {
+    "camera_training_next_run": "Zmiany kamer zostaną zastosowane przy następnym treningu. Bieżący trening nadal używa dotychczasowych obrazów.",
     "trainer_not_restored": {
       "title": "Nie przywrócono trenera",
       "message": "Model projektu jest dostępny do podglądu, ale nie udało się wznowić treningu. Sprawdź ścieżkę zestawu danych i logi."

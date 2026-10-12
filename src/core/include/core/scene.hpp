@@ -281,6 +281,7 @@ namespace lfs::core {
             MODEL_CHANGED = 1 << 6,
             SELECTION_CHANGED = 1 << 7,
             CLEARED = 1 << 8,
+            CAMERA_TRAINING_CHANGED = 1 << 9,
         };
 
         void notifyMutation(MutationType type);

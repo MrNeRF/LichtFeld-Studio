@@ -26,6 +26,9 @@
 #include "rendering/screen_overlay_renderer.hpp"
 #include "training/control/command_api.hpp"
 #include "visualizer/ipc/view_context.hpp"
+#include "visualizer/operation/undo_history.hpp"
+#include "visualizer/scene/scene_manager.hpp"
+#include "visualizer/training/camera_training_notice.hpp"
 #include "visualizer/visualizer.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -596,6 +599,65 @@ namespace {
 TEST_F(PythonIntegrationTest, InitializationSucceeds) {
     // Just verify that initialization doesn't throw
     EXPECT_NO_THROW((void)lfs::python::ensure_initialized());
+}
+
+TEST_F(PythonIntegrationTest, PythonCameraTrainingSettersPostNotices) {
+    struct PythonSceneContextReset {
+        ~PythonSceneContextReset() {
+            lfs::vis::op::undoHistory().clear();
+            lfs::python::set_scene_manager(nullptr);
+            lfs::python::set_application_scene(nullptr);
+        }
+    } reset;
+    lfs::vis::op::undoHistory().clear();
+
+    lfs::vis::SceneManager scene_manager;
+    auto& scene = scene_manager.getScene();
+    const auto group = scene.addCameraGroup("Training", lfs::core::NULL_NODE, 1);
+    const auto camera = scene.addCamera(
+        "frame.png", group,
+        std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            lfs::core::Tensor(), lfs::core::Tensor(), lfs::core::CameraModelType::PINHOLE,
+            "frame.png", std::filesystem::path{}, std::filesystem::path{}, 64, 64, 0));
+    ASSERT_NE(camera, lfs::core::NULL_NODE);
+    ASSERT_TRUE(scene.getNodeById(camera)->training_enabled);
+
+    lfs::python::set_application_scene(&scene);
+    lfs::python::set_scene_manager(&scene_manager);
+    std::size_t posted = 0;
+    struct ScopedSceneChangedSubscription {
+        explicit ScopedSceneChangedSubscription(const lfs::event::HandlerId id) : id(id) {}
+        ~ScopedSceneChangedSubscription() {
+            if (id != 0)
+                lfs::event::EventBridge::instance().unsubscribe(
+                    typeid(lfs::core::events::state::SceneChanged), id);
+        }
+        lfs::event::HandlerId id;
+    } handler(lfs::core::events::state::SceneChanged::when([&](const auto& event) {
+        lfs::vis::detail::dispatch_camera_training_notice(event.mutation_flags, true,
+                                                          [&] { ++posted; });
+    }));
+
+    {
+        const lfs::python::GilAcquire gil;
+        ASSERT_EQ(PyRun_SimpleString(
+                      "import lichtfeld as lf\n"
+                      "lf.set_camera_training_enabled('frame.png', False)\n"
+                      "lf.set_camera_training_enabled('frame.png', False)\n"),
+                  0);
+    }
+    EXPECT_EQ(posted, 1u);
+
+    {
+        const lfs::python::GilAcquire gil;
+        ASSERT_EQ(PyRun_SimpleString(
+                      "lf.get_scene().set_camera_training_enabled('frame.png', True)\n"),
+                  0);
+    }
+    EXPECT_EQ(posted, 2u);
 }
 
 TEST_F(PythonIntegrationTest, SceneTimeCallbackSupportsSetTickClearAndUnsetTick) {

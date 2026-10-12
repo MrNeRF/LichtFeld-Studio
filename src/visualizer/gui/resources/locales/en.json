@@ -2688,6 +2688,7 @@
     "edge_off_help": "Edge 1 to 2 along X: OFF. Levels the plane without the extra turn."
   },
   "toast": {
+    "camera_training_next_run": "Camera changes apply to the next training run. This run keeps its current images.",
     "trainer_not_restored": {
       "title": "Trainer not restored",
       "message": "The project model is available for viewing, but training could not be resumed. Check the dataset path and logs."

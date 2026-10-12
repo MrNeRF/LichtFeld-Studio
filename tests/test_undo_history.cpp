@@ -3424,6 +3424,40 @@ TEST_F(UndoHistoryTest, SceneGraphMetadataUndoRedoRestoresPayloadDivergence) {
     EXPECT_TRUE(scene_manager->getScene().getNode("model")->payload_diverged);
 }
 
+TEST_F(UndoHistoryTest, CameraTrainingUndoRedoPublishesTrainingChange) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+    const auto group = scene.addCameraGroup("Training", lfs::core::NULL_NODE, 1);
+    const auto camera = scene.addCamera("frame.png", group, make_test_camera("frame.png", 1));
+    ASSERT_NE(camera, lfs::core::NULL_NODE);
+
+    auto before = lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {"frame.png"});
+    ASSERT_EQ(before.size(), 1u);
+    scene.setCameraTrainingEnabled(camera, false);
+    auto after = lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {"frame.png"});
+    ASSERT_EQ(after.size(), 1u);
+    lfs::vis::op::SceneGraphMetadataEntry entry(
+        *scene_manager, "camera.training",
+        {{.before = before.front(), .after = after.front()}});
+
+    std::vector<std::uint32_t> changes;
+    auto handler = lfs::core::events::state::SceneChanged::when(
+        [&](const auto& event) { changes.push_back(event.mutation_flags); });
+    (void)handler;
+    constexpr std::uint32_t camera_training_changed = 1u << 9;
+
+    entry.undo();
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_NE(changes.back() & camera_training_changed, 0u);
+    EXPECT_EQ(scene.getActiveCameraCount(), 1u);
+
+    entry.redo();
+    ASSERT_EQ(changes.size(), 2u);
+    EXPECT_NE(changes.back() & camera_training_changed, 0u);
+    EXPECT_EQ(scene.getActiveCameraCount(), 0u);
+}
+
 TEST_F(UndoHistoryTest, ReparentNodeCreatesUndoableSceneGraphEntry) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();

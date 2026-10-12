@@ -2689,6 +2689,7 @@
     "edge_off_help": "Borde de 1 a 2 sobre X: NO. Nivela el plano sin el giro adicional."
   },
   "toast": {
+    "camera_training_next_run": "Los cambios en las cámaras se aplicarán en el próximo entrenamiento. El entrenamiento actual seguirá usando las imágenes anteriores.",
     "trainer_not_restored": {
       "title": "Entrenador no restaurado",
       "message": "El modelo del proyecto está disponible para visualización, pero no se pudo reanudar el entrenamiento. Compruebe la ruta del conjunto de datos y los registros."

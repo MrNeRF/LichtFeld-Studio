@@ -720,6 +720,7 @@ set(TEST_FILES
     test_tensor_storage_version.cpp
     test_modal_registry_regression.cpp
     test_training_notifications.cpp
+    test_camera_training_notice.cpp
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
     test_weight_file_paths.cpp

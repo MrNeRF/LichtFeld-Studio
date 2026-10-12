@@ -2689,6 +2689,7 @@
     "edge_off_help": "Rand van 1 naar 2 langs X: UIT. Zet het vlak waterpas zonder de extra draai."
   },
   "toast": {
+    "camera_training_next_run": "Camerawijzigingen gelden vanaf de volgende training. De huidige training blijft de bestaande beelden gebruiken.",
     "trainer_not_restored": {
       "title": "Trainer niet hersteld",
       "message": "Het projectmodel is beschikbaar om te bekijken, maar training kon niet worden hervat. Controleer het datasetpad en de logboeken."

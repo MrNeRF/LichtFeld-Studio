@@ -6475,6 +6475,8 @@ namespace lfs::core {
         auto* node = getNodeById(id);
         if (node && node->type == NodeType::CAMERA && node->training_enabled != enabled) {
             node->training_enabled = enabled;
+            if (!restore_staging_)
+                pending_mutations_ |= static_cast<uint32_t>(MutationType::CAMERA_TRAINING_CHANGED);
             notifyMutation(MutationType::VISIBILITY_CHANGED);
         }
     }

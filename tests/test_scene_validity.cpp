@@ -2271,6 +2271,34 @@ namespace lfs::python {
         EXPECT_EQ(non_camera_group_counts.total, 0u);
     }
 
+    TEST_F(SceneValidityTest, CameraTrainingToggleIdentifiesEffectiveChanges) {
+        lfs::vis::SceneManager sm;
+        auto& scene = sm.getScene();
+        const auto group = scene.addCameraGroup("Training", core::NULL_NODE, 1);
+        const auto camera = scene.addCamera("frame.png", group, make_test_camera());
+        ASSERT_NE(camera, core::NULL_NODE);
+
+        std::vector<std::uint32_t> changes;
+        auto handler = core::events::state::SceneChanged::when(
+            [&](const auto& event) { changes.push_back(event.mutation_flags); });
+        (void)handler;
+        constexpr std::uint32_t visibility_changed = 1u << 5;
+        constexpr std::uint32_t camera_training_changed = 1u << 9;
+
+        scene.setCameraTrainingEnabled(camera, false);
+        ASSERT_EQ(changes.size(), 1u);
+        EXPECT_EQ(changes.back(), visibility_changed | camera_training_changed);
+        EXPECT_EQ(scene.getActiveCameraCount(), 0u);
+
+        scene.setCameraTrainingEnabled(camera, false);
+        EXPECT_EQ(changes.size(), 1u);
+
+        scene.setCameraTrainingEnabled(camera, true);
+        ASSERT_EQ(changes.size(), 2u);
+        EXPECT_EQ(changes.back(), visibility_changed | camera_training_changed);
+        EXPECT_EQ(scene.getActiveCameraCount(), 1u);
+    }
+
     TEST_F(SceneValidityTest, SceneManagerBlocksActiveCameraSubtreeAndAllowsInactiveCameraRemoval) {
         const ScopedServicesClear services_scope;
         lfs::vis::SceneManager sm;

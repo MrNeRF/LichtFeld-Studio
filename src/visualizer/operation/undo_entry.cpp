@@ -279,7 +279,10 @@ namespace lfs::vis::op {
             scene.setNodeTransform(current_name, target.local_transform);
             node->visible.set(target.visible, false);
             node->locked.set(target.locked, false);
-            node->training_enabled = target.training_enabled;
+            if (node->type == lfs::core::NodeType::CAMERA)
+                scene.setCameraTrainingEnabled(node->id, target.training_enabled);
+            else
+                node->training_enabled = target.training_enabled;
             node->payload_diverged = target.payload_diverged;
             restorePlyPathForSnapshot(scene_manager, target.uuid, target.source_path);
         }

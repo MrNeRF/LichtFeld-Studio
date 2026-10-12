@@ -6,6 +6,7 @@
 #include "core/error.hpp"
 #include "core/error_envelope.hpp"
 #include "core/error_reporter.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
@@ -18,9 +19,11 @@
 #include "core/tensor.hpp"
 #include "core/tensor/internal/size_bucketed_pool.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
+#include "gui/gui_manager.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "training/camera_training_notice.hpp"
 #include "training/control/command_api.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
@@ -2542,6 +2545,23 @@ namespace lfs::vis {
 
         keep(typeid(cmd::StopTraining), cmd::StopTraining::when([this](const auto&) {
                  stopTraining();
+             }));
+
+        keep(typeid(state::SceneChanged), state::SceneChanged::when([this](const auto& event) {
+                 if (!viewer_)
+                     return;
+                 auto* const gui_manager = viewer_->getGuiManager();
+                 if (!gui_manager)
+                     return;
+                 const bool training_active = hasLiveTrainingThread() && (isRunning() || isPaused());
+                 detail::dispatch_camera_training_notice(event.mutation_flags, training_active, [gui_manager] {
+                     gui_manager->enqueueToast({
+                         .title = LOC("window.training"),
+                         .message = LOC("toast.camera_training_next_run"),
+                         .level = gui::ErrorNoticeLevel::Info,
+                         .fingerprint = 0x4c465343414d0001ULL,
+                     });
+                 });
              }));
 
         // Listen for training progress events - update loss buffer
