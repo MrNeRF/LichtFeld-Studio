@@ -195,6 +195,20 @@ namespace {
             }
             {
                 auto run = [&](bool dispatch) {
+                    auto source = image_pattern({H, W, 3}, DataType::Float32);
+                    auto output = image_pattern({H, W, 3}, DataType::Float32);
+                    lfs::gpu_ops::NormalPriorTransform transform{.srgb = true, .flip_yz = true, .world_to_camera = true, .w2c = {0, -1, 0, 1, 0, 0, 0, 0, 1}};
+                    if (dispatch) {
+                        ops.convert(source, output, lfs::gpu_ops::ImageConversion::NormalPriorF32, H, W, 3, transform);
+                    } else {
+                        image_kernels::launch_normal_prior_f32_hwc_to_float32_chw(static_cast<float*>(source.data_ptr()), static_cast<float*>(output.data_ptr()), H, W, transform, stream);
+                    }
+                    return std::vector<Tensor>{output};
+                };
+                expect_same(run);
+            }
+            {
+                auto run = [&](bool dispatch) {
                     auto source = image_pattern({H, W, 3}, DataType::UInt8);
                     auto output = image_pattern({H, W, 3}, DataType::UInt8);
                     if (dispatch) {
