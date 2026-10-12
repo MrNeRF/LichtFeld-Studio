@@ -1188,13 +1188,10 @@ namespace lfs::vis {
             if (!input_controller_)
                 break;
             const int physical_key = input::sdlScancodeToAppKey(event.key.scancode);
-            // Resolve the unmodified layout key so bindings keep modifiers separate
-            // (for example, '=' + Shift stays KEY_EQUAL plus a Shift modifier).
-            int logical_key = input::sdlKeycodeToAppKey(
-                SDL_GetKeyFromScancode(event.key.scancode, SDL_KMOD_NONE, false));
-            if (logical_key == input::KEY_UNKNOWN) {
-                logical_key = physical_key;
-            }
+            // Resolve shortcuts without modifiers (for example, '=' + Shift stays
+            // KEY_EQUAL plus Shift), with the physical top row reserved for digits.
+            const int logical_key = input::sdlShortcutKeyToAppKey(
+                event.key.scancode, SDL_GetKeyFromScancode(event.key.scancode, SDL_KMOD_NONE, false));
             const int action = event.key.down
                                    ? (event.key.repeat ? input::ACTION_REPEAT : input::ACTION_PRESS)
                                    : input::ACTION_RELEASE;

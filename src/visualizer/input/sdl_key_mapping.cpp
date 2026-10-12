@@ -172,6 +172,17 @@ namespace lfs::vis::input {
         }
     }
 
+    int sdlShortcutKeyToAppKey(const SDL_Scancode scancode, const SDL_Keycode keycode) {
+        const int logical_key = sdlKeycodeToAppKey(keycode);
+        // Shortcuts on the top number row follow its physical digits even when
+        // the active layout produces punctuation without Shift.
+        if (scancode >= SDL_SCANCODE_1 && scancode <= SDL_SCANCODE_0 &&
+            (logical_key < KEY_0 || logical_key > KEY_9)) {
+            return sdlScancodeToAppKey(scancode);
+        }
+        return logical_key == KEY_UNKNOWN ? sdlScancodeToAppKey(scancode) : logical_key;
+    }
+
     int sdlModsToAppMods(SDL_Keymod sdl_mods) {
         int mods = KEYMOD_NONE;
         if (sdl_mods & SDL_KMOD_SHIFT)

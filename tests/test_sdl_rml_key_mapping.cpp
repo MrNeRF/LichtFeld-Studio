@@ -6,6 +6,7 @@
 #include "input/frame_input_buffer.hpp"
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
+#include <array>
 #include <gtest/gtest.h>
 
 namespace {
@@ -55,6 +56,57 @@ namespace {
         EXPECT_EQ(lfs::vis::input::sdlKeycodeToAppKey(SDLK_Z), lfs::vis::input::KEY_Z);
         EXPECT_EQ(lfs::vis::input::sdlKeycodeToAppKey(SDLK_RETURN), lfs::vis::input::KEY_ENTER);
         EXPECT_EQ(lfs::vis::input::sdlKeycodeToAppKey(SDLK_KP_PLUS), lfs::vis::input::KEY_KP_ADD);
+    }
+
+    TEST(SdlKeyMappingTest, ShortcutTranslationKeepsNonNumberRowKeysLayoutAware) {
+        using namespace lfs::vis::input;
+        EXPECT_EQ(sdlShortcutKeyToAppKey(SDL_SCANCODE_APOSTROPHE, SDLK_APOSTROPHE), KEY_APOSTROPHE);
+        EXPECT_EQ(sdlShortcutKeyToAppKey(SDL_SCANCODE_MINUS, SDLK_MINUS), KEY_MINUS);
+        EXPECT_EQ(sdlShortcutKeyToAppKey(SDL_SCANCODE_KP_4, SDLK_KP_4), KEY_KP_4);
+        EXPECT_EQ(sdlShortcutKeyToAppKey(SDL_SCANCODE_A, SDLK_Q), KEY_Q);
+    }
+
+    TEST(SdlKeyMappingTest, EntireTopNumberRowFollowsPhysicalDigitsAcrossLayouts) {
+        using namespace lfs::vis::input;
+        struct Layout {
+            const char* name;
+            std::array<SDL_Keycode, 10> keycodes;
+        };
+        const std::array layouts = {
+            Layout{"us", {SDLK_1, SDLK_2, SDLK_3, SDLK_4, SDLK_5, SDLK_6, SDLK_7, SDLK_8, SDLK_9, SDLK_0}},
+            Layout{"be", {SDLK_AMPERSAND, static_cast<SDL_Keycode>(0xe9), SDLK_DBLAPOSTROPHE, SDLK_APOSTROPHE, SDLK_LEFTPAREN, static_cast<SDL_Keycode>(0xa7), static_cast<SDL_Keycode>(0xe8), SDLK_EXCLAIM, static_cast<SDL_Keycode>(0xe7), static_cast<SDL_Keycode>(0xe0)}},
+            Layout{"fr", {SDLK_AMPERSAND, static_cast<SDL_Keycode>(0xe9), SDLK_DBLAPOSTROPHE, SDLK_APOSTROPHE, SDLK_LEFTPAREN, SDLK_MINUS, static_cast<SDL_Keycode>(0xe8), SDLK_UNDERSCORE, static_cast<SDL_Keycode>(0xe7), static_cast<SDL_Keycode>(0xe0)}},
+        };
+        for (const auto& layout : layouts) {
+            for (size_t i = 0; i < layout.keycodes.size(); ++i) {
+                SCOPED_TRACE(std::string(layout.name) + " key " + std::to_string((i + 1) % 10));
+                const auto scancode = static_cast<SDL_Scancode>(SDL_SCANCODE_1 + i);
+                EXPECT_EQ(sdlShortcutKeyToAppKey(scancode, layout.keycodes[i]),
+                          KEY_0 + static_cast<int>((i + 1) % 10));
+            }
+        }
+    }
+
+    TEST(FrameInputBufferTest, NumberRowShortcutMappingLeavesTextInputUntouched) {
+        lfs::vis::FrameInputBuffer buffer;
+        buffer.beginFrame();
+        SDL_Event key_event{};
+        key_event.type = SDL_EVENT_KEY_DOWN;
+        key_event.key.windowID = 11;
+        key_event.key.scancode = SDL_SCANCODE_4;
+        key_event.key.key = SDLK_APOSTROPHE;
+        buffer.processEvent(key_event, 11);
+        SDL_Event text_event{};
+        text_event.type = SDL_EVENT_TEXT_INPUT;
+        text_event.text.windowID = 11;
+        text_event.text.text = "'";
+        buffer.processEvent(text_event, 11);
+
+        EXPECT_EQ(lfs::vis::input::sdlShortcutKeyToAppKey(key_event.key.scancode, key_event.key.key),
+                  lfs::vis::input::KEY_4);
+        ASSERT_EQ(buffer.input_events.size(), 2u);
+        EXPECT_EQ(buffer.input_events.back().kind, lfs::vis::FrameInputEventKind::Text);
+        EXPECT_EQ(buffer.input_events.back().text, "'");
     }
 
     TEST(SdlRmlKeyMappingTest, ModifierTranslationPreservesMeta) {

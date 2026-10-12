@@ -360,11 +360,8 @@ namespace lfs::vis::gui {
             const int mods = input::sdlModsToAppMods(input.key_mods);
             for (const SDL_Scancode scancode : input.keys_pressed) {
                 const int physical_key = input::sdlScancodeToAppKey(scancode);
-                int logical_key = input::sdlKeycodeToAppKey(
-                    SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false));
-                if (logical_key == input::KEY_UNKNOWN) {
-                    logical_key = physical_key;
-                }
+                const int logical_key = input::sdlShortcutKeyToAppKey(
+                    scancode, SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false));
 
                 bindings.captureKey(physical_key, logical_key, mods);
                 if (!bindings.isCapturing())
