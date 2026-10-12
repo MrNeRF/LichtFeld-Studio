@@ -692,6 +692,7 @@ set(TEST_FILES
     test_keymap_upgrade_guard.cpp
     test_keymap_layout_contract.cpp
     test_keymap_default_contract.cpp
+    test_keymap_safety_net.cpp
     test_keymap_rejected_import.cpp
     test_keymap_named_save.cpp
     test_keymap_extended_keys.cpp
