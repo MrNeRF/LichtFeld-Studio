@@ -69,6 +69,7 @@ class ImagePreviewPanel(Panel):
         self._dragging = False
         self._drag_start_x = 0.0
         self._drag_start_y = 0.0
+        self._drag_dp_ratio = 1.0
         self._drag_start_pan_x = 0.0
         self._drag_start_pan_y = 0.0
         self._hover_image = False
@@ -547,6 +548,7 @@ class ImagePreviewPanel(Panel):
         if self._fit_to_window:
             return
         self._dragging = True
+        self._drag_dp_ratio = max(1.0, lf.ui.get_ui_scale())
         self._drag_start_x = float(event.get_parameter("mouse_x", "0"))
         self._drag_start_y = float(event.get_parameter("mouse_y", "0"))
         self._drag_start_pan_x = self._pan_x
@@ -560,8 +562,8 @@ class ImagePreviewPanel(Panel):
             return
         mx = float(event.get_parameter("mouse_x", "0"))
         my = float(event.get_parameter("mouse_y", "0"))
-        self._pan_x = self._drag_start_pan_x + (mx - self._drag_start_x)
-        self._pan_y = self._drag_start_pan_y + (my - self._drag_start_y)
+        self._pan_x = self._drag_start_pan_x + (mx - self._drag_start_x) / self._drag_dp_ratio
+        self._pan_y = self._drag_start_pan_y + (my - self._drag_start_y) / self._drag_dp_ratio
         self._mark_dirty()
 
     def _on_img_mouseover(self, _event):
