@@ -111,6 +111,15 @@ namespace lfs::io::cuda {
         const NormalPriorTransform& transform,
         cudaStream_t stream = nullptr);
 
+    // Fused kernel: raw [0,1] float32 HWC -> float32 CHW normals in [-1,1].
+    void launch_normal_prior_f32_hwc_to_float32_chw(
+        const float* input,
+        float* output,
+        size_t height,
+        size_t width,
+        const NormalPriorTransform& transform,
+        cudaStream_t stream = nullptr);
+
     // Fused kernel: uint8 HWC -> uint8 CHW
     void launch_uint8_hwc_to_uint8_chw(
         const uint8_t* input,

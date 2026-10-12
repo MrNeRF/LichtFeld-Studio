@@ -209,7 +209,8 @@ namespace lfs::io::cuda {
         if (idx >= pixel_count)
             return;
 
-        constexpr float scale = sizeof(T) == 2 ? NORMALIZE_SCALE_U16 : NORMALIZE_SCALE_U8;
+        constexpr float scale = sizeof(T) == sizeof(float) ? 1.0f : sizeof(T) == 2 ? NORMALIZE_SCALE_U16
+                                                                                   : NORMALIZE_SCALE_U8;
         float n[3];
 #pragma unroll
         for (int c = 0; c < 3; ++c) {
@@ -371,6 +372,22 @@ namespace lfs::io::cuda {
         normal_prior_hwc_to_float32_chw_kernel<uint16_t><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, pixel_count, transform);
         LFS_CUDA_LAUNCH_CHECK(stream, "io.image.normal_prior_u16");
+    }
+
+    void launch_normal_prior_f32_hwc_to_float32_chw(
+        const float* input,
+        float* output,
+        size_t height,
+        size_t width,
+        const NormalPriorTransform& transform,
+        cudaStream_t stream) {
+
+        const size_t pixel_count = height * width;
+        const int num_blocks = static_cast<int>((pixel_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+
+        normal_prior_hwc_to_float32_chw_kernel<float><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+            input, output, pixel_count, transform);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.normal_prior_f32");
     }
 
     void launch_float32_hwc_to_uint16_hwc(

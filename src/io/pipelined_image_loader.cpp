@@ -3129,13 +3129,14 @@ namespace lfs::io {
                     int src_h = 0;
                     int channels = 0;
                     // nvimagecodec truncates to 8 bits; 16-bit normal priors
-                    // must keep their precision, so both paths decode on CPU.
+                    // must keep their precision, so normal priors decode on CPU.
                     // The v = n*0.5 + 0.5 file encoding (with the sRGB display
                     // transform when the startup probe detected it), Y/Z flip,
                     // and world->camera rotation are all inverted in one GPU
                     // kernel; the loss re-normalizes per pixel, so resampling
                     // shrinkage is fine.
                     const bool normal_16bit = stbi_is_16_bit(path_utf8.c_str());
+                    bool normal_float = false;
                     lfs::core::Tensor gpu_staging;
                     if (normal_16bit) {
                         stbi_us* const rgb16 = stbi_load_16(path_utf8.c_str(), &src_w, &src_h, &channels, 3);
@@ -3152,16 +3153,34 @@ namespace lfs::io {
                         stbi_image_free(rgb16);
                     } else {
                         stbi_uc* const rgb8 = stbi_load(path_utf8.c_str(), &src_w, &src_h, &channels, 3);
-                        if (!rgb8)
-                            throw std::runtime_error("Failed to decode normal map");
-                        auto cpu_tensor = lfs::core::Tensor::from_blob(
-                            rgb8,
-                            lfs::core::TensorShape(
-                                {static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3}),
-                            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-                        gpu_staging = cpu_tensor.to(lfs::core::Device::CUDA, sidecar_stream);
-                        synchronize_async_upload_before_free(gpu_staging.stream(), "normal");
-                        stbi_image_free(rgb8);
+                        if (rgb8) {
+                            auto cpu_tensor = lfs::core::Tensor::from_blob(
+                                rgb8,
+                                lfs::core::TensorShape(
+                                    {static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3}),
+                                lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+                            gpu_staging = cpu_tensor.to(lfs::core::Device::CUDA, sidecar_stream);
+                            synchronize_async_upload_before_free(gpu_staging.stream(), "normal");
+                            stbi_image_free(rgb8);
+                        } else {
+                            // TIFF priors are accepted by dataset loading but unsupported by stb.
+                            // Keep native precision through the shared decoder and fused GPU transform.
+                            auto [pixels, width, height, count] = lfs::core::load_image_float(item.path);
+                            const std::unique_ptr<float, decltype(&lfs::core::free_image_float)> owned(
+                                pixels, &lfs::core::free_image_float);
+                            if (!pixels || count != 3)
+                                throw std::runtime_error("Failed to decode normal map");
+                            src_w = width;
+                            src_h = height;
+                            normal_float = true;
+                            auto cpu_tensor = lfs::core::Tensor::from_blob(
+                                pixels,
+                                lfs::core::TensorShape(
+                                    {static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3}),
+                                lfs::core::Device::CPU, lfs::core::DataType::Float32);
+                            gpu_staging = cpu_tensor.to(lfs::core::Device::CUDA, sidecar_stream);
+                            synchronize_async_upload_before_free(gpu_staging.stream(), "normal");
+                        }
                     }
 
                     cuda::NormalPriorTransform prior_transform;
@@ -3175,7 +3194,12 @@ namespace lfs::io {
                         lfs::core::TensorShape(
                             {3, static_cast<size_t>(src_h), static_cast<size_t>(src_w)}),
                         lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-                    if (normal_16bit) {
+                    if (normal_float) {
+                        cuda::launch_normal_prior_f32_hwc_to_float32_chw(
+                            gpu_staging.ptr<float>(), normal_tensor.ptr<float>(),
+                            static_cast<size_t>(src_h), static_cast<size_t>(src_w),
+                            prior_transform, sidecar_stream);
+                    } else if (normal_16bit) {
                         cuda::launch_normal_prior_u16_hwc_to_float32_chw(
                             reinterpret_cast<const uint16_t*>(gpu_staging.data_ptr()),
                             normal_tensor.ptr<float>(),
