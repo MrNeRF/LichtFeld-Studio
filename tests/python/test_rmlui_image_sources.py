@@ -90,6 +90,36 @@ def test_first_preview_request_survives_lazy_panel_creation(panel_modules, tmp_p
     assert panel._camera_uids == [17]
 
 
+def test_first_preview_request_opens_once_during_lazy_reentry(
+        panel_modules, tmp_path, monkeypatch):
+    image_preview, _ = panel_modules
+    image_preview._instance = None
+    image_preview._pending_open = None
+    image_path = tmp_path / "first.jpg"
+    open_calls = []
+    original_open = image_preview.ImagePreviewPanel.open
+
+    def track_open(panel, image_paths, mask_paths, start_index, camera_uids=None):
+        open_calls.append((image_paths, mask_paths, start_index, camera_uids))
+        return original_open(panel, image_paths, mask_paths, start_index, camera_uids)
+
+    monkeypatch.setattr(image_preview.ImagePreviewPanel, "open", track_open)
+
+    class LazyPanel:
+        @property
+        def open(self):
+            return image_preview.ImagePreviewPanel().open
+
+    sys.modules["lichtfeld"].ui.get_panel_object = lambda _panel_id: LazyPanel()
+
+    image_preview.open_image_preview([image_path], [None], 0, [17])
+
+    assert image_preview._pending_open is None
+    assert open_calls == [([image_path], [None], 0, [17])]
+    assert image_preview._instance._image_paths == [image_path.resolve()]
+    assert image_preview._instance._camera_uids == [17]
+
+
 def test_image_preview_discards_info_for_previous_image_sets(panel_modules, tmp_path):
     image_preview, _ = panel_modules
     panel = image_preview.ImagePreviewPanel()

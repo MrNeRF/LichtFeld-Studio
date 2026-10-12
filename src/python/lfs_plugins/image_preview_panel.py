@@ -1250,9 +1250,10 @@ def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
         get_panel_object = getattr(lf.ui, "get_panel_object", None)
         if get_panel_object is not None:
             panel = get_panel_object("lfs.image_preview")
-    if panel and _pending_open is not None:
-        panel.open(*_pending_open)
+    pending = _pending_open
+    if panel and pending is not None:
         _pending_open = None
+        panel.open(*pending)
 
 
 def open_camera_preview_by_uid(cam_uid: int):
