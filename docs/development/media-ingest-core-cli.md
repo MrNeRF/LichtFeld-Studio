@@ -213,8 +213,16 @@ regenerated encoded bytes match the recorded hash.
 The extractor replays decoding and selection from the original start to preserve
 VFR timestamps, naming, deduplication and sharpness windows. It verifies retained
 file bytes and regenerated selected pixels. Verified images are not re-encoded
-or rewritten. Resume uses the CPU file encoders; the existing hardware decode
-option remains explicit. Input, pixel and retained-output verification still
+or rewritten. JPEG resume reuses the registered Studio GPU encoder when hardware
+is requested and it can allocate one frame; otherwise a new checkpoint selects
+the existing CPU writer. The standalone CLI has no registered Studio GPU encoder.
+The selected encoder is recorded in the checkpoint identity. CPU checkpoints
+stay CPU when a GPU later becomes available; GPU checkpoints fail explicitly if
+their provider is unavailable. Encoding failures never silently switch providers.
+GPU JPEG bytes pass through the same staging, record-before-image and no-replace
+publication as CPU output. Only missing images are encoded, one frame at a time;
+decoded pixels still pass through host memory for checkpoint verification.
+The existing hardware decode option remains explicit. Input, pixel and retained-output verification still
 cost CPU time and I/O. A verified replay can be slower than a fresh ordinary
 extraction, particularly for JPEG; resume promises verified reuse, not a speedup.
 Accepted-frame and manifest counts include verified retained images as well as

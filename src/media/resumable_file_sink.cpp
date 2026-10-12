@@ -5,6 +5,7 @@
 #include "core/path_utils.hpp"
 #include "git_version.h"
 #include "media/video_frame_extractor.hpp"
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <memory>
@@ -121,7 +122,26 @@ namespace lfs::media::detail {
             return SinkResult::failure(input_digest.error());
         const auto& r = request_;
         const auto& f = output_.files;
+        const auto identity_path = checkpoint_ / "identity.json";
+        std::string previous_provider;
+        if (std::filesystem::exists(identity_path) && !emptyReservation(identity_path)) {
+            const auto previous = readRecord(identity_path);
+            if (!previous)
+                return SinkResult::failure(previous.error());
+            previous_provider = previous->value("image_encoder", std::string{});
+        }
+        gpu_jpeg_.reset();
+        if (f.format == FrameFileFormat::JPEG && r.allow_hardware_decode && previous_provider != "cpu") {
+            gpu_jpeg_ = createGpuJpegEncoder({session.output.width, session.output.height,
+                                              session.output.width, session.output.height, 1, 0,
+                                              false, false, false});
+            if (gpu_jpeg_ && gpu_jpeg_->capacity() == 0)
+                gpu_jpeg_.reset();
+        }
+        if (previous_provider == "nvimagecodec_cuda" && !gpu_jpeg_)
+            return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint GPU JPEG provider is unavailable; CPU reconstruction would change encoded bytes"));
         identity_ = {{"checkpoint_version", 2}, {"pipeline_version", 1}, {"application_build", GIT_TAGGED_VERSION}, {"ffmpeg", av_version_info()}, {"codec_version", avcodec_version()}, {"codec_configuration", avcodec_configuration()}, {"input_sha256", *input_digest}};
+        identity_["image_encoder"] = imageEncoderBackend();
         identity_["stream"] = session.source.selected_video_stream ? Json(*session.source.selected_video_stream) : Json(nullptr);
         identity_["selection"] = {static_cast<int>(r.selection.mode), r.selection.fps, r.selection.interval, r.start_seconds, r.end_seconds};
         identity_["geometry"] = {static_cast<int>(r.geometry.mode), r.geometry.scale, r.geometry.width, r.geometry.height, r.geometry.clockwise_rotation};
@@ -141,7 +161,6 @@ namespace lfs::media::detail {
         }
         if (!std::filesystem::is_directory(std::filesystem::symlink_status(checkpoint_)))
             return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint must be a non-symlink directory"));
-        const auto identity_path = checkpoint_ / "identity.json";
         if (!std::filesystem::exists(identity_path) || emptyReservation(identity_path)) {
             // Before identity publication no image/record can have committed.
             // Only its own interrupted atomic temporary/reservation is recoverable.
@@ -250,15 +269,44 @@ namespace lfs::media::detail {
         staging_options.remove_stale_frames = false;
         staging_options.image_output.overwrite = true;
         staging_options.exr.overwrite = true;
-        FileFrameSink staging(std::move(staging_options));
-        if (auto begun = staging.begin({}); !begun)
-            return begun;
-        if (auto written = staging.write(frame); !written)
-            return written;
-        if (auto completed = staging.complete({SinkOutcome::Completed, 1, {}}); !completed)
-            return completed;
         const auto staged = checkpoint_ / name;
-        const auto encoded_digest = fileDigest(staged, cancelled_);
+        Result<std::string> encoded_digest = std::string{};
+        if (gpu_jpeg_) {
+            std::vector<std::uint8_t> packed;
+            const auto* pixels = frame.pixels.data();
+            if (frame.layout.row_stride != row_bytes) {
+                packed.reserve(row_bytes * frame.layout.height);
+                for (int row = 0; row < frame.layout.height; ++row) {
+                    const auto bytes = frame.pixels.subspan(static_cast<std::size_t>(row) * frame.layout.row_stride, row_bytes);
+                    packed.insert(packed.end(), bytes.begin(), bytes.end());
+                }
+                pixels = packed.data();
+            }
+            const auto quality = std::clamp(output_.files.jpeg_quality == 0 ? 90 : output_.files.jpeg_quality, 1, 100);
+            auto encoded = gpu_jpeg_->encode({gpu_jpeg_->queueHost(0, pixels)}, frame.layout.width, frame.layout.height, quality);
+            if (encoded.size() != 1 || encoded[0].empty())
+                return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint GPU JPEG encoder returned an incomplete frame"));
+            Sha256 digest;
+            digest.update(encoded[0]);
+            encoded_digest = digest.finish();
+            auto staged_result = core::writeFileAtomically(staged, [&](FILE* stream) -> SinkResult {
+                if (std::fwrite(encoded[0].data(), 1, encoded[0].size(), stream) != encoded[0].size())
+                    return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint GPU JPEG staging write failed"));
+                return {};
+            },
+                                                           {.overwrite = true, .durable = false, .cancelled = cancelled_});
+            if (!staged_result)
+                return staged_result;
+        } else {
+            FileFrameSink staging(std::move(staging_options));
+            if (auto begun = staging.begin({}); !begun)
+                return begun;
+            if (auto written = staging.write(frame); !written)
+                return written;
+            if (auto completed = staging.complete({SinkOutcome::Completed, 1, {}}); !completed)
+                return completed;
+            encoded_digest = fileDigest(staged, cancelled_);
+        }
         if (!encoded_digest)
             return SinkResult::failure(encoded_digest.error());
         if (record.contains("file_sha256") && record["file_sha256"].get<std::string>() != *encoded_digest)

@@ -166,6 +166,76 @@ class StudioBackends(unittest.TestCase):
                 mean_error = sum(abs(a - b) for a, b in zip(actual, expected)) / len(actual)
                 self.assertLess(mean_error, 10, f"GPU rotation disagrees with FFmpeg: MAE {mean_error}")
 
+    def test_verified_gpu_jpeg_resume(self):
+        work = Path(tempfile.mkdtemp(dir=self.root))
+        output = work / "frames"
+        path = work / "request.json"
+        def run(**options):
+            request = {"input": str(self.source), "output": str(output),
+                       "jpeg": True, "resume": True, **options}
+            path.write_text(json.dumps(request), encoding="utf-8")
+            return subprocess.run([str(RUNNER), str(path)], capture_output=True, timeout=60)
+
+        interrupted = run(exit_after=1)
+        self.assertEqual(interrupted.returncode, 73, interrupted.stderr.decode(errors="replace"))
+        first = next(output.glob("*.jpg"))
+        original = (first.read_bytes(), first.stat().st_mtime_ns)
+        complete = run()
+        self.assertEqual(complete.returncode, 0, complete.stderr.decode(errors="replace"))
+        self.assertEqual(json.loads(complete.stdout)["accepted"], 4)
+        self.assertEqual((first.read_bytes(), first.stat().st_mtime_ns), original)
+        identity = json.loads((output/".media-ingest-checkpoint"/"identity.json").read_text())
+        self.assertEqual(identity["image_encoder"], "nvimagecodec_cuda")
+        metadata = json.loads((output/"extraction_metadata.json").read_text())
+        self.assertEqual(metadata["processing"]["image_encoder"], {"backend": "nvimagecodec_cuda", "batch_size": 1})
+        images = {image.name: (image.read_bytes(), image.stat().st_mtime_ns) for image in output.glob("*.jpg")}
+        replay = run()
+        self.assertEqual(replay.returncode, 0, replay.stderr.decode(errors="replace"))
+        self.assertEqual(images, {image.name: (image.read_bytes(), image.stat().st_mtime_ns) for image in output.glob("*.jpg")})
+        first.unlink()
+        restored = run()
+        self.assertEqual(restored.returncode, 0, restored.stderr.decode(errors="replace"))
+        self.assertEqual(first.read_bytes(), original[0])
+        unavailable = run(disable_jpeg_provider=True)
+        self.assertNotEqual(unavailable.returncode, 0)
+        self.assertIn("provider is unavailable", unavailable.stdout.decode(errors="replace"))
+        first.write_bytes(b"corrupt")
+        corrupt = run()
+        self.assertNotEqual(corrupt.returncode, 0)
+        self.assertEqual(first.read_bytes(), b"corrupt")
+
+        # A CPU checkpoint keeps its provider even when the GPU becomes available.
+        output = work / "cpu"
+        cpu = run(disable_jpeg_provider=True)
+        self.assertEqual(cpu.returncode, 0, cpu.stderr.decode(errors="replace"))
+        resumed_cpu = run()
+        self.assertEqual(resumed_cpu.returncode, 0, resumed_cpu.stderr.decode(errors="replace"))
+        self.assertEqual(json.loads((output/".media-ingest-checkpoint"/"identity.json").read_text())["image_encoder"], "cpu")
+        for options in ({"rotation": 90}, {"scale": .5}, {"sharpness": True, "window": True}):
+            with self.subTest(options=options):
+                output = Path(tempfile.mkdtemp(dir=work)) / "frames"
+                fresh = run(**options)
+                self.assertEqual(fresh.returncode, 0, fresh.stderr.decode(errors="replace"))
+                before = {image.name: image.read_bytes() for image in output.glob("*.jpg")}
+                self.assertTrue(before)
+                replay = run(**options)
+                self.assertEqual(replay.returncode, 0, replay.stderr.decode(errors="replace"))
+                self.assertEqual(before, {image.name: image.read_bytes() for image in output.glob("*.jpg")})
+                gpu_output = output
+                output = Path(tempfile.mkdtemp(dir=work)) / "cpu-reference"
+                reference = run(disable_jpeg_provider=True, **options)
+                self.assertEqual(reference.returncode, 0, reference.stderr.decode(errors="replace"))
+                self.assertEqual(set(before), {image.name for image in output.glob("*.jpg")})
+                name = sorted(before)[0]
+                def decoded(image):
+                    return subprocess.check_output([FFMPEG, "-v", "error", "-i", str(image),
+                                                    "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+                actual, expected = decoded(gpu_output/name), decoded(output/name)
+                self.assertEqual(len(actual), len(expected))
+                # Different JPEG providers quantize/chroma-sample differently;
+                # the transformed content must agree with the CPU writer.
+                self.assertLess(sum(abs(a-b) for a,b in zip(actual,expected))/len(actual), 10)
+
     def test_memory_delivery_keeps_software_pixels(self):
         actual, output = self.invoke(memory=True)
         reference = subprocess.check_output([FFMPEG, "-v", "error", "-i",str(self.source),"-f", "rawvideo", "-pix_fmt", "rgb24", "-"])

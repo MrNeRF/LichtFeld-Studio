@@ -5,8 +5,10 @@
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/media_studio_backends.hpp"
+#include "media/media_backends.hpp"
 #include "media/media_ingest.hpp"
 #include <algorithm>
+#include <cstdlib>
 #include <cuda_runtime.h>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -44,6 +46,10 @@ int main(int argc, char** argv) {
         const auto caps = media::MediaIngest::capabilities();
         std::ifstream stream(core::utf8_to_path(argv[1]));
         const auto request = json::parse(stream);
+        if (request.value("disable_jpeg_provider", false))
+            // Keep the registered host's decode capabilities unchanged while
+            // simulating an encoder that cannot be allocated.
+            media::detail::registerGpuJpegFactory(+[](const media::detail::JpegSettings&) -> std::unique_ptr<media::detail::GpuJpegEncoder> { return nullptr; });
         const auto operation = request.value("operation", "extract");
         if (operation == "native-preview" || operation == "native-encode" || operation == "native-encode-session" || operation == "native-conversion") {
             std::cout << runNativeVideoContracts(request).dump() << '\n';
@@ -53,7 +59,11 @@ int main(int argc, char** argv) {
         input.input = core::utf8_to_path(request.at("input").get<std::string>());
         input.selection.mode = media::SelectionMode::Interval;
         input.selection.interval = 1;
-        input.end_seconds = .35;
+        if (request.contains("fps")) {
+            input.selection.mode = media::SelectionMode::FPS;
+            input.selection.fps = request.at("fps").get<double>();
+        }
+        input.end_seconds = request.value("end_seconds", .35);
         input.allow_hardware_decode = request.value("hardware", true);
         input.convert_hdr_to_sdr = request.value("hdr", false);
         input.geometry.clockwise_rotation = request.value("rotation", 0);
@@ -68,6 +78,13 @@ int main(int argc, char** argv) {
         files.files.output_directory = core::utf8_to_path(request.at("output").get<std::string>());
         files.files.format = request.value("jpeg", false) ? media::FrameFileFormat::JPEG : media::FrameFileFormat::PNG;
         files.write_metadata = true;
+        files.resume = request.value("resume", false);
+        const int exit_after = request.value("exit_after", 0);
+        if (exit_after > 0)
+            input.progress = [exit_after](const media::IngestProgress& progress) {
+                if (progress.processed >= exit_after)
+                    std::_Exit(73);
+            };
         media::MemoryFrameSink memory;
         const bool to_memory = request.value("memory", false);
         auto result = to_memory ? media::MediaIngest::extract(input, memory) : media::MediaIngest::extractFiles(input, files);
