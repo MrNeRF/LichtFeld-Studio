@@ -100,6 +100,19 @@ def on_unload():
 class TestPluginDiscovery:
     """Tests for plugin discovery."""
 
+    def test_damaged_manifest_reason_is_available_to_startup(self, temp_plugins_dir):
+        from lfs_plugins import PluginManager
+
+        plugin_dir = temp_plugins_dir / "broken_plugin"
+        plugin_dir.mkdir()
+        original = "[project\n"
+        (plugin_dir / "pyproject.toml").write_text(original)
+        (plugin_dir / "settings.json").write_text('{"load_on_startup":true}')
+        mgr = PluginManager.instance()
+        assert mgr.discover() == []
+        assert ("broken_plugin" in mgr.get_discovery_errors()
+                and (plugin_dir / "pyproject.toml").read_text() == original)
+
     def test_discover_empty(self, temp_plugins_dir):
         """Should return empty list when no plugins exist."""
         from lfs_plugins import PluginManager

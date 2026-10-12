@@ -673,7 +673,8 @@ _add_dll_dirs()
             return true;
         }
 
-        std::vector<std::string> discover_enabled_plugins_locked() {
+        std::vector<std::string> discover_enabled_plugins_locked(
+            std::vector<std::string>& rejected_manifests) {
             std::vector<std::string> names;
 
             PyObject* lf = import_lichtfeld_module("Failed to import lichtfeld for plugin discovery");
@@ -703,6 +704,7 @@ _add_dll_dirs()
                 return names;
             }
 
+            PyObject* discovery_errors = nullptr;
             // Pre-register all discovered plugins so load() skips re-discovery
             PyObject* mgr_mod = PyImport_ImportModule("lfs_plugins.manager");
             if (mgr_mod) {
@@ -712,6 +714,7 @@ _add_dll_dirs()
                     if (mgr) {
                         PyObject* result = PyObject_CallMethod(mgr, "pre_register", "O", discovered);
                         Py_XDECREF(result);
+                        discovery_errors = PyObject_CallMethod(mgr, "get_discovery_errors", nullptr);
                         Py_DECREF(mgr);
                     }
                     Py_DECREF(mgr_cls);
@@ -763,6 +766,34 @@ _add_dll_dirs()
                 Py_DECREF(iter);
             }
 
+            if (discovery_errors && PyDict_Check(discovery_errors)) {
+                Py_ssize_t position = 0;
+                PyObject* key = nullptr;
+                PyObject* value = nullptr;
+                while (PyDict_Next(discovery_errors, &position, &key, &value)) {
+                    if (!PyUnicode_Check(key))
+                        continue;
+                    const char* name = PyUnicode_AsUTF8(key);
+                    if (!name)
+                        continue;
+                    bool enabled = false;
+                    if (settings_mgr) {
+                        PyObject* prefs = PyObject_CallMethod(settings_mgr, "get", "s", name);
+                        if (prefs) {
+                            PyObject* flag = PyObject_CallMethod(prefs, "get", "sO", "load_on_startup", Py_False);
+                            if (flag) {
+                                enabled = PyObject_IsTrue(flag) > 0;
+                                Py_DECREF(flag);
+                            }
+                            Py_DECREF(prefs);
+                        } else
+                            PyErr_Clear();
+                    }
+                    if (enabled)
+                        rejected_manifests.emplace_back(name);
+                }
+            }
+            Py_XDECREF(discovery_errors);
             Py_XDECREF(settings_mgr);
             Py_DECREF(discovered);
             Py_DECREF(discover);
@@ -911,6 +942,7 @@ _add_dll_dirs()
                 }
 
                 std::vector<std::string> to_load;
+                std::vector<std::string> rejected_manifests;
                 bool bridge_ready = false;
                 bool already_loaded = false;
                 {
@@ -919,7 +951,7 @@ _add_dll_dirs()
                     bridge_ready = ensure_python_bridge_ready_locked();
                     already_loaded = are_plugins_loaded();
                     if (bridge_ready && !already_loaded)
-                        to_load = discover_enabled_plugins_locked();
+                        to_load = discover_enabled_plugins_locked(rejected_manifests);
                 }
 
                 if (!bridge_ready) {
@@ -950,11 +982,15 @@ _add_dll_dirs()
                 if (to_load.empty()) {
                     finish_plugin_preload(
                         PluginPreloadState::Completed,
-                        "Loaded 0/0 plugins",
+                        rejected_manifests.empty()
+                            ? "Loaded 0/0 plugins"
+                            : "Plugin issue|manifest|" + rejected_manifests.front(),
                         true);
                     return;
                 }
 
+                std::string failed_plugin;
+                std::string failed_reason;
                 for (std::size_t index = 0; index < to_load.size(); ++index) {
                     if (g_plugin_preload.stop_requested.load(std::memory_order_acquire)) {
                         finish_plugin_preload(
@@ -1005,9 +1041,16 @@ _add_dll_dirs()
                     }
                     if (success)
                         LOG_INFO("Loaded plugin: {}", name);
-                    else
+                    else {
                         LOG_ERROR("Failed to load plugin '{}': {}", name,
                                   attempt.error.empty() ? "unknown error" : attempt.error);
+                        if (failed_plugin.empty()) {
+                            failed_plugin = name;
+                            failed_reason = attempt.error.find("plugin API") != std::string::npos
+                                                ? "api"
+                                                : "load";
+                        }
+                    }
                     publish_plugin_preload_status();
                 }
 
@@ -1025,7 +1068,11 @@ _add_dll_dirs()
                     }
                 }
 
-                const std::string final_stage = failure_count == 0
+                const std::string final_stage = !rejected_manifests.empty()
+                                                    ? "Plugin issue|manifest|" + rejected_manifests.front()
+                                                : !failed_plugin.empty()
+                                                    ? "Plugin issue|" + failed_reason + "|" + failed_plugin
+                                                : failure_count == 0
                                                     ? std::format("Loaded {}/{} plugins",
                                                                   to_load.size(), to_load.size())
                                                     : std::format(

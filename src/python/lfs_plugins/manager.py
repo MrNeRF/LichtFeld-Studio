@@ -107,6 +107,7 @@ class PluginManager:
         self._on_plugin_unloaded: List[Callable] = []
         self._on_plugin_changed: List[Callable] = []
         self._registry: Optional[RegistryClient] = None
+        self._discovery_errors: Dict[str, str] = {}
 
     @classmethod
     def instance(cls) -> "PluginManager":
@@ -379,6 +380,7 @@ class PluginManager:
 
     def discover(self) -> List[PluginInfo]:
         """Scan plugins directory for valid plugins."""
+        self._discovery_errors = {}
         if not self._plugins_dir.exists():
             self._plugins_dir.mkdir(parents=True, exist_ok=True)
 
@@ -389,7 +391,12 @@ class PluginManager:
                     plugins.append(self._parse_manifest(entry))
                 except Exception as e:
                     _log.warning("Skipping plugin '%s': invalid manifest. %s", entry.name, e)
+                    self._discovery_errors[entry.name] = str(e)
         return plugins
+
+    def get_discovery_errors(self) -> Dict[str, str]:
+        """Return reasons installed plugins were omitted by the last scan."""
+        return dict(self._discovery_errors)
 
     def pre_register(self, discovered: List[PluginInfo]) -> None:
         """Pre-register discovered plugins so load() skips re-discovery."""
