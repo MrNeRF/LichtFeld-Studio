@@ -55,6 +55,8 @@ class ImagePreviewPanel(Panel):
         self._image_paths: list[Path] = []
         self._mask_paths: list[Optional[Path]] = []
         self._camera_uids: list[int] = []
+        self._camera_nodes: dict[int, tuple[int, str]] = {}
+        self._unbound_camera_generation: int | None = None
         self._current_index = 0
 
         self._zoom = 1.0
@@ -280,9 +282,27 @@ class ImagePreviewPanel(Panel):
             return
 
         self._reactive_unsubscribers = [
-            RuntimeState.scene_generation.subscribe(lambda _value: self._mark_dirty()),
+            RuntimeState.scene_generation.subscribe(self._on_scene_generation_changed),
             RuntimeState.language_generation.subscribe(lambda _value: self._mark_dirty()),
         ]
+
+    def _on_scene_generation_changed(self, _value):
+        if self._current_camera_uid() >= 0 and self._current_camera_node() is None:
+            self._image_paths = []
+            self._mask_paths = []
+            self._camera_uids = []
+            self._camera_nodes.clear()
+            self._unbound_camera_generation = None
+            self._image_info_cache.clear()
+            self._path_stat_cache.clear()
+            self._current_index = 0
+            self._prev_image_index = -1
+            self._crossfade_pending = False
+            self._scroll_target = None
+            self._color_picker_active = False
+            self._reset_view()
+            self._close_panel()
+        self._mark_dirty()
 
     def _unsubscribe_reactive_state(self):
         for unsubscribe in self._reactive_unsubscribers:
@@ -301,7 +321,8 @@ class ImagePreviewPanel(Panel):
         self._request_model_update()
 
     def open(self, image_paths: list[Path], mask_paths: list[Optional[Path]],
-             start_index: int, camera_uids: list[int] | None = None):
+             start_index: int, camera_uids: list[int] | None = None,
+             camera_nodes: dict[int, tuple[int, str]] | None = None):
         if not image_paths:
             return
 
@@ -321,7 +342,13 @@ class ImagePreviewPanel(Panel):
                 self._path_stat_cache[str(path)] = (True, int(stat.st_mtime_ns), int(stat.st_size))
             except OSError:
                 self._path_stat_cache[str(path)] = (False, 0, 0)
-        self._camera_uids = camera_uids if camera_uids is not None else [-1] * len(image_paths)
+        self._camera_uids = list(camera_uids) if camera_uids is not None else [-1] * len(image_paths)
+        self._camera_nodes = dict(camera_nodes) if camera_nodes is not None else {}
+        self._unbound_camera_generation = (
+            RuntimeState.scene_generation.value
+            if camera_nodes is None and any(uid >= 0 for uid in self._camera_uids)
+            else None
+        )
         self._current_index = min(start_index, len(image_paths) - 1)
         self._last_training_params = self._get_training_params()
         self._rotation_quadrants = 0
@@ -376,31 +403,48 @@ class ImagePreviewPanel(Panel):
             return self._camera_uids[self._current_index]
         return -1
 
-    def _current_camera_node(self):
+    def _current_camera_node(self, resolve_unbound: bool = False):
         uid = self._current_camera_uid()
-        if uid < 0:
+        identity = self._camera_nodes.get(uid)
+        if not 0 <= self._current_index < len(self._image_paths):
             return None
         scene = lf.get_scene()
-        for node in scene.get_nodes():
-            if node.type == lf.scene.NodeType.CAMERA and node.camera_uid == uid:
-                return node
+        if not scene:
+            return None
+        if identity is None and resolve_unbound and self._unbound_camera_generation is not None:
+            if RuntimeState.scene_generation.value != self._unbound_camera_generation:
+                return None
+            for candidate in scene.get_nodes():
+                if (candidate.type == lf.scene.NodeType.CAMERA
+                        and candidate.camera_uid == uid
+                        and Path(candidate.image_path) == self._image_paths[self._current_index]):
+                    identity = (candidate.id, candidate.uuid)
+                    self._camera_nodes[uid] = identity
+                    break
+        if identity is None:
+            return None
+        node = scene.get_node_by_id(identity[0])
+        if (node and node.uuid == identity[1]
+                and node.type == lf.scene.NodeType.CAMERA and node.camera_uid == uid
+                and Path(node.image_path) == self._image_paths[self._current_index]):
+            return node
         return None
 
     def _action_go_to_camera_view(self):
-        uid = self._current_camera_uid()
-        if uid >= 0:
-            lf.ui.go_to_camera_view(uid)
+        node = self._current_camera_node(resolve_unbound=True)
+        if node is not None:
+            lf.ui.go_to_camera_view(node.camera_uid)
 
     def _action_open_in_gt_compare(self):
-        uid = self._current_camera_uid()
-        if uid < 0:
+        node = self._current_camera_node(resolve_unbound=True)
+        if node is None:
             return
-        lf.ui.go_to_camera_view(uid)
+        lf.ui.go_to_camera_view(node.camera_uid)
         if not lf.ui.is_gt_comparison_active():
             lf.ui.toggle_gt_comparison()
 
     def _action_toggle_training(self):
-        node = self._current_camera_node()
+        node = self._current_camera_node(resolve_unbound=True)
         if node is None:
             return
         lf.set_camera_training_enabled(node.name, not node.training_enabled)
@@ -1241,9 +1285,10 @@ def _set_text(doc, element_id: str, text: str):
 
 
 def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
-                       start_index: int, camera_uids: list[int] | None = None):
+                       start_index: int, camera_uids: list[int] | None = None,
+                       camera_nodes: dict[int, tuple[int, str]] | None = None):
     global _pending_open
-    _pending_open = (image_paths, mask_paths, start_index, camera_uids)
+    _pending_open = (image_paths, mask_paths, start_index, camera_uids, camera_nodes)
     lf.ui.set_panel_enabled("lfs.image_preview", True)
     panel = _instance
     if panel is None:
@@ -1276,6 +1321,7 @@ def open_camera_preview_by_uid(cam_uid: int):
     image_paths = []
     mask_paths = []
     camera_uids = []
+    camera_nodes = {}
     start_index = 0
     for cid in child_ids:
         child = nodes_by_id.get(cid)
@@ -1286,6 +1332,7 @@ def open_camera_preview_by_uid(cam_uid: int):
         image_paths.append(Path(child.image_path))
         mask_paths.append(Path(child.mask_path) if child.mask_path else None)
         camera_uids.append(child.camera_uid)
+        camera_nodes[child.camera_uid] = (child.id, child.uuid)
 
     if image_paths:
-        open_image_preview(image_paths, mask_paths, start_index, camera_uids)
+        open_image_preview(image_paths, mask_paths, start_index, camera_uids, camera_nodes)

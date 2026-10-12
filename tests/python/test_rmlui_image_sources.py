@@ -24,6 +24,7 @@ def _install_lf_stub(monkeypatch):
             pass
 
     lf_stub = ModuleType("lichtfeld")
+    lf_stub.get_scene = lambda: None
     lf_stub.ui = SimpleNamespace(
         Panel=_Panel,
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
@@ -41,8 +42,9 @@ def _install_lf_stub(monkeypatch):
 def panel_modules(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
     source_python = project_root / "src" / "python"
-    if str(source_python) not in sys.path:
-        sys.path.insert(0, str(source_python))
+    if str(source_python) in sys.path:
+        sys.path.remove(str(source_python))
+    sys.path.insert(0, str(source_python))
 
     for module_name in [
         "lfs_plugins.image_preview_panel",
