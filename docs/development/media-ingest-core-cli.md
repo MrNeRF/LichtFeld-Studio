@@ -181,8 +181,6 @@ cmake --build build --target media_contracts --config Release --parallel 2
 ctest --test-dir build -C Release -L media --output-on-failure --no-tests=error
 ```
 
-## Verification
-
 Contracts compare independent RGB/PTS references, legacy output bytes/names/
 metadata, probe/preview behavior, sink ownership/budgets/lifecycle, actual writer
 failures, CLI version/help, DLL-shared error state and diagnostic registration.
