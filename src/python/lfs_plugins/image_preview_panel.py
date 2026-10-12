@@ -94,7 +94,8 @@ class ImagePreviewPanel(Panel):
         self._scroll_start_time = 0.0
 
         self._image_info_cache: dict[str, tuple[int, int, int]] = {}
-        self._path_stat_cache: dict[str, tuple[bool, int, int]] = {}
+        self._path_stat_cache: dict[str, tuple[bool, int, int, int, int, int]] = {}
+        self._path_revision_cache: dict[str, str] = {}
         self._filmstrip_top_spacer = 0.0
         self._filmstrip_bottom_spacer = 0.0
         self._last_training_params: tuple[int, int, bool] = (1, 0, False)
@@ -332,16 +333,24 @@ class ImagePreviewPanel(Panel):
             str(path)
             for path in self._image_paths + [p for p in self._mask_paths if p is not None]
         }
-        self._image_info_cache = {
-            path: info for path, info in self._image_info_cache.items() if path in live_paths
-        }
+        previous_stats = self._path_stat_cache
+        previous_info = self._image_info_cache
         self._path_stat_cache = {}
+        self._path_revision_cache = {}
         for path in self._image_paths + [p for p in self._mask_paths if p is not None]:
             try:
                 stat = os.stat(path)
-                self._path_stat_cache[str(path)] = (True, int(stat.st_mtime_ns), int(stat.st_size))
+                revision = (int(stat.st_mtime_ns), int(stat.st_size),
+                            int(stat.st_dev), int(stat.st_ino), int(stat.st_ctime_ns))
+                self._path_stat_cache[str(path)] = (True, *revision)
+                self._path_revision_cache[str(path)] = "-".join(str(value) for value in revision)
             except OSError:
-                self._path_stat_cache[str(path)] = (False, 0, 0)
+                self._path_stat_cache[str(path)] = (False, 0, 0, 0, 0, 0)
+        self._image_info_cache = {
+            path: info for path, info in previous_info.items()
+            if path in live_paths and (path not in previous_stats
+                                       or previous_stats[path] == self._path_stat_cache[path])
+        }
         self._camera_uids = list(camera_uids) if camera_uids is not None else [-1] * len(image_paths)
         self._camera_nodes = dict(camera_nodes) if camera_nodes is not None else {}
         self._unbound_camera_generation = (
@@ -475,7 +484,7 @@ class ImagePreviewPanel(Panel):
         if self._current_index >= len(self._mask_paths):
             return False
         mask_path = self._mask_paths[self._current_index]
-        return mask_path is not None and self._path_stat_cache.get(str(mask_path), (False, 0, 0))[0]
+        return mask_path is not None and self._path_stat_cache.get(str(mask_path), (False, 0, 0, 0, 0, 0))[0]
 
     def _close_panel(self):
         lf.ui.set_panel_enabled("lfs.image_preview", False)
@@ -520,9 +529,10 @@ class ImagePreviewPanel(Panel):
     def _make_preview_url(self, path: Path, cam_uid: int,
                           thumb: int = 0, preview_mw: int = 0) -> str:
         rf, mw, ud = self._last_training_params
+        revision = self._path_revision_cache.get(str(path), "missing")
         return (f"preview://cam={cam_uid}&thumb={thumb}"
                 f"&rf={rf}&mw={mw}&pmw={preview_mw}"
-                f"&ud={1 if ud else 0}&path={_encode_rml_path(path)}")
+                f"&ud={1 if ud else 0}&rev={revision}&path={_encode_rml_path(path)}")
 
     def _on_filmstrip_click(self, event):
         el = event.target()

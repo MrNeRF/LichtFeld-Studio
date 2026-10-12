@@ -1284,6 +1284,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_layout.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_pan_scale.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_camera_identity.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_file_revision.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rmlui_image_sources.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_runtime_state.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scripts_panel.py
