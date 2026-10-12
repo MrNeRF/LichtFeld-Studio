@@ -189,7 +189,7 @@ namespace lfs::training {
         // holding the result.
         uint32_t sort_instances(MetalFastState& s, const uint32_t capacity, const uint32_t end_bit) {
             const uint32_t blocks = div_up(capacity, kSortBlock);
-            reserve(s.histogram, size_t{256} * blocks, DataType::UInt32, "fast.sort.histogram");
+            reserve(s.histogram, size_t{256} * blocks, DataType::UInt32, "fast.sort.histogram", false);
             uint32_t current = 0;
             for (uint32_t shift = 0; shift < end_bit; shift += 8) {
                 auto& keys_in = s.keys[current];
@@ -437,11 +437,13 @@ namespace lfs::training {
                 // of `capacity` instances; the kernels take the count from s.counts.
                 const auto encode_raster = [&](const uint32_t capacity) {
                     fill(s.ranges, size_t{n_tiles} * 2, 0);
+                    // instance_capacity already includes growth headroom. Keep
+                    // its sort storage at that capacity rather than adding it twice.
                     for (uint32_t i = 0; i < 2; ++i) {
                         reserve(s.keys[i], capacity, DataType::Int64,
-                                i == 0 ? "fast.sort.keys0" : "fast.sort.keys1");
+                                i == 0 ? "fast.sort.keys0" : "fast.sort.keys1", false);
                         reserve(s.values[i], capacity, DataType::UInt32,
-                                i == 0 ? "fast.sort.values0" : "fast.sort.values1");
+                                i == 0 ? "fast.sort.values0" : "fast.sort.values1", false);
                     }
                     const InstanceParams inst{mk::address(s.mean_box), mk::address(s.conic_opacity),
                                               mk::address(s.tile_info), mk::address(s.n_touched),
