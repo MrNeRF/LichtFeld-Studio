@@ -692,6 +692,43 @@ namespace {
             check_forward(fc);
     }
 
+    TEST_P(PortableFastRaster, GrowingSortCapacityPreservesRender) {
+        const auto& table = fast_ops();
+        if (table.set_instance_capacity_for_testing == nullptr)
+            GTEST_SKIP() << "backend has no forced FastGS capacity path";
+
+        Scene s = make_scene(24, 3, 48, 40, 93u, -2.3f, -1.6f);
+        const Gpu g = upload_scene(s, ops::ShStorage::Float32);
+        const Config config{.normals = true};
+        Frame reference;
+        reference.saved.backend = table.create();
+        table.set_instance_capacity_for_testing(reference.saved, 16385);
+        forward(reference, s, g, config);
+        ASSERT_EQ(reference.result.code, ops::RasterResult::Code::Success) << reference.result.message;
+        const auto image = download(reference.image);
+        const auto alpha = download(reference.alpha);
+        const auto depth = download(reference.depth);
+        const auto normal = download(reference.normal);
+        table.release(reference.saved);
+
+        Frame growing;
+        growing.saved.backend = table.create();
+        // Non-power-of-two capacities exercise sort padding and cross backing
+        // allocation size classes with and without extra growth headroom.
+        // The scene fits in every capacity; allocation must not affect its render.
+        for (const uint32_t capacity : {1801u, 2305u, 3601u, 4609u, 7201u, 9217u}) {
+            SCOPED_TRACE(capacity);
+            table.set_instance_capacity_for_testing(growing.saved, capacity);
+            forward(growing, s, g, config);
+            ASSERT_EQ(growing.result.code, ops::RasterResult::Code::Success) << growing.result.message;
+            EXPECT_EQ(download(growing.image), image);
+            EXPECT_EQ(download(growing.alpha), alpha);
+            EXPECT_EQ(download(growing.depth), depth);
+            EXPECT_EQ(download(growing.normal), normal);
+            table.release(growing.saved);
+        }
+    }
+
     // Zero moments and a zero image gradient leave every parameter bit-identical,
     // as the parity fixture expects.
     TEST_P(PortableFastRaster, ZeroGradientLeavesParametersUnchanged) {
