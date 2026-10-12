@@ -2239,6 +2239,48 @@ TEST_F(UndoHistoryTest, SceneSnapshotEstimatedBytesIncludeTransformMaps) {
     EXPECT_GE(snapshot->estimatedBytes(), minimum_expected);
 }
 
+TEST_F(UndoHistoryTest, TransformSnapshotInvalidatesRenderWithoutPayloadUpload) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(2));
+
+    lfs::vis::op::SceneSnapshot snapshot(*scene_manager, "transform.render");
+    snapshot.captureTransforms({"model"});
+    EXPECT_EQ(snapshot.dirtyFlags() & lfs::vis::DirtyFlag::SPLATS, 0u);
+    EXPECT_EQ(snapshot.dirtyFlags() &
+                  (lfs::vis::DirtyFlag::MESH | lfs::vis::DirtyFlag::OVERLAY),
+              lfs::vis::DirtyFlag::MESH | lfs::vis::DirtyFlag::OVERLAY);
+
+    snapshot.captureSelection();
+    EXPECT_NE(snapshot.dirtyFlags() & lfs::vis::DirtyFlag::SELECTION, 0u);
+    EXPECT_EQ(snapshot.dirtyFlags() & lfs::vis::DirtyFlag::SPLATS, 0u);
+
+    snapshot.captureTopology();
+    EXPECT_NE(snapshot.dirtyFlags() & lfs::vis::DirtyFlag::SPLATS, 0u);
+}
+
+TEST_F(UndoHistoryTest, SceneSnapshotDirtyFlagsAreIsolatedByMutationType) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(2));
+
+    lfs::vis::op::SceneSnapshot selection_only(*scene_manager, "selection.only");
+    selection_only.captureSelection();
+    EXPECT_EQ(selection_only.dirtyFlags() & lfs::vis::DirtyFlag::SELECTION,
+              lfs::vis::DirtyFlag::SELECTION);
+    EXPECT_EQ(selection_only.dirtyFlags() & lfs::vis::DirtyFlag::SPLATS, 0u);
+
+    lfs::vis::op::SceneSnapshot transform_only(*scene_manager, "transform.only");
+    transform_only.captureTransforms({"model"});
+    EXPECT_EQ(transform_only.dirtyFlags() & lfs::vis::DirtyFlag::SPLATS, 0u);
+    EXPECT_EQ(transform_only.dirtyFlags() &
+                  (lfs::vis::DirtyFlag::MESH | lfs::vis::DirtyFlag::OVERLAY),
+              lfs::vis::DirtyFlag::MESH | lfs::vis::DirtyFlag::OVERLAY);
+
+    lfs::vis::op::SceneSnapshot transform_and_topology(*scene_manager, "transform.topology");
+    transform_and_topology.captureTransforms({"model"});
+    transform_and_topology.captureTopology();
+    EXPECT_NE(transform_and_topology.dirtyFlags() & lfs::vis::DirtyFlag::SPLATS, 0u);
+}
+
 TEST_F(UndoHistoryTest, SceneSnapshotFallsBackToDenseSelectionStorageForWideChanges) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();

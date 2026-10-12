@@ -162,7 +162,7 @@ namespace lfs::vis::op {
                 flags |= DirtyFlag::SELECTION;
             }
             if (hasFlag(captured, ModifiesFlag::TRANSFORMS)) {
-                flags |= DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY;
+                flags |= DirtyFlag::MESH | DirtyFlag::OVERLAY;
             }
             if (hasFlag(captured, ModifiesFlag::TOPOLOGY)) {
                 flags |= DirtyFlag::SPLATS | DirtyFlag::SELECTION;
