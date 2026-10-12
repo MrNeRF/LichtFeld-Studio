@@ -1491,9 +1491,12 @@
     "file": "Datei",
     "items": "Elemente",
     "and_more": "... und",
+    "and_more_in_log": "... und {} weitere (vollständige Liste im Protokoll)",
     "cannot_open": "Kann nicht öffnen"
   },
   "file_drop": {
+    "drop_video_project_separately": "Videos und Projekte müssen einzeln abgelegt werden. Die aufgeführten Elemente wurden nicht geöffnet.",
+    "supported_formats_detail": "Unterstützte Formate: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {} oder Datensatzverzeichnisse",
     "blocked_during_training": "Beenden Sie das Training, bevor Sie eine neue Szene laden.",
     "cancelled_by_new_project": "Die Aktion „Neues Projekt“ hat diese Dateiablage abgebrochen. Legen Sie die Datei erneut ab, um sie zu laden.",
     "cancelled_by_project_switch": "Die abgelegte Datei wurde nicht geladen, weil ein Projektvorgang gestartet wurde. Legen Sie sie erneut ab, um sie zu laden."

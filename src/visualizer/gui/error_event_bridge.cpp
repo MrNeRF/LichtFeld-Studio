@@ -176,6 +176,11 @@ namespace lfs::vis::gui {
         const std::size_t count = e.files.size();
         const std::size_t display_count = std::min(count, MAX_DISPLAY);
 
+        std::string full_list;
+        for (const auto& path : e.files)
+            full_list += std::format("  - {}\n", path);
+        LOG_WARN("Dropped {} item(s) that were not opened:\n{}", count, full_list);
+
         std::string file_list;
         file_list.reserve(display_count * 64);
         for (std::size_t i = 0; i < display_count; ++i) {
@@ -185,7 +190,7 @@ namespace lfs::vis::gui {
                                      is_dir ? LOC(Notif::DIRECTORY) : LOC(Notif::FILE));
         }
         if (count > MAX_DISPLAY) {
-            file_list += std::format("  {} {}\n", LOC(Notif::AND_MORE), count - MAX_DISPLAY);
+            file_list += std::format("  {}\n", LOCF("notification.and_more_in_log", count - MAX_DISPLAY));
         }
 
         const bool single_dir = count == 1 && std::filesystem::is_directory(e.files[0]);

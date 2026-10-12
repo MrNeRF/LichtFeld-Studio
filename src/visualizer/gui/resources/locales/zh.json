@@ -1491,9 +1491,12 @@
     "file": "文件",
     "items": "项目",
     "and_more": "... 和",
+    "and_more_in_log": "……以及另外 {} 项（完整列表见日志）",
     "cannot_open": "无法打开"
   },
   "file_drop": {
+    "drop_video_project_separately": "请分别拖放视频和项目。列出的项目未被打开。",
+    "supported_formats_detail": "支持的格式：.licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {}，或数据集目录",
     "blocked_during_training": "请先停止训练，再加载新场景。",
     "cancelled_by_new_project": "“新建项目”操作取消了此次文件拖放。请再次拖放该文件以加载。",
     "cancelled_by_project_switch": "由于启动了项目操作，拖放的文件未加载。请再次拖放该文件以加载。"

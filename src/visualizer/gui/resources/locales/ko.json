@@ -1491,9 +1491,12 @@
     "file": "파일",
     "items": "항목",
     "and_more": "... 외",
+    "and_more_in_log": "... 외 {}개 (전체 목록은 로그에 있음)",
     "cannot_open": "열 수 없음"
   },
   "file_drop": {
+    "drop_video_project_separately": "동영상과 프로젝트는 각각 따로 놓으세요. 목록의 항목은 열리지 않았습니다.",
+    "supported_formats_detail": "지원 형식: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {} 또는 데이터셋 디렉터리",
     "blocked_during_training": "새 장면을 불러오기 전에 학습을 중지하세요.",
     "cancelled_by_new_project": "새 프로젝트 작업으로 이 파일 놓기가 취소되었습니다. 파일을 다시 놓아 불러오세요.",
     "cancelled_by_project_switch": "프로젝트 작업이 시작되어 놓은 파일을 불러오지 못했습니다. 파일을 다시 놓아 불러오세요."

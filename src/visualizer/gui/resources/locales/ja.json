@@ -1491,9 +1491,12 @@
     "file": "ファイル",
     "items": "項目",
     "and_more": "... 他",
+    "and_more_in_log": "... ほか {} 件（完全な一覧はログに記録されています）",
     "cannot_open": "開けません"
   },
   "file_drop": {
+    "drop_video_project_separately": "動画とプロジェクトは個別にドロップしてください。一覧の項目は開かれませんでした。",
+    "supported_formats_detail": "対応形式: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {}、またはデータセットのディレクトリ",
     "blocked_during_training": "新しいシーンを読み込む前にトレーニングを停止してください。",
     "cancelled_by_new_project": "新しいプロジェクトの操作により、このファイルのドロップは取り消されました。読み込むにはもう一度ドロップしてください。",
     "cancelled_by_project_switch": "プロジェクトの操作が開始されたため、ドロップしたファイルは読み込まれませんでした。読み込むにはもう一度ドロップしてください。"

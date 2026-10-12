@@ -1491,9 +1491,12 @@
     "file": "file",
     "items": "elementi",
     "and_more": "... e",
+    "and_more_in_log": "... e altri {} (elenco completo nel registro)",
     "cannot_open": "Impossibile aprire"
   },
   "file_drop": {
+    "drop_video_project_separately": "Trascina video e progetti separatamente. Gli elementi elencati non sono stati aperti.",
+    "supported_formats_detail": "Formati supportati: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {} o directory dei set di dati",
     "blocked_during_training": "Arresta l'addestramento prima di caricare una nuova scena.",
     "cancelled_by_new_project": "L’azione Nuovo progetto ha annullato il rilascio del file. Rilascia di nuovo il file per caricarlo.",
     "cancelled_by_project_switch": "Il file rilasciato non è stato caricato perché è iniziata un’operazione sul progetto. Rilascialo di nuovo per caricarlo."

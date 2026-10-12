@@ -2472,7 +2472,9 @@ namespace lfs::vis {
         std::vector<std::filesystem::path> splat_files;
         std::optional<std::filesystem::path> dataset_path;
         std::optional<std::filesystem::path> environment_map_path;
-        std::vector<std::string> unrecognized_files;
+        std::vector<std::string> skipped_files;
+        bool skipped_video_or_project = false;
+        bool has_unrecognized_files = false;
 
         if (paths.size() == 1) {
             const std::filesystem::path dropped_path = lfs::core::utf8_to_path(paths.front());
@@ -2521,6 +2523,13 @@ namespace lfs::vis {
                     return static_cast<char>(std::tolower(character));
                 });
 
+            if ((ext == ".licht" || lfs::io::video::is_supported_video_extension(ext)) &&
+                !std::filesystem::is_directory(filepath)) {
+                skipped_files.push_back(path_str);
+                skipped_video_or_project = true;
+                continue;
+            }
+
             if (ext == ".resume") {
                 cmd::ShowResumeCheckpointPopup{.checkpoint_path = filepath}.emit();
                 continue;
@@ -2562,7 +2571,8 @@ namespace lfs::vis {
                         continue;
                     }
                 }
-                unrecognized_files.push_back(lfs::core::path_to_utf8(filepath));
+                skipped_files.push_back(path_str);
+                has_unrecognized_files = true;
             } else if (std::filesystem::is_directory(filepath)) {
                 // Check for dataset markers
                 LOG_DEBUG("Checking directory for dataset markers: {}", lfs::core::path_to_utf8(filepath));
@@ -2582,11 +2592,13 @@ namespace lfs::vis {
                         splat_files.push_back(filepath);
                         LOG_DEBUG("Detected SOG directory: {}", lfs::core::path_to_utf8(filepath));
                     } else {
-                        unrecognized_files.push_back(lfs::core::path_to_utf8(filepath));
+                        skipped_files.push_back(path_str);
+                        has_unrecognized_files = true;
                     }
                 }
             } else {
-                unrecognized_files.push_back(lfs::core::path_to_utf8(filepath));
+                skipped_files.push_back(path_str);
+                has_unrecognized_files = true;
             }
         }
 
@@ -2610,12 +2622,18 @@ namespace lfs::vis {
             applyDroppedEnvironmentMap(*environment_map_path);
         }
 
-        if (!unrecognized_files.empty() && splat_files.empty() && !dataset_path && !environment_map_path) {
-            const std::string supported_formats = std::format(
-                "Supported formats: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {}, or dataset directories",
-                lfs::io::video::supported_video_extensions_display());
-            LOG_DEBUG("Dropped {} unrecognized file(s)", unrecognized_files.size());
-            state::FileDropFailed{.files = unrecognized_files, .error = supported_formats}.emit();
+        if (!skipped_files.empty()) {
+            std::string reason;
+            if (skipped_video_or_project)
+                reason = LOC("file_drop.drop_video_project_separately");
+            if (has_unrecognized_files) {
+                if (!reason.empty())
+                    reason += "\n\n";
+                reason += LOCF("file_drop.supported_formats_detail",
+                               lfs::io::video::supported_video_extensions_display());
+            }
+            LOG_DEBUG("Dropped {} file(s) that were not opened", skipped_files.size());
+            state::FileDropFailed{.files = skipped_files, .error = std::move(reason)}.emit();
         }
     }
 

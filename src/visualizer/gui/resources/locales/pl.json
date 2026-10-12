@@ -1491,9 +1491,12 @@
     "file": "plik",
     "items": "elementy",
     "and_more": "... i",
+    "and_more_in_log": "... i jeszcze {} (pełna lista w dzienniku)",
     "cannot_open": "Nie można otworzyć"
   },
   "file_drop": {
+    "drop_video_project_separately": "Upuszczaj filmy i projekty osobno. Wymienione elementy nie zostały otwarte.",
+    "supported_formats_detail": "Obsługiwane formaty: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {} lub katalogi zestawów danych",
     "blocked_during_training": "Zatrzymaj trening przed załadowaniem nowej sceny.",
     "cancelled_by_new_project": "Operacja Nowy projekt anulowała upuszczenie tego pliku. Upuść plik ponownie, aby go wczytać.",
     "cancelled_by_project_switch": "Upuszczony plik nie został wczytany, ponieważ rozpoczęto operację na projekcie. Upuść go ponownie, aby go wczytać."

@@ -1491,9 +1491,12 @@
     "file": "fichier",
     "items": "éléments",
     "and_more": "... et",
+    "and_more_in_log": "... et {} autres (liste complète dans le journal)",
     "cannot_open": "Impossible d'ouvrir"
   },
   "file_drop": {
+    "drop_video_project_separately": "Déposez les vidéos et les projets séparément. Les éléments répertoriés n'ont pas été ouverts.",
+    "supported_formats_detail": "Formats pris en charge : .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {} ou répertoires de jeux de données",
     "blocked_during_training": "Arrêtez l'entraînement avant de charger une nouvelle scène.",
     "cancelled_by_new_project": "L’action Nouveau projet a annulé ce dépôt de fichier. Déposez à nouveau le fichier pour le charger.",
     "cancelled_by_project_switch": "Le fichier déposé n’a pas été chargé, car une opération sur le projet a commencé. Déposez-le à nouveau pour le charger."

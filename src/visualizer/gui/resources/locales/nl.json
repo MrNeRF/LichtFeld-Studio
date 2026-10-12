@@ -1491,9 +1491,12 @@
     "file": "bestand",
     "items": "items",
     "and_more": "... en",
+    "and_more_in_log": "... en nog {} (volledige lijst in het logboek)",
     "cannot_open": "Kan niet openen"
   },
   "file_drop": {
+    "drop_video_project_separately": "Zet video's en projecten afzonderlijk neer. De vermelde items zijn niet geopend.",
+    "supported_formats_detail": "Ondersteunde formaten: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {} of datasetmappen",
     "blocked_during_training": "Stop de training voordat je een nieuwe scène laadt.",
     "cancelled_by_new_project": "De actie Nieuw project heeft deze bestandsplaatsing geannuleerd. Zet het bestand opnieuw neer om het te laden.",
     "cancelled_by_project_switch": "Het neergezette bestand is niet geladen omdat een projectbewerking is gestart. Zet het opnieuw neer om het te laden."

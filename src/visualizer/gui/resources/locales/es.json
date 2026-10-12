@@ -1491,9 +1491,12 @@
     "file": "archivo",
     "items": "elementos",
     "and_more": "... y",
+    "and_more_in_log": "... y {} más (lista completa en el registro)",
     "cannot_open": "No se puede abrir"
   },
   "file_drop": {
+    "drop_video_project_separately": "Suelta los vídeos y proyectos por separado. Los elementos de la lista no se abrieron.",
+    "supported_formats_detail": "Formatos compatibles: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {} o directorios de conjuntos de datos",
     "blocked_during_training": "Detén el entrenamiento antes de cargar una escena nueva.",
     "cancelled_by_new_project": "La acción Nuevo proyecto canceló esta entrega de archivo. Suelta el archivo de nuevo para cargarlo.",
     "cancelled_by_project_switch": "El archivo soltado no se cargó porque se inició una operación de proyecto. Suéltalo de nuevo para cargarlo."

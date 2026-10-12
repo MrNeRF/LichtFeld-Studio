@@ -3,6 +3,7 @@
 
 #include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
@@ -25,6 +26,8 @@ namespace lfs::vis {
         class InputControllerDatasetLoadTest : public ::testing::Test {
         protected:
             void SetUp() override {
+                ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+                    (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
                 lfs::event::EventBridge::instance().clear_all();
                 services().clear();
                 gui::guiFocusState().reset();
@@ -232,9 +235,11 @@ namespace lfs::vis {
         services().set(&rendering_manager);
 
         bool video_extractor_requested = false;
+        std::optional<core::events::state::FileDropFailed> failure;
         core::events::cmd::ShowVideoExtractor::when([&](const auto&) {
             video_extractor_requested = true;
         });
+        core::events::state::FileDropFailed::when([&](const auto& e) { failure = e; });
 
         const auto video_path = std::filesystem::temp_directory_path() / "drag_drop_video.mp4";
         const auto hdr_path = std::filesystem::temp_directory_path() / "drag_drop_environment.hdr";
@@ -244,9 +249,85 @@ namespace lfs::vis {
         });
 
         EXPECT_FALSE(video_extractor_requested);
+        ASSERT_TRUE(failure.has_value());
+        EXPECT_EQ(failure->files, std::vector<std::string>{lfs::core::path_to_utf8(video_path)});
+        EXPECT_NE(failure->error.find("separately"), std::string::npos);
         const auto settings = rendering_manager.getSettings();
         EXPECT_EQ(settings.environment_mode, EnvironmentBackgroundMode::Equirectangular);
         EXPECT_EQ(lfs::core::utf8_to_path(settings.environment_map_path), hdr_path);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, MixedDropReportsEverySkippedItem) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        std::vector<core::events::cmd::LoadFile> loads;
+        std::optional<core::events::state::FileDropFailed> failure;
+        core::events::cmd::LoadFile::when([&](const auto& e) { loads.push_back(e); });
+        core::events::state::FileDropFailed::when([&](const auto& e) { failure = e; });
+
+        const auto splat = std::filesystem::temp_directory_path() / "drop_splat.ply";
+        const auto video = std::filesystem::temp_directory_path() / "drop_video.mp4";
+        const auto project = std::filesystem::temp_directory_path() / "drop_project.licht";
+        const auto unknown = std::filesystem::temp_directory_path() / "drop_unknown.xyz";
+        controller.handleFileDrop({lfs::core::path_to_utf8(video), lfs::core::path_to_utf8(splat),
+                                   lfs::core::path_to_utf8(project), lfs::core::path_to_utf8(unknown)});
+
+        ASSERT_EQ(loads.size(), 1u);
+        EXPECT_EQ(loads.front().paths, std::vector<std::filesystem::path>{splat});
+        ASSERT_TRUE(failure.has_value());
+        EXPECT_EQ(failure->files,
+                  (std::vector<std::string>{lfs::core::path_to_utf8(video), lfs::core::path_to_utf8(project),
+                                            lfs::core::path_to_utf8(unknown)}));
+        EXPECT_NE(failure->error.find("separately"), std::string::npos);
+        EXPECT_NE(failure->error.find("Supported formats"), std::string::npos);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, TwoVideosAreReportedAsSkipped) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        std::vector<core::events::cmd::ShowVideoExtractor> extractors;
+        std::optional<core::events::state::FileDropFailed> failure;
+        core::events::cmd::ShowVideoExtractor::when([&](const auto& e) { extractors.push_back(e); });
+        core::events::state::FileDropFailed::when([&](const auto& e) { failure = e; });
+        const auto first = std::filesystem::temp_directory_path() / "drop_first.mp4";
+        const auto second = std::filesystem::temp_directory_path() / "drop_second.MOV";
+        controller.handleFileDrop({lfs::core::path_to_utf8(first), lfs::core::path_to_utf8(second)});
+        EXPECT_TRUE(extractors.empty());
+        ASSERT_TRUE(failure.has_value());
+        EXPECT_EQ(failure->files,
+                  (std::vector<std::string>{lfs::core::path_to_utf8(first), lfs::core::path_to_utf8(second)}));
+        EXPECT_NE(failure->error.find("separately"), std::string::npos);
+        EXPECT_EQ(failure->error.find("Supported formats"), std::string::npos);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, UnknownAlongsideSplatIsReported) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        std::optional<core::events::state::FileDropFailed> failure;
+        core::events::state::FileDropFailed::when([&](const auto& e) { failure = e; });
+        const auto splat = std::filesystem::temp_directory_path() / "drop_splat.ply";
+        const auto unknown = std::filesystem::temp_directory_path() / "drop_unknown.xyz";
+        controller.handleFileDrop({lfs::core::path_to_utf8(splat), lfs::core::path_to_utf8(unknown)});
+        ASSERT_TRUE(failure.has_value());
+        EXPECT_EQ(failure->files, std::vector<std::string>{lfs::core::path_to_utf8(unknown)});
+        EXPECT_NE(failure->error.find("Supported formats"), std::string::npos);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, UnknownDropLocalizesWholeSupportedFormatsDetail) {
+        auto& locale = lfs::event::LocalizationManager::getInstance();
+        locale.setOverride("file_drop.supported_formats_detail", "Valid inputs: {} plus dataset folders");
+
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        std::optional<core::events::state::FileDropFailed> failure;
+        core::events::state::FileDropFailed::when([&](const auto& e) { failure = e; });
+        controller.handleFileDrop({"drop_unknown.xyz"});
+
+        locale.clearOverride("file_drop.supported_formats_detail");
+        ASSERT_TRUE(failure.has_value());
+        EXPECT_NE(failure->error.find("Valid inputs:"), std::string::npos);
+        EXPECT_NE(failure->error.find(".mp4"), std::string::npos);
+        EXPECT_EQ(failure->error.find("Supported formats:"), std::string::npos);
     }
 
     TEST_F(InputControllerDatasetLoadTest, MixedFileDropEmitsOneOrderedBatch) {
