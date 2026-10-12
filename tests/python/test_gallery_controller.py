@@ -1424,7 +1424,7 @@ def test_U2_portal_404_sentence_requests_refresh(gallery, monkeypatch):
     monkeypatch.setattr(module.lf.ui, 'tr', lambda key: 'localized:' + key)
     assert localize_message('This gallery item is no longer available. Refresh the gallery.') == 'localized:projects.gallery.sidebar.refresh'
 
-@pytest.mark.parametrize('status,expected', [('completed', '134 KB'), ('canceled', '1.0 KB'), ('running', '1.0 KB / 134 KB')])
+@pytest.mark.parametrize('status,expected', [('completed', '137 KB'), ('canceled', '1.0 KB'), ('running', '1.0 KB / 137 KB')])
 def test_A5_finished_overlay_rows_show_one_adaptive_size(gallery, monkeypatch, status, expected):
     from lfs_plugins.gallery_transfer_ui import transfer_rows
     module = import_module('lfs_plugins.gallery_controller')

@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <filesystem>
 #include <memory>
+#include <optional>
 
 namespace lfs::core::param {
     struct TrainingParameters;
@@ -17,6 +19,12 @@ namespace lfs::app {
     // a modal in a CLI or CI run blocks the process forever. viewer_only lets the GUI
     // continue on the Vulkan tensor backend when CUDA is unusable.
     bool preflightGpu(bool show_dialog, bool viewer_only = false);
+
+    // Routes core image loads (masks, depth and normal sidecars) through the cache loader.
+    void install_image_loader(bool use_cpu_memory);
+
+    // LFS_LPIPS_WEIGHTS, else the downloaded weights; nullopt with a warning when neither is available.
+    [[nodiscard]] std::optional<std::filesystem::path> prepare_lpips_weights(bool allow_download);
 
     class Application {
     public:

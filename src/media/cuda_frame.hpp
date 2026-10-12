@@ -15,5 +15,6 @@ namespace lfs::media::detail {
         CudaDecodeContext decoder;
         std::array<const std::uint8_t*, 2> planes;
         std::array<int, 2> row_stride;
+        bool full_range = false;
     };
 } // namespace lfs::media::detail

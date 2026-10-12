@@ -21,6 +21,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from .gallery_storage import GalleryStorageError, gallery_quota, storage_requirement, is_storage_error
 from .private_directory import mkdir_private
 from .http import urlopen
 from .portal_retry import retry_call
@@ -681,6 +682,8 @@ class PortalGalleryClient:
         if upload.get("status") == "conflict":
             raise PortalHTTPError(409, "sync_conflict", detail=(upload.get("conflict") or {}).get("detail"))
         if upload.get("status") == "failed":
+            if is_storage_error(upload.get("processing", {}).get("message", "")):
+                raise GalleryStorageError()
             if upload.get("processing", {}).get("retryable"):
                 raise ValueError("The portal could not finish checking this upload. Resume to retry.")
             raise ValueError("The uploaded scene is incomplete or invalid. Export it again and start a new upload.")
@@ -722,6 +725,17 @@ class PortalGalleryClient:
             if not all(isinstance(tokens.get(name), str) and tokens[name] for name in ("content", "metadata")):
                 raise PortalProtocolError("Missing gallery revision tokens")
         request = {**metadata, "sourceFormat": path.suffix.lower()[1:], "contentLength": size}
+        needed = None
+        replaced = 0
+        quota, used, free = gallery_quota(capabilities)
+        # A saved create key can own a reservation even if its response was lost.
+        # Let the portal replay that key instead of counting its space twice.
+        if checkpoint is None and free is not None:
+            replaced = self.scene(metadata["replaceSceneId"]).get("contentLength") if metadata.get("replaceSceneId") else 0
+            needed = storage_requirement(size, capabilities, request["sourceFormat"], replaced)
+            if needed > free or used > quota:
+                raise GalleryStorageError(needed, free, quota)
+
         origin = {key: metadata[key] for key in ("originProjectUuid", "originCommitUuid", "originFileUuid", "clientMutationId") if key in metadata}
         if checkpoint is None:
             checkpoint = {"origin": self.account.base_url, "owner": identity, "sha256": fingerprint,
@@ -739,6 +753,17 @@ class PortalGalleryClient:
             upload = self._request("POST", "/splats/uploads", create)
         except Exception as exc:
             log_failure("upload_create", exc, path=path.name, bytes=size)
+            if isinstance(exc, PortalHTTPError) and exc.status == 400 and is_storage_error(
+                    str(exc) + " " + str((exc.detail or {}).get("message", ""))):
+                # Quota may have changed since preflight. Do not show stale numbers.
+                try:
+                    latest = self._request("GET", "/me")
+                    quota, _, free = gallery_quota(latest)
+                    replaced = self.scene(metadata["replaceSceneId"]).get("contentLength") if metadata.get("replaceSceneId") else 0
+                    needed = storage_requirement(size, latest, request["sourceFormat"], replaced)
+                except Exception:
+                    needed = free = quota = None
+                raise GalleryStorageError(needed, free, quota) from exc
             raise
         checkpoint["request"] = {key: value for key, value in create.items() if key != "idempotencyKey"}
         upload_id = _identifier(upload["id"])
@@ -747,6 +772,8 @@ class PortalGalleryClient:
                   part_count=((size + upload["partSize"] - 1) // upload["partSize"])
                   if type(upload.get("partSize")) is int and upload.get("partSize") else 0)
         checkpoint["uploadId"] = upload_id
+        if not resuming:
+            checkpoint["reservedBytes"] = max(0, size - (replaced or 0)) if not metadata.get("replaceSceneId") or needed is not None else None
         on_checkpoint(dict(checkpoint))
         # The create response can be an idempotent replay. Storage is the
         # authority for parts acknowledged before the last local checkpoint.

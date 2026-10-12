@@ -828,7 +828,7 @@ namespace lfs::core::image_codecs {
 #ifndef _WIN32
             if (hdr && target.sample_type == SampleType::Float32) {
                 const int descriptor = open(path.c_str(), O_RDONLY);
-                struct stat file_status {};
+                struct stat file_status{};
                 if (descriptor >= 0 && fstat(descriptor, &file_status) == 0 && file_status.st_size > 0 &&
                     file_status.st_size <= std::numeric_limits<int>::max()) {
                     const auto size = static_cast<std::size_t>(file_status.st_size);
@@ -1267,7 +1267,8 @@ namespace lfs::core::image_codecs {
         }
         if (!encode_jpeg(state.get(), data, width, height, channels, quality,
                          comment ? comment->data() : nullptr, comment ? comment->size() : 0, full_chroma)) {
-            set_error(error, "JPEG encode failed", state->error.message);
+            const auto message = "JPEG encode failed for " + path_to_utf8(path);
+            set_error(error, message.c_str(), state->error.message);
             return false;
         }
         const bool success = borrowed ? !std::ferror(borrowed) : std::fclose(state->file) == 0;

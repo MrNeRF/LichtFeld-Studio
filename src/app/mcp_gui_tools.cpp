@@ -73,6 +73,7 @@
 #include <numbers>
 #include <optional>
 #include <shared_mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -2748,12 +2749,10 @@ namespace lfs::app {
                     auto immediate_params = params;
                     immediate_params.dataset.data_path.clear();
                     return post_and_wait(viewer, [viewer, viewer_impl, params = std::move(immediate_params), path]() -> mcp::SharedSceneToolBackend::LoadDatasetHandler::result_type {
-                        // Loading replaces the trainer. The GUI thread cannot wait for a live
-                        // worker, so the load would stop the run and then fail; refuse first.
-                        if (const auto* const trainer_manager = viewer_impl->getTrainerManager();
-                            trainer_manager && trainer_manager->hasLiveTrainingThread()) {
-                            return std::unexpected(
-                                "Cannot load a dataset while training is running. Stop training and wait for it to finish first.");
+                        // Admission must precede parameter changes and trainer teardown.
+                        if (const auto* trainer = viewer_impl->getTrainerManager();
+                            trainer && (trainer->hasLiveTrainingThread() || trainer->isTrainingActive() || trainer->isCompletionPending())) {
+                            return std::unexpected("Cannot load a dataset while training is active or stopping. Stop training and wait for completion first.");
                         }
                         viewer->setParameters(params);
                         return viewer->loadDataset(path);
@@ -3515,10 +3514,14 @@ namespace lfs::app {
                     if (auto result = apply_render_settings_patch(args, *settings); !result)
                         return json{{"error", result.error()}};
 
-                    vis::update_render_settings(
-                        *settings,
-                        {.scene_upscaler_explicit = args.contains("scene_upscaler"),
-                         .scene_upscaler_preset_explicit = args.contains("scene_upscaler_preset")});
+                    try {
+                        vis::update_render_settings(
+                            *settings,
+                            {.scene_upscaler_explicit = args.contains("scene_upscaler"),
+                             .scene_upscaler_preset_explicit = args.contains("scene_upscaler_preset")});
+                    } catch (const std::invalid_argument& error) {
+                        return mcp::invalid_argument_result(error.what(), "environment_map_path");
+                    }
 
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     auto* const rendering_manager = viewer_impl->getRenderingManager();

@@ -260,6 +260,18 @@
               <option data-for="mode : navigation_modes" data-attr-value="mode.index">{{ mode.label }}</option>
             </select>
           </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.new_project_navigation_up</span>
+            <select class="preferences-select" data-value="navigation_up_idx">
+              <option value="0">@tr:preferences.navigation_up_legacy_y</option>
+              <option value="1">@tr:preferences.navigation_up_data_z</option>
+            </select>
+          </div>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.new_project_align_grid</span>
+            <input type="checkbox" data-checked="new_project_align_grid" />
+          </div>
+          <span class="preferences-description">@tr:preferences.new_project_navigation_help</span>
           <div class="setting-row setting-row--aligned" data-tooltip="preferences.navigation_speed_tooltip">
             <span class="setting-row__label-col">@tr:preferences.navigation_speed</span>
             <div class="setting-row__control-col setting-row__control-col--slider">

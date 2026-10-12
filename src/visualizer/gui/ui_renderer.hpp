@@ -55,6 +55,10 @@ namespace lfs::vis::gui {
         [[nodiscard]] virtual bool
         renderFrostedGlass(std::span<const UiFrostedGlassRegion> regions) = 0;
         virtual void beginCacheCapture(int x, int y, int width, int height) = 0;
+        // Layer for a cached context: it keeps the context offset, clip and
+        // capture area. Layers RmlUi pushes itself (box shadows, filters) use
+        // their own coordinates.
+        [[nodiscard]] virtual Rml::LayerHandle pushContextLayer() { return PushLayer(); }
         virtual void endCacheCapture() = 0;
         [[nodiscard]] virtual Rml::TextureHandle
         saveLayerRegionAsTexture(UiPixelRect region,

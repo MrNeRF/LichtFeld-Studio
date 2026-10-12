@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/application.hpp"
+#include "app/compare.hpp"
 #include "app/converter.hpp"
 #include "app/gpu_preflight.hpp"
 #include "app/licht_command.hpp"
@@ -229,6 +230,14 @@ namespace {
                     preflightGpuOrExit(false);
                 }
                 return lfs::preprocessing::run_preprocess(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::io::args::CompareMode>) {
+                if constexpr (!LFS_BUILD_TRAINER) {
+                    std::println(stderr, "Image comparison is not included in this build.");
+                    return 1;
+                } else {
+                    preflightGpuOrExit(false);
+                    return lfs::app::run_compare(mode.params);
+                }
             } else if constexpr (std::is_same_v<T, lfs::io::args::PluginMode>) {
                 return lfs::python::run_plugin_command(mode);
             } else if constexpr (std::is_same_v<T, lfs::io::args::LichtMode>) {

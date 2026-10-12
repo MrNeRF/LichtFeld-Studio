@@ -313,3 +313,112 @@ TEST(RenderSettingsBackendNormalization, RenderingManagerKeepsGutToggleWorking) 
     EXPECT_EQ(settings.raster_backend, Backend::ThreeDgs);
     EXPECT_FALSE(settings.gut);
 }
+
+TEST(RenderSettingsBackendNormalization, EquirectangularRoundTripRestoresBackend) {
+    using Backend = lfs::rendering::GaussianRasterBackend;
+    for (const auto backend : {Backend::ThreeDgs, Backend::ThreeDgut}) {
+        for (const bool use_proxy : {false, true}) {
+            lfs::vis::screen::ScreenService manager_views;
+            lfs::vis::RenderingManager manager{manager_views};
+            auto settings = manager.getSettings();
+            settings.raster_backend = backend;
+            settings.gut = lfs::rendering::isGutBackend(backend);
+            manager.updateSettings(settings);
+            for (int cycle = 0; cycle < 3; ++cycle) {
+                for (const bool enabled : {true, true, false, false}) {
+                    settings = manager.getSettings();
+                    if (use_proxy) {
+                        auto proxy = lfs::vis::to_proxy(settings);
+                        proxy.equirectangular = enabled;
+                        lfs::vis::apply_proxy(settings, proxy);
+                    } else {
+                        settings.equirectangular = enabled;
+                    }
+                    manager.updateSettings(settings);
+                    settings = manager.getSettings();
+                    EXPECT_EQ(settings.equirectangular, enabled);
+                    EXPECT_EQ(settings.raster_backend, backend);
+                    EXPECT_EQ(settings.gut, lfs::rendering::isGutBackend(backend));
+                    auto effective = settings;
+                    lfs::vis::enforceProjectionBackend(effective);
+                    EXPECT_EQ(effective.raster_backend, enabled ? Backend::ThreeDgut : backend);
+                    EXPECT_EQ(effective.gut, enabled || lfs::rendering::isGutBackend(backend));
+                    settings.background_color = {0.1f, 0.2f, 0.3f};
+                    manager.updateSettings(settings);
+                    EXPECT_EQ(manager.getSettings().raster_backend, settings.raster_backend);
+                }
+            }
+        }
+    }
+}
+
+TEST(RenderSettingsBackendNormalization, EquirectangularDoesNotOverrideLaterBackendChoice) {
+    using Backend = lfs::rendering::GaussianRasterBackend;
+    lfs::vis::screen::ScreenService manager_views;
+    lfs::vis::RenderingManager manager{manager_views};
+    auto settings = manager.getSettings();
+    settings.equirectangular = true;
+    manager.updateSettings(settings);
+    settings = manager.getSettings();
+    settings.equirectangular = false;
+    manager.updateSettings(settings);
+    settings = manager.getSettings();
+    settings.raster_backend = Backend::ThreeDgut;
+    settings.gut = true;
+    manager.updateSettings(settings);
+    settings = manager.getSettings();
+    settings.equirectangular = true;
+    manager.updateSettings(settings);
+    settings = manager.getSettings();
+    settings.equirectangular = false;
+    manager.updateSettings(settings);
+    EXPECT_EQ(manager.getSettings().raster_backend, Backend::ThreeDgut);
+    EXPECT_TRUE(manager.getSettings().gut);
+}
+
+TEST(RenderSettingsBackendNormalization, EquirectangularExitPreservesExplicitBackendChange) {
+    using Backend = lfs::rendering::GaussianRasterBackend;
+    lfs::vis::screen::ScreenService manager_views;
+    lfs::vis::RenderingManager manager{manager_views};
+    auto settings = manager.getSettings();
+    settings.raster_backend = Backend::ThreeDgut;
+    settings.gut = true;
+    manager.updateSettings(settings);
+    settings.equirectangular = true;
+    manager.updateSettings(settings);
+    settings = manager.getSettings();
+    settings.equirectangular = false;
+    settings.raster_backend = Backend::ThreeDgs;
+    settings.gut = false;
+    manager.updateSettings(settings);
+    EXPECT_EQ(manager.getSettings().raster_backend, Backend::ThreeDgs);
+    EXPECT_FALSE(manager.getSettings().gut);
+}
+
+TEST(RenderSettingsBackendNormalization, ProjectSettingsDiscardLiveProjectionOverride) {
+    using Backend = lfs::rendering::GaussianRasterBackend;
+    for (const bool equirectangular : {false, true}) {
+        lfs::vis::screen::ScreenService manager_views;
+        lfs::vis::RenderingManager manager{manager_views};
+        auto settings = manager.getSettings();
+        settings.equirectangular = true;
+        manager.updateSettings(settings);
+
+        lfs::vis::RenderSettings saved;
+        saved.raster_backend = Backend::ThreeDgut;
+        saved.gut = true;
+        saved.equirectangular = equirectangular;
+        const auto json = lfs::vis::project::renderSettingsToProjectJson(saved);
+        const auto restored = lfs::vis::project::renderSettingsFromProjectJson(json, manager.getSettings());
+        ASSERT_TRUE(restored);
+        manager.updateSettings(*restored);
+        EXPECT_EQ(manager.getSettings().raster_backend, Backend::ThreeDgut);
+        EXPECT_EQ(manager.getSettings().equirectangular, equirectangular);
+        EXPECT_EQ(lfs::vis::project::renderSettingsToProjectJson(manager.getSettings()), json);
+
+        settings = manager.getSettings();
+        settings.equirectangular = false;
+        manager.updateSettings(settings);
+        EXPECT_EQ(manager.getSettings().raster_backend, Backend::ThreeDgut);
+    }
+}

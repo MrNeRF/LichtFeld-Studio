@@ -616,7 +616,8 @@ namespace lfs::vis::gui {
                                                cam_state.focal_length_mm,
                                                width,
                                                height,
-                                               std::nullopt, std::nullopt,
+                                               std::nullopt,
+                                               std::nullopt,
                                                render_settings.equirectangular)
                                      : snapshot.borrowed_model
                                          // Sequence switches must not inherit interactive depth-tie order.
@@ -628,7 +629,9 @@ namespace lfs::vis::gui {
                                                cam_state.focal_length_mm,
                                                width,
                                                height,
-                                               std::nullopt, std::nullopt, std::nullopt,
+                                               std::nullopt,
+                                               std::nullopt,
+                                               std::nullopt,
                                                render_settings.equirectangular)
                                          : rendering_manager.renderPreviewImage(
                                                *snapshot.gaussianModel(),
@@ -638,7 +641,9 @@ namespace lfs::vis::gui {
                                                cam_state.focal_length_mm,
                                                width,
                                                height,
-                                               std::nullopt, std::nullopt, std::nullopt,
+                                               std::nullopt,
+                                               std::nullopt,
+                                               std::nullopt,
                                                render_settings.equirectangular);
                 auto video_frame = makeGaussianPreviewVideoFrame(preview_image);
                 if (!video_frame) {
@@ -1481,8 +1486,6 @@ namespace lfs::vis::gui {
                 publishImportOverlayState();
                 return;
             }
-            if (!splat_load_state_.gallery)
-                scene_manager->consolidateNodeModels();
             splat_load_state_.consolidation_pending = false;
         }
         if (!splat_load_state_.failures.empty()) {
@@ -1535,6 +1538,7 @@ namespace lfs::vis::gui {
         state::SceneReplacing::when([this](const auto& event) {
             if (!viewer_->getSceneManager() || event.scene != &viewer_->getSceneManager()->getScene())
                 return;
+            ++splat_simplify_scene_epoch_;
             ++gallery_scene_epoch_;
             if (auto* loader = viewer_->getDataLoader())
                 loader->cancelPendingImports();
@@ -1618,6 +1622,8 @@ namespace lfs::vis::gui {
             params.init_path = std::nullopt;
             params.resume_checkpoint = std::nullopt;
             params.dataset.output_path = output_path;
+            if (!cmd.images_folder.empty())
+                params.dataset.images = cmd.images_folder;
             if (!cmd.init_path.empty())
                 params.init_path = lfs::core::path_to_utf8(cmd.init_path);
             params.add_splat_paths = cmd.add_splat_paths;
@@ -3367,7 +3373,7 @@ namespace lfs::vis::gui {
                              fps = static_cast<float>(export_options.framerate),
                              cam_state = frame_states[frame],
                              clip_time = start_time + static_cast<float>(frame) * time_step]() mutable
-                            -> std::expected<lfs::core::Tensor, std::string> {
+                                -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
                                     const auto* current = sequencer_ui.controller().plySequence();
@@ -3725,6 +3731,8 @@ namespace lfs::vis::gui {
         struct SimplifyCapture {
             std::unique_ptr<lfs::core::SplatData> model;
             std::string source_name;
+            core::Uuid source_uuid;
+            uint64_t scene_epoch;
             std::string output_name;
         };
 
@@ -3749,6 +3757,8 @@ namespace lfs::vis::gui {
                 return SimplifyCapture{
                     .model = std::make_unique<lfs::core::SplatData>(node->model->clone()),
                     .source_name = source_name,
+                    .source_uuid = node->uuid,
+                    .scene_epoch = splat_simplify_scene_epoch_,
                     .output_name = std::format("{}_{}", source_name, target_count),
                 };
             });
@@ -3774,6 +3784,8 @@ namespace lfs::vis::gui {
         {
             const std::lock_guard lock(splat_simplify_state_.mutex);
             splat_simplify_state_.source_name = capture->source_name;
+            splat_simplify_state_.source_uuid = capture->source_uuid;
+            splat_simplify_state_.scene_epoch = capture->scene_epoch;
             splat_simplify_state_.output_name = capture->output_name;
             splat_simplify_state_.result.reset();
         }
@@ -3846,13 +3858,29 @@ namespace lfs::vis::gui {
             }
 
             std::unique_ptr<lfs::core::SplatData> result;
-            std::string source_name;
+            core::Uuid source_uuid;
+            uint64_t scene_epoch;
             std::string output_name;
             {
                 const std::lock_guard lock(splat_simplify_state_.mutex);
                 result = std::move(splat_simplify_state_.result);
-                source_name = splat_simplify_state_.source_name;
+                source_uuid = splat_simplify_state_.source_uuid;
+                scene_epoch = splat_simplify_state_.scene_epoch;
                 output_name = splat_simplify_state_.output_name;
+            }
+
+            // Validate at publication, including cancellation after the worker finished.
+            // Names can change or be reused while the cloned input is being processed.
+            const auto* source = scene_manager->getScene().getNodeByUuid(source_uuid);
+            if (scene_epoch != splat_simplify_scene_epoch_ || !source ||
+                source->type != core::NodeType::SPLAT ||
+                jobs_.cancelRequested(splat_simplify_state_.job)) {
+                jobs_.report(splat_simplify_state_.job, std::nullopt,
+                             LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED));
+                jobs_.canceled(splat_simplify_state_.job);
+                splat_simplify_state_.completed.store(false);
+                publishSplatSimplifyState();
+                return;
             }
 
             if (!result) {
@@ -3865,7 +3893,7 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const auto added_name = scene_manager->addGeneratedSplatNode(std::move(result), source_name, output_name, true);
+            const auto added_name = scene_manager->addGeneratedSplatNode(std::move(result), source->name, output_name, true);
             if (added_name.empty()) {
                 jobs_.failed(
                     splat_simplify_state_.job,

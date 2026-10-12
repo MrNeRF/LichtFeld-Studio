@@ -33,7 +33,7 @@ function(lfs_add_windows_version_resource target description)
     )
     # Resolve configuration-specific filenames after all target properties are
     # known, including the Debug suffix and nanobind's Python ABI suffix.
-    set(resource "${resource_dir}/$<CONFIG>/${target}.rc")
+    set(resource "${resource_dir}/$<CONFIG>/${target}.version.rc")
     file(GENERATE OUTPUT "${resource}" INPUT "${resource_dir}/${target}.rc.in" TARGET ${target})
     target_sources(${target} PRIVATE "${resource}")
 endfunction()

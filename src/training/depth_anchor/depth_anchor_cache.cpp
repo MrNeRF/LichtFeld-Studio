@@ -27,7 +27,7 @@
 namespace lfs::training {
     namespace {
 
-        constexpr int kSchemaVersion = 2;
+        constexpr int kSchemaVersion = 3;
 
         void hash_bytes(std::uint64_t& hash, const void* data, const std::size_t size) {
             const auto* bytes = static_cast<const unsigned char*>(data);
@@ -210,6 +210,30 @@ namespace lfs::training {
         };
 
         std::vector<std::thread> workers;
+        // Producer failures (including depth decoding and partial pool startup)
+        // must wake and join the workers before the exception reaches the caller.
+        struct WorkerJoiner {
+            std::vector<std::thread>& workers;
+            std::mutex& mutex;
+            std::condition_variable& cv;
+            bool& producing;
+
+            void join() {
+                if (!producing) {
+                    return;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    producing = false;
+                }
+                cv.notify_all();
+                for (auto& thread : workers) {
+                    thread.join();
+                }
+            }
+
+            ~WorkerJoiner() { join(); }
+        } joiner{workers, queue_mutex, queue_cv, producing};
         workers.reserve(worker_count);
         for (std::size_t i = 0; i < worker_count; ++i) {
             workers.emplace_back(worker);
@@ -250,6 +274,22 @@ namespace lfs::training {
             const float sx = static_cast<float>(prior_w) / static_cast<float>(cam->camera_width());
             const float sy = static_cast<float>(prior_h) / static_cast<float>(cam->camera_height());
 
+            // The camera's own SfM observations are the points it sees. Projecting the whole cloud also
+            // pairs points hidden behind the visible surface with that surface's prior value, which biased
+            // every fit toward larger depths.
+            const auto& observations = cam->sfm_observations();
+            lfs::core::Tensor observed_points;
+            if (!observations.empty()) {
+                std::vector<float> xyz;
+                xyz.reserve(observations.size() * 3);
+                for (const auto& observation : observations) {
+                    xyz.insert(xyz.end(), {observation.x, observation.y, observation.z});
+                }
+                observed_points = lfs::core::Tensor::from_vector(
+                    xyz, lfs::core::TensorShape({observations.size(), std::size_t{3}}), means.device());
+            }
+            const bool use_observations = observed_points.is_valid();
+
             // The prior's lazy ops materialize on their own stream; the collect
             // kernel reads raw pointers, so settle the device first (startup only).
             prior.ptr<float>();
@@ -257,7 +297,7 @@ namespace lfs::training {
                 lfs::core::gpu_device_barrier(*backend);
 
             auto samples = geometry.collect_anchor_samples(
-                means, cam->world_view_transform(), prior,
+                use_observations ? observed_points : means, cam->world_view_transform(), prior,
                 {{cam->focal_x() * sx, cam->focal_y() * sy, cam->center_x() * sx, cam->center_y() * sy},
                  0.01f,
                  {aabb_lo[0], aabb_lo[1], aabb_lo[2]},
@@ -276,14 +316,7 @@ namespace lfs::training {
             queue_cv.notify_one();
         }
 
-        {
-            std::lock_guard<std::mutex> lock(queue_mutex);
-            producing = false;
-        }
-        queue_cv.notify_all();
-        for (auto& t : workers) {
-            t.join();
-        }
+        joiner.join();
 
         return anchors;
     }

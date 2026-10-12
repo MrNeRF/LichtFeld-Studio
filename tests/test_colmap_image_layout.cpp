@@ -17,7 +17,9 @@
 #include <cmath>
 
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -1473,4 +1475,175 @@ TEST_F(ColmapImageLayoutTest, MissingImagesFolderNamesBothSearchedLocations) {
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::MISSING_REQUIRED_FILES);
     EXPECT_NE(result.error().message.find("dataset or the working directory"), std::string::npos);
+}
+
+// 5187 is not divisible by 4: scaling through the truncated 1296 px nominal width biases fx by 0.06 % and cx by 0.4 px.
+TEST_F(ColmapImageLayoutTest, DownscaledIntrinsicsUseExactImageRatios) {
+    const auto binary_dir = temp_dir_ / "binary";
+    const auto text_dir = temp_dir_ / "text";
+    const auto images_dir = temp_dir_ / "images_4";
+    fs::create_directories(binary_dir);
+    fs::create_directories(images_dir);
+    const int width = 1297, height = 840;
+    const std::vector<unsigned char> pixels(width * height * 3, 128);
+    ASSERT_TRUE(lfs::core::save_png(images_dir / "frame.png", pixels.data(), width, height, 3, 8, 6));
+
+    const auto write = [](std::ofstream& out, const auto&... values) {
+        (out.write(reinterpret_cast<const char*>(&values), sizeof(values)), ...);
+    };
+    std::ofstream cameras(binary_dir / "cameras.bin", std::ios::binary);
+    write(cameras, uint64_t{1}, uint32_t{1}, int32_t{1}, uint64_t{5187}, uint64_t{3361},
+          3800.0, 3900.0, 2593.5, 1680.5);
+    cameras.close();
+    ASSERT_TRUE(cameras.good());
+    std::ofstream images(binary_dir / "images.bin", std::ios::binary);
+    write(images, uint64_t{1}, uint32_t{1}, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+          uint32_t{1}, "frame.png", uint64_t{0});
+    images.close();
+    ASSERT_TRUE(images.good());
+    write_text_file(text_dir / "cameras.txt", "1 PINHOLE 5187 3361 3800 3900 2593.5 1680.5\n");
+    write_text_file(text_dir / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n\n");
+
+    ensure_image_loader();
+    const auto check = [&](const std::shared_ptr<lfs::core::Camera>& camera) {
+        if (camera->image_path().empty()) {
+            camera->set_image_dimensions(width, height);
+        } else {
+            ASSERT_TRUE(camera->load_and_get_image(1, 0).is_valid());
+            ASSERT_EQ(camera->image_width(), width);
+            ASSERT_EQ(camera->image_height(), height);
+        }
+        const auto [fx, fy, cx, cy] = camera->get_intrinsics();
+        EXPECT_NEAR(fx, 3800.0 * width / 5187, 2e-4);
+        EXPECT_NEAR(fy, 3900.0 * height / 3361, 2e-4);
+        EXPECT_NEAR(cx, 2593.5 * width / 5187, 2e-4);
+        EXPECT_NEAR(cy, 1680.5 * height / 3361, 2e-4);
+    };
+    for (const auto& dir : {binary_dir, text_dir}) {
+        SCOPED_TRACE(dir.filename().string());
+        const auto loaded = dir == binary_dir
+                                ? lfs::io::read_colmap_cameras_and_images(dir, images_dir.string())
+                                : lfs::io::read_colmap_cameras_and_images_text(dir, images_dir.string());
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        ASSERT_EQ(std::get<0>(loaded->value).size(), 1u);
+        EXPECT_TRUE(loaded->warnings.empty());
+        check(std::get<0>(loaded->value).front());
+        const auto metadata = lfs::io::read_colmap_cameras_only(dir, 4.0f);
+        ASSERT_TRUE(metadata) << metadata.error().format();
+        ASSERT_EQ(std::get<0>(*metadata).size(), 1u);
+        check(std::get<0>(*metadata).front());
+    }
+}
+
+TEST_F(ColmapImageLayoutTest, ManyAspectMismatchesAreSummarized) {
+    const auto dataset = temp_dir_ / "many_cropped";
+    fs::create_directories(dataset / "images");
+    write_text_file(dataset / "cameras.txt", "1 PINHOLE 648 420 480 481 324 210\n");
+    std::ostringstream image_text;
+    const std::vector<unsigned char> pixels(324 * 420 * 3, 128);
+    for (int i = 0; i < 12; ++i) {
+        const auto name = std::format("cropped_{:02}.png", i);
+        ASSERT_TRUE(lfs::core::save_png(dataset / "images" / name, pixels.data(), 324, 420, 3, 8, 6));
+        image_text << i + 1 << " 1 0 0 0 0 0 0 1 " << name << "\n\n";
+    }
+    write_text_file(dataset / "images.txt", image_text.str());
+    const auto loaded = lfs::io::read_colmap_cameras_and_images_text(dataset, "images");
+    ASSERT_TRUE(loaded) << loaded.error().format();
+    EXPECT_EQ(std::get<0>(loaded->value).size(), 12u);
+    ASSERT_EQ(loaded->warnings.size(), 9u);
+    EXPECT_NE(loaded->warnings.back().message.find("4 more image(s)"), std::string::npos);
+}
+
+TEST_F(ColmapImageLayoutTest, WarnsOnImageAspectMismatchWithoutChangingCameraCalibration) {
+    const auto write = [](std::ofstream& out, const auto&... values) {
+        (out.write(reinterpret_cast<const char*>(&values), sizeof(values)), ...);
+    };
+    for (const bool binary : {false, true}) {
+        const auto dataset = temp_dir_ / (binary ? "binary" : "text");
+        fs::create_directories(dataset / "images");
+        struct ImageCase {
+            const char* name;
+            int width, height;
+            bool warn;
+        };
+        const std::vector<ImageCase> cases{
+            {"original.png", 648, 420, false},
+            {"cropped.png", 324, 420, true},
+            {"stretched.png", 1296, 420, true},
+            {"rescaled.png", 1296, 840, false},
+            {"rounded.png", 649, 420, false}};
+        std::ostringstream image_text;
+        std::ofstream image_bin;
+        if (binary) {
+            std::ofstream cameras(dataset / "cameras.bin", std::ios::binary);
+            write(cameras, uint64_t{1}, uint32_t{1}, int32_t{1}, uint64_t{648}, uint64_t{420},
+                  480.0, 481.0, 324.0, 210.0);
+            image_bin.open(dataset / "images.bin", std::ios::binary);
+            write(image_bin, static_cast<uint64_t>(cases.size()));
+        } else {
+            write_text_file(dataset / "cameras.txt", "1 PINHOLE 648 420 480 481 324 210\n");
+        }
+        for (size_t i = 0; i < cases.size(); ++i) {
+            const auto& entry = cases[i];
+            const std::vector<unsigned char> pixels(entry.width * entry.height * 3, 128);
+            ASSERT_TRUE(lfs::core::save_png(dataset / "images" / entry.name, pixels.data(),
+                                            entry.width, entry.height, 3, 8, 6));
+            if (binary) {
+                write(image_bin, static_cast<uint32_t>(i + 1), 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint32_t{1});
+                image_bin.write(entry.name, std::char_traits<char>::length(entry.name) + 1);
+                write(image_bin, uint64_t{0});
+            } else {
+                image_text << i + 1 << " 1 0 0 0 0 0 0 1 " << entry.name << "\n\n";
+            }
+        }
+        if (binary)
+            image_bin.close();
+        else
+            write_text_file(dataset / "images.txt", image_text.str());
+        const auto loaded = binary ? lfs::io::read_colmap_cameras_and_images(dataset, "images")
+                                   : lfs::io::read_colmap_cameras_and_images_text(dataset, "images");
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        const auto& cameras = std::get<0>(loaded->value);
+        ASSERT_EQ(cameras.size(), cases.size());
+        EXPECT_EQ(loaded->warnings.size(), 2u);
+        for (const auto& entry : cases) {
+            SCOPED_TRACE(std::string(binary ? "binary: " : "text: ") + entry.name);
+            const auto camera = std::find_if(cameras.begin(), cameras.end(), [&](const auto& c) {
+                return c->image_name() == entry.name;
+            });
+            ASSERT_NE(camera, cameras.end());
+            (*camera)->set_image_dimensions(entry.width, entry.height);
+            const auto [fx, fy, cx, cy] = (*camera)->get_intrinsics();
+            EXPECT_NEAR(fx, 480.0 * entry.width / 648, 1e-4);
+            EXPECT_NEAR(fy, 481.0 * entry.height / 420, 1e-4);
+            EXPECT_NEAR(cx, 324.0 * entry.width / 648, 1e-4);
+            EXPECT_NEAR(cy, 210.0 * entry.height / 420, 1e-4);
+            const auto warning = std::find_if(loaded->warnings.begin(), loaded->warnings.end(), [&](const auto& d) {
+                return d.message.find(entry.name) != std::string::npos;
+            });
+            EXPECT_EQ(warning != loaded->warnings.end(), entry.warn);
+            if (warning != loaded->warnings.end()) {
+                EXPECT_NE(warning->message.find("648x420"), std::string::npos);
+                EXPECT_NE(warning->message.find(std::to_string(entry.width) + "x" + std::to_string(entry.height)), std::string::npos);
+                EXPECT_NE(warning->message.find("aspect ratio"), std::string::npos);
+            }
+        }
+        lfs::io::ColmapLoader loader;
+        const auto result = loader.load(dataset, {});
+        ASSERT_TRUE(result) << result.error().format();
+        EXPECT_EQ(std::count_if(result->warnings.begin(), result->warnings.end(), [](const auto& warning) {
+                      return warning.find("aspect ratio") != std::string::npos;
+                  }),
+                  2);
+    }
+}
+
+TEST_F(ColmapImageLayoutTest, UnreadableImageHeaderDoesNotRejectCameraImport) {
+    write_minimal_colmap_text_dataset(temp_dir_, "frame.jpg");
+    write_text_file(temp_dir_ / "images/frame.jpg", "unreadable image header");
+    const auto loaded = lfs::io::read_colmap_cameras_and_images_text(temp_dir_, "images");
+    ASSERT_TRUE(loaded) << loaded.error().format();
+    ASSERT_EQ(std::get<0>(loaded->value).size(), 1u);
+    EXPECT_TRUE(std::get<0>(loaded->value).front()->has_image());
+    EXPECT_TRUE(loaded->warnings.empty());
 }

@@ -220,7 +220,7 @@ namespace lfs::python {
 
             std::optional<PyPointCloud> get_point_cloud() const {
                 if (point_cloud)
-                    return PyPointCloud(point_cloud.get());
+                    return PyPointCloud(point_cloud);
                 return std::nullopt;
             }
 
@@ -1336,7 +1336,8 @@ namespace lfs::python {
             "save_point_cloud_ply",
             [](const PyPointCloud& pc, const std::filesystem::path& path, nb::object extra_attributes,
                bool include_provenance) {
-                if (!pc.data())
+                const auto data = pc.retain_data();
+                if (!data)
                     throw_invalid_io_argument("Point cloud data must not be null");
                 io::PlySaveOptions options;
                 options.output_path = path;
@@ -1346,7 +1347,7 @@ namespace lfs::python {
                                                         : core::make_minimal_provenance_stamp();
                 auto result = [&] {
                     nb::gil_scoped_release release;
-                    return io::save_ply(*pc.data(), options);
+                    return io::save_ply(*data, options);
                 }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save point cloud PLY");

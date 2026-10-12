@@ -64,7 +64,7 @@ namespace lfs::vis {
 
         LFS_VIS_API bool initHeadless();
         LFS_VIS_API bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height);
-        void shutdown();
+        LFS_VIS_API void shutdown();
         void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
         [[nodiscard]] bool hasPendingSwapchainResize() const {
             if (rendererTerminalState() != RendererTerminalState::Running)

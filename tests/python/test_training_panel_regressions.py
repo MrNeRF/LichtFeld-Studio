@@ -36,6 +36,7 @@ def _install_lf_stub(monkeypatch):
     lf_stub.dataset_params = lambda: None
     lf_stub.get_scene = lambda: None
     lf_stub.start_training = lambda: None
+    lf_stub.trainer_error_key = lambda: None
     lf_stub.trainer_saving_model = lambda: False
     lf_stub.training_start_overwrite_conflict = lambda: None
     lf_stub.loss_buffer = lambda: []
@@ -2858,3 +2859,105 @@ def test_restored_control_echo_is_not_an_edit(
     assert getattr(params, prop) == changed
     setter(*args, changed)
     assert params.writes == [(prop, changed)]
+
+
+@pytest.mark.parametrize("completed", [False, True])
+@pytest.mark.parametrize("runtime_iteration", [0, 1776])
+def test_stored_session_iteration_does_not_report_a_live_rate(
+    training_panel_module, monkeypatch, completed, runtime_iteration
+):
+    module = training_panel_module
+    runtime = SimpleNamespace(iteration=_make_signal(0), has_trainer=_make_signal(False))
+    monkeypatch.setattr(module, "RuntimeState", runtime)
+    now = [10.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    panel = module.TrainingPanel()
+    model = _ModelStub()
+    panel._bind_status(model, lambda: None)
+    status = model.bindings["status_iteration"][0]
+    status()  # The panel is evaluated before a project is opened.
+    session = _stub_stored_session(
+        module, monkeypatch, iteration=1776, completed=completed
+    )
+    runtime.iteration.value = runtime_iteration
+    now[0] += 0.4
+
+    assert status() == "status.iteration 1,776"
+    assert module._rate_tracker.samples == []
+
+    # Hydrating and resuming starts a fresh measurement at the stored counter.
+    session["hydrated"] = True
+    runtime.has_trainer.value = True
+    runtime.iteration.value = 1776
+    assert "(0.0 training_panel.iters_per_sec)" in status()
+    now[0] += 1.0
+    runtime.iteration.value += 373
+    assert "(373.0 training_panel.iters_per_sec)" in status()
+
+
+def test_live_iteration_rate_matches_existing_window(training_panel_module, monkeypatch):
+    module = training_panel_module
+    runtime = SimpleNamespace(iteration=_make_signal(0), has_trainer=_make_signal(True))
+    monkeypatch.setattr(module, "RuntimeState", runtime)
+    # Saving a live run also exposes a stored session. It must not hide live rates.
+    _stub_stored_session(module, monkeypatch, iteration=373, hydrated=False)
+    now = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    model = _ModelStub()
+    module.TrainingPanel()._bind_status(model, lambda: None)
+    status = model.bindings["status_iteration"][0]
+    samples = []
+    for elapsed, iteration in [(0, 0), (1, 373), (2, 746), (3, 746), (6, 1119)]:
+        now[0] = elapsed
+        runtime.iteration.value = iteration
+        # Reference the existing five-second estimator, including paused updates.
+        shown_iteration = iteration or 373
+        samples.append((shown_iteration, elapsed))
+        samples = [(i, t) for i, t in samples if elapsed - t <= 5.0]
+        dt = samples[-1][1] - samples[0][1]
+        expected = (samples[-1][0] - samples[0][0]) / dt if dt > 0 else 0.0
+        assert status() == (
+            f"status.iteration {shown_iteration:,} ({expected:.1f} training_panel.iters_per_sec)"
+        )
+
+
+@pytest.mark.parametrize("key", ["messages.err_distorted_images", "messages.err_non_pinhole"])
+def test_camera_error_resolves_locale_when_presented(training_panel_module, monkeypatch, key):
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    panel._bind_status(model, lambda: None)
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error", lambda: "Readable English guidance", raising=False)
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error_key", lambda: key, raising=False)
+    get_message = model.bindings["error_message"][0]
+    for translation in ("Aktivieren Sie GUT im Trainingspanel.", "Activez GUT dans le panneau Entraînement."):
+        monkeypatch.setattr(training_panel_module.lf.ui, "tr", lambda value: translation if value == key else value)
+        assert get_message() == translation
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error", lambda: "Other diagnostic")
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error_key", lambda: None)
+    assert get_message() == "Other diagnostic"
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error_key", lambda: "unknown.key")
+    assert get_message() == "Other diagnostic"
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error", lambda: None)
+
+    def unexpected_key_lookup():
+        pytest.fail("No localization lookup is needed without an error")
+
+    monkeypatch.setattr(training_panel_module.lf, "trainer_error_key", unexpected_key_lookup)
+    assert get_message() == ""
+
+
+def test_camera_guidance_locales_use_gui_options():
+    locale_dir = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    locales = list(locale_dir.glob("*.json"))
+    assert len(locales) == 10
+    for path in locales:
+        messages = json.loads(path.read_text())["messages"]
+        for key in ("err_distorted_images", "err_non_pinhole"):
+            assert "--gut" not in messages[key], path.name
+            assert "--undistort" not in messages[key], path.name
+            assert "GUT" in messages[key], path.name
+
+
+def test_trainer_error_api_without_manager(lf):
+    assert lf.trainer_error() is None
+    assert lf.trainer_error_key() is None

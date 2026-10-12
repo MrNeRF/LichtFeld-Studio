@@ -36,9 +36,10 @@
 
 namespace lfs::training {
     namespace {
-        std::shared_ptr<lfs::core::PointCloud> createRandomPointCloud() {
-            constexpr size_t N = 10000;
-            auto positions = lfs::core::Tensor::rand({N, 3}, lfs::core::Device::CPU) * 2.0f - 1.0f;
+        std::shared_ptr<lfs::core::PointCloud> createRandomPointCloud(const lfs::core::param::TrainingParameters& params) {
+            const auto N = static_cast<size_t>(params.optimization.init_num_pts);
+            const float extent = params.optimization.init_extent;
+            auto positions = (lfs::core::Tensor::rand({N, 3}, lfs::core::Device::CPU) * 2.0f - 1.0f) * extent;
             auto colors = lfs::core::Tensor::randint({N, 3}, 0, 256, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
             return std::make_shared<lfs::core::PointCloud>(positions, colors);
         }

@@ -4,8 +4,11 @@
 
 #include "py_command.hpp"
 #include "core/logger.hpp"
+#include "py_error.hpp"
 #include "py_viewer_dispatch.hpp"
+#include "python/python_runtime.hpp"
 #include "visualizer/operation/undo_history.hpp"
+#include "visualizer/post_work_utils.hpp"
 
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -16,6 +19,36 @@
 namespace lfs::python {
 
     namespace {
+        vis::op::HistoryResult play_history(const bool undo_direction, const size_t count = 1) {
+            reject_viewer_work_in_node_execute();
+            const auto play = [undo_direction, count]() -> lfs::Result<vis::op::HistoryResult> {
+                auto& history = vis::op::undoHistory();
+                return undo_direction ? history.undoMultiple(count) : history.redoMultiple(count);
+            };
+            auto* viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread())
+                return unwrap(play());
+
+            const core::TaskContext context{
+                .name = undo_direction ? "python.undo" : "python.redo",
+                .domain = lfs::ErrorDomain::Python,
+                .operation_id = lfs::OperationId::generate(),
+                .site = LFS_SOURCE_SITE_CURRENT(),
+            };
+            const auto cancelled = lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Cancelled,
+                .domain = lfs::ErrorDomain::Python,
+                .severity = lfs::Severity::Warning,
+                .detail = "Viewer is shutting down",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+            // Playback mutates scene payloads; serialize it with rendering and
+            // release the caller's GIL so Python undo callbacks can run there.
+            nb::gil_scoped_release release;
+            return unwrap(vis::post_guarded_and_wait<vis::op::HistoryResult>(
+                *viewer, context, play, cancelled));
+        }
+
         vis::DirtyMask normalize_dirty_flags(const uint32_t flags) {
             return flags == 0 ? vis::DirtyFlag::ALL : static_cast<vis::DirtyMask>(flags);
         }
@@ -202,7 +235,11 @@ namespace lfs::python {
         };
 
         // lf.undo submodule - main undo API
-        auto undo = m.def_submodule("undo", "Undo/redo system");
+        auto undo = m.def_submodule("undo",
+                                    "Undo/redo system.\n\n"
+                                    "With an active viewer, undo(), redo() and jump() wait for playback on the\n"
+                                    "viewer thread, where registered Python callbacks also execute. Standalone\n"
+                                    "interpreters execute playback on the calling thread.");
 
         undo.def(
             "push",
@@ -250,33 +287,17 @@ namespace lfs::python {
             "Push an undo step with undo/redo functions");
 
         undo.def(
-            "undo",
-            []() {
-                return invoke_on_viewer(
-                    []() { return vis::op::undoHistory().undo().success; }, false);
-            },
-            "Undo last operation");
+            "undo", []() { return play_history(true).success; }, "Undo last operation");
         undo.def(
-            "redo",
-            []() {
-                return invoke_on_viewer(
-                    []() { return vis::op::undoHistory().redo().success; }, false);
-            },
-            "Redo last undone operation");
+            "redo", []() { return play_history(false).success; }, "Redo last undone operation");
         undo.def(
             "jump",
             [history_result_to_dict](const std::string& stack, size_t count) {
                 if (stack == "undo") {
-                    const auto result = invoke_on_viewer(
-                        [count]() { return vis::op::undoHistory().undoMultiple(count); },
-                        vis::op::HistoryResult{});
-                    return history_result_to_dict(result);
+                    return history_result_to_dict(play_history(true, count));
                 }
                 if (stack == "redo") {
-                    const auto result = invoke_on_viewer(
-                        [count]() { return vis::op::undoHistory().redoMultiple(count); },
-                        vis::op::HistoryResult{});
-                    return history_result_to_dict(result);
+                    return history_result_to_dict(play_history(false, count));
                 }
                 throw std::runtime_error("stack must be 'undo' or 'redo'");
             },

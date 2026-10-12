@@ -91,6 +91,8 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
         options.matrix = ColorMatrix::Smpte170M;
         options.range = ColorRange::Limited;
     }
+    options.matrix = static_cast<ColorMatrix>(request.value("matrix", static_cast<int>(options.matrix)));
+    options.range = static_cast<ColorRange>(request.value("range", static_cast<int>(options.range)));
     Writer writer;
     require(!session.isOpen(), "new session closed");
     require(session.writeFrame(writer).error().code() == lfs::ErrorCode::FailedPrecondition && writer.calls == 0,

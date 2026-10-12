@@ -62,6 +62,18 @@ namespace lfs::vis {
     using namespace lfs::core::events;
 
     namespace {
+        const core::param::OptimizationParameters* ready_presentation_params(const TrainerManager& manager) {
+            const auto* trainer = manager.getTrainer();
+            if (!trainer || trainer->isInitialized() || manager.getState() != TrainingState::Ready)
+                return nullptr;
+
+            // Before Start, the editable configuration is authoritative; the
+            // placeholder trainer receives these parameters in applyPendingParams.
+            if (const auto* params = services().paramsOrNull(); params && params->isLoaded())
+                return &params->getActiveParams();
+            return &manager.getEditableOptParams();
+        }
+
         template <typename Fn>
         class ScopeExit final {
         public:
@@ -758,7 +770,7 @@ namespace lfs::vis {
         if (viewer_ && viewer_->isTrainingStartPending()) {
             return action == TrainingAction::Stop;
         }
-        if (action == TrainingAction::Stop && !trainer_ && viewer_ &&
+        if ((action == TrainingAction::Stop || action == TrainingAction::Resume) && !trainer_ && viewer_ &&
             getState() == TrainingState::Paused) {
             const auto session = viewer_->projectTrainingSessionState();
             return session.available && !session.hydrated && !session.restoring;
@@ -1615,6 +1627,15 @@ namespace lfs::vis {
             LOG_INFO("Training finished: iter={}, loss={:.6f}, time={:.1f}s",
                      completion.iteration, completion.final_loss, completion.elapsed_seconds);
             completion_pending_.store(false, std::memory_order_release);
+            std::string error_message_key;
+            if (completion.typed_error && !completion.typed_error->frames().empty()) {
+                for (const auto& field : completion.typed_error->frames().front().fields.entries()) {
+                    if (field.key == "message_key") {
+                        if (const auto* key = std::get_if<std::string>(&field.value))
+                            error_message_key = *key;
+                    }
+                }
+            }
             state::TrainingCompleted{
                 .iteration = completion.iteration,
                 .final_loss = completion.final_loss,
@@ -1626,7 +1647,8 @@ namespace lfs::vis {
                 .error_info = completion.typed_error
                                   ? std::optional(core::to_wire_error(*completion.typed_error))
                                   : std::nullopt,
-                .suppress_notification = suppress_completion_notification_.exchange(false, std::memory_order_relaxed)}
+                .suppress_notification = suppress_completion_notification_.exchange(false, std::memory_order_relaxed),
+                .error_message_key = std::move(error_message_key)}
                 .emit();
         };
 
@@ -1664,7 +1686,7 @@ namespace lfs::vis {
 
     int TrainerManager::getCurrentIteration() const {
         if (trainer_) {
-            return trainer_->get_current_iteration();
+            return trainer_->get_progress_iteration();
         }
         if (stored_session_presentation_active_) {
             return stored_session_presentation_iteration_;
@@ -1716,6 +1738,8 @@ namespace lfs::vis {
     }
 
     int TrainerManager::getMaxGaussians() const {
+        if (const auto* params = ready_presentation_params(*this))
+            return params->max_cap;
         if (!trainer_)
             return 0;
         return trainer_->getParams().optimization.max_cap;
@@ -1757,6 +1781,12 @@ namespace lfs::vis {
     }
 
     const char* TrainerManager::getStrategyType() const {
+        if (const auto* params = ready_presentation_params(*this)) {
+            // Return a static name: other threads (TCP, MCP, Python) read this
+            // while the panel may replace the editable strategy string.
+            const auto name = core::param::canonical_strategy_name(params->strategy);
+            return name.empty() ? "unknown" : name.data();
+        }
         if (trainer_ && trainer_->isInitialized()) {
             return trainer_->get_strategy().strategy_type();
         }
@@ -1768,6 +1798,8 @@ namespace lfs::vis {
     }
 
     bool TrainerManager::isGutEnabled() const {
+        if (const auto* params = ready_presentation_params(*this))
+            return params->gut;
         if (!trainer_)
             return false;
         return trainer_->getParams().optimization.gut;

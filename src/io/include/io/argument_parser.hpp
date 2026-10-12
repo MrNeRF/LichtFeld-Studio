@@ -53,6 +53,9 @@ namespace lfs::io::args {
     struct PreprocessMode {
         core::param::PreprocessParameters params;
     };
+    struct CompareMode {
+        core::param::CompareParameters params;
+    };
     struct HelpMode {};
     struct VersionMode {};
     struct WarmupMode {}; // JIT compile PTX kernels and exit
@@ -71,7 +74,8 @@ namespace lfs::io::args {
         std::optional<std::filesystem::path> dataset_path;
     };
 
-    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, HelpMode, VersionMode, WarmupMode, TensorBackendSelftestMode, PluginMode, LichtMode>;
+    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, CompareMode, HelpMode,
+                                    VersionMode, WarmupMode, TensorBackendSelftestMode, PluginMode, LichtMode>;
 
     LFS_IO_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
 

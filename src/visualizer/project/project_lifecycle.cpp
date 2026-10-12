@@ -1203,7 +1203,7 @@ namespace lfs::vis::project {
             const int iteration =
                 cached_bound_checkpoint_iteration_.value_or(0);
             const int max_iterations =
-                static_cast<int>(params.iterations);
+                params.resolved_total_iterations();
             const bool completed = storedSessionCompleted(
                 iteration,
                 max_iterations,
@@ -3596,6 +3596,14 @@ namespace lfs::vis::project {
                 .defer_geometry_payloads = true,
             });
         if (!opened) {
+            if (opened.error().code() == lfs::ErrorCode::NotFound && document_->source_reader()) {
+                std::error_code error;
+                if (!std::filesystem::exists(path, error) && !error) {
+                    // The document still owns the removed file's payloads.
+                    // Keep that reader so an explicit save can recover them.
+                    return {};
+                }
+            }
             return lfs::Status::failure(
                 std::move(opened).error());
         }
@@ -8917,6 +8925,8 @@ namespace lfs::vis::project {
         // A new document clears project-owned data, but it is not a workspace
         // preset. Preserve the live panel arrangement and desktop geometry.
         viewer_.resetProjectState(/*reset_panel_registry=*/false);
+        if (auto* input = viewer_.getInputController())
+            input->applyNewProjectNavigationDefaults();
         active_restore_ticket_ = 0;
         recovery_prompt_pending_ = false;
         epoch_.fetch_add(

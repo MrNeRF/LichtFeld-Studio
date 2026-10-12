@@ -9,6 +9,7 @@
 #include "gui/rml_status_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
+#include "gui/status_bar_training.hpp"
 #include "rendering/viewport_artifact_service.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/preferences.hpp"
@@ -85,6 +86,7 @@ namespace lfs::vis::gui {
             status_bar.document_ = document;
             status_bar.fit_level_ = 0;
             status_bar.applyFitLevel(0);
+            status_bar.updateFpsReservedWidths();
         }
 
         static int fit(RmlStatusBar& status_bar, const bool allow_expand = false) {
@@ -100,6 +102,30 @@ namespace lfs::vis::gui {
         static void clearRedraw(RmlStatusBar& status_bar) { status_bar.model_dirty_ = false; }
         [[nodiscard]] static bool redrawPending(const RmlStatusBar& status_bar) {
             return status_bar.model_dirty_;
+        }
+
+        static bool tooltipPending(const RmlStatusBar& status_bar) {
+            return status_bar.tooltip_.revealDeadline().has_value();
+        }
+
+        static void prepareTooltip(RmlStatusBar& status_bar, const std::string& text) {
+            // Match the available overlay space supplied by render in a 900px window.
+            status_bar.tooltip_max_overlay_height_ = 878.0f;
+            status_bar.tooltip_target_ = status_bar.document_;
+            status_bar.tooltip_text_ = text;
+            status_bar.tooltip_.setHover(text, status_bar.document_);
+        }
+
+        static void revealTooltip(RmlStatusBar& status_bar, const bool layout = true) {
+            if (const auto deadline = status_bar.tooltip_.revealDeadline())
+                std::this_thread::sleep_until(*deadline + std::chrono::milliseconds(2));
+            status_bar.tooltip_.apply(status_bar.document_, 1200, 889, 2400, 900);
+            if (layout)
+                status_bar.rml_context_->Update();
+        }
+
+        static void positionTooltip(RmlStatusBar& status_bar, const float before, const float after) {
+            status_bar.positionTooltip(before, after, false);
         }
 
         static void trackRenderedFrame(RmlStatusBar& status_bar,
@@ -203,9 +229,12 @@ namespace {
         model.gpu_model_text = "NVIDIA GeForce RTX 5090";
         model.gpu_mem_text = "GPU 18.75/31.99 GiB";
         model.gpu_mem_color = "#ffffff";
-        model.fps_value = "UI 144 · View 144";
+        model.fps_value = "144";
+        model.fps_view_value = "144";
+        model.fps_ui_label = "UI";
+        model.fps_view_label = "3D";
         model.fps_color = "#ffffff";
-        model.fps_label = " FPS";
+        model.fps_label = "FPS";
         model.renderer_label = "R";
         model.renderer_value = "Vulkan";
         model.renderer_tooltip = "Scene renderer";
@@ -322,6 +351,8 @@ namespace {
             const auto font_path = std::filesystem::path(PROJECT_ROOT_PATH) /
                                    "src/visualizer/gui/assets/fonts/Inter-Regular.ttf";
             ASSERT_TRUE(Rml::LoadFontFace(font_path.string()));
+            for (const char* name : {"NotoSansJP-Regular.ttf", "NotoSansKR-Regular.ttf"})
+                ASSERT_TRUE(Rml::LoadFontFace((font_path.parent_path() / name).string(), true));
         }
 
         static void TearDownTestSuite() {
@@ -401,6 +432,9 @@ namespace {
             bound &= constructor.Bind("gpu_mem_text", &model_.gpu_mem_text);
             bound &= constructor.Bind("gpu_mem_color", &model_.gpu_mem_color);
             bound &= constructor.Bind("fps_value", &model_.fps_value);
+            bound &= constructor.Bind("fps_view_value", &model_.fps_view_value);
+            bound &= constructor.Bind("fps_ui_label", &model_.fps_ui_label);
+            bound &= constructor.Bind("fps_view_label", &model_.fps_view_label);
             bound &= constructor.Bind("fps_color", &model_.fps_color);
             bound &= constructor.Bind("fps_label", &model_.fps_label);
             bound &= constructor.Bind("renderer_label", &model_.renderer_label);
@@ -470,6 +504,172 @@ namespace {
             lfs::vis::gui::RmlStatusBarTestAccess::model(status_bar_);
     };
 
+    TEST_F(StatusBarFitTest, TooltipHoverStartsAndClearsForBothFpsMetrics) {
+        using lfs::vis::gui::RmlStatusBarTestAccess;
+        for (const char* id : {"fps-value", "fps-view-value"}) {
+            auto* value = document_->GetElementById(id);
+            ASSERT_TRUE(value);
+            auto* metric = value->GetParentNode();
+            EXPECT_FALSE(metric->GetAttribute<Rml::String>("data-tooltip", "").empty());
+            metric->SetAttribute("title", "Frame rate details");
+            const auto offset = value->GetAbsoluteOffset(Rml::BoxArea::Border);
+            lfs::vis::gui::PanelInputState input{};
+            input.mouse_x = offset.x + value->GetOffsetWidth() / 2;
+            input.mouse_y = offset.y + value->GetOffsetHeight() / 2;
+            status_bar_.processInput(input, 0, 0, 2400, 22);
+            EXPECT_TRUE(RmlStatusBarTestAccess::tooltipPending(status_bar_));
+            status_bar_.clearTooltip();
+            EXPECT_FALSE(RmlStatusBarTestAccess::tooltipPending(status_bar_));
+            input.mouse_y = -100;
+            status_bar_.processInput(input, 0, 0, 2400, 22);
+            EXPECT_FALSE(RmlStatusBarTestAccess::tooltipPending(status_bar_));
+        }
+    }
+
+    TEST_F(StatusBarFitTest, TooltipOverlayReservesOnlyMeasuredHeight) {
+        using lfs::vis::gui::RmlStatusBarTestAccess;
+        EXPECT_FLOAT_EQ(status_bar_.overlayHeight(), 0.0f);
+        for (const float scale : {1.0f, 2.0f, 4.0f}) {
+            SCOPED_TRACE(scale);
+            context_->SetDensityIndependentPixelRatio(scale);
+            context_->SetDimensions({2400, 900});
+            document_->SetProperty("height", "900px");
+            context_->Update();
+            RmlStatusBarTestAccess::prepareTooltip(status_bar_,
+                                                   "Frame rate details\nA second line");
+            EXPECT_FLOAT_EQ(status_bar_.overlayHeight(), 0.0f);
+            RmlStatusBarTestAccess::revealTooltip(status_bar_);
+            auto* tooltip = document_->GetElementById("frame-tooltip");
+            ASSERT_NE(tooltip, nullptr);
+            ASSERT_TRUE(tooltip->IsVisible());
+            const float measured = tooltip->GetOffsetHeight();
+            EXPECT_GE(status_bar_.overlayHeight(), measured);
+            EXPECT_LE(status_bar_.overlayHeight(), measured + 20.0f);
+            status_bar_.clearTooltip();
+            RmlStatusBarTestAccess::revealTooltip(status_bar_);
+            EXPECT_FLOAT_EQ(status_bar_.overlayHeight(), 0.0f);
+        }
+    }
+
+    TEST_F(StatusBarFitTest, TooltipAndMcpPopupShareOnlyTheirRequiredOverlay) {
+        using lfs::vis::gui::RmlStatusBarTestAccess;
+        RmlStatusBarTestAccess::setMcpExpanded(status_bar_, true);
+        model_.mcp_details_expanded = true;
+        model_handle_.DirtyVariable("mcp_details_expanded");
+        context_->SetDimensions({2400, 900});
+        document_->SetProperty("height", "900px");
+        context_->Update();
+        const float popup_height = status_bar_.overlayHeight();
+        ASSERT_GE(popup_height, 150.0f);
+        RmlStatusBarTestAccess::prepareTooltip(status_bar_,
+                                               "Frame rate details\nA second line");
+        EXPECT_FLOAT_EQ(status_bar_.overlayHeight(), popup_height);
+        RmlStatusBarTestAccess::revealTooltip(status_bar_);
+        EXPECT_FLOAT_EQ(status_bar_.overlayHeight(), popup_height);
+        RmlStatusBarTestAccess::setMcpExpanded(status_bar_, false);
+        EXPECT_LT(status_bar_.overlayHeight(), popup_height);
+        status_bar_.clearTooltip();
+        RmlStatusBarTestAccess::revealTooltip(status_bar_);
+        EXPECT_FLOAT_EQ(status_bar_.overlayHeight(), 0.0f);
+    }
+
+    TEST_F(StatusBarFitTest, TooltipTranslationUsesPendingPositionAfterMeasurement) {
+        using lfs::vis::gui::RmlStatusBarTestAccess;
+        context_->SetDimensions({2400, 900});
+        document_->SetProperty("height", "900px");
+        context_->Update();
+        RmlStatusBarTestAccess::prepareTooltip(status_bar_, "Frame rate details");
+        RmlStatusBarTestAccess::revealTooltip(status_bar_, false);
+        auto* tooltip = document_->GetElementById("frame-tooltip");
+        ASSERT_NE(tooltip, nullptr);
+        ASSERT_LT(tooltip->GetOffsetTop(), 0.0f);
+        const float pending_top = tooltip->GetLocalProperty(Rml::PropertyId::Top)->Get<float>();
+        ASSERT_GE(pending_top, 0.0f);
+        RmlStatusBarTestAccess::positionTooltip(status_bar_, 150, 175);
+        context_->Update();
+        EXPECT_FLOAT_EQ(tooltip->GetOffsetTop(), pending_top + 25);
+        // Changing the surface again preserves the same screen-space anchor.
+        RmlStatusBarTestAccess::positionTooltip(status_bar_, 175, 150);
+        context_->Update();
+        EXPECT_FLOAT_EQ(tooltip->GetOffsetTop(), pending_top);
+    }
+
+    TEST_F(StatusBarFitTest, LayoutAndDigitReservationFollowDensityChanges) {
+        for (const float scale : {1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 4.0f}) {
+            SCOPED_TRACE(scale);
+            context_->SetDensityIndependentPixelRatio(scale);
+            const int height = static_cast<int>(22 * scale + 0.5f);
+            document_->SetProperty("height", std::format("{}px", height));
+            context_->SetDimensions({static_cast<int>(2400 * scale), height});
+            context_->Update();
+            lfs::vis::gui::RmlStatusBarTestAccess::attach(status_bar_, context_, document_);
+            auto* ui = document_->GetElementById("fps-value");
+            model_.fps_value = "144";
+            model_handle_.DirtyVariable("fps_value");
+            context_->Update();
+            const float width = ui->GetOffsetWidth();
+            model_.fps_value = "0";
+            model_handle_.DirtyVariable("fps_value");
+            context_->Update();
+            EXPECT_FLOAT_EQ(ui->GetOffsetWidth(), width);
+            for (const int dp_width : {2400, 1600, 1200, 900, 700, 500, 320}) {
+                SCOPED_TRACE(dp_width);
+                const int px_width = static_cast<int>(dp_width * scale);
+                context_->SetDimensions({px_width, height});
+                context_->Update();
+                lfs::vis::gui::RmlStatusBarTestAccess::fit(status_bar_);
+                assertNoVerticalOverflow(document_);
+                assertFlexSiblingsDoNotOverlap(document_);
+                EXPECT_LE(ui->GetAbsoluteOffset().x + ui->GetOffsetWidth(), px_width + 0.5f);
+            }
+        }
+    }
+
+    TEST_F(StatusBarFitTest, LocalizedTooltipsStayInsideScaledNarrowWindow) {
+        auto& loc = lfs::event::LocalizationManager::getInstance();
+        const auto locales = std::filesystem::path(PROJECT_ROOT_PATH) /
+                             "src/visualizer/gui/resources/locales";
+        ASSERT_TRUE(loc.initialize(locales.string()));
+        lfs::vis::gui::RmlTooltipController tooltip;
+        for (const float scale : {1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 4.0f}) {
+            SCOPED_TRACE(scale);
+            const int width = static_cast<int>(400 * scale);
+            const int height = static_cast<int>(300 * scale);
+            context_->SetDensityIndependentPixelRatio(scale);
+            context_->SetDimensions({width, height});
+            document_->SetProperty("height", std::format("{}px", height));
+            context_->Update();
+            for (const auto& language : loc.getAvailableLanguages()) {
+                SCOPED_TRACE(language);
+                ASSERT_TRUE(loc.setLanguage(language));
+                for (const char* id : {"fps-value", "fps-view-value"}) {
+                    auto* value = document_->GetElementById(id);
+                    const std::string text = lfs::vis::gui::resolveRmlTooltip(value);
+                    ASSERT_FALSE(text.empty());
+                    EXPECT_NE(text, value->GetParentNode()->GetAttribute<Rml::String>("data-tooltip", ""));
+                    tooltip.setHover(text, value);
+                    if (const auto deadline = tooltip.revealDeadline())
+                        std::this_thread::sleep_until(*deadline + std::chrono::milliseconds(2));
+                    ASSERT_TRUE(tooltip.apply(document_, width - 5, height - 5, width, height));
+                    context_->Update();
+                    auto* element = document_->GetElementById("frame-tooltip");
+                    ASSERT_TRUE(element);
+                    ASSERT_TRUE(element->IsVisible());
+                    const auto offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+                    EXPECT_GE(offset.x, 0);
+                    EXPECT_GE(offset.y, 0);
+                    EXPECT_LE(offset.x + element->GetOffsetWidth(), width + 0.5f);
+                    EXPECT_LE(offset.y + element->GetOffsetHeight(), height + 0.5f);
+                    tooltip.setHover({}, nullptr);
+                    EXPECT_TRUE(tooltip.apply(document_, 0, 0, width, height));
+                    context_->Update();
+                    EXPECT_FALSE(element->IsVisible());
+                }
+            }
+        }
+        EXPECT_TRUE(loc.setLanguage("en"));
+    }
+
     TEST_F(StatusBarFitTest, KeepsSingleLineNonOverlappingLayoutAcrossWidths) {
         const std::vector<int> widths = {3000, 2400, 1600, 1200, 900, 700, 500, 320};
         int previous_fit_level = 0;
@@ -533,6 +733,12 @@ namespace {
         EXPECT_TRUE(renderer->GetChild(0)->IsVisible(true));
         EXPECT_TRUE(tensor->GetChild(0)->IsVisible(true));
         EXPECT_LE(tensor->GetAbsoluteOffset().x + tensor->GetOffsetWidth(), 320.5f);
+        for (const char* id : {"fps-value", "fps-view-value", "fps-label"}) {
+            auto* element = document_->GetElementById(id);
+            ASSERT_NE(element, nullptr);
+            EXPECT_TRUE(element->IsVisible(true));
+            EXPECT_GT(element->GetOffsetWidth(), 0.0f);
+        }
         EXPECT_EQ(renderer->GetAttribute<Rml::String>("title", ""), model_.renderer_tooltip);
         assertNoVerticalOverflow(document_);
         assertFlexSiblingsDoNotOverlap(document_);
@@ -706,6 +912,59 @@ namespace {
         EXPECT_FALSE(store.viewer_backend.get());
     }
 
+    TEST_F(StatusBarFitTest, FpsValuesReserveIndependentWidthsAndKeepUnitVisible) {
+        context_->SetDimensions({2400, 22});
+        context_->Update();
+        auto* ui = document_->GetElementById("fps-value");
+        auto* view = document_->GetElementById("fps-view-value");
+        auto* unit = document_->GetElementById("fps-label");
+        ASSERT_NE(ui, nullptr);
+        ASSERT_NE(view, nullptr);
+        ASSERT_NE(unit, nullptr);
+        const auto ui_width = ui->GetOffsetWidth();
+        const auto view_position = view->GetAbsoluteOffset().x;
+        model_.fps_value = "0";
+        model_.fps_view_value = "9";
+        model_handle_.DirtyVariable("fps_value");
+        model_handle_.DirtyVariable("fps_view_value");
+        context_->Update();
+        EXPECT_FLOAT_EQ(ui->GetOffsetWidth(), ui_width);
+        EXPECT_FLOAT_EQ(view->GetAbsoluteOffset().x, view_position);
+        // The reservation is a minimum: four-digit rates must remain visible.
+        model_.fps_value = "1234";
+        model_handle_.DirtyVariable("fps_value");
+        context_->Update();
+        EXPECT_GT(ui->GetOffsetWidth(), ui_width);
+        assertNoVerticalOverflow(document_);
+        assertFlexSiblingsDoNotOverlap(document_);
+        document_->SetClass("fit-8", true);
+        context_->Update();
+        EXPECT_GT(unit->GetOffsetWidth(), 0.0f);
+    }
+
+    TEST_F(StatusBarFitTest, FpsSpacingFollowsDensityChanges) {
+        for (const float scale : {1.0f, 1.25f, 2.0f, 4.0f}) {
+            SCOPED_TRACE(scale);
+            context_->SetDensityIndependentPixelRatio(scale);
+            context_->SetDimensions({static_cast<int>(2400 * scale), static_cast<int>(22 * scale)});
+            document_->SetProperty("height", std::format("{}px", 22 * scale));
+            context_->Update();
+            lfs::vis::gui::RmlStatusBarTestAccess::attach(status_bar_, context_, document_);
+            for (const char* id : {"fps-value", "fps-view-value"}) {
+                auto* value = document_->GetElementById(id);
+                auto* caption = value->GetParentNode()->QuerySelector(".fps-caption");
+                ASSERT_NE(caption, nullptr);
+                EXPECT_NEAR(value->GetAbsoluteOffset().x - caption->GetAbsoluteOffset().x -
+                                caption->GetOffsetWidth(),
+                            3 * scale, 0.5f);
+            }
+            auto* unit = document_->GetElementById("fps-label");
+            auto* ui_caption = document_->GetElementById("fps-value")->GetParentNode()->QuerySelector(".fps-caption");
+            EXPECT_NEAR(ui_caption->GetAbsoluteOffset().x - unit->GetAbsoluteOffset().x - unit->GetOffsetWidth(),
+                        8 * scale, 0.5f);
+        }
+    }
+
     TEST_F(StatusBarFitTest, McpDetailsReserveOnlyTheirMeasuredOverlayArea) {
         EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
         EXPECT_FALSE(status_bar_.isOverlayPoint(2300.0f, -20.0f, 2400.0f));
@@ -806,4 +1065,43 @@ namespace {
         EXPECT_FALSE(lfs::vis::toggleMcpRuntimeBinding());
     }
 
+} // namespace
+
+namespace {
+    class StatusBarTrainingTest : public ::testing::Test {
+    protected:
+        lfs::vis::ThemePalette palette_{};
+
+        void SetUp() override {
+            palette_.success = {0.1f, 0.8f, 0.2f, 1.0f};
+            palette_.text_dim = {0.4f, 0.4f, 0.4f, 1.0f};
+            palette_.error = {0.9f, 0.1f, 0.1f, 1.0f};
+        }
+
+        void expectStatus(lfs::vis::FinishReason reason, const char* key,
+                          const lfs::vis::ThemeColor& color) {
+            const auto status = lfs::vis::gui::finishedTrainingStatus(reason, palette_);
+            EXPECT_STREQ(status.label_key, key);
+            EXPECT_EQ(status.color.x, color.x);
+            EXPECT_EQ(status.color.y, color.y);
+            EXPECT_EQ(status.color.z, color.z);
+            EXPECT_EQ(status.color.w, color.w);
+        }
+    };
+
+    TEST_F(StatusBarTrainingTest, UserStopIsNotCompletion) {
+        expectStatus(lfs::vis::FinishReason::UserStopped, "status.stopped", palette_.text_dim);
+    }
+
+    TEST_F(StatusBarTrainingTest, ErrorIsNotCompletion) {
+        expectStatus(lfs::vis::FinishReason::Error, "status.error", palette_.error);
+    }
+
+    TEST_F(StatusBarTrainingTest, CompletedRunKeepsSuccessPresentation) {
+        expectStatus(lfs::vis::FinishReason::Completed, "status.complete", palette_.success);
+    }
+
+    TEST_F(StatusBarTrainingTest, StoredCompletedSessionWithoutTrainerKeepsSuccessPresentation) {
+        expectStatus(lfs::vis::FinishReason::None, "status.complete", palette_.success);
+    }
 } // namespace

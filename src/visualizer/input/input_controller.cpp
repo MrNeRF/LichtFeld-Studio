@@ -38,9 +38,11 @@
 #include "tools/selection_tool.hpp"
 #include "tools/tool_base.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
+#include "visualizer/preferences.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
 #include <SDL3/SDL.h>
@@ -177,7 +179,9 @@ namespace lfs::vis {
             auto settings = rendering_manager->getSettings();
             settings.environment_mode = EnvironmentBackgroundMode::Equirectangular;
             settings.environment_map_path = lfs::core::path_to_utf8(environment_map_path);
-            rendering_manager->updateSettings(settings);
+            if (!rendering_manager->updateSettingsFromUser(settings)) {
+                return;
+            }
 
             LOG_INFO("Applied environment map via drag-and-drop: {}",
                      lfs::core::path_to_utf8(environment_map_path.filename()));
@@ -504,6 +508,13 @@ namespace lfs::vis {
 
     void InputController::initialize() {
         instance_ = this;
+        applyNewProjectNavigationDefaults();
+
+        // The GUI is initialized before this controller exists.
+        if (const auto mode = cameraNavigationModeFromName(loadCameraNavigationPreference())) {
+            setCameraNavigationMode(*mode);
+        }
+        setCameraViewSnapEnabled(loadCameraViewSnapPreference());
 
         // Get initial mouse position
         float fx, fy;
@@ -626,6 +637,32 @@ namespace lfs::vis {
             keyboard_viewport.camera.enterDrone();
             publishCameraMove(&keyboard_viewport);
         }
+    }
+
+    void InputController::applyNewProjectNavigationDefaults() {
+        auto& preferences = UserPreferences::instance();
+        setNavigationUpAxis(navigationUpAxisFromName(preferences.newProjectNavigationUpAxis()).value_or(NavigationUpAxis::LegacyY),
+                            preferences.alignNewProjectGrid());
+    }
+
+    void InputController::setNavigationUpAxis(const NavigationUpAxis axis, const bool align_grid) {
+        clearViewportDragState();
+        clearWasdMomentumViewport();
+        orbit_coast_view_ = kNoView;
+        pan_coast_view_ = kNoView;
+        views_.forEachView([&](const ViewTarget view) {
+            if (!view.valid())
+                return;
+            view.viewport->camera.setNavigationUpAxis(axis);
+            if (align_grid && viewer_) {
+                if (auto* rendering = viewer_->getRenderingManager())
+                    rendering->editViewSettings(view.id, [axis](auto& settings) {
+                        settings.grid_plane = axis == NavigationUpAxis::DataZ ? 2 : 1;
+                    });
+            }
+        });
+        auto& generation = app_store().render_settings_generation;
+        generation.set(generation.get() + 1);
     }
 
     void InputController::applyNavigationSpeedPreferences(const float zoom_speed,
@@ -2943,26 +2980,14 @@ namespace lfs::vis {
         }
 
         // Load splat and mesh files supported by the generic loader path.
-        if (!splat_files.empty() && viewer_ &&
-            viewer_->loadFileWipeWouldNeedConfirmation(
-                false, false, false)) {
-            cmd::ShowLoadFileConfirmation{
-                .paths = splat_files,
-                .is_dataset = false,
-                .replace = false,
-                .user_batch = splat_files.size() > 1}
+        // The loading service owns admission and confirmation so later drops
+        // cannot open a separate confirmation ahead of its pending queue.
+        if (!splat_files.empty()) {
+            cmd::LoadFile{.path = splat_files.front(),
+                          .is_dataset = false,
+                          .paths = splat_files,
+                          .user_batch = true}
                 .emit();
-            LOG_INFO(
-                "Requesting confirmation before loading {} dropped splat/mesh file(s)",
-                splat_files.size());
-        } else {
-            if (!splat_files.empty()) {
-                cmd::LoadFile{.path = splat_files.front(),
-                              .is_dataset = false,
-                              .paths = splat_files,
-                              .user_batch = splat_files.size() > 1}
-                    .emit();
-            }
         }
 
         if (dataset_path) {

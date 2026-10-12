@@ -165,6 +165,7 @@ namespace lfs::vis::gui {
         Rml::Element* toolbarButtonAtPoint(float x, float y) const;
         bool projectTitleAtPoint(float x, float y) const;
         void updateCompactLayout(int screen_w, float dp_ratio);
+        void updateToolbarLayout(int screen_w, float dp_ratio);
         void updateProjectTitleLayout(int screen_w, float dp_ratio);
         void updateTitlebarDragRegion(int bar_height_px);
         void clearTitlebarDragRegion();

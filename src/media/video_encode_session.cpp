@@ -15,7 +15,6 @@ extern "C" {
 #include <libavutil/dict.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
-#include <libavutil/pixdesc.h>
 }
 namespace lfs::media {
     namespace {

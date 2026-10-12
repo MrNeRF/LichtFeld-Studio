@@ -16,6 +16,7 @@ from test_gallery_controller import gallery
 def convenience(panel_module, monkeypatch):
     panel, local, remote = _gallery_fixture(panel_module)
     strings = json.loads((Path(__file__).parents[2] / 'src/visualizer/gui/resources/locales/en.json').read_text())
+    strings.update({'projects.' + key: value for key, value in strings['projects'].items()})
     monkeypatch.setattr(panel_module.lf.ui, 'tr', lambda key: strings.get(key, key))
     panel._handle = _Handle()
     panel._select_asset_id(local['id'])
@@ -98,7 +99,7 @@ def test_gallery_preferences_reject_invalid_values(tmp_path, key, value):
 def test_gallery_quota_requires_server_usage(convenience):
     panel, local, _ = convenience
     panel._gallery_state.update(quotaBytes=50_000_000_000, usedBytes=12_300_000_000)
-    assert panel._gallery_quota() == '12.3 GB of 50 GB used'
+    assert panel._gallery_quota() == '12 GB of 50 GB used'
     panel._gallery_state.update(quotaBytes=100, usedBytes=None)
     assert panel._gallery_quota() == ''
     panel._gallery_state["usedBytes"] = 84

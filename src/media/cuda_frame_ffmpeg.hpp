@@ -16,7 +16,7 @@ extern "C" {
 
 namespace lfs::media::detail {
     // Only the provider interprets the decoder's native frame/device structures.
-    inline Result<CudaVideoFrame> cudaFrameView(const AVFrame* frame) {
+    inline Result<CudaVideoFrame> cudaFrameView(const AVFrame* frame, const bool source_full_range = false) {
         auto unavailable = [](std::string text) -> Result<CudaVideoFrame> {
             return make_error({.code = ErrorCode::FailedPrecondition, .domain = ErrorDomain::IO, .detail = std::move(text), .detection = LFS_SOURCE_SITE_CURRENT()});
         };
@@ -34,7 +34,7 @@ namespace lfs::media::detail {
             !frame->data[0] || !frame->data[1] ||
             frame->linesize[0] < frame->width || frame->linesize[1] < frame->width)
             return unavailable(std::format("CUDA video frame has invalid decoder plane storage (format={}, width={}, height={}, pitches=[{}, {}], planes_present=[{}, {}], context_present={})", frame->format, frame->width, frame->height, frame->linesize[0], frame->linesize[1], frame->data[0] != nullptr, frame->data[1] != nullptr, decoder->cuda_ctx != nullptr));
-        return CudaVideoFrame{{decoder->cuda_ctx, decoder->stream}, {frame->data[0], frame->data[1]}, {frame->linesize[0], frame->linesize[1]}};
+        return CudaVideoFrame{{decoder->cuda_ctx, decoder->stream}, {frame->data[0], frame->data[1]}, {frame->linesize[0], frame->linesize[1]}, frame->color_range == AVCOL_RANGE_JPEG || (frame->color_range == AVCOL_RANGE_UNSPECIFIED && source_full_range)};
 #else
         return unavailable("CUDA video frames are unavailable in this build");
 #endif

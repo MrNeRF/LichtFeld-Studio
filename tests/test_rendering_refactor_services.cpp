@@ -3,6 +3,7 @@
 
 #include "core/camera.hpp"
 #include "core/editor_context.hpp"
+#include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
@@ -55,6 +56,7 @@
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -2655,6 +2657,115 @@ namespace lfs::vis {
         EXPECT_EQ(scene.peekCombinedModel(), consolidated);
     }
 
+    TEST_F(SceneManagerRenderStateTest, AggregateSnapshotSurvivesRebuildAndMetadataQueries) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        scene.addSplat("left", makeTestSplat(0.0f));
+        scene.addSplat("right", makeTestSplat(1.0f));
+        const auto original = manager.buildRenderState();
+        ASSERT_NE(original.owned_combined_model, nullptr);
+        ASSERT_EQ(original.owned_combined_model.get(), original.combined_model);
+        ASSERT_NE(original.transform_indices, nullptr);
+        scene.addSplat("third", makeTestSplat(2.0f));
+        const auto* replacement = scene.getCurrentCombinedModel();
+        ASSERT_NE(replacement, nullptr);
+        EXPECT_NE(replacement, original.combined_model);
+        EXPECT_EQ(replacement->size(), 3u);
+        const auto metadata = manager.buildRenderState({.metadata_only = true});
+        EXPECT_EQ(metadata.owned_combined_model, nullptr);
+        const auto current = manager.buildRenderState();
+        EXPECT_EQ(current.combined_model, replacement);
+        EXPECT_EQ(current.owned_combined_model.get(), replacement);
+        EXPECT_EQ(original.combined_model->size(), 2u);
+        EXPECT_EQ(original.transform_indices->numel(), 2u);
+        EXPECT_EQ(original.model_transforms.size(), 2u);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, AggregateSnapshotSurvivesCacheDiscardUntilReleased) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        scene.addSplat("left", makeTestSplat(0.0f));
+        scene.addSplat("right", makeTestSplat(1.0f));
+        auto retained = manager.buildRenderState();
+        ASSERT_NE(retained.owned_combined_model, nullptr);
+        std::weak_ptr<const core::SplatData> aggregate = retained.owned_combined_model;
+        scene.discardUnconsolidatedModelCache();
+        EXPECT_EQ(scene.peekCombinedModel(), nullptr);
+        EXPECT_EQ(manager.buildRenderState({.metadata_only = true}).combined_model, nullptr);
+        ASSERT_FALSE(aggregate.expired());
+        EXPECT_EQ(retained.combined_model->size(), 2u);
+        retained = {};
+        EXPECT_TRUE(aggregate.expired());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, SceneClearReleasesCachedAggregateWithoutAnotherRender) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        scene.addSplat("left", makeTestSplat(0.0f));
+        scene.addSplat("right", makeTestSplat(1.0f));
+        std::weak_ptr<const core::SplatData> aggregate;
+        {
+            const auto state = manager.buildRenderState();
+            ASSERT_NE(state.owned_combined_model, nullptr);
+            aggregate = state.owned_combined_model;
+        }
+        ASSERT_FALSE(aggregate.expired());
+        ASSERT_TRUE(manager.clear());
+        EXPECT_TRUE(aggregate.expired());
+        EXPECT_EQ(manager.buildRenderState().combined_model, nullptr);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, ReturnedAggregateSnapshotSurvivesSceneClear) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        scene.addSplat("left", makeTestSplat(0.0f));
+        scene.addSplat("right", makeTestSplat(1.0f));
+        auto retained = manager.buildRenderState();
+        ASSERT_NE(retained.owned_combined_model, nullptr);
+        std::weak_ptr<const core::SplatData> aggregate = retained.owned_combined_model;
+        ASSERT_TRUE(manager.clear());
+        ASSERT_FALSE(aggregate.expired());
+        EXPECT_EQ(retained.combined_model->size(), 2u);
+        retained = {};
+        EXPECT_TRUE(aggregate.expired());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, SingleNodeAndMetadataSnapshotsDoNotOwnAnAggregate) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto id = scene.addSplat("single", makeTestSplat(0.0f));
+        const auto single = manager.buildRenderState();
+        EXPECT_EQ(single.combined_model, scene.getNodeById(id)->model.get());
+        EXPECT_EQ(single.owned_combined_model, nullptr);
+        EXPECT_EQ(scene.sharePreparedCombinedModel(), nullptr);
+        const auto metadata = manager.buildRenderState({.metadata_only = true});
+        EXPECT_EQ(metadata.combined_model, nullptr);
+        EXPECT_EQ(metadata.owned_combined_model, nullptr);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, DiscardingTheAggregateFreesItOnceSnapshotsAreGone) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        scene.addSplat("left", makeTestSplat(0.0f));
+        scene.addSplat("right", makeTestSplat(1.0f));
+        std::weak_ptr<const core::SplatData> aggregate;
+        {
+            const auto state = manager.buildRenderState();
+            ASSERT_NE(state.owned_combined_model, nullptr);
+            aggregate = state.owned_combined_model;
+        }
+        // Imports discard the aggregate to free its memory before allocating the next one;
+        // the manager's own snapshot cache must not keep it alive.
+        scene.discardUnconsolidatedModelCache();
+        EXPECT_TRUE(aggregate.expired());
+    }
+
     TEST_F(SceneManagerRenderStateTest, PlyComparisonMetadataCacheIsDistinctFromFullCombinedState) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
@@ -4329,6 +4440,77 @@ namespace lfs::vis {
         expect_one_redraw(0);
     }
 
+    TEST_F(RenderingManagerEventsTest, SceneReconstructionReadinessRequestsOneFollowupFrame) {
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        manager.retainVisibleViews({manager_views.activeView()});
+        auto settings = manager.getSettings();
+        settings.scene_upscaler = "spatial";
+        settings.scene_upscaler_preset = "balanced";
+        manager.updateSettings(settings);
+        auto& ledger = manager.frameDemandLedger();
+        // The settings frame rendered before presentation prepared reconstruction.
+        (void)ledger.plan(FrameClock::now());
+
+        const auto ready = resolveSceneUpscalerSelection(SceneUpscalerBackend::Spatial, true);
+        manager.reportSceneUpscalerRuntimeSelection(manager_views.activeView(), ready);
+        EXPECT_EQ(manager.sceneUpscalerRuntimeSelection(), ready);
+        const auto plan = ledger.plan(FrameClock::now());
+        EXPECT_TRUE(plan.present);
+        EXPECT_NE(plan.view_flags[0] & DirtyFlag::TEMPORAL, 0u);
+        EXPECT_FLOAT_EQ(manager.getSettings().scene_upscaler_scale, 0.67f);
+
+        for (int i = 0; i < 3; ++i) {
+            manager.reportSceneUpscalerRuntimeSelection(manager_views.activeView(), ready);
+            EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+            EXPECT_FALSE(ledger.nextDeadline(FrameClock::now()).has_value());
+        }
+    }
+
+    TEST_F(RenderingManagerEventsTest, SceneReconstructionFallbackAndRecoveryRequestFrames) {
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        manager.retainVisibleViews({manager_views.activeView()});
+        auto& ledger = manager.frameDemandLedger();
+        (void)ledger.plan(FrameClock::now());
+        const auto ready = resolveSceneUpscalerSelection(SceneUpscalerBackend::Spatial, true);
+        const auto fallback = resolveSceneUpscalerSelection(SceneUpscalerBackend::Spatial, false);
+        const auto native = resolveSceneUpscalerSelection(SceneUpscalerBackend::Native, true);
+        for (const auto selection : {ready, fallback, ready, native}) {
+            manager.reportSceneUpscalerRuntimeSelection(manager_views.activeView(), selection);
+            EXPECT_EQ(manager.sceneUpscalerRuntimeSelection(), selection);
+            const auto plan = ledger.plan(FrameClock::now());
+            EXPECT_TRUE(plan.present);
+            EXPECT_NE(plan.view_flags[0] & DirtyFlag::TEMPORAL, 0u);
+            manager.reportSceneUpscalerRuntimeSelection(manager_views.activeView(), selection);
+            EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+        }
+    }
+
+    TEST_F(RenderingManagerEventsTest, SceneReconstructionUnchangedFeedbackPreservesIdleAndPresetUpdates) {
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        manager.retainVisibleViews({manager_views.activeView()});
+        auto& ledger = manager.frameDemandLedger();
+        (void)ledger.plan(FrameClock::now());
+        manager.reportSceneUpscalerRuntimeSelection(manager_views.activeView(), {});
+        EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+
+        const auto ready = resolveSceneUpscalerSelection(SceneUpscalerBackend::Spatial, true);
+        manager.reportSceneUpscalerRuntimeSelection(manager_views.activeView(), ready);
+        (void)ledger.plan(FrameClock::now());
+        for (const auto& preset : sceneUpscalerDescriptor(SceneUpscalerBackend::Spatial).presets) {
+            auto settings = manager.getSettings();
+            settings.scene_upscaler = "spatial";
+            settings.scene_upscaler_preset = preset.id;
+            manager.updateSettings(settings);
+            EXPECT_TRUE(ledger.plan(FrameClock::now()).present);
+            EXPECT_FLOAT_EQ(manager.getSettings().scene_upscaler_scale, preset.input_scale);
+            manager.reportSceneUpscalerRuntimeSelection(manager_views.activeView(), ready);
+            EXPECT_TRUE(ledger.plan(FrameClock::now()).empty());
+        }
+    }
+
     TEST(RenderAnimationStateTest, PivotAndExplicitOverlayAnimationsStillRequestFrames) {
         RenderAnimationState state;
         EXPECT_EQ(state.pollDirtyState(), 0u);
@@ -4361,6 +4543,212 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
     }
 
+    TEST_F(RenderingManagerEventsTest, PlyComparisonRequiresTwoVisibleModelsAndExplainsWhy) {
+        struct Consumer : lfs::NativeErrorConsumer {
+            int notices = 0;
+            void on_error(const lfs::ErrorNotification& notification,
+                          const lfs::ErrorDeliveryInfo&) noexcept override {
+                EXPECT_EQ(notification.error.code(), lfs::ErrorCode::FailedPrecondition);
+                EXPECT_EQ(notification.surface, lfs::ErrorSurface::StatusOnly);
+                EXPECT_FALSE(notification.error.user_message().empty());
+                ++notices;
+            }
+        } consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        const auto reject = [&] {
+            const auto before = consumer.notices;
+            lfs::core::events::cmd::ToggleSplitView{}.emit();
+            EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+            EXPECT_EQ(consumer.notices, before + 1);
+        };
+        reject();
+        SceneManager scene_manager;
+        services().set(&scene_manager);
+        reject();
+        auto& scene = scene_manager.getScene();
+        scene.addSplat("first", makeTestSplat(0.0f));
+        reject();
+        const auto second = scene.addSplat("second", makeTestSplat(1.0f));
+        scene.setNodeVisibility(second, false);
+        reject();
+        const auto group = scene.addGroup("hidden group");
+        ASSERT_TRUE(scene.reparent(second, group));
+        scene.setNodeVisibility(second, true);
+        scene.setNodeVisibility(group, false);
+        reject();
+    }
+
+    TEST_F(RenderingManagerEventsTest, PlyComparisonStillTogglesAndCanAlwaysExit) {
+        SceneManager scene_manager;
+        services().set(&scene_manager);
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        auto& scene = scene_manager.getScene();
+        scene.addSplat("first", makeTestSplat(0.0f));
+        const auto second = scene.addSplat("second", makeTestSplat(1.0f));
+        auto settings = manager.getSettings();
+        settings.split_position = 0.35f;
+        settings.split_view_offset = 7;
+        manager.updateSettings(settings);
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::PLYComparison);
+        EXPECT_FLOAT_EQ(manager.getSettings().split_position, 0.35f);
+        EXPECT_EQ(manager.getSettings().split_view_offset, 0u);
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        scene.setNodeVisibility(second, false);
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+    }
+
+    TEST_F(RenderingManagerEventsTest, HidingComparisonModelDisablesSplitAndResetsOffset) {
+        SceneManager scene_manager;
+        services().set(&scene_manager);
+        screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        auto& scene = scene_manager.getScene();
+        scene.addSplat("first", makeTestSplat(0.0f));
+        const auto second = scene.addSplat("second", makeTestSplat(1.0f));
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        auto settings = manager.getSettings();
+        settings.split_view_offset = 3;
+        settings.split_position = 0.35f;
+        manager.updateSettings(settings);
+        manager.retainVisibleViews({manager_views.activeView()});
+        (void)manager.frameDemandLedger().plan(FrameClock::now());
+
+        scene.setNodeVisibility(second, false);
+
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+        EXPECT_EQ(manager.getSettings().split_view_offset, 0u);
+        EXPECT_FLOAT_EQ(manager.getSettings().split_position, 0.35f);
+        EXPECT_TRUE(manager.frameDemandLedger().plan(FrameClock::now()).present);
+        EXPECT_TRUE(manager.frameDemandLedger().plan(FrameClock::now()).empty());
+        scene.setNodeVisibility(second, true);
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::PLYComparison);
+    }
+
+    TEST_F(RenderingManagerEventsTest, ComparisonUsesEffectiveVisibilityAfterGroupChanges) {
+        SceneManager scene_manager;
+        services().set(&scene_manager);
+        screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        auto& scene = scene_manager.getScene();
+        const auto group = scene.addGroup("group");
+        scene.addSplat("first", makeTestSplat(0.0f));
+        const auto second = scene.addSplat("second", makeTestSplat(1.0f));
+        ASSERT_TRUE(scene.reparent(second, group));
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        scene.setNodeVisibility(group, false);
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+
+        ASSERT_TRUE(scene.reparent(second, lfs::core::NULL_NODE));
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::PLYComparison);
+        ASSERT_TRUE(scene.reparent(second, group));
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+    }
+
+    TEST_F(RenderingManagerEventsTest, VisibilityKeepsComparisonWhileTwoModelsRemain) {
+        SceneManager scene_manager;
+        services().set(&scene_manager);
+        screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        auto& scene = scene_manager.getScene();
+        scene.addSplat("first", makeTestSplat(0.0f));
+        scene.addSplat("second", makeTestSplat(1.0f));
+        const auto third = scene.addSplat("third", makeTestSplat(2.0f));
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        auto settings = manager.getSettings();
+        settings.split_view_offset = 1;
+        settings.split_position = 0.35f;
+        manager.updateSettings(settings);
+        for (const bool visible : {false, true}) {
+            scene.setNodeVisibility(third, visible);
+            EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::PLYComparison);
+            EXPECT_EQ(manager.getSettings().split_view_offset, 1u);
+            EXPECT_FLOAT_EQ(manager.getSettings().split_position, 0.35f);
+        }
+        scene.removeNode("third");
+        lfs::core::events::state::PLYRemoved{}.emit();
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::PLYComparison);
+        scene.removeNode("second");
+        lfs::core::events::state::PLYRemoved{}.emit();
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+    }
+
+    TEST_F(RenderingManagerEventsTest, VisibilityPreservesOtherViewModes) {
+        SceneManager scene_manager;
+        addDatasetCameraWithImage(scene_manager);
+        services().set(&scene_manager);
+        screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        auto& scene = scene_manager.getScene();
+        const auto model = scene.addSplat("model", makeTestSplat(0.0f));
+        const auto active = manager_views.activeView();
+        for (const bool independent : {false, true}) {
+            if (independent) {
+                const auto second = manager_views.screen().split(
+                    screen::AreaId{active}, screen::SplitAxis::Columns, 0.5f);
+                ASSERT_TRUE(manager_views.viewSettings(second.value).has_value());
+            }
+            const auto view_ids = manager_views.screen().views();
+            for (const auto mode : {SplitViewMode::Disabled, SplitViewMode::GTComparison}) {
+                auto settings = manager.getSettings();
+                settings.split_view_mode = mode;
+                manager.updateSettings(settings);
+                const auto before = manager.getSettings();
+                for (const bool visible : {false, true}) {
+                    scene.setNodeVisibility(model, visible);
+                    const auto after = manager.getSettings();
+                    EXPECT_EQ(manager_views.activeView(), active);
+                    EXPECT_EQ(manager_views.screen().views(), view_ids);
+                    EXPECT_EQ(after.split_view_mode, before.split_view_mode);
+                    EXPECT_EQ(after.equirectangular, before.equirectangular);
+                    EXPECT_EQ(after.show_camera_frustums, before.show_camera_frustums);
+                    EXPECT_EQ(after.split_view_offset, before.split_view_offset);
+                    EXPECT_EQ(after.split_position, before.split_position);
+                }
+            }
+        }
+    }
+
+    TEST_F(RenderingManagerEventsTest, RejectedPlyComparisonPreservesIndependentView) {
+        SceneManager scene_manager;
+        services().set(&scene_manager);
+        scene_manager.getScene().addSplat("model", makeTestSplat(0.0f));
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        const auto second = manager_views.screen().split(
+            screen::AreaId{manager_views.activeView()}, screen::SplitAxis::Columns, 0.5f);
+        const auto active = manager_views.activeView();
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+        EXPECT_EQ(manager_views.activeView(), active);
+        EXPECT_TRUE(manager_views.viewSettings(second.value).has_value());
+    }
+
+    TEST_F(RenderingManagerEventsTest, RejectedPlyComparisonPreservesGroundTruthView) {
+        SceneManager scene_manager;
+        addDatasetCameraWithImage(scene_manager);
+        services().set(&scene_manager);
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::GTComparison);
+        const auto before = manager.getSettings();
+        lfs::core::events::cmd::ToggleSplitView{}.emit();
+        const auto after = manager.getSettings();
+        EXPECT_EQ(after.split_view_mode, SplitViewMode::GTComparison);
+        EXPECT_EQ(after.equirectangular, before.equirectangular);
+        EXPECT_EQ(after.show_camera_frustums, before.show_camera_frustums);
+    }
+
     TEST_F(RenderingManagerEventsTest, ViewerCannotEnterGtComparisonThroughCommand) {
         services().clear();
         SceneManager scene_manager;
@@ -4387,6 +4775,48 @@ namespace lfs::vis {
         lfs::core::events::state::SceneCleared{}.emit();
 
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
+    }
+
+    TEST_F(RenderingManagerEventsTest, SceneClearedDiscardsTemporaryProjectionBackend) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
+        auto event = lfs::core::events::ui::RenderSettingsChanged{};
+        event.equirectangular = true;
+        event.emit();
+        lfs::core::events::state::SceneCleared{}.emit();
+
+        auto settings = manager.getSettings();
+        settings.equirectangular = false;
+        settings.raster_backend = Backend::ThreeDgut;
+        settings.gut = true;
+        manager.updateSettings(settings);
+        EXPECT_EQ(manager.getSettings().raster_backend, Backend::ThreeDgut);
+        EXPECT_TRUE(manager.getSettings().gut);
+    }
+
+    TEST_F(RenderingManagerEventsTest, RenderSettingsChangedEquirectangularRestoresBackend) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+        for (const auto backend : {Backend::ThreeDgs, Backend::ThreeDgut}) {
+            lfs::vis::screen::ScreenService manager_views;
+            RenderingManager manager{manager_views};
+            auto settings = manager.getSettings();
+            settings.raster_backend = backend;
+            settings.gut = lfs::rendering::isGutBackend(backend);
+            manager.updateSettings(settings);
+            for (int cycle = 0; cycle < 3; ++cycle) {
+                for (const bool enabled : {true, true, false, false}) {
+                    auto event = lfs::core::events::ui::RenderSettingsChanged{};
+                    event.equirectangular = enabled;
+                    event.emit();
+                    EXPECT_EQ(manager.getSettings().raster_backend, backend);
+                    EXPECT_EQ(manager.getSettings().gut, lfs::rendering::isGutBackend(backend));
+                    auto effective = manager.getSettings();
+                    enforceProjectionBackend(effective);
+                    EXPECT_EQ(effective.raster_backend, enabled ? Backend::ThreeDgut : backend);
+                }
+            }
+        }
     }
 
     TEST_F(RenderingManagerEventsTest,

@@ -32,6 +32,7 @@ def main():
     try:
         node = scene.get_node(name)
         original = node.point_cloud()
+        original_means = original.means
         points = np.full((1_000_000, 3), 0.25, dtype=np.float32)
         colors = np.full((1_000_000, 3), 128, dtype=np.uint8)
         owner = weakref.ref(points)
@@ -44,7 +45,9 @@ def main():
         assert owner() is None
         current = scene.get_node_by_uuid(node.uuid).point_cloud()
         assert current.size == 1_000_000
-        assert original.size == 2
+        assert original.size == 1_000_000
+        assert original_means.shape == (2, 3)
+        assert original_means.cpu().tolist() == [[0., 0., 0.]] * 2
         assert node.centroid == (0.25, 0.25, 0.25)
         assert np.allclose(current.colors.numpy(), 128 / 255)
 

@@ -613,6 +613,11 @@ namespace lfs::training {
             scene->syncTrainingModelTopology(static_cast<size_t>(model.size()));
         }
 
+        size_t reported_gaussian_count(const lfs::core::SplatData& model) {
+            const size_t count = model.size();
+            return count - std::min(count, model.deleted_count());
+        }
+
         [[nodiscard]] std::array<float, 3> lerp_color(const std::array<float, 3>& a,
                                                       const std::array<float, 3>& b,
                                                       const float t) {
@@ -1492,6 +1497,28 @@ namespace lfs::training {
             params_.optimization.invert_masks = false;
         }
 
+        // AlphaConsistent evaluation does not use masks. With eval_all, the
+        // validation cameras are already included in the training set.
+        const bool validate_eval = !opt.eval_all && opt.mask_mode != lfs::core::param::MaskMode::AlphaConsistent;
+        for (const auto* dataset : {train_dataset_.get(), validate_eval ? val_dataset_.get() : nullptr}) {
+            if (!dataset)
+                continue;
+            for (const auto& cam : dataset->get_cameras()) {
+                if (!cam || cam->has_in_memory_mask() || !cam->has_mask())
+                    continue;
+                // Masks can be enabled after loading. Compare actual file sizes,
+                // since camera metadata may describe a larger source image.
+                const auto [img_w, img_h, img_c] = lfs::core::get_image_info(cam->image_path());
+                const auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(cam->mask_path());
+                if (img_w != mask_w || img_h != mask_h) {
+                    return std::unexpected(std::format(
+                        "Mask '{}' is {}x{} but image '{}' is {}x{}",
+                        lfs::core::path_to_utf8(cam->mask_path().filename()), mask_w, mask_h,
+                        cam->image_name(), img_w, img_h));
+                }
+            }
+        }
+
         size_t alpha_count = 0;
         size_t masks_found = 0;
         for (const auto& cam : train_dataset_->get_cameras()) {
@@ -1605,6 +1632,15 @@ namespace lfs::training {
             training_ops_->photometric->evaluate(
                 photo_saved_, corrected, raw_rendered, gt_image, photometric_weight, photo_params,
                 loss, grad_corrected, grad_raw);
+
+            // The loss already reads this normalization; epsilon alone means no contributing pixels.
+            if (has_user_mask && mode == param::MaskMode::Ignore && !empty_ignore_mask_warned_ &&
+                photo_saved_.empty_mask) {
+                empty_ignore_mask_warned_ = true;
+                LOG_WARN("Effective ignore mask excludes every pixel in a training view: no photometric supervision. "
+                         "If all views are masked out, zero loss does not indicate a trained model. "
+                         "Check mask threshold and inversion.");
+            }
 
             if (has_user_mask &&
                 (mode == param::MaskMode::Segment || mode == param::MaskMode::SegmentAndIgnore) &&
@@ -1720,12 +1756,16 @@ namespace lfs::training {
             return std::unexpected(mask_result.error());
         }
 
-        const int n_before = static_cast<int>(splat_data.size());
+        // Strategies may keep pruned rows as reusable slots. Publish the active
+        // count here, once, so progress and UI polling need no GPU reduction.
+        splat_data.refresh_deleted_count();
+        const size_t n_before = reported_gaussian_count(splat_data);
         strategy_->remove_gaussians(*mask_result);
-        const int n_after = static_cast<int>(splat_data.size());
+        splat_data.refresh_deleted_count();
+        const size_t n_after = reported_gaussian_count(splat_data);
 
         LOG_INFO("Sparsity pruning: {} -> {} Gaussians ({}% reduction)",
-                 n_before, n_after, static_cast<int>(100.0f * (n_before - n_after) / n_before));
+                 n_before, n_after, n_before > 0 ? static_cast<int>(100.0f * (n_before - n_after) / n_before) : 0);
 
         sparsity_optimizer_.reset();
         return {};
@@ -1940,13 +1980,13 @@ namespace lfs::training {
                 progress_->update(
                     slot.iter,
                     loss_value,
-                    static_cast<int>(strategy_->get_model().size()),
+                    static_cast<int>(reported_gaussian_count(strategy_->get_model())),
                     get_progress_phase(slot.iter, in_controller_phase));
             }
             lfs::core::events::state::TrainingProgress{
                 .iteration = slot.iter,
                 .loss = loss_value,
-                .num_gaussians = static_cast<int>(strategy_->get_model().size()),
+                .num_gaussians = static_cast<int>(reported_gaussian_count(strategy_->get_model())),
                 .is_refining = strategy_->is_refining(slot.iter)}
                 .emit();
         }
@@ -2548,15 +2588,24 @@ namespace lfs::training {
                         "Scene has no cameras with image files available for training");
                 }
 
+                const bool hold_out = params.optimization.holds_out_eval_images();
+                const bool keep_project_split = params.resume_project && hold_out &&
+                                                std::ranges::any_of(scene_->getAllCameras(), [](const auto& camera) {
+                                                    return camera->split() == lfs::core::CameraSplit::Eval;
+                                                });
                 if (params.overrides.has_dataset_key("test_every") ||
-                    params.overrides.has_optimization_key("enable_eval") ||
-                    params.overrides.has_optimization_key("eval_all")) {
+                    (!keep_project_split &&
+                     (params.overrides.has_optimization_key("enable_eval") ||
+                      params.overrides.has_optimization_key("eval_all")))) {
+                    if (params.resume_project)
+                        LOG_INFO("Updating project camera split from explicit evaluation options");
                     std::sort(
                         source_cameras.begin(), source_cameras.end(),
-                        [](const auto& lhs, const auto& rhs) {
+                        [&](const auto& lhs, const auto& rhs) {
+                            if (hold_out && !params.resume_checkpoint && lhs->image_name() != rhs->image_name())
+                                return lhs->image_name() < rhs->image_name();
                             return lhs->uid() < rhs->uid();
                         });
-                    const bool hold_out = params.optimization.holds_out_eval_images();
                     const int test_every = std::max(1, params.dataset.test_every);
                     for (size_t i = 0; i < source_cameras.size(); ++i) {
                         const bool is_val =
@@ -2799,76 +2848,38 @@ namespace lfs::training {
             if (!params_.optimization.eval_mask.empty()) {
                 const glm::vec3 origin = scene_ ? scene_->getTrainingDataOrigin() : glm::vec3{0.0f};
                 const bool invert = params_.optimization.eval_mask_invert;
-                if (const auto file = lfs::core::param::eval_mask_splat_file(params_.optimization.eval_mask)) {
-                    auto splat = lfs::training::load_evaluation_splat(lfs::core::utf8_to_path(std::string(*file)),
-                                                                      {origin.x, origin.y, origin.z});
-                    if (!splat)
-                        return std::unexpected(std::format("Failed to load evaluation splat '{}': {}", *file,
-                                                           splat.error().detail()));
-                    LOG_INFO("Evaluation mask: {} splats from {} at opacity {}{}", splat->size(), *file,
-                             params_.optimization.eval_mask_opacity, invert ? " (inverted)" : "");
-                    evaluator_->set_eval_splat(lfs::training::EvaluationSplat{
-                        .model = std::move(*splat),
-                        .opacity = params_.optimization.eval_mask_opacity,
-                        .invert = invert});
-                } else if (const auto file = lfs::core::param::eval_mask_points_file(params_.optimization.eval_mask)) {
-                    auto means = lfs::training::load_evaluation_points(lfs::core::utf8_to_path(std::string(*file)),
-                                                                       {origin.x, origin.y, origin.z});
-                    if (!means)
-                        return std::unexpected(std::format("Failed to load evaluation points '{}': {}", *file,
-                                                           means.error().detail()));
-                    LOG_INFO("Evaluation mask: {} points from {}{}", means->shape()[0], *file, invert ? " (inverted)" : "");
-                    evaluator_->set_eval_points(lfs::training::EvaluationPoints{.means = std::move(*means), .invert = invert});
-                } else if (const auto splat = lfs::core::param::parse_eval_mask_points(params_.optimization.eval_mask)) {
-                    auto cloud = scene_ ? scene_->getInitialPointCloud() : nullptr;
-                    if (!cloud || !cloud->means.is_valid() || cloud->means.numel() == 0) {
-                        auto reloaded = lfs::training::loadInitialPointCloud(params_, origin);
-                        if (!reloaded)
-                            return std::unexpected(std::format("Evaluation mask 'points' needs the points training "
-                                                               "started from: {}",
-                                                               reloaded.error().user_message()));
-                        cloud = std::move(*reloaded);
+                auto installed = evaluator_->install_eval_mask_source({origin.x, origin.y, origin.z});
+                if (!installed)
+                    return std::unexpected(std::string(installed.error().user_message()));
+                if (!*installed) {
+                    if (const auto splat = lfs::core::param::parse_eval_mask_points(params_.optimization.eval_mask)) {
+                        auto cloud = scene_ ? scene_->getInitialPointCloud() : nullptr;
+                        if (!cloud || !cloud->means.is_valid() || cloud->means.numel() == 0) {
+                            auto reloaded = lfs::training::loadInitialPointCloud(params_, origin);
+                            if (!reloaded)
+                                return std::unexpected(std::format("Evaluation mask 'points' needs the points training "
+                                                                   "started from: {}",
+                                                                   reloaded.error().user_message()));
+                            cloud = std::move(*reloaded);
+                        }
+                        evaluator_->set_eval_points(lfs::training::EvaluationPoints{
+                            .means = cloud->means.to(lfs::core::Device::GPU).to(lfs::core::DataType::Float32).contiguous(),
+                            .radius = (*splat)[0],
+                            .close = (*splat)[1],
+                            .invert = invert});
+                        LOG_INFO("Evaluation mask: {} initial points, radius {} px, closed by {} px{}",
+                                 cloud->means.shape()[0], (*splat)[0], (*splat)[1], invert ? " (inverted)" : "");
+                    } else if (lfs::core::param::is_eval_mask_cropbox(params_.optimization.eval_mask)) {
+                        const auto cropbox = scene_ ? lfs::training::resolve_training_cropbox_geom(*scene_) : std::nullopt;
+                        if (!cropbox)
+                            return std::unexpected("Evaluation mask 'cropbox' needs an enabled crop box on the training model");
+                        const bool cropbox_invert = invert != cropbox->inverse;
+                        evaluator_->set_eval_mesh(lfs::training::make_evaluation_box(
+                            lfs::training::training_cropbox_model_corners(*cropbox), cropbox_invert));
+                        LOG_INFO("Evaluation mask: crop box{}", cropbox_invert ? " (inverted)" : "");
+                    } else {
+                        LOG_INFO("Evaluation mask: {}{}", params_.optimization.eval_mask, invert ? " (inverted)" : "");
                     }
-                    evaluator_->set_eval_points(lfs::training::EvaluationPoints{
-                        .means = cloud->means.to(lfs::core::Device::GPU).to(lfs::core::DataType::Float32).contiguous(),
-                        .radius = (*splat)[0],
-                        .close = (*splat)[1],
-                        .invert = invert});
-                    LOG_INFO("Evaluation mask: {} initial points, radius {} px, closed by {} px{}",
-                             cloud->means.shape()[0], (*splat)[0], (*splat)[1], invert ? " (inverted)" : "");
-                } else if (lfs::core::param::is_eval_mask_folder(params_.optimization.eval_mask)) {
-                    const auto folder = lfs::core::utf8_to_path(
-                        std::string(lfs::core::param::eval_mask_folder(params_.optimization.eval_mask)));
-                    std::error_code folder_error;
-                    if (!std::filesystem::is_directory(folder, folder_error))
-                        return std::unexpected(std::format("Evaluation mask folder '{}' does not exist",
-                                                           lfs::core::path_to_utf8(folder)));
-                    evaluator_->set_eval_mask_folder(
-                        std::make_shared<const lfs::io::MaskDirCache>(lfs::io::MaskDirCache::for_folder(folder)));
-                    LOG_INFO("Evaluation mask: masks from {}{}", lfs::core::path_to_utf8(folder), invert ? " (inverted)" : "");
-                } else if (lfs::core::param::is_eval_mask_cropbox(params_.optimization.eval_mask)) {
-                    const auto cropbox = scene_ ? lfs::training::resolve_training_cropbox_geom(*scene_) : std::nullopt;
-                    if (!cropbox)
-                        return std::unexpected("Evaluation mask 'cropbox' needs an enabled crop box on the training model");
-                    const bool cropbox_invert = invert != cropbox->inverse;
-                    evaluator_->set_eval_mesh(lfs::training::make_evaluation_box(
-                        lfs::training::training_cropbox_model_corners(*cropbox), cropbox_invert));
-                    LOG_INFO("Evaluation mask: crop box{}", cropbox_invert ? " (inverted)" : "");
-                } else if (lfs::core::param::is_eval_mask_depth(params_.optimization.eval_mask)) {
-                    LOG_INFO("Evaluation mask: {}{}", params_.optimization.eval_mask, invert ? " (inverted)" : "");
-                } else if (const auto box = lfs::core::param::parse_eval_mask_box(params_.optimization.eval_mask)) {
-                    evaluator_->set_eval_mesh(lfs::training::make_evaluation_box(
-                        lfs::training::axis_aligned_box_corners(*box, {origin.x, origin.y, origin.z}), invert));
-                    LOG_INFO("Evaluation mask: {}{}", params_.optimization.eval_mask, invert ? " (inverted)" : "");
-                } else {
-                    auto mesh = lfs::training::load_evaluation_mesh(
-                        lfs::core::utf8_to_path(params_.optimization.eval_mask), {origin.x, origin.y, origin.z}, invert);
-                    if (!mesh)
-                        return std::unexpected(std::format("Failed to load evaluation mesh '{}': {}",
-                                                           params_.optimization.eval_mask, mesh.error().detail()));
-                    LOG_INFO("Evaluation mask: {} triangles from {}{}", mesh->indices.shape()[0],
-                             params_.optimization.eval_mask, invert ? " (inverted)" : "");
-                    evaluator_->set_eval_mesh(std::move(*mesh));
                 }
             }
             if (params_.optimization.ppisp_active() && ppisp_ && ppisp_->isFinalized()) {
@@ -2954,7 +2965,7 @@ namespace lfs::training {
                 lfs::training::HookContext ctx{
                     .iteration = current_iteration_.load(),
                     .loss = current_loss_.load(),
-                    .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                    .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                     .is_refining = strategy_ ? strategy_->is_refining(current_iteration_.load()) : false,
                     .trainer = this};
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
@@ -3908,6 +3919,8 @@ namespace lfs::training {
         const std::uint64_t request_id,
         const std::string_view message) {
         if (request_id == 0) {
+            // Synchronous and scheduled saves have no tracked request ID.
+            last_project_writer_error_ = message;
             return;
         }
         if (last_completed_project_request_id_ >=
@@ -3937,14 +3950,19 @@ namespace lfs::training {
     void Trainer::abandon_pending_project_requests(
         const std::string_view reason) {
         std::lock_guard lock(project_snapshot_mutex_);
-        if (requested_project_request_id_) {
+        // Zero also denotes an unused slot; only terminalize tracked requests.
+        if (requested_project_request_id_ && *requested_project_request_id_ != 0) {
             fail_project_request_locked(
                 *requested_project_request_id_, reason);
         }
-        fail_project_request_locked(
-            prepared_project_request_id_, reason);
-        fail_project_request_locked(
-            prestaged_project_request_id_, reason);
+        if (prepared_project_request_id_ != 0) {
+            fail_project_request_locked(
+                prepared_project_request_id_, reason);
+        }
+        if (prestaged_project_request_id_ != 0) {
+            fail_project_request_locked(
+                prestaged_project_request_id_, reason);
+        }
         requested_project_path_.reset();
         requested_project_preview_png_.clear();
         requested_project_request_id_.reset();
@@ -5385,7 +5403,7 @@ namespace lfs::training {
                 progress_->pause();
             }
             if (on_paused_) {
-                on_paused_(iter);
+                on_paused_(get_progress_iteration());
             }
             // B3: the previous step is complete; release the production loss arena.
             if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
@@ -5395,7 +5413,7 @@ namespace lfs::training {
             training_session_ops().resize_arena("B3 pause", true);
             if (training_ops_ != nullptr && training_ops_->gsplat != nullptr)
                 training_ops_->gsplat->release_caches(gsplat_saved_);
-            LOG_INFO("Training paused at iteration {}", iter);
+            LOG_INFO("Training paused at iteration {}", get_progress_iteration());
             lfs::diagnostics::VramProfiler::instance().mark("training_pause");
             LOG_DEBUG("Click 'Resume Training' to continue.");
         } else if (!pause_requested_.load() && is_paused_.load()) {
@@ -5404,7 +5422,7 @@ namespace lfs::training {
                 progress_->resume(
                     iter,
                     current_loss_.load(),
-                    static_cast<int>(strategy_->get_model().size()),
+                    static_cast<int>(reported_gaussian_count(strategy_->get_model())),
                     get_progress_phase(iter));
             }
             LOG_INFO("Training resumed at iteration {}", iter);
@@ -5841,16 +5859,26 @@ namespace lfs::training {
                         return lfs::make_error(lfs::ErrorInit{
                             .code = lfs::ErrorCode::InvalidArgument,
                             .domain = lfs::ErrorDomain::Training,
-                            .user_message = "Distorted images detected. Use --gut or --undistort to train on cameras with distortion.",
+                            .user_message = params_.optimization.headless
+                                                ? "Distorted images detected. Use --gut or --undistort to train on cameras with distortion."
+                                                : "Distorted images detected. Enable GUT or Undistort in the Training panel to train on cameras with distortion.",
                             .detection = LFS_SOURCE_SITE_CURRENT(),
+                            .fields = params_.optimization.headless
+                                          ? lfs::SmallFields{}
+                                          : lfs::SmallFields{}.add("message_key", std::string_view("messages.err_distorted_images")),
                         });
                     }
                     if (cam->camera_model_type() != core::CameraModelType::PINHOLE) {
                         return lfs::make_error(lfs::ErrorInit{
                             .code = lfs::ErrorCode::InvalidArgument,
                             .domain = lfs::ErrorDomain::Training,
-                            .user_message = "Use --gut or --undistort to train on cameras with non-pinhole model.",
+                            .user_message = params_.optimization.headless
+                                                ? "Use --gut or --undistort to train on cameras with non-pinhole model."
+                                                : "Enable GUT or Undistort in the Training panel to train on cameras with a non-pinhole model.",
                             .detection = LFS_SOURCE_SITE_CURRENT(),
+                            .fields = params_.optimization.headless
+                                          ? lfs::SmallFields{}
+                                          : lfs::SmallFields{}.add("message_key", std::string_view("messages.err_non_pinhole")),
                         });
                     }
                 }
@@ -5876,15 +5904,18 @@ namespace lfs::training {
                 // Python hook: iteration start (safe, pre-forward)
                 if (!replay_fast_capacity) {
                     lfs::training::HookContext ctx{
-                        .iteration = iter,
+                        .iteration = get_progress_iteration(),
                         .loss = current_loss_.load(),
-                        .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                        .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                         .is_refining = strategy_ ? strategy_->is_refining(iter) : false,
                         .trainer = this};
                     lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::IterationStart);
                     lfs::training::CommandCenter::instance().update_snapshot(
                         ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
                         lfs::training::TrainingPhase::IterationStart);
+                    // The hook still addresses the upcoming step, even when
+                    // the published progress describes the paused model.
+                    ctx.iteration = iter;
                     lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::IterationStart, ctx);
                     auto view = lfs::training::CommandCenter::instance().snapshot();
                     lfs::training::CommandCenter::instance().drain_enqueued(view);
@@ -7934,7 +7965,7 @@ namespace lfs::training {
                             lfs::training::HookContext ctx{
                                 .iteration = iter,
                                 .loss = current_loss_.load(),
-                                .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                                .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                                 .is_refining = strategy_ ? strategy_->is_refining(iter) : false,
                                 .trainer = this};
                             lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::OptimizerStep);
@@ -8192,7 +8223,7 @@ namespace lfs::training {
                     lfs::training::HookContext ctx{
                         .iteration = iter,
                         .loss = current_loss_.load(),
-                        .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                        .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                         .is_refining = strategy_ ? strategy_->is_refining(iter) : false,
                         .trainer = this};
                     lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
@@ -8426,6 +8457,7 @@ namespace lfs::training {
         }
 
         training_complete_ = false;
+        empty_ignore_mask_warned_ = false;
         pending_snapshot_finish_reason_ =
             lfs::io::project::TrainingFinishReason::None;
         ready_to_start_ = false; // Reset the flag
@@ -8466,7 +8498,7 @@ namespace lfs::training {
                 lfs::training::HookContext ctx{
                     .iteration = 0,
                     .loss = current_loss_.load(),
-                    .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                    .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                     .is_refining = strategy_ ? strategy_->is_refining(0) : false,
                     .trainer = this};
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
@@ -8492,7 +8524,7 @@ namespace lfs::training {
                 progress_->update(
                     iter,
                     current_loss_.load(),
-                    static_cast<int>(strategy_->get_model().size()),
+                    static_cast<int>(reported_gaussian_count(strategy_->get_model())),
                     get_progress_phase(iter));
             }
 
@@ -9150,7 +9182,7 @@ namespace lfs::training {
             lfs::training::HookContext ctx{
                 .iteration = terminal_iteration,
                 .loss = current_loss_.load(),
-                .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                 .is_refining = strategy_ ? strategy_->is_refining(terminal_iteration) : false,
                 .trainer = this};
             command_center.set_phase(lfs::training::TrainingPhase::SafeControl);

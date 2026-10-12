@@ -117,48 +117,25 @@ namespace lfs::python {
 
     class PyPointCloud {
     public:
-        explicit PyPointCloud(core::PointCloud* pc, bool owns = false,
-                              core::SceneNode* node = nullptr, core::Scene* scene = nullptr);
-
-        PyTensor means() const { return PyTensor(pc_->means, false); }
-        PyTensor colors() const { return PyTensor(pc_->colors, false); }
-
-        std::optional<PyTensor> normals() const {
-            if (!pc_->normals.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->normals, false);
-        }
-        std::optional<PyTensor> sh0() const {
-            if (!pc_->sh0.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->sh0, false);
-        }
-        std::optional<PyTensor> shN() const {
-            if (!pc_->shN.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->shN, false);
-        }
-        std::optional<PyTensor> opacity() const {
-            if (!pc_->opacity.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->opacity, false);
-        }
-        std::optional<PyTensor> scaling() const {
-            if (!pc_->scaling.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->scaling, false);
-        }
-        std::optional<PyTensor> rotation() const {
-            if (!pc_->rotation.is_valid())
-                return std::nullopt;
-            return PyTensor(pc_->rotation, false);
+        explicit PyPointCloud(std::shared_ptr<core::PointCloud> owner)
+            : owner_(std::move(owner)) {
+            assert(owner_ != nullptr);
         }
 
-        int64_t size() const { return pc_->size(); }
-        bool is_gaussian() const { return pc_->is_gaussian(); }
-        std::vector<std::string> attribute_names() const { return pc_->attribute_names; }
+        PyPointCloud(core::SceneNode* node, core::Scene* scene);
 
-        void normalize_colors() { pc_->normalize_colors(); }
+        PyTensor means() const;
+        PyTensor colors() const;
+        std::optional<PyTensor> normals() const;
+        std::optional<PyTensor> sh0() const;
+        std::optional<PyTensor> shN() const;
+        std::optional<PyTensor> opacity() const;
+        std::optional<PyTensor> scaling() const;
+        std::optional<PyTensor> rotation() const;
+        int64_t size() const;
+        bool is_gaussian() const;
+        std::vector<std::string> attribute_names() const;
+        void normalize_colors();
 
         // Filter points by boolean mask - keeps points where mask is True
         int64_t filter(const PyTensor& keep_mask);
@@ -174,15 +151,14 @@ namespace lfs::python {
         void set_colors(const PyTensor& colors);
         void set_means(const PyTensor& points);
 
-        core::PointCloud* data() { return pc_; }
-        const core::PointCloud* data() const { return pc_; }
+        std::shared_ptr<core::PointCloud> retain_data() const;
 
     private:
-        core::PointCloud* pc_;
-        std::shared_ptr<core::PointCloud> payload_keep_alive_;
+        core::SceneNode& resolve_node() const;
+
+        std::shared_ptr<core::PointCloud> owner_;
+        core::Uuid node_uuid_;
         vis::PointCloudUpdateTarget update_target_;
-        bool owns_;
-        core::SceneNode* node_ = nullptr;
         core::Scene* scene_ = nullptr;
     };
 
@@ -386,6 +362,7 @@ namespace lfs::python {
         }
 
         core::Uuid node_uuid_;
+        vis::PointCloudUpdateTarget update_target_;
         core::Scene* scene_;
         std::string property_group_;
     };

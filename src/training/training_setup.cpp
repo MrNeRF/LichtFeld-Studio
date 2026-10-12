@@ -447,8 +447,9 @@ namespace lfs::training {
                 point_cloud_to_use.colors = point_cloud_to_use.colors.cpu();
             }
         } else {
-            LOG_INFO("No point cloud provided, using random initialization");
-            point_cloud_to_use = *createRandomPointCloud();
+            LOG_WARN("No sparse points available; using random initialization with {} points and extent {}",
+                     params.optimization.init_num_pts, params.optimization.init_extent);
+            point_cloud_to_use = *createRandomPointCloud(params);
         }
 
         if (!params.optimization.random && max_cap > 0 &&

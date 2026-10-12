@@ -824,12 +824,20 @@
     "button.stop": "Interrompi Training",
     "button.reset": "Resetta Training",
     "button.add": "Aggiungi",
-    "button.remove": "Rimuovi"
+    "button.remove": "Rimuovi",
+    "conflict.strategy_gut_start_message": "GUT non può essere usato con la strategia igs+. Scegli un'azione per avviare il Training.",
+    "conflict.strategy_gut_strategy_message": "Questa strategia è incompatibile con GUT. Disabilitare GUT per cambiare?"
   },
   "rendering": "Rendering",
   "scene": {
     "streamed_badge": "in streaming",
     "streamed_badge_tooltip": "Modello in streaming: il dettaglio segue la vista. Sola lettura.",
+    "summary_model_one": "{} modello",
+    "summary_model_few": "{} modelli",
+    "summary_model_other": "{} modelli",
+    "summary_node_one": "{} nodo",
+    "summary_node_few": "{} nodi",
+    "summary_node_other": "{} nodi",
     "add_ply": "Aggiungi PLY...",
     "add_group": "Aggiungi Gruppo",
     "add_group_ellipsis": "Aggiungi Gruppo...",
@@ -1083,6 +1091,16 @@
     "input": "Input",
     "key_bindings": "Associazioni tasti",
     "camera_navigation": "Navigazione della camera",
+    "new_project_navigation_up": "Verticale per i nuovi progetti",
+    "new_project_navigation_help": "Si applica solo ai nuovi progetti. I progetti esistenti mantengono le impostazioni salvate.",
+    "new_project_align_grid": "Allinea griglia nei nuovi progetti",
+    "navigation_project_hint": "Salva il progetto per conservare la scelta. Le coordinate dei dati non cambiano.",
+    "navigation_up_axis": "Asse verticale",
+    "navigation_up_legacy_y": "Y-up (predefinito)",
+    "navigation_up_data_z": "+Z-up (coordinate dati)",
+    "navigation_up_help": "Salvato nel progetto. Cambia solo la navigazione; coordinate e scala dei dati restano invariate.",
+    "align_navigation_grid": "Allinea griglia alla verticale",
+    "align_grid_short": "Allinea",
     "navigation_mode": "Modalità di navigazione",
     "zoom_speed": "Velocità di zoom",
     "zoom_speed_tooltip": "Velocità predefinita per lo zoom con la rotellina del mouse.",
@@ -1534,9 +1552,9 @@
         "custom": "Ultimo HDRI personalizzato caricato"
       },
       "grid_plane": {
-        "yz": "Mostra griglia sul piano YZ (vista destra)",
-        "xz": "Mostra griglia sul piano XZ (vista dall'alto)",
-        "xy": "Mostra griglia sul piano XY (vista frontale)"
+        "yz": "Mostra griglia sul piano YZ",
+        "xz": "Mostra griglia sul piano XZ",
+        "xy": "Mostra griglia sul piano XY"
       },
       "sh_degree": {
         "0": "Solo diffuso — nessuna illuminazione vista-dipendente",
@@ -1631,6 +1649,7 @@
     "create": "Crea"
   },
   "notification": {
+    "split_view_requires_two_models": "La vista divisa richiede due modelli splat visibili.",
     "merge_nodes_kept": "L’unione ha mantenuto {} nodi non splat.",
     "duplicate_training_data_skipped": "I dati di addestramento (dataset, fotocamere e immagini) sono stati esclusi dalla duplicazione.",
     "dropped_not_recognized": "L'elemento trascinato",
@@ -1846,7 +1865,8 @@
     "action.view_frame_all": "Inquadra tutto",
     "action.toggle_quad_view": "Attiva/disattiva quattro viste",
     "action.toggle_maximize_area": "Massimizza area",
-    "action.toggle_node_editor": "Mostra editor nodi"
+    "action.toggle_node_editor": "Mostra editor nodi",
+    "action.toggle_independent_split_view": "Attiva vista divisa indipendente"
   },
   "debug_info": {
     "clear_history": "Cancella Cronologia",
@@ -2164,8 +2184,19 @@
     "height": "Altezza",
     "output_res": "Output: {}x{}",
     "naming": "Nomi di output",
+    "naming_preset": "Preimpostazione:",
+    "naming_video_frame": "Nome video + frame + numero",
+    "naming_video_number": "Nome video + numero",
+    "naming_frame_number": "Frame + numero",
+    "naming_number": "Solo numero",
+    "naming_custom": "Personalizzato",
+    "naming_help": "{video}: nome video senza estensione. %d: numero frame sorgente. %05d: almeno 5 cifre. %%: carattere % letterale. L’estensione viene aggiunta automaticamente. {{ / }}: graffe letterali.",
+    "naming_number_help": "I frame sorgente partono da 1 e possono avere salti. Senza un segnaposto numerico, il numero viene aggiunto in fondo.",
+    "naming_example_pending": "Esempio illustrativo (nessun video caricato): {}{}",
+    "naming_error_placeholder": "Segnaposto sconosciuto o incompleto. Usa {video} per il nome del video.",
+    "naming_error_filename": "Nome file non valido per questa piattaforma. Usa un nome senza cartelle.",
     "pattern": "Modello:",
-    "pattern_tooltip": "Usa %d per il numero di fotogramma (es. frame_%04d per riempimento con zeri)",
+    "pattern_tooltip": "{video}: nome video senza estensione. %d: numero frame sorgente. %05d: almeno 5 cifre. %%: carattere % letterale. L’estensione viene aggiunta automaticamente. {{ / }}: graffe letterali.",
     "example": "Esempio: {}{}",
     "start": "Avvia estrazione",
     "stop": "Interrompi",
@@ -2286,6 +2317,8 @@
     "strategy_default": "Predefinito",
     "split": "Divisione:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Fotogrammi dell’interfaccia presentati al secondo.",
+    "view_fps_tooltip": "Fotogrammi della vista 3D renderizzati al secondo. Una vista statica può indicare 0 mentre l’interfaccia rimane reattiva.",
     "ui": "UI",
     "view": "Vista",
     "renderer_backend": "Renderer",
@@ -2639,9 +2672,9 @@
     "solid_color": "Colore uniforme",
     "equirectangular_hdri": "HDRI equirettangolare",
     "off": "Disattivato",
-    "grid_plane_yz": "YZ (destra)",
-    "grid_plane_xz": "XZ (alto)",
-    "grid_plane_xy": "XY (fronte)",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "Manuale",
@@ -2729,9 +2762,12 @@
     "perf_hud_tooltip": "Mostra o nascondi l'HUD delle prestazioni",
     "input_mouse_tooltip": "Navigazione con mouse: trascina con il tasto centrale per orbitare, con il destro per spostare, rotella per lo zoom. Fai clic per cambiare",
     "input_trackpad_tooltip": "Navigazione con trackpad: scorri con due dita per orbitare, Maiusc+scorri per spostare, pizzica o Ctrl+scorri per lo zoom. Fai clic per cambiare",
-    "input_automatic_tooltip": "Navigazione automatica: gesti del trackpad sul trackpad, zoom con la rotella sul mouse. Fai clic per cambiare"
+    "input_automatic_tooltip": "Navigazione automatica: gesti del trackpad sul trackpad, zoom con la rotella sul mouse. Fai clic per cambiare",
+    "independent_split_view": "Vista divisa indipendente",
+    "exit_independent_split_view": "Esci dalla vista divisa indipendente"
   },
   "runtime": {
+    "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",
     "training_save_no_memory": "Salvataggio del progetto non riuscito: {}",
     "autosave_deferred_no_memory": "Il salvataggio automatico è in pausa: memoria libera insufficiente ({}). L'addestramento continua; il salvataggio automatico riprenderà quando si libererà memoria.",
     "grouped_changes": "Modifiche raggruppate",
@@ -2914,12 +2950,13 @@
     "right_click_to_add": "Clic destro per aggiungere...",
     "training_complete": "Training Completato",
     "training_stopped": "Training Interrotto",
+    "training_stopped_body": "L’utente ha interrotto l’addestramento all’iterazione {}.\n\nSalva il progetto per conservare questo stato. Riapri il progetto salvato per riprendere l’addestramento.",
     "training_error": "Errore di Training",
     "param_manager_unavailable": "Gestore parametri non disponibile",
     "failed_to_load_params": "Caricamento parametri fallito:",
-    "err_distorted_images": "Rilevate immagini distorte. Attivare --gut o --undistort per addestrare con fotocamere con distorsione.",
+    "err_distorted_images": "Rilevate immagini distorte. Attivare GUT o Rimuovi distorsione nel pannello Training per addestrare con fotocamere con distorsione.",
     "err_ortho_not_supported": "Il Training con modello fotocamera ortografico non è ancora supportato.",
-    "err_non_pinhole": "Attivare --gut o --undistort per addestrare con fotocamere non-pinhole."
+    "err_non_pinhole": "Attivare GUT o Rimuovi distorsione nel pannello Training per addestrare con fotocamere con modello non stenopeico."
   },
   "projects.gallery.sidebar.title": "Galleria",
   "projects.gallery.sidebar.refresh": "Controlla galleria",
@@ -3071,9 +3108,16 @@
   "projects.gallery.toast.published": "«{title}» pubblicata",
   "projects.gallery.toast.pulled": "«{title}» aggiunta a «{folder}»",
   "projects.gallery.toast.removed": "«{title}» rimossa dalla tua galleria",
-  "projects.gallery.quota.used": "{used} GB usati su {quota} GB",
+  "projects.gallery.quota.used": "{used} usati su {quota}",
   "projects.gallery.quota.warning": "Il file potrebbe superare lo spazio disponibile nella galleria. La dimensione del caricamento dipende dal formato scelto.",
   "projects.gallery.quota.confirm": "Il file salvato supera lo spazio rimasto nella galleria. Il formato scelto può ridurne la dimensione. Continuare a preparare ‹{title}›?",
+  "projects.gallery.error.gallery_storage": "Spazio Gallery insufficiente. Elimina scene da Gallery, annulla i caricamenti in attesa o non riusciti (occupano ancora spazio) oppure riduci la scena.",
+  "projects.gallery.error.gallery_storage_size": "Spazio Gallery insufficiente: questo caricamento richiede {needed}, sono liberi {free} su {quota}. Elimina scene da Gallery, annulla i caricamenti in attesa o non riusciti (occupano ancora spazio) oppure riduci la scena.",
+  "projects.gallery.info.reserves": "Questo caricamento riserva ancora {size} di spazio Gallery finché non viene annullato.",
+  "projects.gallery.info.reserves_unknown": "Questo caricamento occupa ancora spazio Gallery finché non viene annullato.",
+  "projects.gallery.info.storage_retry": "La copia preparata è stata conservata. Libera spazio in Gallery, poi premi Riprova per riutilizzarla.",
+  "projects.gallery.review.upload_size": "Dimensione del caricamento: {size}",
+  "projects.gallery.review.ssog_levels": "SSOG include tutti i livelli LOD e può essere molto più grande di un singolo file SOG.",
   "projects.gallery.action.update_all": "Aggiorna tutto ({count})",
   "projects.gallery.confirm.update_all": "Aggiornare queste scene pubbliche? Il contenuto pubblicato verrà sostituito:\n{title}",
   "projects.gallery.empty.published": "Nessuna scena pubblicata: scegli un progetto e premi Pubblica",
@@ -5188,5 +5232,6 @@
   "node_editor.capture_view": "Acquisisci vista",
   "node_editor.curve_hint": "Trascina i punti; clic per aggiungere, doppio clic o Canc per rimuovere.",
   "node_editor.ramp_hint": "Trascina le tappe; clic per aggiungere, doppio clic o Canc per rimuovere. Seleziona una tappa per modificare RGBA.",
-  "node_editor.keyframe_hint": "Inserisci fotogramma chiave · Ctrl+clic oppure I al passaggio del puntatore"
+  "node_editor.keyframe_hint": "Inserisci fotogramma chiave · Ctrl+clic oppure I al passaggio del puntatore",
+  "toolbar.asset_manager": "Progetti"
 }

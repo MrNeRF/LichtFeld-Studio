@@ -9,17 +9,21 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/vmm_device_buffer.hpp"
 #include "core/environment.hpp"
+#include "core/image_io.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
 #include "fast_raster_test_helpers.hpp"
 #include "gsplat_raster_test_helpers.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "training/components/ppisp.hpp"
+#include "training/depth_anchor/depth_anchor_cache.hpp"
 #include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/depth_loss.hpp"
 #include "training/kernels/normal_consistency_loss.hpp"
@@ -31,6 +35,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -2265,6 +2270,128 @@ TEST_F(GsplatRasterizerTest, GeometryAnchorsAndDepthNormalsFollowCameraRays) {
         if (equi)
             EXPECT_EQ(stats.ptr<float>()[kernels::normal_consistency_slots::kCount], float(w * (h - 2)));
     }
+}
+
+class DepthAnchorSetupTest : public ::testing::Test {
+protected:
+    std::filesystem::path directory;
+    Tensor means;
+
+    auto geometry() const { return lfs::training::training_ops(lfs::core::default_gpu_backend()).geometry; }
+
+    void SetUp() override {
+        if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend()) || !geometry())
+            GTEST_SKIP() << "Training geometry backend unavailable";
+        directory = std::filesystem::temp_directory_path() /
+                    ("lfs_anchor_setup_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(directory);
+        means = Tensor::from_vector({0.f, 0.f, 2.f}, {1, 3}, Device::GPU);
+    }
+
+    void TearDown() override { std::filesystem::remove_all(directory); }
+
+    std::shared_ptr<Camera> camera(const std::filesystem::path& depth_path) {
+        auto rotation = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CPU);
+        auto cam = std::make_shared<Camera>(
+            rotation, Tensor::zeros({3}, Device::CPU), 50, 50, 32, 24, Tensor(), Tensor(),
+            lfs::core::CameraModelType::PINHOLE, "view.png", std::filesystem::path{}, std::filesystem::path{},
+            64, 48, 0, 0, depth_path);
+        cam->set_image_dimensions(64, 48);
+        return cam;
+    }
+};
+
+TEST_F(DepthAnchorSetupTest, DamagedDepthPropagatesDecodeError) {
+    const auto path = directory / "view.tiff";
+    std::ofstream(path) << "not an image\n";
+    auto cam = camera(path);
+    // The caller must receive the decoder error after the fit workers have joined.
+    EXPECT_THROW((void)computeRawDepthAnchors(*geometry(), means, {cam}, -1, 0), std::exception);
+}
+
+TEST_F(DepthAnchorSetupTest, ProgressFailurePropagatesWithIdleWorkers) {
+    const auto path = directory / "view.png";
+    std::vector<std::uint16_t> prior(64 * 48, 0);
+    ASSERT_TRUE(save_png(path, prior.data(), 64, 48, 1, 16, 1));
+    auto cam = camera(path);
+    EXPECT_THROW((void)computeRawDepthAnchors(*geometry(), means, {cam}, -1, 0,
+                                              [](std::size_t, std::size_t) { throw std::runtime_error("progress failed"); }),
+                 std::runtime_error);
+}
+
+TEST_F(DepthAnchorSetupTest, MissingAndZeroDepthRemainEmpty) {
+    EXPECT_TRUE(computeRawDepthAnchors(*geometry(), means, {nullptr, camera({})}, -1, 0).empty());
+    const auto path = directory / "view.png";
+    std::vector<std::uint16_t> prior(64 * 48, 0);
+    ASSERT_TRUE(save_png(path, prior.data(), 64, 48, 1, 16, 1));
+    std::size_t calls = 0;
+    EXPECT_TRUE(computeRawDepthAnchors(*geometry(), means, {nullptr, camera({}), camera(path)}, -1, 0,
+                                       [&](std::size_t completed, std::size_t total) {
+                                           EXPECT_EQ(completed, 1);
+                                           EXPECT_EQ(total, 1);
+                                           ++calls;
+                                       })
+                    .empty());
+    EXPECT_EQ(calls, 1);
+    EXPECT_TRUE(computeRawDepthAnchors(*geometry(), Tensor(), {camera(path)}, -1, 0).empty());
+}
+
+// The anchor must come from the surface the camera sees. The sparse cloud also holds points behind that surface on
+// the same rays; fitting the prior against them made every target too far. Here the hidden points are the
+// majority, so an anchor fitted against the whole cloud lands on them (shift near 3) instead of the surface.
+TEST(DepthAnchorFit, UsesOnlyThePointsTheCameraObserved) {
+    const auto* geometry = lfs::training::training_ops(lfs::core::default_gpu_backend()).geometry;
+    if (!geometry)
+        GTEST_SKIP() << "No geometry training ops on the default GPU backend";
+    constexpr int width = 64;
+    constexpr int height = 48;
+    constexpr float focal = 50.0f;
+    const auto surface_depth = [](const float u) { return 2.0f + 2.0f * u / width; };
+
+    const auto directory = std::filesystem::temp_directory_path() / "lfs_depth_anchor_visible";
+    std::filesystem::create_directories(directory);
+    const auto depth_path = directory / "view.png";
+    std::vector<std::uint16_t> prior(static_cast<size_t>(width) * height);
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+            prior[static_cast<size_t>(y) * width + x] =
+                static_cast<std::uint16_t>(std::lround(surface_depth(x + 0.5f) / 10.0f * 65535.0f));
+    ASSERT_TRUE(lfs::core::save_png(depth_path, prior.data(), width, height, 1, 16, 1));
+
+    auto R = Tensor::from_vector(std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0, 1}, {3, 3}, Device::CPU);
+    auto T = Tensor::zeros({3}, Device::CPU);
+    auto camera = std::make_shared<lfs::core::Camera>(
+        R, T, focal, focal, width / 2.0f, height / 2.0f, Tensor(), Tensor(), lfs::core::CameraModelType::PINHOLE,
+        "view.png", std::filesystem::path{}, std::filesystem::path{}, width, height, 0, 0, depth_path);
+    camera->set_image_dimensions(width, height);
+
+    std::vector<lfs::core::Camera::SfmObservation> observations;
+    std::vector<float> cloud;
+    for (int y = 1; y < height; y += 2) {
+        for (int x = 1; x < width; x += 2) {
+            const float u = x + 0.5f;
+            const float v = y + 0.5f;
+            const float rx = (u - width / 2.0f) / focal;
+            const float ry = (v - height / 2.0f) / focal;
+            const float z = surface_depth(u);
+            observations.push_back({u, v, rx * z, ry * z, z});
+            cloud.insert(cloud.end(), {rx * z, ry * z, z});
+            for (int k = 0; k < 3; ++k) {
+                const float hidden = z + 3.0f + 0.01f * k;
+                cloud.insert(cloud.end(), {rx * hidden, ry * hidden, hidden});
+            }
+        }
+    }
+    camera->set_sfm_observations(std::move(observations));
+    const auto means = Tensor::from_vector(cloud, {cloud.size() / 3, size_t{3}}, Device::GPU);
+
+    const auto anchors = lfs::training::computeRawDepthAnchors(*geometry, means, {camera}, -1, 0);
+    std::filesystem::remove_all(directory);
+    ASSERT_TRUE(anchors.contains("view.png"));
+    const auto& depth = anchors.at("view.png").depth;
+    ASSERT_TRUE(depth.valid);
+    EXPECT_NEAR(depth.scale, 10.0f, 0.1f);
+    EXPECT_NEAR(depth.shift, 0.0f, 0.05f);
 }
 
 TEST_F(GsplatRasterizerTest, ExpectedRadialDepthBehindCameraHasCorrectGradients) {

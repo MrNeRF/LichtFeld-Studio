@@ -12,6 +12,7 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
+#include <fstream>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -33,6 +34,20 @@ namespace {
 
     using lfs::core::Tensor;
     namespace envmath = lfs::core::envmath;
+
+    TEST(EnvironmentImageLoadTest, ProbeReadsHeaderWithoutPixelPayload) {
+        const auto path = std::filesystem::temp_directory_path() / "lfs_environment_header.hdr";
+        {
+            std::ofstream file(path, std::ios::binary);
+            file << "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 4096 +X 8192\n";
+        }
+        // Pixel completeness remains the renderer's job; admission only reads metadata.
+        EXPECT_EQ(lfs::core::probe_image_info(path), (std::tuple{8192, 4096, 3}));
+        EXPECT_NO_THROW(lfs::rendering::probeEnvironmentImage(path));
+        std::filesystem::remove(path);
+        EXPECT_THROW(lfs::rendering::probeEnvironmentImage(path), std::runtime_error);
+        EXPECT_THROW(lfs::rendering::probeEnvironmentImage({}), std::runtime_error);
+    }
 
     TEST(EnvironmentImageLoadTest, ExtractsRgbFromRgbaSource) {
         const auto path = std::filesystem::temp_directory_path() / "lfs_rgba_environment_test.png";

@@ -824,12 +824,20 @@
     "button.stop": "Zatrzymaj Trening",
     "button.reset": "Resetuj Trening",
     "button.add": "Dodaj",
-    "button.remove": "Usuń"
+    "button.remove": "Usuń",
+    "conflict.strategy_gut_start_message": "GUT nie może być używany ze strategią igs+. Wybierz akcję, aby rozpocząć trening.",
+    "conflict.strategy_gut_strategy_message": "Ta strategia jest niekompatybilna z GUT. Wyłączyć GUT, aby przełączyć?"
   },
   "rendering": "Renderowanie",
   "scene": {
     "streamed_badge": "strumieniowany",
     "streamed_badge_tooltip": "Model strumieniowany: szczegółowość zależy od widoku. Tylko do odczytu.",
+    "summary_model_one": "{} model",
+    "summary_model_few": "{} modele",
+    "summary_model_other": "{} modeli",
+    "summary_node_one": "{} węzeł",
+    "summary_node_few": "{} węzły",
+    "summary_node_other": "{} węzłów",
     "add_ply": "Dodaj PLY...",
     "add_group": "Dodaj Grupę",
     "add_group_ellipsis": "Dodaj Grupę...",
@@ -1083,6 +1091,16 @@
     "input": "Sterowanie",
     "key_bindings": "Przypisania klawiszy",
     "camera_navigation": "Nawigacja kamery",
+    "new_project_navigation_up": "Pion dla nowych projektów",
+    "new_project_navigation_help": "Dotyczy tylko nowych projektów. Istniejące projekty zachowują zapisane ustawienia.",
+    "new_project_align_grid": "Wyrównaj siatkę w nowych projektach",
+    "navigation_project_hint": "Zapisz projekt, aby zachować wybór. Współrzędne danych pozostają bez zmian.",
+    "navigation_up_axis": "Oś pionowa",
+    "navigation_up_legacy_y": "Y-up (domyślnie)",
+    "navigation_up_data_z": "+Z w górę (współrzędne danych)",
+    "navigation_up_help": "Zapisywane w projekcie. Zmienia tylko nawigację; współrzędne i skala danych pozostają bez zmian.",
+    "align_navigation_grid": "Wyrównaj siatkę do pionu",
+    "align_grid_short": "Wyrównaj",
     "navigation_mode": "Tryb nawigacji",
     "zoom_speed": "Prędkość powiększania",
     "zoom_speed_tooltip": "Domyślna prędkość przybliżania kamery kółkiem myszy.",
@@ -1534,9 +1552,9 @@
         "custom": "Ostatnio załadowane niestandardowe HDRI"
       },
       "grid_plane": {
-        "yz": "Pokaż siatkę na płaszczyźnie YZ (widok z prawej)",
-        "xz": "Pokaż siatkę na płaszczyźnie XZ (widok z góry)",
-        "xy": "Pokaż siatkę na płaszczyźnie XY (widok z przodu)"
+        "yz": "Pokaż siatkę na płaszczyźnie YZ",
+        "xz": "Pokaż siatkę na płaszczyźnie XZ",
+        "xy": "Pokaż siatkę na płaszczyźnie XY"
       },
       "sh_degree": {
         "0": "Tylko rozpraszanie — brak oświetlenia zależnego od widoku",
@@ -1631,6 +1649,7 @@
     "create": "Utwórz"
   },
   "notification": {
+    "split_view_requires_two_models": "Widok podzielony wymaga dwóch widocznych modeli splatów.",
     "merge_nodes_kept": "Scalanie zachowało {} węzłów innych niż splaty.",
     "duplicate_training_data_skipped": "Dane treningowe (zbiory danych, kamery i obrazy) zostały pominięte podczas duplikowania.",
     "dropped_not_recognized": "Upuszczony",
@@ -1846,7 +1865,8 @@
     "action.view_frame_all": "Wykadruj wszystko",
     "action.toggle_quad_view": "Przełącz cztery widoki",
     "action.toggle_maximize_area": "Maksymalizuj obszar",
-    "action.toggle_node_editor": "Przełącz edytor węzłów"
+    "action.toggle_node_editor": "Przełącz edytor węzłów",
+    "action.toggle_independent_split_view": "Przełącz niezależny widok podzielony"
   },
   "debug_info": {
     "clear_history": "Wyczyść Historię",
@@ -2164,8 +2184,19 @@
     "height": "Wysokość",
     "output_res": "Wyjście: {}x{}",
     "naming": "Nazewnictwo wyjścia",
+    "naming_preset": "Ustawienie wstępne:",
+    "naming_video_frame": "Nazwa wideo + frame + numer",
+    "naming_video_number": "Nazwa wideo + numer",
+    "naming_frame_number": "Frame + numer",
+    "naming_number": "Tylko numer",
+    "naming_custom": "Własny",
+    "naming_help": "{video}: nazwa wideo bez rozszerzenia. %d: numer klatki źródłowej. %05d: co najmniej 5 cyfr. %%: dosłowny znak %. Rozszerzenie jest dodawane automatycznie. {{ / }}: dosłowne nawiasy klamrowe.",
+    "naming_number_help": "Numery klatek źródłowych zaczynają się od 1 i mogą mieć luki. Bez znacznika liczbowego numer jest dopisywany na końcu.",
+    "naming_example_pending": "Przykład poglądowy (nie wczytano wideo): {}{}",
+    "naming_error_placeholder": "Nieznany lub niepełny znacznik. Użyj {video} jako nazwy wideo.",
+    "naming_error_filename": "Nazwa pliku nieprawidłowa dla tej platformy. Użyj nazwy bez folderów.",
     "pattern": "Wzorzec:",
-    "pattern_tooltip": "Użyj %d dla numeru klatki (np. frame_%04d dla wypełnienia zerami)",
+    "pattern_tooltip": "{video}: nazwa wideo bez rozszerzenia. %d: numer klatki źródłowej. %05d: co najmniej 5 cyfr. %%: dosłowny znak %. Rozszerzenie jest dodawane automatycznie. {{ / }}: dosłowne nawiasy klamrowe.",
     "example": "Przykład: {}{}",
     "start": "Rozpocznij ekstrakcję",
     "stop": "Zatrzymaj",
@@ -2286,6 +2317,8 @@
     "strategy_default": "Domyślny",
     "split": "Podział:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Liczba wyświetlanych klatek interfejsu na sekundę.",
+    "view_fps_tooltip": "Liczba renderowanych klatek widoku 3D na sekundę. Statyczny widok może pokazywać 0, gdy interfejs nadal reaguje.",
     "ui": "UI",
     "view": "Widok",
     "renderer_backend": "Renderer",
@@ -2639,9 +2672,9 @@
     "solid_color": "Jednolity kolor",
     "equirectangular_hdri": "HDRI ekwiprostokątne",
     "off": "Wył.",
-    "grid_plane_yz": "YZ (prawa)",
-    "grid_plane_xz": "XZ (góra)",
-    "grid_plane_xy": "XY (przód)",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "Ręcznie",
@@ -2729,9 +2762,12 @@
     "perf_hud_tooltip": "Pokaż lub ukryj HUD wydajności",
     "input_mouse_tooltip": "Nawigacja myszą: przeciąganie środkowym przyciskiem obraca, prawym przesuwa, kółko przybliża. Kliknij, aby zmienić",
     "input_trackpad_tooltip": "Nawigacja gładzikiem: przesunięcie dwoma palcami obraca, Shift+przesunięcie przesuwa, uszczypnięcie lub Ctrl+przesunięcie przybliża. Kliknij, aby zmienić",
-    "input_automatic_tooltip": "Nawigacja automatyczna: gesty gładzika na gładziku, przybliżanie kółkiem na myszy. Kliknij, aby zmienić"
+    "input_automatic_tooltip": "Nawigacja automatyczna: gesty gładzika na gładziku, przybliżanie kółkiem na myszy. Kliknij, aby zmienić",
+    "independent_split_view": "Niezależny widok podzielony",
+    "exit_independent_split_view": "Zamknij niezależny widok podzielony"
   },
   "runtime": {
+    "environment_map_failed": "Nie można odczytać mapy środowiska „{}”. Zachowano poprzednie środowisko.",
     "training_save_no_memory": "Nie udało się zapisać projektu: {}",
     "autosave_deferred_no_memory": "Autozapis został wstrzymany: za mało wolnej pamięci ({}). Trening jest kontynuowany; autozapis wznowi się, gdy pamięć zostanie zwolniona.",
     "grouped_changes": "Zgrupowane zmiany",
@@ -2914,12 +2950,13 @@
     "right_click_to_add": "Kliknij prawym przyciskiem, aby dodać...",
     "training_complete": "Trening Ukończony",
     "training_stopped": "Trening Zatrzymany",
+    "training_stopped_body": "Użytkownik zatrzymał trening na iteracji {}.\n\nZapisz projekt, aby zachować ten stan. Otwórz ponownie zapisany projekt, aby wznowić trening.",
     "training_error": "Błąd Treningu",
     "param_manager_unavailable": "Menedżer parametrów niedostępny",
     "failed_to_load_params": "Nie udało się załadować parametrów:",
-    "err_distorted_images": "Wykryto zniekształcone obrazy. Włącz --gut lub --undistort, aby trenować z kamerami ze zniekształceniami.",
+    "err_distorted_images": "Wykryto zniekształcone obrazy. Włącz GUT lub korekcję zniekształceń w panelu treningu, aby trenować z kamerami ze zniekształceniami.",
     "err_ortho_not_supported": "Trening z ortograficznym modelem kamery nie jest jeszcze obsługiwany.",
-    "err_non_pinhole": "Włącz --gut lub --undistort, aby trenować z kamerami innymi niż pinhole."
+    "err_non_pinhole": "Włącz GUT lub korekcję zniekształceń w panelu treningu, aby trenować z kamerami o modelu innym niż otworkowy."
   },
   "projects.gallery.sidebar.title": "Galeria",
   "projects.gallery.sidebar.refresh": "Sprawdź galerię",
@@ -3071,9 +3108,16 @@
   "projects.gallery.toast.published": "Opublikowano „{title}”",
   "projects.gallery.toast.pulled": "Dodano „{title}” do „{folder}”",
   "projects.gallery.toast.removed": "Usunięto „{title}” z Twojej galerii",
-  "projects.gallery.quota.used": "Wykorzystano {used} GB z {quota} GB",
+  "projects.gallery.quota.used": "Wykorzystano {used} z {quota}",
   "projects.gallery.quota.warning": "Ten plik może przekraczać wolne miejsce w galerii. Rozmiar przesyłania zależy od wybranego formatu.",
   "projects.gallery.quota.confirm": "Zapisany plik jest większy niż wolne miejsce w galerii. Wybrany format może zmniejszyć jego rozmiar. Kontynuować przygotowanie ‹{title}›?",
+  "projects.gallery.error.gallery_storage": "Za mało miejsca w Gallery. Usuń sceny z Gallery, anuluj oczekujące lub nieudane przesyłania (nadal zajmują miejsce) albo zmniejsz scenę.",
+  "projects.gallery.error.gallery_storage_size": "Za mało miejsca w Gallery: to przesyłanie wymaga {needed}, wolne jest {free} z {quota}. Usuń sceny z Gallery, anuluj oczekujące lub nieudane przesyłania (nadal zajmują miejsce) albo zmniejsz scenę.",
+  "projects.gallery.info.reserves": "To przesyłanie nadal rezerwuje {size} miejsca w Gallery do czasu anulowania.",
+  "projects.gallery.info.reserves_unknown": "To przesyłanie nadal zajmuje miejsce w Gallery do czasu anulowania.",
+  "projects.gallery.info.storage_retry": "Przygotowana kopia została zachowana. Zwolnij miejsce w Gallery i wybierz Ponów, aby użyć jej ponownie.",
+  "projects.gallery.review.upload_size": "Rozmiar przesyłania: {size}",
+  "projects.gallery.review.ssog_levels": "SSOG zawiera wszystkie poziomy LOD i może być znacznie większy niż pojedynczy plik SOG.",
   "projects.gallery.action.update_all": "Aktualizuj wszystko ({count})",
   "projects.gallery.confirm.update_all": "Zaktualizować te publiczne sceny? Ich opublikowana zawartość zostanie zastąpiona:\n{title}",
   "projects.gallery.empty.published": "Brak opublikowanych scen: wybierz projekt i naciśnij Opublikuj",
@@ -5188,5 +5232,6 @@
   "node_editor.capture_view": "Zapisz widok",
   "node_editor.curve_hint": "Przeciągaj punkty; kliknij, aby dodać, kliknij dwukrotnie lub naciśnij Delete, aby usunąć.",
   "node_editor.ramp_hint": "Przeciągaj znaczniki; kliknij, aby dodać, kliknij dwukrotnie lub Delete, aby usunąć. Zaznacz znacznik, aby zmienić RGBA.",
-  "node_editor.keyframe_hint": "Wstaw klatkę kluczową · Ctrl+kliknięcie lub I po najechaniu kursorem"
+  "node_editor.keyframe_hint": "Wstaw klatkę kluczową · Ctrl+kliknięcie lub I po najechaniu kursorem",
+  "toolbar.asset_manager": "Projekty"
 }

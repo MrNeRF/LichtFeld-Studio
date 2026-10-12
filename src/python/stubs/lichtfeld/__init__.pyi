@@ -245,6 +245,9 @@ def finish_reason() -> str | None:
 def trainer_error() -> str | None:
     """Get trainer error message"""
 
+def trainer_error_key() -> str | None:
+    """Get the optional localization key for the trainer error message"""
+
 def prepare_training_from_scene() -> None:
     """Initialize trainer from existing scene cameras and point cloud"""
 
@@ -394,7 +397,7 @@ def switch_to_edit_mode() -> None:
 def apple_reframe_available() -> bool:
     """Whether Apple photo reconstruction is ready on this Mac"""
 
-def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False, discard_changes: bool = False, replace: bool = False) -> None:
+def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False, discard_changes: bool = False, replace: bool = False, images_folder: str = '') -> None:
     """Load a file (PLY, checkpoint) or dataset into the scene."""
 
 def load_files(paths: Sequence[str], stop_training: bool = False, discard_changes: bool = False, replace: bool = False, _user_batch: bool = False) -> None:
@@ -631,6 +634,25 @@ def get_camera_navigation_mode() -> str:
 
 def set_camera_navigation_mode(mode: str) -> None:
     """Set the active camera navigation mode"""
+
+def get_new_project_navigation_up_axis() -> str:
+    """Get the navigation vertical used only for new projects"""
+
+def get_new_project_align_grid() -> bool:
+    """
+    Get whether new projects start with a grid perpendicular to their navigation vertical
+    """
+
+def set_new_project_navigation_defaults(axis: str, align_grid: bool) -> None:
+    """Set new-project defaults without modifying the current project"""
+
+def get_navigation_up_axis() -> str:
+    """Get the project navigation vertical: legacy_y or data_z"""
+
+def set_navigation_up_axis(axis: str, align_grid: bool = False) -> None:
+    """
+    Set the project navigation vertical without transforming scene data or camera poses; optionally align both panel grids
+    """
 
 def get_camera_view_snap_enabled() -> bool:
     """Check whether camera axis-view snapping is enabled"""

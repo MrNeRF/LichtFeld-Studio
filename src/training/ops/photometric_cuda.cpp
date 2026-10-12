@@ -116,6 +116,7 @@ namespace lfs::training {
             auto& state = state_of(saved);
             kernels::validate_loss_weight(params.ssim_weight);
             state.raw_gradient.reset();
+            saved.empty_mask = false;
             grad_raw = {};
 
             switch (params.path) {
@@ -182,6 +183,7 @@ namespace lfs::training {
                 auto& workspace = state.arena.masked_fused();
                 auto [loss_tensor, ctx] = kernels::masked_fused_l1_ssim_forward(
                     corrected, target, mask, params.ssim_weight, workspace, params.denominator);
+                saved.empty_mask = ctx.mask_sum_value <= kernels::SSIM_EPSILON;
                 grad_corrected = kernels::masked_fused_l1_ssim_backward(ctx, workspace);
                 loss = loss_tensor;
                 if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
@@ -194,6 +196,7 @@ namespace lfs::training {
                 auto& workspace = state.arena.masked_decoupled();
                 auto [loss_tensor, ctx] = kernels::masked_decoupled_fused_l1_ssim_forward(
                     corrected, raw, target, mask, params.ssim_weight, workspace, params.denominator);
+                saved.empty_mask = ctx.mask_sum_value <= kernels::SSIM_EPSILON;
                 auto grads = kernels::masked_decoupled_fused_l1_ssim_backward(ctx, workspace);
                 loss = loss_tensor;
                 grad_corrected = grads.grad_corrected;
@@ -266,6 +269,7 @@ namespace lfs::training {
                 kernels::accumulate_decoupled_raw_gradient(*state.raw_gradient, grad_image);
             }
             state.raw_gradient.reset();
+            saved.empty_mask = false;
         }
 
         lfs::gpu_ops::PhotoWorkspaceBytes photo_workspace_bytes(const lfs::gpu_ops::PhotoSaved& saved) {

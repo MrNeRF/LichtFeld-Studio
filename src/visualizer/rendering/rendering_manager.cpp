@@ -4,13 +4,17 @@
 
 #include "rendering_manager.hpp"
 #include "core/camera_metrics.hpp"
+#include "core/error_bus.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/raster_arena.hpp"
 #include "core/tensor_backend.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "preferences.hpp"
+#include "rendering/environment_image.hpp"
 #include "rendering/export_post_process.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
@@ -860,6 +864,47 @@ namespace lfs::vis {
             return std::chrono::duration<double>(kVksplatIdleScratchReleaseDelay).count();
         const auto due = vksplat_idle_since_ + kVksplatIdleScratchReleaseDelay;
         return std::max(0.0, std::chrono::duration<double>(due - std::chrono::steady_clock::now()).count());
+    }
+
+    lfs::Result<void> RenderingManager::updateSettingsFromUser(
+        const RenderSettings& new_settings, const SceneUpscalerPresetUpdate preset_update) {
+        if (auto result = validateSettingsFromUser(new_settings); !result)
+            return result;
+        updateSettings(new_settings, DirtyFlag::ALL, preset_update);
+        return {};
+    }
+
+    lfs::Result<void> RenderingManager::validateSettingsFromUser(const RenderSettings& new_settings) const {
+        bool validate_environment = false;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            validate_environment = settings_.environment_map_path != new_settings.environment_map_path ||
+                                   (settings_.environment_mode != new_settings.environment_mode &&
+                                    new_settings.environment_mode == EnvironmentBackgroundMode::Equirectangular);
+        }
+        if (validate_environment) {
+            const auto path = core::utf8_to_path(new_settings.environment_map_path);
+            try {
+                rendering::probeEnvironmentImage(path);
+            } catch (const std::exception& failure) {
+                auto error = lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::App,
+                    .user_message = LOCF("runtime.environment_map_failed", core::path_to_utf8(path.filename())),
+                    .detail = failure.what(),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+                LOG_WARN("{}", failure.what());
+                lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                    .error = error,
+                    .surface = lfs::ErrorSurface::Toast,
+                    .actions = {},
+                    .operation_id = lfs::OperationId::generate(),
+                });
+                return lfs::Result<void>::failure(std::move(error));
+            }
+        }
+        return {};
     }
 
     void RenderingManager::updateSettings(const RenderSettings& new_settings) {

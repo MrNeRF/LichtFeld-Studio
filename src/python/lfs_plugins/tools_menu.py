@@ -3,7 +3,7 @@
 """Tools menu implementation."""
 
 import lichtfeld as lf
-from .layouts.menus import register_menu, menu_action, menu_separator
+from .layouts.menus import register_menu, menu_action, menu_operator, menu_separator
 
 __lfs_menu_classes__ = ["ToolsMenu"]
 
@@ -44,6 +44,15 @@ class ToolsMenu:
             menu_action(
                 tr("menu.tools.gallery"),
                 _open_gallery_scope,
+            ),
+            menu_separator(),
+            menu_operator(
+                "lfs_plugins.file_menu.Mesh2SplatOperator",
+                label=tr("menu.file.mesh_to_splat"),
+            ),
+            menu_operator(
+                "lfs_plugins.file_menu.ExtractVideoFramesOperator",
+                label=tr("menu.file.extract_video_frames"),
             ),
             menu_separator(),
             menu_action(

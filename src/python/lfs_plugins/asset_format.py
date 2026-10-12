@@ -9,7 +9,7 @@ def format_size(value):
         size = max(0, int(value))
     except (TypeError, ValueError, OverflowError):
         size = 0
-    for divisor, unit in ((1024**3, "gb"), (1024**2, "mb"), (1024, "kb"), (1, "b")):
+    for divisor, unit in ((1000**3, "gb"), (1000**2, "mb"), (1000, "kb"), (1, "b")):
         if size >= divisor or divisor == 1:
             amount = size / divisor
             # Round before selecting precision, so 9.99 KB becomes 10 KB.

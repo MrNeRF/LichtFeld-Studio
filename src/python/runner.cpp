@@ -1182,6 +1182,7 @@ _add_dll_dirs()
         }
 
         void run_python_init_once() {
+            std::optional<GilAcquire> external_gil;
             if (!Py_IsInitialized()) {
                 PyImport_AppendInittab("_lfs_output", init_capture_module);
 
@@ -1217,6 +1218,9 @@ _add_dll_dirs()
             } else {
                 LOG_WARN("Python already initialized by external code (e.g., .pyd loading)");
                 g_we_initialized_python = false;
+                // Python entry points may release the GIL before reaching the runner.
+                // Restore the caller's ownership on every exit, including failures.
+                external_gil.emplace();
             }
 
             register_output_module_post_init();
@@ -1255,7 +1259,9 @@ _add_dll_dirs()
                 bridge_ready = ensure_python_bridge_ready_locked();
             }
 
-            set_main_thread_state(PyEval_SaveThread());
+            if (g_we_initialized_python) {
+                set_main_thread_state(PyEval_SaveThread());
+            }
             set_gil_state_ready(true);
             LOG_DEBUG("GIL released, external_init={}", !g_we_initialized_python);
 
@@ -2125,34 +2131,46 @@ def _lfs_format_code(code, comment_preamble):
     static bool g_frame_callback_deprecation_logged = false;
 
     void set_frame_callback(std::function<void(float)> callback, const std::optional<double> duration_s) {
-        std::lock_guard lock(g_frame_mutex);
-        g_frame_callback = std::move(callback);
-        g_frame_callback_warn_on_expiry = !duration_s.has_value();
-        const auto duration = std::chrono::duration<double>(duration_s.value_or(10.0));
-        g_frame_callback_deadline = std::chrono::steady_clock::now() +
-                                    std::chrono::duration_cast<std::chrono::steady_clock::duration>(duration);
+        std::function<void(float)> old_callback;
+        {
+            std::lock_guard lock(g_frame_mutex);
+            old_callback.swap(g_frame_callback);
+            g_frame_callback = std::move(callback);
+            g_frame_callback_warn_on_expiry = !duration_s.has_value();
+            const auto duration = std::chrono::duration<double>(duration_s.value_or(10.0));
+            g_frame_callback_deadline = std::chrono::steady_clock::now() +
+                                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(duration);
+        }
     }
 
     void clear_frame_callback() {
-        std::lock_guard lock(g_frame_mutex);
-        g_frame_callback = nullptr;
-        g_frame_callback_deadline = {};
-        g_frame_callback_warn_on_expiry = false;
+        std::function<void(float)> old_callback;
+        {
+            std::lock_guard lock(g_frame_mutex);
+            old_callback.swap(g_frame_callback);
+            g_frame_callback_deadline = {};
+            g_frame_callback_warn_on_expiry = false;
+        }
     }
 
     bool has_frame_callback() {
-        std::lock_guard lock(g_frame_mutex);
-        if (g_frame_callback && g_frame_callback_deadline != std::chrono::steady_clock::time_point{} &&
-            std::chrono::steady_clock::now() >= g_frame_callback_deadline) {
-            g_frame_callback = nullptr;
-            g_frame_callback_deadline = {};
-            if (g_frame_callback_warn_on_expiry && !g_frame_callback_deprecation_logged) {
-                g_frame_callback_deprecation_logged = true;
-                LOG_WARN("Python frame callback expired after 10 seconds; pass duration_s to set_frame_callback");
+        std::function<void(float)> expired_callback;
+        bool has_callback = false;
+        {
+            std::lock_guard lock(g_frame_mutex);
+            if (g_frame_callback && g_frame_callback_deadline != std::chrono::steady_clock::time_point{} &&
+                std::chrono::steady_clock::now() >= g_frame_callback_deadline) {
+                expired_callback.swap(g_frame_callback);
+                g_frame_callback_deadline = {};
+                if (g_frame_callback_warn_on_expiry && !g_frame_callback_deprecation_logged) {
+                    g_frame_callback_deprecation_logged = true;
+                    LOG_WARN("Python frame callback expired after 10 seconds; pass duration_s to set_frame_callback");
+                }
+                g_frame_callback_warn_on_expiry = false;
             }
-            g_frame_callback_warn_on_expiry = false;
+            has_callback = g_frame_callback != nullptr;
         }
-        return g_frame_callback != nullptr;
+        return has_callback;
     }
 
     void tick_frame_callback(float dt) {

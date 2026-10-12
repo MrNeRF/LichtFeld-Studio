@@ -77,9 +77,7 @@ namespace lfs::python {
             namespace Str = lichtfeld::Strings::Training::Button;
 
             auto message = e.user_stopped
-                               ? std::format("Training stopped by user at iteration {}.\n\n"
-                                             "Resume is available from the training panel. Save the project to keep this state.",
-                                             e.iteration)
+                               ? LOCF("messages.training_stopped_body", e.iteration)
                                : std::format("Training completed successfully.\n\n"
                                              "{} iterations | loss {:.6f} | {}",
                                              e.iteration, e.final_loss, formatDuration(e.elapsed_seconds));

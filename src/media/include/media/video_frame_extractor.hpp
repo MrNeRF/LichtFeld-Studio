@@ -23,11 +23,13 @@ namespace lfs::io {
 
     // Supports %d, %0Nd zero-padding, %% escaping, and legacy %000 zero-padding.
     [[nodiscard]] LFS_MEDIA_API std::string formatFrameFilenameStem(std::string_view pattern, int frame_number);
-    [[nodiscard]] LFS_MEDIA_API bool isGeneratedFrameFilename(const std::filesystem::path&, std::string_view pattern);
-    // Includes previous manifest-listed frames and metadata independently of
-    // the current pattern. PNG/JPEG retains the legacy extension-wide policy.
+    // True when the extractor writes `filename` (name only) for `pattern`: a frame stem with any
+    // positive frame number and padding width, followed by .png, .jpg or .exr.
+    [[nodiscard]] LFS_MEDIA_API bool isGeneratedFrameFilename(std::string_view pattern, std::string_view filename);
+    // Frames and metadata an earlier extraction wrote into `directory`: files the metadata manifest
+    // lists and files `pattern` produces. Other files, such as existing photos, are never included.
     [[nodiscard]] LFS_MEDIA_API std::vector<std::filesystem::path> generatedExtractionFiles(
-        const std::filesystem::path& directory, std::string_view pattern, bool legacy_rgb);
+        const std::filesystem::path& directory, std::string_view pattern);
     [[nodiscard]] LFS_MEDIA_API std::size_t calculateFpsSampleCount(double start_time, double end_time,
                                                                     double target_fps);
     [[nodiscard]] LFS_MEDIA_API double fpsSampleTime(double start_time, double end_time,

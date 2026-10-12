@@ -21,6 +21,7 @@ namespace lfs::vis::gui {
         std::mutex registry_mutex;
         std::unordered_map<std::uintptr_t, std::weak_ptr<const lfs::core::Tensor>> registry;
         std::atomic<std::uint64_t> generation{0};
+        std::atomic<std::uint64_t> next_source{1};
 
         // Texture updates are ordered on the tensor timeline instead of waiting
         // for the whole queue, as Tensor::to(Device::GPU) does.
@@ -57,6 +58,15 @@ namespace lfs::vis::gui {
         std::vector<std::uint8_t> host_rgba;
         int width = 0;
         int height = 0;
+        std::uint64_t source_generation = 0;
+        std::string rml_source;
+        int source_width = 0;
+        int source_height = 0;
+
+        void beginSourceLifetime() {
+            source_generation = next_source.fetch_add(1, std::memory_order_relaxed);
+            rml_source.clear();
+        }
 
         [[nodiscard]] std::uintptr_t id() const noexcept {
             return reinterpret_cast<std::uintptr_t>(this);
@@ -81,6 +91,7 @@ namespace lfs::vis::gui {
             if (new_width <= 0 || new_height <= 0)
                 return false;
             if (width != new_width || height != new_height || host_rgba.empty()) {
+                beginSourceLifetime();
                 width = new_width;
                 height = new_height;
                 host_rgba.assign(static_cast<std::size_t>(width) * height * 4, 0);
@@ -109,6 +120,8 @@ namespace lfs::vis::gui {
         void setImage(lfs::core::Tensor tensor) {
             if (tensor.device() != lfs::core::Device::GPU)
                 tensor = uploadToGpu(tensor);
+            if (!image || width != static_cast<int>(tensor.size(1)) || height != static_cast<int>(tensor.size(0)))
+                beginSourceLifetime();
             width = static_cast<int>(tensor.size(1));
             height = static_cast<int>(tensor.size(0));
             host_rgba.clear();
@@ -198,9 +211,16 @@ namespace lfs::vis::gui {
     std::uintptr_t UiTexture::textureId() const { return impl_ ? impl_->id() : 0; }
     bool UiTexture::valid() const { return impl_ && impl_->image && impl_->image->is_valid(); }
 
-    std::string UiTexture::rmlSrcUrl(int width, int height) const {
-        return valid() ? std::format("lfs-tensor://{}?w={}&h={}", textureId(), width, height)
-                       : std::string{};
+    const std::string& UiTexture::rmlSrcUrl(int width, int height) const {
+        static const std::string empty;
+        if (!valid() || width <= 0 || height <= 0)
+            return empty;
+        if (impl_->rml_source.empty() || impl_->source_width != width || impl_->source_height != height) {
+            impl_->rml_source = std::format("lfs-tensor://{}?w={}&h={}&g={}", textureId(), width, height, impl_->source_generation);
+            impl_->source_width = width;
+            impl_->source_height = height;
+        }
+        return impl_->rml_source;
     }
 
     void UiTexture::reset() {
@@ -209,6 +229,7 @@ namespace lfs::vis::gui {
         impl_->unpublish();
         impl_->image.reset();
         impl_->host_rgba.clear();
+        impl_->rml_source.clear();
     }
 
     std::uint64_t uiTextureGeneration() { return generation.load(std::memory_order_relaxed); }

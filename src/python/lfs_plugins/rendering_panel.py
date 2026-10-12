@@ -420,6 +420,8 @@ class RenderingPanel(Panel):
             return
 
         s = lf.get_render_settings
+        model.bind("navigation_up_idx", self._navigation_up_index, self._set_navigation_up_index)
+        model.bind_event("align_navigation_grid", self._align_navigation_grid)
 
         for prop_id in BOOL_PROPS:
             if prop_id == "equirectangular":
@@ -667,6 +669,21 @@ class RenderingPanel(Panel):
         self._handle = model.get_handle()
         self._selection_groups.attach(self._handle)
 
+    def _navigation_up_index(self):
+        return "1" if lf.get_navigation_up_axis() == "data_z" else "0"
+
+    def _set_navigation_up_index(self, value):
+        axis = {"0": "legacy_y", "1": "data_z"}.get(str(value))
+        if axis is not None:
+            lf.set_navigation_up_axis(axis)
+            if self._handle:
+                self._handle.dirty("navigation_up_idx")
+
+    def _align_navigation_grid(self, *_):
+        lf.set_navigation_up_axis(lf.get_navigation_up_axis(), align_grid=True)
+        if self._handle:
+            self._handle.dirty("grid_plane")
+
     def on_update(self, doc):
         s = lf.get_render_settings()
         if not s:
@@ -722,6 +739,12 @@ class RenderingPanel(Panel):
             return False
         self._last_environment_state = state
         self._dirty_environment_bindings()
+        if self._doc and current_path and current_path not in ENVIRONMENT_PRESET_PATHS:
+            select = self._doc.get_element_by_id("environment-map-preset")
+            if select and select.get_attribute("value", "") == CUSTOM_ENVIRONMENT_PRESET_VALUE:
+                # RmlUi caches the closed label even when the selected option's
+                # text changes. Reapply the value to refresh that copy on update.
+                select.set_attribute("value", CUSTOM_ENVIRONMENT_PRESET_VALUE)
         return True
 
     def _projection_state_snapshot(self):
@@ -774,11 +797,7 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if not settings:
             return
-        enabled = bool(value)
-        current_backend = _normalize_raster_backend(getattr(settings, "raster_backend", ""))
-        if enabled and current_backend != "3dgut":
-            settings.raster_backend = "3dgut"
-        settings.equirectangular = enabled
+        settings.equirectangular = bool(value)
         self._sync_projection_state()
 
     def _environment_map_is_custom(self):

@@ -14,6 +14,7 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "gui/utils/summary_labels.hpp"
 #include "internal/resource_paths.hpp"
 #include "operation/undo_history.hpp"
 #include "preferences.hpp"
@@ -53,16 +54,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::string replaceUnderscores(std::string value) {
             std::replace(value.begin(), value.end(), '_', ' ');
             return value;
-        }
-
-        [[nodiscard]] std::string pluralize(const size_t count,
-                                            std::string_view singular,
-                                            std::string_view plural = {}) {
-            if (count == 1)
-                return std::format("{} {}", count, singular);
-            if (!plural.empty())
-                return std::format("{} {}", lfs::core::format_count(count), plural);
-            return std::format("{} {}s", lfs::core::format_count(count), singular);
         }
 
         [[nodiscard]] std::string formatBytes(const size_t value) {
@@ -1069,8 +1060,8 @@ namespace lfs::vis::gui {
             return false;
 
         bool changed = false;
-        changed |= setCachedText(summary_model_chip_el_, pluralize(tree_el_->modelCount(), "model"));
-        changed |= setCachedText(summary_node_chip_el_, pluralize(tree_el_->nodeCount(), "node"));
+        changed |= setCachedText(summary_model_chip_el_, formatSceneModelCount(tree_el_->modelCount()));
+        changed |= setCachedText(summary_node_chip_el_, formatSceneNodeCount(tree_el_->nodeCount()));
 
         const bool show_filter = !tree_el_->filterText().empty();
         changed |= setCachedText(summary_filter_chip_el_,

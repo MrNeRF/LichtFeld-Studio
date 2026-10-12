@@ -187,6 +187,9 @@ namespace lfs::vis::gui {
         VulkanImageBarrierTracker image_barriers;
         std::uint64_t image_generation_ = 0;
         std::uint64_t src_incarnation_ = 0;
+        std::string rml_source;
+        int source_width = 0;
+        int source_height = 0;
         struct PendingUpload {
             VkFence fence = VK_NULL_HANDLE;
             VkCommandBuffer command_buffer = VK_NULL_HANDLE;
@@ -450,6 +453,7 @@ namespace lfs::vis::gui {
 
             image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             src_incarnation_ = 0;
+            rml_source.clear();
             width = 0;
             height = 0;
         }
@@ -752,6 +756,7 @@ namespace lfs::vis::gui {
                                          new_height);
             ++image_generation_;
             src_incarnation_ = g_external_src_incarnation.fetch_add(1, std::memory_order_relaxed);
+            rml_source.clear();
             image_barriers.registerImage(image, image_generation_, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
 
             if (descriptor_set == VK_NULL_HANDLE) {
@@ -1140,6 +1145,7 @@ namespace lfs::vis::gui {
             image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             image_vram_label.clear();
             src_incarnation_ = 0;
+            rml_source.clear();
 
             width = 0;
             height = 0;
@@ -1304,14 +1310,21 @@ namespace lfs::vis::gui {
         return found == texture_images.end() || found->second.tensor.expired() ? VK_NULL_HANDLE : found->second.descriptor;
     }
 
-    std::string UiTexture::rmlSrcUrl(const int width, const int height) const {
+    const std::string& UiTexture::rmlSrcUrl(const int width, const int height) const {
+        static const std::string empty;
         serviceOrphanedImpls(false);
-        if (!impl_) {
-            return {};
-        }
+        if (!impl_)
+            return empty;
         impl_->tryReleasePendingUpload();
-        return RenderInterface_VK::MakeExternalTextureSource(
-            impl_->image_view, impl_->sampler, width, height, impl_->src_incarnation_);
+        if (impl_->image_view == VK_NULL_HANDLE || impl_->sampler == VK_NULL_HANDLE || width <= 0 || height <= 0)
+            return empty;
+        if (impl_->rml_source.empty() || impl_->source_width != width || impl_->source_height != height) {
+            impl_->rml_source = RenderInterface_VK::MakeExternalTextureSource(
+                impl_->image_view, impl_->sampler, width, height, impl_->src_incarnation_);
+            impl_->source_width = width;
+            impl_->source_height = height;
+        }
+        return impl_->rml_source;
     }
 
     bool UiTexture::valid() const {

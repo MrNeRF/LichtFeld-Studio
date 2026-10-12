@@ -161,7 +161,7 @@ namespace lfs::io {
         }
 
         if (!std::filesystem::exists(check_path, ec)) {
-            auto parent = check_path;
+            auto parent = std::filesystem::absolute(check_path, ec);
             while (!parent.empty() && !std::filesystem::exists(parent, ec)) {
                 parent = parent.parent_path();
             }

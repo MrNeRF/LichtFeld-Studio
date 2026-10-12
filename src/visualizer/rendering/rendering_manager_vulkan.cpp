@@ -2989,7 +2989,7 @@ namespace lfs::vis {
                                                 if (!materialized || !materialized->valid()) {
                                                     LOG_ERROR("Failed to materialize corrected Scene viewport capture for environment composite: {}",
                                                               materialized ? "invalid frame" : materialized.error());
-                                                    return corrected_capture_image;
+                                                    return {};
                                                 }
                                                 auto composited = engine->renderVideoCompositeFrame(
                                                     *materialized,
@@ -2997,7 +2997,15 @@ namespace lfs::vis {
                                                 if (!composited) {
                                                     LOG_ERROR("Failed to composite environment into corrected Scene viewport capture: {}",
                                                               composited.error());
-                                                    return corrected_capture_image;
+                                                    // Match the viewport's black background when the environment cannot load.
+                                                    // Never expose straight-alpha RGB as an opaque capture.
+                                                    auto fallback_request = capture_composite_request;
+                                                    fallback_request.environment.enabled = false;
+                                                    fallback_request.background_color = glm::vec3(0.0f);
+                                                    composited = engine->renderVideoCompositeFrame(*materialized, fallback_request);
+                                                    if (!composited) {
+                                                        return {};
+                                                    }
                                                 }
                                                 return makeViewportCaptureImageHwc(std::move(*composited));
                                             },
@@ -3068,7 +3076,7 @@ namespace lfs::vis {
                                     if (!materialized || !materialized->valid()) {
                                         LOG_ERROR("Failed to materialize Scene viewport capture for environment composite: {}",
                                                   materialized ? "invalid frame" : materialized.error());
-                                        return frame_image;
+                                        return {};
                                     }
                                     auto composited = engine->renderVideoCompositeFrame(
                                         *materialized,
@@ -3076,7 +3084,15 @@ namespace lfs::vis {
                                     if (!composited) {
                                         LOG_ERROR("Failed to composite environment into Scene viewport capture: {}",
                                                   composited.error());
-                                        return frame_image;
+                                        // Match the viewport's black background when the environment cannot load.
+                                        // Never expose straight-alpha RGB as an opaque capture.
+                                        auto fallback_request = capture_composite_request;
+                                        fallback_request.environment.enabled = false;
+                                        fallback_request.background_color = glm::vec3(0.0f);
+                                        composited = engine->renderVideoCompositeFrame(*materialized, fallback_request);
+                                        if (!composited) {
+                                            return {};
+                                        }
                                     }
                                     return makeViewportCaptureImageHwc(std::move(*composited));
                                 }

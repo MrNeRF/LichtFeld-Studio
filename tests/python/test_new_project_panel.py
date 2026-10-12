@@ -430,6 +430,39 @@ def test_deferred_create_still_issues_dependent_load(new_project_module):
     assert state.enabled[-1] == ("lfs.new_project", False)
 
 
+@pytest.mark.parametrize("folder", ["images", "images_2", "images_4", "images_8", "input", "rgb", "."])
+@pytest.mark.parametrize("deferred", [False, True])
+def test_create_imports_detected_image_folder(new_project_module, folder, deferred):
+    module, state = new_project_module
+    state.info.images_path = state.dataset / folder
+    state.create_result = not deferred
+    state.create_pending = deferred
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+    assert panel._string_attr("images_path") == str(state.info.images_path)
+
+    panel._on_do_create()
+
+    assert [call[0] for call in state.calls] == ["create", "load"]
+    assert state.calls[1][2].get("images_folder", "images") == folder
+    assert state.calls[1][2]["path"] == str(state.dataset)
+    assert state.calls[1][2]["is_dataset"] is True
+
+
+def test_detected_image_folder_is_captured_before_consent(new_project_module):
+    module, state = new_project_module
+    state.info.images_path = state.dataset / "images_8"
+    state.dirty = True
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+    panel._on_do_create()
+    state.info.images_path = state.dataset / "images"
+    state.prompts[0][3]("unsaved_work.continue_without_saving")
+    assert state.calls[1][2]["images_folder"] == "images_8"
+
+
 def test_blank_and_splat_overwrite_authorization(new_project_module):
     module, state = new_project_module
     (state.location / "untitled.licht").write_bytes(b"existing")

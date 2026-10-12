@@ -78,6 +78,10 @@ namespace lfs::vis::gui {
                   std::function<RuntimeServiceStatus()> mcp_status_provider);
         // Thread-safe one-line transient status text (ErrorBus StatusOnly
         // surface). Picked up by the next periodic content refresh; auto-clears.
+        void clearTooltip() {
+            pointer_inside_ = false;
+            updateHoverTooltip();
+        }
         void postStatusMessage(std::string text, ErrorNoticeLevel level);
         void shutdown();
         void reloadResources();
@@ -95,6 +99,8 @@ namespace lfs::vis::gui {
 
     private:
         friend class RmlStatusBarTestAccess;
+        LFS_VIS_API void updateFpsReservedWidths();
+        LFS_VIS_API void positionTooltip(float previous_overlay, float overlay_height, bool place_above);
 
         struct ProgressBarGeometry {
             float x = 0.0f;
@@ -108,7 +114,7 @@ namespace lfs::vis::gui {
         LFS_VIS_API void updateBackendContent(std::optional<rendering::ViewerBackend> published_backend);
         LFS_VIS_API bool applyHoverTooltip(int doc_w, int bar_h, int maximum_overlay_height,
                                            bool force_position = false);
-        void updateHoverTooltip();
+        LFS_VIS_API void updateHoverTooltip();
         void updateTooltipScheduling();
         void resetTooltip();
         LFS_VIS_API void updateUpscalerContent(const RenderSettings& settings, SceneUpscalerSelection runtime);
@@ -165,6 +171,7 @@ namespace lfs::vis::gui {
         };
         std::optional<BackendStatusStamp> backend_status_stamp_;
         float tooltip_overlay_height_ = 0.0f;
+        float tooltip_max_overlay_height_ = 0.0f;
         int last_mouse_x_ = 0;
         int last_mouse_bar_y_ = 0;
         int last_mouse_modifiers_ = 0;
@@ -286,6 +293,9 @@ namespace lfs::vis::gui {
             std::string gpu_mem_text;
             std::string gpu_mem_color;
             std::string fps_value;
+            std::string fps_view_value;
+            std::string fps_ui_label;
+            std::string fps_view_label;
             std::string fps_color;
             std::string fps_label;
             std::string renderer_label, renderer_value, renderer_tooltip;

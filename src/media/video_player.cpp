@@ -6,9 +6,11 @@
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "decoded_video_frame_ffmpeg.hpp"
+#include "media/frame_color_range.hpp"
 #include "media/hdr_renderer.hpp"
 #include "media/hdr_tonemap.hpp"
 #include "media/media_probe_ffmpeg.hpp"
+#include "media/sws_packed_rgb.hpp"
 #include "media_backends.hpp"
 
 extern "C" {
@@ -295,46 +297,59 @@ namespace lfs::io {
                                                         : "CPU");
             }
 
-            codec_ctx_ = avcodec_alloc_context3(codec);
-            if (!codec_ctx_) {
-                setError("Failed to allocate video decoder context");
-                close();
-                return false;
-            }
-            const int parameters_result =
-                avcodec_parameters_to_context(codec_ctx_, stream->codecpar);
-            if (parameters_result < 0) {
-                setError("Failed to configure video decoder: " +
-                         ffmpegError(parameters_result));
-                close();
-                return false;
-            }
-#ifdef AV_CODEC_EXPORT_DATA_DOVI_RPU
-            // Export Dolby Vision RPU side data for libplacebo.
-            codec_ctx_->export_side_data |= AV_CODEC_EXPORT_DATA_DOVI_RPU;
-#endif
-
-            if (using_hw_decode_) {
-                codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
-                if (!codec_ctx_->hw_device_ctx) {
-                    setError("Failed to retain CUDA video decoder context");
+            for (;;) {
+                codec_ctx_ = avcodec_alloc_context3(codec);
+                if (!codec_ctx_) {
+                    setError("Failed to allocate video decoder context");
                     close();
                     return false;
                 }
-                codec_ctx_->get_format = getHwFormat;
-            } else {
-                const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
-                codec_ctx_->thread_count = std::min(MAX_SW_DECODE_THREADS,
-                                                    static_cast<int>(hardware_threads));
-                codec_ctx_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
-                LOG_INFO("VideoPlayer: FFmpeg software decoder threads: {}", codec_ctx_->thread_count);
-            }
+                const int parameters_result =
+                    avcodec_parameters_to_context(codec_ctx_, stream->codecpar);
+                if (parameters_result < 0) {
+                    setError("Failed to configure video decoder: " +
+                             ffmpegError(parameters_result));
+                    close();
+                    return false;
+                }
+#ifdef AV_CODEC_EXPORT_DATA_DOVI_RPU
+                // Export Dolby Vision RPU side data for libplacebo.
+                codec_ctx_->export_side_data |= AV_CODEC_EXPORT_DATA_DOVI_RPU;
+#endif
 
-            const int codec_open_result =
-                avcodec_open2(codec_ctx_, codec, nullptr);
-            if (codec_open_result < 0) {
-                setError("Failed to open video decoder: " +
-                         ffmpegError(codec_open_result));
+                if (using_hw_decode_) {
+                    codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
+                    if (!codec_ctx_->hw_device_ctx) {
+                        setError("Failed to retain CUDA video decoder context");
+                        close();
+                        return false;
+                    }
+                    codec_ctx_->get_format = getHwFormat;
+                } else {
+                    const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
+                    codec_ctx_->thread_count = std::min(MAX_SW_DECODE_THREADS,
+                                                        static_cast<int>(hardware_threads));
+                    codec_ctx_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+                    LOG_INFO("VideoPlayer: FFmpeg software decoder threads: {}", codec_ctx_->thread_count);
+                }
+
+                const int codec_open_result =
+                    avcodec_open2(codec_ctx_, codec, nullptr);
+                if (codec_open_result >= 0)
+                    break;
+
+                if (using_hw_decode_) {
+                    LOG_WARN("VideoPlayer: failed to open NVDEC decoder {}: {}; falling back to CPU",
+                             hw_decoder_name, ffmpegError(codec_open_result));
+                    avcodec_free_context(&codec_ctx_);
+                    av_buffer_unref(&hw_device_ctx_);
+                    using_hw_decode_ = false;
+                    codec = avcodec_find_decoder(codec_id);
+                    if (codec)
+                        continue;
+                }
+
+                setError("Failed to open video decoder: " + ffmpegError(codec_open_result));
                 close();
                 return false;
             }
@@ -879,6 +894,8 @@ namespace lfs::io {
                 av_frame_unref(frame_);
                 const int receive_result = avcodec_receive_frame(codec_ctx_, frame_);
                 if (receive_result == 0) {
+                    video::restoreCuvidFullRange(frame_, codec_ctx_,
+                                                 fmt_ctx_->streams[video_stream_idx_]->codecpar);
                     return convertFrameToBuffer() ? DecodeResult::Frame : DecodeResult::Error;
                 }
                 if (receive_result == AVERROR_EOF)
@@ -1019,10 +1036,8 @@ namespace lfs::io {
                     return false;
                 }
                 decoded_frame_.data.resize(frame_size_);
-                uint8_t* dst_data[1] = {decoded_frame_.data.data()};
-                int dst_linesize[1] = {width_ * 3};
-                if (sws_scale(sws_ctx_, src_frame->data, src_frame->linesize, 0, src_height_,
-                              dst_data, dst_linesize) <= 0) {
+                if (scaleToPackedRgb24(sws_ctx_, src_frame->data, src_frame->linesize, src_height_,
+                                       decoded_frame_.data.data(), width_, height_, rgb_scratch_) <= 0) {
                     setError("Video color conversion failed");
                     decoded_frame_.data.clear();
                     return false;
@@ -1039,6 +1054,7 @@ namespace lfs::io {
         AVCodecContext* codec_ctx_ = nullptr;
         AVBufferRef* hw_device_ctx_ = nullptr;
         SwsContext* sws_ctx_ = nullptr;
+        std::vector<uint8_t> rgb_scratch_;
         AVFrame* frame_ = nullptr;
         AVFrame* sw_frame_ = nullptr;
         AVPacket* packet_ = nullptr;

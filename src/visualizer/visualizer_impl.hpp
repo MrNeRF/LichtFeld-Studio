@@ -224,6 +224,7 @@ namespace lfs::vis {
         [[nodiscard]] ViewTarget viewAt(float x, float y) override;
         [[nodiscard]] ViewTarget findView(ViewId id) override;
         [[nodiscard]] ViewId viewId(const Viewport& viewport) const override;
+        void forEachView(const std::function<void(ViewTarget)>& visit) override;
         [[nodiscard]] std::uint64_t viewEpoch() const override { return screen_service_.screenEpoch(); }
         void activateView(ViewId id) override;
         // Runs a named command on one 3D view: frame_all, frame_selected,
@@ -311,6 +312,8 @@ namespace lfs::vis {
         friend class DepthWindowPanelsInteractionTest;
         friend class DepthWindowGtHookTest;
         friend class P5SessionCaptureTestAccess;
+        friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
+        friend class VisualizerImplResetTest_DirectSplatLoadWithoutActiveTrainingStillReplacesScene_Test;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
         friend class VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
@@ -495,6 +498,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_LoadFileStopTrainingDefersSplatLoadUntilTrainerStops_Test;
         friend class VisualizerImplResetTest_LoadFileStopTrainingDefersWholeBatchInOrder_Test;
         friend class VisualizerImplResetTest_LoadDatasetApiDoesNotDeferOrPrompt_Test;
+        friend class VisualizerImplResetTest_DatasetApiReplacementKeepsPreviousProjectFile_Test;
+        friend class VisualizerImplResetTest_DatasetApiLoadIntoBlankProjectKeepsBinding_Test;
         friend class VisualizerImplResetTest_ForceExitDiscardOnAutoCreatedProjectLeavesProjectAndNoAutosave_Test;
         friend class VisualizerImplResetTest_DatasetLoadIntoTitledProjectStartsUntitledSessionAndKeepsProjectFile_Test;
         friend class VisualizerImplResetTest_DatasetLoadPreservesImportParameters_Test;
@@ -512,8 +517,10 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_PostTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
         friend class VisualizerImplResetTest_CaptureOmitsPlySequenceClipAndCollapsedUuid_Test;
         friend class VisualizerImplResetTest_SequencerCaptureDropsRemovedTailAndPreservesExtensions_Test;
+        friend class VisualizerImplResetTest_NavigationVerticalRoundTripPreservesPosesAndGridChoices_Test;
         friend class VisualizerImplResetTest_AssetManagerProjectRestorePreservesLeftDockWidth_Test;
         friend class VisualizerImplResetTest_SaveAsAssignsNewProjectIdentity_Test;
+        friend class VisualizerImplResetTest_SaveAfterSourceRemovalKeepsLiveSceneEdits_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;

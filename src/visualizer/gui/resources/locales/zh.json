@@ -824,12 +824,20 @@
     "button.stop": "停止训练",
     "button.reset": "重置训练",
     "button.add": "添加",
-    "button.remove": "移除"
+    "button.remove": "移除",
+    "conflict.strategy_gut_start_message": "GUT不能与igs+策略同时使用。请选择操作以开始训练。",
+    "conflict.strategy_gut_strategy_message": "此策略与GUT不兼容。禁用GUT以切换？"
   },
   "rendering": "渲染",
   "scene": {
     "streamed_badge": "流式",
     "streamed_badge_tooltip": "流式模型：细节随视图变化。只读。",
+    "summary_model_one": "{} 个模型",
+    "summary_model_few": "{} 个模型",
+    "summary_model_other": "{} 个模型",
+    "summary_node_one": "{} 个节点",
+    "summary_node_few": "{} 个节点",
+    "summary_node_other": "{} 个节点",
     "add_ply": "添加PLY...",
     "add_group": "添加组",
     "add_group_ellipsis": "添加组...",
@@ -1083,6 +1091,16 @@
     "input": "输入",
     "key_bindings": "按键绑定",
     "camera_navigation": "相机导航",
+    "new_project_navigation_up": "新项目的向上轴",
+    "new_project_navigation_help": "仅适用于新项目。现有项目保留已保存的设置。",
+    "new_project_align_grid": "对齐新项目的网格",
+    "navigation_project_hint": "保存项目以保留此选择。数据坐标保持不变。",
+    "navigation_up_axis": "向上轴",
+    "navigation_up_legacy_y": "Y-up（默认）",
+    "navigation_up_data_z": "+Z 向上（数据坐标）",
+    "navigation_up_help": "保存在项目中。仅改变导航方式，数据坐标和比例保持不变。",
+    "align_navigation_grid": "将网格对齐到向上方向",
+    "align_grid_short": "对齐",
     "navigation_mode": "导航模式",
     "zoom_speed": "缩放速度",
     "zoom_speed_tooltip": "使用鼠标滚轮缩放相机的默认速度。",
@@ -1534,9 +1552,9 @@
         "custom": "最近加载的自定义 HDRI"
       },
       "grid_plane": {
-        "yz": "在 YZ 平面显示网格（右视图）",
-        "xz": "在 XZ 平面显示网格（顶视图）",
-        "xy": "在 XY 平面显示网格（前视图）"
+        "yz": "在 YZ 平面显示网格",
+        "xz": "在 XZ 平面显示网格",
+        "xy": "在 XY 平面显示网格"
       },
       "sh_degree": {
         "0": "仅漫反射 — 无视角相关光照",
@@ -1631,6 +1649,7 @@
     "create": "创建"
   },
   "notification": {
+    "split_view_requires_two_models": "分屏视图需要两个可见的 Splat 模型。",
     "merge_nodes_kept": "合并保留了 {} 个非 splat 节点。",
     "duplicate_training_data_skipped": "复制时已跳过训练数据（数据集、相机和图像）。",
     "dropped_not_recognized": "拖放的",
@@ -1846,7 +1865,8 @@
     "action.view_frame_all": "框选全部",
     "action.toggle_quad_view": "切换四视图",
     "action.toggle_maximize_area": "最大化区域",
-    "action.toggle_node_editor": "切换节点编辑器"
+    "action.toggle_node_editor": "切换节点编辑器",
+    "action.toggle_independent_split_view": "切换独立分屏视图"
   },
   "debug_info": {
     "clear_history": "清除历史",
@@ -2164,8 +2184,19 @@
     "height": "高度",
     "output_res": "输出: {}x{}",
     "naming": "输出命名",
+    "naming_preset": "预设：",
+    "naming_video_frame": "视频名 + frame + 编号",
+    "naming_video_number": "视频名 + 编号",
+    "naming_frame_number": "Frame + 编号",
+    "naming_number": "仅编号",
+    "naming_custom": "自定义",
+    "naming_help": "{video}：不含扩展名的视频名。%d：源帧编号。%05d：至少5位数字。%%：百分号字符 %。扩展名自动添加。 {{ / }}：花括号字符。",
+    "naming_number_help": "源帧编号从1开始，可能不连续。没有数字占位符时，将在末尾添加帧编号。",
+    "naming_example_pending": "示例（未加载视频）：{}{}",
+    "naming_error_placeholder": "占位符未知或不完整。请使用 {video} 表示视频名。",
+    "naming_error_filename": "此平台上的文件名无效。请使用不含文件夹的名称。",
     "pattern": "模式:",
-    "pattern_tooltip": "使用 %d 表示帧号（例如 frame_%04d 表示补零）",
+    "pattern_tooltip": "{video}：不含扩展名的视频名。%d：源帧编号。%05d：至少5位数字。%%：百分号字符 %。扩展名自动添加。 {{ / }}：花括号字符。",
     "example": "示例: {}{}",
     "start": "开始提取",
     "stop": "停止",
@@ -2286,6 +2317,8 @@
     "strategy_default": "默认",
     "split": "分割：",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "每秒显示的界面帧数。",
+    "view_fps_tooltip": "每秒渲染的3D视图帧数。静止视图可能显示为0，此时界面仍可正常响应。",
     "ui": "界面",
     "view": "视图",
     "renderer_backend": "渲染器",
@@ -2639,9 +2672,9 @@
     "solid_color": "纯色",
     "equirectangular_hdri": "等距圆柱 HDRI",
     "off": "关闭",
-    "grid_plane_yz": "YZ（右）",
-    "grid_plane_xz": "XZ（上）",
-    "grid_plane_xy": "XY（前）",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "手动",
@@ -2729,9 +2762,12 @@
     "perf_hud_tooltip": "显示或隐藏性能 HUD",
     "input_mouse_tooltip": "鼠标导航：中键拖动环绕，右键拖动平移，滚轮缩放。点击切换",
     "input_trackpad_tooltip": "触控板导航：双指滑动环绕，Shift+滑动平移，双指捏合或 Ctrl+滑动缩放。点击切换",
-    "input_automatic_tooltip": "自动导航：触控板上使用触控板手势，鼠标上用滚轮缩放。点击切换"
+    "input_automatic_tooltip": "自动导航：触控板上使用触控板手势，鼠标上用滚轮缩放。点击切换",
+    "independent_split_view": "独立分屏视图",
+    "exit_independent_split_view": "退出独立分屏视图"
   },
   "runtime": {
+    "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",
     "training_save_no_memory": "项目保存失败：{}",
     "autosave_deferred_no_memory": "自动保存已暂停：可用内存不足（{}）。训练将继续；内存释放后自动保存会恢复。",
     "grouped_changes": "已分组的更改",
@@ -2914,12 +2950,13 @@
     "right_click_to_add": "右键单击以添加...",
     "training_complete": "训练完成",
     "training_stopped": "训练已停止",
+    "training_stopped_body": "用户在第 {} 次迭代时停止了训练。\n\n请保存项目以保留此状态。重新打开已保存的项目即可继续训练。",
     "training_error": "训练错误",
     "param_manager_unavailable": "参数管理器不可用",
     "failed_to_load_params": "加载参数失败：",
-    "err_distorted_images": "检测到畸变图像。请启用 --gut 或 --undistort 以使用有畸变的相机进行训练。",
+    "err_distorted_images": "检测到畸变图像。请在训练面板中启用 GUT 或去畸变，以使用有畸变的相机进行训练。",
     "err_ortho_not_supported": "暂不支持使用正交相机模型进行训练。",
-    "err_non_pinhole": "请启用 --gut 或 --undistort 以使用非针孔相机进行训练。"
+    "err_non_pinhole": "请在训练面板中启用 GUT 或去畸变，以使用非针孔相机进行训练。"
   },
   "projects.gallery.sidebar.title": "图库",
   "projects.gallery.sidebar.refresh": "检查图库",
@@ -3071,9 +3108,16 @@
   "projects.gallery.toast.published": "已发布“{title}”",
   "projects.gallery.toast.pulled": "已将“{title}”添加到“{folder}”",
   "projects.gallery.toast.removed": "已从您的图库中移除“{title}”",
-  "projects.gallery.quota.used": "已使用 {used} GB，共 {quota} GB",
+  "projects.gallery.quota.used": "已使用 {used}，共 {quota}",
   "projects.gallery.quota.warning": "图库剩余空间可能不足以容纳此文件。上传大小取决于所选格式。",
   "projects.gallery.quota.confirm": "已保存的文件大于图库剩余空间。所选格式可能会减小文件大小。继续准备 ‹{title}›？",
+  "projects.gallery.error.gallery_storage": "Gallery 存储空间不足。请删除 Gallery 场景，取消待处理或失败的上传（它们仍占用空间），或缩小场景。",
+  "projects.gallery.error.gallery_storage_size": "Gallery 存储空间不足：此次上传需要 {needed}，总容量 {quota} 中剩余 {free}。请删除 Gallery 场景，取消待处理或失败的上传（它们仍占用空间），或缩小场景。",
+  "projects.gallery.info.reserves": "此上传在取消前仍会预留 {size} 的 Gallery 存储空间。",
+  "projects.gallery.info.reserves_unknown": "此上传在取消前仍会占用 Gallery 存储空间。",
+  "projects.gallery.info.storage_retry": "已保留准备好的副本。请释放 Gallery 存储空间，然后点击重试以重新使用该副本。",
+  "projects.gallery.review.upload_size": "上传大小：{size}",
+  "projects.gallery.review.ssog_levels": "SSOG 包含所有 LOD 层级，因此可能比单个 SOG 文件大得多。",
   "projects.gallery.action.update_all": "全部更新 ({count})",
   "projects.gallery.confirm.update_all": "更新这些公开场景？其已发布内容将被替换：\n{title}",
   "projects.gallery.empty.published": "尚无已发布场景：选择一个项目并点击“发布”",
@@ -5188,5 +5232,6 @@
   "node_editor.capture_view": "捕获视图",
   "node_editor.curve_hint": "拖动控制点调整曲线。单击添加，双击或按 Delete 删除。",
   "node_editor.ramp_hint": "拖动色标移动位置。单击添加，双击或按 Delete 删除。选择色标后可编辑 RGBA。",
-  "node_editor.keyframe_hint": "插入关键帧 · Ctrl+单击，或悬停时按 I"
+  "node_editor.keyframe_hint": "插入关键帧 · Ctrl+单击，或悬停时按 I",
+  "toolbar.asset_manager": "项目"
 }

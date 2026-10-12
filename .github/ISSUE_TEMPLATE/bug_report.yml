@@ -1,0 +1,68 @@
+name: Report a problem
+description: Something went wrong, crashed, or behaved unexpectedly.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Thanks for reporting a problem! A few sentences are enough to get started.
+        Share whatever details you know. You do not need to identify the cause.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: >-
+        What were you trying to do, what happened, and what did you expect instead?
+        You can also attach screenshots here.
+      placeholder: |
+        I was trying to...
+        Instead, ...
+        I expected...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: System and GPU
+      description: >-
+        Which operating system and GPU are you using? Approximate details are fine.
+        If you are unsure, say so. Driver details are welcome if known;
+        on macOS, the operating system version is enough for driver information.
+      placeholder: >-
+        For example: Windows 11 / NVIDIA RTX 4070, or macOS 27 / Apple M4.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or download (optional)
+      description: >-
+        Add the app version, build identifier, or download link if available.
+        For source builds, the repository or fork, branch, and commit are helpful.
+      placeholder: Version, build, download link, or approximate download date.
+    validations:
+      required: false
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can we reproduce it? (optional)
+      description: >-
+        If you know the steps, list them here along with any relevant settings.
+        If it only happens sometimes, describe when.
+        It is okay if you cannot reproduce it reliably.
+      placeholder: |
+        1. Open...
+        2. Select...
+        3. ...
+    validations:
+      required: false
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Anything else that might help? (optional)
+      description: >-
+        Logs, screenshots, or a small sample are welcome.
+        If this worked before, mention the last working version you remember.
+        Remove private information before sharing.
+    validations:
+      required: false

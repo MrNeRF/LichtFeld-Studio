@@ -20,8 +20,10 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/status_bar_mining.hpp"
+#include "gui/status_bar_training.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
+#include "gui/utils/summary_labels.hpp"
 #include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "ipc/view_context.hpp"
@@ -41,6 +43,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/FontEngineInterface.h>
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_video.h>
 #include <cassert>
@@ -136,13 +139,6 @@ namespace lfs::vis::gui {
             return std::format("{}:{:02d}", m, s);
         }
 
-        std::string stripColon(const std::string& s) {
-            auto end = s.find_last_not_of(": ");
-            if (end == std::string::npos)
-                return s;
-            return s.substr(0, end + 1);
-        }
-
         // Automatic detection needs the trackpad touches only macOS reports.
         NavigationDevice nextNavigationDevice(const NavigationDevice device) {
             switch (device) {
@@ -173,7 +169,7 @@ namespace lfs::vis::gui {
         }
 
         std::string formatStepLabel(const size_t step) {
-            return std::format("{} {}", stripColon(LOC(lichtfeld::Strings::Status::STEP)), lfs::core::format_count(step));
+            return std::format("{} {}", stripLabelColon(LOC(lichtfeld::Strings::Status::STEP)), lfs::core::format_count(step));
         }
 
         // Width the element's content box would need to show everything on one line.
@@ -486,6 +482,9 @@ namespace lfs::vis::gui {
         ctor.Bind("gpu_mem_text", &model_.gpu_mem_text);
         ctor.Bind("gpu_mem_color", &model_.gpu_mem_color);
         ctor.Bind("fps_value", &model_.fps_value);
+        ctor.Bind("fps_view_value", &model_.fps_view_value);
+        ctor.Bind("fps_ui_label", &model_.fps_ui_label);
+        ctor.Bind("fps_view_label", &model_.fps_view_label);
         ctor.Bind("fps_color", &model_.fps_color);
         ctor.Bind("fps_label", &model_.fps_label);
         ctor.Bind("preview_reduced", &model_.preview_reduced);
@@ -1409,10 +1408,15 @@ namespace lfs::vis::gui {
                 mode_rml = LOC("training_panel.preparing_training");
                 mode_color = colorToRml(p.warning);
                 break;
-            case TrainingState::Finished:
-                mode_rml = LOC(lichtfeld::Strings::Status::COMPLETE) + suffix;
-                mode_color = colorToRml(p.success);
+            case TrainingState::Finished: {
+                const auto reason = tm
+                                        ? tm->getStateMachine().getFinishReason()
+                                        : FinishReason::None;
+                const auto status = finishedTrainingStatus(reason, p);
+                mode_rml = LOC(status.label_key) + suffix;
+                mode_color = colorToRml(status.color);
                 break;
+            }
             case TrainingState::Stopping:
                 mode_rml = LOC(lichtfeld::Strings::Status::STOPPING) + suffix;
                 mode_color = colorToRml(p.text_dim);
@@ -1454,7 +1458,7 @@ namespace lfs::vis::gui {
         setModelString("step_label", model_.step_label, LOC(lichtfeld::Strings::Status::STEP));
         setModelString("loss_label", model_.loss_label, LOC(lichtfeld::Strings::Status::LOSS));
         setModelString("gaussians_label", model_.gaussians_label,
-                       stripColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
+                       stripLabelColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
         setModelString("eta_label", model_.eta_label, LOC(lichtfeld::Strings::Status::ETA));
 
         if (show_training && tm) {
@@ -1585,7 +1589,7 @@ namespace lfs::vis::gui {
         if (show_splats) {
             auto splat_rml = std::format("{} {}",
                                          fmtCount(static_cast<int64_t>(total_gaussians)),
-                                         stripColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
+                                         stripLabelColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
             setModelString("splat_text", model_.splat_text, std::move(splat_rml));
             setModelString("splat_color", model_.splat_color, colorToRml(p.text));
         } else {
@@ -1624,7 +1628,7 @@ namespace lfs::vis::gui {
 
         if (wasd_visible) {
             auto wasd_rml = std::format("{}: {:.0f}",
-                                        stripColon(LOC(lichtfeld::Strings::Controls::WASD)),
+                                        stripLabelColon(LOC(lichtfeld::Strings::Controls::WASD)),
                                         wasd_speed);
             setModelBool("show_wasd", model_.show_wasd, true);
             setModelString("wasd_text", model_.wasd_text, std::move(wasd_rml));
@@ -1640,7 +1644,7 @@ namespace lfs::vis::gui {
 
         if (zoom_visible) {
             auto zoom_rml = std::format("{}: {:.0f}",
-                                        stripColon(LOC(lichtfeld::Strings::Controls::ZOOM)),
+                                        stripLabelColon(LOC(lichtfeld::Strings::Controls::ZOOM)),
                                         zoom_speed);
             setModelBool("show_zoom", model_.show_zoom, true);
             setModelString("zoom_text", model_.zoom_text, std::move(zoom_rml));
@@ -1708,12 +1712,12 @@ namespace lfs::vis::gui {
         const auto rates = rm ? rm->guiFrameRates() : FrameRates{};
         const float scene_fps = rates.view;
         const float presented_fps = rates.ui;
-        setModelString("fps_value", model_.fps_value,
-                       std::format("{} {:.0f} · {} {:.0f}", LOC("status_bar.ui"), presented_fps,
-                                   LOC("status_bar.view"), scene_fps));
-        setModelString("fps_color", model_.fps_color, colorToRml(p.text_dim));
-        setModelString("fps_label", model_.fps_label,
-                       std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
+        setModelString("fps_value", model_.fps_value, std::format("{:.0f}", presented_fps));
+        setModelString("fps_view_value", model_.fps_view_value, std::format("{:.0f}", scene_fps));
+        setModelString("fps_ui_label", model_.fps_ui_label, LOC("status_bar.ui"));
+        setModelString("fps_view_label", model_.fps_view_label, "3D");
+        setModelString("fps_color", model_.fps_color, colorToRml(p.text));
+        setModelString("fps_label", model_.fps_label, LOC(lichtfeld::Strings::Status::FPS));
         const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
         if (backend_manager)
             updateBackendContent(backend_manager->activeViewerBackend());
@@ -1877,8 +1881,8 @@ namespace lfs::vis::gui {
                                          const bool force_position) {
         if (!rml_context_ || !document_)
             return false;
-        const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
         const float maximum = static_cast<float>(std::max(0, maximum_overlay_height));
+        tooltip_max_overlay_height_ = maximum;
         bool changed = false;
         const auto resize_context = [&] {
             const int height = bar_h + static_cast<int>(std::ceil(overlayHeight()));
@@ -1898,8 +1902,6 @@ namespace lfs::vis::gui {
             return resized;
         };
 
-        if (tooltip_.revealDue() && tooltip_overlay_height_ == 0.0f)
-            tooltip_overlay_height_ = std::min(150.0f * dp_ratio, maximum);
         bool reposition = resize_context() || force_position;
         auto* const body = document_->GetElementById("body");
         const auto apply = [&] {
@@ -1917,7 +1919,7 @@ namespace lfs::vis::gui {
         float measured_height = 0.0f;
         if (auto* const element = document_->GetElementById("frame-tooltip");
             element && element->IsVisible())
-            measured_height = std::min(std::ceil(element->GetOffsetHeight() + 20.0f * dp_ratio), maximum);
+            measured_height = std::min(std::ceil(element->GetOffsetHeight() + 14.0f), maximum);
         if (tooltip_overlay_height_ != measured_height) {
             tooltip_overlay_height_ = measured_height;
             reposition = resize_context();
@@ -1958,6 +1960,7 @@ namespace lfs::vis::gui {
         if (!is_inside && !input.mouse_released[0] && !input.mouse_released[1] &&
             !save_step_interaction_.dragging) {
             clearSaveStepHover();
+            clearTooltip();
             return;
         }
 
@@ -1995,7 +1998,12 @@ namespace lfs::vis::gui {
                 popup_height = std::max(popup_height, popup->GetOffsetHeight() + 20.f * ratio);
         }
         // Only reserve the measured tooltip surface; it never captures input.
-        return std::max(popup_height, tooltip_overlay_height_);
+        float tooltip_height = 0.0f;
+        if (tooltip_.hasActiveState() && document_) {
+            if (auto* element = document_->GetElementById("frame-tooltip"); element && element->IsVisible())
+                tooltip_height = std::min(tooltip_max_overlay_height_, std::ceil(element->GetOffsetHeight() + 14.0f));
+        }
+        return std::max(popup_height, tooltip_height);
     }
 
     bool RmlStatusBar::isOverlayPoint(const float local_x, const float local_y,
@@ -2067,6 +2075,41 @@ namespace lfs::vis::gui {
         });
     }
 
+    void RmlStatusBar::updateFpsReservedWidths() {
+        // Reserve three digits in the actual font, rather than a fixed dp width.
+        if (auto* engine = Rml::GetFontEngineInterface()) {
+            for (const char* id : {"fps-value", "fps-view-value"}) {
+                if (auto* value = document_->GetElementById(id)) {
+                    const auto face = value->GetFontFaceHandle();
+                    if (!face)
+                        continue;
+                    int width = 0;
+                    const Rml::TextShapingContext shaping{Rml::String{}};
+                    for (char digit = '0'; digit <= '9'; ++digit)
+                        width = std::max(width, engine->GetStringWidth(face, std::string(3, digit), shaping));
+                    value->SetProperty("min-width", std::format("{}px", width));
+                }
+            }
+            rml_context_->Update();
+        }
+    }
+
+    void RmlStatusBar::positionTooltip(const float previous_overlay, const float overlay_height,
+                                       const bool place_above) {
+        auto* const element = document_->GetElementById("frame-tooltip");
+        if (!element || !element->IsVisible())
+            return;
+        // apply() has written the final position, but layout may still expose
+        // the offscreen measurement position. Read the pending pixel property.
+        const auto* const pending_top = element->GetLocalProperty(Rml::PropertyId::Top);
+        const float current_top = pending_top ? pending_top->Get<float>() : element->GetOffsetTop();
+        const float top = place_above
+                              ? std::max(4.0f, overlay_height + last_mouse_bar_y_ -
+                                                   10.0f - element->GetOffsetHeight())
+                              : current_top + overlay_height - previous_overlay;
+        element->SetProperty(Rml::PropertyId::Top, Rml::Property(top, Rml::Unit::PX));
+    }
+
     void RmlStatusBar::render(const PanelDrawContext& ctx, const float x, const float y,
                               const float w_px, const float h_px,
                               const int screen_w, const int screen_h) {
@@ -2125,7 +2168,9 @@ namespace lfs::vis::gui {
                 last_document_h_ = render_h;
             }
             rml_context_->Update();
-            fitToAvailableWidth(size_changed || dp_changed || theme_changed || section_signature_changed);
+            if (dp_changed || theme_changed)
+                updateFpsReservedWidths();
+            fitToAvailableWidth(render_w != last_render_w_ || dp_changed || theme_changed || section_signature_changed);
             (void)applyHoverTooltip(render_w, static_cast<int>(h_px),
                                     static_cast<int>(y), size_changed || dp_changed || theme_changed);
             overlay_height = overlayHeight();

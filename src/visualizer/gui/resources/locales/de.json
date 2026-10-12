@@ -824,12 +824,20 @@
     "button.stop": "Training stoppen",
     "button.reset": "Training zurücksetzen",
     "button.add": "Hinzufügen",
-    "button.remove": "Entfernen"
+    "button.remove": "Entfernen",
+    "conflict.strategy_gut_start_message": "GUT kann nicht mit der igs+-Strategie verwendet werden. Wählen Sie eine Aktion, um das Training zu starten.",
+    "conflict.strategy_gut_strategy_message": "Diese Strategie ist nicht mit GUT kompatibel. GUT deaktivieren, um zu wechseln?"
   },
   "rendering": "Rendering",
   "scene": {
     "streamed_badge": "gestreamt",
     "streamed_badge_tooltip": "Gestreamtes Modell: Die Detailstufe folgt der Ansicht. Schreibgeschützt.",
+    "summary_model_one": "{} Modell",
+    "summary_model_few": "{} Modelle",
+    "summary_model_other": "{} Modelle",
+    "summary_node_one": "{} Knoten",
+    "summary_node_few": "{} Knoten",
+    "summary_node_other": "{} Knoten",
     "add_ply": "PLY hinzufügen...",
     "add_group": "Gruppe hinzufügen",
     "add_group_ellipsis": "Gruppe hinzufügen...",
@@ -1083,6 +1091,16 @@
     "input": "Eingabe",
     "key_bindings": "Tastenbelegung",
     "camera_navigation": "Kameranavigation",
+    "new_project_navigation_up": "Vertikale für neue Projekte",
+    "new_project_navigation_help": "Gilt nur für neue Projekte. Bestehende Projekte behalten ihre gespeicherten Einstellungen.",
+    "new_project_align_grid": "Raster in neuen Projekten ausrichten",
+    "navigation_project_hint": "Projekt speichern, um die Auswahl zu behalten. Datenkoordinaten bleiben unverändert.",
+    "navigation_up_axis": "Vertikalachse",
+    "navigation_up_legacy_y": "Y-up (Standard)",
+    "navigation_up_data_z": "+Z oben (Datenkoordinaten)",
+    "navigation_up_help": "Wird im Projekt gespeichert. Ändert nur die Navigation; Datenkoordinaten und Maßstab bleiben unverändert.",
+    "align_navigation_grid": "Raster an Vertikale ausrichten",
+    "align_grid_short": "Ausrichten",
     "navigation_mode": "Navigationsmodus",
     "zoom_speed": "Zoomgeschwindigkeit",
     "zoom_speed_tooltip": "Standardgeschwindigkeit für das Zoomen der Kamera mit dem Mausrad.",
@@ -1534,9 +1552,9 @@
         "custom": "Zuletzt geladenes benutzerdefiniertes HDRI"
       },
       "grid_plane": {
-        "yz": "Gitter in der YZ-Ebene anzeigen (Rechte Ansicht)",
-        "xz": "Gitter in der XZ-Ebene anzeigen (Draufsicht)",
-        "xy": "Gitter in der XY-Ebene anzeigen (Vorderansicht)"
+        "yz": "Gitter in der YZ-Ebene anzeigen",
+        "xz": "Gitter in der XZ-Ebene anzeigen",
+        "xy": "Gitter in der XY-Ebene anzeigen"
       },
       "sh_degree": {
         "0": "Nur diffus — keine blickrichtungsabhängige Beleuchtung",
@@ -1631,6 +1649,7 @@
     "create": "Erstellen"
   },
   "notification": {
+    "split_view_requires_two_models": "Die geteilte Ansicht benötigt zwei sichtbare Splat-Modelle.",
     "merge_nodes_kept": "Beim Zusammenführen wurden {} Nicht-Splat-Knoten beibehalten.",
     "duplicate_training_data_skipped": "Trainingsdaten (Datensätze, Kameras und Bilder) wurden beim Duplizieren übersprungen.",
     "dropped_not_recognized": "Das abgelegte",
@@ -1846,7 +1865,8 @@
     "action.view_frame_all": "Alles einpassen",
     "action.toggle_quad_view": "Vier Ansichten umschalten",
     "action.toggle_maximize_area": "Bereich maximieren",
-    "action.toggle_node_editor": "Node-Editor umschalten"
+    "action.toggle_node_editor": "Node-Editor umschalten",
+    "action.toggle_independent_split_view": "Unabhängige geteilte Ansicht umschalten"
   },
   "debug_info": {
     "clear_history": "Verlauf löschen",
@@ -2164,8 +2184,19 @@
     "height": "Höhe",
     "output_res": "Ausgabe: {}x{}",
     "naming": "Ausgabenamen",
+    "naming_preset": "Voreinstellung:",
+    "naming_video_frame": "Videoname + Frame + Nummer",
+    "naming_video_number": "Videoname + Nummer",
+    "naming_frame_number": "Frame + Nummer",
+    "naming_number": "Nur Nummer",
+    "naming_custom": "Benutzerdefiniert",
+    "naming_help": "{video}: Videoname ohne Erweiterung. %d: Quellbildnummer. %05d: mindestens 5 Stellen. %%: wörtliches %. Die Erweiterung wird automatisch ergänzt. {{ / }}: wörtliche geschweifte Klammern.",
+    "naming_number_help": "Quellbildnummern beginnen bei 1 und können Lücken enthalten. Ohne Zahlenplatzhalter wird die Bildnummer angehängt.",
+    "naming_example_pending": "Beispiel (kein Video geladen): {}{}",
+    "naming_error_placeholder": "Unbekannter oder unvollständiger Platzhalter. Für den Videonamen {video} verwenden.",
+    "naming_error_filename": "Ungültiger Dateiname für diese Plattform. Einen Namen ohne Ordner verwenden.",
     "pattern": "Muster:",
-    "pattern_tooltip": "%d für Framenummer verwenden (z.B. frame_%04d für Nullauffüllung)",
+    "pattern_tooltip": "{video}: Videoname ohne Erweiterung. %d: Quellbildnummer. %05d: mindestens 5 Stellen. %%: wörtliches %. Die Erweiterung wird automatisch ergänzt. {{ / }}: wörtliche geschweifte Klammern.",
     "example": "Beispiel: {}{}",
     "start": "Extraktion starten",
     "stop": "Stoppen",
@@ -2286,6 +2317,8 @@
     "strategy_default": "Standard",
     "split": "Teilung:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Pro Sekunde angezeigte Benutzeroberflächen-Frames.",
+    "view_fps_tooltip": "Pro Sekunde gerenderte Frames der 3D-Ansicht. Eine statische Ansicht kann 0 anzeigen, während die Oberfläche weiterhin reagiert.",
     "ui": "UI",
     "view": "Ansicht",
     "renderer_backend": "Renderer",
@@ -2639,9 +2672,9 @@
     "solid_color": "Einheitliche Farbe",
     "equirectangular_hdri": "Equirectangular-HDRI",
     "off": "Aus",
-    "grid_plane_yz": "YZ (Rechts)",
-    "grid_plane_xz": "XZ (Oben)",
-    "grid_plane_xy": "XY (Vorne)",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "Manuell",
@@ -2729,9 +2762,12 @@
     "perf_hud_tooltip": "Leistungs-HUD ein- oder ausblenden",
     "input_mouse_tooltip": "Mausnavigation: mittlere Maustaste ziehen dreht die Ansicht, rechte Maustaste ziehen verschiebt, Mausrad zoomt. Klicken zum Wechseln",
     "input_trackpad_tooltip": "Trackpad-Navigation: Wischen mit zwei Fingern dreht die Ansicht, Umschalt+Wischen verschiebt, Aufziehen/Zuziehen oder Strg+Wischen zoomt. Klicken zum Wechseln",
-    "input_automatic_tooltip": "Automatische Navigation: Trackpad-Gesten auf dem Trackpad, Zoom mit dem Mausrad. Klicken zum Wechseln"
+    "input_automatic_tooltip": "Automatische Navigation: Trackpad-Gesten auf dem Trackpad, Zoom mit dem Mausrad. Klicken zum Wechseln",
+    "independent_split_view": "Unabhängige geteilte Ansicht",
+    "exit_independent_split_view": "Unabhängige geteilte Ansicht verlassen"
   },
   "runtime": {
+    "environment_map_failed": "Die Umgebungskarte „{}“ konnte nicht gelesen werden. Die bisherige Umgebung wurde beibehalten.",
     "training_save_no_memory": "Projekt konnte nicht gespeichert werden: {}",
     "autosave_deferred_no_memory": "Automatisches Speichern ist pausiert: nicht genug freier Speicher ({}). Das Training läuft weiter; das automatische Speichern wird fortgesetzt, sobald wieder Speicher frei ist.",
     "grouped_changes": "Gruppierte Änderungen",
@@ -2914,12 +2950,13 @@
     "right_click_to_add": "Rechtsklick zum Hinzufügen...",
     "training_complete": "Training abgeschlossen",
     "training_stopped": "Training gestoppt",
+    "training_stopped_body": "Training wurde bei Iteration {} vom Benutzer gestoppt.\n\nSpeichern Sie das Projekt, um diesen Zustand zu behalten. Öffnen Sie das gespeicherte Projekt erneut, um das Training fortzusetzen.",
     "training_error": "Trainingsfehler",
     "param_manager_unavailable": "ParameterManager nicht verfügbar",
     "failed_to_load_params": "Parameter laden fehlgeschlagen:",
-    "err_distorted_images": "Verzerrte Bilder erkannt. Aktivieren Sie --gut oder --undistort, um mit verzerrten Kameras zu trainieren.",
+    "err_distorted_images": "Verzerrte Bilder erkannt. Aktivieren Sie GUT oder Entzerren im Trainingspanel, um mit Kameras mit Verzerrung zu trainieren.",
     "err_ortho_not_supported": "Training mit orthographischem Kameramodell wird noch nicht unterstützt.",
-    "err_non_pinhole": "Aktivieren Sie --gut oder --undistort, um mit Nicht-Pinhole-Kameras zu trainieren."
+    "err_non_pinhole": "Aktivieren Sie GUT oder Entzerren im Trainingspanel, um mit Kameras ohne Lochkameramodell zu trainieren."
   },
   "projects.gallery.sidebar.title": "Galerie",
   "projects.gallery.sidebar.refresh": "Galerie prüfen",
@@ -3071,9 +3108,16 @@
   "projects.gallery.toast.published": "„{title}“ veröffentlicht",
   "projects.gallery.toast.pulled": "„{title}“ zu „{folder}“ hinzugefügt",
   "projects.gallery.toast.removed": "„{title}“ aus der Galerie entfernt",
-  "projects.gallery.quota.used": "{used} GB von {quota} GB belegt",
+  "projects.gallery.quota.used": "{used} von {quota} belegt",
   "projects.gallery.quota.warning": "Diese Datei passt möglicherweise nicht in deine Galerie. Die Uploadgröße hängt vom gewählten Format ab.",
   "projects.gallery.quota.confirm": "Die gespeicherte Datei ist größer als der freie Galeriespeicher. Das gewählte Format kann sie verkleinern. Mit der Vorbereitung von ‹{title}› fortfahren?",
+  "projects.gallery.error.gallery_storage": "Nicht genug Gallery-Speicher. Lösche Gallery-Szenen, brich ausstehende oder fehlgeschlagene Uploads ab (sie belegen weiterhin Speicher) oder verkleinere die Szene.",
+  "projects.gallery.error.gallery_storage_size": "Nicht genug Gallery-Speicher: Dieser Upload benötigt {needed}, von {quota} sind {free} frei. Lösche Gallery-Szenen, brich ausstehende oder fehlgeschlagene Uploads ab (sie belegen weiterhin Speicher) oder verkleinere die Szene.",
+  "projects.gallery.info.reserves": "Dieser Upload reserviert bis zum Abbrechen weiterhin {size} Gallery-Speicher.",
+  "projects.gallery.info.reserves_unknown": "Dieser Upload belegt bis zum Abbrechen weiterhin Gallery-Speicher.",
+  "projects.gallery.info.storage_retry": "Die vorbereitete Kopie wurde behalten. Gib Gallery-Speicher frei und verwende sie mit „Erneut versuchen“ wieder.",
+  "projects.gallery.review.upload_size": "Upload-Größe: {size}",
+  "projects.gallery.review.ssog_levels": "SSOG enthält jede LOD-Stufe und kann deutlich größer als eine einzelne SOG-Datei sein.",
   "projects.gallery.action.update_all": "Alle aktualisieren ({count})",
   "projects.gallery.confirm.update_all": "Diese öffentlichen Szenen aktualisieren? Ihre veröffentlichten Inhalte werden ersetzt:\n{title}",
   "projects.gallery.empty.published": "Noch keine veröffentlichten Szenen: Projekt auswählen und auf Veröffentlichen klicken",
@@ -5188,5 +5232,6 @@
   "node_editor.capture_view": "Ansicht speichern",
   "node_editor.curve_hint": "Punkte ziehen; klicken zum Hinzufügen, doppelklicken oder Entf zum Löschen.",
   "node_editor.ramp_hint": "Marken ziehen; klicken zum Hinzufügen, doppelklicken oder Entf zum Löschen. Marke auswählen, um RGBA zu ändern.",
-  "node_editor.keyframe_hint": "Schlüsselbild einfügen · Strg+Klick oder I beim Darüberfahren"
+  "node_editor.keyframe_hint": "Schlüsselbild einfügen · Strg+Klick oder I beim Darüberfahren",
+  "toolbar.asset_manager": "Projekte"
 }

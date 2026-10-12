@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/mesh_data.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -10,9 +11,13 @@
 #include "io/loader.hpp"
 #include "io/video/video_encoder.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/rendering_manager.hpp"
+#include "screen/screen_service.hpp"
 #if LFS_GRAPHICS_VULKAN
 #include "rendering/vksplat_viewport_renderer.hpp"
 #include "window/vulkan_context.hpp"
+#include "window/vulkan_graphics_context.hpp"
+#include <SDL3/SDL.h>
 #endif
 #include "scene/scene_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -27,6 +32,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 using lfs::core::Device;
@@ -184,6 +190,115 @@ TEST(VideoExportUtilsTest, CaptureSnapshotUsesRenderableModelAndTransforms) {
 }
 
 #if LFS_GRAPHICS_VULKAN
+TEST(VideoExportUtilsTest, UnconsolidatedAllNodeCacheVisibilityReachesCudaAndVulkan) {
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+        GTEST_SKIP() << SDL_GetError();
+    struct VideoGuard {
+        ~VideoGuard() { SDL_QuitSubSystem(SDL_INIT_VIDEO); }
+    } video_guard;
+    std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
+        SDL_CreateWindow("Cache visibility test", 64, 64, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN),
+        SDL_DestroyWindow);
+    ASSERT_TRUE(window) << SDL_GetError();
+    const bool vulkan_backend = lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan;
+    if (vulkan_backend)
+        ASSERT_TRUE(lfs::core::shutdown_gpu_backend(lfs::core::GpuBackend::Vulkan));
+    lfs::vis::VulkanGraphicsContext graphics;
+    auto& context = graphics.vulkanContext();
+    struct ShutdownBackend {
+        bool enabled;
+        ~ShutdownBackend() {
+            if (enabled)
+                EXPECT_TRUE(lfs::core::shutdown_gpu_backend(lfs::core::GpuBackend::Vulkan));
+        }
+    } shutdown_backend{vulkan_backend};
+    ASSERT_TRUE(graphics.initialize(window.get(), 64, 64)) << context.lastError();
+    lfs::vis::SceneManager manager;
+    auto& scene = manager.getScene();
+    const auto first = scene.addSplat("first", make_test_splat({-0.5f, 0.0f, 3.0f}));
+    const auto second = scene.addSplat("second", make_test_splat({0.5f, 0.0f, 3.0f}));
+    scene.setNodeVisibility(first, false);
+    scene.setCombinedModelAllocator([&context](lfs::core::TensorShape shape, size_t capacity,
+                                               lfs::core::DataType dtype, std::string_view name) {
+        auto tensor = context.tensorInterop().empty(std::move(shape), dtype,
+                                                    lfs::core::default_gpu_backend(), capacity);
+        tensor.set_name(std::string(name));
+        return tensor;
+    });
+    scene.requestCombinedModelBuild(true);
+    while (scene.combinedModelBuildPending()) {
+        (void)scene.combinedModelBuildError();
+        std::this_thread::yield();
+    }
+    const auto* model = scene.getCombinedModel();
+    ASSERT_TRUE(model);
+    ASSERT_EQ(model->size(), 2u);
+    ASSERT_FALSE(scene.isConsolidated());
+    auto transforms = scene.getVisibleNodeTransforms();
+    for (auto& transform : transforms)
+        transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+    const auto indices = scene.getTransformIndices();
+    ASSERT_EQ(transforms.size(), 2u);
+    lfs::vis::VksplatViewportRenderer renderer;
+    auto cuda_renderer = lfs::rendering::RenderingEngine::create();
+    ASSERT_TRUE(cuda_renderer->initialize());
+    lfs::vis::RenderTargetRegistry targets;
+    const auto slot = targets.allocate();
+    for (int backend = 0; backend < 3; ++backend) {
+        SCOPED_TRACE(backend); // CUDA point rendering, Vulkan 3DGS and 3DGUT.
+        const auto render = [&]() -> std::vector<float> {
+            EXPECT_EQ(scene.getCombinedModel(), model);
+            const auto mask = scene.getNodeVisibilityMask();
+            if (backend == 0) {
+                lfs::rendering::PointCloudRenderRequest request;
+                request.frame_view.size = {64, 64};
+                request.render.voxel_size = 0.1f;
+                request.scene = {&transforms, indices, mask};
+                auto image = cuda_renderer->renderPointCloudImage(*model, request);
+                EXPECT_TRUE(image) << (image ? "" : image.error());
+                return image ? image->image->cpu().to_vector() : std::vector<float>{};
+            }
+            lfs::rendering::ViewportRenderRequest request;
+            request.frame_view.size = {64, 64};
+            request.sh_degree = 0;
+            request.scene = {&transforms, indices, mask};
+            request.raster_backend = backend == 1 ? lfs::rendering::GaussianRasterBackend::ThreeDgs
+                                                  : lfs::rendering::GaussianRasterBackend::ThreeDgut;
+            request.gut = backend == 2;
+            auto result = renderer.render(context, *model, request, false, slot, false, true);
+            EXPECT_TRUE(result) << (result ? "" : result.error());
+            if (!result)
+                return {};
+            auto image = renderer.readOutputImageRgb8(context, slot);
+            EXPECT_TRUE(image) << (image ? "" : image.error());
+            if (!image)
+                return {};
+            const auto* bytes = (*image)->ptr<uint8_t>();
+            return {bytes, bytes + (*image)->numel()};
+        };
+        manager.setNodeVisibility(first, true);
+        ASSERT_EQ(scene.getCombinedModel(), model);
+        const auto shown = render();
+        ASSERT_FALSE(shown.empty());
+        EXPECT_GT(*std::max_element(shown.begin(), shown.end()), 0);
+        manager.setNodeVisibility(first, false);
+        ASSERT_EQ(scene.getCombinedModel(), model);
+        const auto hidden = render();
+        EXPECT_NE(hidden, shown);
+        manager.setNodeVisibilityTransient(second, false);
+        ASSERT_EQ(scene.getCombinedModel(), model);
+        const auto empty = render();
+        EXPECT_TRUE(std::all_of(empty.begin(), empty.end(), [](float v) { return v == 0; }));
+        manager.setNodeVisibilityTransient(second, true);
+        ASSERT_EQ(scene.getCombinedModel(), model);
+        EXPECT_EQ(render(), hidden);
+        manager.setNodeVisibility(first, true);
+        ASSERT_EQ(scene.getCombinedModel(), model);
+        EXPECT_EQ(render(), shown);
+    }
+    cuda_renderer->shutdown();
+}
+
 namespace {
     void verifyHiddenDatasetSnapshotCullsImplicitNodeInPreview() {
         const bool vulkan_backend = lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan;
@@ -300,8 +415,106 @@ TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {
         std::_Exit(::testing::Test::HasFailure() ? 1 : 0); }, ::testing::ExitedWithCode(0), "");
 }
 
-#endif
+namespace {
+    class VideoExportBandTest : public ::testing::TestWithParam<std::tuple<bool, bool>> {
+    protected:
+        void SetUp() override {
+            if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan)
+                ASSERT_TRUE(lfs::core::shutdown_gpu_backend(lfs::core::GpuBackend::Vulkan));
+            ASSERT_TRUE(graphics_.initializeHeadless()) << graphics_.lastError();
+            // Include both poles, the longitude seam, and splats crossing band edges.
+            model_ = make_test_splat({0, -8, -3, 0, -3, -3, 0, 0, -3,
+                                      0, 3, -3, 0, 8, -3, 0.1f, 0, 3});
+            const auto allocator = [this](lfs::core::TensorShape shape, size_t capacity,
+                                          lfs::core::DataType dtype, std::string_view name) {
+                auto tensor = context_.tensorInterop().empty(std::move(shape), dtype,
+                                                             lfs::core::default_gpu_backend(), capacity);
+                tensor.set_name(std::string(name));
+                return tensor;
+            };
+            auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model_, allocator);
+            ASSERT_TRUE(migrated) << migrated.error().format();
+        }
 
+        void TearDown() override {
+            renderer_.reset();
+            model_.reset();
+            if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan)
+                EXPECT_TRUE(lfs::core::shutdown_gpu_backend(lfs::core::GpuBackend::Vulkan));
+            context_.shutdown();
+        }
+
+        std::vector<uint8_t> render(int y, int rows, bool banded, bool full_frame) {
+            lfs::rendering::ViewportRenderRequest request;
+            request.frame_view.size = {render_width_, rows};
+            request.frame_view.subregion_origin = {0, y};
+            if (banded)
+                request.frame_view.subregion_full_size = {render_width_, render_height_};
+            request.sh_degree = 0;
+            request.gut = true;
+            request.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+            request.equirectangular = std::get<0>(GetParam());
+            const auto slot = full_frame ? preview_slot_ : main_slot_;
+            auto result = renderer_->render(context_, *model_, request, false, slot, false, full_frame);
+            EXPECT_TRUE(result) << (result ? "" : result.error());
+            if (!result)
+                return {};
+            auto image = renderer_->readOutputImageRgb8(context_, slot);
+            EXPECT_TRUE(image) << (image ? "" : image.error());
+            if (!image)
+                return {};
+            const auto* data = (*image)->ptr<uint8_t>();
+            return {data, data + (*image)->numel()};
+        }
+
+        int render_width_ = 1024;
+        int render_height_ = 512;
+        lfs::vis::RenderTargetRegistry targets_;
+        lfs::vis::RenderTargetId main_slot_ = targets_.allocate();
+        lfs::vis::RenderTargetId preview_slot_ = targets_.allocate();
+        lfs::vis::VulkanGraphicsContext graphics_;
+        lfs::vis::VulkanContext& context_ = graphics_.vulkanContext();
+        std::unique_ptr<lfs::core::SplatData> model_;
+        std::unique_ptr<lfs::vis::VksplatViewportRenderer> renderer_ =
+            std::make_unique<lfs::vis::VksplatViewportRenderer>();
+    };
+
+    TEST_P(VideoExportBandTest, BandedEqualsFullImage) {
+        const bool full_frame = std::get<1>(GetParam());
+        for (const int width : {1024, 2048}) {
+            render_width_ = width;
+            render_height_ = width / 2;
+            SCOPED_TRACE(::testing::Message() << "extent=" << width << "x" << render_height_);
+            const auto full = render(0, render_height_, false, full_frame);
+            ASSERT_EQ(full.size(), size_t(width) * render_height_ * 3u);
+            for (const int band_rows : {256, 64}) {
+                for (int y = 0; y < render_height_; y += band_rows) {
+                    SCOPED_TRACE(::testing::Message() << "rows=" << band_rows << " y=" << y);
+                    const auto band = render(y, band_rows, true, full_frame);
+                    ASSERT_EQ(band.size(), size_t(width) * band_rows * 3u);
+                    const auto first = full.begin() + size_t(y) * width * 3;
+                    ASSERT_GT(*std::max_element(first, first + band.size()), 0);
+                    int max_diff = 0;
+                    size_t changed = 0;
+                    for (size_t i = 0; i < band.size(); ++i) {
+                        max_diff = std::max(max_diff, std::abs(int(band[i]) - int(first[i])));
+                        changed += band[i] != first[i];
+                    }
+                    EXPECT_LE(max_diff, 1) << "changed channels=" << changed;
+                }
+            }
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Projection, VideoExportBandTest,
+                             ::testing::Combine(::testing::Bool(), ::testing::Bool()),
+                             [](const auto& info) {
+                                 return std::string(std::get<0>(info.param) ? "Equirectangular" : "Perspective") +
+                                        (std::get<1>(info.param) ? "FullFrame" : "BandRelative");
+                             });
+} // namespace
+
+#endif
 TEST(VideoExportUtilsTest, CaptureSnapshotPrefersSplatsOverPointCloudAndKeepsMeshes) {
     lfs::vis::SceneManager scene_manager;
     auto& scene = scene_manager.getScene();
@@ -538,3 +751,142 @@ TEST(VideoEncoderValidationTest, AcceptsMp4CaseVariantsAndExtensionlessNames) {
         EXPECT_TRUE(std::filesystem::is_regular_file(directory.path / name));
     }
 }
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+}
+
+namespace {
+    class VideoEncoderColorTest : public ::testing::TestWithParam<bool> {};
+
+    TEST_P(VideoEncoderColorTest, TagsLimitedRangeBt601) {
+        if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend()))
+            GTEST_SKIP() << "GPU backend unavailable";
+        // NVENC rejects a 16x16 frame; exercise the actual software fallback.
+        const bool hardware = GetParam();
+        if (hardware && !avcodec_find_encoder_by_name("h264_nvenc"))
+            GTEST_SKIP() << "NVENC is not compiled in";
+        const int width = hardware ? 160 : 16;
+        const int height = hardware ? 96 : 16;
+        VideoOutputDirectory directory;
+        const auto path = directory.path / "color.mp4";
+        lfs::io::video::VideoEncoder encoder;
+        auto opened = encoder.open(path, {.preset = lfs::io::video::VideoPreset::CUSTOM,
+                                          .width = width,
+                                          .height = height,
+                                          .framerate = 4});
+        ASSERT_TRUE(opened) << opened.error();
+        std::vector<float> pixels(width * height * 3, 0.0f);
+        for (size_t i = 0; i < pixels.size(); i += 3)
+            pixels[i] = 1.0f;
+        auto frame = Tensor::from_vector(pixels, {size_t(height), size_t(width), size_t{3}}, Device::GPU);
+        for (int i = 0; i < 6; ++i) {
+            const auto written = encoder.writeFrame(frame);
+            ASSERT_TRUE(written) << written.error();
+        }
+        const auto closed = encoder.close();
+        ASSERT_TRUE(closed) << closed.error();
+        AVFormatContext* raw_format = nullptr;
+        ASSERT_EQ(avformat_open_input(&raw_format, lfs::core::path_to_utf8(path).c_str(), nullptr, nullptr), 0);
+        const auto close_format = [](AVFormatContext* format) { avformat_close_input(&format); };
+        std::unique_ptr<AVFormatContext, decltype(close_format)> format(raw_format, close_format);
+        ASSERT_GE(avformat_find_stream_info(format.get(), nullptr), 0);
+        const int stream = av_find_best_stream(format.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        ASSERT_GE(stream, 0);
+        const auto* params = format->streams[stream]->codecpar;
+        EXPECT_EQ(params->color_space, AVCOL_SPC_SMPTE170M);
+        EXPECT_EQ(params->color_range, AVCOL_RANGE_MPEG);
+        EXPECT_EQ(params->color_primaries, AVCOL_PRI_UNSPECIFIED);
+        EXPECT_EQ(params->color_trc, AVCOL_TRC_UNSPECIFIED);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backend, VideoEncoderColorTest, ::testing::Bool(),
+                             [](const auto& info) { return info.param ? "Hardware" : "Software"; });
+} // namespace
+
+#if LFS_GRAPHICS_VULKAN
+namespace {
+    // Keep the regression runnable against the old API to prove the image failure.
+    template <typename Manager>
+    std::shared_ptr<Tensor> renderExportPreview(Manager& manager, const lfs::core::SplatData& model,
+                                                int format, int width, int height, bool panorama) {
+        const glm::mat3 rotation(1.0f);
+        const glm::vec3 position(0.0f);
+        if (format == 0) {
+            if constexpr (requires { manager.renderPreviewImage(model, {}, rotation, position, 35.0f, width, height,
+                                                                std::nullopt, std::nullopt, std::nullopt, panorama); })
+                return manager.renderPreviewImage(model, {}, rotation, position, 35.0f, width, height,
+                                                  std::nullopt, std::nullopt, std::nullopt, panorama);
+            else
+                return manager.renderPreviewImage(model, {}, rotation, position, 35.0f, width, height);
+        }
+        if (format == 1) {
+            if constexpr (requires { manager.renderPreviewImageRgb8(model, {}, rotation, position, 35.0f, width, height,
+                                                                    std::nullopt, std::nullopt, std::nullopt, panorama); })
+                return manager.renderPreviewImageRgb8(model, {}, rotation, position, 35.0f, width, height,
+                                                      std::nullopt, std::nullopt, std::nullopt, panorama);
+            else
+                return manager.renderPreviewImageRgb8(model, {}, rotation, position, 35.0f, width, height);
+        }
+        if constexpr (requires { manager.renderPreviewImageRgba8(model, {}, rotation, position, 35.0f, width, height,
+                                                                 std::nullopt, std::nullopt, panorama); })
+            return manager.renderPreviewImageRgba8(model, {}, rotation, position, 35.0f, width, height,
+                                                   std::nullopt, std::nullopt, panorama);
+        else
+            return manager.renderPreviewImageRgba8(model, {}, rotation, position, 35.0f, width, height);
+    }
+
+    TEST_P(VideoExportBandTest, PreviewProjectionMatchesRenderer) {
+        const bool panorama = std::get<0>(GetParam());
+        const bool tiled = std::get<1>(GetParam());
+        const int width = tiled ? 6144 : 1024;
+        const int height = width / 2;
+        Viewport viewport(64, 64);
+        lfs::vis::screen::ScreenService views;
+        lfs::vis::RenderingManager manager{views};
+        auto settings = manager.getSettings();
+        settings.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+        settings.gut = true;
+        settings.equirectangular = panorama;
+        settings.sh_degree = 0;
+        settings.mip_filter = false;
+        settings.antialiasing = false;
+        settings.background_color = glm::vec3(0.0f);
+        manager.updateSettings(settings);
+        // Establish the same context that the viewer passes to the export manager.
+        manager.renderFrame({.view = views.activeView(), .viewport = viewport, .settings = settings, .graphics_context = &graphics_});
+        lfs::rendering::ViewportRenderRequest request;
+        request.frame_view.size = {width, height};
+        request.frame_view.focal_length_mm = 35.0f;
+        request.sh_degree = 0;
+        request.raster_backend = settings.raster_backend;
+        request.gut = true;
+        request.equirectangular = panorama;
+        const auto slot = preview_slot_;
+        for (int format = 0; format < 3; ++format) {
+            SCOPED_TRACE(::testing::Message() << "format=" << format << " tiled=" << tiled);
+            request.transparent_background = format == 2;
+            auto rendered = renderer_->render(context_, *model_, request, false, slot, false, true);
+            ASSERT_TRUE(rendered) << rendered.error();
+            auto reference = format == 2 ? renderer_->readOutputImageRgba8(context_, slot)
+                                         : renderer_->readOutputImageRgb8(context_, slot);
+            ASSERT_TRUE(reference) << reference.error();
+            auto actual = renderExportPreview(manager, *model_, format, width, height, panorama);
+            ASSERT_TRUE(actual);
+            ASSERT_EQ(actual->numel(), (*reference)->numel());
+            int max_diff = 0;
+            size_t changed = 0;
+            const auto* expected = (*reference)->ptr<uint8_t>();
+            for (size_t i = 0; i < actual->numel(); ++i) {
+                const int value = format == 0 ? int(std::clamp(actual->ptr<float>()[i], 0.0f, 1.0f) * 255.0f + 0.5f)
+                                              : actual->ptr<uint8_t>()[i];
+                const int diff = std::abs(value - int(expected[i]));
+                max_diff = std::max(max_diff, diff);
+                changed += diff > 1;
+            }
+            EXPECT_LE(max_diff, 1) << "channels differing by more than one=" << changed;
+        }
+    }
+} // namespace
+#endif

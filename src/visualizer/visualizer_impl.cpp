@@ -29,6 +29,7 @@
 #include "gui/panels/windows_console_utils.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "io/dataset_scene_import.hpp"
 #include "io/project_chapters.hpp"
 #include "ipc/render_settings_convert.hpp"
 #include "ipc/view_context.hpp"
@@ -927,6 +928,11 @@ namespace lfs::vis {
         callback_cleanup_.add([] { python::set_export_callback(nullptr); });
     }
 
+    void VisualizerImpl::forEachView(const std::function<void(ViewTarget)>& visit) {
+        for (const auto id : screen_service_.screen().views())
+            visit(findView(id.value));
+    }
+
     ViewTarget VisualizerImpl::activeView() {
         return findView(screen_service_.screen().activeView().value);
     }
@@ -1142,7 +1148,10 @@ namespace lfs::vis {
                     intent.scene_upscaler_explicit && !intent.scene_upscaler_preset_explicit
                         ? SceneUpscalerPresetUpdate::RestoreRememberedForBackend
                         : SceneUpscalerPresetUpdate::UseRequested;
-                rendering_manager_->updateSettings(s, DirtyFlag::ALL, preset_update);
+                if (const auto result = rendering_manager_->updateSettingsFromUser(s, preset_update); !result) {
+                    wakeMainLoop();
+                    throw std::invalid_argument(std::string(result.error().user_message()));
+                }
                 const auto& applied = rendering_manager_->getSettings();
                 if (applied.scene_upscaler != previous_upscaler ||
                     applied.scene_upscaler_preset != previous_preset) {
@@ -1179,6 +1188,10 @@ namespace lfs::vis {
                 const auto preset_update = intent.scene_upscaler_explicit && !intent.scene_upscaler_preset_explicit
                                                ? SceneUpscalerPresetUpdate::RestoreRememberedForBackend
                                                : SceneUpscalerPresetUpdate::UseRequested;
+                if (const auto result = rendering_manager_->validateSettingsFromUser(*settings); !result) {
+                    wakeMainLoop();
+                    throw std::invalid_argument(std::string(result.error().user_message()));
+                }
                 if (!rendering_manager_->updateSettingsForView(target.view, *settings, DirtyFlag::ALL, preset_update))
                     return std::nullopt;
                 const auto applied = rendering_manager_->trySettingsForView(target.view);
@@ -2077,7 +2090,7 @@ namespace lfs::vis {
         });
 
         state::TrainingPaused::when([this](const auto& event) {
-            training_progress_publisher_.publishFinal(event.iteration);
+            training_progress_publisher_.publishFinal(event.iteration, trainer_manager_->getNumSplats());
             auto& store = app_store();
             lfs::core::reactive::BatchUpdate batch(store.store());
             store.training_running.set(false);
@@ -2094,7 +2107,7 @@ namespace lfs::vis {
         });
 
         state::TrainingCompleted::when([this](const auto& event) {
-            training_progress_publisher_.publishFinal(event.iteration);
+            training_progress_publisher_.publishFinal(event.iteration, trainer_manager_->getNumSplats());
             const char* state = !event.success       ? "error"
                                 : event.user_stopped ? "stopped"
                                                      : "completed";
@@ -3406,14 +3419,7 @@ namespace lfs::vis {
         if (trainer_manager_ &&
             (trainer_manager_->isTrainingActive() ||
              trainer_manager_->isCompletionPending())) {
-            cmd::LoadFile{
-                .path = path,
-                .is_dataset = false,
-                .stop_training = true,
-                .discard_changes = true,
-                .replace = true}
-                .emit();
-            return {};
+            return std::unexpected("Cannot replace the scene until training has stopped.");
         }
         return data_loader_->loadPLY(path);
     }
@@ -3438,6 +3444,23 @@ namespace lfs::vis {
         }
 
         LOG_INFO("Loading dataset: {}", lfs::core::path_to_utf8(path));
+        if (trainer_manager_ &&
+            (trainer_manager_->isTrainingActive() ||
+             trainer_manager_->isCompletionPending())) {
+            return std::unexpected("Cannot replace the scene until training has stopped.");
+        }
+        if (project_lifecycle_ &&
+            project_lifecycle_->hasSourcePath() &&
+            !project_lifecycle_->isBlankProject()) {
+            // Keep invalid imports from discarding the current project. The
+            // loader below still reports validation failures through its events.
+            auto params = data_loader_->getParameters();
+            params.dataset.data_path = path;
+            if (lfs::training::validateDatasetPath(params) &&
+                !resetUntitledSessionForReplaceLoad()) {
+                return std::unexpected("Failed to reset the project for dataset replacement.");
+            }
+        }
         return data_loader_->loadDataset(path);
     }
 
@@ -4000,6 +4023,8 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::resetProjectState(const bool reset_panel_registry) {
+        if (input_controller_)
+            input_controller_->setNavigationUpAxis(NavigationUpAxis::LegacyY);
         if (trainer_manager_) {
             trainer_manager_->clearRestoredProjectMetrics();
         }

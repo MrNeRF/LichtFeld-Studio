@@ -23,6 +23,19 @@ Thanks for your interest in contributing!
    - Link related issues
    - Describe what you changed and why
 
+## Opening an Issue
+
+Search existing issues, then choose **Report a problem**, **Suggest an improvement**,
+or **Ask a question**. You can also open a blank issue if none of the forms fits.
+
+Short reports are welcome. For problems, your app version, operating system, and
+GPU help us investigate. Share whatever details you know. For source builds,
+the repository or fork, branch, and commit are helpful if available.
+
+Describe one main topic per issue and link related reports when useful. Share
+what you observed; you do not need to diagnose the cause. Screenshots, logs, and
+small samples are welcome. Remove private information before sharing.
+
 ## Localization
 
 `src/visualizer/gui/resources/locales/en.json` is the canonical locale bundle.

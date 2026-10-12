@@ -1145,6 +1145,13 @@ namespace lfs::vis::gui {
         bool current_frame_loaded = false;
         const auto current_frame = requestedPlySequenceFrame();
 
+        // Loading or unloading a frame shifts the selection offsets of every later
+        // node. Keep the selection by node and restore it once the topology settles.
+        const auto selection = scene.hasSelection() ? scene.capturePerNodeSelectionSlices()
+                                                    : core::Scene::PerNodeSelectionSlices{};
+        core::Scene::Transaction transaction(scene);
+        bool topology_changed = false;
+
         while (!completed.empty()) {
             auto result = std::move(completed.front());
             completed.pop_front();
@@ -1193,6 +1200,7 @@ namespace lfs::vis::gui {
             const size_t gaussian_count = result.model->size();
             auto old_model = scene.swapNodeModel(node_name, std::move(result.model));
             old_model.reset();
+            topology_changed = true;
             scene.setNodeVisibility(*resolved_node, false);
             scene_manager->setPlyPath(frame_node->uuid, frame.path);
 
@@ -1227,31 +1235,61 @@ namespace lfs::vis::gui {
             last_ply_sequence_frame_ = std::nullopt;
         if (auto* const rm = viewer_->getRenderingManager())
             rm->markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
-        if (current_frame.has_value())
-            evictPlySequenceFrames(*current_frame);
+        if (current_frame.has_value() && evictPlySequenceFrames(*current_frame, selection))
+            topology_changed = true;
+        if (topology_changed && !selection.empty())
+            scene.applyPerNodeSelectionSlices(selection);
     }
 
-    void SequencerUIManager::evictPlySequenceFrames(const size_t keep_frame_index) {
+    bool SequencerUIManager::evictPlySequenceFrames(const size_t keep_frame_index,
+                                                    const core::Scene::PerNodeSelectionSlices& selection) {
         const auto* const sequence = controller_.plySequence();
         auto* const scene_manager = viewer_->getSceneManager();
         if (!sequence || !scene_manager)
-            return;
+            return false;
 
         auto& scene = scene_manager->getScene();
         const size_t frame_count = sequence->frames.size();
         const size_t budget = std::min(MAX_STREAM_RESIDENT_FRAMES, frame_count);
+        if (loaded_ply_sequence_frames_.size() <= budget)
+            return false;
+
+        // A frame without a node holds no payload; drop it so it does not take a slot.
+        std::erase_if(loaded_ply_sequence_frames_, [&](const size_t frame_index) {
+            if (frame_index >= frame_count)
+                return true;
+            const auto& frame = sequence->frames[frame_index];
+            const auto resolved = resolvePlySequenceNode(scene, frame.node_uuid, frame.node_name);
+            if (!resolved)
+                LOG_ERROR("Cannot evict PLY sequence frame {}: {}", frame_index, resolved.error().message);
+            return !resolved;
+        });
+
+        bool evicted = false;
         while (loaded_ply_sequence_frames_.size() > budget) {
             auto victim_it = loaded_ply_sequence_frames_.end();
             bool victim_outside_window = false;
             size_t victim_distance = 0;
+            core::NodeId victim_id = core::NULL_NODE;
 
             for (auto it = loaded_ply_sequence_frames_.begin(); it != loaded_ply_sequence_frames_.end(); ++it) {
                 const size_t candidate = *it;
                 if (candidate == keep_frame_index ||
-                    (last_ply_sequence_frame_.has_value() && candidate == *last_ply_sequence_frame_) ||
-                    candidate >= frame_count) {
+                    (last_ply_sequence_frame_.has_value() && candidate == *last_ply_sequence_frame_)) {
                     continue;
                 }
+
+                const auto& frame = sequence->frames[candidate];
+                const auto resolved = resolvePlySequenceNode(scene, frame.node_uuid, frame.node_name);
+                assert(resolved);
+                const auto* node = scene.getNodeById(*resolved);
+                assert(node);
+                const auto source = scene_manager->getPlyPath(node->uuid);
+                // Reload uses frame.path, so a missing or changed source cannot
+                // recover this payload. Edited and selected frames stay resident too.
+                if (node->payload_diverged || selection.contains(node->uuid) ||
+                    frame.path.empty() || !source || *source != frame.path)
+                    continue;
 
                 const bool outside_window = !isPlySequenceFrameInWindow(candidate, keep_frame_index, frame_count);
                 const size_t distance = plySequenceFrameDistance(candidate, keep_frame_index, frame_count);
@@ -1261,34 +1299,28 @@ namespace lfs::vis::gui {
                     victim_it = it;
                     victim_outside_window = outside_window;
                     victim_distance = distance;
+                    victim_id = *resolved;
                 }
             }
 
+            // Protected payloads may exceed the soft residency budget.
             if (victim_it == loaded_ply_sequence_frames_.end())
-                return;
+                break;
 
             const size_t victim = *victim_it;
             loaded_ply_sequence_frames_.erase(victim_it);
-            if (victim >= frame_count)
-                continue;
-
-            const auto& victim_frame = sequence->frames[victim];
-            const auto resolved_node = resolvePlySequenceNode(
-                scene, victim_frame.node_uuid, victim_frame.node_name);
-            if (!resolved_node) {
-                LOG_ERROR("Cannot evict PLY sequence frame {}: {}", victim, resolved_node.error().message);
-                continue;
-            }
-            const auto* victim_node = scene.getNodeById(*resolved_node);
+            const auto* victim_node = scene.getNodeById(victim_id);
             assert(victim_node);
             auto old_model = scene.swapNodeModel(victim_node->name, nullptr);
             old_model.reset();
-            scene.setNodeVisibility(*resolved_node, false);
+            evicted = true;
+            scene.setNodeVisibility(victim_id, false);
             std::lock_guard lock(ply_stream_mutex_);
             if (victim < ply_stream_states_.size())
                 ply_stream_states_[victim] = PlyStreamFrameState::Empty;
             ++ply_stream_eviction_count_;
         }
+        return evicted;
     }
 
     float SequencerUIManager::advancePanelClock() {
@@ -2211,8 +2243,8 @@ namespace lfs::vis::gui {
                 .user_message = std::move(message),
                 .detection = LFS_SOURCE_SITE_CURRENT()}));
         };
-        if (fps > 0.0f)
-            ui_state_.sequence_fps = std::clamp(fps, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
+        const float sequence_fps = std::clamp(fps > 0.0f ? fps : ui_state_.sequence_fps,
+                                              MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
         auto* const scene_manager = viewer_->getSceneManager();
         if (!scene_manager)
             return fail(lfs::ErrorCode::Unavailable, "Scene manager unavailable");
@@ -2222,32 +2254,38 @@ namespace lfs::vis::gui {
             LOG_ERROR("PLY sequence path is not a directory: {}", lfs::core::path_to_utf8(directory));
             return fail(lfs::ErrorCode::InvalidArgument, std::format("PLY sequence path is not a directory: {}", lfs::core::path_to_utf8(directory)));
         }
-        last_ply_sequence_frame_ = std::nullopt;
-        loaded_ply_sequence_frames_.clear();
-
         std::vector<std::filesystem::path> paths;
-        const std::filesystem::directory_iterator entries(directory, ec);
-        if (ec) {
+        const auto directory_error = [&] {
             LOG_ERROR("Failed to read PLY sequence directory {}: {}",
-                      lfs::core::path_to_utf8(directory),
-                      ec.message());
-            return fail(lfs::ErrorCode::Unavailable, std::format("Failed to read PLY sequence directory: {}", ec.message()));
-        }
-        for (const auto& entry : entries) {
-            if (ec) {
-                LOG_ERROR("Failed to read PLY sequence directory {}: {}",
-                          lfs::core::path_to_utf8(directory),
-                          ec.message());
-                return fail(lfs::ErrorCode::Unavailable, std::format("Failed to read PLY sequence directory: {}", ec.message()));
-            }
-            if (!entry.is_regular_file(ec))
-                continue;
-            auto ext = entry.path().extension().string();
+                      lfs::core::path_to_utf8(directory), ec.message());
+            return fail(lfs::ErrorCode::Unavailable,
+                        std::format("Failed to read PLY sequence directory: {}", ec.message()));
+        };
+        std::filesystem::directory_iterator entry(directory, ec);
+        if (ec)
+            return directory_error();
+        const std::filesystem::directory_iterator end;
+        for (; entry != end; entry.increment(ec)) {
+            if (ec)
+                return directory_error();
+            auto ext = entry->path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(),
                            [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (ext == ".ply")
-                paths.push_back(entry.path());
+            if (ext != ".ply")
+                continue;
+            const bool regular_file = entry->is_regular_file(ec);
+            // A dangling link or an entry removed since the listing is not a frame.
+            if (ec == std::errc::no_such_file_or_directory) {
+                ec.clear();
+                continue;
+            }
+            if (ec)
+                return directory_error();
+            if (regular_file)
+                paths.push_back(entry->path());
         }
+        if (ec)
+            return directory_error();
 
         std::sort(paths.begin(), paths.end());
         if (paths.empty()) {
@@ -2314,7 +2352,8 @@ namespace lfs::vis::gui {
             LOG_DEBUG("Added PLY sequence placeholder '{}'", node_name);
         }
 
-        ui_state_.sequence_fps = std::clamp(ui_state_.sequence_fps, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
+        ui_state_.sequence_fps = sequence_fps;
+        loaded_ply_sequence_frames_.clear();
         controller_.setPlySequence(directory,
                                    sequence_node,
                                    std::move(loaded_paths),

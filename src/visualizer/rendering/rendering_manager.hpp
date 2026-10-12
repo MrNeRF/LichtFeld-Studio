@@ -155,7 +155,8 @@ namespace lfs::vis {
                                                               int width, int height,
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
-                                                              std::optional<float> ortho_scale_override = std::nullopt);
+                                                              std::optional<float> ortho_scale_override = std::nullopt,
+                                                              bool equirectangular = false);
         // Renders the scene from a dataset camera's pose and intrinsics, as the GT comparison
         // view does, at max(image, camera) size: the size selection projects that camera at.
         // Returns a CPU float [H,W,3] image without touching the viewport presentation, or
@@ -170,7 +171,8 @@ namespace lfs::vis {
                                                                   std::optional<glm::vec3> background_color_override = std::nullopt,
                                                                   std::optional<bool> orthographic_override = std::nullopt,
                                                                   std::optional<float> ortho_scale_override = std::nullopt,
-                                                                  int reference_height = 0);
+                                                                  int reference_height = 0,
+                                                                  bool equirectangular = false);
 
         // Image + per-pixel linear depth from the same viewport render. When
         // expected_depth is true, depth is alpha-weighted expected depth instead
@@ -193,7 +195,8 @@ namespace lfs::vis {
                                                                    int width, int height,
                                                                    std::optional<bool> orthographic_override = std::nullopt,
                                                                    std::optional<float> ortho_scale_override = std::nullopt,
-                                                                   int reference_height = 0);
+                                                                   int reference_height = 0,
+                                                                   bool equirectangular = false);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImage(const lfs::core::SplatData& model,
                                                               SceneRenderState scene_state,
                                                               const glm::mat3& camera_rotation,
@@ -296,7 +299,12 @@ namespace lfs::vis {
             this->state().animation_state_.setOverlayAnimationActive(active);
         }
 
-        // Settings management
+        // Interactive edits validate changed environment maps before committing settings.
+        [[nodiscard]] lfs::Result<void> updateSettingsFromUser(const RenderSettings& settings,
+                                                               SceneUpscalerPresetUpdate preset_update = SceneUpscalerPresetUpdate::UseRequested);
+        [[nodiscard]] lfs::Result<void> validateSettingsFromUser(const RenderSettings& settings) const;
+
+        // Settings management (also used for restoring saved state).
         void updateSettings(const RenderSettings& settings);
         void updateSettings(
             const RenderSettings& settings,
@@ -799,8 +807,7 @@ namespace lfs::vis {
             std::optional<glm::vec3> background_color_override,
             std::optional<bool> transparent_background_override,
             float rasterization_scale = 1.0f,
-            bool deterministic_export = false, bool capture_float_color = false,
-            bool equirectangular = false);
+            bool deterministic_export = false, bool capture_float_color = false, bool equirectangular = false);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
             const RenderSettings& settings,
             SceneManager* scene_manager,

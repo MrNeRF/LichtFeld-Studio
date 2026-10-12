@@ -122,7 +122,7 @@ int runFrameSinkUnitContracts() {
     require(std::filesystem::exists(directory / "frame_77.exr"), "stale files survive until completion");
     require(successful_replacement.complete({SinkOutcome::Completed, 1, {}}).has_value(), "replacement complete cleans stale frames");
     require(!std::filesystem::exists(directory / "frame_5.png") && !std::filesystem::exists(directory / "frame_77.exr"), "obsolete generated PNG and EXR removed");
-    require(std::filesystem::exists(directory / "frame_1.png") && !std::filesystem::exists(directory / "photo.png") && std::filesystem::exists(directory / "other_9.exr"), "PNG replacement retains the legacy extension-wide policy");
+    require(std::filesystem::exists(directory / "frame_1.png") && std::filesystem::exists(directory / "photo.png") && std::filesystem::exists(directory / "other_9.exr"), "PNG replacement preserves unrelated images");
     seed("img_1.png");
     seed("img_31.jpg");
     std::ofstream(directory / "extraction_metadata.json") << R"({"frames":[{"file":"img_1.png"},{"file":"img_31.jpg"}]})";

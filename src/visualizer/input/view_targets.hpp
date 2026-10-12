@@ -8,6 +8,7 @@
 #include "rendering/view_source.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <glm/glm.hpp>
 #include <string_view>
 
@@ -39,6 +40,8 @@ namespace lfs::vis {
         [[nodiscard]] virtual ViewTarget viewAt(float x, float y) = 0;
         [[nodiscard]] virtual ViewTarget findView(ViewId id) = 0;
         [[nodiscard]] virtual ViewId viewId(const Viewport& viewport) const = 0;
+        // Cold project-wide changes, such as navigation defaults, visit every view.
+        virtual void forEachView(const std::function<void(ViewTarget)>& visit) { visit(activeView()); }
         // Makes a view the active one (a press in it does this).
         virtual void activateView(ViewId id) = 0;
         // Runs a view command (see screen::applyViewCommand, plus frame_all,

@@ -1059,8 +1059,8 @@ void main(
     float2 radii = sqrt(max(splat_dist.cov_vs.xz, float2(0.0f))) * extend;
   #endif
     if (equirectangular_camera) {
-        radii.x = min(radii.x, float(image_width));
-        radii.y = min(radii.y, 0.49f * float(image_height));
+        radii.x = min(radii.x, float(camera_width));
+        radii.y = min(radii.y, 0.49f * float(camera_height));
     }
 
     // GUT keeps a local tile grid, but crops the full-image rectangle only
@@ -1069,7 +1069,7 @@ void main(
     const uint bin_grid_width = banded_gut ? (camera_width + TILE_WIDTH - 1u) / TILE_WIDTH : grid_width;
     const uint bin_grid_height = banded_gut ? (camera_height + TILE_HEIGHT - 1u) / TILE_HEIGHT : grid_height;
     rectangle rect_tile_space = equirectangular_camera
-        ? get_wrapped_rectangle_tile_space(splat_dist.xyz_vs.xy, radii, grid_height, grid_width)
+        ? get_wrapped_rectangle_tile_space(splat_dist.xyz_vs.xy, radii, bin_grid_height, bin_grid_width)
         : get_rectangle_tile_space(splat_dist.xyz_vs.xy, radii, bin_grid_height, bin_grid_width);
 #if LFS_3DGUT_PROJECTION && EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
     if (gut_rectilinear_bounds(uniforms.camera_model, uniforms.splat_render_profile, uniforms.lod_enabled)) {

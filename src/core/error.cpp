@@ -435,6 +435,9 @@ namespace lfs {
             }
             out += "\n";
             for (const auto& entry : frame.fields.entries()) {
+                // Presentation metadata is not part of the English diagnostic.
+                if (entry.key == "message_key")
+                    continue;
                 out += std::format("    {}=", entry.key);
                 append_field_value(out, entry.value);
                 out += "\n";

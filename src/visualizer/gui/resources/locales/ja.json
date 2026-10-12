@@ -824,12 +824,20 @@
     "button.stop": "トレーニングを停止",
     "button.reset": "トレーニングをリセット",
     "button.add": "追加",
-    "button.remove": "削除"
+    "button.remove": "削除",
+    "conflict.strategy_gut_start_message": "GUTはigs+戦略と同時に使用できません。トレーニングを開始するアクションを選択してください。",
+    "conflict.strategy_gut_strategy_message": "この戦略はGUTと互換性がありません。切り替えるためにGUTを無効にしますか？"
   },
   "rendering": "レンダリング",
   "scene": {
     "streamed_badge": "ストリーミング",
     "streamed_badge_tooltip": "ストリーミング中のモデル：詳細度はビューに追従します。読み取り専用です。",
+    "summary_model_one": "{} モデル",
+    "summary_model_few": "{} モデル",
+    "summary_model_other": "{} モデル",
+    "summary_node_one": "{} ノード",
+    "summary_node_few": "{} ノード",
+    "summary_node_other": "{} ノード",
     "add_ply": "PLYを追加...",
     "add_group": "グループを追加",
     "add_group_ellipsis": "グループを追加...",
@@ -1083,6 +1091,16 @@
     "input": "入力",
     "key_bindings": "キー割り当て",
     "camera_navigation": "カメラ操作",
+    "new_project_navigation_up": "新規プロジェクトの上方向",
+    "new_project_navigation_help": "新規プロジェクトにのみ適用されます。既存のプロジェクトは保存済みの設定を維持します。",
+    "new_project_align_grid": "新規プロジェクトのグリッドを整列",
+    "navigation_project_hint": "この選択を保持するにはプロジェクトを保存してください。データ座標は変更されません。",
+    "navigation_up_axis": "上方向の軸",
+    "navigation_up_legacy_y": "Y-up（既定）",
+    "navigation_up_data_z": "+Z上向き（データ座標）",
+    "navigation_up_help": "プロジェクトに保存されます。ナビゲーションのみを変更し、データの座標とスケールは変更しません。",
+    "align_navigation_grid": "グリッドを上方向に合わせる",
+    "align_grid_short": "整列",
     "navigation_mode": "ナビゲーションモード",
     "zoom_speed": "ズーム速度",
     "zoom_speed_tooltip": "マウスホイールでカメラをズームする際の既定の速度。",
@@ -1534,9 +1552,9 @@
         "custom": "最後に読み込んだカスタム HDRI"
       },
       "grid_plane": {
-        "yz": "YZ 平面にグリッドを表示（右側ビュー）",
-        "xz": "XZ 平面にグリッドを表示（トップビュー）",
-        "xy": "XY 平面にグリッドを表示（フロントビュー）"
+        "yz": "YZ 平面にグリッドを表示",
+        "xz": "XZ 平面にグリッドを表示",
+        "xy": "XY 平面にグリッドを表示"
       },
       "sh_degree": {
         "0": "拡散反射のみ — ビュー依存ライティングなし",
@@ -1631,6 +1649,7 @@
     "create": "作成"
   },
   "notification": {
+    "split_view_requires_two_models": "分割ビューには、表示中のスプラットモデルが2つ必要です。",
     "merge_nodes_kept": "統合時にスプラット以外のノードを {} 個保持しました。",
     "duplicate_training_data_skipped": "複製時に学習データ（データセット、カメラ、画像）はスキップされました。",
     "dropped_not_recognized": "ドロップされた",
@@ -1846,7 +1865,8 @@
     "action.view_frame_all": "全体をフレーム",
     "action.toggle_quad_view": "4分割ビューを切り替え",
     "action.toggle_maximize_area": "エリアを最大化",
-    "action.toggle_node_editor": "ノードエディターを切り替え"
+    "action.toggle_node_editor": "ノードエディターを切り替え",
+    "action.toggle_independent_split_view": "独立分割ビュー切替"
   },
   "debug_info": {
     "clear_history": "履歴をクリア",
@@ -2164,8 +2184,19 @@
     "height": "高さ",
     "output_res": "出力：{}x{}",
     "naming": "出力の命名",
+    "naming_preset": "プリセット:",
+    "naming_video_frame": "動画名 + frame + 番号",
+    "naming_video_number": "動画名 + 番号",
+    "naming_frame_number": "Frame + 番号",
+    "naming_number": "番号のみ",
+    "naming_custom": "カスタム",
+    "naming_help": "{video}: 拡張子を除く動画名。%d: 元動画のフレーム番号。%05d: 最低5桁。%%: 文字としての %。拡張子は自動追加されます。 {{ / }}: 波括弧を文字として挿入。",
+    "naming_number_help": "元動画のフレーム番号は1から始まり、欠番が生じる場合があります。番号指定がない場合は末尾に番号を追加します。",
+    "naming_example_pending": "参考例（動画未読み込み）: {}{}",
+    "naming_error_placeholder": "不明または不完全なプレースホルダーです。動画名には {video} を使用してください。",
+    "naming_error_filename": "この環境では無効なファイル名です。フォルダーを含まない名前を使用してください。",
     "pattern": "パターン：",
-    "pattern_tooltip": "%dでフレーム番号を指定（例：frame_%04dでゼロ埋め）",
+    "pattern_tooltip": "{video}: 拡張子を除く動画名。%d: 元動画のフレーム番号。%05d: 最低5桁。%%: 文字としての %。拡張子は自動追加されます。 {{ / }}: 波括弧を文字として挿入。",
     "example": "例：{}{}",
     "start": "抽出を開始",
     "stop": "停止",
@@ -2286,6 +2317,8 @@
     "strategy_default": "デフォルト",
     "split": "分割:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "1秒あたりに表示されるインターフェースのフレーム数。",
+    "view_fps_tooltip": "1秒あたりにレンダリングされる3Dビューのフレーム数。静止したビューでは、インターフェースが応答していても0と表示されることがあります。",
     "ui": "UI",
     "view": "ビュー",
     "renderer_backend": "レンダラー",
@@ -2639,9 +2672,9 @@
     "solid_color": "単色",
     "equirectangular_hdri": "正距円筒HDRI",
     "off": "オフ",
-    "grid_plane_yz": "YZ（右）",
-    "grid_plane_xz": "XZ（上）",
-    "grid_plane_xy": "XY（前）",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "手動",
@@ -2729,9 +2762,12 @@
     "perf_hud_tooltip": "パフォーマンス HUD の表示/非表示",
     "input_mouse_tooltip": "マウス操作: 中ボタンドラッグで回転、右ドラッグでパン、ホイールでズーム。クリックで切り替え",
     "input_trackpad_tooltip": "トラックパッド操作: 2本指スワイプで回転、Shift+スワイプでパン、ピンチまたはCtrl+スワイプでズーム。クリックで切り替え",
-    "input_automatic_tooltip": "自動操作: トラックパッドではトラックパッド操作、マウスではホイールでズーム。クリックで切り替え"
+    "input_automatic_tooltip": "自動操作: トラックパッドではトラックパッド操作、マウスではホイールでズーム。クリックで切り替え",
+    "independent_split_view": "独立分割ビュー",
+    "exit_independent_split_view": "独立分割ビューを終了"
   },
   "runtime": {
+    "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",
     "training_save_no_memory": "プロジェクトを保存できませんでした: {}",
     "autosave_deferred_no_memory": "自動保存は一時停止中です: 空きメモリが不足しています（{}）。トレーニングは継続します。メモリが解放されると自動保存を再開します。",
     "grouped_changes": "グループ化された変更",
@@ -2914,12 +2950,13 @@
     "right_click_to_add": "右クリックして追加...",
     "training_complete": "トレーニング完了",
     "training_stopped": "トレーニング停止",
+    "training_stopped_body": "ユーザーが反復 {} でトレーニングを停止しました。\n\nこの状態を保持するには、プロジェクトを保存してください。トレーニングを再開するには、保存したプロジェクトを開き直してください。",
     "training_error": "トレーニングエラー",
     "param_manager_unavailable": "パラメータマネージャーが利用できません",
     "failed_to_load_params": "パラメータの読み込みに失敗しました:",
-    "err_distorted_images": "歪みのある画像が検出されました。歪みのあるカメラで学習するには --gut または --undistort を有効にしてください。",
+    "err_distorted_images": "歪みのある画像が検出されました。歪みのあるカメラで学習するには、トレーニングパネルで GUT または歪み補正を有効にしてください。",
     "err_ortho_not_supported": "正射影カメラモデルでの学習はまだサポートされていません。",
-    "err_non_pinhole": "非ピンホールカメラで学習するには --gut または --undistort を有効にしてください。"
+    "err_non_pinhole": "非ピンホールカメラで学習するには、トレーニングパネルで GUT または歪み補正を有効にしてください。"
   },
   "projects.gallery.sidebar.title": "ギャラリー",
   "projects.gallery.sidebar.refresh": "ギャラリーを確認",
@@ -3071,9 +3108,16 @@
   "projects.gallery.toast.published": "「{title}」を公開しました",
   "projects.gallery.toast.pulled": "「{title}」を「{folder}」に追加しました",
   "projects.gallery.toast.removed": "「{title}」をギャラリーから削除しました",
-  "projects.gallery.quota.used": "{quota} GB 中 {used} GB 使用済み",
+  "projects.gallery.quota.used": "{quota} 中 {used} 使用済み",
   "projects.gallery.quota.warning": "このファイルはギャラリーの空き容量を超える可能性があります。アップロードサイズは選択した形式によって異なります。",
   "projects.gallery.quota.confirm": "保存済みファイルがギャラリーの空き容量を超えています。選択した形式でサイズを小さくできる場合があります。‹{title}› の準備を続けますか？",
+  "projects.gallery.error.gallery_storage": "Gallery の空き容量が不足しています。Gallery のシーンを削除するか、保留中または失敗したアップロード（容量を確保したままです）をキャンセルするか、シーンを小さくしてください。",
+  "projects.gallery.error.gallery_storage_size": "Gallery の空き容量が不足しています。このアップロードには {needed} が必要ですが、{quota} 中の空き容量は {free} です。Gallery のシーンを削除するか、保留中または失敗したアップロード（容量を確保したままです）をキャンセルするか、シーンを小さくしてください。",
+  "projects.gallery.info.reserves": "このアップロードはキャンセルするまで Gallery の容量 {size} を確保し続けます。",
+  "projects.gallery.info.reserves_unknown": "このアップロードはキャンセルするまで Gallery の容量を確保し続けます。",
+  "projects.gallery.info.storage_retry": "準備済みのコピーを保持しました。Gallery の容量を空けてから「再試行」で再利用できます。",
+  "projects.gallery.review.upload_size": "アップロードサイズ: {size}",
+  "projects.gallery.review.ssog_levels": "SSOG はすべての LOD レベルを含むため、単一の SOG ファイルより大幅に大きくなる場合があります。",
   "projects.gallery.action.update_all": "すべて更新 ({count})",
   "projects.gallery.confirm.update_all": "これらの公開シーンを更新しますか？公開中の内容が置き換えられます:\n{title}",
   "projects.gallery.empty.published": "公開済みのシーンはまだありません。プロジェクトを選んで「公開」を押してください",
@@ -5188,5 +5232,6 @@
   "node_editor.capture_view": "ビューを保存",
   "node_editor.curve_hint": "点をドラッグして調整。クリックで追加、ダブルクリックまたはDeleteで削除。",
   "node_editor.ramp_hint": "ストップをドラッグして移動。クリックで追加、ダブルクリックまたはDeleteで削除。選択するとRGBAを編集できます。",
-  "node_editor.keyframe_hint": "キーフレームを挿入 · Ctrl+クリック、またはポインターを重ねて I"
+  "node_editor.keyframe_hint": "キーフレームを挿入 · Ctrl+クリック、またはポインターを重ねて I",
+  "toolbar.asset_manager": "プロジェクト"
 }

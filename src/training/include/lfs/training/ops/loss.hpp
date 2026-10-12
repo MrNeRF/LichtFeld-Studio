@@ -27,6 +27,8 @@ namespace lfs::gpu_ops {
 
     struct PhotoSaved {
         Tensor ssim_map, cs_map;
+        // Diagnostic from an already available host normalization, without a new readback.
+        bool empty_mask = false;
         State backend;
     };
 

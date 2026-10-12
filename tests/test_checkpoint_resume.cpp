@@ -1071,6 +1071,87 @@ namespace {
             return name;
         });
 
+    TEST(SplatDataDeletedCountTest, DeserializePublishesDeletedCountAndPreservesPayload) {
+        for (const size_t deleted_count : {0u, 3u, 6u}) {
+            SCOPED_TRACE(deleted_count);
+            auto model = make_checkpoint_test_splat(6, lfs::core::Device::GPU);
+            std::vector<bool> mask(6, false);
+            std::fill_n(mask.begin(), deleted_count, true);
+            model->soft_delete(lfs::core::Tensor::from_vector(mask, {6}, lfs::core::Device::GPU));
+            model->refresh_deleted_count();
+            std::stringstream stream;
+            model->serialize(stream);
+
+            lfs::core::SplatData loaded;
+            loaded.deserialize(stream, {});
+
+            EXPECT_EQ(loaded.size(), model->size());
+            EXPECT_EQ(loaded.visible_count(), 6u - deleted_count);
+            EXPECT_EQ(loaded.deleted_count(), deleted_count);
+            EXPECT_EQ(loaded.means().cpu().to_vector(), model->means().cpu().to_vector());
+            EXPECT_EQ(loaded.opacity_raw().cpu().to_vector(), model->opacity_raw().cpu().to_vector());
+            if (deleted_count > 0) {
+                EXPECT_EQ(loaded.deleted().cpu().to_vector_bool(), mask);
+            } else {
+                EXPECT_FALSE(loaded.has_deleted_mask());
+            }
+        }
+    }
+
+    TEST(SplatDataDeletedCountTest, DeserializeReplacesStaleCountAndPreservesStateOnFailure) {
+        auto loaded = make_checkpoint_test_splat(6, lfs::core::Device::GPU);
+        loaded->soft_delete(lfs::core::Tensor::ones_bool({6}, lfs::core::Device::GPU));
+        loaded->refresh_deleted_count();
+        ASSERT_EQ(loaded->deleted_count(), 6u);
+
+        auto source = make_checkpoint_test_splat(4, lfs::core::Device::GPU);
+        std::stringstream stream;
+        source->serialize(stream);
+        const auto bytes = stream.str();
+        std::stringstream truncated(bytes.substr(0, bytes.size() - 1));
+        EXPECT_THROW(loaded->deserialize(truncated, {}), std::runtime_error);
+        EXPECT_EQ(loaded->deleted_count(), 6u);
+        EXPECT_EQ(loaded->visible_count(), 0u);
+        EXPECT_EQ(loaded->size(), 6u);
+
+        loaded->deserialize(stream, {});
+        EXPECT_EQ(loaded->deleted_count(), 0u);
+        EXPECT_EQ(loaded->visible_count(), 4u);
+        EXPECT_FALSE(loaded->has_deleted_mask());
+    }
+
+    TEST(SplatDataDeletedCountTest, AllocatorMigrationPreservesDeletedCount) {
+        const lfs::core::SplatTensorAllocator allocator =
+            [](const lfs::core::TensorShape shape, const size_t capacity,
+               const lfs::core::DataType dtype, std::string_view) {
+                return lfs::core::Tensor::zeros_direct(shape, capacity, lfs::core::Device::GPU, dtype);
+            };
+        for (const bool training : {false, true}) {
+            for (const size_t deleted_count : {0u, 3u}) {
+                SCOPED_TRACE(training);
+                SCOPED_TRACE(deleted_count);
+                auto model = make_checkpoint_test_splat(6, lfs::core::Device::GPU);
+                std::vector<bool> mask(6, false);
+                std::fill_n(mask.begin(), deleted_count, true);
+                model->soft_delete(lfs::core::Tensor::from_vector(mask, {6}, lfs::core::Device::GPU));
+                model->refresh_deleted_count();
+                const auto means = model->means().cpu().to_vector();
+                if (training) {
+                    lfs::core::param::TrainingParameters params;
+                    params.optimization.max_cap = 16;
+                    ASSERT_TRUE(lfs::training::migrateTrainingModelToAllocator(params, *model, allocator, true));
+                } else {
+                    ASSERT_TRUE(lfs::io::migrateSplatTensorsToAllocator(*model, allocator));
+                }
+                EXPECT_EQ(model->deleted_count(), deleted_count);
+                EXPECT_EQ(model->visible_count(), 6u - deleted_count);
+                EXPECT_EQ(model->size(), 6u);
+                EXPECT_EQ(model->deleted().cpu().to_vector_bool(), mask);
+                EXPECT_EQ(model->means().cpu().to_vector(), means);
+            }
+        }
+    }
+
     TEST(SplatDataFrozenRangesTest, FrozenRangesSurviveSerializeRoundTrip) {
         auto model = make_checkpoint_test_splat(6);
         model->set_frozen_ranges({{1, 2}, {4, 1}});
@@ -2650,6 +2731,88 @@ namespace {
         EXPECT_FALSE(document->checkpoint_uuids().empty());
 
         std::filesystem::remove_all(output_path, ec);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           FailedSnapshotPreparationDoesNotReusePreviousSaveSuccess) {
+        using namespace lfs::io::project;
+        using namespace lfs::test::licht;
+        TemporaryDirectory temporary;
+        auto params = make_tiny_headless_params(temporary.path, 1);
+        params.optimization.enable_eval = false;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        lfs::training::Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        lfs::training::grant_headless_project_saves(trainer, params);
+        const auto path = temporary.path / "project.licht";
+        ASSERT_TRUE(trainer.save_project_to(path, 0));
+        const auto before = require_result(ProjectReader::open(path)).commit().generation;
+        const auto before_hash = require_result(hash_dataset_file(path));
+
+        // An empty model fails during preparation, before the writer starts.
+        auto& means = trainer.get_strategy_mutable().get_model().means();
+        auto original_means = std::move(means);
+        means = lfs::core::Tensor::zeros({0, 3}, lfs::core::Device::GPU);
+        for (const auto& destination : {path, temporary.path / "new.licht"}) {
+            const auto saved = trainer.save_project_to(destination, 1);
+            EXPECT_FALSE(saved);
+            if (!saved) {
+                EXPECT_NE(saved.error().find("Gaussian count is out of bounds"), std::string::npos)
+                    << saved.error();
+            }
+            EXPECT_NE(trainer.get_project_snapshot_metrics().last_writer_error.find(
+                          "Gaussian count is out of bounds"),
+                      std::string::npos);
+            EXPECT_EQ(trainer.get_project_snapshot_metrics().last_failed_request_id, 0u);
+        }
+        EXPECT_EQ(require_result(hash_dataset_file(path)), before_hash);
+        EXPECT_FALSE(std::filesystem::exists(temporary.path / "new.licht"));
+
+        means = std::move(original_means);
+        ASSERT_TRUE(trainer.save_project_to(path, 1));
+        EXPECT_TRUE(trainer.get_project_snapshot_metrics().last_writer_error.empty());
+        EXPECT_GT(require_result(ProjectReader::open(path)).commit().generation, before);
+        trainer.shutdown();
+        EXPECT_TRUE(trainer.get_project_snapshot_metrics().last_writer_error.empty());
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           EmptyFinalSparsitySnapshotFailsTrainingAndPreservesRegularCheckpoint) {
+        using namespace lfs::io::project;
+        using namespace lfs::test::licht;
+        TemporaryDirectory temporary;
+        auto params = make_tiny_headless_params(temporary.path, 4);
+        params.optimization.strategy = "mrnf";
+        params.optimization.enable_eval = false;
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsify_steps = 1;
+        params.optimization.prune_ratio = 1.0f;
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        lfs::training::Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        lfs::training::grant_headless_project_saves(trainer, params);
+        const auto trained = trainer.train();
+        EXPECT_EQ(scene.getTrainingModel()->size(), 0u);
+        EXPECT_FALSE(trained);
+        if (!trained) {
+            EXPECT_NE(lfs::format_for_developer(trained.error()).find("Gaussian count is out of bounds"),
+                      std::string::npos);
+        }
+        trainer.shutdown();
+
+        auto document = require_result_ptr(ProjectDocument::open(temporary.path / "project.licht"));
+        lfs::core::Scene restored;
+        const auto hydration = require_result(document->hydrate(restored));
+        ASSERT_TRUE(hydration.checkpoint_header);
+        EXPECT_EQ(hydration.checkpoint_header->iteration, 4);
+        ASSERT_NE(restored.getTrainingModel(), nullptr);
+        EXPECT_GT(restored.getTrainingModel()->size(), 0u);
     }
 
     TEST_F(ProjectCheckpointTrainerInstall,

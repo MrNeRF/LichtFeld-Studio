@@ -4772,13 +4772,6 @@ namespace lfs::vis::gui {
         }
 
         applyDefaultStyle();
-        if (auto* const input_controller = viewer_->getInputController()) {
-            if (const auto mode = InputController::cameraNavigationModeFromName(
-                    lfs::vis::loadCameraNavigationPreference())) {
-                input_controller->setCameraNavigationMode(*mode);
-            }
-            input_controller->setCameraViewSnapEnabled(lfs::vis::loadCameraViewSnapPreference());
-        }
         rebuildFonts(current_ui_scale_);
 
         initMenuBar();
@@ -6891,6 +6884,8 @@ namespace lfs::vis::gui {
             if (status_input) {
                 rml_status_bar_.processInput(panel_input, status_bar_x, status_bar_y,
                                              status_bar_w, status_bar_height);
+            } else {
+                rml_status_bar_.clearTooltip();
             }
             rml_status_bar_.render(draw_ctx, status_bar_x, status_bar_y,
                                    status_bar_w, status_bar_height,

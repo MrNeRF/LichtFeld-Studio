@@ -398,7 +398,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -1125,6 +1125,25 @@ NB_MODULE(lichtfeld, m) {
             return error.empty() ? std::nullopt : std::make_optional(error);
         },
         "Get trainer error message");
+
+    m.def(
+        "trainer_error_key",
+        []() -> std::optional<std::string> {
+            const auto* const tm = lfs::python::get_trainer_manager();
+            if (!tm || tm->getLastError().empty())
+                return std::nullopt;
+            const auto error = tm->lastTrainingError();
+            if (error && !error->frames().empty()) {
+                for (const auto& field : error->frames().front().fields.entries()) {
+                    if (field.key == "message_key") {
+                        if (const auto* key = std::get_if<std::string>(&field.value))
+                            return *key;
+                    }
+                }
+            }
+            return std::nullopt;
+        },
+        "Get the optional localization key for the trainer error message");
 
     m.def(
         "prepare_training_from_scene", []() {
@@ -2030,7 +2049,8 @@ NB_MODULE(lichtfeld, m) {
            std::optional<int> min_track_length,
            bool stop_training,
            bool discard_changes,
-           bool replace) {
+           bool replace,
+           const std::string& images_folder) {
             nb::gil_scoped_release release;
             lfs::core::events::cmd::LoadFile command{
                 .path = python_utf8_path(path),
@@ -2043,7 +2063,8 @@ NB_MODULE(lichtfeld, m) {
                 .apply_auto_crop = apply_auto_crop,
                 .stop_training = stop_training,
                 .discard_changes = discard_changes,
-                .replace = replace};
+                .replace = replace,
+                .images_folder = images_folder};
             emit_project_cmd_marshaled(
                 "python.load_file",
                 [command = std::move(command)] { command.emit(); });
@@ -2057,6 +2078,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("stop_training") = false,
         nb::arg("discard_changes") = false,
         nb::arg("replace") = false,
+        nb::arg("images_folder") = "",
         "Load a file (PLY, checkpoint) or dataset into the scene.");
 
     m.def(
@@ -2071,7 +2093,7 @@ NB_MODULE(lichtfeld, m) {
                 .stop_training = stop_training,
                 .discard_changes = discard_changes,
                 .replace = replace,
-                .user_batch = user_batch && paths.size() > 1};
+                .user_batch = user_batch};
             for (const auto& path : paths)
                 command.paths.push_back(python_utf8_path(path));
             nb::gil_scoped_release release;
@@ -3068,6 +3090,25 @@ NB_MODULE(lichtfeld, m) {
                 lfs::vis::InputController::cameraNavigationModeName(*parsed));
         },
         nb::arg("mode"), "Set the active camera navigation mode");
+    m.def("get_new_project_navigation_up_axis", [] { return lfs::vis::UserPreferences::instance().newProjectNavigationUpAxis(); }, "Get the navigation vertical used only for new projects");
+    m.def("get_new_project_align_grid", [] { return lfs::vis::UserPreferences::instance().alignNewProjectGrid(); }, "Get whether new projects start with a grid perpendicular to their navigation vertical");
+    m.def("set_new_project_navigation_defaults", [](const std::string& axis, bool align_grid) { lfs::vis::UserPreferences::instance().setNewProjectNavigation(axis, align_grid); }, nb::arg("axis"), nb::arg("align_grid"), "Set new-project defaults without modifying the current project");
+    m.def(
+        "get_navigation_up_axis", []() -> std::string {
+            const auto* controller = lfs::vis::InputController::instance();
+            return std::string(lfs::vis::navigationUpAxisName(
+                controller ? controller->navigationUpAxis() : lfs::vis::NavigationUpAxis::LegacyY));
+        },
+        "Get the project navigation vertical: legacy_y or data_z");
+    m.def(
+        "set_navigation_up_axis", [](const std::string& axis, bool align_grid) {
+            const auto parsed = lfs::vis::navigationUpAxisFromName(axis);
+            if (!parsed)
+                throw std::invalid_argument("navigation up axis must be legacy_y or data_z");
+            if (auto* controller = lfs::vis::InputController::instance())
+                controller->setNavigationUpAxis(*parsed, align_grid);
+        },
+        nb::arg("axis"), nb::arg("align_grid") = false, "Set the project navigation vertical without transforming scene data or camera poses; optionally align both panel grids");
     m.def(
         "get_camera_view_snap_enabled", []() -> bool {
             const auto* controller = lfs::vis::InputController::instance();

@@ -65,6 +65,11 @@ namespace lfs::vis::project {
 
         using Json = SessionJson;
 
+        bool is_builtin_environment(const std::string_view path) {
+            return path == lfs::vis::kDefaultEnvironmentMapPath ||
+                   path == "environments/alps_field_1k.hdr";
+        }
+
         lfs::Error session_state_error(
             const lfs::ErrorCode code,
             std::string detail,
@@ -338,7 +343,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> required_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return JsonField<Owner>(
                 name,
                 [member](const Owner& source) { return Json(source.*member); },
@@ -356,7 +361,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> optional_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return JsonField<Owner>(
                 name,
                 [member](const Owner& source) { return Json(source.*member); },
@@ -384,7 +389,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> vec3_field(
             const std::string_view name,
-            glm::vec3 Owner::*member) {
+            glm::vec3 Owner::* member) {
             return JsonField<Owner>(
                 name,
                 [member](const Owner& source) { return vec3_json(source.*member); },
@@ -407,7 +412,7 @@ namespace lfs::vis::project {
                   typename AfterAssign = std::nullptr_t>
         JsonField<Owner> enum_field(
             const std::string_view name,
-            Enum Owner::*member,
+            Enum Owner::* member,
             const int minimum,
             const int maximum,
             const std::string_view invalid_detail,
@@ -509,7 +514,7 @@ namespace lfs::vis::project {
         template <typename Owner, std::size_t Size>
         JsonField<Owner> array_field(
             const std::string_view name,
-            std::array<float, Size> Owner::*member) {
+            std::array<float, Size> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -545,7 +550,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> nullable_positive_float_field(
             const std::string_view name,
-            std::optional<float> Owner::*member) {
+            std::optional<float> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -739,8 +744,7 @@ namespace lfs::vis::project {
                 custom_field<RenderSettings>(
                     "environment_builtin",
                     [](const RenderSettings& settings) {
-                        return settings.environment_map_path ==
-                                       lfs::vis::kDefaultEnvironmentMapPath
+                        return is_builtin_environment(settings.environment_map_path)
                                    ? Json(settings.environment_map_path)
                                    : Json(nullptr);
                     },
@@ -1749,7 +1753,7 @@ namespace lfs::vis::project {
             using Panel = gui::PanelProjectState;
             const auto nullable_float = [](
                                             const std::string_view name,
-                                            float Panel::*member) {
+                                            float Panel::* member) {
                 return custom_field<Panel>(
                     name,
                     [member](const Panel& panel) {
@@ -2398,8 +2402,7 @@ namespace lfs::vis::project {
         auto project_render_settings =
             renderSettingsToProjectJson(settings);
         if (!settings.environment_map_path.empty() &&
-            settings.environment_map_path !=
-                lfs::vis::kDefaultEnvironmentMapPath) {
+            !is_builtin_environment(settings.environment_map_path)) {
             std::optional<lfs::core::Uuid>
                 retained_uuid;
             const auto retained_reference =
@@ -2470,6 +2473,7 @@ namespace lfs::vis::project {
                  {"view_snap",
                   input_controller
                       ->cameraViewSnapEnabled()},
+                 {"up_axis", std::string(navigationUpAxisName(input_controller->navigationUpAxis()))},
              }},
             {"split",
              {
@@ -3475,7 +3479,8 @@ namespace lfs::vis::project {
                     scalar<bool>(
                         *navigation,
                         "view_snap")
-                        .value_or(false));
+                        .value_or(false),
+                    navigationUpAxisFromName(scalar<std::string>(*navigation, "up_axis").value_or("legacy_y")).value_or(NavigationUpAxis::LegacyY));
             }
 
             bookmarks.clear();

@@ -169,14 +169,14 @@ if(CMAKE_HOST_APPLE)
     set(LFS_ENABLE_CUDA OFF CACHE BOOL "Build the CUDA language, toolkit, and CUDA trainer kernels" FORCE)
 endif()
 if(LFS_ENABLE_CUDA)
-    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
+    project(LichtFeld-Studio VERSION 0.5.5 LANGUAGES CUDA CXX C)
     set(LFS_HAS_CUDA ON)
 elseif(CMAKE_HOST_APPLE)
     # Objective-C++ builds the Metal tensor backend.
-    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CXX C OBJCXX)
+    project(LichtFeld-Studio VERSION 0.5.5 LANGUAGES CXX C OBJCXX)
     set(LFS_HAS_CUDA OFF)
 else()
-    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CXX C)
+    project(LichtFeld-Studio VERSION 0.5.5 LANGUAGES CXX C)
     set(LFS_HAS_CUDA OFF)
 endif()
 
@@ -253,6 +253,7 @@ add_custom_target(lfs_git_version ALL
     COMMAND ${CMAKE_COMMAND}
             "-DGIT_SRC_DIR=${CMAKE_SOURCE_DIR}"
             "-DGIT_VERSION_HEADER=${CMAKE_BINARY_DIR}/include/git_version.h"
+            "-DLFS_PROJECT_VERSION=${PROJECT_VERSION}"
             -P "${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
     COMMENT "Refreshing git_version.h"
     VERBATIM
@@ -811,6 +812,10 @@ add_executable(${PROJECT_NAME}
     resources/lichtfeld-studio.rc
     resources/lichtfeld-studio.manifest
 )
+# Image comparison scores with the training metrics.
+if(LFS_BUILD_TRAINER)
+    target_sources(${PROJECT_NAME} PRIVATE src/app/compare.cpp)
+endif()
 if(TARGET lfs_scene_upscaler_amd_fsr3)
     add_dependencies(${PROJECT_NAME} lfs_scene_upscaler_amd_fsr3)
 endif()

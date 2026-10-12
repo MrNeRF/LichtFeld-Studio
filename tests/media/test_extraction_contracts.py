@@ -97,6 +97,21 @@ class ExtractionContracts(unittest.TestCase):
             luma = pixels[index * 4608:index * 4608 + 3072]
             self.assertLessEqual(max(abs(value - (32 + index * 32)) for value in luma), 5)
 
+    def test_cpu_encode_session_preserves_explicit_color_options(self):
+        work = Path(tempfile.mkdtemp(prefix="encode-color-", dir=self.root))
+        video = work / "bt709.mp4"
+        request = work / "encode.json"
+        request.write_text(json.dumps({"operation": "encode-session", "output": str(video),
+                                       "matrix": 1, "range": 1}), encoding="utf-8")
+        result = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        decoded = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_frames", "-show_streams",
+                                                      "-of", "json", str(video)]))
+        self.assertEqual(len(decoded["frames"]), 4)
+        for item in decoded["streams"] + decoded["frames"]:
+            self.assertEqual(item["color_space"], "bt709")
+            self.assertEqual(item["color_range"], "tv")
+
     @unittest.skipUnless(os.environ.get("LFS_MEDIA_TEST_VIDEOTOOLBOX_8K") == "1",
                          "requires an explicit native Mac VideoToolbox 8K run")
     def test_videotoolbox_8k_session_roundtrip_and_recovery(self):
@@ -475,6 +490,30 @@ class ExtractionContracts(unittest.TestCase):
         # Legacy source_frame on VFR is nominal-FPS-derived, not a decoded ordinal.
         for index, frame in enumerate(frames):
             self.assertEqual(fixtures.decoded_rgb(output / frame["file"], FFMPEG), self.reference_frame(index))
+
+    def test_vfr_file_sink_uses_nominal_rate_when_average_differs(self):
+        source = self.root / "variable-rate.mp4"
+        subprocess.run([
+            FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=64x32:rate=30",
+            "-frames:v", "12", "-vf", "setpts='if(lt(N,6),N,6+(N-6)*2)/(30*TB)'",
+            "-fps_mode", "vfr", "-c:v", "mpeg4", "-q:v", "2", str(source),
+        ], check=True, capture_output=True)
+        probe = json.loads(subprocess.check_output([
+            FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_streams", "-of", "json", str(source),
+        ]))["streams"][0]
+        self.assertEqual(probe["r_frame_rate"], "30/1")
+        self.assertNotEqual(probe["avg_frame_rate"], probe["r_frame_rate"])
+        expected = [1, 2, 3, 4, 5, 6, 7, 9, 11, 13, 15, 17]
+        for sink in ("legacy", "file"):
+            with self.subTest(sink=sink):
+                result, output = self.extract(input=str(source), sink=sink, end=-1.0)
+                self.completed(result)
+                self.assertEqual(sorted(path.name for path in output.glob("*.png")),
+                                 [f"frame_{number:03d}.png" for number in expected])
+                if sink == "legacy":
+                    frames = self.metadata(output)["frames"]
+                    self.assertEqual([frame["source_frame"] for frame in frames], expected)
+                    self.assertTrue(all((output / frame["file"]).exists() for frame in frames))
 
     def test_all_explicit_rotations_preserve_full_pixels(self):
         for rotation in (90, 180, 270):

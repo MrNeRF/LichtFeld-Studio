@@ -1148,76 +1148,6 @@ namespace lfs::io {
     }
 
     // -----------------------------------------------------------------------------
-    //  Helper to scale camera intrinsics
-    // -----------------------------------------------------------------------------
-    static void scale_camera_intrinsics(CAMERA_MODEL model, std::vector<float>& params, float factor) {
-        switch (model) {
-        case CAMERA_MODEL::SIMPLE_PINHOLE:
-            params[0] /= factor; // f
-            params[1] /= factor; // cx
-            params[2] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::PINHOLE:
-            params[0] /= factor; // fx
-            params[1] /= factor; // fy
-            params[2] /= factor; // cx
-            params[3] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::SIMPLE_RADIAL:
-        case CAMERA_MODEL::RADIAL:
-            params[0] /= factor; // f
-            params[1] /= factor; // cx
-            params[2] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::OPENCV:
-        case CAMERA_MODEL::OPENCV_FISHEYE:
-        case CAMERA_MODEL::FULL_OPENCV:
-            params[0] /= factor; // fx
-            params[1] /= factor; // fy
-            params[2] /= factor; // cx
-            params[3] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::SIMPLE_RADIAL_FISHEYE:
-        case CAMERA_MODEL::RADIAL_FISHEYE:
-            params[0] /= factor; // f
-            params[1] /= factor; // cx
-            params[2] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::FOV:
-            params[0] /= factor; // fx
-            params[1] /= factor; // fy
-            params[2] /= factor; // cx
-            params[3] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::THIN_PRISM_FISHEYE:
-            params[0] /= factor; // fx
-            params[1] /= factor; // fy
-            params[2] /= factor; // cx
-            params[3] /= factor; // cy
-            break;
-
-        case CAMERA_MODEL::EQUIRECTANGULAR:
-            params[0] /= factor; // width
-            params[1] /= factor; // height
-            break;
-
-        default:
-            LOG_WARN("Unknown camera model for scaling");
-            if (params.size() >= 4) {
-                params[2] /= factor; // cx
-                params[3] /= factor; // cy
-            }
-            break;
-        }
-    }
-
-    // -----------------------------------------------------------------------------
     //  Helper to extract scale factor from folder name
     // -----------------------------------------------------------------------------
     static float extract_scale_from_folder(const std::string& images_folder) {
@@ -1505,10 +1435,6 @@ namespace lfs::io {
             for (int j = 0; j < param_cnt; j++) {
                 cam.params[j] = static_cast<float>(read_f64(cur, end, "cameras.bin parameter"));
                 valid = valid && std::isfinite(cam.params[j]);
-            }
-
-            if (scale_factor != 1.0f) {
-                scale_camera_intrinsics(it->second.first, cam.params, scale_factor);
             }
 
             if (!valid) {
@@ -2251,10 +2177,6 @@ namespace lfs::io {
                 }
                 continue;
             }
-            if (scale_factor != 1.0f) {
-                scale_camera_intrinsics(it->second.first, cam.params, scale_factor);
-            }
-
             const auto [_, inserted] = cams.emplace(cam.camera_id, std::move(cam));
             if (!inserted) {
                 throw_colmap_error(lfs::ErrorCode::DataLoss,
@@ -2788,6 +2710,15 @@ namespace lfs::io {
         default:
             return std::nullopt;
         }
+        // Expand shared focal lengths before applying the exact ratio for each axis.
+        if (model != CAMERA_MODEL::EQUIRECTANGULAR) {
+            const float x_scale = static_cast<float>(cam_data.width) / static_cast<float>(cam_data.original_width);
+            const float y_scale = static_cast<float>(cam_data.height) / static_cast<float>(cam_data.original_height);
+            calibration.focal_x *= x_scale;
+            calibration.focal_y *= y_scale;
+            calibration.center_x *= x_scale;
+            calibration.center_y *= y_scale;
+        }
         return calibration;
     }
 
@@ -2845,6 +2776,7 @@ namespace lfs::io {
             bool depth_matched = false;
             bool normal_matched = false;
             std::array<int, 4> depth_sizes{}, normal_sizes{};
+            std::optional<Diagnostic> image_aspect_warning;
             size_t undistort_crop_failures = 0;
             size_t undistort_fisheye_crop_failures = 0;
         };
@@ -3057,6 +2989,29 @@ namespace lfs::io {
                     }
                     return *image_info;
                 };
+                // Advisory only: retain existing import behavior when a header cannot be probed.
+                if (image_file_present) {
+                    try {
+                        const auto [img_w, img_h, img_c] = get_image_info_cached();
+                        if (img_w > 0 && img_h > 0) {
+                            const double aspect_scale = (static_cast<double>(img_w) * cam_data.height) /
+                                                        (static_cast<double>(img_h) * cam_data.width);
+                            if (std::abs(aspect_scale - 1.0) > 0.01) {
+                                output.image_aspect_warning = Diagnostic{
+                                    .code = lfs::ErrorCode::InvalidArgument,
+                                    .message = std::format(
+                                        "Image '{}' is {}x{} but COLMAP camera {} is {}x{} (aspect ratio differs by {:.1f}%). "
+                                        "Intrinsics will be scaled independently in x and y; check for cropping or incorrect camera metadata.",
+                                        img.name, img_w, img_h, img.camera_id, cam_data.width, cam_data.height,
+                                        std::abs(aspect_scale - 1.0) * 100.0),
+                                    .fields = lfs::SmallFields{},
+                                };
+                            }
+                        }
+                    } catch (const std::exception& e) {
+                        LOG_DEBUG("Could not check image aspect ratio for '{}': {}", img.name, e.what());
+                    }
+                }
                 if (image_file_present && options.load_masks && !mask_path.empty()) {
                     auto [img_w, img_h, img_c] = get_image_info_cached();
                     auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
@@ -3280,6 +3235,28 @@ namespace lfs::io {
         }
 
         std::vector<Diagnostic> warnings;
+        // A whole cropped dataset would otherwise add one warning per image.
+        size_t aspect_mismatches = 0;
+        for (auto& output : assembled) {
+            if (!output.image_aspect_warning)
+                continue;
+            if (++aspect_mismatches > kMaxSkipSamples) {
+                LOG_DEBUG("{}", output.image_aspect_warning->message);
+                continue;
+            }
+            LOG_WARN("{}", output.image_aspect_warning->message);
+            warnings.push_back(std::move(*output.image_aspect_warning));
+        }
+        if (aspect_mismatches > kMaxSkipSamples) {
+            auto summary = std::format("{} more image(s) differ in aspect ratio from their COLMAP camera",
+                                       aspect_mismatches - kMaxSkipSamples);
+            LOG_WARN("{}", summary);
+            warnings.push_back(Diagnostic{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .message = std::move(summary),
+                .fields = lfs::SmallFields{}.add("count", static_cast<std::int64_t>(aspect_mismatches)),
+            });
+        }
         if (auto diagnostic = image_tally.to_diagnostic(
                 lfs::ErrorCode::DataLoss, "image(s) with an unusable camera")) {
             warnings.push_back(std::move(*diagnostic));
@@ -4573,7 +4550,7 @@ namespace lfs::io {
     }
 
     Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
-    read_colmap_cameras_only(const std::filesystem::path& sparse_path, float scale_factor) {
+    read_colmap_cameras_only(const std::filesystem::path& sparse_path, float scale_factor, int first_uid) {
         LOG_TIMER_TRACE("Read COLMAP cameras only");
         try {
 
@@ -4769,6 +4746,15 @@ namespace lfs::io {
                     continue;
                 }
 
+                if (model != CAMERA_MODEL::EQUIRECTANGULAR) {
+                    const float x_scale = static_cast<float>(cam_data.width) / static_cast<float>(cam_data.original_width);
+                    const float y_scale = static_cast<float>(cam_data.height) / static_cast<float>(cam_data.original_height);
+                    focal_x *= x_scale;
+                    focal_y *= y_scale;
+                    center_x *= x_scale;
+                    center_y *= y_scale;
+                }
+
                 camera_positions.push_back(cam_pos[0]);
                 camera_positions.push_back(cam_pos[1]);
                 camera_positions.push_back(cam_pos[2]);
@@ -4786,7 +4772,7 @@ namespace lfs::io {
                     fs::path{}, // Empty mask path
                     cam_data.width,
                     cam_data.height,
-                    static_cast<int>(cameras.size()));
+                    first_uid + static_cast<int>(cameras.size()));
 
                 cameras.push_back(std::move(camera));
             }

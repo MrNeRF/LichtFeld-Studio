@@ -26,7 +26,7 @@ def test_project_folder_remove_label_uses_sentence_case_in_all_locales():
         "zh": "移除文件夹",
     }
     locales = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
-    assert {path.stem: json.loads(path.read_text())["projects"]["action.remove_folder"]
+    assert {path.stem: json.loads(path.read_text(encoding="utf-8"))["projects"]["action.remove_folder"]
             for path in locales.glob("*.json")} == expected
 
 
@@ -399,6 +399,23 @@ def preferences_panel_module(monkeypatch):
         return False
 
     lf_stub.get_render_settings = lambda: state.render_settings
+    state.navigation_up_axis = "legacy_y"
+    state.navigation_up_calls = []
+    state.new_project_axis = "legacy_y"
+    state.new_project_align_grid = True
+    state.new_project_navigation_calls = []
+    lf_stub.get_new_project_navigation_up_axis = lambda: state.new_project_axis
+    lf_stub.get_new_project_align_grid = lambda: state.new_project_align_grid
+    def set_new_project_navigation_defaults(axis, align_grid):
+        state.new_project_axis = axis
+        state.new_project_align_grid = align_grid
+        state.new_project_navigation_calls.append((axis, align_grid))
+    lf_stub.set_new_project_navigation_defaults = set_new_project_navigation_defaults
+    lf_stub.get_navigation_up_axis = lambda: state.navigation_up_axis
+    def set_navigation_up_axis(axis, align_grid=False):
+        state.navigation_up_axis = axis
+        state.navigation_up_calls.append((axis, align_grid))
+    lf_stub.set_navigation_up_axis = set_navigation_up_axis
     lf_stub.get_camera_navigation_mode = lambda: "orbit"
     lf_stub.set_camera_navigation_mode = lambda _mode: None
     lf_stub.get_camera_view_snap_enabled = lambda: False
@@ -1293,3 +1310,106 @@ def test_optional_provider_names_come_from_catalog_and_do_not_require_translatio
     panel._sync_scene_reconstruction_catalog()
     panel._rebuild_records()
     assert all(item[0] != "amd-fsr3" for item in panel._scene_upscaler_catalog)
+
+
+@pytest.mark.parametrize("reset_scope", ["section", "all", "bindings"])
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_input_reset_restores_bindings_and_refreshes_rows(
+    preferences_panel_module, reset_scope, confirmed,
+):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "input"
+    panel._refresh_selection = lambda: None
+    panel._set_zoom_speed(42)
+    panel._set_navigation_speed(73)
+    panel._set_navigation_up_index("1")
+    panel._set_new_project_align_grid(False)
+    state.navigation_up_axis = "data_z"
+    defaults = {"forward": "W", "backward": "S", "left": "A"}
+    bindings = {"forward": "S", "backward": "Unbound", "left": "A"}
+    reset_calls = []
+
+    def reset_bindings():
+        reset_calls.append(True)
+        bindings.update(defaults)
+
+    module.lf.keymap.reset_to_default = reset_bindings
+    module.lf.ui.confirm_dialog = lambda _title, _body, buttons, callback: callback(
+        buttons[1 if confirmed else 0]
+    )
+    module.lf.ui.message_dialog = lambda *_args: None
+    module.lf.ui.set_theme = lambda _theme: None
+    module.lf.ui.reset_layout = lambda: None
+    module.lf.ui.reset_window_state = lambda: None
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    dirty = []
+    panel._keymap._handle = SimpleNamespace(dirty=dirty.append)
+    panel._keymap._last_state_key = ("old bindings",)
+    panel._keymap._pending_conflict = {"old": "conflict"}
+
+    if reset_scope == "section":
+        panel._on_reset_current_section(None, None, None)
+    elif reset_scope == "all":
+        panel._on_reset_all_settings(None, None, None)
+    elif confirmed:
+        panel._keymap._on_reset_default(None, None, None)
+
+    if confirmed:
+        assert bindings == defaults
+        assert reset_calls == [True]
+        assert panel._keymap._last_state_key is None
+        assert panel._keymap._pending_conflict is None
+        assert {"profile_idx", "mode_idx", "is_capturing", "bindings_hint"} <= set(dirty)
+    else:
+        assert bindings == {"forward": "S", "backward": "Unbound", "left": "A"}
+        assert reset_calls == []
+        assert panel._keymap._last_state_key == ("old bindings",)
+        assert dirty == []
+
+    reset_input = confirmed and reset_scope != "bindings"
+    assert state.zoom_speed == (11 if reset_input else 42)
+    assert state.navigation_speed == (10 if reset_input else 73)
+    assert panel._navigation_up_index() == ("0" if reset_input else "1")
+    assert state.new_project_align_grid is reset_input
+    assert state.navigation_up_axis == "data_z"
+    assert state.navigation_up_calls == []
+
+
+@pytest.mark.parametrize("section", ["general", "appearance", "interface", "mcp", "portal"])
+def test_other_section_resets_preserve_key_bindings(preferences_panel_module, section):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    reset_calls = []
+    module.lf.keymap.reset_to_default = lambda: reset_calls.append(True)
+    module.lf.ui.set_theme = lambda _theme: None
+    module.lf.ui.reset_layout = lambda: None
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    panel._keymap._last_state_key = ("custom bindings",)
+    panel._set_zoom_speed(42)
+    panel._set_navigation_speed(73)
+
+    panel._reset_section(section)
+
+    assert reset_calls == []
+    assert panel._keymap._last_state_key == ("custom bindings",)
+    assert state.zoom_speed == 42
+    assert state.navigation_speed == 73
+
+
+def test_navigation_defaults_do_not_modify_current_project(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    assert panel._navigation_up_index() == "0"
+    panel._set_navigation_up_index("1")
+    assert state.new_project_navigation_calls == [("data_z", True)]
+    assert panel._navigation_up_index() == "1"
+    panel._set_navigation_up_index("invalid")
+    panel._set_navigation_up_index("2")
+    assert len(state.new_project_navigation_calls) == 1
+    panel._set_new_project_align_grid(False)
+    assert state.new_project_navigation_calls[-1] == ("data_z", False)
+    assert state.navigation_up_calls == []
+    assert state.navigation_up_axis == "legacy_y"

@@ -824,12 +824,20 @@
     "button.stop": "학습 중지",
     "button.reset": "학습 재설정",
     "button.add": "추가",
-    "button.remove": "제거"
+    "button.remove": "제거",
+    "conflict.strategy_gut_start_message": "GUT는 igs+ 전략과 함께 사용할 수 없습니다. 훈련을 시작할 작업을 선택하세요.",
+    "conflict.strategy_gut_strategy_message": "이 전략은 GUT와 호환되지 않습니다. 전환하려면 GUT를 비활성화하시겠습니까?"
   },
   "rendering": "렌더링",
   "scene": {
     "streamed_badge": "스트리밍",
     "streamed_badge_tooltip": "스트리밍 모델: 디테일이 뷰를 따라갑니다. 읽기 전용입니다.",
+    "summary_model_one": "{} 모델",
+    "summary_model_few": "{} 모델",
+    "summary_model_other": "{} 모델",
+    "summary_node_one": "{} 노드",
+    "summary_node_few": "{} 노드",
+    "summary_node_other": "{} 노드",
     "add_ply": "PLY 추가...",
     "add_group": "그룹 추가",
     "add_group_ellipsis": "그룹 추가...",
@@ -1083,6 +1091,16 @@
     "input": "입력",
     "key_bindings": "키 바인딩",
     "camera_navigation": "카메라 탐색",
+    "new_project_navigation_up": "새 프로젝트의 위쪽 축",
+    "new_project_navigation_help": "새 프로젝트에만 적용됩니다. 기존 프로젝트는 저장된 설정을 유지합니다.",
+    "new_project_align_grid": "새 프로젝트의 그리드 정렬",
+    "navigation_project_hint": "선택을 유지하려면 프로젝트를 저장하세요. 데이터 좌표는 변경되지 않습니다.",
+    "navigation_up_axis": "수직 축",
+    "navigation_up_legacy_y": "Y-up (기본값)",
+    "navigation_up_data_z": "+Z 위쪽 (데이터 좌표)",
+    "navigation_up_help": "프로젝트에 저장됩니다. 탐색만 변경하며 데이터 좌표와 배율은 유지됩니다.",
+    "align_navigation_grid": "그리드를 수직축에 맞추기",
+    "align_grid_short": "정렬",
     "navigation_mode": "탐색 모드",
     "zoom_speed": "줌 속도",
     "zoom_speed_tooltip": "마우스 휠로 카메라를 줌할 때의 기본 속도입니다.",
@@ -1534,9 +1552,9 @@
         "custom": "마지막으로 로드한 사용자 정의 HDRI"
       },
       "grid_plane": {
-        "yz": "YZ 평면에 그리드 표시 (오른쪽 뷰)",
-        "xz": "XZ 평면에 그리드 표시 (위쪽 뷰)",
-        "xy": "XY 평면에 그리드 표시 (앞쪽 뷰)"
+        "yz": "YZ 평면에 그리드 표시",
+        "xz": "XZ 평면에 그리드 표시",
+        "xy": "XY 평면에 그리드 표시"
       },
       "sh_degree": {
         "0": "확산만 — 시점 의존 조명 없음",
@@ -1631,6 +1649,7 @@
     "create": "만들기"
   },
   "notification": {
+    "split_view_requires_two_models": "분할 보기에는 표시된 스플랫 모델이 두 개 필요합니다.",
     "merge_nodes_kept": "병합 시 스플랫이 아닌 노드 {}개를 유지했습니다.",
     "duplicate_training_data_skipped": "복제 중 학습 데이터(데이터 세트, 카메라 및 이미지)는 건너뛰었습니다.",
     "dropped_not_recognized": "드롭된",
@@ -1846,7 +1865,8 @@
     "action.view_frame_all": "전체 맞추기",
     "action.toggle_quad_view": "4분할 뷰 전환",
     "action.toggle_maximize_area": "영역 최대화",
-    "action.toggle_node_editor": "노드 편집기 전환"
+    "action.toggle_node_editor": "노드 편집기 전환",
+    "action.toggle_independent_split_view": "독립 분할 보기 전환"
   },
   "debug_info": {
     "clear_history": "기록 지우기",
@@ -2164,8 +2184,19 @@
     "height": "높이",
     "output_res": "출력: {}x{}",
     "naming": "출력 이름 지정",
+    "naming_preset": "프리셋:",
+    "naming_video_frame": "동영상 이름 + frame + 번호",
+    "naming_video_number": "동영상 이름 + 번호",
+    "naming_frame_number": "Frame + 번호",
+    "naming_number": "번호만",
+    "naming_custom": "사용자 지정",
+    "naming_help": "{video}: 확장자를 제외한 동영상 이름. %d: 원본 프레임 번호. %05d: 최소 5자리. %%: 문자 %. 확장자는 자동으로 추가됩니다. {{ / }}: 중괄호 문자.",
+    "naming_number_help": "원본 프레임 번호는 1부터 시작하며 중간 번호가 빠질 수 있습니다. 번호 자리표시자가 없으면 끝에 번호를 붙입니다.",
+    "naming_example_pending": "예시 (동영상이 로드되지 않음): {}{}",
+    "naming_error_placeholder": "알 수 없거나 불완전한 자리표시자입니다. 동영상 이름에는 {video}를 사용하세요.",
+    "naming_error_filename": "이 플랫폼에서 유효하지 않은 파일 이름입니다. 폴더가 없는 이름을 사용하세요.",
     "pattern": "패턴:",
-    "pattern_tooltip": "프레임 번호에 %d 사용 (예: frame_%04d로 0 채움)",
+    "pattern_tooltip": "{video}: 확장자를 제외한 동영상 이름. %d: 원본 프레임 번호. %05d: 최소 5자리. %%: 문자 %. 확장자는 자동으로 추가됩니다. {{ / }}: 중괄호 문자.",
     "example": "예시: {}{}",
     "start": "추출 시작",
     "stop": "중지",
@@ -2286,6 +2317,8 @@
     "strategy_default": "기본값",
     "split": "분할:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "초당 표시되는 인터페이스 프레임 수입니다.",
+    "view_fps_tooltip": "초당 렌더링되는 3D 뷰 프레임 수입니다. 정적인 뷰는 인터페이스가 응답하는 동안에도 0으로 표시될 수 있습니다.",
     "ui": "UI",
     "view": "뷰",
     "renderer_backend": "렌더러",
@@ -2639,9 +2672,9 @@
     "solid_color": "단색",
     "equirectangular_hdri": "등각원통 HDRI",
     "off": "끔",
-    "grid_plane_yz": "YZ (오른쪽)",
-    "grid_plane_xz": "XZ (위)",
-    "grid_plane_xy": "XY (앞)",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "수동",
@@ -2729,9 +2762,12 @@
     "perf_hud_tooltip": "성능 HUD 표시 또는 숨기기",
     "input_mouse_tooltip": "마우스 탐색: 가운데 버튼 드래그로 궤도 회전, 오른쪽 드래그로 이동, 휠로 확대/축소. 클릭하여 전환",
     "input_trackpad_tooltip": "트랙패드 탐색: 두 손가락 스와이프로 궤도 회전, Shift+스와이프로 이동, 핀치 또는 Ctrl+스와이프로 확대/축소. 클릭하여 전환",
-    "input_automatic_tooltip": "자동 탐색: 트랙패드에서는 트랙패드 제스처, 마우스에서는 휠로 확대/축소. 클릭하여 전환"
+    "input_automatic_tooltip": "자동 탐색: 트랙패드에서는 트랙패드 제스처, 마우스에서는 휠로 확대/축소. 클릭하여 전환",
+    "independent_split_view": "독립 분할 보기",
+    "exit_independent_split_view": "독립 분할 보기 종료"
   },
   "runtime": {
+    "environment_map_failed": "환경 맵 \"{}\"을(를) 읽을 수 없습니다. 이전 환경이 유지되었습니다.",
     "training_save_no_memory": "프로젝트를 저장하지 못했습니다: {}",
     "autosave_deferred_no_memory": "자동 저장이 일시 중지되었습니다: 여유 메모리가 부족합니다({}). 학습은 계속되며, 메모리가 확보되면 자동 저장이 재개됩니다.",
     "grouped_changes": "그룹화된 변경 사항",
@@ -2914,12 +2950,13 @@
     "right_click_to_add": "추가하려면 우클릭...",
     "training_complete": "학습 완료",
     "training_stopped": "학습 중지됨",
+    "training_stopped_body": "사용자가 반복 {}에서 학습을 중지했습니다.\n\n이 상태를 유지하려면 프로젝트를 저장하세요. 학습을 재개하려면 저장한 프로젝트를 다시 여세요.",
     "training_error": "학습 오류",
     "param_manager_unavailable": "파라미터 관리자를 사용할 수 없음",
     "failed_to_load_params": "파라미터 로드 실패:",
-    "err_distorted_images": "왜곡된 이미지가 감지되었습니다. 왜곡이 있는 카메라로 학습하려면 --gut 또는 --undistort를 활성화하세요.",
+    "err_distorted_images": "왜곡된 이미지가 감지되었습니다. 왜곡이 있는 카메라로 학습하려면 학습 패널에서 GUT 또는 왜곡 보정을 활성화하세요.",
     "err_ortho_not_supported": "직교 카메라 모델로의 학습은 아직 지원되지 않습니다.",
-    "err_non_pinhole": "비 핀홀 카메라로 학습하려면 --gut 또는 --undistort를 활성화하세요."
+    "err_non_pinhole": "비 핀홀 카메라로 학습하려면 학습 패널에서 GUT 또는 왜곡 보정을 활성화하세요."
   },
   "projects.gallery.sidebar.title": "갤러리",
   "projects.gallery.sidebar.refresh": "갤러리 확인",
@@ -3071,9 +3108,16 @@
   "projects.gallery.toast.published": "“{title}” 게시됨",
   "projects.gallery.toast.pulled": "“{title}” 항목을 “{folder}”에 추가했습니다",
   "projects.gallery.toast.removed": "갤러리에서 “{title}” 항목을 삭제했습니다",
-  "projects.gallery.quota.used": "{quota} GB 중 {used} GB 사용",
+  "projects.gallery.quota.used": "{quota} 중 {used} 사용",
   "projects.gallery.quota.warning": "이 파일은 갤러리의 남은 공간을 초과할 수 있습니다. 업로드 크기는 선택한 형식에 따라 달라집니다.",
   "projects.gallery.quota.confirm": "저장된 파일이 갤러리의 남은 공간보다 큽니다. 선택한 형식으로 크기를 줄일 수 있습니다. ‹{title}› 준비를 계속할까요?",
+  "projects.gallery.error.gallery_storage": "Gallery 저장 공간이 부족합니다. Gallery 장면을 삭제하거나, 대기 중이거나 실패한 업로드(계속 공간을 차지함)를 취소하거나, 장면 크기를 줄이세요.",
+  "projects.gallery.error.gallery_storage_size": "Gallery 저장 공간이 부족합니다. 이 업로드에는 {needed}가 필요하며, {quota} 중 {free}가 남아 있습니다. Gallery 장면을 삭제하거나, 대기 중이거나 실패한 업로드(계속 공간을 차지함)를 취소하거나, 장면 크기를 줄이세요.",
+  "projects.gallery.info.reserves": "이 업로드는 취소할 때까지 Gallery 저장 공간 {size}를 계속 예약합니다.",
+  "projects.gallery.info.reserves_unknown": "이 업로드는 취소할 때까지 Gallery 저장 공간을 계속 차지합니다.",
+  "projects.gallery.info.storage_retry": "준비된 사본을 보관했습니다. Gallery 공간을 확보한 다음 다시 시도하여 재사용하세요.",
+  "projects.gallery.review.upload_size": "업로드 크기: {size}",
+  "projects.gallery.review.ssog_levels": "SSOG에는 모든 LOD 단계가 포함되므로 단일 SOG 파일보다 훨씬 클 수 있습니다.",
   "projects.gallery.action.update_all": "모두 업데이트 ({count})",
   "projects.gallery.confirm.update_all": "이 공개 장면들을 업데이트할까요? 게시된 내용이 교체됩니다:\n{title}",
   "projects.gallery.empty.published": "아직 게시된 장면이 없습니다. 프로젝트를 선택하고 게시를 누르세요",
@@ -5188,5 +5232,6 @@
   "node_editor.capture_view": "뷰 저장",
   "node_editor.curve_hint": "점을 끌어 조정하세요. 클릭하여 추가하고 두 번 클릭하거나 Delete로 삭제합니다.",
   "node_editor.ramp_hint": "스톱을 끌어 이동하세요. 클릭하여 추가하고 두 번 클릭하거나 Delete로 삭제합니다. 스톱을 선택하면 RGBA를 편집할 수 있습니다.",
-  "node_editor.keyframe_hint": "키프레임 삽입 · Ctrl+클릭 또는 포인터를 올리고 I"
+  "node_editor.keyframe_hint": "키프레임 삽입 · Ctrl+클릭 또는 포인터를 올리고 I",
+  "toolbar.asset_manager": "프로젝트"
 }

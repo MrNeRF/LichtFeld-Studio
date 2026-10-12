@@ -824,12 +824,20 @@
     "button.stop": "Training stoppen",
     "button.reset": "Training resetten",
     "button.add": "Toevoegen",
-    "button.remove": "Verwijderen"
+    "button.remove": "Verwijderen",
+    "conflict.strategy_gut_start_message": "GUT kan niet samen met de igs+-strategie worden gebruikt. Kies een actie om de training te starten.",
+    "conflict.strategy_gut_strategy_message": "Deze strategie is niet compatibel met GUT. GUT uitschakelen om te wisselen?"
   },
   "rendering": "Renderen",
   "scene": {
     "streamed_badge": "gestreamd",
     "streamed_badge_tooltip": "Gestreamd model: het detailniveau volgt de weergave. Alleen-lezen.",
+    "summary_model_one": "{} model",
+    "summary_model_few": "{} modellen",
+    "summary_model_other": "{} modellen",
+    "summary_node_one": "{} knooppunt",
+    "summary_node_few": "{} knooppunten",
+    "summary_node_other": "{} knooppunten",
     "add_ply": "PLY Toevoegen...",
     "add_group": "Groep Toevoegen",
     "add_group_ellipsis": "Groep Toevoegen...",
@@ -1083,6 +1091,16 @@
     "input": "Invoer",
     "key_bindings": "Toetsbindingen",
     "camera_navigation": "Cameranavigatie",
+    "new_project_navigation_up": "Verticaal voor nieuwe projecten",
+    "new_project_navigation_help": "Geldt alleen voor nieuwe projecten. Bestaande projecten behouden hun opgeslagen instellingen.",
+    "new_project_align_grid": "Raster in nieuwe projecten uitlijnen",
+    "navigation_project_hint": "Sla het project op om deze keuze te bewaren. De gegevenscoördinaten blijven gelijk.",
+    "navigation_up_axis": "Verticale as",
+    "navigation_up_legacy_y": "Y-up (standaard)",
+    "navigation_up_data_z": "+Z omhoog (datacoördinaten)",
+    "navigation_up_help": "Opgeslagen in dit project. Alleen de navigatie verandert; datacoördinaten en schaal blijven gelijk.",
+    "align_navigation_grid": "Raster op verticaal uitlijnen",
+    "align_grid_short": "Uitlijnen",
     "navigation_mode": "Navigatiemodus",
     "zoom_speed": "Zoomsnelheid",
     "zoom_speed_tooltip": "Standaardsnelheid voor het zoomen van de camera met het muiswiel.",
@@ -1534,9 +1552,9 @@
         "custom": "Laatst geladen aangepaste HDRI"
       },
       "grid_plane": {
-        "yz": "Raster op YZ-vlak tonen (rechter aanzicht)",
-        "xz": "Raster op XZ-vlak tonen (bovenaanzicht)",
-        "xy": "Raster op XY-vlak tonen (vooraanzicht)"
+        "yz": "Raster op YZ-vlak tonen",
+        "xz": "Raster op XZ-vlak tonen",
+        "xy": "Raster op XY-vlak tonen"
       },
       "sh_degree": {
         "0": "Alleen diffuus — geen blikrichting-afhankelijke verlichting",
@@ -1631,6 +1649,7 @@
     "create": "Maken"
   },
   "notification": {
+    "split_view_requires_two_models": "Voor de gesplitste weergave zijn twee zichtbare splatmodellen nodig.",
     "merge_nodes_kept": "Bij het samenvoegen zijn {} niet-splat-knooppunten behouden.",
     "duplicate_training_data_skipped": "Trainingsgegevens (datasets, camera’s en afbeeldingen) zijn overgeslagen bij het dupliceren.",
     "dropped_not_recognized": "Het gesleepte",
@@ -1846,7 +1865,8 @@
     "action.view_frame_all": "Alles inkaderen",
     "action.toggle_quad_view": "Vier weergaven wisselen",
     "action.toggle_maximize_area": "Gebied maximaliseren",
-    "action.toggle_node_editor": "Node-editor wisselen"
+    "action.toggle_node_editor": "Node-editor wisselen",
+    "action.toggle_independent_split_view": "Onafhankelijke gesplitste weergave omschakelen"
   },
   "debug_info": {
     "clear_history": "Geschiedenis Wissen",
@@ -2164,8 +2184,19 @@
     "height": "Hoogte",
     "output_res": "Uitvoer: {}x{}",
     "naming": "Uitvoernaamgeving",
+    "naming_preset": "Voorinstelling:",
+    "naming_video_frame": "Videonaam + frame + nummer",
+    "naming_video_number": "Videonaam + nummer",
+    "naming_frame_number": "Frame + nummer",
+    "naming_number": "Alleen nummer",
+    "naming_custom": "Aangepast",
+    "naming_help": "{video}: videonaam zonder extensie. %d: bronframenummer. %05d: minstens 5 cijfers. %%: letterlijk %. De extensie wordt automatisch toegevoegd. {{ / }}: letterlijke accolades.",
+    "naming_number_help": "Bronframenummers beginnen bij 1 en kunnen gaten bevatten. Zonder numerieke aanduiding wordt het framenummer achteraan toegevoegd.",
+    "naming_example_pending": "Voorbeeld (geen video geladen): {}{}",
+    "naming_error_placeholder": "Onbekende of onvolledige aanduiding. Gebruik {video} voor de videonaam.",
+    "naming_error_filename": "Ongeldige bestandsnaam voor dit platform. Gebruik een naam zonder mappen.",
     "pattern": "Patroon:",
-    "pattern_tooltip": "Gebruik %d voor framenummer (bijv. frame_%04d voor opvulling met nullen)",
+    "pattern_tooltip": "{video}: videonaam zonder extensie. %d: bronframenummer. %05d: minstens 5 cijfers. %%: letterlijk %. De extensie wordt automatisch toegevoegd. {{ / }}: letterlijke accolades.",
     "example": "Voorbeeld: {}{}",
     "start": "Extractie starten",
     "stop": "Stoppen",
@@ -2286,6 +2317,8 @@
     "strategy_default": "Standaard",
     "split": "Splitsing:",
     "mcp_name": "MCP",
+    "ui_fps_tooltip": "Weergegeven interfaceframes per seconde.",
+    "view_fps_tooltip": "Gerenderde frames van de 3D-weergave per seconde. Een statische weergave kan 0 tonen terwijl de interface blijft reageren.",
     "ui": "UI",
     "view": "Beeld",
     "renderer_backend": "Renderer",
@@ -2639,9 +2672,9 @@
     "solid_color": "Effen kleur",
     "equirectangular_hdri": "Equirectangulaire HDRI",
     "off": "Uit",
-    "grid_plane_yz": "YZ (rechts)",
-    "grid_plane_xz": "XZ (boven)",
-    "grid_plane_xy": "XY (voor)",
+    "grid_plane_yz": "YZ",
+    "grid_plane_xz": "XZ",
+    "grid_plane_xy": "XY",
     "psnr": "PSNR",
     "psnr_ssim": "PSNR + SSIM",
     "manual": "Handmatig",
@@ -2729,9 +2762,12 @@
     "perf_hud_tooltip": "Prestatie-HUD tonen of verbergen",
     "input_mouse_tooltip": "Muisnavigatie: slepen met middelste knop draait rond, slepen met rechterknop verschuift, scrollwiel zoomt. Klik om te wisselen",
     "input_trackpad_tooltip": "Trackpadnavigatie: vegen met twee vingers draait rond, Shift+vegen verschuift, knijpen of Ctrl+vegen zoomt. Klik om te wisselen",
-    "input_automatic_tooltip": "Automatische navigatie: trackpadgebaren op het trackpad, zoomen met het scrollwiel op de muis. Klik om te wisselen"
+    "input_automatic_tooltip": "Automatische navigatie: trackpadgebaren op het trackpad, zoomen met het scrollwiel op de muis. Klik om te wisselen",
+    "independent_split_view": "Onafhankelijke gesplitste weergave",
+    "exit_independent_split_view": "Onafhankelijke gesplitste weergave verlaten"
   },
   "runtime": {
+    "environment_map_failed": "Omgevingskaart ‘{}’ kon niet worden gelezen. De vorige omgeving is behouden.",
     "training_save_no_memory": "Project opslaan mislukt: {}",
     "autosave_deferred_no_memory": "Automatisch opslaan is gepauzeerd: onvoldoende vrij geheugen ({}). De training gaat door; automatisch opslaan wordt hervat zodra er geheugen vrijkomt.",
     "grouped_changes": "Gegroepeerde wijzigingen",
@@ -2914,12 +2950,13 @@
     "right_click_to_add": "Rechtsklik om toe te voegen...",
     "training_complete": "Training Voltooid",
     "training_stopped": "Training Gestopt",
+    "training_stopped_body": "De training is door de gebruiker gestopt bij iteratie {}.\n\nSla het project op om deze toestand te bewaren. Open het opgeslagen project opnieuw om de training te hervatten.",
     "training_error": "Training Fout",
     "param_manager_unavailable": "ParameterManager niet beschikbaar",
     "failed_to_load_params": "Laden van params mislukt:",
-    "err_distorted_images": "Vervormde beelden gedetecteerd. Activeer --gut of --undistort om te trainen met vervormde camera's.",
+    "err_distorted_images": "Vervormde beelden gedetecteerd. Schakel GUT of Vervorming corrigeren in het trainingspaneel in om te trainen met camera’s met vervorming.",
     "err_ortho_not_supported": "Training met orthografisch cameramodel wordt nog niet ondersteund.",
-    "err_non_pinhole": "Activeer --gut of --undistort om te trainen met niet-pinhole camera's."
+    "err_non_pinhole": "Schakel GUT of Vervorming corrigeren in het trainingspaneel in om te trainen met camera’s zonder pinholemodel."
   },
   "projects.gallery.sidebar.title": "Galerij",
   "projects.gallery.sidebar.refresh": "Galerij controleren",
@@ -3071,9 +3108,16 @@
   "projects.gallery.toast.published": "‘{title}’ gepubliceerd",
   "projects.gallery.toast.pulled": "‘{title}’ toegevoegd aan ‘{folder}’",
   "projects.gallery.toast.removed": "‘{title}’ uit je galerij verwijderd",
-  "projects.gallery.quota.used": "{used} GB van {quota} GB gebruikt",
+  "projects.gallery.quota.used": "{used} van {quota} gebruikt",
   "projects.gallery.quota.warning": "Dit bestand past mogelijk niet in je galerij. De uploadgrootte hangt af van het gekozen formaat.",
   "projects.gallery.quota.confirm": "Het opgeslagen bestand is groter dan de vrije ruimte in je galerij. Het gekozen formaat kan het kleiner maken. Doorgaan met het voorbereiden van ‹{title}›?",
+  "projects.gallery.error.gallery_storage": "Onvoldoende Gallery-opslag. Verwijder Gallery-scènes, annuleer wachtende of mislukte uploads (ze houden ruimte bezet) of maak de scène kleiner.",
+  "projects.gallery.error.gallery_storage_size": "Onvoldoende Gallery-opslag: deze upload heeft {needed} nodig, er is {free} vrij van {quota}. Verwijder Gallery-scènes, annuleer wachtende of mislukte uploads (ze houden ruimte bezet) of maak de scène kleiner.",
+  "projects.gallery.info.reserves": "Deze upload reserveert nog steeds {size} Gallery-opslag totdat je hem annuleert.",
+  "projects.gallery.info.reserves_unknown": "Deze upload houdt nog steeds Gallery-opslag bezet totdat je hem annuleert.",
+  "projects.gallery.info.storage_retry": "De voorbereide kopie is bewaard. Maak Gallery-opslag vrij en kies Opnieuw proberen om deze te hergebruiken.",
+  "projects.gallery.review.upload_size": "Uploadgrootte: {size}",
+  "projects.gallery.review.ssog_levels": "SSOG bevat elk LOD-niveau en kan veel groter zijn dan één SOG-bestand.",
   "projects.gallery.action.update_all": "Alles bijwerken ({count})",
   "projects.gallery.confirm.update_all": "Deze openbare scènes bijwerken? De gepubliceerde inhoud wordt vervangen:\n{title}",
   "projects.gallery.empty.published": "Nog geen gepubliceerde scènes: kies een project en klik op Publiceren",
@@ -5188,5 +5232,6 @@
   "node_editor.capture_view": "Weergave vastleggen",
   "node_editor.curve_hint": "Versleep punten; klik om toe te voegen, dubbelklik of Delete om te verwijderen.",
   "node_editor.ramp_hint": "Versleep kleurstops; klik om toe te voegen, dubbelklik of Delete om te verwijderen. Selecteer een stop om RGBA te wijzigen.",
-  "node_editor.keyframe_hint": "Sleutelframe invoegen · Ctrl+klik of I onder de muisaanwijzer"
+  "node_editor.keyframe_hint": "Sleutelframe invoegen · Ctrl+klik of I onder de muisaanwijzer",
+  "toolbar.asset_manager": "Projecten"
 }

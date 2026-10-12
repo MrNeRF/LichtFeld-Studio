@@ -77,7 +77,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::shared_ptr<const lfs::core::Tensor> image() const;
         [[nodiscard]] std::uintptr_t textureId() const;
         [[nodiscard]] bool valid() const;
-        [[nodiscard]] std::string rmlSrcUrl(int width, int height) const;
+        // Cached source is borrowed until the image lifetime or display dimensions change.
+        [[nodiscard]] const std::string& rmlSrcUrl(int width, int height) const;
         void reset();
 
         // Public so the separately compiled backend can retire resources

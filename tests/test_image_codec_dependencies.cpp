@@ -396,6 +396,7 @@ namespace {
         std::vector<std::uint8_t> rgb(std::size_t{19} * 17 * 3, 128);
         std::string error;
         EXPECT_FALSE(codec::write_jpeg("/dev/full", rgb.data(), 19, 17, 3, 95, std::nullopt, error, true));
+        EXPECT_NE(error.find("/dev/full"), std::string::npos) << error;
         EXPECT_FALSE(error.empty());
     }
 #endif
