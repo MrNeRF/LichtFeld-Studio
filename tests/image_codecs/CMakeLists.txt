@@ -59,6 +59,19 @@ endif()
 add_test(NAME lichtfeld_image_codec_tests COMMAND lichtfeld_image_codec_tests)
 set_tests_properties(lichtfeld_image_codec_tests PROPERTIES LABELS "fast;image;cpu" TIMEOUT 120)
 
+if(TARGET lfs_io)
+    add_executable(lichtfeld_image_discovery_tests ../test_image_format_discovery.cpp)
+    target_include_directories(lichtfeld_image_discovery_tests PRIVATE ${LFS_CODEC_ROOT}/src)
+    target_compile_features(lichtfeld_image_discovery_tests PRIVATE cxx_std_23)
+    target_link_libraries(lichtfeld_image_discovery_tests PRIVATE lfs_io lfs_core lfs_image_codecs GTest::gtest_main)
+    add_test(NAME lichtfeld_image_discovery_tests COMMAND lichtfeld_image_discovery_tests)
+    set_tests_properties(lichtfeld_image_discovery_tests PROPERTIES LABELS "fast;image;cpu" TIMEOUT 60)
+    if(WIN32)
+        set_tests_properties(lichtfeld_image_discovery_tests PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
+    endif()
+endif()
+
 # Exercise the actual import/export boundary; direct-source codec tests cannot
 # detect missing exports from the hidden-visibility shared library.
 

@@ -286,7 +286,7 @@ namespace lfs::io {
             }
 
             if (!codec) {
-                codec = avcodec_find_decoder(codec_id);
+                codec = media::detail::softwareVideoDecoder(codec_id);
                 if (!codec) {
                     close();
                     return false;
@@ -344,7 +344,7 @@ namespace lfs::io {
                     avcodec_free_context(&codec_ctx_);
                     av_buffer_unref(&hw_device_ctx_);
                     using_hw_decode_ = false;
-                    codec = avcodec_find_decoder(codec_id);
+                    codec = media::detail::softwareVideoDecoder(codec_id);
                     if (codec)
                         continue;
                 }

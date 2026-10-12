@@ -1188,7 +1188,7 @@ namespace lfs::io {
 #endif
 
                 if (!codec) {
-                    codec = avcodec_find_decoder(codec_id);
+                    codec = media::detail::softwareVideoDecoder(codec_id);
                     if (!codec) {
                         error = "Unsupported codec";
                         if (hw_device_ctx)
@@ -1267,7 +1267,7 @@ namespace lfs::io {
                     hw_device_type = AV_HWDEVICE_TYPE_NONE;
                     hw_decoder_state.pixel_format = AV_PIX_FMT_NONE;
                     decoder_backend = "ffmpeg_software";
-                    codec = avcodec_find_decoder(codec_id);
+                    codec = media::detail::softwareVideoDecoder(codec_id);
                     if (!codec) {
                         error = "Unsupported codec";
                         avformat_close_input(&fmt_ctx);

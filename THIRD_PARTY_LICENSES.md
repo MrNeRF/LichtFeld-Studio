@@ -76,6 +76,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 |---------|-------------|---------|
 | [FFmpeg](https://ffmpeg.org/) | Video encoding (libavcodec, libavformat, libswscale) | LGPL-2.1+ |
 | [OpenH264](https://www.openh264.org/) | Cisco H.264 software encoder | BSD-2-Clause |
+| [dav1d](https://code.videolan.org/videolan/dav1d) | AV1 software decoder used by FFmpeg for CPU extraction and preview | BSD-2-Clause (see resources/licenses/dav1d-LICENSE.txt) |
 
 ## Data & I/O Libraries
 | Project | Description | License |

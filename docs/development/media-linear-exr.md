@@ -328,3 +328,29 @@ references, frame-only HEVC color declarations, trim, mastering independence,
 midstream transfer/primaries rejection, API/MCP and verified resume/replay.
 Synthetic fixtures do not qualify every camera, damaged stream, HLG grading
 convention or external application's interpretation of custom EXR attributes.
+
+## Existing-format portability checks
+
+Dataset discovery includes EXR and WebP alongside JPEG, PNG, BMP and TIFF.
+These formats use the existing CPU image decoders; recognizing their paths
+also applies to flat COLMAP layouts, image counts and basename ambiguity checks.
+This does not change the existing training RGB conversion or preserve an EXR
+HDR master inside a display-byte training cache. The extraction master and the
+training representation remain distinct contracts.
+
+TIFF sample descriptions and decoding accept unsigned 8/16-bit samples and
+32-bit floating-point samples. Unsigned 32-bit integer TIFF is unsupported and
+must fail both probing and decoding, rather than being reported as UInt8.
+Float32 TIFF remains supported; integer32 and float32 are not interchangeable.
+
+CPU AV1 extraction and preview use FFmpeg's libdav1d decoder. The manifest
+explicitly enables the dav1d feature, because FFmpeg's native AV1 decoder in the
+pinned version requires hardware acceleration. CUDA/VideoToolbox selection is
+retained; software fallback selects dav1d without changing other codec choices.
+The dav1d BSD-2-Clause notice is included with the distributed licenses.
+
+Regression fixtures cover flat EXR/WebP loading and ambiguous basenames, TIFF
+sample types and both byte orders, and AV1 8/10-bit extraction plus CPU preview
+against an independently decoded RGB reference. These checks do not add new
+image writers, new sequence formats, or new video encoders. TIFF16 export,
+HEIF/AVIF/JPEG XL support and HEVC export remain separate increments.

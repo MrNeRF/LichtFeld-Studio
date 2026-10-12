@@ -594,6 +594,11 @@ namespace lfs::core::image_codecs {
             return tiff;
         }
 
+        bool supported_tiff_samples(const std::uint16_t bits, const std::uint16_t sample_format) {
+            return (sample_format == SAMPLEFORMAT_UINT && (bits == 8 || bits == 16)) ||
+                   (sample_format == SAMPLEFORMAT_IEEEFP && bits == 32);
+        }
+
         bool decode_tiff(const std::filesystem::path& path, Image& result, std::string& error) {
             TIFF* tiff = open_tiff(path, "r", error);
             if (!tiff)
@@ -636,9 +641,7 @@ namespace lfs::core::image_codecs {
                 TIFFClose(tiff);
                 return true;
             }
-            if ((bits != 8 && bits != 16 && bits != 32) ||
-                (sample_format != SAMPLEFORMAT_UINT && sample_format != SAMPLEFORMAT_IEEEFP) ||
-                (sample_format == SAMPLEFORMAT_IEEEFP && bits != 32)) {
+            if (!supported_tiff_samples(bits, sample_format)) {
                 TIFFClose(tiff);
                 error = "Unsupported TIFF sample format";
                 return false;
@@ -703,7 +706,8 @@ namespace lfs::core::image_codecs {
                                                                           : SampleType::UInt8;
             const auto sample_size = static_cast<std::size_t>(bits / 8);
             const auto row_bytes = static_cast<std::size_t>(width) * channels * sample_size;
-            const bool direct = width > 0 && height > 0 && channels == target.channels && planar == PLANARCONFIG_CONTIG &&
+            const bool direct = supported_tiff_samples(bits, sample_format) &&
+                                width > 0 && height > 0 && channels == target.channels && planar == PLANARCONFIG_CONTIG &&
                                 !TIFFIsTiled(tiff) && source_type == target.sample_type &&
                                 ((bits == 8 && target.sample_type == SampleType::UInt8) ||
                                  (bits == 16 && target.sample_type == SampleType::UInt16) ||
@@ -828,7 +832,7 @@ namespace lfs::core::image_codecs {
 #ifndef _WIN32
             if (hdr && target.sample_type == SampleType::Float32) {
                 const int descriptor = open(path.c_str(), O_RDONLY);
-                struct stat file_status {};
+                struct stat file_status{};
                 if (descriptor >= 0 && fstat(descriptor, &file_status) == 0 && file_status.st_size > 0 &&
                     file_status.st_size <= std::numeric_limits<int>::max()) {
                     const auto size = static_cast<std::size_t>(file_status.st_size);
@@ -1038,6 +1042,10 @@ namespace lfs::core::image_codecs {
             TIFFGetFieldDefaulted(tiff, TIFFTAG_BITSPERSAMPLE, &bits);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLEFORMAT, &sample_format);
             TIFFClose(tiff);
+            if (!supported_tiff_samples(bits, sample_format)) {
+                error = "Unsupported TIFF sample format";
+                return false;
+            }
             result = {static_cast<int>(width), static_cast<int>(height), static_cast<int>(channels),
                       sample_format == SAMPLEFORMAT_IEEEFP ? SampleType::Float32 : bits == 16 ? SampleType::UInt16
                                                                                               : SampleType::UInt8};
@@ -1064,6 +1072,10 @@ namespace lfs::core::image_codecs {
             TIFFGetFieldDefaulted(tiff, TIFFTAG_BITSPERSAMPLE, &bits);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLEFORMAT, &sample_format);
             TIFFClose(tiff);
+            if (!supported_tiff_samples(bits, sample_format)) {
+                error = "Unsupported TIFF sample format";
+                return false;
+            }
             result = {static_cast<int>(width), static_cast<int>(height), static_cast<int>(channels),
                       sample_format == SAMPLEFORMAT_IEEEFP ? SampleType::Float32 : bits == 16 ? SampleType::UInt16
                                                                                               : SampleType::UInt8};
