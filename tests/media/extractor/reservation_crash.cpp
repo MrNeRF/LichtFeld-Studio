@@ -13,7 +13,7 @@ extern "C" int stopAtReservedPublication(const char* source, const char* target)
     const std::string_view path(target);
     const auto slash = path.find_last_of('/');
     const auto name = path.substr(slash == std::string_view::npos ? 0 : slash + 1);
-    struct stat state{};
+    struct stat state {};
     if (requested && name == requested && ::lstat(target, &state) == 0 &&
         S_ISREG(state.st_mode) && state.st_size == 0)
         ::_exit(73);
