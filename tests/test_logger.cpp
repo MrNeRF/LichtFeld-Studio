@@ -305,6 +305,20 @@ TEST(LoggerTest, BufferByteBudgetBoundsLargeMessages) {
     EXPECT_TRUE(snapshot.entries.back().message.ends_with(" [truncated]"));
 }
 
+TEST(LoggerTest, BufferTruncationPreservesCompleteUtf8Characters) {
+    LoggerInitGuard reset_guard;
+    auto& logger = lfs::core::Logger::get();
+    logger.init(lfs::core::LogLevel::Info, "", "", false, unique_temp_dir("utf8-limit").string());
+    logger.clear_log_buffer();
+    constexpr size_t boundary = 64 * 1024;
+    const std::string complete = std::string(boundary - 2, 'x') + "\xc3\xa9";
+    LOG_INFO("{}tail", complete);
+    EXPECT_EQ(logger.buffered_logs().back().message, complete + " [truncated]");
+    const std::string partial = std::string(boundary - 1, 'x') + "\xc3\xa9";
+    LOG_INFO("{}tail", partial);
+    EXPECT_EQ(logger.buffered_logs().back().message, std::string(boundary - 1, 'x') + " [truncated]");
+}
+
 TEST(LoggerTest, BufferedLogsSinceReturnsBoundedMonotonicRingTail) {
     LoggerInitGuard reset_guard;
     const auto temp_root = unique_temp_dir("incremental");

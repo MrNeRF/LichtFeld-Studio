@@ -51,7 +51,7 @@ def matching_entries(entries, query="", source="", level=-1):
         if not terms and not source:
             result.append(entry)
             continue
-        location = f"{entry['file']}:{entry['line']}".casefold()
+        location = f"{entry['file'] or 'runtime'}:{entry['line']}".casefold()
         if source and source not in location:
             continue
         searchable = f"{location} {entry['message']}".casefold()

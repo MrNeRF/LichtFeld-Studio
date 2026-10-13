@@ -39,6 +39,12 @@ def test_search_combines_terms_source_and_severity(logging_module):
     assert match(entries, query="[invalid regex") == []
 
 
+def test_search_matches_displayed_runtime_source(logging_module):
+    entries = [entry(1, "source-less message", file="", line=0)]
+    assert logging_module.matching_entries(entries, source="runtime:0") == entries
+    assert logging_module.matching_entries(entries, query="runtime") == entries
+
+
 def test_markup_escapes_messages_sources_and_translated_labels(logging_module):
     logging_module.lf.ui.tr = lambda key: "<Warning>"
     markup = logging_module.entry_markup(entry(1, '<script>&"', 4, 'a"<b>.cpp'))

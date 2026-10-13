@@ -457,14 +457,12 @@ namespace lfs::core {
                 entry.line = msg.source.line;
                 entry.message = is_perf ? strip_perf_prefix(msg_view) : std::string(msg_view);
                 if (entry.message.size() > MAX_BUFFERED_MESSAGE_BYTES) {
-                    entry.message.resize(MAX_BUFFERED_MESSAGE_BYTES);
-                    // Avoid cutting a UTF-8 code point in the middle.
-                    while (!entry.message.empty() &&
-                           (static_cast<unsigned char>(entry.message.back()) & 0xc0) == 0x80)
-                        entry.message.pop_back();
-                    if (!entry.message.empty() &&
-                        static_cast<unsigned char>(entry.message.back()) >= 0xc0)
-                        entry.message.pop_back();
+                    // Inspect the first excluded byte so complete trailing code points survive.
+                    size_t end = MAX_BUFFERED_MESSAGE_BYTES;
+                    while (end > 0 &&
+                           (static_cast<unsigned char>(entry.message[end]) & 0xc0) == 0x80)
+                        --end;
+                    entry.message.resize(end);
                     entry.message += " [truncated]";
                 }
 
