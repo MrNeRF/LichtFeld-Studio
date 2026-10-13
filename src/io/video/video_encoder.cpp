@@ -22,6 +22,8 @@ extern "C" {
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_cuda.h>
 #include <libavutil/opt.h>
+#include <libavutil/spherical.h>
+#include <libavutil/stereo3d.h>
 }
 
 namespace lfs::io::video {
@@ -65,6 +67,44 @@ namespace lfs::io::video {
             }
             return reason;
         }
+
+        bool applySphericalMetadata(AVFormatContext* const fmt_ctx, AVStream* const stream) {
+            if (!fmt_ctx || !stream || !stream->codecpar)
+                return false;
+
+            fmt_ctx->strict_std_compliance = FF_COMPLIANCE_UNOFFICIAL;
+            size_t spherical_size = 0;
+            auto* const spherical = av_spherical_alloc(&spherical_size);
+            if (!spherical)
+                return false;
+            spherical->projection = AV_SPHERICAL_EQUIRECTANGULAR;
+            if (!av_packet_side_data_add(&stream->codecpar->coded_side_data,
+                                         &stream->codecpar->nb_coded_side_data,
+                                         AV_PKT_DATA_SPHERICAL,
+                                         spherical,
+                                         spherical_size,
+                                         0)) {
+                av_free(spherical);
+                return false;
+            }
+
+            size_t stereo_size = 0;
+            auto* const stereo = av_stereo3d_alloc_size(&stereo_size);
+            if (!stereo)
+                return false;
+            stereo->type = AV_STEREO3D_2D;
+            if (!av_packet_side_data_add(&stream->codecpar->coded_side_data,
+                                         &stream->codecpar->nb_coded_side_data,
+                                         AV_PKT_DATA_STEREO3D,
+                                         stereo,
+                                         stereo_size,
+                                         0)) {
+                av_free(stereo);
+                return false;
+            }
+            return true;
+        }
+
     } // namespace
 
     class VideoEncoderImpl {
@@ -261,6 +301,8 @@ namespace lfs::io::video {
                 av_strerror(ret, err, sizeof(err));
                 return std::string("codec parameter copy failed: ") + err;
             }
+            if (opts.spherical_video && !applySphericalMetadata(fmt_ctx_, stream_))
+                return "spherical video metadata setup failed";
             stream_->time_base = codec_ctx_->time_base;
 
             if (!(fmt_ctx_->oformat->flags & AVFMT_NOFILE)) {
@@ -357,6 +399,8 @@ namespace lfs::io::video {
             if (ret < 0) {
                 return std::unexpected("Codec parameters copy failed");
             }
+            if (opts.spherical_video && !applySphericalMetadata(fmt_ctx_, stream_))
+                return std::unexpected("Spherical video metadata setup failed");
             stream_->time_base = codec_ctx_->time_base;
 
             if (!(fmt_ctx_->oformat->flags & AVFMT_NOFILE)) {

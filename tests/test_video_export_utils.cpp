@@ -25,6 +25,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -32,6 +33,7 @@
 #include <gtest/gtest.h>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -849,6 +851,7 @@ TEST(VideoEncoderValidationTest, AcceptsMp4CaseVariantsAndExtensionlessNames) {
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/spherical.h>
 }
 
 namespace {
@@ -899,6 +902,90 @@ namespace {
     INSTANTIATE_TEST_SUITE_P(Backend, VideoEncoderColorTest, ::testing::Bool(),
                              [](const auto& info) { return info.param ? "Hardware" : "Software"; });
 } // namespace
+
+namespace {
+    struct EncodedVideo {
+        std::optional<AVSphericalProjection> projection;
+        std::vector<std::string> packets;
+    };
+
+    std::optional<EncodedVideo> inspectEncodedVideo(const std::filesystem::path& path) {
+        AVFormatContext* raw_format = nullptr;
+        if (avformat_open_input(&raw_format, lfs::core::path_to_utf8(path).c_str(), nullptr, nullptr) < 0)
+            return std::nullopt;
+        const auto close_format = [](AVFormatContext* format) { avformat_close_input(&format); };
+        std::unique_ptr<AVFormatContext, decltype(close_format)> format(raw_format, close_format);
+        if (avformat_find_stream_info(format.get(), nullptr) < 0)
+            return std::nullopt;
+        const int stream = av_find_best_stream(format.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        if (stream < 0)
+            return std::nullopt;
+
+        EncodedVideo result;
+        const auto* params = format->streams[stream]->codecpar;
+        for (int i = 0; i < params->nb_coded_side_data; ++i) {
+            const auto& side_data = params->coded_side_data[i];
+            if (side_data.type == AV_PKT_DATA_SPHERICAL && side_data.size >= sizeof(AVSphericalMapping))
+                result.projection = reinterpret_cast<const AVSphericalMapping*>(side_data.data)->projection;
+        }
+        AVPacket* packet = av_packet_alloc();
+        if (!packet)
+            return std::nullopt;
+        int read_result = 0;
+        while ((read_result = av_read_frame(format.get(), packet)) >= 0) {
+            if (packet->stream_index == stream)
+                result.packets.emplace_back(reinterpret_cast<const char*>(packet->data),
+                                            static_cast<size_t>(packet->size));
+            av_packet_unref(packet);
+        }
+        av_packet_free(&packet);
+        return read_result == AVERROR_EOF ? std::optional<EncodedVideo>(std::move(result)) : std::nullopt;
+    }
+} // namespace
+
+TEST(VideoEncoderSphericalMetadataTest, TagsEquirectangularOnlyAndPreservesEncodedFrames) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
+        GTEST_SKIP() << "CUDA device required to encode video frames";
+
+    constexpr int width = 160;
+    constexpr int height = 96;
+    VideoOutputDirectory directory;
+    const auto frame = Tensor::zeros({size_t(height), size_t(width), size_t{3}}, Device::CUDA,
+                                     lfs::core::DataType::Float32);
+    const auto encode = [&](const std::filesystem::path& path, const bool spherical) {
+        lfs::io::video::VideoEncoder encoder;
+        const auto opened = encoder.open(path, {.preset = lfs::io::video::VideoPreset::CUSTOM, .width = width, .height = height, .framerate = 4, .crf = 20, .spherical_video = spherical});
+        if (!opened) {
+            ADD_FAILURE() << opened.error();
+            return false;
+        }
+        for (int i = 0; i < 4; ++i) {
+            const auto written = encoder.writeFrameGpu(frame.ptr<float>(), width, height);
+            if (!written) {
+                ADD_FAILURE() << written.error();
+                return false;
+            }
+        }
+        const auto closed = encoder.close();
+        if (!closed) {
+            ADD_FAILURE() << closed.error();
+            return false;
+        }
+        return true;
+    };
+    ASSERT_TRUE(encode(directory.path / "spherical.mp4", true));
+    ASSERT_TRUE(encode(directory.path / "perspective.mp4", false));
+    const auto spherical = inspectEncodedVideo(directory.path / "spherical.mp4");
+    const auto perspective = inspectEncodedVideo(directory.path / "perspective.mp4");
+    ASSERT_TRUE(spherical);
+    ASSERT_TRUE(perspective);
+    ASSERT_TRUE(spherical->projection);
+    EXPECT_EQ(*spherical->projection, AV_SPHERICAL_EQUIRECTANGULAR);
+    EXPECT_FALSE(perspective->projection);
+    ASSERT_FALSE(spherical->packets.empty());
+    EXPECT_EQ(spherical->packets, perspective->packets);
+}
 
 namespace {
     // Keep the regression runnable against the old API to prove the image failure.

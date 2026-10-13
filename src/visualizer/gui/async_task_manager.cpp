@@ -1660,6 +1660,8 @@ namespace lfs::vis::gui {
             options.height = evt.height;
             options.framerate = evt.framerate;
             options.crf = evt.crf;
+            if (const auto* rendering = viewer_->getRenderingManager())
+                options.spherical_video = rendering->getSettings().equirectangular;
             if (evt.include_provenance) {
                 if (const auto* const scene_manager = viewer_->getSceneManager()) {
                     options.provenance = make_gui_export_stamp(*scene_manager);

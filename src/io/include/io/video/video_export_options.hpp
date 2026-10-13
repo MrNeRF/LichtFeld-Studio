@@ -69,6 +69,7 @@ namespace lfs::io::video {
         int framerate = 30;
         int crf = 18;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+        bool spherical_video = false;
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(
