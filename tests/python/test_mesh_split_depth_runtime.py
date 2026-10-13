@@ -17,7 +17,12 @@ from viewer_mesh_test_support import viewport_image
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
 
-def _front_splats(path):
+def _green(rgb):
+    r, g, b = rgb
+    return g > 80 and g > 2 * max(r, b)
+
+
+def _front_splats(path, z=1.):
     fields = ["x", "y", "z", "nx", "ny", "nz"]
     fields += [f"f_dc_{i}" for i in range(3)] + [f"f_rest_{i}" for i in range(45)]
     fields += ["opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
@@ -27,7 +32,7 @@ def _front_splats(path):
         output.write(header.encode())
         for y in range(31):
             for x in range(31):
-                values = [(x - 15) / 15., (y - 15) / 15., 1., 0., 0., 1.]
+                values = [(x - 15) / 15., (y - 15) / 15., z, 0., 0., 1.]
                 values += [(channel - .5) / .28209479177387814 for channel in (.95, .05, .05)]
                 values += [0.] * 45 + [10.] + [math.log(.075)] * 3 + [1., 0., 0., 0.]
                 output.write(struct.pack("<" + str(len(values)) + "f", *values))
@@ -93,3 +98,37 @@ lf.set_camera((0.,0.,6.), (0.,0.,0.), (0.,1.,0.), panel='right')
     assert _red(single.getpixel((w // 2, y)))
     for x in (w // 4, 3 * w // 4):
         assert _red(split.getpixel((x, y)))
+
+
+@pytest.mark.parametrize("backend", ["3dgs", "3dgut"])
+def test_split_mesh_shows_through_splat_sheet_behind(tmp_path, backend):
+    pictures = Path(os.environ.get("LFS_TEST_ARTIFACT_DIR", tmp_path)) / backend
+    pictures.mkdir(parents=True, exist_ok=True)
+    model = tmp_path / "front.ply"
+    _front_splats(model, -4.)
+    with isolated_app(tmp_path) as endpoint:
+        _tool(endpoint, "scene_load_ply", {"path": str(model)})
+        job = _tool(endpoint, "runtime_job_wait", {"job_id": "import.dataset", "timeout_ms": 60000})
+        assert job["success"], job
+        _editor(endpoint, MESH)
+        _tool(endpoint, "render_settings_set", {
+            "show_grid": False, "show_coord_axes": False, "show_pivot": False,
+            "render_scale": 1., "raster_backend": backend,
+        })
+        _tool(endpoint, "camera_set_view", {
+            "eye": [0., 0., 6.], "target": [0., 0., 0.], "up": [0., 1., 0.],
+        })
+        single = viewport_image(endpoint, pictures, "behind-single", require_green=False)
+        _tool(endpoint, "render_settings_set", {"split_view_mode": 3})
+        _editor(endpoint, """\
+lf.set_camera((0.,0.,6.), (0.,0.,0.), (0.,1.,0.), panel='left')
+lf.set_camera((0.,0.,6.), (0.,0.,0.), (0.,1.,0.), panel='right')
+""")
+        split = viewport_image(endpoint, pictures, "behind-split", require_green=False)
+
+    assert single.size == split.size
+    w, h = single.size
+    y = h // 2
+    assert _green(single.getpixel((w // 2, y))), single.getpixel((w // 2, y))
+    for x in (w // 4, 3 * w // 4):
+        assert _green(split.getpixel((x, y))), split.getpixel((x, y))

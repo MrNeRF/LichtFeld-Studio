@@ -34,6 +34,17 @@ MESH_CODE = '"""Small generated geometry for viewer QA; execute in the app\'s Py
 
 
 def setup_mesh(endpoint):
+    # Mesh vertices are pinned into visualizer space below. A loaded splat keeps
+    # an identity dataset transform, and the visualizer flips that to diag(1,-1,-1),
+    # so a sheet authored at z=-4 is drawn at visualizer z=+4, between the usual
+    # camera and the mesh. Pin splat nodes first so authored z stays put.
+    _editor(endpoint, """
+import lichtfeld as lf
+identity = [1.,0.,0.,0., 0.,1.,0.,0., 0.,0.,1.,0., 0.,0.,0.,1.]
+for node in lf.get_scene().get_nodes():
+    if node.splat_data() is not None:
+        lf.set_node_visualizer_world_transform(node.name, identity, record_history=False)
+""")
     _editor(endpoint, MESH_CODE)
     _tool(endpoint, "render_settings_set", {
         "show_grid": False, "show_coord_axes": False, "show_pivot": False, "render_scale": 1.,
