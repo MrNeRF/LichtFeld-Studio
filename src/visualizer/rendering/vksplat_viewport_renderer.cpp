@@ -2469,14 +2469,14 @@ namespace lfs::vis {
         const bool same_model =
             lod_page_cache_model_ == &splat_data &&
             lod_page_cache_.configured() &&
-            lod_page_cache_.snapshot().logical_chunks == logical_chunks &&
-            !lod_pool_sizing_dirty_;
+            lod_page_cache_.snapshot().logical_chunks == logical_chunks;
+        const bool sizing_dirty = lod_pool_sizing_dirty_;
         // The VRAM-derived size is computed once per model attach and then
         // sticks: free VRAM keeps moving as the pool's own buffers allocate,
         // and reconfiguring resets the whole cache. The pool budget setting or
         // VRAM fraction changing re-arms the computation.
         std::size_t physical_pages;
-        if (same_model) {
+        if (same_model && !sizing_dirty) {
             physical_pages = lod_page_cache_.snapshot().physical_pages;
         } else {
             physical_pages = requestedLodPhysicalPages(
@@ -2487,9 +2487,8 @@ namespace lfs::vis {
                 lod_page_inputs_.model == &splat_data ? lod_page_inputs_.physical_pages : 0);
             lod_pool_sizing_dirty_ = false;
         }
-        const bool needs_configure =
-            !same_model ||
-            lod_page_cache_.snapshot().physical_pages != physical_pages;
+        const bool needs_configure = detail::lodPageCacheNeedsReconfigure(
+            same_model, sizing_dirty, lod_page_cache_.snapshot().physical_pages, physical_pages);
         if (needs_configure) {
             lod_page_cache_model_ = &splat_data;
             const bool disk_backed =
