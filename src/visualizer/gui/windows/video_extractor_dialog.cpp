@@ -265,6 +265,37 @@ namespace lfs::gui {
             return static_cast<int>(std::clamp<long>(parsed, 1, 65535));
         }
 
+        [[nodiscard]] int readNonNegativeIntValue(const Rml::Element* const el, const int fallback) {
+            if (!el)
+                return fallback;
+            const std::string value = controlValue(el);
+            int parsed = 0;
+            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+            if (error != std::errc{} || end != value.data() + value.size())
+                return fallback;
+            return std::max(0, parsed);
+        }
+
+        // Frames and metadata an extraction writes into its output directory. Other files
+        // such as photos already in the folder are never part of the list.
+        std::vector<std::filesystem::path> generatedExtractionFiles(const VideoExtractionParams& params) {
+            std::vector<std::filesystem::path> files;
+            std::error_code ec;
+            for (std::filesystem::directory_iterator it(params.output_dir, ec), end;
+                 !ec && it != end; it.increment(ec)) {
+                std::error_code type_ec;
+                if (!it->is_regular_file(type_ec))
+                    continue;
+                const std::string name = lfs::core::path_to_utf8(it->path().filename());
+                // Recognize zero-numbered frames from an earlier extraction even when this run
+                // starts at one, so Delete Existing removes all output for the current pattern.
+                if ((params.generate_metadata && name == "extraction_metadata.json") ||
+                    io::isGeneratedFrameFilename(params.filename_pattern, name, true))
+                    files.push_back(it->path());
+            }
+            return files;
+        }
+
     } // namespace
 
     VideoExtractorDialog::VideoExtractorDialog()
@@ -452,6 +483,7 @@ namespace lfs::gui {
             media::FileExtraction files;
             files.files.output_directory = params.output_dir;
             files.files.filename_pattern = params.filename_pattern;
+            files.files.first_source_frame_number = params.first_source_frame_number;
             files.files.format = params.format == io::ImageFormat::EXR ? media::FrameFileFormat::EXR : params.format == io::ImageFormat::PNG ? media::FrameFileFormat::PNG
                                                                                                                                              : media::FrameFileFormat::JPEG;
             files.files.exr = params.exr;
@@ -577,7 +609,7 @@ namespace lfs::gui {
         } else
             source_probe_error_ = std::string(description.error().detail());
         trim_start_ = 0.0f;
-        trim_end_ = static_cast<float>(player_->duration());
+        trim_end_ = player_->duration() > 0.0 ? static_cast<float>(player_->duration()) : -1.0f;
         trim_end_is_auto_ = true;
         custom_width_ = std::max(16, player_->sourceWidth());
         custom_height_ = std::max(16, player_->sourceHeight());
@@ -758,6 +790,7 @@ namespace lfs::gui {
         custom_resolution_row_el_ = nullptr;
         custom_width_input_el_ = nullptr;
         custom_height_input_el_ = nullptr;
+        first_source_frame_number_input_el_ = nullptr;
         output_resolution_el_ = nullptr;
         naming_select_el_ = nullptr;
         custom_pattern_row_el_ = nullptr;
@@ -851,6 +884,7 @@ namespace lfs::gui {
         naming_help_el_ = document_->GetElementById("naming-help");
         naming_error_el_ = document_->GetElementById("naming-error");
         pattern_input_el_ = document_->GetElementById("pattern-input");
+        first_source_frame_number_input_el_ = document_->GetElementById("first-source-frame-number-input");
         pattern_example_el_ = document_->GetElementById("pattern-example");
         start_btn_el_ = document_->GetElementById("btn-start");
         stop_btn_el_ = document_->GetElementById("btn-stop");
@@ -883,6 +917,10 @@ namespace lfs::gui {
         window_candidates_readout_el_ = document_->GetElementById("window-candidates-readout");
         generate_metadata_el_ = document_->GetElementById("generate-metadata");
         overwrite_overlay_el_ = document_->GetElementById("overwrite-overlay");
+        overwrite_message_el_ = document_->GetElementById("overwrite-message");
+        overwrite_cancel_btn_el_ = document_->GetElementById("overwrite-cancel");
+        overwrite_delete_btn_el_ = document_->GetElementById("overwrite-delete");
+        overwrite_proceed_btn_el_ = document_->GetElementById("overwrite-proceed");
 
         elements_cached_ =
             title_el_ && close_btn_el_ && preview_shell_el_ && preview_image_el_ &&
@@ -956,15 +994,9 @@ namespace lfs::gui {
         listen_click(stopped_ok_btn_el_);
         listen_click(dismiss_btn_el_);
 
-        // Overwrite confirmation buttons
-        {
-            auto* no = document_->GetElementById("overwrite-no");
-            if (no)
-                no->AddEventListener(Rml::EventId::Click, &listener_);
-            auto* yes = document_->GetElementById("overwrite-yes");
-            if (yes)
-                yes->AddEventListener(Rml::EventId::Click, &listener_);
-        }
+        listen_click(overwrite_cancel_btn_el_);
+        listen_click(overwrite_delete_btn_el_);
+        listen_click(overwrite_proceed_btn_el_);
 
         listen_change(mode_select_el_);
         listen_change(fps_slider_el_);
@@ -982,6 +1014,7 @@ namespace lfs::gui {
         listen_change(custom_height_input_el_);
         listen_change(naming_select_el_);
         listen_change(pattern_input_el_);
+        listen_change(first_source_frame_number_input_el_);
         listen_change(trim_start_input_el_);
         listen_change(trim_end_input_el_);
         listen_change(sharpness_toggle_el_);
@@ -1073,8 +1106,22 @@ namespace lfs::gui {
                        "video_extractor.candidates_very_high", "video_extractor.candidates_all"});
         changed |= setCachedText(stop_btn_el_, LOC(VideoExtractor::STOP));
         changed |= setCachedText(cancel_btn_el_, LOC(VideoExtractor::CANCEL));
+        syncOverwritePrompt();
+        changed |= setCachedText(overwrite_cancel_btn_el_, LOC(VideoExtractor::OVERWRITE_CANCEL));
+        changed |= setCachedText(overwrite_delete_btn_el_, LOC(VideoExtractor::OVERWRITE_DELETE));
+        changed |= setCachedText(overwrite_proceed_btn_el_, LOC(VideoExtractor::OVERWRITE_PROCEED));
         markContentDirty();
         controls_dirty_ |= changed;
+    }
+
+    void VideoExtractorDialog::syncOverwritePrompt() {
+        const char* const prompt = pending_metadata_will_be_replaced_
+                                       ? (pending_has_frame_conflicts_
+                                              ? VideoExtractor::OVERWRITE_PROMPT_FRAMES_METADATA
+                                              : VideoExtractor::OVERWRITE_PROMPT_METADATA)
+                                       : VideoExtractor::OVERWRITE_PROMPT;
+        if (setCachedText(overwrite_message_el_, LOC(prompt)))
+            markContentDirty();
     }
 
     void VideoExtractorDialog::syncVideoPreview() {
@@ -1297,6 +1344,7 @@ namespace lfs::gui {
         changed |= setCachedSelect(naming_select_el_, naming_selection_);
         changed |= setCachedDisabled(naming_select_el_, extracting);
         changed |= setCachedDisabled(pattern_input_el_, extracting);
+        changed |= setCachedDisabled(first_source_frame_number_input_el_, extracting);
         changed |= setCachedProperty(custom_pattern_row_el_, "display", naming_selection_ == 4 ? "flex" : "none");
         changed |= setCachedProperty(naming_help_el_, "display", naming_selection_ == 4 ? "block" : "none");
         changed |= setCachedText(naming_error_el_, naming_error);
@@ -1387,6 +1435,7 @@ namespace lfs::gui {
         changed |= setCachedControlValue(custom_width_input_el_, std::to_string(custom_width_));
         changed |= setCachedControlValue(custom_height_input_el_, std::to_string(custom_height_));
         changed |= setCachedControlValue(pattern_input_el_, filename_pattern_);
+        changed |= setCachedControlValue(first_source_frame_number_input_el_, std::to_string(first_source_frame_number_));
 
         const std::string video_display = video_path_.empty()
                                               ? LOC(VideoExtractor::NO_FILE)
@@ -1487,7 +1536,7 @@ namespace lfs::gui {
                                                                                          : ".jpg";
         std::string resolved_pattern, naming_error;
         const bool valid = resolveFilenamePattern(resolved_pattern, naming_error);
-        const std::string preview = valid ? io::formatFrameFilenameStem(resolved_pattern, 1) : "";
+        const std::string preview = valid ? io::formatFrameFilenameStem(resolved_pattern, first_source_frame_number_) : "";
         changed |= setCachedText(pattern_example_el_, valid
                                                           ? LOCF(player_->isOpen() ? VideoExtractor::EXAMPLE : "video_extractor.naming_example_pending", preview.c_str(), ext)
                                                           : "");
@@ -1584,28 +1633,41 @@ namespace lfs::gui {
         } else if (id == "btn-trim-reset" && player_->isOpen()) {
             trim_end_is_auto_ = true;
             trim_start_ = 0.0f;
-            trim_end_ = static_cast<float>(player_->duration());
+            trim_end_ = player_->duration() > 0.0 ? static_cast<float>(player_->duration()) : -1.0f;
             controls_dirty_ = true;
             markContentDirty();
         } else if (id == "btn-start") {
             beginExtractionFromUi();
-        } else if (id == "overwrite-yes") {
+        } else if (id == "overwrite-proceed") {
             if (pending_params_set_) {
                 pending_params_.exr.overwrite = true;
-                pending_params_.remove_stale_frames = true;
-                pending_params_set_ = false;
-                if (overwrite_overlay_el_)
-                    overwrite_overlay_el_->SetClass("hidden", true);
-                stop_extraction_requested_.store(false);
-                extracting_.store(true);
-                current_frame_.store(0);
-                total_frames_.store(0);
-                discarded_frames_.store(0);
-                clearExtractionStatus();
-                startExtraction(pending_params_);
+                launchExtraction(pending_params_);
             }
-        } else if (id == "overwrite-no") {
+        } else if (id == "overwrite-delete") {
+            if (pending_params_set_) {
+                pending_params_.exr.overwrite = true;
+                for (const auto& path : generatedExtractionFiles(pending_params_)) {
+                    std::error_code ec;
+                    if (!std::filesystem::remove(path, ec) && ec) {
+                        pending_params_set_ = false;
+                        if (overwrite_overlay_el_)
+                            overwrite_overlay_el_->SetClass("hidden", true);
+                        setExtractionError(LOCF(VideoExtractor::OVERWRITE_DELETE_ERROR,
+                                                lfs::core::path_to_utf8(path), ec.message()),
+                                           false);
+                        pending_has_frame_conflicts_ = false;
+                        pending_metadata_will_be_replaced_ = false;
+                        controls_dirty_ = true;
+                        markContentDirty();
+                        return;
+                    }
+                }
+                launchExtraction(pending_params_);
+            }
+        } else if (id == "overwrite-cancel") {
             pending_params_set_ = false;
+            pending_has_frame_conflicts_ = false;
+            pending_metadata_will_be_replaced_ = false;
             if (overwrite_overlay_el_)
                 overwrite_overlay_el_->SetClass("hidden", true);
         } else if (id == "btn-complete-ok" || id == "btn-stopped-ok") {
@@ -1820,6 +1882,8 @@ namespace lfs::gui {
             custom_height_ = std::max(16, readIntValue(custom_height_input_el_, custom_height_));
         } else if (id == "pattern-input" && pattern_input_el_ && naming_selection_ == 4) {
             filename_pattern_ = controlValue(pattern_input_el_);
+        } else if (id == "first-source-frame-number-input") {
+            first_source_frame_number_ = readNonNegativeIntValue(first_source_frame_number_input_el_, first_source_frame_number_);
         }
     }
 
@@ -1888,6 +1952,7 @@ namespace lfs::gui {
         applyTextInput("custom-width-input");
         applyTextInput("custom-height-input");
         applyTextInput("pattern-input");
+        applyTextInput("first-source-frame-number-input");
 
         if (!player_->isOpen() || output_dir_.empty() || extracting_.load() || !exrPreflightError().empty())
             return;
@@ -1898,6 +1963,7 @@ namespace lfs::gui {
         params.mode = mode_selection_ == 0 ? io::ExtractionMode::FPS : io::ExtractionMode::INTERVAL;
         params.fps = static_cast<double>(fps_);
         params.frame_interval = frame_interval_;
+        params.first_source_frame_number = first_source_frame_number_;
         params.format = format_selection_ == 2 ? io::ImageFormat::EXR : format_selection_ == 0 ? io::ImageFormat::PNG
                                                                                                : io::ImageFormat::JPG;
         if (format_selection_ == 2) {
@@ -1941,18 +2007,34 @@ namespace lfs::gui {
         params.convert_hdr_to_sdr = format_selection_ != 2 && hdr_to_sdr_;
         params.rotation = rotation_deg_;
 
-        // Check if output folder already contains generated extraction files
-        if (std::filesystem::exists(output_dir_)) {
-            const bool has_generated = !io::generatedExtractionFiles(output_dir_, params.filename_pattern).empty();
-            if (has_generated) {
-                pending_params_ = params;
-                pending_params_set_ = true;
-                if (overwrite_overlay_el_)
-                    overwrite_overlay_el_->SetClass("hidden", false);
-                return;
-            }
+        // Ask before replacing frames matching this naming or metadata this run will write.
+        const auto existing_files = generatedExtractionFiles(params);
+        if (!existing_files.empty()) {
+            pending_params_ = params;
+            pending_params_set_ = true;
+            pending_has_frame_conflicts_ = std::any_of(
+                existing_files.begin(), existing_files.end(), [](const std::filesystem::path& path) {
+                    return lfs::core::path_to_utf8(path.filename()) != "extraction_metadata.json";
+                });
+            pending_metadata_will_be_replaced_ = params.generate_metadata && std::any_of(
+                                                                                 existing_files.begin(), existing_files.end(), [](const std::filesystem::path& path) {
+                                                                                     return lfs::core::path_to_utf8(path.filename()) == "extraction_metadata.json";
+                                                                                 });
+            syncOverwritePrompt();
+            if (overwrite_overlay_el_)
+                overwrite_overlay_el_->SetClass("hidden", false);
+            return;
         }
 
+        launchExtraction(params);
+    }
+
+    void VideoExtractorDialog::launchExtraction(const VideoExtractionParams& params) {
+        pending_params_set_ = false;
+        pending_has_frame_conflicts_ = false;
+        pending_metadata_will_be_replaced_ = false;
+        if (overwrite_overlay_el_)
+            overwrite_overlay_el_->SetClass("hidden", true);
         stop_extraction_requested_.store(false);
         extracting_.store(true);
         current_frame_.store(0);

@@ -210,7 +210,21 @@
     "view.performance_hud": "HUD prestazioni",
     "edit.preferences": "Preferenze...",
     "view.debug_info": "Info di Debug...",
-    "view.streaming_settings": "Impostazioni visualizzatore in streaming"
+    "view.streaming_settings": "Impostazioni visualizzatore in streaming",
+    "file.browse_projects": "Sfoglia progetti…",
+    "file.export_menu": "Esporta",
+    "file.export_scene": "Scena…",
+    "file.open_gallery": "Apri galleria",
+    "file.project_maintenance": "Manutenzione progetto",
+    "view.split_view": "Vista divisa",
+    "file.splat_file": "File splat…",
+    "file.ssog_folder": "Cartella SSOG…",
+    "file.configuration": "Configurazione…",
+    "file.dataset": "Dataset…",
+    "file.mesh": "Mesh…",
+    "file.checkpoint": "Checkpoint…",
+    "tools.developer": "Sviluppatore",
+    "tools.system_console": "Console di sistema"
   },
   "window": {
     "export": "Esporta",
@@ -1796,7 +1810,19 @@
     "action.view_axis_right": "Vista da destra",
     "action.view_axis_top": "Vista dall'alto",
     "action.view_frame_all": "Inquadra tutto",
-    "action.view_toggle_perspective": "Alterna prospettica/ortografica"
+    "action.view_toggle_perspective": "Alterna prospettica/ortografica",
+    "mouse_back": "Pulsante Indietro del mouse",
+    "mouse_forward": "Pulsante Avanti del mouse",
+    "invalid_profile_name": "Nome del profilo non valido. Usa un nome semplice senza separatori di percorso o caratteri riservati.",
+    "profile_save_failed": "Impossibile salvare il profilo di input.",
+    "invalid_binding": "Questa scorciatoia non può essere usata per questa azione.",
+    "damaged_profile_backed_up": "Una mappa tasti danneggiata è stata salvata prima della scrittura. Il file originale si trova accanto al profilo.",
+    "invalid_entries_skipped": "Voci della mappa dei tasti ignorate e conservate nelle posizioni da 1: ",
+    "newer_profile_unchanged": "Questa mappa dei tasti è stata salvata da una versione più recente. Non è stata caricata né modificata.",
+    "core_actions_unreachable": "Alcune scorciatoie essenziali di questa mappa non sono utilizzabili. Puoi ripristinare solo queste azioni.",
+    "restore_core_actions": "Ripristina i valori predefiniti per queste azioni",
+    "clear_binding": "Cancella",
+    "action.toggle_python_console": "Attiva o disattiva la console Python"
   },
   "debug_info": {
     "clear_history": "Cancella Cronologia",
@@ -2171,7 +2197,14 @@
     "linear": "Lineare",
     "source_metadata": "Metadati sorgente",
     "source_metadata_unavailable": "I metadati colore della sorgente non sono disponibili.",
-    "srgb": "sRGB"
+    "srgb": "sRGB",
+    "first_source_frame_number": "Numero del primo frame sorgente:",
+    "first_source_frame_number_help": "Il numero assegnato al frame sorgente 1; gli intervalli tra frame sorgente vengono mantenuti.",
+    "overwrite_delete": "Elimina esistenti",
+    "overwrite_proceed": "Procedi (sovrascrivi duplicati)",
+    "overwrite_prompt_metadata": "La cartella di output contiene metadati di estrazione che questa esecuzione sostituirà. Scegli come procedere.",
+    "overwrite_prompt_frames_metadata": "La cartella di output contiene già fotogrammi che corrispondono al modello di denominazione di questa estrazione. Anche i metadati di estrazione esistenti verranno sostituiti. Scegli come procedere.",
+    "overwrite_delete_error": "Impossibile rimuovere {}: {}"
   },
   "rendering_panel": {
     "fov_format": "Campo visivo: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2475,7 +2508,6 @@
       "off": "Disattivato",
       "summary": "{x_metric} rispetto a {y_metric} su {count} Gaussiane",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "La regione di confronto contrassegnata diventa la selezione attiva delle Gaussiane.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} Gaussiane",
       "empty": {
         "title": "Confronto non disponibile",

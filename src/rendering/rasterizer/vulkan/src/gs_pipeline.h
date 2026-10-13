@@ -183,7 +183,8 @@ protected:
     std::vector<PendingTimelineWait> pending_timeline_waits_;
     std::unordered_map<VkSemaphore, std::uint64_t> last_timeline_signal_values_;
 
-    static constexpr std::uint32_t kCommandBatchSlotCount = 3;
+    // Keep one measured split-view frame's thirteen submissions in flight.
+    static constexpr std::uint32_t kCommandBatchSlotCount = 13;
     struct CommandBatchSlot {
         VkCommandBuffer command_buffer = VK_NULL_HANDLE;
         VkQueryPool timestamp_query_pool = VK_NULL_HANDLE;

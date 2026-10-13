@@ -95,17 +95,26 @@ namespace lfs::training {
 
         struct CannyParams {
             uint64_t input, output;
+            uint64_t mask;
             int32_t height, width;
         };
 
-        void canny(const Tensor& image, Tensor& edges) {
+        void canny(const Tensor& image, const Tensor& photometric_weight, Tensor& edges) {
             const int height = static_cast<int>(image.shape()[1]);
             const int width = static_cast<int>(image.shape()[2]);
-            const CannyParams params{mk::address(image), mk::address(edges), height, width};
+            const CannyParams params{mk::address(image), mk::address(edges),
+                                     photometric_weight.is_valid() ? mk::address(photometric_weight) : 0,
+                                     height, width};
             const bool bytes = image.dtype() == core::DataType::UInt8;
-            mk::launch_2d("training_image_canny", params, {&image, &edges},
-                          core::GpuKernelModule::groups_for(width, 32), core::GpuKernelModule::groups_for(height, 32),
-                          32, 32, {{0, bytes ? 1u : 0u}});
+            if (photometric_weight.is_valid()) {
+                mk::launch_2d("training_image_canny", params, {&image, &photometric_weight, &edges},
+                              core::GpuKernelModule::groups_for(width, 32), core::GpuKernelModule::groups_for(height, 32),
+                              32, 32, {{0, bytes ? 1u : 0u}});
+            } else {
+                mk::launch_2d("training_image_canny", params, {&image, &edges},
+                              core::GpuKernelModule::groups_for(width, 32), core::GpuKernelModule::groups_for(height, 32),
+                              32, 32, {{0, bytes ? 1u : 0u}});
+            }
         }
 
         struct NormalizeScalarParams {

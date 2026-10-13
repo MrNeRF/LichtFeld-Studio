@@ -776,7 +776,10 @@ namespace lfs::vis {
         if ((action == TrainingAction::Stop || action == TrainingAction::Resume) && !trainer_ && viewer_ &&
             getState() == TrainingState::Paused) {
             const auto session = viewer_->projectTrainingSessionState();
-            return session.available && !session.hydrated && !session.restoring;
+            if (action == TrainingAction::Stop)
+                return session.available && !session.hydrated && !session.restoring;
+            return session.available && !session.hydrated &&
+                   !session.restoring && session.error.empty();
         }
         return state_machine_.canPerform(action);
     }

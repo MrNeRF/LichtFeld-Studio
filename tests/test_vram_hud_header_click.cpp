@@ -4,6 +4,7 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/events.hpp"
+#include "gui/rml_viewport_overlay.hpp"
 #include "gui/vram_hud_overlay.hpp"
 
 #include <RmlUi/Core.h>
@@ -79,6 +80,7 @@ namespace lfs::vis::gui {
             #perf-hud-card { display: block; width: 300px; height: 200px; }
             #vram-hud-header { display: block; position: relative; width: 300px; height: 20px; drag: drag; }
             #perf-hud-collapse { position: absolute; right: 0px; top: 0px; width: 20px; height: 20px; }
+            #vram-hud-summary, .vram-hud-summary-row { display: block; } .hidden { display: none; }
         </style></head><body>
             <div id="vram-hud-overlay">
                 <div id="perf-hud-strip">
@@ -88,6 +90,9 @@ namespace lfs::vis::gui {
                     <div id="vram-hud-header">
                         <div id="perf-hud-collapse" data-perf-toggle-expanded="true"></div>
                     </div>
+                    <div id="perf-hud-tracking-off" class="hidden"></div>
+                    <div id="vram-hud-panel-overview"><div id="vram-hud-summary"></div></div>
+                    <div id="vram-hud-panel-ledger" class="hidden"></div>
                 </div>
             </div>
         </body></rml>)";
@@ -154,8 +159,32 @@ namespace lfs::vis::gui {
             VramHudOverlay::State state;
             state.perf_hud.visible = true;
             state.perf_hud.expanded = expanded;
-            overlay_->setState(std::move(state));
+            (void)overlay_->setState(std::move(state));
             context_->Update();
+        }
+
+        [[nodiscard]] bool publish(VramHudOverlay::State state) {
+            RmlViewportOverlay viewport;
+            viewport.vram_hud_ = std::move(overlay_);
+            viewport.render_needed_ = false;
+            viewport.render_reason_bits_ = 0;
+            viewport.setVramHudOverlay(std::move(state));
+            context_->Update();
+            overlay_ = std::move(viewport.vram_hud_);
+            return viewport.render_needed_;
+        }
+
+        [[nodiscard]] std::string summaryValue(const char* label) const {
+            auto* const root = document_->GetElementById("vram-hud-summary");
+            if (root == nullptr)
+                return {};
+            for (int i = 0; i < root->GetNumChildren(); ++i) {
+                auto* const row = root->GetChild(i);
+                if (row->GetNumChildren() < 2 || std::string(row->GetChild(0)->GetInnerRML()) != label)
+                    continue;
+                return std::string(row->GetChild(1)->GetInnerRML());
+            }
+            return {};
         }
 
         [[nodiscard]] Rml::Vector2i centerOf(const char* id) const {
@@ -246,6 +275,41 @@ namespace lfs::vis::gui {
 
         click(centerOf("perf-hud-collapse"));
         EXPECT_EQ(toggles_, 1);
+    }
+
+    TEST_F(VramHudHeaderClickTest, DisabledTrackingShowsProcessMemoryAndNotice) {
+        VramHudOverlay::State state;
+        state.perf_hud.visible = true;
+        state.perf_hud.expanded = true;
+        state.perf_hud.snapshot = std::make_shared<AppStore::PerfHudSnapshot>();
+        EXPECT_TRUE(publish(state));
+
+        EXPECT_FALSE(document_->GetElementById("perf-hud-tracking-off")->IsClassSet("hidden"));
+        EXPECT_FALSE(document_->GetElementById("vram-hud-panel-overview")->IsClassSet("hidden"));
+        EXPECT_TRUE(document_->GetElementById("vram-hud-panel-ledger")->IsClassSet("hidden"));
+        EXPECT_FALSE(summaryValue("Process").empty());
+        EXPECT_FALSE(summaryValue("GPU used (all procs)").empty());
+        EXPECT_EQ(summaryValue("CUDA pool used"), "—");
+
+        int idle_requests = 0;
+        for (int tick = 0; tick < 12; ++tick) {
+            auto repeated = state;
+            auto snapshot = std::make_shared<AppStore::PerfHudSnapshot>(*state.perf_hud.snapshot);
+            snapshot->ram_used_bytes += static_cast<std::size_t>(tick + 1);
+            repeated.perf_hud.snapshot = std::move(snapshot);
+            idle_requests += publish(std::move(repeated));
+        }
+        EXPECT_EQ(idle_requests, 0);
+
+        auto labeled = state;
+        labeled.snapshot.process.device_name = "Snapshot GPU";
+        EXPECT_TRUE(publish(labeled));
+        EXPECT_EQ(std::string(document_->GetElementById("vram-hud-summary")->GetLastChild()->GetInnerRML()),
+                  "Snapshot GPU");
+
+        auto changed = state;
+        changed.snapshot.enabled = true;
+        EXPECT_TRUE(publish(std::move(changed)));
     }
 
 } // namespace lfs::vis::gui

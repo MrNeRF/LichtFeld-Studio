@@ -128,6 +128,9 @@ TEST_F(MeshLoaderTest, LoadsGeometryNormalsAndBoundedIndices) {
     const auto* mesh_ptr = std::get_if<std::shared_ptr<MeshData>>(&result->data);
     ASSERT_NE(mesh_ptr, nullptr);
     auto& mesh = **mesh_ptr;
+    ASSERT_EQ(mesh.materials.size(), 1u);
+    EXPECT_EQ(mesh.materials[0].alpha_mode, AlphaMode::Opaque);
+    EXPECT_FLOAT_EQ(mesh.materials[0].alpha_cutoff, 0.5f);
     EXPECT_EQ(mesh.vertex_count(), 3);
     EXPECT_EQ(mesh.face_count(), 1);
     ASSERT_TRUE(mesh.has_normals());
@@ -153,6 +156,47 @@ TEST_F(MeshLoaderTest, LoadsGeometryNormalsAndBoundedIndices) {
         EXPECT_GE(indices(0, axis), 0);
         EXPECT_LT(indices(0, axis), mesh.vertex_count());
     }
+}
+
+TEST_F(MeshLoaderTest, ImportsGltfAlphaModesAndDefaults) {
+    const auto path = write_scene(nlohmann::json::parse(R"([{"mesh":0}])"));
+    auto scene = nlohmann::json::parse(std::ifstream(path));
+    scene["materials"][0]["alphaMode"] = "MASK";
+    scene["materials"][0]["alphaCutoff"] = 0.25f;
+    std::ofstream(path) << scene.dump();
+
+    auto loaded = loader_.load(path);
+    ASSERT_TRUE(loaded.has_value());
+    const auto& masked = std::get<std::shared_ptr<MeshData>>(loaded->data)->materials[0];
+    EXPECT_EQ(masked.alpha_mode, AlphaMode::Mask);
+    EXPECT_FLOAT_EQ(masked.alpha_cutoff, 0.25f);
+
+    scene["materials"][0].erase("alphaCutoff");
+    std::ofstream(path) << scene.dump();
+    loaded = loader_.load(path);
+    ASSERT_TRUE(loaded.has_value());
+    const auto& default_cutoff =
+        std::get<std::shared_ptr<MeshData>>(loaded->data)->materials[0];
+    EXPECT_EQ(default_cutoff.alpha_mode, AlphaMode::Mask);
+    EXPECT_FLOAT_EQ(default_cutoff.alpha_cutoff, 0.5f);
+
+    scene["materials"][0]["alphaMode"] = "BLEND";
+    scene["materials"][0]["alphaCutoff"] = 0.25f;
+    std::ofstream(path) << scene.dump();
+    loaded = loader_.load(path);
+    ASSERT_TRUE(loaded.has_value());
+    const auto& blended = std::get<std::shared_ptr<MeshData>>(loaded->data)->materials[0];
+    EXPECT_EQ(blended.alpha_mode, AlphaMode::Blend);
+    EXPECT_FLOAT_EQ(blended.alpha_cutoff, 0.25f);
+
+    scene["materials"][0].erase("alphaMode");
+    scene["materials"][0].erase("alphaCutoff");
+    std::ofstream(path) << scene.dump();
+    loaded = loader_.load(path);
+    ASSERT_TRUE(loaded.has_value());
+    const auto& opaque = std::get<std::shared_ptr<MeshData>>(loaded->data)->materials[0];
+    EXPECT_EQ(opaque.alpha_mode, AlphaMode::Opaque);
+    EXPECT_FLOAT_EQ(opaque.alpha_cutoff, 0.5f);
 }
 
 TEST_F(MeshLoaderTest, MissingFileReturnsError) {

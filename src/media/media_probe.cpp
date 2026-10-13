@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/path_utils.hpp"
+#include "io/video/probed_stream_rewind.hpp"
 #include "media/media_probe_ffmpeg.hpp"
 extern "C" {
 #include <libavformat/avformat.h>
@@ -199,6 +200,7 @@ namespace lfs::media {
             VideoStreamProbe result;
             if (!context)
                 return result;
+            lfs::io::video::limitUntimedVideoProbe(context);
             result.stream_index = findUsableHeaderVideoStream(context);
             if (result.stream_index < 0) {
                 result.ffmpeg_error = avformat_find_stream_info(context, nullptr);

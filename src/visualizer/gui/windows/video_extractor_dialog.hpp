@@ -57,6 +57,7 @@ namespace lfs::gui {
         int custom_height = 0;
 
         std::string filename_pattern = "frame_%d";
+        int first_source_frame_number = 1;
 
         io::SharpnessAlgorithm sharpness_algorithm = io::SharpnessAlgorithm::COMBINED;
         double sharpness_threshold = 10.0;
@@ -150,6 +151,7 @@ namespace lfs::gui {
         bool syncHdrControls();
         void syncExtractionStatus();
         void syncOutputPreview();
+        void syncOverwritePrompt();
         void handleEvent(Rml::Event& event);
         void handleClick(const std::string& id);
         void handleChange(const std::string& id, bool explicit_edit = true);
@@ -159,6 +161,7 @@ namespace lfs::gui {
         void applyTextInput(const std::string& id);
         [[nodiscard]] bool resolveFilenamePattern(std::string& pattern, std::string& error) const;
         void beginExtractionFromUi();
+        void launchExtraction(const VideoExtractionParams& params);
         void requestStopExtraction();
         void markContentDirty();
         void disablePanel();
@@ -191,6 +194,7 @@ namespace lfs::gui {
 
         int naming_selection_ = 2;
         std::string filename_pattern_ = "frame_%05d";
+        int first_source_frame_number_ = 1;
 
         float trim_start_ = 0.0f;
         float trim_end_ = -1.0f;
@@ -276,6 +280,7 @@ namespace lfs::gui {
         Rml::Element* naming_help_el_ = nullptr;
         Rml::Element* naming_error_el_ = nullptr;
         Rml::Element* pattern_input_el_ = nullptr;
+        Rml::Element* first_source_frame_number_input_el_ = nullptr;
         Rml::Element* pattern_example_el_ = nullptr;
         Rml::Element* start_btn_el_ = nullptr;
         Rml::Element* stop_btn_el_ = nullptr;
@@ -308,6 +313,10 @@ namespace lfs::gui {
         Rml::Element* hdr_to_sdr_el_ = nullptr;
         Rml::Element* hdr_to_sdr_row_el_ = nullptr;
         Rml::Element* overwrite_overlay_el_ = nullptr;
+        Rml::Element* overwrite_message_el_ = nullptr;
+        Rml::Element* overwrite_cancel_btn_el_ = nullptr;
+        Rml::Element* overwrite_delete_btn_el_ = nullptr;
+        Rml::Element* overwrite_proceed_btn_el_ = nullptr;
         int rotation_deg_ = 0;
         bool hdr_to_sdr_ = false;
         Rml::Element* rotation_cw_btn_el_ = nullptr;
@@ -318,6 +327,8 @@ namespace lfs::gui {
         Rml::Element* hdr_badge_label_el_ = nullptr;
         VideoExtractionParams pending_params_;
         bool pending_params_set_ = false;
+        bool pending_has_frame_conflicts_ = false;
+        bool pending_metadata_will_be_replaced_ = false;
     };
 
 } // namespace lfs::gui

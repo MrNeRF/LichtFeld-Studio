@@ -19,6 +19,7 @@
 #include <iterator>
 #include <sstream>
 #include <string>
+#include <utility>
 
 namespace lfs::vis::gui {
     class ViewportDepthLayoutTestAccess {
@@ -30,6 +31,9 @@ namespace lfs::vis::gui {
             overlay.toolbar_position_preference_dirty_ = false;
         }
         static bool update(RmlViewportOverlay& overlay) { return overlay.updateToolbarRoots(); }
+        static bool updateOverlayPanels(RmlViewportOverlay& overlay) {
+            return overlay.updateViewportOverlayPanelLayout();
+        }
         static void bindStore(RmlViewportOverlay& overlay) { overlay.bindReactiveStore(); }
         static void releaseStore(RmlViewportOverlay& overlay) {
             overlay.gt_metrics_config_subscription_.reset();
@@ -235,6 +239,31 @@ namespace {
             bar->SetId(id);
             layout(true);
             EXPECT_FLOAT_EQ(top(), 5);
+        }
+    }
+
+    TEST_F(ViewportDepthLayoutTest, OverlayPanelsClearThePrimaryToolbarAtHighScale) {
+        auto* const content = document_->GetElementById("viewport-content");
+        auto toolbar_node = document_->CreateElement("div");
+        toolbar_node->SetId("primary-utility-toolbar");
+        toolbar_node->SetProperty("width", "44dp");
+        toolbar_node->SetProperty("height", "400dp");
+        auto* const toolbar = toolbar_node.get();
+        auto root_node = document_->CreateElement("div");
+        root_node->SetId("primary-toolbar-root");
+        root_node->SetClassNames("panel-toolbar-root");
+        root_node->AppendChild(std::move(toolbar_node));
+        content->AppendChild(std::move(root_node));
+        for (const float scale : {1.0f, 1.5f, 2.0f}) {
+            context_->SetDensityIndependentPixelRatio(scale);
+            context_->Update();
+            EXPECT_TRUE(lfs::vis::gui::ViewportDepthLayoutTestAccess::updateOverlayPanels(overlay_));
+            context_->Update();
+            const auto* const left = panel()->GetProperty("left");
+            ASSERT_NE(left, nullptr);
+            const auto toolbar_size = toolbar->GetBox().GetSize(Rml::BoxArea::Border);
+            EXPECT_GE(panel()->GetAbsoluteOffset(Rml::BoxArea::Border).x,
+                      toolbar->GetAbsoluteOffset(Rml::BoxArea::Border).x + toolbar_size.x + 8.0f * scale);
         }
     }
 

@@ -504,8 +504,8 @@ namespace lfs::vis::gui {
         if (!vram_hud_)
             return;
         const bool was_visible = vram_hud_->isVisible();
-        vram_hud_->setState(std::move(state));
-        if (was_visible || vram_hud_->isVisible())
+        const bool changed = vram_hud_->setState(std::move(state));
+        if (changed && (was_visible || vram_hud_->isVisible()))
             markRenderNeeded(RenderReason::VramHud);
     }
 
@@ -681,6 +681,42 @@ namespace lfs::vis::gui {
         }
 
         toolbar_rail_layout_dirty_ = false;
+        return changed;
+    }
+
+    bool RmlViewportOverlay::updateViewportOverlayPanelLayout() {
+        if (!document_ || !rml_context_)
+            return false;
+        auto* const content = document_->GetElementById("viewport-content");
+        if (!content)
+            return false;
+        const float content_left = content->GetAbsoluteOffset(Rml::BoxArea::Border).x;
+        float toolbar_right = -1.0f;
+        for (const char* const id : {"primary-utility-toolbar", "secondary-utility-toolbar"}) {
+            auto* const toolbar = document_->GetElementById(id);
+            if (!toolbar || !toolbar->GetParentNode() || toolbar->GetParentNode()->IsClassSet("hidden"))
+                continue;
+            const auto offset = toolbar->GetAbsoluteOffset(Rml::BoxArea::Border);
+            toolbar_right = std::max(toolbar_right,
+                                     offset.x + toolbar->GetBox().GetSize(Rml::BoxArea::Border).x);
+        }
+        const float panel_left = toolbar_right < 0.0f
+                                     ? -1.0f
+                                     : toolbar_right - content_left +
+                                           8.0f * std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f);
+        bool changed = false;
+        for (const char* const id : {"transform-block", "selection-block", "depth-view-block",
+                                     "gt-compare-mode-block", "viewport-export-block"}) {
+            auto* const panel = document_->GetElementById(id);
+            if (!panel)
+                continue;
+            const std::string value = panel_left < 0.0f ? "12dp" : std::format("{:.1f}px", panel_left);
+            const auto* const current = panel->GetProperty("left");
+            if (!current || current->ToString() != value) {
+                panel->SetProperty("left", value);
+                changed = true;
+            }
+        }
         return changed;
     }
 
@@ -1607,11 +1643,14 @@ namespace lfs::vis::gui {
             }
             if (vram_hud_ && vram_hud_->initializeGeometryAfterLayout())
                 rml_context_->Update();
-            updateToolbarRailLayout();
+            const bool rail_layout_changed = updateToolbarRailLayout();
             if (viewport_toolbar_position_ == "free" && applyToolbarPosition()) {
                 LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.toolbar_position", 0.25);
                 rml_context_->Update();
             }
+            if ((toolbar_changed || size_changed || dpi_changed || rail_layout_changed) &&
+                updateViewportOverlayPanelLayout())
+                rml_context_->Update();
         }
 
         queueCachedContext(true);

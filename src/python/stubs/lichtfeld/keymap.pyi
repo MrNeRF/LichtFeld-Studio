@@ -207,6 +207,8 @@ class Action(enum.Enum):
 
     DEPTH_WINDOW_DRAG = 86
 
+    TOGGLE_PYTHON_CONSOLE = 103
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 

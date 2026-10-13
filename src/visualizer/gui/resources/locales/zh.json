@@ -210,7 +210,21 @@
     "view.performance_hud": "性能 HUD",
     "edit.preferences": "偏好设置...",
     "view.debug_info": "调试信息...",
-    "view.streaming_settings": "流式查看器设置"
+    "view.streaming_settings": "流式查看器设置",
+    "file.browse_projects": "浏览项目…",
+    "file.export_menu": "导出",
+    "file.export_scene": "场景…",
+    "file.open_gallery": "打开图库",
+    "file.project_maintenance": "项目维护",
+    "view.split_view": "分屏视图",
+    "file.splat_file": "Splat 文件…",
+    "file.ssog_folder": "SSOG 文件夹…",
+    "file.configuration": "配置…",
+    "file.dataset": "数据集…",
+    "file.mesh": "网格…",
+    "file.checkpoint": "检查点…",
+    "tools.developer": "开发者",
+    "tools.system_console": "系统控制台"
   },
   "window": {
     "export": "导出",
@@ -1796,7 +1810,19 @@
     "action.view_axis_right": "右视图",
     "action.view_axis_top": "顶视图",
     "action.view_frame_all": "框选全部",
-    "action.view_toggle_perspective": "切换透视/正交"
+    "action.view_toggle_perspective": "切换透视/正交",
+    "mouse_back": "鼠标后退键",
+    "mouse_forward": "鼠标前进键",
+    "invalid_profile_name": "配置文件名称无效。请使用不含路径分隔符或保留字符的简单名称。",
+    "profile_save_failed": "无法保存输入配置文件。",
+    "invalid_binding": "此快捷键不能用于该操作。",
+    "damaged_profile_backed_up": "保存前已备份损坏的按键映射。原始文件保存在配置文件旁边。",
+    "invalid_entries_skipped": "已跳过并保留的按键映射项位置（从 1 开始）：",
+    "newer_profile_unchanged": "此按键映射由较新版本保存，未加载或更改。",
+    "core_actions_unreachable": "此按键映射中的部分重要快捷键无法使用。您可以仅恢复这些操作。",
+    "restore_core_actions": "恢复这些操作的默认设置",
+    "clear_binding": "清除",
+    "action.toggle_python_console": "切换 Python 控制台"
   },
   "debug_info": {
     "clear_history": "清除历史",
@@ -2171,7 +2197,14 @@
     "linear": "Linear",
     "source_metadata": "Source metadata",
     "source_metadata_unavailable": "无法获取源颜色元数据。",
-    "srgb": "sRGB"
+    "srgb": "sRGB",
+    "first_source_frame_number": "第一源帧编号：",
+    "first_source_frame_number_help": "分配给源帧 1 的编号；源帧编号间的间隔将保留。",
+    "overwrite_delete": "删除现有文件",
+    "overwrite_proceed": "继续（覆盖重复文件）",
+    "overwrite_prompt_metadata": "输出文件夹包含本次运行将替换的提取元数据。请选择如何继续。",
+    "overwrite_prompt_frames_metadata": "输出文件夹已包含与此次提取命名模式匹配的帧。现有提取元数据也将被替换。请选择如何继续。",
+    "overwrite_delete_error": "无法删除 {}：{}"
   },
   "rendering_panel": {
     "fov_format": "视场角：{hfov:.1f}° H / {vfov:.1f}° V",
@@ -2475,7 +2508,6 @@
       "off": "关闭",
       "summary": "{x_metric} 对比 {y_metric}，共 {count} 个高斯",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "标记的对比区域成为当前的高斯选择。",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} 个高斯",
       "empty": {
         "title": "对比不可用",

@@ -953,8 +953,12 @@ namespace lfs::vis {
             return false;
         auto& target_state = viewState(target_view);
         RenderSettings sanitized_settings = new_settings;
-        if (sanitized_settings.equirectangular)
+        const bool conflicting_projection = sanitized_settings.equirectangular &&
+                                            sanitized_settings.orthographic;
+        if (conflicting_projection) {
             sanitized_settings.orthographic = false;
+            enforceProjectionBackend(sanitized_settings);
+        }
         if (const auto requested = sceneUpscalerBackendFromId(sanitized_settings.scene_upscaler);
             requested && !sceneUpscalerBackendAvailable(*requested)) {
             std::string previous_backend_id;

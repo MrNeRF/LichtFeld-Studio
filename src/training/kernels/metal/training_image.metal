@@ -148,6 +148,7 @@ kernel void training_image_random_background(constant RandomBackgroundParams& p 
 struct CannyParams {
     device const void* input;
     device float* output;
+    device const float* mask;
     int height, width;
 };
 
@@ -192,8 +193,10 @@ kernel void training_image_canny(constant CannyParams& p [[buffer(0)]],
             const int yi = min(max(int(group.y) * kBlock + y - kHalo, 0), p.height - 1);
             const int xi = min(max(int(group.x) * kBlock + x - kHalo, 0), p.width - 1);
             const int i = yi * p.width + xi;
-            pixels[y][x] = 0.299f * canny_value(p, i) + 0.587f * canny_value(p, i + plane) +
-                           0.114f * canny_value(p, i + 2 * plane);
+            const bool keep = p.mask == nullptr || p.mask[i] > 0.0f;
+            pixels[y][x] = keep ? 0.299f * canny_value(p, i) + 0.587f * canny_value(p, i + plane) +
+                                      0.114f * canny_value(p, i + 2 * plane)
+                                : 0.0f;
         }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -243,8 +246,13 @@ kernel void training_image_canny(constant CannyParams& p [[buffer(0)]],
         if (magnitude < length(forward) || magnitude < length(backward))
             magnitude = 0.0f;
     }
-    if (y_id < p.height && x_id < p.width)
+    if (y_id < p.height && x_id < p.width) {
+        if (p.mask != nullptr && p.mask[y_id * p.width + x_id] <= 0.0f) {
+            p.output[y_id * p.width + x_id] = 0.0f;
+            return;
+        }
         p.output[y_id * p.width + x_id] = magnitude;
+    }
 }
 
 struct NormalizeScalarParams {

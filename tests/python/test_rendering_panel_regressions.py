@@ -212,6 +212,39 @@ def test_rendering_panel_equirectangular_delegates_backend_to_native_settings(re
     assert settings.raster_backend == "3dgs"
 
 
+def test_rendering_panel_hides_perspective_fov_for_equirectangular(rendering_panel_module):
+    module = rendering_panel_module
+    settings = SimpleNamespace(raster_backend="3dgs", equirectangular=False, focal_length_mm=35.0)
+    module.lf.get_render_settings = lambda: settings
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+
+    panel.on_bind_model(_BindingContextStub(model))
+    show_fov_controls = model.func_bindings["show_fov_controls"]
+    equirectangular, set_equirectangular = model.bindings["equirectangular"]
+    assert equirectangular() is False
+    assert show_fov_controls() is True
+
+    set_equirectangular(True)
+    assert equirectangular() is True
+    assert show_fov_controls() is False
+    assert settings.focal_length_mm == pytest.approx(35.0)
+    assert "show_fov_controls" in model.handle.dirty_fields
+
+    set_equirectangular(False)
+    assert equirectangular() is False
+    assert show_fov_controls() is True
+    assert settings.focal_length_mm == pytest.approx(35.0)
+
+    project_root = Path(__file__).parent.parent.parent
+    rendering_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "rendering.rml"
+    content = rendering_rml.read_text()
+    controls = content.split('<div data-if="show_fov_controls">', 1)[1].split(
+        '<div class="setting-row setting-row--aligned" data-tooltip="tooltip.sh_degree">', 1
+    )[0]
+    assert 'data-value="focal_length_mm"' in controls and "@tr:main_panel.fov" in controls
+
+
 def test_rendering_panel_projection_sync_updates_backend_dropdown(rendering_panel_module):
     module = rendering_panel_module
     settings = SimpleNamespace(raster_backend="3dgs", equirectangular=False)
@@ -228,7 +261,7 @@ def test_rendering_panel_projection_sync_updates_backend_dropdown(rendering_pane
     settings.equirectangular = True
 
     assert panel._sync_projection_state() is True
-    assert model.handle.dirty_fields == ["raster_backend", "equirectangular"]
+    assert model.handle.dirty_fields == ["raster_backend", "equirectangular", "show_fov_controls"]
 
 
 def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_module):

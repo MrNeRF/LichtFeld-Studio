@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <openssl/evp.h>
 extern "C" {
@@ -154,6 +155,7 @@ namespace lfs::media::detail {
         identity_["files"] = {f.filename_pattern, static_cast<int>(f.format), f.jpeg_quality, static_cast<int>(f.exr.precision), static_cast<int>(f.exr.compression), f.exr.provenance};
         if (f.format == FrameFileFormat::TIFF16)
             identity_["tiff16"] = {core::image_codecs::tiff_sdr_encoding, static_cast<int>(f.tiff16.transfer), f.tiff16.provenance};
+        identity_["files"].push_back(f.first_source_frame_number);
         identity_["layout"] = {session.output.width, session.output.height, static_cast<int>(session.output.format), static_cast<int>(session.output.color.transfer), static_cast<int>(session.output.color.primaries)};
         identity_["metadata"] = output_.write_metadata;
         if (r.float_color_profile != FloatColorProfile::Sdr)
@@ -217,7 +219,7 @@ namespace lfs::media::detail {
                 !record->contains("file_sha256") || !(*record)["file_sha256"].is_string())
                 return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Invalid checkpoint frame schema"));
             const auto name = core::utf8_to_path((*record)["file"].get<std::string>());
-            if (name != name.filename() || !io::isGeneratedFrameFilename(f.filename_pattern, core::path_to_utf8(name)))
+            if (name != name.filename() || !io::isGeneratedFrameFilename(f.filename_pattern, core::path_to_utf8(name), true))
                 return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Invalid checkpoint frame filename"));
             // Verify retained encoded bytes once, when their selected pixels
             // have also been regenerated in write(). No eager duplicate read.
@@ -233,10 +235,17 @@ namespace lfs::media::detail {
             return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint sink is inactive"));
         if (auto size = frame.requiredBytes(); !size)
             return SinkResult::failure(size.error());
+        if (frame.info.legacy_source_frame < 1 || output_.files.first_source_frame_number < 0 ||
+            frame.info.legacy_source_frame - 1 >
+                std::numeric_limits<int>::max() - output_.files.first_source_frame_number) {
+            return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument,
+                                                       "Output frame number exceeds the supported range"));
+        }
+        const auto output_frame_number = output_.files.first_source_frame_number + frame.info.legacy_source_frame - 1;
         const auto extension = output_.files.format == FrameFileFormat::TIFF16 ? ".tif" : output_.files.format == FrameFileFormat::PNG ? ".png"
                                                                                       : output_.files.format == FrameFileFormat::JPEG  ? ".jpg"
                                                                                                                                        : ".exr";
-        const auto name = core::utf8_to_path(io::formatFrameFilenameStem(output_.files.filename_pattern, frame.info.legacy_source_frame) + extension);
+        const auto name = core::utf8_to_path(io::formatFrameFilenameStem(output_.files.filename_pattern, output_frame_number) + extension);
         if (name != name.filename() || name.empty() || !filenames_.insert(name).second)
             return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Resume requires unique plain frame filenames"));
         const auto destination = output_.files.output_directory / name;

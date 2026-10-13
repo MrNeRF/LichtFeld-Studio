@@ -977,10 +977,7 @@ namespace lfs::vis::project {
             !status) {
             return std::move(status).error();
         }
-        enforceProjectionBackend(settings);
-        settings.gut =
-            lfs::rendering::isGutBackend(
-                settings.raster_backend);
+        settings.gut = lfs::rendering::isGutBackend(settings.raster_backend);
         return settings;
     }
 

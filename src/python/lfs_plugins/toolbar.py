@@ -551,6 +551,20 @@ class _GizmoToolbarController:
                 )
             )
 
+        if histogram_mode_available(context):
+            mode_buttons.append(
+                _button_record(
+                    "selection-histogram",
+                    "toggle_histogram",
+                    _HISTOGRAM_PANEL_ID,
+                    _icon_src("histogram.png"),
+                    tooltip_key="toolbar.histogram",
+                    tooltip_text="Histogram",
+                    selected=_panel_enabled(_HISTOGRAM_PANEL_ID),
+                    enabled=enabled,
+                )
+            )
+
         group_button = _button_record(
             "group-selection",
             "tool",
@@ -1095,6 +1109,21 @@ class _GizmoToolbarController:
                 set_selection_mode(value)
             return
 
+        if action == "toggle_histogram":
+            if not histogram_mode_available(lf.ui.context()):
+                lf.ui.set_panel_enabled(_HISTOGRAM_PANEL_ID, False)
+                return
+            if not _panel_enabled(_HISTOGRAM_PANEL_ID):
+                select_tool = ToolRegistry.get("builtin.select")
+                if select_tool is not None and select_tool.can_activate(get_context()):
+                    ToolRegistry.set_active("builtin.select")
+            _toggle_editor_panel(
+                _HISTOGRAM_PANEL_ID,
+                _panel_enabled(_HISTOGRAM_PANEL_ID),
+                lambda visible: lf.ui.set_panel_enabled(_HISTOGRAM_PANEL_ID, visible),
+            )
+            return
+
         if action == "tool":
             tool_def = ToolRegistry.get(value)
             if tool_def is None or not tool_def.can_activate(get_context()):
@@ -1353,21 +1382,6 @@ class _UtilityToolbarController:
                     tooltip_text="Sequencer",
                     selected=_editor_panel_selected(_SEQUENCER_PANEL_ID, seq_visible),
                     enabled=seq_enabled,
-                )
-            )
-
-        if histogram_mode_available(lf.ui.context()):
-            utility_bottom_buttons.append(
-                _button_record(
-                    "util-histogram",
-                    "toggle_panel",
-                    _HISTOGRAM_PANEL_ID,
-                    _icon_src("histogram.png"),
-                    tooltip_key="toolbar.histogram",
-                    tooltip_text="Histogram",
-                    selected=_editor_panel_selected(
-                        _HISTOGRAM_PANEL_ID, _panel_enabled(_HISTOGRAM_PANEL_ID)
-                    ),
                 )
             )
 

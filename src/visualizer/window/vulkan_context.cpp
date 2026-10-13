@@ -3030,6 +3030,7 @@ namespace lfs::vis {
         features2.features.fillModeNonSolid = supported_features2.features.fillModeNonSolid;
         features2.features.wideLines = supported_features2.features.wideLines;
         features2.features.largePoints = supported_features2.features.largePoints;
+        features2.features.geometryShader = supported_features2.features.geometryShader;
         features2.features.sparseBinding =
             (sparse_binding_supported && graphics_queue_sparse) ? VK_TRUE : VK_FALSE;
 
@@ -3119,6 +3120,7 @@ namespace lfs::vis {
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
         sparse_binding_enabled_ = features2.features.sparseBinding == VK_TRUE;
         buffer_device_address_enabled_ = features12.bufferDeviceAddress == VK_TRUE;
+        geometry_shader_enabled_ = features2.features.geometryShader == VK_TRUE;
 
         VkPhysicalDeviceMaintenance3Properties maint3{};
         maint3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;

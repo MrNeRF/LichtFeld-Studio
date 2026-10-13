@@ -41,11 +41,6 @@
 namespace lfs::io {
 
     namespace {
-        bool needs_masked_rgb_fill(const int width, const int height, const int resize_factor, const int max_width) {
-            const auto [target_width, target_height] = lfs::core::resized_image_dimensions(
-                width, height, resize_factor, max_width);
-            return target_width != width || target_height != height;
-        }
     } // namespace
 
 #if LFS_HAS_CUDA
@@ -320,7 +315,7 @@ namespace lfs::io {
             execution_scope.emplace(image_execution_stream(params.cuda_stream));
 #endif
         auto staging = upload_hwc(data, width, height, channels);
-        if (params.masked_fill && needs_masked_rgb_fill(width, height, params.resize_factor, params.max_width)) {
+        if (params.masked_fill) {
 #if LFS_HAS_CUDA
             if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::CUDA)
                 throw std::runtime_error(masked_image_fill_error());
@@ -341,7 +336,7 @@ namespace lfs::io {
             execution_scope.emplace(image_execution_stream(params.cuda_stream));
 #endif
         auto staging = upload_hwc(data, width, height, channels);
-        if (params.masked_fill && needs_masked_rgb_fill(width, height, params.resize_factor, params.max_width)) {
+        if (params.masked_fill) {
 #if LFS_HAS_CUDA
             if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::CUDA)
                 throw std::runtime_error(masked_image_fill_error());
@@ -501,10 +496,11 @@ namespace lfs::io {
             execution_scope.emplace(image_execution_stream(cuda_stream));
 #endif
         const auto finish = [&](const auto* data, const int width, const int height, const int channels) {
+            (void)force_masked_fill;
             if (!data || channels != 4)
                 throw std::runtime_error("Failed to decode RGBA image: " + path_to_utf8(path));
             auto staging = upload_hwc(data, width, height, channels);
-            if (masked_fill && (force_masked_fill || needs_masked_rgb_fill(width, height, resize_factor, max_width))) {
+            if (masked_fill) {
 #if LFS_HAS_CUDA
                 if (default_gpu_backend() != GpuBackend::CUDA)
                     throw std::runtime_error(masked_image_fill_error());
@@ -513,7 +509,15 @@ namespace lfs::io {
                 throw std::runtime_error("Masked image fill requires the CUDA backend");
 #endif
             }
-            return hwc_to_chw(staging, resize_factor, max_width, false, exact_mask_alpha);
+            auto result = hwc_to_chw(staging, resize_factor, max_width, false, exact_mask_alpha);
+            if (masked_fill) {
+#if LFS_HAS_CUDA
+                auto result_hwc = result.permute({1, 2, 0}).contiguous();
+                fill_masked_image(result_hwc, *masked_fill, static_cast<cudaStream_t>(cuda_stream));
+                result = result_hwc.permute({2, 0, 1}).contiguous();
+#endif
+            }
+            return result;
         };
         if (decode_16bit) {
             auto [data, width, height, channels] = load_image_with_alpha_u16(path, 1, 0);

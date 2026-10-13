@@ -621,6 +621,7 @@ class RenderingPanel(Panel):
                          lambda: lf.ui.tr("main_panel.ppisp_crf_advanced") or "CRF")
 
         model.bind_func("fov_display", self._compute_fov)
+        model.bind_func("show_fov_controls", self._show_fov_controls)
 
         model.bind_func("picker_r", lambda: float(self._picker_color()[0]))
         model.bind_func("picker_g", lambda: float(self._picker_color()[1]))
@@ -631,8 +632,6 @@ class RenderingPanel(Panel):
         )
 
         model.bind_func("is_windows", lambda: lf.ui.is_windows_platform())
-        model.bind_func("label_console",
-                         lambda: lf.ui.tr("main_panel.console") or "Console")
         model.bind_func("simplify_has_source", lambda: bool(self._simplify_source_name))
         model.bind_func("simplify_source_name", lambda: self._simplify_source_name)
         model.bind_func("simplify_original_count", lambda: f"{self._simplify_original_count:,}")
@@ -676,8 +675,6 @@ class RenderingPanel(Panel):
         model.bind_event("picker_change", self._on_picker_change)
         model.bind_event("simplify_apply", self._on_simplify_apply)
         model.bind_event("simplify_cancel", self._on_simplify_cancel)
-        model.bind_event("toggle_console",
-                         lambda h, e, a: lf.ui.toggle_system_console())
         model.bind_event("browse_environment_map", self._on_browse_environment_map)
         self._selection_groups.bind(model)
 
@@ -772,7 +769,11 @@ class RenderingPanel(Panel):
         )
 
     def _dirty_projection_bindings(self):
-        self._dirty_model("raster_backend", "equirectangular")
+        self._dirty_model("raster_backend", "equirectangular", "show_fov_controls")
+
+    def _show_fov_controls(self):
+        settings = lf.get_render_settings()
+        return not bool(getattr(settings, "equirectangular", False)) if settings else True
 
     def _sync_projection_state(self):
         state = self._projection_state_snapshot()

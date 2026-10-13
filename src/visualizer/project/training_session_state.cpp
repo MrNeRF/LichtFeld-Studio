@@ -88,7 +88,17 @@ namespace lfs::vis {
 
     void TrainerManager::publishStoredSessionPresentation() {
         if (trainer_) {
+            const auto& last = g_last_stored_session_publish;
+            const bool restore_completed =
+                last.owner == this && last.valid && last.available &&
+                !last.hydrated;
             clearStoredSessionPresentation();
+            if (restore_completed)
+                app_store().stored_session_generation.set(
+                    app_store().stored_session_generation.get() + 1);
+            g_last_stored_session_publish = {};
+            g_last_stored_session_publish.owner = this;
+            g_last_stored_session_publish.valid = true;
             return;
         }
         Visualizer::ProjectTrainingSessionState session;
@@ -100,6 +110,8 @@ namespace lfs::vis {
         desired.owner = this;
         desired.valid = true;
         desired.available = session.available;
+        desired.restoring = session.restoring;
+        desired.restore_error = session.error;
         if (session.available) {
             const core::Scene* scene = scene_;
             if (!scene && viewer_) {
@@ -132,12 +144,21 @@ namespace lfs::vis {
             last.completed == desired.completed &&
             last.stopped == desired.stopped &&
             last.hydrated == desired.hydrated &&
+            last.restoring == desired.restoring &&
             last.iteration == desired.iteration &&
             last.max_iterations == desired.max_iterations &&
             last.num_gaussians == desired.num_gaussians &&
-            last.strategy == desired.strategy) {
+            last.strategy == desired.strategy &&
+            last.restore_error == desired.restore_error) {
             return;
         }
+
+        const bool restore_state_changed =
+            !last.valid || last.owner != this ||
+            last.available != desired.available ||
+            last.hydrated != desired.hydrated ||
+            last.restoring != desired.restoring ||
+            last.restore_error != desired.restore_error;
 
         if (!session.available) {
             clearStoredSessionPresentation();
@@ -154,6 +175,9 @@ namespace lfs::vis {
                 python::update_trainer_loaded(false, 0, 0);
                 python::flush_signals();
             }
+            if (restore_state_changed)
+                app_store().stored_session_generation.set(
+                    app_store().stored_session_generation.get() + 1);
             g_last_stored_session_publish = desired;
             return;
         }
@@ -197,6 +221,9 @@ namespace lfs::vis {
                 static_cast<std::size_t>(std::max(0, desired.num_gaussians)));
             python::flush_signals();
         }
+        if (restore_state_changed)
+            app_store().stored_session_generation.set(
+                app_store().stored_session_generation.get() + 1);
 
         lfs::training::CommandCenter::instance().update_snapshot(
             lfs::training::HookContext{

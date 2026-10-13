@@ -24,6 +24,14 @@ def camera_runtime(tmp_path, monkeypatch):
     endpoint = f"http://127.0.0.1:{port}/mcp"
     home = tmp_path / "home"
     home.mkdir()
+    requested_backend = os.environ.get("LFS_TEST_TENSOR_BACKEND")
+    if requested_backend:
+        preferences = home / ".lichtfeld" / "config" / "preferences.json"
+        preferences.parent.mkdir(parents=True)
+        preferences.write_text(json.dumps({
+            "schema_version": 2,
+            "tensor_backend": {"backend": requested_backend},
+        }))
     # urllib caches proxy configuration in its process-global opener.
     monkeypatch.setattr(urllib.request, "_opener", None)
     for name, value in {

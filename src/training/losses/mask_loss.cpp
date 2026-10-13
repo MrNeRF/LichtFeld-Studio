@@ -92,16 +92,16 @@ namespace lfs::training::losses {
                                  const bool segment_and_ignore,
                                  lfs::core::Tensor& edges) {
         const auto& ops = training_ops(core::default_gpu_backend());
-        ops.training_image->canny(image, edges);
+        core::Tensor photometric_weight;
         if (mask.is_valid() && mask.numel() > 0) {
             const auto mask_2d = mask.ndim() == 3 ? mask.squeeze(0) : mask;
             LFS_ASSERT_MSG(mask_2d.shape() == edges.shape(), "edge mask must match the image");
-            auto weight = core::Tensor::empty(edges.shape(), core::Device::GPU, core::DataType::Float32);
-            ops.masks->photometric_weight(mask_2d, {}, weight,
+            photometric_weight = core::Tensor::empty(edges.shape(), core::Device::GPU, core::DataType::Float32);
+            ops.masks->photometric_weight(mask_2d, {}, photometric_weight,
                                           segment_and_ignore ? gpu_ops::MaskPhotoMode::SegmentAndIgnore
                                                              : gpu_ops::MaskPhotoMode::BinaryGt0);
-            edges = edges * weight.gt(0.0f).to(core::DataType::Float32);
         }
+        ops.training_image->canny(image, photometric_weight, edges);
         ops.refine->normalize_positive_median(edges);
     }
 

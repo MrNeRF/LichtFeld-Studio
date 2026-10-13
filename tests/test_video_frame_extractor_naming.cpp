@@ -326,9 +326,11 @@ namespace lfs::gui {
             else
                 dialog.setExtractionError("Extraction failed");
         }
-        static void cancelOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-no"); }
+        static void cancelOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-cancel"); }
         static bool pending(const VideoExtractorDialog& dialog) { return dialog.pending_params_set_; }
-        static void confirmOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-yes"); }
+        static void confirmOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-proceed"); }
+        static void proceedOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-proceed"); }
+        static void deleteExisting(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-delete"); }
         static bool waitIdle(const VideoExtractorDialog& dialog) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             while (dialog.extracting_.load()) {
@@ -1237,6 +1239,30 @@ namespace {
         }
     }
 
+    TEST(VideoExtractorNaming, ConfiguredFirstSourceFrameNumberNamesExtractedFiles) {
+        TempDir temp("first_source_frame_number");
+        const auto source = temp.path / "clip.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 3, 0));
+        for (const int first_number : {0, 30}) {
+            auto params = extractionParams(source, temp.path / std::to_string(first_number));
+            params.end_time = -1.0;
+            params.first_source_frame_number = first_number;
+            VideoFrameExtractor extractor;
+            std::string error;
+            ASSERT_TRUE(extractor.extract(params, error)) << error;
+            const auto extracted_count = countPngFiles(params.output_dir);
+            ASSERT_GT(extracted_count, 0u);
+            for (std::size_t index = 0; index < extracted_count; ++index) {
+                const int number = first_number + static_cast<int>(index);
+                EXPECT_TRUE(std::filesystem::exists(
+                    params.output_dir /
+                    (lfs::io::formatFrameFilenameStem(params.filename_pattern, number) + ".png")));
+            }
+            const auto metadata = readMetadata(params.output_dir);
+            EXPECT_EQ(metadata["first_source_frame_number"], first_number);
+        }
+    }
+
     TEST(VideoExtractorNaming, GeneratedFrameNamesFollowThePattern) {
         using lfs::io::isGeneratedFrameFilename;
         for (const auto* name : {"frame_00001.png", "frame_00012.jpg", "frame_1.png", "frame_1234567.png"})
@@ -1285,9 +1311,21 @@ namespace {
         std::ofstream(output / "extraction_metadata.json") << "{}";
         ASSERT_TRUE(NamingAccess::begin(dialog, output));
         ASSERT_TRUE(NamingAccess::pending(dialog));
-        NamingAccess::confirmOverwrite(dialog);
+        NamingAccess::proceedOverwrite(dialog);
+        ASSERT_TRUE(NamingAccess::waitIdle(dialog));
+        EXPECT_GT(std::filesystem::file_size(output / "frame_00001.png"), 100u);
+        EXPECT_TRUE(std::filesystem::exists(output / "frame_00099.jpg"));
+        EXPECT_TRUE(std::filesystem::exists(output / "extraction_metadata.json"));
+        for (const auto& name : existing)
+            EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
+
+        // Deleting existing output removes only generated frames and metadata requested by this run.
+        ASSERT_TRUE(NamingAccess::begin(dialog, output));
+        ASSERT_TRUE(NamingAccess::pending(dialog));
+        NamingAccess::deleteExisting(dialog);
         ASSERT_TRUE(NamingAccess::waitIdle(dialog));
         EXPECT_FALSE(std::filesystem::exists(output / "frame_00099.jpg"));
+        EXPECT_TRUE(std::filesystem::exists(output / "extraction_metadata.json"));
         EXPECT_TRUE(std::filesystem::exists(output / "frame_00001.png"));
         for (const auto& name : existing)
             EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
@@ -1414,6 +1452,33 @@ namespace {
         choose(2);
         choose(4);
         EXPECT_EQ(input->GetValue(), "{{label}}_{video}_%06d");
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, MetadataOnlyPromptsOnlyWhenItWillBeReplaced) {
+        TempDir temp("metadata_only_conflict");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        auto* const metadata_toggle = document->GetElementById("generate-metadata");
+        ASSERT_NE(metadata_toggle, nullptr);
+
+        const auto retained_metadata = temp.path / "retained_metadata";
+        std::filesystem::create_directories(retained_metadata);
+        std::ofstream(retained_metadata / "extraction_metadata.json") << "{}";
+        ASSERT_TRUE(NamingAccess::begin(*dialog, retained_metadata));
+        EXPECT_FALSE(NamingAccess::pending(*dialog));
+        ASSERT_TRUE(NamingAccess::waitIdle(*dialog));
+        EXPECT_TRUE(std::filesystem::exists(retained_metadata / "extraction_metadata.json"));
+
+        metadata_toggle->SetAttribute("checked", "checked");
+        const auto replaced_metadata = temp.path / "replaced_metadata";
+        std::filesystem::create_directories(replaced_metadata);
+        std::ofstream(replaced_metadata / "extraction_metadata.json") << "{}";
+        ASSERT_TRUE(NamingAccess::begin(*dialog, replaced_metadata));
+        EXPECT_TRUE(NamingAccess::pending(*dialog));
+        EXPECT_EQ(document->GetElementById("overwrite-message")->GetInnerRML(),
+                  LOC("video_extractor.overwrite_prompt_metadata"));
+        NamingAccess::cancelOverwrite(*dialog);
     }
 
     TEST_F(VideoExtractorNamingUiTest, SourceChangesRefreshPreviewAndInvalidPatternBlocksRealStart) {
@@ -1781,6 +1846,38 @@ TEST(VideoStreamProbe, VideosThatNeedPacketProbingOpenAndExtract) {
         ASSERT_TRUE(extractor.extract(params, error)) << error;
         EXPECT_GT(countPngFiles(output_dir), 0u);
     }
+}
+
+TEST(VideoDecoderFallback, RawH264WithoutPacketTimestampsOpensAndExtracts) {
+    TempDir temp("raw_h264_without_timestamps");
+    const auto source = temp.path / "raw_stream.h264";
+    constexpr int frame_count = 8;
+    ASSERT_TRUE(writeProbedVideo(source, "h264", AV_CODEC_ID_H264, frame_count, 0));
+
+    AVFormatContext* format = nullptr;
+    ASSERT_EQ(avformat_open_input(&format, source.string().c_str(), nullptr, nullptr), 0);
+    AVPacket* packet = av_packet_alloc();
+    ASSERT_NE(packet, nullptr);
+    ASSERT_EQ(av_read_frame(format, packet), 0);
+    EXPECT_EQ(packet->pts, AV_NOPTS_VALUE);
+    EXPECT_EQ(packet->dts, AV_NOPTS_VALUE);
+    av_packet_free(&packet);
+    avformat_close_input(&format);
+
+    {
+        lfs::io::VideoPlayer player;
+        ASSERT_TRUE(player.open(source)) << player.takeError();
+        EXPECT_NE(player.currentFrameData(), nullptr);
+        ASSERT_GT(player.fps(), 1.0);
+        EXPECT_DOUBLE_EQ(player.duration(), 0.0);
+    }
+
+    auto params = extractionParams(source, temp.path / "frames");
+    params.end_time = -1.0;
+    VideoFrameExtractor extractor;
+    std::string error;
+    ASSERT_TRUE(extractor.extract(params, error)) << error;
+    EXPECT_EQ(countPngFiles(params.output_dir), frame_count);
 }
 
 class VideoFrameExtractorTrim : public VideoFrameExtractorOutputNaming {};

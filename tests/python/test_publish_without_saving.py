@@ -10,8 +10,17 @@ def test_unsaved_scene_enables_publish_and_offers_three_choices(monkeypatch):
     menu = _load_file_menu(monkeypatch)
     menu.lf.has_scene = lambda: True
     menu.lf.project_poll_write = lambda: {"path": ""}
-    entry = next(item for item in menu.FileMenu().menu_items()
-                 if item.get("label") == "tr:menu.file.publish_to_gallery")
+    def find(items):
+        for item in items:
+            if item.get("label") == "tr:menu.file.publish_to_gallery":
+                return item
+            if item.get("type") == "submenu":
+                found = find(item.get("items", ()))
+                if found:
+                    return found
+        return None
+
+    entry = find(menu.FileMenu().menu_items())
     assert entry["enabled"]
     entry["callback"]()
     assert len(menu.lf.confirm_dialogs) == 1

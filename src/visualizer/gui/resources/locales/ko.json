@@ -210,7 +210,21 @@
     "view.performance_hud": "성능 HUD",
     "edit.preferences": "환경설정...",
     "view.debug_info": "디버그 정보...",
-    "view.streaming_settings": "스트리밍 뷰어 설정"
+    "view.streaming_settings": "스트리밍 뷰어 설정",
+    "file.browse_projects": "프로젝트 찾아보기…",
+    "file.export_menu": "내보내기",
+    "file.export_scene": "장면…",
+    "file.open_gallery": "갤러리 열기",
+    "file.project_maintenance": "프로젝트 유지 관리",
+    "view.split_view": "분할 보기",
+    "file.splat_file": "스플랫 파일…",
+    "file.ssog_folder": "SSOG 폴더…",
+    "file.configuration": "설정…",
+    "file.dataset": "데이터셋…",
+    "file.mesh": "메시…",
+    "file.checkpoint": "체크포인트…",
+    "tools.developer": "개발자",
+    "tools.system_console": "시스템 콘솔"
   },
   "window": {
     "export": "내보내기",
@@ -1796,7 +1810,19 @@
     "action.view_axis_right": "오른쪽 보기",
     "action.view_axis_top": "위쪽 보기",
     "action.view_frame_all": "전체 맞추기",
-    "action.view_toggle_perspective": "원근/직교 전환"
+    "action.view_toggle_perspective": "원근/직교 전환",
+    "mouse_back": "마우스 뒤로 버튼",
+    "mouse_forward": "마우스 앞으로 버튼",
+    "invalid_profile_name": "잘못된 프로필 이름입니다. 경로 구분자나 예약 문자가 없는 이름을 사용하세요.",
+    "profile_save_failed": "입력 프로필을 저장할 수 없습니다.",
+    "invalid_binding": "이 단축키는 이 동작에 사용할 수 없습니다.",
+    "damaged_profile_backed_up": "손상된 키 맵을 저장하기 전에 백업했습니다. 원본 파일은 프로필 옆에 보관됩니다.",
+    "invalid_entries_skipped": "건너뛰고 보존한 키 맵 항목의 위치 (1부터): ",
+    "newer_profile_unchanged": "이 키맵은 최신 버전에서 저장되었습니다. 불러오거나 변경하지 않았습니다.",
+    "core_actions_unreachable": "이 키맵의 일부 필수 단축키를 사용할 수 없습니다. 해당 동작만 복원할 수 있습니다.",
+    "restore_core_actions": "이 동작의 기본값 복원",
+    "clear_binding": "지우기",
+    "action.toggle_python_console": "Python 콘솔 전환"
   },
   "debug_info": {
     "clear_history": "기록 지우기",
@@ -2171,7 +2197,14 @@
     "linear": "Linear",
     "source_metadata": "Source metadata",
     "source_metadata_unavailable": "원본 색상 메타데이터를 사용할 수 없습니다.",
-    "srgb": "sRGB"
+    "srgb": "sRGB",
+    "first_source_frame_number": "첫 번째 원본 프레임 번호:",
+    "first_source_frame_number_help": "원본 프레임 1에 할당할 번호입니다. 원본 프레임 번호 사이의 간격은 유지됩니다.",
+    "overwrite_delete": "기존 파일 삭제",
+    "overwrite_proceed": "계속 (중복 덮어쓰기)",
+    "overwrite_prompt_metadata": "출력 폴더에 이번 실행에서 대체할 추출 메타데이터가 있습니다. 계속할 방법을 선택하세요.",
+    "overwrite_prompt_frames_metadata": "출력 폴더에 이 추출의 이름 지정 패턴과 일치하는 프레임이 이미 있습니다. 기존 추출 메타데이터도 대체됩니다. 계속할 방법을 선택하세요.",
+    "overwrite_delete_error": "{}을(를) 제거하지 못했습니다: {}"
   },
   "rendering_panel": {
     "fov_format": "시야각: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2475,7 +2508,6 @@
       "off": "끔",
       "summary": "가우시안 {count}개에서 {x_metric}와 {y_metric} 비교",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "표시된 비교 영역이 활성 가우시안 선택이 됩니다.",
       "bin_tooltip": "X {x_range} | Y {y_range} | 가우시안 {count}개",
       "empty": {
         "title": "비교를 사용할 수 없습니다",

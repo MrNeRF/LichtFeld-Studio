@@ -342,8 +342,7 @@ namespace {
             const GpuBackendScope scope(GetParam());
             expected_soft_mask = undistort_mask(
                 host(planar(mask_, 1, UINT8_SCALE), hw).to(Device::GPU), camera, nullptr);
-            shared_image_ops(GetParam())->mask(expected_soft_mask,
-                                               lfs::gpu_ops::MaskTransform::QuantizeByteGrid, 0.0f);
+            shared_image_ops(GetParam())->mask(expected_soft_mask, lfs::gpu_ops::MaskTransform::QuantizeByteGrid, 0.0f);
         }
         expect_close(load(soft).mask, expected_soft_mask.cpu(), 0.0f);
     }

@@ -91,7 +91,10 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     assert 'data-class-active="item.submenu_open"' in rml
     assert 'data-class-open="child.submenu_open"' in rml
     assert 'data-attr-data-child-index="child.index"' in rml
-    assert 'data-for="leaf : child.children"' in rml
+    assert 'data-for="grandchild : child.children"' in rml
+    assert 'data-class-open="grandchild.submenu_open"' in rml
+    assert 'data-attr-data-grandchild-index="grandchild.index"' in rml
+    assert 'data-for="leaf : grandchild.children"' in rml
     assert 'id="dropdown-popup"' in rml
     assert "#dropdown-overlay" in rcss
     assert "#dropdown-container" in rcss

@@ -210,7 +210,21 @@
     "view.performance_hud": "Prestatie-HUD",
     "edit.preferences": "Voorkeuren...",
     "view.debug_info": "Debug-info...",
-    "view.streaming_settings": "Instellingen streamingviewer"
+    "view.streaming_settings": "Instellingen streamingviewer",
+    "file.browse_projects": "Projecten bladeren…",
+    "file.export_menu": "Exporteren",
+    "file.export_scene": "Scène…",
+    "file.open_gallery": "Galerij openen",
+    "file.project_maintenance": "Projectonderhoud",
+    "view.split_view": "Gesplitste weergave",
+    "file.splat_file": "Splat-bestand…",
+    "file.ssog_folder": "SSOG-map…",
+    "file.configuration": "Configuratie…",
+    "file.dataset": "Dataset…",
+    "file.mesh": "Mesh…",
+    "file.checkpoint": "Checkpoint…",
+    "tools.developer": "Ontwikkelaar",
+    "tools.system_console": "Systeemconsole"
   },
   "window": {
     "export": "Exporteren",
@@ -1796,7 +1810,19 @@
     "action.view_axis_right": "Rechteraanzicht",
     "action.view_axis_top": "Bovenaanzicht",
     "action.view_frame_all": "Alles inkaderen",
-    "action.view_toggle_perspective": "Perspectief/orthografisch wisselen"
+    "action.view_toggle_perspective": "Perspectief/orthografisch wisselen",
+    "mouse_back": "Muisknop Terug",
+    "mouse_forward": "Muisknop Vooruit",
+    "invalid_profile_name": "Ongeldige profielnaam. Gebruik een eenvoudige naam zonder padscheidingstekens of gereserveerde tekens.",
+    "profile_save_failed": "Het invoerprofiel kon niet worden opgeslagen.",
+    "invalid_binding": "Deze sneltoets kan niet voor deze actie worden gebruikt.",
+    "damaged_profile_backed_up": "Een beschadigde toetsenindeling is vóór het opslaan bewaard. Het oorspronkelijke bestand staat naast het profiel.",
+    "invalid_entries_skipped": "Overgeslagen en bewaarde toetsindelingen op posities vanaf 1: ",
+    "newer_profile_unchanged": "Deze toetsindeling is met een nieuwere versie opgeslagen. Ze is niet geladen of gewijzigd.",
+    "core_actions_unreachable": "Sommige belangrijke sneltoetsen in deze indeling werken niet. U kunt alleen die acties herstellen.",
+    "restore_core_actions": "Standaardinstellingen voor deze acties herstellen",
+    "clear_binding": "Wissen",
+    "action.toggle_python_console": "Python-console omschakelen"
   },
   "debug_info": {
     "clear_history": "Geschiedenis Wissen",
@@ -2171,7 +2197,14 @@
     "linear": "Linear",
     "source_metadata": "Source metadata",
     "source_metadata_unavailable": "De kleurmetadata van de bron zijn niet beschikbaar.",
-    "srgb": "sRGB"
+    "srgb": "sRGB",
+    "first_source_frame_number": "Nummer eerste bronframe:",
+    "first_source_frame_number_help": "Het nummer voor bronframe 1; gaten tussen bronframes blijven behouden.",
+    "overwrite_delete": "Bestaande verwijderen",
+    "overwrite_proceed": "Doorgaan (duplicaten overschrijven)",
+    "overwrite_prompt_metadata": "De uitvoermap bevat extractiemetadata die deze uitvoering zal vervangen. Kies hoe u wilt doorgaan.",
+    "overwrite_prompt_frames_metadata": "De uitvoermap bevat al frames die overeenkomen met het naamgevingspatroon van deze extractie. Bestaande extractiemetadata wordt ook vervangen. Kies hoe u wilt doorgaan.",
+    "overwrite_delete_error": "Kan {} niet verwijderen: {}"
   },
   "rendering_panel": {
     "fov_format": "Gezichtsveld: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2475,7 +2508,6 @@
       "off": "Uit",
       "summary": "{x_metric} tegenover {y_metric} over {count} Gaussische splats",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "De gemarkeerde vergelijkingsregio wordt de actieve selectie van Gaussische splats.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} Gaussische splats",
       "empty": {
         "title": "Vergelijking niet beschikbaar",

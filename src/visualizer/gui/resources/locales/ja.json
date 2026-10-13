@@ -210,7 +210,21 @@
     "view.performance_hud": "パフォーマンス HUD",
     "edit.preferences": "環境設定...",
     "view.debug_info": "デバッグ情報...",
-    "view.streaming_settings": "ストリーミングビューアー設定"
+    "view.streaming_settings": "ストリーミングビューアー設定",
+    "file.browse_projects": "プロジェクトを参照…",
+    "file.export_menu": "エクスポート",
+    "file.export_scene": "シーン…",
+    "file.open_gallery": "ギャラリーを開く",
+    "file.project_maintenance": "プロジェクトのメンテナンス",
+    "view.split_view": "分割表示",
+    "file.splat_file": "スプラットファイル…",
+    "file.ssog_folder": "SSOGフォルダー…",
+    "file.configuration": "設定…",
+    "file.dataset": "データセット…",
+    "file.mesh": "メッシュ…",
+    "file.checkpoint": "チェックポイント…",
+    "tools.developer": "開発者",
+    "tools.system_console": "システムコンソール"
   },
   "window": {
     "export": "エクスポート",
@@ -1796,7 +1810,19 @@
     "action.view_axis_right": "右面ビュー",
     "action.view_axis_top": "上面ビュー",
     "action.view_frame_all": "全体をフレーム",
-    "action.view_toggle_perspective": "透視/平行投影を切り替え"
+    "action.view_toggle_perspective": "透視/平行投影を切り替え",
+    "mouse_back": "マウス戻るボタン",
+    "mouse_forward": "マウス進むボタン",
+    "invalid_profile_name": "無効なプロファイル名です。パス区切り文字や予約文字を含まない名前を使用してください。",
+    "profile_save_failed": "入力プロファイルを保存できませんでした。",
+    "invalid_binding": "このショートカットはこの操作には使用できません。",
+    "damaged_profile_backed_up": "破損したキーマップを保存前にバックアップしました。元のファイルはプロファイルの隣に保存されています。",
+    "invalid_entries_skipped": "スキップして保持したキーマップ項目の位置（1から）: ",
+    "newer_profile_unchanged": "このキーマップは新しいバージョンで保存されました。読み込みも変更も行っていません。",
+    "core_actions_unreachable": "このキーマップでは一部の重要なショートカットを使用できません。該当する操作だけを復元できます。",
+    "restore_core_actions": "これらの操作の既定設定を復元",
+    "clear_binding": "解除",
+    "action.toggle_python_console": "Python コンソールを切り替え"
   },
   "debug_info": {
     "clear_history": "履歴をクリア",
@@ -2171,7 +2197,14 @@
     "linear": "Linear",
     "source_metadata": "Source metadata",
     "source_metadata_unavailable": "ソースの色メタデータを取得できません。",
-    "srgb": "sRGB"
+    "srgb": "sRGB",
+    "first_source_frame_number": "最初の元フレーム番号:",
+    "first_source_frame_number_help": "元フレーム1に割り当てる番号です。元フレーム番号の間隔は維持されます。",
+    "overwrite_delete": "既存を削除",
+    "overwrite_proceed": "続行（重複を上書き）",
+    "overwrite_prompt_metadata": "出力フォルダには、この実行で置き換えられる抽出メタデータがあります。続行方法を選択してください。",
+    "overwrite_prompt_frames_metadata": "出力フォルダには、この抽出の命名パターンに一致するフレームが既にあります。既存の抽出メタデータも置き換えられます。続行方法を選択してください。",
+    "overwrite_delete_error": "{} を削除できませんでした: {}"
   },
   "rendering_panel": {
     "fov_format": "視野角: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2475,7 +2508,6 @@
       "off": "オフ",
       "summary": "{count} 個のガウシアンにおける {x_metric} と {y_metric} の比較",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "マークした比較領域がアクティブなガウシアン選択になります。",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} 個のガウシアン",
       "empty": {
         "title": "比較を利用できません",

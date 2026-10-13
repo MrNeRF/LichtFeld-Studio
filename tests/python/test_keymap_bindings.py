@@ -123,6 +123,7 @@ ACTION_NAMES = (
     "TOGGLE_MAXIMIZE_AREA",
     "TOGGLE_NODE_EDITOR",
     "DEPTH_WINDOW_DRAG",
+    "TOGGLE_PYTHON_CONSOLE",
 )
 
 
@@ -247,6 +248,7 @@ def _install_lf_stub(monkeypatch):
     keymap = SimpleNamespace(
         ToolMode=tool_mode,
         Action=action,
+        bindings_revision=lambda: 0,
         get_available_profiles=lambda: list(state.profiles),
         get_current_profile=lambda: state.current_profile[0],
         get_tool_mode_name=lambda mode: f"Mode {mode.name}",
@@ -273,6 +275,8 @@ def _install_lf_stub(monkeypatch):
     lf_stub = ModuleType("lichtfeld")
     lf_stub.keymap = keymap
     lf_stub.get_camera_navigation_mode = lambda: "orbit"
+    lf_stub.project_auto_save_on_close_enabled = lambda: True
+    lf_stub.project_set_auto_save_on_close = lambda _enabled: None
     lf_stub.get_new_project_navigation_up_axis = lambda: "legacy_y"
     lf_stub.get_new_project_align_grid = lambda: True
     lf_stub.get_camera_view_snap_enabled = lambda: False

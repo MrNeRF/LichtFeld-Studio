@@ -46,14 +46,21 @@ namespace lfs::training {
                                               destination.shape()[2], seed, core::getCurrentCUDAStream());
         }
 
-        void canny(const Tensor& image, Tensor& edges) {
+        void canny(const Tensor& image, const Tensor& photometric_weight, Tensor& edges) {
             const int height = image.shape()[1];
             const int width = image.shape()[2];
             const auto stream = core::getCurrentCUDAStream();
+            const float* mask = photometric_weight.is_valid() ? photometric_weight.ptr<float>() : nullptr;
             if (image.dtype() == core::DataType::UInt8) {
-                kernels::launch_fused_canny_edge_filter_chw(image.ptr<uint8_t>(), edges.ptr<float>(), height, width, stream);
+                if (mask)
+                    kernels::launch_fused_canny_edge_filter_chw(image.ptr<uint8_t>(), mask, edges.ptr<float>(), height, width, stream);
+                else
+                    kernels::launch_fused_canny_edge_filter_chw(image.ptr<uint8_t>(), edges.ptr<float>(), height, width, stream);
             } else {
-                kernels::launch_fused_canny_edge_filter_chw(image.ptr<float>(), edges.ptr<float>(), height, width, stream);
+                if (mask)
+                    kernels::launch_fused_canny_edge_filter_chw(image.ptr<float>(), mask, edges.ptr<float>(), height, width, stream);
+                else
+                    kernels::launch_fused_canny_edge_filter_chw(image.ptr<float>(), edges.ptr<float>(), height, width, stream);
             }
         }
 

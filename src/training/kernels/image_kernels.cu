@@ -50,6 +50,7 @@ namespace lfs::training::kernels {
     template <typename InputT>
     __global__ void fused_canny_edge_filter_chw_kernel(
         const InputT* __restrict__ input,
+        const float* __restrict__ mask,
         float* __restrict__ output,
         const int height,
         const int width) {
@@ -75,10 +76,12 @@ namespace lfs::training::kernels {
                 const int yi = min(max(static_cast<int>(blockIdx.y * BLOCK) + y - HALO, 0), height - 1);
                 const int xi = min(max(static_cast<int>(blockIdx.x * BLOCK) + x - HALO, 0), width - 1);
                 const int idx = yi * width + xi;
-                shared_pixels[y][x] =
-                    0.299f * canny_input_value(input, idx) +
-                    0.587f * canny_input_value(input, idx + plane_size) +
-                    0.114f * canny_input_value(input, idx + 2 * plane_size);
+                const bool keep = mask == nullptr || mask[idx] > 0.0f;
+                shared_pixels[y][x] = keep
+                                          ? 0.299f * canny_input_value(input, idx) +
+                                                0.587f * canny_input_value(input, idx + plane_size) +
+                                                0.114f * canny_input_value(input, idx + 2 * plane_size)
+                                          : 0.0f;
             }
         }
         __syncthreads();
@@ -137,6 +140,12 @@ namespace lfs::training::kernels {
         }
         __syncthreads();
 
+        if (xid >= width || yid >= height)
+            return;
+        if (mask != nullptr && mask[yid * width + xid] <= 0.0f) {
+            output[yid * width + xid] = 0.0f;
+            return;
+        }
         float2 gradient = shared_filtered[threadIdx.y + HALO2][threadIdx.x + HALO2];
         float mag = hypotf(gradient.x, gradient.y);
         if (mag > 0.0f) {
@@ -149,9 +158,7 @@ namespace lfs::training::kernels {
             }
         }
 
-        if (yid < height && xid < width) {
-            output[yid * width + xid] = mag;
-        }
+        output[yid * width + xid] = mag;
     }
 
     __global__ void normalize_by_device_scalar_kernel(
@@ -178,6 +185,7 @@ namespace lfs::training::kernels {
     template <typename InputT>
     void launch_fused_canny_edge_filter_chw_impl(
         const InputT* d_input_chw,
+        const float* d_mask,
         float* d_output_hw,
         const int height,
         const int width,
@@ -188,7 +196,7 @@ namespace lfs::training::kernels {
                      (height + blockDim.y - 1) / blockDim.y);
 
         fused_canny_edge_filter_chw_kernel<InputT><<<gridDim, blockDim, 0, stream>>>(
-            d_input_chw, d_output_hw, height, width);
+            d_input_chw, d_mask, d_output_hw, height, width);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.image.canny_edge_chw");
     }
 
@@ -199,7 +207,7 @@ namespace lfs::training::kernels {
         const int width,
         cudaStream_t stream) {
         stream = resolve_stream(stream);
-        launch_fused_canny_edge_filter_chw_impl(d_input_chw, d_output_hw, height, width, stream);
+        launch_fused_canny_edge_filter_chw_impl(d_input_chw, nullptr, d_output_hw, height, width, stream);
     }
 
     void launch_fused_canny_edge_filter_chw(
@@ -209,7 +217,21 @@ namespace lfs::training::kernels {
         const int width,
         cudaStream_t stream) {
         stream = resolve_stream(stream);
-        launch_fused_canny_edge_filter_chw_impl(d_input_chw, d_output_hw, height, width, stream);
+        launch_fused_canny_edge_filter_chw_impl(d_input_chw, nullptr, d_output_hw, height, width, stream);
+    }
+
+    void launch_fused_canny_edge_filter_chw(
+        const float* d_input_chw, const float* d_mask_hw, float* d_output_hw,
+        const int height, const int width, cudaStream_t stream) {
+        stream = resolve_stream(stream);
+        launch_fused_canny_edge_filter_chw_impl(d_input_chw, d_mask_hw, d_output_hw, height, width, stream);
+    }
+
+    void launch_fused_canny_edge_filter_chw(
+        const uint8_t* d_input_chw, const float* d_mask_hw, float* d_output_hw,
+        const int height, const int width, cudaStream_t stream) {
+        stream = resolve_stream(stream);
+        launch_fused_canny_edge_filter_chw_impl(d_input_chw, d_mask_hw, d_output_hw, height, width, stream);
     }
 
     void compute_edge_weight_map(

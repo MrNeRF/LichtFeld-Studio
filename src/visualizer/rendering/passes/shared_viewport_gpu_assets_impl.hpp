@@ -81,6 +81,7 @@ namespace lfs::vis {
             std::uint32_t start_index = 0;
             std::uint32_t index_count = 0;
             std::size_t material_index = 0;
+            glm::vec3 local_center{0.0f};
         };
 
         struct GpuMesh {

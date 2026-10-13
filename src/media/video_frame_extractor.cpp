@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "decoded_video_frame_ffmpeg.hpp"
+#include "io/video/probed_stream_rewind.hpp"
 #include "linear_frame.hpp"
 #include "media/file_frame_sink.hpp"
 #include "media/frame_color_range.hpp"
@@ -180,9 +181,10 @@ namespace lfs::io {
                                                    const double time_base,
                                                    const int frame_index,
                                                    const double fallback_fps,
-                                                   const int64_t stream_start_timestamp) {
-            int64_t timestamp = frame->best_effort_timestamp;
-            if (timestamp == AV_NOPTS_VALUE)
+                                                   const int64_t stream_start_timestamp,
+                                                   const bool untimed_stream = false) {
+            int64_t timestamp = untimed_stream ? AV_NOPTS_VALUE : frame->best_effort_timestamp;
+            if (timestamp == AV_NOPTS_VALUE && !untimed_stream)
                 timestamp = frame->pts;
             if (timestamp != AV_NOPTS_VALUE && std::isfinite(time_base) && time_base > 0.0)
                 // Subtract in ticks before scaling: fused multiply/subtract
@@ -712,6 +714,10 @@ namespace lfs::io {
             error = "Video stream time base must be finite and positive";
             return false;
         }
+        if (params.first_source_frame_number < 0) {
+            error = "First source frame number must be nonnegative";
+            return false;
+        }
         if (!std::isfinite(params.start_time) || params.start_time < 0.0 ||
             !std::isfinite(params.end_time) ||
             (params.end_time != -1.0 && params.end_time <= params.start_time)) {
@@ -932,19 +938,20 @@ namespace lfs::io {
         // Number fields accept any digit run that is not all zeros: earlier
         // extractions may have used another padding width.
         bool matchFrameNameSegments(const std::vector<FrameNameSegment>& segments, const size_t index,
-                                    const std::string_view name, const size_t pos) {
+                                    const std::string_view name, const size_t pos, const bool allow_zero = false) {
             if (index == segments.size())
                 return pos == name.size();
             const auto& segment = segments[index];
             if (!segment.number) {
                 return name.substr(pos, segment.literal.size()) == segment.literal &&
-                       matchFrameNameSegments(segments, index + 1, name, pos + segment.literal.size());
+                       matchFrameNameSegments(segments, index + 1, name, pos + segment.literal.size(), allow_zero);
             }
             bool nonzero = false;
             for (size_t end = pos; end < name.size() && std::isdigit(static_cast<unsigned char>(name[end]));) {
                 nonzero |= name[end] != '0';
                 ++end;
-                if (nonzero && matchFrameNameSegments(segments, index + 1, name, end))
+                if ((nonzero || (allow_zero && name.substr(pos, end - pos).find_first_not_of('0') == std::string_view::npos)) &&
+                    matchFrameNameSegments(segments, index + 1, name, end, allow_zero))
                     return true;
             }
             return false;
@@ -963,12 +970,12 @@ namespace lfs::io {
         return out;
     }
 
-    bool isGeneratedFrameFilename(const std::string_view pattern, const std::string_view filename) {
-        // Generated extraction files use only these lowercase image extensions.
+    bool isGeneratedFrameFilename(const std::string_view pattern, const std::string_view filename, const bool allow_zero) {
+        // The writer appends one of these lowercase extensions.
         if (!filename.ends_with(".png") && !filename.ends_with(".jpg") && !filename.ends_with(".exr") && !filename.ends_with(".tif") && !filename.ends_with(".tiff"))
             return false;
         return matchFrameNameSegments(parseFrameFilenamePattern(pattern), 0,
-                                      filename.substr(0, filename.size() - (filename.ends_with(".tiff") ? 5 : 4)), 0);
+                                      filename.substr(0, filename.size() - (filename.ends_with(".tiff") ? 5 : 4)), 0, allow_zero);
     }
 
     std::vector<std::filesystem::path> generatedExtractionFiles(
@@ -997,7 +1004,7 @@ namespace lfs::io {
                 continue;
             const auto name = it->path().filename();
             if (name == "extraction_metadata.json" || previous.contains(name) ||
-                isGeneratedFrameFilename(pattern, core::path_to_utf8(name)))
+                isGeneratedFrameFilename(pattern, core::path_to_utf8(name), true))
                 files.push_back(it->path());
         }
         return files;
@@ -1020,9 +1027,7 @@ namespace lfs::io {
             }
             const bool external_sink = provided_sink != nullptr;
             const bool custom_sink = external_sink && !legacy_file_policy;
-            media::FileFrameSink file_sink({params.output_dir, params.filename_pattern,
-                                            params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG,
-                                            params.jpg_quality});
+            media::FileFrameSink file_sink({params.output_dir, params.filename_pattern, params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG, params.jpg_quality, {}, false, false, {.overwrite = true, .durable = false, .create_directories = false}, params.first_source_frame_number});
             auto& sink = provided_sink ? *provided_sink : static_cast<media::FrameSink&>(file_sink);
             bool sink_started = false;
             size_t accepted_frames = 0;
@@ -1089,9 +1094,11 @@ namespace lfs::io {
                     return false;
                 }
                 AVStream* video_stream = fmt_ctx->streams[video_stream_idx];
+                (void)lfs::io::video::rewindProbedVideoStream(fmt_ctx, video_stream_idx);
+                const bool untimed_stream = fmt_ctx->iformat &&
+                                            (fmt_ctx->iformat->flags & AVFMT_NOTIMESTAMPS) != 0;
                 if (!probe.metadata_complete)
                     LOG_WARN("Could not complete video-only stream metadata probe; some source metadata may be unavailable");
-                av_seek_frame(fmt_ctx, video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
                 const AVCodecID codec_id = video_stream->codecpar->codec_id;
                 int dv_profile = 0;
                 int dv_compatibility = 0;
@@ -1283,8 +1290,8 @@ namespace lfs::io {
                     video_fps = validFrameRate(video_stream->r_frame_rate);
                 if (video_fps <= 0.0)
                     video_fps = 30.0;
-                // Source numbers use the timestamp grid, not the average cadence of a VFR stream.
-                double source_frame_fps = validFrameRate(video_stream->r_frame_rate);
+                // Untimed streams have no timestamp grid; use sequential decode cadence.
+                double source_frame_fps = untimed_stream ? video_fps : validFrameRate(video_stream->r_frame_rate);
                 if (source_frame_fps <= 0.0)
                     source_frame_fps = video_fps;
                 double video_duration = validDurationSeconds(fmt_ctx->duration, AVRational{1, AV_TIME_BASE});
@@ -1375,17 +1382,17 @@ namespace lfs::io {
                             stream_start_timestamp);
                     };
 
-                if (video_duration <= 0.0 && params.end_time < 0.0) {
+                if (video_duration <= 0.0 && params.end_time < 0.0 && !untimed_stream) {
                     error = "Could not determine video duration";
                     throw std::runtime_error(error);
                 }
 
                 const double start_time = params.start_time;
-                double end_time =
-                    params.end_time < 0.0 ? video_duration : params.end_time;
+                bool extract_to_stream_end = params.end_time < 0.0;
+                const bool unknown_stream_end = extract_to_stream_end && untimed_stream && video_duration <= 0.0;
+                double end_time = unknown_stream_end ? 0.0 : (extract_to_stream_end ? video_duration : params.end_time);
                 // Plain interval extraction can read to EOF when the duration estimate is short.
                 // FPS sampling and sharpness windows retain their existing time boundaries.
-                bool extract_to_stream_end = params.end_time < 0.0;
                 if (video_duration > 0.0) {
                     const double duration_tolerance =
                         std::max(1.0e-6, time_base);
@@ -1402,14 +1409,16 @@ namespace lfs::io {
                 }
                 extract_to_stream_end = extract_to_stream_end &&
                                         !(params.sharpness.enabled && params.sharpness.window_mode);
-                const double trim_duration = end_time - start_time;
-                if (!std::isfinite(trim_duration) || trim_duration <= 0.0) {
+                const double trim_duration = unknown_stream_end ? 0.0 : end_time - start_time;
+                if (!unknown_stream_end && (!std::isfinite(trim_duration) || trim_duration <= 0.0)) {
                     error = "Invalid extraction parameters: invalid video trim range";
                     throw std::invalid_argument(error);
                 }
 
                 int64_t total_frames = video_stream->nb_frames;
-                if (total_frames <= 0 || video_duration <= 0.0) {
+                if (unknown_stream_end) {
+                    total_frames = 0;
+                } else if (total_frames <= 0 || video_duration <= 0.0) {
                     const long double estimated_frames =
                         std::ceil(static_cast<long double>(trim_duration) *
                                   video_fps);
@@ -1433,7 +1442,7 @@ namespace lfs::io {
                 const double target_interval = 1.0 / target_fps;
                 double next_capture_time = start_time;
                 const std::size_t fps_target_count =
-                    params.mode == ExtractionMode::FPS
+                    params.mode == ExtractionMode::FPS && !unknown_stream_end
                         ? calculateFpsSampleCount(start_time, end_time,
                                                   target_fps)
                         : 0;
@@ -1454,12 +1463,8 @@ namespace lfs::io {
                         "exceeds supported limits";
                     throw std::invalid_argument(error);
                 }
-                const int estimated_total =
-                    params.mode == ExtractionMode::FPS
-                        ? static_cast<int>(fps_target_count)
-                        : estimateFramesToExtract(
-                              params.mode, start_time, end_time, target_fps,
-                              total_frames, frame_step);
+                const int estimated_total = unknown_stream_end ? 0 : params.mode == ExtractionMode::FPS ? static_cast<int>(fps_target_count)
+                                                                                                        : estimateFramesToExtract(params.mode, start_time, end_time, target_fps, total_frames, frame_step);
                 // Estimated frames per sliding window (for candidate sampling)
                 int window_est_frames = frame_step;
                 if (params.mode == ExtractionMode::FPS && video_fps > 0 && target_fps > 0)
@@ -1706,7 +1711,7 @@ namespace lfs::io {
 
                 const bool seek_timestamps_available =
                     std::isfinite(time_base) && time_base > 0.0 && std::isfinite(video_duration) &&
-                    video_duration > 0.0;
+                    video_duration > 0.0 && !untimed_stream;
                 // Dolby Vision RPU application requires continuous sequential decode.
                 const FrameSelectionDecision frame_selection = chooseFrameSelection(
                     params, video_fps, target_fps, seek_timestamps_available,
@@ -1766,10 +1771,13 @@ namespace lfs::io {
                 auto generate_filename = [&](int frame_num) {
                     if (custom_sink)
                         return std::filesystem::path{};
+                    if (frame_num < 1 || frame_num - 1 > std::numeric_limits<int>::max() - params.first_source_frame_number)
+                        throw std::runtime_error("Output frame number exceeds the supported range");
+                    const int output_number = params.first_source_frame_number + frame_num - 1;
                     std::string ext = params.format == ImageFormat::TIFF16 ? ".tif" : params.format == ImageFormat::PNG ? ".png"
                                                                                   : params.format == ImageFormat::EXR   ? ".exr"
                                                                                                                         : ".jpg";
-                    return params.output_dir / (formatFrameFilenameStem(params.filename_pattern, frame_num) + ext);
+                    return params.output_dir / (formatFrameFilenameStem(params.filename_pattern, output_number) + ext);
                 };
 
                 const auto source_frame_for_time = [&](const double frame_time) {
@@ -2172,23 +2180,23 @@ namespace lfs::io {
                 const auto process_sequential_frame = [&](AVFrame* const decoded_frame) {
                     const double frame_time = frameTimestampSeconds(
                         decoded_frame, time_base, decoded_frame_count - 1,
-                        video_fps, stream_start_timestamp);
-                    const int64_t timestamp = frameTimestampTicks(decoded_frame);
+                        video_fps, stream_start_timestamp, untimed_stream);
+                    const int64_t timestamp = untimed_stream ? AV_NOPTS_VALUE : frameTimestampTicks(decoded_frame);
                     if ((timestamp != AV_NOPTS_VALUE &&
                          timestamp < start_timestamp_boundary.first_at_or_after) ||
                         (timestamp == AV_NOPTS_VALUE && frame_time < start_time))
                         return false;
-                    const bool past_end =
-                        params.mode == ExtractionMode::FPS
-                            ? (timestamp != AV_NOPTS_VALUE
-                                   ? timestamp >= end_timestamp_boundary.first_at_or_after
-                                   : frame_time >= end_time)
-                            : !extract_to_stream_end &&
-                                  (timestamp != AV_NOPTS_VALUE
-                                       ? (end_timestamp_boundary.exact_tick
-                                              ? timestamp > end_timestamp_boundary.first_at_or_after
-                                              : timestamp >= end_timestamp_boundary.first_at_or_after)
-                                       : frame_time > end_time);
+                    const bool past_end = !unknown_stream_end &&
+                                          (params.mode == ExtractionMode::FPS
+                                               ? (timestamp != AV_NOPTS_VALUE
+                                                      ? timestamp >= end_timestamp_boundary.first_at_or_after
+                                                      : frame_time >= end_time)
+                                               : !extract_to_stream_end &&
+                                                     (timestamp != AV_NOPTS_VALUE
+                                                          ? (end_timestamp_boundary.exact_tick
+                                                                 ? timestamp > end_timestamp_boundary.first_at_or_after
+                                                                 : timestamp >= end_timestamp_boundary.first_at_or_after)
+                                                          : frame_time > end_time));
                     if (past_end)
                         return true;
 
@@ -2426,6 +2434,7 @@ namespace lfs::io {
                     while (!reached_end) {
                         throw_if_cancelled();
                         if (params.mode == ExtractionMode::FPS &&
+                            estimated_total > 0 &&
                             saved_count >= estimated_total) {
                             break;
                         }
@@ -2444,7 +2453,7 @@ namespace lfs::io {
                     while (shouldFillRetainedFpsTail(reached_eof, reached_end) &&
                            params.mode == ExtractionMode::FPS &&
                            !params.sharpness.window_mode && has_retained_frame &&
-                           saved_count + skipped_count < estimated_total &&
+                           (estimated_total <= 0 || saved_count + skipped_count < estimated_total) &&
                            next_fps_target_index < fps_target_count &&
                            ((retained_frame_timestamp != AV_NOPTS_VALUE &&
                              retained_frame_duration_ticks > 0)
@@ -2470,6 +2479,12 @@ namespace lfs::io {
                                 next_fps_target_index);
                         }
                     }
+                }
+
+                if (unknown_stream_end && decoded_frame_count > 0 && video_fps > 0.0) {
+                    total_frames = decoded_frame_count;
+                    video_duration = static_cast<double>(total_frames) / video_fps;
+                    end_time = video_duration;
                 }
 
                 if (gpu_encoding_enabled) {
@@ -2682,6 +2697,7 @@ namespace lfs::io {
                         if (!float_output)
                             root["output_quality"] = params.jpg_quality;
                         root["filename_pattern"] = params.filename_pattern;
+                        root["first_source_frame_number"] = params.first_source_frame_number;
                         if (params.mode == ExtractionMode::FPS) {
                             root["extraction"]["mode"] = "fps";
                             root["extraction"]["fps"] = params.fps;

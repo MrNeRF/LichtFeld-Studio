@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/material.hpp"
 
 #include <array>
 #include <cstddef>
@@ -28,11 +29,13 @@ namespace lfs::vis {
         std::uint32_t start_index = 0;
         std::uint32_t index_count = 0;
         std::size_t material_index = 0;
+        glm::vec3 local_center{0.0f};
     };
 
     struct SharedMeshMaterial {
         std::array<float, 16> uniform{};
         std::array<VkDescriptorImageInfo, 3> textures{};
+        lfs::core::AlphaMode alpha_mode = lfs::core::AlphaMode::Opaque;
     };
 
     struct SharedMeshDrawAsset {

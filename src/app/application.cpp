@@ -51,6 +51,7 @@
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_encoder.hpp"
+#include "io/video/video_export_schedule.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "preprocessing/preprocess.hpp"
@@ -65,7 +66,6 @@
 #include "visualizer/input/input_bindings.hpp"
 #include "visualizer/preferences.hpp"
 #include "window/graphics_context.hpp"
-#include <cmath>
 #include <condition_variable>
 #if LFS_HAS_CUDA
 #include <cuda_runtime.h>
@@ -1382,7 +1382,7 @@ namespace lfs::app {
             const float duration = timeline.clipDuration();
             const std::vector<glm::mat4> model_transforms{
                 rendering::DATA_TO_VISUALIZER_WORLD_AXES_4};
-            const int total_frames = static_cast<int>(std::ceil(duration * cfg.fps)) + 1;
+            const int total_frames = lfs::io::video::videoExportFrameCount(duration, cfg.fps);
             LOG_INFO("Rendering {} frame(s) ({:.2f}s @ {}fps) from {} to {}",
                      total_frames, duration, cfg.fps,
                      core::path_to_utf8(cfg.camera_path), core::path_to_utf8(cfg.output_path));
@@ -1390,7 +1390,7 @@ namespace lfs::app {
             vis::RenderTargetRegistry targets;
             const auto target = targets.allocate();
             for (int frame = 0; frame < total_frames; ++frame) {
-                const float t = std::min(static_cast<float>(frame) / static_cast<float>(cfg.fps), duration);
+                const float t = lfs::io::video::videoExportSampleTime(frame, cfg.fps);
                 const auto cam_state = timeline.evaluate(t);
 
                 rendering::ViewportRenderRequest request;

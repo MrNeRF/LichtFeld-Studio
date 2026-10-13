@@ -945,6 +945,30 @@ namespace {
             expected);
     }
 
+    TEST(P5SessionChapterTest,
+         EquirectangularSessionRoundTripKeepsSelectedBackendWithoutNewFields) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+
+        lfs::vis::RenderSettings settings;
+        settings.equirectangular = true;
+        settings.raster_backend = Backend::ThreeDgs;
+        settings.gut = false;
+
+        auto json = renderSettingsToProjectJson(settings);
+        EXPECT_FALSE(json.contains("raster_backend_before_equirectangular"));
+        EXPECT_EQ(json["raster_backend"], "3dgs");
+
+        auto restored = renderSettingsFromProjectJson(json);
+        ASSERT_TRUE(restored) << lfs::format_for_developer(restored.error());
+        EXPECT_EQ(restored->raster_backend, Backend::ThreeDgs);
+        EXPECT_FALSE(restored->gut);
+        auto render_settings = *restored;
+        lfs::vis::enforceProjectionBackend(render_settings);
+        EXPECT_EQ(render_settings.raster_backend, Backend::ThreeDgut);
+        restored->equirectangular = false;
+        EXPECT_EQ(restored->raster_backend, Backend::ThreeDgs);
+    }
+
     TEST(P5SessionChapterTest, GalleryOrthographicExtentSurvivesViewportSizes) {
         auto state = rolled_panel_camera(7.0f);
         state.ortho_extent_world = 6.25f;

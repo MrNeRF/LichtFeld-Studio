@@ -206,7 +206,21 @@
     "view.performance_hud": "Performance HUD",
     "edit.preferences": "Preferences...",
     "view.debug_info": "Debug Info...",
-    "view.streaming_settings": "Streaming Viewer Settings"
+    "view.streaming_settings": "Streaming Viewer Settings",
+    "file.browse_projects": "Browse Projects…",
+    "file.export_menu": "Export",
+    "file.export_scene": "Scene…",
+    "file.open_gallery": "Open Gallery",
+    "file.project_maintenance": "Project Maintenance",
+    "view.split_view": "Split View",
+    "file.splat_file": "Splat File…",
+    "file.ssog_folder": "SSOG Folder…",
+    "file.configuration": "Configuration…",
+    "file.dataset": "Dataset…",
+    "file.mesh": "Mesh…",
+    "file.checkpoint": "Checkpoint…",
+    "tools.developer": "Developer",
+    "tools.system_console": "System Console"
   },
   "window": {
     "export": "Export",
@@ -1794,7 +1808,19 @@
     "action.view_axis_right": "View Right",
     "action.view_axis_top": "View Top",
     "action.view_frame_all": "Frame All",
-    "action.view_toggle_perspective": "Toggle Perspective/Orthographic"
+    "action.view_toggle_perspective": "Toggle Perspective/Orthographic",
+    "mouse_back": "Mouse Back",
+    "mouse_forward": "Mouse Forward",
+    "invalid_profile_name": "Invalid profile name. Use a simple name without path separators or reserved characters.",
+    "profile_save_failed": "Could not save the input profile.",
+    "invalid_binding": "This shortcut cannot be used for that action.",
+    "damaged_profile_backed_up": "A damaged key map was backed up before saving. Your original file is preserved beside the profile.",
+    "invalid_entries_skipped": "Skipped and preserved key map entries at 1-based positions: ",
+    "newer_profile_unchanged": "This key map was saved by a newer version. It was not loaded or changed.",
+    "core_actions_unreachable": "Some essential shortcuts in this key map cannot be used. You can restore only those actions.",
+    "restore_core_actions": "Restore defaults for these actions",
+    "clear_binding": "Clear",
+    "action.toggle_python_console": "Toggle Python Console"
   },
   "debug_info": {
     "clear_history": "Clear History",
@@ -2169,7 +2195,14 @@
     "linear": "Linear",
     "source_metadata": "Source metadata",
     "source_metadata_unavailable": "Source color metadata is unavailable.",
-    "srgb": "sRGB"
+    "srgb": "sRGB",
+    "first_source_frame_number": "First source frame number:",
+    "first_source_frame_number_help": "The number assigned to source frame 1; source frame gaps are preserved.",
+    "overwrite_delete": "Delete Existing",
+    "overwrite_proceed": "Proceed (overwrite duplicates)",
+    "overwrite_prompt_metadata": "The output folder contains extraction metadata that this run will replace. Choose how to continue.",
+    "overwrite_prompt_frames_metadata": "The output folder already contains frames matching this extraction's naming pattern. Existing extraction metadata will also be replaced. Choose how to continue.",
+    "overwrite_delete_error": "Failed to remove {}: {}"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2474,7 +2507,6 @@
       "off": "Off",
       "summary": "{x_metric} vs {y_metric} across {count} Gaussians",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "Marked compare region becomes the active Gaussian selection.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} Gaussians",
       "empty": {
         "title": "Compare unavailable",

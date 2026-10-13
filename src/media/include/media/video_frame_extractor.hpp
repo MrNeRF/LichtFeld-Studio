@@ -25,7 +25,8 @@ namespace lfs::io {
     [[nodiscard]] LFS_MEDIA_API std::string formatFrameFilenameStem(std::string_view pattern, int frame_number);
     // True when the extractor writes `filename` (name only) for `pattern`: a frame stem with any
     // positive frame number and padding width, followed by .png, .jpg or .exr.
-    [[nodiscard]] LFS_MEDIA_API bool isGeneratedFrameFilename(std::string_view pattern, std::string_view filename);
+    [[nodiscard]] LFS_MEDIA_API bool isGeneratedFrameFilename(std::string_view pattern, std::string_view filename,
+                                                              bool allow_zero = false);
     // Frames and metadata an earlier extraction wrote into `directory`: files the metadata manifest
     // lists and files `pattern` produces. Other files, such as existing photos, are never included.
     [[nodiscard]] LFS_MEDIA_API std::vector<std::filesystem::path> generatedExtractionFiles(
@@ -96,6 +97,7 @@ namespace lfs::io {
             ExtractionMode mode = ExtractionMode::FPS;
             double fps = 1.0;
             int frame_interval = 1;
+            int first_source_frame_number = 1;
             ImageFormat format = ImageFormat::PNG;
             int jpg_quality = 95;
             SharpnessParams sharpness;

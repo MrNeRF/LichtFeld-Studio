@@ -183,16 +183,25 @@ TEST_F(MeshDataTest, MaterialsAndSubmeshes) {
     Material mat;
     mat.metallic = 0.5f;
     mat.roughness = 0.8f;
+    mat.alpha_mode = AlphaMode::Mask;
+    mat.alpha_cutoff = 0.25f;
     mat.name = "test_material";
     mesh.materials.push_back(mat);
     mesh.submeshes.push_back({0, 6, 0});
 
     EXPECT_EQ(mesh.materials.size(), 1u);
     EXPECT_FLOAT_EQ(mesh.materials[0].metallic, 0.5f);
+    EXPECT_EQ(mesh.materials[0].alpha_mode, AlphaMode::Mask);
+    EXPECT_FLOAT_EQ(mesh.materials[0].alpha_cutoff, 0.25f);
     EXPECT_EQ(mesh.materials[0].name, "test_material");
     EXPECT_EQ(mesh.submeshes[0].start_index, 0u);
     EXPECT_EQ(mesh.submeshes[0].index_count, 6u);
     EXPECT_EQ(mesh.submeshes[0].material_index, 0u);
+
+    auto cpu_copy = mesh.to(Device::CPU);
+    ASSERT_EQ(cpu_copy.materials.size(), 1u);
+    EXPECT_EQ(cpu_copy.materials[0].alpha_mode, AlphaMode::Mask);
+    EXPECT_FLOAT_EQ(cpu_copy.materials[0].alpha_cutoff, 0.25f);
 }
 
 TEST_F(MeshDataTest, Mesh2SplatCpuTensorConverterProducesSplatData) {

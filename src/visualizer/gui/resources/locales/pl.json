@@ -210,7 +210,21 @@
     "view.performance_hud": "HUD wydajności",
     "edit.preferences": "Preferencje...",
     "view.debug_info": "Informacje Debugowania...",
-    "view.streaming_settings": "Ustawienia przeglądarki strumieniowej"
+    "view.streaming_settings": "Ustawienia przeglądarki strumieniowej",
+    "file.browse_projects": "Przeglądaj projekty…",
+    "file.export_menu": "Eksportuj",
+    "file.export_scene": "Scena…",
+    "file.open_gallery": "Otwórz galerię",
+    "file.project_maintenance": "Konserwacja projektu",
+    "view.split_view": "Widok podzielony",
+    "file.splat_file": "Plik splat…",
+    "file.ssog_folder": "Folder SSOG…",
+    "file.configuration": "Konfiguracja…",
+    "file.dataset": "Zbiór danych…",
+    "file.mesh": "Siatka…",
+    "file.checkpoint": "Punkt kontrolny…",
+    "tools.developer": "Deweloper",
+    "tools.system_console": "Konsola systemowa"
   },
   "window": {
     "export": "Eksportuj",
@@ -1796,7 +1810,19 @@
     "action.view_axis_right": "Widok z prawej",
     "action.view_axis_top": "Widok z góry",
     "action.view_frame_all": "Wykadruj wszystko",
-    "action.view_toggle_perspective": "Przełącz perspektywę/rzut ortogonalny"
+    "action.view_toggle_perspective": "Przełącz perspektywę/rzut ortogonalny",
+    "mouse_back": "Przycisk myszy Wstecz",
+    "mouse_forward": "Przycisk myszy Dalej",
+    "invalid_profile_name": "Nieprawidłowa nazwa profilu. Użyj prostej nazwy bez separatorów ścieżki i znaków zastrzeżonych.",
+    "profile_save_failed": "Nie udało się zapisać profilu wejściowego.",
+    "invalid_binding": "Tego skrótu nie można użyć dla tej czynności.",
+    "damaged_profile_backed_up": "Przed zapisaniem utworzono kopię uszkodzonej mapy klawiszy. Oryginalny plik znajduje się obok profilu.",
+    "invalid_entries_skipped": "Pominięte i zachowane wpisy mapy klawiszy na pozycjach od 1: ",
+    "newer_profile_unchanged": "Ta mapa klawiszy została zapisana w nowszej wersji. Nie została wczytana ani zmieniona.",
+    "core_actions_unreachable": "Niektóre ważne skróty w tej mapie są niedostępne. Możesz przywrócić tylko te działania.",
+    "restore_core_actions": "Przywróć domyślne skróty tych działań",
+    "clear_binding": "Wyczyść",
+    "action.toggle_python_console": "Przełącz konsolę Pythona"
   },
   "debug_info": {
     "clear_history": "Wyczyść Historię",
@@ -2171,7 +2197,14 @@
     "linear": "Linear",
     "source_metadata": "Source metadata",
     "source_metadata_unavailable": "Metadane koloru źródła są niedostępne.",
-    "srgb": "sRGB"
+    "srgb": "sRGB",
+    "first_source_frame_number": "Numer pierwszej klatki źródłowej:",
+    "first_source_frame_number_help": "Numer przypisany do klatki źródłowej 1; odstępy między klatkami źródłowymi są zachowane.",
+    "overwrite_delete": "Usuń istniejące",
+    "overwrite_proceed": "Kontynuuj (nadpisz duplikaty)",
+    "overwrite_prompt_metadata": "Folder wyjściowy zawiera metadane ekstrakcji, które to uruchomienie zastąpi. Wybierz sposób kontynuowania.",
+    "overwrite_prompt_frames_metadata": "Folder wyjściowy zawiera już klatki pasujące do wzorca nazewnictwa tej ekstrakcji. Istniejące metadane ekstrakcji również zostaną zastąpione. Wybierz sposób kontynuowania.",
+    "overwrite_delete_error": "Nie udało się usunąć {}: {}"
   },
   "rendering_panel": {
     "fov_format": "Pole widzenia: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2475,7 +2508,6 @@
       "off": "Wył.",
       "summary": "{x_metric} względem {y_metric} dla {count} splatów Gaussa",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "Zaznaczony obszar porównania staje się aktywnym wyborem splatów Gaussa.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} splatów Gaussa",
       "empty": {
         "title": "Porównanie niedostępne",

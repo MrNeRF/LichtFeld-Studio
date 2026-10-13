@@ -949,7 +949,8 @@ namespace {
         const std::filesystem::path& dataset_path = {},
         const int sh_degree = 0,
         const bool gut = false,
-        const lfs::training::PPISP* appearance = nullptr) {
+        const lfs::training::PPISP* appearance = nullptr,
+        const std::filesystem::path& background_image = {}) {
         const lfs::core::GpuBackendScope backend_scope(lfs::core::GpuBackend::CUDA);
         const std::size_t count = sh_degree > 0 ? 8 : 2;
         auto model = sh_degree > 0
@@ -963,6 +964,10 @@ namespace {
         parameters.optimization.sh_degree = sh_degree;
         parameters.optimization.gut = gut;
         parameters.optimization.use_ppisp = appearance != nullptr;
+        if (!background_image.empty()) {
+            parameters.optimization.bg_mode = lfs::core::param::BackgroundMode::Image;
+            parameters.optimization.bg_image_path = background_image;
+        }
         parameters.optimization.max_cap =
             static_cast<int>(count);
         parameters.dataset.data_path = dataset_path;
@@ -1119,7 +1124,8 @@ namespace {
         const bool enable_sparsity = false,
         const int sparsify_steps = 15000,
         const lfs::training::PPISP* appearance = nullptr,
-        const int max_cap = -1) {
+        const int max_cap = -1,
+        const std::filesystem::path& background_image = {}) {
         auto document = lfs::test::licht::make_empty_document(
             lfs::core::generate_uuid_v4(), 1);
         lfs::core::Scene source;
@@ -1169,7 +1175,7 @@ namespace {
                 checkpoint_uuid,
                 make_training_autosave_checkpoint_payload(
                     checkpoint_uuid, dataset_path,
-                    sh_degree, gut, appearance)));
+                    sh_degree, gut, appearance, background_image)));
         if (finish_reason !=
             lfs::io::project::TrainingFinishReason::
                 None) {
@@ -5554,6 +5560,95 @@ contract["check_selection_submode_follows_native_mode"](lf)
                 LOC(lichtfeld::Strings::Recovery::
                         CRASH_TITLE));
         }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RecoverThenAutosaveEditsForNextRecovery) {
+        const auto project_path =
+            temporary_.path / "recover-autosave-again.licht";
+        const auto sidecar =
+            lfs::io::project::autosave_sidecar_path(project_path);
+        std::optional<lfs::core::Uuid> ppisp_uuid;
+        write_recoverable_project(project_path);
+        auto options = projectOptions();
+        const auto recover = [&](VisualizerImpl& viewer) {
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
+            auto pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges);
+            ASSERT_TRUE(pending);
+            ASSERT_EQ(*pending, ProjectOpenOutcome::RecoveryPromptPending);
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_,
+                gui->rml_modal_overlay_->queue_);
+            ASSERT_TRUE(request.on_result);
+            request.on_result({.button_label =
+                                   LOC(lichtfeld::Strings::Recovery::RECOVER)});
+            ASSERT_TRUE(waitForHydrationComplete(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        };
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer);
+            ASSERT_NO_FATAL_FAILURE(recover(viewer));
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(lifecycle->recovered_master_path_);
+            ASSERT_TRUE(lifecycle->recovery_session_);
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Post recovery edit"),
+                lfs::core::NULL_NODE);
+            lifecycle->settings_.autosave_interval_seconds = 2;
+            lifecycle->settings_.autosave_quiet_seconds = 0;
+            lifecycle->settings_.autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosave_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->last_mutation_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            ASSERT_TRUE(lifecycle->project_write_job_)
+                << lifecycle->last_project_write_error_;
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            const auto saved = lfs::test::licht::require_result(
+                lfs::io::project::ProjectReader::open(sidecar));
+            EXPECT_EQ(saved.superblock().autosave_sequence, 2u);
+            const auto ppisp = std::ranges::find_if(
+                saved.chunks(), [](const auto& row) {
+                    return row.key.fourcc ==
+                           lfs::io::project::FOURCC_PPIS;
+                });
+            ASSERT_NE(ppisp, saved.chunks().end());
+            ppisp_uuid = ppisp->key.instance_uuid;
+        }
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            ASSERT_NO_FATAL_FAILURE(recover(viewer));
+            const auto& document = *viewer.project_lifecycle_->document_;
+            const auto nodes = lfs::test::licht::require_result(
+                document.scene_graph().nodes());
+            const auto marker = document.view().dom().get_json("recovery_marker");
+            ASSERT_TRUE(marker);
+            EXPECT_EQ(*marker, "autosaved");
+            ASSERT_TRUE(ppisp_uuid);
+            EXPECT_NE(document.find_ppisp(*ppisp_uuid), nullptr);
+            EXPECT_TRUE(std::ranges::any_of(
+                nodes, [](const auto& node) {
+                    return node.name == "Post recovery edit";
+                }));
+        }
+        EXPECT_TRUE(std::filesystem::is_regular_file(sidecar));
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -18091,6 +18186,93 @@ contract["check_selection_submode_follows_native_mode"](lf)
                   std::optional<int>{11});
         EXPECT_EQ(manager->getCurrentIteration(), 11);
     }
+
+    enum class StoredSessionRestoreCase { Success,
+                                          Failure,
+                                          Cancel,
+                                          Replace };
+    class StoredSessionRestoreTest : public VisualizerImplResetTest,
+                                     public ::testing::WithParamInterface<StoredSessionRestoreCase> {};
+
+    TEST_P(StoredSessionRestoreTest, CompletionPublishesOnViewerThread) {
+        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto outcome = GetParam();
+        const bool failure = outcome == StoredSessionRestoreCase::Failure ||
+                             outcome == StoredSessionRestoreCase::Replace;
+        const auto project_path = temporary_.path / "restore.licht";
+        const auto dataset_path = temporary_.path / "restore-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path, lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(), dataset_path,
+            lfs::io::project::TrainingFinishReason::None, 0, -1,
+            false, false, 15000, nullptr, -1,
+            failure ? temporary_.path / "missing-background.png" : std::filesystem::path{});
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer);
+        ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        const auto generation = app_store().stored_session_generation.get();
+        ASSERT_TRUE(viewer.restoreProjectTrainingSession());
+        ASSERT_EQ(app_store().stored_session_generation.get(), generation + 1);
+        auto* manager = viewer.getTrainerManager();
+        ASSERT_NE(manager, nullptr);
+        if (outcome == StoredSessionRestoreCase::Cancel) {
+            auto& worker = viewer.project_lifecycle_->hydration_threads_.back();
+            worker.request_stop();
+            worker.join();
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return app_store().stored_session_generation.get() == generation + 2;
+            }));
+            EXPECT_EQ(viewer.projectTrainingSessionState().error,
+                      "Project trainer restore cancelled");
+            EXPECT_FALSE(manager->canResume());
+            return;
+        }
+        if (outcome == StoredSessionRestoreCase::Replace) {
+            ASSERT_TRUE(waitUntil([&] {
+                std::lock_guard lock(viewer.work_queue_mutex_);
+                return !viewer.work_queue_.empty();
+            }));
+            viewer.project_lifecycle_->hydration_threads_.back().join();
+            {
+                std::lock_guard lock(viewer.work_queue_mutex_);
+                EXPECT_EQ(viewer.work_queue_.size(), 1);
+            }
+            const auto replacement = temporary_.path / "replacement.licht";
+            write_empty_project(replacement);
+            ASSERT_TRUE(viewer.projectOpen(replacement, ProjectSwitchDisposition::DiscardChanges));
+            const auto replacement_generation = app_store().stored_session_generation.get();
+            lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
+            EXPECT_EQ(app_store().stored_session_generation.get(), replacement_generation);
+            const auto state = viewer.projectTrainingSessionState();
+            EXPECT_FALSE(state.restoring);
+            EXPECT_TRUE(state.error.empty());
+            EXPECT_FALSE(state.available);
+            return;
+        }
+        ASSERT_TRUE(waitUntil([&] {
+            std::lock_guard lock(viewer.work_queue_mutex_);
+            return !viewer.work_queue_.empty();
+        },
+                              std::chrono::seconds(2)));
+        EXPECT_EQ(app_store().stored_session_generation.get(), generation + 1);
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return app_store().stored_session_generation.get() == generation + 2;
+        }));
+        EXPECT_EQ(manager->canResume(), !failure);
+        EXPECT_EQ(viewer.projectTrainingSessionState().error.empty(), !failure);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Outcomes, StoredSessionRestoreTest,
+                             ::testing::Values(StoredSessionRestoreCase::Success,
+                                               StoredSessionRestoreCase::Failure,
+                                               StoredSessionRestoreCase::Cancel,
+                                               StoredSessionRestoreCase::Replace));
 
     TEST_F(VisualizerImplResetTest,
            ErrorFinishedCheckpointProjectReopensPausedAndResumable) {
