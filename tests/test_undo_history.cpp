@@ -6,8 +6,10 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "operation/ops/edit_ops.hpp"
 #include "operation/pipeline.hpp"
@@ -1790,6 +1792,70 @@ TEST_F(UndoHistoryTest, PasteGaussiansCreatesUndoableSceneGraphEntry) {
     auto undo_result = lfs::vis::op::undoHistory().undo();
     ASSERT_TRUE(undo_result.success) << undo_result.error;
     EXPECT_EQ(scene_manager->getScene().getNode(pasted.front()), nullptr);
+}
+
+TEST_F(UndoHistoryTest, FullSelectionClipboardCopyOwnsItsPayload) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_patterned_sh_rest_splat(3));
+    const auto* original = scene_manager->getScene().getNode("model");
+    ASSERT_NE(original, nullptr);
+    ASSERT_NE(original->model, nullptr);
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({1, 1, 1})));
+
+    const auto selection = scene_manager->getScene().getSelectionMask()->to(DataType::Bool);
+    auto reference_extracted = std::make_unique<lfs::core::SplatData>(
+        lfs::core::extract_by_mask(*original->model, selection));
+    auto reference_merged = lfs::core::Scene::mergeSplatsWithTransforms(
+        {{reference_extracted.get(), glm::mat4{1.0f}}});
+    ASSERT_NE(reference_merged, nullptr);
+    const auto expected_means = mean_x_values(*reference_merged);
+    const auto expected_sh = sh_rest_row_values(*reference_merged, 1);
+
+    ASSERT_TRUE(scene_manager->copySelectedGaussians());
+
+    auto* source = scene_manager->getScene().getMutableNode("model");
+    ASSERT_NE(source, nullptr);
+    ASSERT_NE(source->model, nullptr);
+    source->model->means_raw() = Tensor::from_vector(
+        std::vector<float>{10.0f, 0.0f, 0.0f, 11.0f, 0.0f, 0.0f, 12.0f, 0.0f, 0.0f},
+        {3, size_t{3}}, Device::CUDA);
+
+    const auto pasted = scene_manager->pasteGaussians();
+    ASSERT_EQ(pasted.size(), 1u);
+    const auto* pasted_node = scene_manager->getScene().getNode(pasted.front());
+    ASSERT_NE(pasted_node, nullptr);
+    ASSERT_NE(pasted_node->model, nullptr);
+    EXPECT_EQ(mean_x_values(*pasted_node->model), expected_means);
+    EXPECT_EQ(sh_rest_row_values(*pasted_node->model, 1), expected_sh);
+}
+
+TEST_F(UndoHistoryTest, TransformedSelectionClipboardCopyPreservesWorldPosition) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(3));
+    scene_manager->setNodeTransform(
+        "model", glm::translate(glm::mat4(1.0f), glm::vec3(7.0f, 0.0f, 0.0f)));
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({1, 1, 1})));
+
+    ASSERT_TRUE(scene_manager->copySelectedGaussians());
+    scene_manager->setNodeTransform(
+        "model", glm::translate(glm::mat4(1.0f), glm::vec3(20.0f, 0.0f, 0.0f)));
+
+    const auto pasted = scene_manager->pasteGaussians();
+    ASSERT_EQ(pasted.size(), 1u);
+    const auto* pasted_node = scene_manager->getScene().getNode(pasted.front());
+    ASSERT_NE(pasted_node, nullptr);
+    ASSERT_NE(pasted_node->model, nullptr);
+    EXPECT_EQ(mean_x_values(*pasted_node->model), (std::vector<float>{7.0f, 8.0f, 9.0f}));
 }
 
 TEST_F(UndoHistoryTest, NodeCopyWithAllRowsDeletedProducesNoClipboard) {

@@ -5435,6 +5435,7 @@ namespace lfs::vis {
     }
 
     bool SceneManager::copySelectedGaussians() {
+        LOG_TIMER("SceneManager::copySelectedGaussians");
         clipboard_.clear();
         gaussian_clipboard_.reset();
         clipboard_kind_ = ClipboardKind::None;
@@ -5457,6 +5458,7 @@ namespace lfs::vis {
         const auto add_selected_chunk = [&](const lfs::core::SplatData& src,
                                             lfs::core::Tensor mask,
                                             const glm::mat4& world_transform) {
+            LOG_TIMER("SceneManager::copySelectedGaussians.prepare_chunk");
             if (mask.numel() != static_cast<size_t>(src.size()))
                 return;
 
@@ -5467,8 +5469,12 @@ namespace lfs::vis {
             if (mask.count_nonzero() == 0)
                 return;
 
-            auto extracted = std::make_unique<lfs::core::SplatData>(
-                lfs::core::extract_by_mask(src, mask));
+            std::unique_ptr<lfs::core::SplatData> extracted;
+            {
+                LOG_TIMER("SceneManager::copySelectedGaussians.extract");
+                extracted = std::make_unique<lfs::core::SplatData>(
+                    lfs::core::extract_by_mask(src, mask));
+            }
             if (extracted->size() == 0)
                 return;
 
@@ -5530,11 +5536,27 @@ namespace lfs::vis {
         if (chunks_with_transforms.empty())
             return false;
 
-        auto merged = lfs::core::Scene::mergeSplatsWithTransforms(chunks_with_transforms);
-        if (!merged || merged->size() == 0)
+        const auto& [single_chunk, single_transform] = chunks_with_transforms.front();
+        const bool can_copy_single_chunk =
+            chunks_with_transforms.size() == 1 && single_transform == glm::mat4{1.0f} &&
+            (!single_chunk->lod_tree || !single_chunk->lod_tree->has_tree());
+
+        std::unique_ptr<lfs::core::SplatData> merged;
+        const lfs::core::SplatData* clipboard_source = nullptr;
+        if (can_copy_single_chunk) {
+            clipboard_source = single_chunk;
+        } else {
+            LOG_TIMER("SceneManager::copySelectedGaussians.merge");
+            merged = lfs::core::Scene::mergeSplatsWithTransforms(chunks_with_transforms);
+            clipboard_source = merged.get();
+        }
+        if (!clipboard_source || clipboard_source->size() == 0)
             return false;
 
-        gaussian_clipboard_ = cloneSplatDataToCpu(*merged);
+        {
+            LOG_TIMER("SceneManager::copySelectedGaussians.copy_to_cpu");
+            gaussian_clipboard_ = cloneSplatDataToCpu(*clipboard_source);
+        }
         clipboard_kind_ = ClipboardKind::Gaussians;
 
         LOG_INFO("Copied {} Gaussians", gaussian_clipboard_->size());
