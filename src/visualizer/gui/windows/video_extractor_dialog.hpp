@@ -143,6 +143,7 @@ namespace lfs::gui {
         bool syncHdrControls();
         void syncExtractionStatus();
         void syncOutputPreview();
+        void syncOverwritePrompt();
         void handleEvent(Rml::Event& event);
         void handleClick(const std::string& id);
         void handleChange(const std::string& id, bool explicit_edit = true);
@@ -308,6 +309,8 @@ namespace lfs::gui {
         Rml::Element* hdr_badge_label_el_ = nullptr;
         VideoExtractionParams pending_params_;
         bool pending_params_set_ = false;
+        bool pending_has_frame_conflicts_ = false;
+        bool pending_metadata_will_be_replaced_ = false;
     };
 
 } // namespace lfs::gui

@@ -772,9 +772,12 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SHARPNESS_MODE_DESC_THRESHOLD = "video_extractor.sharpness_mode_desc_threshold";
         inline constexpr const char* SHARPNESS_MODE_DESC_WINDOW = "video_extractor.sharpness_mode_desc_window";
         inline constexpr const char* OVERWRITE_PROMPT = "video_extractor.overwrite_prompt";
+        inline constexpr const char* OVERWRITE_PROMPT_METADATA = "video_extractor.overwrite_prompt_metadata";
+        inline constexpr const char* OVERWRITE_PROMPT_FRAMES_METADATA = "video_extractor.overwrite_prompt_frames_metadata";
         inline constexpr const char* OVERWRITE_CANCEL = "video_extractor.overwrite_cancel";
         inline constexpr const char* OVERWRITE_DELETE = "video_extractor.overwrite_delete";
         inline constexpr const char* OVERWRITE_PROCEED = "video_extractor.overwrite_proceed";
+        inline constexpr const char* OVERWRITE_DELETE_ERROR = "video_extractor.overwrite_delete_error";
     } // namespace VideoExtractor
 
     namespace Mesh2Splat {

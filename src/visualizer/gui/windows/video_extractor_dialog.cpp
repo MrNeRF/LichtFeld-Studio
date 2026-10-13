@@ -262,10 +262,12 @@ namespace lfs::gui {
             return static_cast<int>(std::clamp<long>(parsed, 1, 65535));
         }
 
-        // Frames and metadata an extraction with `pattern` writes into `dir`. Other files,
+        // Frames and, when requested, metadata an extraction with `pattern` writes into `dir`.
+        // Other files,
         // such as photos already in the folder, are never part of the list.
         std::vector<std::filesystem::path> generatedExtractionFiles(const std::filesystem::path& dir,
-                                                                    const std::string& pattern) {
+                                                                    const std::string& pattern,
+                                                                    const bool generate_metadata) {
             std::vector<std::filesystem::path> files;
             std::error_code ec;
             for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
@@ -273,7 +275,8 @@ namespace lfs::gui {
                 if (!it->is_regular_file(type_ec))
                     continue;
                 const std::string name = lfs::core::path_to_utf8(it->path().filename());
-                if (name == "extraction_metadata.json" || io::isGeneratedFrameFilename(pattern, name))
+                if ((generate_metadata && name == "extraction_metadata.json") ||
+                    io::isGeneratedFrameFilename(pattern, name))
                     files.push_back(it->path());
             }
             return files;
@@ -1025,12 +1028,22 @@ namespace lfs::gui {
                        "video_extractor.candidates_very_high", "video_extractor.candidates_all"});
         changed |= setCachedText(stop_btn_el_, LOC(VideoExtractor::STOP));
         changed |= setCachedText(cancel_btn_el_, LOC(VideoExtractor::CANCEL));
-        changed |= setCachedText(overwrite_message_el_, LOC(VideoExtractor::OVERWRITE_PROMPT));
+        syncOverwritePrompt();
         changed |= setCachedText(overwrite_cancel_btn_el_, LOC(VideoExtractor::OVERWRITE_CANCEL));
         changed |= setCachedText(overwrite_delete_btn_el_, LOC(VideoExtractor::OVERWRITE_DELETE));
         changed |= setCachedText(overwrite_proceed_btn_el_, LOC(VideoExtractor::OVERWRITE_PROCEED));
         markContentDirty();
         controls_dirty_ |= changed;
+    }
+
+    void VideoExtractorDialog::syncOverwritePrompt() {
+        const char* const prompt = pending_metadata_will_be_replaced_
+                                       ? (pending_has_frame_conflicts_
+                                              ? VideoExtractor::OVERWRITE_PROMPT_FRAMES_METADATA
+                                              : VideoExtractor::OVERWRITE_PROMPT_METADATA)
+                                       : VideoExtractor::OVERWRITE_PROMPT;
+        if (setCachedText(overwrite_message_el_, LOC(prompt)))
+            markContentDirty();
     }
 
     void VideoExtractorDialog::syncVideoPreview() {
@@ -1526,15 +1539,18 @@ namespace lfs::gui {
             if (pending_params_set_) {
                 // Remove only what this extraction would write; other files stay.
                 for (const auto& path : generatedExtractionFiles(pending_params_.output_dir,
-                                                                 pending_params_.filename_pattern)) {
+                                                                 pending_params_.filename_pattern,
+                                                                 pending_params_.generate_metadata)) {
                     std::error_code ec;
                     if (!std::filesystem::remove(path, ec) && ec) {
                         pending_params_set_ = false;
                         if (overwrite_overlay_el_)
                             overwrite_overlay_el_->SetClass("hidden", true);
-                        setExtractionError(std::format("Failed to remove {}: {}",
-                                                       lfs::core::path_to_utf8(path), ec.message()),
+                        setExtractionError(LOCF(VideoExtractor::OVERWRITE_DELETE_ERROR,
+                                                 lfs::core::path_to_utf8(path), ec.message()),
                                            false);
+                        pending_has_frame_conflicts_ = false;
+                        pending_metadata_will_be_replaced_ = false;
                         controls_dirty_ = true;
                         markContentDirty();
                         return;
@@ -1547,6 +1563,8 @@ namespace lfs::gui {
                 launchExtraction(pending_params_);
         } else if (id == "overwrite-cancel") {
             pending_params_set_ = false;
+            pending_has_frame_conflicts_ = false;
+            pending_metadata_will_be_replaced_ = false;
             if (overwrite_overlay_el_)
                 overwrite_overlay_el_->SetClass("hidden", true);
             controls_dirty_ = true;
@@ -1870,10 +1888,21 @@ namespace lfs::gui {
         params.convert_hdr_to_sdr = hdr_to_sdr_;
         params.rotation = rotation_deg_;
 
-        // Ask before replacing frames or metadata that an extraction with this naming wrote.
-        if (!generatedExtractionFiles(output_dir_, params.filename_pattern).empty()) {
+        // Ask before replacing frames matching this naming or metadata this run will write.
+        const auto existing_files = generatedExtractionFiles(output_dir_, params.filename_pattern,
+                                                             params.generate_metadata);
+        if (!existing_files.empty()) {
             pending_params_ = params;
             pending_params_set_ = true;
+            pending_has_frame_conflicts_ = std::any_of(
+                existing_files.begin(), existing_files.end(), [](const std::filesystem::path& path) {
+                    return lfs::core::path_to_utf8(path.filename()) != "extraction_metadata.json";
+                });
+            pending_metadata_will_be_replaced_ = params.generate_metadata && std::any_of(
+                existing_files.begin(), existing_files.end(), [](const std::filesystem::path& path) {
+                    return lfs::core::path_to_utf8(path.filename()) == "extraction_metadata.json";
+                });
+            syncOverwritePrompt();
             if (overwrite_overlay_el_)
                 overwrite_overlay_el_->SetClass("hidden", false);
             return;
@@ -1884,6 +1913,8 @@ namespace lfs::gui {
 
     void VideoExtractorDialog::launchExtraction(const VideoExtractionParams& params) {
         pending_params_set_ = false;
+        pending_has_frame_conflicts_ = false;
+        pending_metadata_will_be_replaced_ = false;
         if (overwrite_overlay_el_)
             overwrite_overlay_el_->SetClass("hidden", true);
         stop_extraction_requested_.store(false);

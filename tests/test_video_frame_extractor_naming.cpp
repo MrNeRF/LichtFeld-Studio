@@ -1217,13 +1217,13 @@ namespace {
         for (const auto& name : existing)
             EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
 
-        // Deleting existing output removes only files that match the current pattern and metadata.
+        // Deleting existing output leaves metadata alone when this run does not write metadata.
         ASSERT_TRUE(NamingAccess::begin(dialog, output));
         ASSERT_TRUE(NamingAccess::pending(dialog));
         NamingAccess::deleteExisting(dialog);
         ASSERT_TRUE(NamingAccess::waitIdle(dialog));
         EXPECT_FALSE(std::filesystem::exists(output / "frame_00099.jpg"));
-        EXPECT_FALSE(std::filesystem::exists(output / "extraction_metadata.json"));
+        EXPECT_TRUE(std::filesystem::exists(output / "extraction_metadata.json"));
         EXPECT_TRUE(std::filesystem::exists(output / "frame_00001.png"));
         for (const auto& name : existing)
             EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
@@ -1350,6 +1350,33 @@ namespace {
         choose(2);
         choose(4);
         EXPECT_EQ(input->GetValue(), "{{label}}_{video}_%06d");
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, MetadataOnlyPromptsOnlyWhenItWillBeReplaced) {
+        TempDir temp("metadata_only_conflict");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        auto* const metadata_toggle = document->GetElementById("generate-metadata");
+        ASSERT_NE(metadata_toggle, nullptr);
+
+        const auto retained_metadata = temp.path / "retained_metadata";
+        std::filesystem::create_directories(retained_metadata);
+        std::ofstream(retained_metadata / "extraction_metadata.json") << "{}";
+        ASSERT_TRUE(NamingAccess::begin(*dialog, retained_metadata));
+        EXPECT_FALSE(NamingAccess::pending(*dialog));
+        ASSERT_TRUE(NamingAccess::waitIdle(*dialog));
+        EXPECT_TRUE(std::filesystem::exists(retained_metadata / "extraction_metadata.json"));
+
+        metadata_toggle->SetAttribute("checked", "checked");
+        const auto replaced_metadata = temp.path / "replaced_metadata";
+        std::filesystem::create_directories(replaced_metadata);
+        std::ofstream(replaced_metadata / "extraction_metadata.json") << "{}";
+        ASSERT_TRUE(NamingAccess::begin(*dialog, replaced_metadata));
+        EXPECT_TRUE(NamingAccess::pending(*dialog));
+        EXPECT_EQ(document->GetElementById("overwrite-message")->GetInnerRML(),
+                  LOC("video_extractor.overwrite_prompt_metadata"));
+        NamingAccess::cancelOverwrite(*dialog);
     }
 
     TEST_F(VideoExtractorNamingUiTest, SourceChangesRefreshPreviewAndInvalidPatternBlocksRealStart) {
