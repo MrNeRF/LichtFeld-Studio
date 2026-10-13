@@ -119,7 +119,7 @@ namespace lfs::media {
                     p.exr_precision = files->files.exr.precision;
                     p.exr_compression = files->files.exr.compression;
                     if ((files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16) != (request.output_format == FramePixelFormat::RGBFloat32))
-                        return failure(ErrorCode::InvalidArgument, "EXR file extraction requires float output; PNG/JPEG require RGB8", 0);
+                        return failure(ErrorCode::InvalidArgument, "EXR/TIFF16 file extraction requires float output; PNG/JPEG require RGB8", 0);
                     if (files->files.format == FrameFileFormat::EXR) {
                         if (auto valid = validateExrOutputOptions(files->files.exr); !valid)
                             return std::move(valid).error();

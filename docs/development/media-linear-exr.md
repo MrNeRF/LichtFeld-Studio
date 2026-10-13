@@ -420,8 +420,9 @@ sample types and both byte orders, and AV1 8/10-bit extraction plus CPU preview
 against an independently decoded RGB reference. The AV1 inputs are checked-in
 project-generated four-frame fixtures, so missing AV1 encoders cannot skip
 CPU decoder coverage. These checks do not add new
-image writers, new sequence formats, or new video encoders. TIFF16 export,
-HEIF/AVIF/JPEG XL support and HEVC export remain separate increments.
+image writers, new sequence formats, or new video encoders. TIFF16 output is
+described above; HEIF/AVIF/JPEG XL support and HEVC export remain separate
+increments.
 
 The native Mac Release-only dependency profile keeps its macOS 26 deployment
 target when using SDK 27. For curl, the profile disables `pipe2` detection below
