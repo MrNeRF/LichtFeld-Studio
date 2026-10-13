@@ -10,7 +10,6 @@
 #include "image_execution_cuda.hpp"
 #endif
 #include "core/event_bridge/localization_manager.hpp"
-#include <stb_image.h>
 #include "core/host_metrics.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -19,6 +18,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_image.hpp"
+#include <stb_image.h>
 #if LFS_HAS_CUDA
 #include "io/cuda/masked_image_fill.hpp"
 #include "io/nvcodec_image_loader.hpp"
