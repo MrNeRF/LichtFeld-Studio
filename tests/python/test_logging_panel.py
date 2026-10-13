@@ -196,3 +196,54 @@ def test_live_tail_reuses_unchanged_row_nodes(logging_module):
     assert panel._row_nodes[0][0] == 300
     assert panel._row_nodes[1][1] is original_nodes[0][1]
     assert original_nodes[-1][1] not in doc.elements["log-rows"].nodes
+
+
+@pytest.mark.parametrize('name,value', [('query', 'message-2'), ('source', 'loader'), ('level', '2')])
+def test_filtered_live_updates_match_only_new_entries(logging_module, monkeypatch, name, value):
+    panel, doc, snapshot = make_panel(logging_module)
+    panel._set_filter(name, value)
+    original = logging_module.matching_entries
+    calls = []
+    def tracked(entries, *args):
+        calls.append([row['sequence'] for row in entries])
+        return original(entries, *args)
+    monkeypatch.setattr(logging_module, 'matching_entries', tracked)
+    tail = [entry(300, 'message-299 tail'), entry(301, 'unrelated', 5, 'other.cpp')]
+    update = dict(generation=2, limit=5000, discarded=2, incremental=True,
+                  first_sequence=2, entry_count=300, entries=tail)
+    logging_module.lf.log.snapshot = lambda *_: update
+    panel.on_update(doc)
+    assert calls == [[300, 301]]
+    retained = snapshot['entries'][2:] + tail
+    assert panel._matched == original(retained, panel._query, panel._source, int(panel._level))
+    calls.clear()
+    logging_module.lf.log.snapshot = lambda *_: None
+    panel._set_wrap(False)
+    panel._set_filter('page_size', '100')
+    panel._on_copy()
+    assert calls == []
+    panel._set_filter('query', 'unrelated' if name != 'query' else 'tail')
+    assert calls == [[row['sequence'] for row in retained]]
+
+
+def test_match_cache_rebuilds_on_limit_change_and_clear(logging_module, monkeypatch):
+    panel, doc, snapshot = make_panel(logging_module)
+    panel._set_filter('query', 'message')
+    original = logging_module.matching_entries
+    calls = []
+    def tracked(entries, *args):
+        calls.append([row['sequence'] for row in entries])
+        return original(entries, *args)
+    monkeypatch.setattr(logging_module, 'matching_entries', tracked)
+    update = dict(generation=2, limit=100, discarded=200, incremental=True,
+                  first_sequence=200, entry_count=100, entries=[])
+    logging_module.lf.log.snapshot = lambda *_: update
+    panel.on_update(doc)
+    assert calls == [list(range(200, 300))]
+    calls.clear()
+    empty = dict(generation=3, limit=100, discarded=0, entries=[])
+    logging_module.lf.log.clear_buffer = lambda: None
+    logging_module.lf.log.snapshot = lambda *_: empty
+    panel._on_clear()
+    assert calls == [[]]
+    assert panel._matched == []

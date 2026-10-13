@@ -112,6 +112,7 @@ class LoggingPanel(Panel):
         self._feedback_deadline = 0.0
         self._dirty = True
         self._matched = []
+        self._matches_dirty = True
         self._last_language = ""
         self._row_nodes = []
         self._row_locale = ""
@@ -169,6 +170,8 @@ class LoggingPanel(Panel):
         if value == getattr(self, "_" + name):
             return
         setattr(self, "_" + name, value)
+        if name in {"query", "source", "level"}:
+            self._matches_dirty = True
         self._page = 0
         self._invalidate()
 
@@ -198,6 +201,7 @@ class LoggingPanel(Panel):
         self._last_buffer_limit = limit
         # Apply destructive retention changes even while the display is paused.
         self._snapshot = lf.log.snapshot()
+        self._matches_dirty = True
         self._page = 0
         self._feedback = ""
         self._invalidate()
@@ -214,6 +218,7 @@ class LoggingPanel(Panel):
     def _on_clear(self, *_):
         lf.log.clear_buffer()
         self._snapshot = lf.log.snapshot()
+        self._matches_dirty = True
         self._page = 0
         self._feedback = ""
         self._invalidate()
@@ -221,12 +226,23 @@ class LoggingPanel(Panel):
     def _on_reset_filters(self, *_):
         self._query = self._source = ""
         self._level = "-1"
+        self._matches_dirty = True
         self._page = 0
         self._invalidate()
 
     def _refresh_matches(self):
+        if not self._matches_dirty:
+            return
         entries = self._snapshot["entries"] if self._snapshot else []
         self._matched = matching_entries(entries, self._query, self._source, int(self._level))
+        self._matches_dirty = False
+
+    def _append_matches(self, update):
+        """Prune evictions and evaluate filters only against the new snapshot tail."""
+        first = bisect_left(self._matched, update["first_sequence"], key=lambda entry: entry["sequence"])
+        self._matched = self._matched[first:] if update["entry_count"] else []
+        if update["entries"]:
+            self._matched.extend(matching_entries(update["entries"], self._query, self._source, int(self._level)))
 
     def _on_copy(self, *_):
         self._refresh_matches()
@@ -283,10 +299,15 @@ class LoggingPanel(Panel):
             snapshot = lf.log.snapshot(previous)
             if snapshot is not None:
                 self._snapshot = merge_snapshot(self._snapshot, snapshot)
+                if not snapshot.get("incremental", False):
+                    self._matches_dirty = True
                 if snapshot["limit"] != self._last_buffer_limit:
+                    self._matches_dirty = True
                     self._last_buffer_limit = snapshot["limit"]
                     if not self._editing_limit:
                         self._limit = str(snapshot["limit"])
+                if not self._matches_dirty:
+                    self._append_matches(snapshot)
                 self._dirty = True
         if not self._dirty or self._snapshot is None:
             return
