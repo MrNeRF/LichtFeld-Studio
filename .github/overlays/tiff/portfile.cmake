@@ -1,10 +1,14 @@
 # Based on vcpkg tiff 4.7.1 at tree 9391305288677bb3959bf22a08218a61ffec0be0.
-# Keep the baseline port's build and patches, but use the official release
-# archive so a GitLab archive outage cannot block every clean CI build.
-vcpkg_download_distfile(ARCHIVE
-    URLS "https://download.osgeo.org/libtiff/tiff-${VERSION}.tar.gz"
-    FILENAME "tiff-${VERSION}.tar.gz"
-    SHA512 89c5af880626888451caf8b78a2f57b2973719db837dce6530c1fb30318fc6fba7ef9f9d8e46c547821eae29322607cb5146bf3de39b3d7b70bcf5b68c4ee3b1
+# GitLab's generated archive and the official release tarball differ. Keep
+# separate filenames and hashes; never accept one using the other's checksum.
+include("${CMAKE_CURRENT_LIST_DIR}/download_with_fallback.cmake")
+lfs_download_with_fallback(ARCHIVE
+    PRIMARY_URL "https://gitlab.com/libtiff/libtiff/-/archive/v${VERSION}/libtiff-v${VERSION}.tar.gz"
+    PRIMARY_FILENAME "libtiff-libtiff-v${VERSION}.tar.gz"
+    PRIMARY_SHA512 dcdabe2598db33a973d06f0009dd528aa1f38813bd6015e2595097b838a42240f9ccbe7524b5235ea2f4207a10d5d706339c7a6f4772b531e00a20281a00f67b
+    MIRROR_URL "https://download.osgeo.org/libtiff/tiff-${VERSION}.tar.gz"
+    MIRROR_FILENAME "tiff-${VERSION}.tar.gz"
+    MIRROR_SHA512 89c5af880626888451caf8b78a2f57b2973719db837dce6530c1fb30318fc6fba7ef9f9d8e46c547821eae29322607cb5146bf3de39b3d7b70bcf5b68c4ee3b1
 )
 vcpkg_extract_source_archive(SOURCE_PATH
     ARCHIVE "${ARCHIVE}"
