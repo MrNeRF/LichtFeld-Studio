@@ -213,10 +213,11 @@ kernel void structure_main(constant StructureParams& p [[buffer(0)]],
                     st_write(p.d, 3072 + group, valid_count);
             }
         } else if (operation == 3) {
-            if (i < uint(n))
+            if (i < uint(n)) {
                 bool range_valid = p.e != 0 ? valid_count > 0.0f : value.z > value.y;
                 float count = p.e != 0 ? valid_count : float(n);
                 st_write(p.c, i, st_read(p.c, i) * (value.x > 0.0f && range_valid ? count / value.x : 0.0f));
+            }
         } else if (operation == 6) {
             if (lane == 0) {
                 st_write(p.d, group, value.x);
