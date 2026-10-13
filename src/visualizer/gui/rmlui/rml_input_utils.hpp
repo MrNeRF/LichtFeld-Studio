@@ -11,6 +11,7 @@
 #include <RmlUi/Core/EventListener.h>
 
 #include <functional>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -49,6 +50,71 @@ namespace lfs::vis::gui::rml_input {
 
     inline bool hasFocusedKeyboardTarget(Rml::Element* element) {
         return element && element->GetTagName() != "body";
+    }
+
+    inline bool isDisplayedElement(Rml::Element* element) {
+        return element && element->GetDisplay() != Rml::Style::Display::None && element->IsVisible();
+    }
+
+    inline bool isKeyboardPopupElement(Rml::Element* element) {
+        if (!element)
+            return false;
+
+        const auto& tag = element->GetTagName();
+        if (tag == "select")
+            if (auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(element); select && select->IsSelectBoxVisible())
+                return true;
+
+        const auto string_attribute = [element](const char* name) -> std::string_view {
+            const auto* attribute = element->GetAttribute(name);
+            return attribute && attribute->GetType() == Rml::Variant::STRING
+                       ? std::string_view(attribute->GetReference<Rml::String>())
+                       : std::string_view{};
+        };
+        const auto role = string_attribute("role");
+        const auto aria_modal = string_attribute("aria-modal");
+        if (tag == "dialog" || role == "dialog" || aria_modal == "true")
+            return true;
+
+        const auto classes = string_attribute("class");
+        std::size_t start = 0;
+        while (start < classes.size()) {
+            const auto end = classes.find_first_of(" \t\r\n", start);
+            const auto token = classes.substr(start, end == std::string_view::npos ? end : end - start);
+            if (token.find("popup") != std::string_view::npos || token == "context-menu")
+                return true;
+            if (end == std::string_view::npos)
+                break;
+            start = end + 1;
+        }
+        return false;
+    }
+
+    inline bool hasOpenKeyboardPopup(Rml::Context* context) {
+        if (!context)
+            return false;
+
+        auto visit = [](auto&& self, Rml::Element* element) -> bool {
+            if (!isDisplayedElement(element))
+                return false;
+            if (isKeyboardPopupElement(element))
+                return true;
+            for (int i = 0; i < element->GetNumChildren(); ++i) {
+                if (self(self, element->GetChild(i)))
+                    return true;
+            }
+            return false;
+        };
+
+        for (int i = 0; i < context->GetNumDocuments(); ++i) {
+            if (visit(visit, context->GetDocument(i)))
+                return true;
+        }
+        return false;
+    }
+
+    inline bool wantsKeyboardCapture(Rml::Element* focused, Rml::Context* context) {
+        return hasFocusedKeyboardTarget(focused) || hasOpenKeyboardPopup(context);
     }
 
     inline bool isCustomTextInputElement(Rml::Element* element) {

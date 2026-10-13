@@ -243,6 +243,31 @@ namespace {
         EXPECT_EQ(input_->GetValue(), "30000");
     }
 
+    TEST_F(RmlTextInputNativeKeysTest, OpenPopupRequiresDisplayedVisibleAncestor) {
+        auto container = document_->CreateElement("div");
+        container->SetId("popup-container");
+        container->SetProperty("display", "none");
+        auto popup = document_->CreateElement("div");
+        popup->SetAttribute("class", "dropdown-popup");
+        container->AppendChild(std::move(popup));
+        document_->AppendChild(std::move(container));
+        context_->Update();
+
+        EXPECT_FALSE(lfs::vis::gui::rml_input::hasOpenKeyboardPopup(context_));
+        document_->GetElementById("popup-container")->SetProperty("display", "block");
+        context_->Update();
+        EXPECT_TRUE(lfs::vis::gui::rml_input::hasOpenKeyboardPopup(context_));
+
+        document_->GetElementById("popup-container")->SetProperty("visibility", "hidden");
+        context_->Update();
+        EXPECT_FALSE(lfs::vis::gui::rml_input::hasOpenKeyboardPopup(context_));
+        document_->GetElementById("popup-container")->SetProperty("visibility", "visible");
+
+        document_->GetElementById("popup-container")->SetProperty("display", "none");
+        context_->Update();
+        EXPECT_FALSE(lfs::vis::gui::rml_input::hasOpenKeyboardPopup(context_));
+    }
+
     TEST_F(RmlTextInputNativeKeysTest, DisabledOverlayBlocksMouseAndUnlockRestoresKeyboardEditing) {
         loadLockableControls();
         auto* search = document_->GetElementById("search");

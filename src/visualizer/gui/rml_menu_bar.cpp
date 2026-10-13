@@ -962,7 +962,8 @@ namespace lfs::vis::gui {
     void RmlMenuBar::openDropdown(int index) {
         assert(index >= 0 && index < static_cast<int>(current_idnames_.size()));
 
-        rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); });
+        if (open_menu_index_ < 0)
+            rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); });
         open_menu_index_ = index;
         open_submenu_index_ = -1;
         open_child_submenu_index_ = -1;

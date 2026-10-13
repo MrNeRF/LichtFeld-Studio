@@ -16,6 +16,7 @@
 #include "gui/line_renderer_overlays.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/rml_menu_bar.hpp"
 #include "gui/rml_modal_overlay.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/rmlui/elements/python_editor_element.hpp"
@@ -1712,6 +1713,77 @@ namespace lfs::vis {
         EXPECT_EQ(shortcuts, 1);
     }
 
+    TEST_F(WindowInputDispatchTest, ProductionMenubarPopupOwnsShortcutUntilEscape) {
+        gui::RmlMenuBar bar;
+        bar.init(&manager());
+        struct ShutdownMenuBar {
+            gui::RmlMenuBar& bar;
+            ~ShutdownMenuBar() { bar.shutdown(); }
+        } shutdown{bar};
+        bar.updateLabels({"File"}, {"file"});
+        auto* const context = manager().getContext("menu_bar");
+        ASSERT_NE(context, nullptr);
+        gui::PanelInputState layout_input;
+        layout_input.screen_w = 400;
+        layout_input.screen_h = 300;
+        bar.processInput(layout_input);
+        context->Update();
+        auto* const items = context->GetDocument(0)->GetElementById("menu-items");
+        ASSERT_NE(items, nullptr);
+        ASSERT_GT(items->GetNumChildren(), 0);
+        auto* const first = items->GetChild(0);
+        const auto offset = first->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = first->GetBox().GetSize(Rml::BoxArea::Border);
+
+        click(static_cast<int>(offset.x + size.x * 0.5f), static_cast<int>(offset.y + size.y * 0.5f));
+        ASSERT_TRUE(bar.isOpen());
+        manager().syncTextInput();
+        ASSERT_TRUE(manager().wantsModalKeyboardCapture());
+
+        int shortcuts = 0;
+        lfs::event::ScopedHandler handlers;
+        handlers.subscribe<core::events::cmd::ToggleSplitView>([&](const auto&) { ++shortcuts; });
+        key(SDL_SCANCODE_V);
+        EXPECT_EQ(shortcuts, 0);
+        key(SDL_SCANCODE_ESCAPE);
+        EXPECT_FALSE(bar.isOpen());
+        EXPECT_FALSE(manager().wantsModalKeyboardCapture());
+        key(SDL_SCANCODE_V);
+        EXPECT_EQ(shortcuts, 1);
+
+        ASSERT_TRUE(field_->Focus());
+        field_->Blur();
+        manager().syncTextInput();
+        for (const bool unload_document : {true, false}) {
+            SCOPED_TRACE(unload_document ? "document unload" : "window focus loss");
+            auto* popup_document = context_->LoadDocumentFromMemory(
+                "<rml><head><style>body { width:400px; height:300px; }</style></head>"
+                "<body><div id='popup' class='dropdown-popup'/></body></rml>");
+            ASSERT_NE(popup_document, nullptr);
+            popup_document->Show();
+            context_->Update();
+            manager().syncTextInput();
+            ASSERT_TRUE(manager().wantsModalKeyboardCapture());
+
+            if (unload_document) {
+                popup_document->DispatchEvent("unload", {});
+                auto* popup = popup_document->GetElementById("popup");
+                popup->GetParentNode()->RemoveChild(popup);
+            } else {
+                auto* popup = popup_document->GetElementById("popup");
+                popup->GetParentNode()->RemoveChild(popup);
+                SDL_Event focus_lost{};
+                focus_lost.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+                dispatch(focus_lost);
+            }
+            manager().syncTextInput();
+            EXPECT_FALSE(manager().wantsModalKeyboardCapture());
+            const int previous_shortcuts = shortcuts;
+            key(SDL_SCANCODE_V);
+            EXPECT_EQ(shortcuts, previous_shortcuts + 1);
+        }
+    }
+
     TEST_F(WindowInputDispatchTest, SaveAndBindingCapturePrecedeTextConsumption) {
         click();
         int saves = 0;
@@ -1800,6 +1872,7 @@ namespace lfs::vis {
 
         click(140, 95);
         EXPECT_TRUE(select->IsSelectBoxVisible());
+        EXPECT_TRUE(gui::rml_input::hasOpenKeyboardPopup(floating.getContext()));
         EXPECT_EQ(recorder.countOf("chart:mousedown"), 0) << recorder.joined();
         EXPECT_EQ(recorder.countOf("chart:mouseup"), 0) << recorder.joined();
         EXPECT_EQ(recorder.countOf("chart:click"), 0) << recorder.joined();
@@ -1817,6 +1890,7 @@ namespace lfs::vis {
         click(option_x, option_y);
         EXPECT_EQ(select->GetValue(), "150");
         EXPECT_FALSE(select->IsSelectBoxVisible());
+        EXPECT_FALSE(gui::rml_input::hasOpenKeyboardPopup(floating.getContext()));
         EXPECT_EQ(recorder.countOf("chart:mousedown"), 0) << recorder.joined();
         EXPECT_EQ(recorder.countOf("chart:mouseup"), 0) << recorder.joined();
         frame();

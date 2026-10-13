@@ -8075,6 +8075,7 @@ namespace lfs::vis::gui {
             isModalWindowOpen() ||
             startup_overlay_.blocksUnderlayInput() ||
             (global_context_menu_ && global_context_menu_->isOpen()) ||
+            rmlui_manager_.wantsModalKeyboardCapture() ||
             isViewportExportLocked() ||
             sequencer_ui_.blocksKeyboard();
 
