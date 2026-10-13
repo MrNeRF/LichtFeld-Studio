@@ -3,6 +3,7 @@
 
 #include "image_codecs.hpp"
 #include "image_exr.hpp"
+#include "image_heif.hpp"
 
 #include "core/color_transfer.h"
 #include "core/path_utils.hpp"
@@ -1198,6 +1199,8 @@ namespace lfs::core::image_codecs {
 
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error) {
         const auto extension = lower_extension(path);
+        if (extension == ".heic" || extension == ".heif")
+            return probe_heif(path, result, error);
         if (extension == ".exr")
             return probe_exr(path, result, error);
         if (extension == ".jpg" || extension == ".jpeg")
@@ -1346,6 +1349,8 @@ namespace lfs::core::image_codecs {
 
     bool decode(const std::filesystem::path& path, Image& result, std::string& error) {
         const auto extension = lower_extension(path);
+        if (extension == ".heic" || extension == ".heif")
+            return decode_heif(path, result, error);
         if (extension == ".tif" || extension == ".tiff")
             return decode_tiff(path, result, error);
         if (extension == ".exr")

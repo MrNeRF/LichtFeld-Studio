@@ -33,6 +33,11 @@
       ]
     },
     "libdeflate",
+    "lcms",
+    {
+      "name": "libheif",
+      "default-features": false
+    },
     "libjpeg-turbo",
     "libpng",
     "libwebp",

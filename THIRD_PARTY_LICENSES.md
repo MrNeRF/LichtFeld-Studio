@@ -91,6 +91,9 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 | [stb](https://github.com/nothings/stb) | Image decode and encode headers | MIT / Public Domain |
 | [nlohmann/json](https://github.com/nlohmann/json) | JSON for Modern C++ | MIT |
 | [LibArchive](https://libarchive.org/) | Multi-format archive library | BSD |
+| [libheif](https://github.com/strukturag/libheif) | HEIF container and HEIC decode | LGPL-3.0-only (library); MIT (wrappers/examples) |
+| [libde265](https://github.com/strukturag/libde265) | Software HEVC image decoder | LGPL-3.0-only |
+| [Little CMS](https://github.com/mm2/Little-CMS) | HEIF SDR ICC/NCLX display conversion | MIT |
 | [libwebp](https://github.com/webmproject/libwebp) | WebP image format library | BSD-3-Clause |
 | [TinyUSDZ](https://github.com/lighttransport/tinyusdz) | Flat USD/USDZ reader and writer | Apache-2.0 |
 | [lz4](https://github.com/lz4/lz4) | USD crate compression | BSD-2-Clause |

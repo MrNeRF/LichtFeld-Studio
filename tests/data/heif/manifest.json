@@ -1,0 +1,286 @@
+{
+  "rgb8": {
+    "size": [
+      128,
+      96
+    ],
+    "mode": "RGB",
+    "stride": 384,
+    "info": {
+      "bit_depth": 8,
+      "nclx_profile": {
+        "color_primaries": 1,
+        "transfer_characteristics": 13,
+        "matrix_coefficients": 0,
+        "full_range_flag": 1,
+        "color_primary_red_x": 0.6399999856948853,
+        "color_primary_red_y": 0.33000001311302185,
+        "color_primary_green_x": 0.30000001192092896,
+        "color_primary_green_y": 0.6000000238418579,
+        "color_primary_blue_x": 0.15000000596046448,
+        "color_primary_blue_y": 0.05999999865889549,
+        "color_primary_white_x": 0.3127000033855438,
+        "color_primary_white_y": 0.32899999618530273
+      }
+    },
+    "sha256": "0fb9f3792d83dd92578c9cca281f4cdb1296b97d3c0047202cc97f9e151cf6af"
+  },
+  "mirrored": {
+    "size": [
+      32,
+      24
+    ],
+    "mode": "RGB",
+    "stride": 96,
+    "info": {
+      "bit_depth": 8,
+      "nclx_profile": {
+        "color_primaries": 1,
+        "transfer_characteristics": 13,
+        "matrix_coefficients": 0,
+        "full_range_flag": 1,
+        "color_primary_red_x": 0.6399999856948853,
+        "color_primary_red_y": 0.33000001311302185,
+        "color_primary_green_x": 0.30000001192092896,
+        "color_primary_green_y": 0.6000000238418579,
+        "color_primary_blue_x": 0.15000000596046448,
+        "color_primary_blue_y": 0.05999999865889549,
+        "color_primary_white_x": 0.3127000033855438,
+        "color_primary_white_y": 0.32899999618530273
+      }
+    },
+    "sha256": "c916e0ebe18a548eb065952def966aec0d3c103f2e04237c6ae6be53b93c50d7"
+  },
+  "premultiplied": {
+    "size": [
+      32,
+      24
+    ],
+    "mode": "RGBa",
+    "stride": 128,
+    "info": {
+      "bit_depth": 8,
+      "nclx_profile": {
+        "color_primaries": 1,
+        "transfer_characteristics": 13,
+        "matrix_coefficients": 0,
+        "full_range_flag": 1,
+        "color_primary_red_x": 0.6399999856948853,
+        "color_primary_red_y": 0.33000001311302185,
+        "color_primary_green_x": 0.30000001192092896,
+        "color_primary_green_y": 0.6000000238418579,
+        "color_primary_blue_x": 0.15000000596046448,
+        "color_primary_blue_y": 0.05999999865889549,
+        "color_primary_white_x": 0.3127000033855438,
+        "color_primary_white_y": 0.32899999618530273
+      }
+    },
+    "sha256": "b11cd81ca2cc012f3fb9e72605523efba47447c6a3fd7dd5be305e0aaebc0c82"
+  },
+  "rgba8": {
+    "size": [
+      32,
+      24
+    ],
+    "mode": "RGBA",
+    "stride": 128,
+    "info": {
+      "bit_depth": 8,
+      "nclx_profile": {
+        "color_primaries": 1,
+        "transfer_characteristics": 13,
+        "matrix_coefficients": 0,
+        "full_range_flag": 1,
+        "color_primary_red_x": 0.6399999856948853,
+        "color_primary_red_y": 0.33000001311302185,
+        "color_primary_green_x": 0.30000001192092896,
+        "color_primary_green_y": 0.6000000238418579,
+        "color_primary_blue_x": 0.15000000596046448,
+        "color_primary_blue_y": 0.05999999865889549,
+        "color_primary_white_x": 0.3127000033855438,
+        "color_primary_white_y": 0.32899999618530273
+      }
+    },
+    "sha256": "24d4c7a69c94f24f218a8b874a0c099d2d5981b6da601f11cfd1464389088b2d"
+  },
+  "rgb10": {
+    "size": [
+      32,
+      24
+    ],
+    "mode": "RGB;16",
+    "stride": 192,
+    "info": {
+      "bit_depth": 10,
+      "nclx_profile": {
+        "color_primaries": 1,
+        "transfer_characteristics": 13,
+        "matrix_coefficients": 0,
+        "full_range_flag": 1,
+        "color_primary_red_x": 0.6399999856948853,
+        "color_primary_red_y": 0.33000001311302185,
+        "color_primary_green_x": 0.30000001192092896,
+        "color_primary_green_y": 0.6000000238418579,
+        "color_primary_blue_x": 0.15000000596046448,
+        "color_primary_blue_y": 0.05999999865889549,
+        "color_primary_white_x": 0.3127000033855438,
+        "color_primary_white_y": 0.32899999618530273
+      }
+    },
+    "sha256": "c004390a42e4d22133fefd9d4692f237f804b1abde6e01964985e37cf127b193"
+  },
+  "rgb12": {
+    "size": [
+      32,
+      24
+    ],
+    "mode": "RGB;16",
+    "stride": 192,
+    "info": {
+      "bit_depth": 12,
+      "nclx_profile": {
+        "color_primaries": 1,
+        "transfer_characteristics": 13,
+        "matrix_coefficients": 0,
+        "full_range_flag": 1,
+        "color_primary_red_x": 0.6399999856948853,
+        "color_primary_red_y": 0.33000001311302185,
+        "color_primary_green_x": 0.30000001192092896,
+        "color_primary_green_y": 0.6000000238418579,
+        "color_primary_blue_x": 0.15000000596046448,
+        "color_primary_blue_y": 0.05999999865889549,
+        "color_primary_white_x": 0.3127000033855438,
+        "color_primary_white_y": 0.32899999618530273
+      }
+    },
+    "sha256": "27179fa4450b538db52003d014fa4dd60438719e48d171d796f0ddb251ea8a9c"
+  },
+  "p3": {
+    "size": [
+      32,
+      24
+    ],
+    "mode": "RGB",
+    "stride": 96,
+    "info": {
+      "bit_depth": 8,
+      "nclx_profile": {
+        "color_primaries": 12,
+        "transfer_characteristics": 13,
+        "matrix_coefficients": 0,
+        "full_range_flag": 1,
+        "color_primary_red_x": 0.6800000071525574,
+        "color_primary_red_y": 0.3199999928474426,
+        "color_primary_green_x": 0.26499998569488525,
+        "color_primary_green_y": 0.6899999976158142,
+        "color_primary_blue_x": 0.15000000596046448,
+        "color_primary_blue_y": 0.05999999865889549,
+        "color_primary_white_x": 0.3127000033855438,
+        "color_primary_white_y": 0.32899999618530273
+      }
+    },
+    "sha256": "6ac3553b634dee3099127931adcbe37944cdd465c08f0e6ad183cf81a6909de4"
+  },
+  "icc": {
+    "size": [
+      32,
+      24
+    ],
+    "mode": "RGB",
+    "stride": 96,
+    "info": {
+      "bit_depth": 8
+    },
+    "sha256": "84916566be06a1379c3d7480b0288b8157b9d6da67606593a1127b0a12b4f658"
+  },
+  "badicc": {
+    "size": [
+      32,
+      24
+    ],
+    "mode": "RGB",
+    "stride": 96,
+    "info": {
+      "bit_depth": 8
+    },
+    "sha256": "11d8821f1111e17ada36b1bbe912318a3d7f0d48bb7f1dad7e3662c57f9e4895"
+  },
+  "multi": {
+    "size": [
+      16,
+      16
+    ],
+    "mode": "RGB",
+    "stride": 48,
+    "info": {
+      "bit_depth": 8,
+      "nclx_profile": {
+        "color_primaries": 1,
+        "transfer_characteristics": 13,
+        "matrix_coefficients": 0,
+        "full_range_flag": 1,
+        "color_primary_red_x": 0.6399999856948853,
+        "color_primary_red_y": 0.33000001311302185,
+        "color_primary_green_x": 0.30000001192092896,
+        "color_primary_green_y": 0.6000000238418579,
+        "color_primary_blue_x": 0.15000000596046448,
+        "color_primary_blue_y": 0.05999999865889549,
+        "color_primary_white_x": 0.3127000033855438,
+        "color_primary_white_y": 0.32899999618530273
+      }
+    },
+    "sha256": "6fbd560ad09d99b9ee95231449d1b972e1b7b07bc495d800757973f6c3e3ffa2"
+  },
+  "pq": {
+    "size": [
+      32,
+      24
+    ],
+    "mode": "RGB;16",
+    "stride": 192,
+    "info": {
+      "bit_depth": 12,
+      "nclx_profile": {
+        "color_primaries": 9,
+        "transfer_characteristics": 16,
+        "matrix_coefficients": 0,
+        "full_range_flag": 1,
+        "color_primary_red_x": 0.7080000042915344,
+        "color_primary_red_y": 0.2919999957084656,
+        "color_primary_green_x": 0.17000000178813934,
+        "color_primary_green_y": 0.796999990940094,
+        "color_primary_blue_x": 0.13099999725818634,
+        "color_primary_blue_y": 0.04600000008940697,
+        "color_primary_white_x": 0.3127000033855438,
+        "color_primary_white_y": 0.32899999618530273
+      }
+    },
+    "sha256": "98927e9f40c177e7334ce906a31fcbf8cb5f3f4e8b204b02dc4373faeca16ce5"
+  },
+  "rotated": {
+    "size": [
+      24,
+      32
+    ],
+    "mode": "RGB",
+    "stride": 72,
+    "info": {
+      "bit_depth": 8,
+      "nclx_profile": {
+        "color_primaries": 1,
+        "transfer_characteristics": 13,
+        "matrix_coefficients": 0,
+        "full_range_flag": 1,
+        "color_primary_red_x": 0.6399999856948853,
+        "color_primary_red_y": 0.33000001311302185,
+        "color_primary_green_x": 0.30000001192092896,
+        "color_primary_green_y": 0.6000000238418579,
+        "color_primary_blue_x": 0.15000000596046448,
+        "color_primary_blue_y": 0.05999999865889549,
+        "color_primary_white_x": 0.3127000033855438,
+        "color_primary_white_y": 0.32899999618530273
+      }
+    },
+    "sha256": "cf95be4ac488ef6536239a1ec686474a7022385b8245fa7d0b069357e47c55aa"
+  }
+}

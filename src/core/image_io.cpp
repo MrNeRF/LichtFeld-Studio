@@ -5,6 +5,7 @@
 #include "core/color_transfer.h"
 
 #include "image_codecs.hpp"
+#include "image_heif.hpp"
 
 #if LFS_HAS_CUDA
 #include "core/cuda/image_quantize.hpp"
@@ -42,6 +43,14 @@
 namespace image_codecs = lfs::core::image_codecs;
 
 namespace {
+
+    bool decode_display_image(const std::filesystem::path& path, image_codecs::Image& image, std::string& error) {
+        auto extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (extension == ".heic" || extension == ".heif")
+            return image_codecs::decode_heif(path, image, error, true);
+        return image_codecs::decode(path, image, error);
+    }
 
     struct TiffDisplayEncoding {
         std::string transfer;
@@ -556,7 +565,7 @@ namespace {
         const auto encoding = tiff_display_encoding(p);
         image_codecs::Image decoded;
         std::string error;
-        if (!image_codecs::decode(p, decoded, error))
+        if (!decode_display_image(p, decoded, error))
             throw std::runtime_error("Load failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
         if (encoding)
             tiff_to_display_rgb(decoded, *encoding);
@@ -684,7 +693,7 @@ namespace {
             if (target.data)
                 std::free(target.data);
             image_codecs::Image decoded;
-            if (!image_codecs::decode(p, decoded, error))
+            if (!decode_display_image(p, decoded, error))
                 throw std::runtime_error("Load failed: " + path_utf8 + (error.empty() ? "" : " : " + error));
             if (decoded.width <= 0 || decoded.height <= 0 || decoded.channels <= 0)
                 throw std::runtime_error("Invalid image dimensions: " + path_utf8);
