@@ -15,6 +15,7 @@
 #include "window/vulkan_result.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstring>
 #include <format>
 #include <glm/gtc/matrix_transform.hpp>
@@ -27,6 +28,7 @@
 #include <vk_mem_alloc.h>
 
 #include "viewport/mesh.frag.spv.h"
+#include "viewport/mesh.geom.spv.h"
 #include "viewport/mesh.vert.spv.h"
 #include "viewport/mesh_shadow.frag.spv.h"
 #include "viewport/mesh_shadow.vert.spv.h"
@@ -89,12 +91,14 @@ namespace lfs::vis {
             float camera_pos[4];
             float light_dir[4];      // xyz, w unused
             float params[4];         // x = intensity, y = ambient, z = shadow_enabled
-            float selection[4];      // x = emphasized, y = dim others, zw = reserved
+            float selection[4];      // x = emphasized, y = dim others, z = panorama, w = reserved
             float light_vp[16];      // light view-projection (column-major) for shadow sampling
             float camera_forward[4]; // xyz = world-space view direction
             float depth_view[4];     // x = enabled, y = near, z = far, w = grayscale
+            float view[16];
+            float projection[16];
         };
-        static_assert(sizeof(LightUbo) == 160, "LightUbo layout");
+        static_assert(sizeof(LightUbo) == 288, "LightUbo layout");
 
         struct MaterialUbo {
             float base_color[4];
@@ -580,7 +584,10 @@ namespace lfs::vis {
             light_b[0].binding = 0;
             light_b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             light_b[0].descriptorCount = 1;
-            light_b[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            light_b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            if (context->geometryShaderEnabled()) {
+                light_b[0].stageFlags |= VK_SHADER_STAGE_GEOMETRY_BIT;
+            }
             light_b[1].binding = 1;
             light_b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             light_b[1].descriptorCount = 1;
@@ -1335,25 +1342,38 @@ namespace lfs::vis {
             using namespace viewport_shaders;
 
             VkShaderModule vert = createShaderModule(device, kMeshVertSpv, "Mesh");
+            VkShaderModule geom = context->geometryShaderEnabled()
+                                      ? createShaderModule(device, kMeshGeomSpv, "Mesh")
+                                      : VK_NULL_HANDLE;
             VkShaderModule frag = createShaderModule(device, kMeshFragSpv, "Mesh");
-            if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
+            if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE ||
+                (context->geometryShaderEnabled() && geom == VK_NULL_HANDLE)) {
                 if (vert)
                     vkDestroyShaderModule(device, vert, nullptr);
+                if (geom)
+                    vkDestroyShaderModule(device, geom, nullptr);
                 if (frag)
                     vkDestroyShaderModule(device, frag, nullptr);
                 LOG_ERROR("VulkanMeshPass: main shader module creation failed");
                 return false;
             }
 
-            std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
+            std::array<VkPipelineShaderStageCreateInfo, 3> stages{};
             stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
             stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
             stages[0].module = vert;
             stages[0].pName = "main";
-            stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-            stages[1].module = frag;
-            stages[1].pName = "main";
+            std::uint32_t stage_count = 1;
+            if (geom != VK_NULL_HANDLE) {
+                stages[stage_count].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                stages[stage_count].stage = VK_SHADER_STAGE_GEOMETRY_BIT;
+                stages[stage_count].module = geom;
+                stages[stage_count++].pName = "main";
+            }
+            stages[stage_count].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[stage_count].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[stage_count].module = frag;
+            stages[stage_count++].pName = "main";
 
             VkVertexInputBindingDescription binding{};
             binding.binding = 0;
@@ -1426,6 +1446,8 @@ namespace lfs::vis {
                 vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout);
             if (layout_result != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vert, nullptr);
+                if (geom)
+                    vkDestroyShaderModule(device, geom, nullptr);
                 vkDestroyShaderModule(device, frag, nullptr);
                 return reportVkFailure(
                     "vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout)",
@@ -1474,7 +1496,7 @@ namespace lfs::vis {
                 VkGraphicsPipelineCreateInfo pipeline_info{};
                 pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
                 pipeline_info.pNext = &rendering_info;
-                pipeline_info.stageCount = 2;
+                pipeline_info.stageCount = stage_count;
                 pipeline_info.pStages = stages.data();
                 pipeline_info.pVertexInputState = &vertex_input;
                 pipeline_info.pInputAssemblyState = &input_assembly;
@@ -1511,6 +1533,8 @@ namespace lfs::vis {
                             build(VK_CULL_MODE_BACK_BIT, true, pipeline_cull_blend) &&
                             build(VK_CULL_MODE_NONE, true, pipeline_no_cull_blend);
             vkDestroyShaderModule(device, vert, nullptr);
+            if (geom)
+                vkDestroyShaderModule(device, geom, nullptr);
             vkDestroyShaderModule(device, frag, nullptr);
             if (!ok) {
                 return false;
@@ -2326,7 +2350,19 @@ namespace lfs::vis {
             ubo.depth_view[1] = params.depth_view_min;
             ubo.depth_view[2] = params.depth_view_max;
             ubo.depth_view[3] = params.depth_grayscale ? 1.0f : 0.0f;
-            return writeBuffer(resources.allocation, &ubo, sizeof(ubo));
+            const VulkanMeshViewportPanel* projection_state =
+                params.draw_group < params.panels.size() ? &params.panels[params.draw_group] : nullptr;
+            const bool equirectangular = projection_state && projection_state->equirectangular;
+            ubo.selection[2] = equirectangular ? 1.0f : 0.0f;
+            if (equirectangular) {
+                std::memcpy(ubo.view, &projection_state->view[0][0], sizeof(ubo.view));
+                glm::mat4 clip_y_flip(1.0f);
+                clip_y_flip[1][1] = -1.0f;
+                const glm::mat4 projection = clip_y_flip * projection_state->projection;
+                std::memcpy(ubo.projection, &projection[0][0], sizeof(ubo.projection));
+            }
+            const std::size_t upload_size = equirectangular ? sizeof(ubo) : offsetof(LightUbo, view);
+            return writeBuffer(resources.allocation, &ubo, upload_size);
         }
 
         void bindShadowMap(const LightDrawResources& resources, const ShadowTarget& target) const {

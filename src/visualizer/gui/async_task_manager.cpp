@@ -727,6 +727,7 @@ namespace lfs::vis::gui {
                     .view_projection = projection * viewport.getViewMatrix(),
                     .camera_position = viewport.translation,
                     .items = {},
+                    .panels = {},
                     .frame_slot = 0,
                     .draw_group = 0,
                     .draw_group_count = 1,

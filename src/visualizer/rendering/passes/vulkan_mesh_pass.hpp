@@ -50,8 +50,11 @@ namespace lfs::vis {
         float start_position = 0.0f;
         float end_position = 1.0f;
         glm::mat4 view_projection{1.0f};
+        glm::mat4 view{1.0f};
+        glm::mat4 projection{1.0f};
         glm::vec3 camera_position{0.0f};
         glm::vec3 camera_backward{0.0f, 0.0f, 1.0f};
+        bool equirectangular = false;
     };
 
     struct VulkanMeshPassParams {

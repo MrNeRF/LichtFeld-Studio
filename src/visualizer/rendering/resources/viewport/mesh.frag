@@ -12,10 +12,12 @@ layout(set = 0, binding = 0) uniform LightUbo {
     vec4 camera_pos; // xyz = camera position, w unused
     vec4 light_dir;  // xyz = world-space light direction (normalized)
     vec4 params;     // x = intensity, y = ambient, z = shadow_enabled, w unused
-    vec4 selection;  // x = emphasized, y = dim others, zw = reserved
+    vec4 selection;  // x = emphasized, y = dim others, z = panorama, w = reserved
     mat4 light_vp;   // light view-projection (for sampling shadow map)
     vec4 camera_forward; // xyz = world-space view direction
     vec4 depth_view; // x = enabled, y = near, z = far, w = grayscale
+    mat4 view;
+    mat4 projection;
 } u_light;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_shadow_map;
 
