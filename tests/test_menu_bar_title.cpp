@@ -456,6 +456,69 @@ namespace {
         EXPECT_FALSE(bar_.isOpen());
     }
 
+    // A pointer-opened submenu keeps keyboard depth on the parent row. Escape
+    // must close only that submenu; the next Escape closes the menu.
+    TEST_F(MenuBarTitleTest, EscapeClosesMouseOpenedSubmenuOneLevel) {
+        using Item = lfs::vis::gui::MenuItemDesc;
+        using Type = Item::Type;
+        const std::vector<Item> items{
+            {.type = Type::SubMenuBegin, .label = "Import"},
+            {.type = Type::SubMenuBegin, .label = "More"},
+            {.type = Type::Item, .label = "Deep", .callback_index = 2},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::Item, .label = "Image", .callback_index = 1},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::Item, .label = "Open", .callback_index = 3},
+        };
+        const auto visible_submenus = [&] {
+            Rml::ElementList popups;
+            el("dropdown-popup")->GetElementsByClassName(popups, "submenu-popup");
+            int visible = 0;
+            for (auto* popup : popups)
+                if (popup->GetDisplay() != Rml::Style::Display::None)
+                    ++visible;
+            return visible;
+        };
+        const auto hover_label = [&](const char* label) {
+            Rml::ElementList rows;
+            el("dropdown-popup")->GetElementsByClassName(rows, "menu-item");
+            for (auto* row : rows) {
+                if (row->GetDisplay() == Rml::Style::Display::None)
+                    continue;
+                if (textContent(row).find(label) == std::string::npos)
+                    continue;
+                const auto rect = bounds(row);
+                RmlMenuBarTestAccess::hover(bar_, (rect.left + rect.right) * 0.5f,
+                                            (rect.top + rect.bottom) * 0.5f, true);
+                return;
+            }
+            FAIL() << label;
+        };
+
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        hover_label("Import");
+        EXPECT_TRUE(bar_.isOpen());
+        EXPECT_EQ(RmlMenuBarTestAccess::depth(bar_), 0);
+        EXPECT_EQ(visible_submenus(), 1);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_ESCAPE);
+        EXPECT_TRUE(bar_.isOpen());
+        EXPECT_EQ(visible_submenus(), 0);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_ESCAPE);
+        EXPECT_FALSE(bar_.isOpen());
+
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        hover_label("Import");
+        hover_label("More");
+        EXPECT_EQ(RmlMenuBarTestAccess::depth(bar_), 1);
+        EXPECT_EQ(visible_submenus(), 2);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_ESCAPE);
+        EXPECT_TRUE(bar_.isOpen());
+        EXPECT_EQ(visible_submenus(), 1);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_ESCAPE);
+        EXPECT_TRUE(bar_.isOpen());
+        EXPECT_EQ(visible_submenus(), 0);
+    }
+
     TEST_F(MenuBarTitleTest, HoveringSameRowDoesNotDirtyTheMenuModel) {
         using Item = lfs::vis::gui::MenuItemDesc;
         using Type = Item::Type;

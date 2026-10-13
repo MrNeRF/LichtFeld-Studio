@@ -1083,6 +1083,41 @@ namespace lfs::vis::gui {
             return true;
         }
 
+        // Hover stores the row under the pointer. That row is the parent of a
+        // submenu the pointer just opened, so keyboard_depth_ is one short of
+        // the open stack. Dismiss one real submenu before the menu itself.
+        const auto open_submenu_depth = [this] {
+            if (open_submenu_index_ < 0 || open_submenu_index_ >= static_cast<int>(dropdown_items_.size()) ||
+                !dropdown_items_[open_submenu_index_].submenu_open)
+                return 0;
+            const auto& root = dropdown_items_[open_submenu_index_];
+            if (open_child_submenu_index_ < 0 || open_child_submenu_index_ >= static_cast<int>(root.children.size()) ||
+                !root.children[open_child_submenu_index_].submenu_open)
+                return 1;
+            const auto& child = root.children[open_child_submenu_index_];
+            if (open_grandchild_submenu_index_ < 0 ||
+                open_grandchild_submenu_index_ >= static_cast<int>(child.children.size()) ||
+                !child.children[open_grandchild_submenu_index_].submenu_open)
+                return 2;
+            return 3;
+        };
+        const auto close_one_level = [&] {
+            const int next = std::max(open_submenu_depth(), keyboard_depth_) - 1;
+            if (keyboard_path_[0] < 0)
+                keyboard_path_[0] = open_submenu_index_;
+            if (next >= 1 && keyboard_path_[1] < 0)
+                keyboard_path_[1] = open_child_submenu_index_;
+            if (next >= 2 && keyboard_path_[2] < 0)
+                keyboard_path_[2] = open_grandchild_submenu_index_;
+            keyboard_depth_ = std::max(next, 0);
+            for (int level = keyboard_depth_ + 1; level < 4; ++level)
+                keyboard_path_[level] = -1;
+            setOpenSubmenu(keyboard_depth_ == 0 ? -1 : keyboard_path_[0],
+                           keyboard_depth_ < 2 ? -1 : keyboard_path_[1],
+                           keyboard_depth_ < 3 ? -1 : keyboard_path_[2]);
+            updateKeyboardHighlight();
+        };
+
         switch (event.scancode) {
         case SDL_SCANCODE_UP: moveKeyboardHighlight(-1); break;
         case SDL_SCANCODE_DOWN: moveKeyboardHighlight(1); break;
@@ -1104,27 +1139,16 @@ namespace lfs::vis::gui {
                                      static_cast<int>(current_labels_.size());
                 openDropdown(previous);
             } else {
-                --keyboard_depth_;
-                keyboard_path_[keyboard_depth_ + 1] = -1;
-                setOpenSubmenu(keyboard_depth_ == 0 ? -1 : keyboard_path_[0],
-                               keyboard_depth_ < 2 ? -1 : keyboard_path_[1],
-                               keyboard_depth_ < 3 ? -1 : keyboard_path_[2]);
-                updateKeyboardHighlight();
+                close_one_level();
             }
             break;
         case SDL_SCANCODE_RETURN:
         case SDL_SCANCODE_SPACE: activateKeyboardHighlight(); break;
         case SDL_SCANCODE_ESCAPE:
-            if (keyboard_depth_ > 0) {
-                --keyboard_depth_;
-                keyboard_path_[keyboard_depth_ + 1] = -1;
-                setOpenSubmenu(keyboard_depth_ == 0 ? -1 : keyboard_path_[0],
-                               keyboard_depth_ < 2 ? -1 : keyboard_path_[1],
-                               keyboard_depth_ < 3 ? -1 : keyboard_path_[2]);
-                updateKeyboardHighlight();
-            } else {
+            if (keyboard_depth_ > 0 || open_submenu_depth() > 0)
+                close_one_level();
+            else
                 closeDropdown();
-            }
             break;
         default: return false;
         }
