@@ -1112,7 +1112,9 @@ namespace {
         const int prms_iterations = -1,
         const bool enable_sparsity = false,
         const int sparsify_steps = 15000,
-        const lfs::training::PPISP* appearance = nullptr) {
+        const lfs::training::PPISP* appearance = nullptr,
+        const bool gut = false,
+        const int max_cap = -1) {
         auto document = lfs::test::licht::make_empty_document(
             lfs::core::generate_uuid_v4(), 1);
         lfs::core::Scene source;
@@ -1169,19 +1171,28 @@ namespace {
             document->edit_metrics().finish_reason =
                 finish_reason;
         }
-        if (prms_iterations >= 0) {
+        if (prms_iterations >= 0 || gut || max_cap >= 0) {
             auto snapshot = lfs::test::licht::require_result(
                 document->parameters().snapshot());
-            const auto iterations =
-                static_cast<std::size_t>(prms_iterations);
-            snapshot.mrnf_session.iterations = iterations;
-            snapshot.mrnf_current.iterations = iterations;
-            snapshot.mcmc_session.iterations = iterations;
-            snapshot.mcmc_current.iterations = iterations;
-            for (auto* params : {&snapshot.mrnf_session, &snapshot.mrnf_current,
-                                 &snapshot.mcmc_session, &snapshot.mcmc_current}) {
-                params->enable_sparsity = enable_sparsity;
-                params->sparsify_steps = sparsify_steps;
+            if (prms_iterations >= 0) {
+                const auto iterations =
+                    static_cast<std::size_t>(prms_iterations);
+                snapshot.mrnf_session.iterations = iterations;
+                snapshot.mrnf_current.iterations = iterations;
+                snapshot.mcmc_session.iterations = iterations;
+                snapshot.mcmc_current.iterations = iterations;
+                for (auto* params : {&snapshot.mrnf_session, &snapshot.mrnf_current,
+                                     &snapshot.mcmc_session, &snapshot.mcmc_current}) {
+                    params->enable_sparsity = enable_sparsity;
+                    params->sparsify_steps = sparsify_steps;
+                }
+            }
+            if (gut || max_cap >= 0) {
+                for (auto* params : {&snapshot.mrnf_session, &snapshot.mrnf_current}) {
+                    params->gut = gut;
+                    if (max_cap >= 0)
+                        params->max_cap = max_cap;
+                }
             }
             lfs::test::licht::require_status(
                 document->edit_parameters().set_snapshot(
@@ -18658,6 +18669,63 @@ contract["check_selection_submode_follows_native_mode"](lf)
             EXPECT_TRUE(manager->canStop());
             EXPECT_STREQ(manager->getStrategyType(), "mrnf");
             EXPECT_EQ(manager->getNumSplats(), 2);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StoredPausedSessionReportsSavedGutAndCap) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto dataset_path =
+            temporary_.path / "stored-session-gut-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        struct Case {
+            const char* name;
+            bool gut;
+            int max_cap;
+        };
+        for (const auto& scenario : {
+                 Case{"gut", true, 300000},
+                 Case{"standard", false, 250000},
+             }) {
+            SCOPED_TRACE(scenario.name);
+            const auto project_path =
+                temporary_.path / std::format("stored-{}-cap.licht", scenario.name);
+            write_resumable_project_with_checkpoint(
+                project_path,
+                lfs::core::generate_uuid_v4(),
+                lfs::core::generate_uuid_v4(),
+                dataset_path,
+                lfs::io::project::TrainingFinishReason::None,
+                0, -1, false, 15000, nullptr,
+                scenario.gut, scenario.max_cap);
+
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            ASSERT_TRUE(viewer.getWindowManager()->init());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(nullptr, viewer.getViewport());
+            auto opened = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(opened.error());
+            viewer.noteGuiSessionRestoreOwnerReady(1);
+            ASSERT_TRUE(waitForHydrationComplete(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+            auto* const manager = viewer.getTrainerManager();
+            ASSERT_NE(manager, nullptr);
+            ASSERT_FALSE(manager->hasTrainer());
+            EXPECT_EQ(manager->getState(), TrainingState::Paused);
+            EXPECT_STREQ(manager->getStrategyType(), "mrnf");
+            const auto& saved = viewer.getParameterManager()->getActiveParams();
+            EXPECT_EQ(saved.gut, scenario.gut);
+            EXPECT_EQ(saved.max_cap, scenario.max_cap);
+            // No live trainer yet. The status cap and GUT flag still follow
+            // the parameters saved with the paused session.
+            EXPECT_EQ(manager->isGutEnabled(), scenario.gut);
+            EXPECT_EQ(manager->getMaxGaussians(), scenario.max_cap);
         }
     }
 

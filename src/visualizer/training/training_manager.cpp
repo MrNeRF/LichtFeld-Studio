@@ -885,8 +885,10 @@ namespace lfs::vis {
     void TrainerManager::clearStoredSessionPresentation() {
         stored_session_presentation_active_ = false;
         stored_session_presentation_completed_ = false;
+        stored_session_presentation_gut_ = false;
         stored_session_presentation_iteration_ = 0;
         stored_session_presentation_max_iterations_ = 0;
+        stored_session_presentation_max_cap_ = 0;
         stored_session_presentation_strategy_.clear();
     }
 
@@ -968,6 +970,14 @@ namespace lfs::vis {
         stored_session_presentation_max_iterations_ =
             session.max_iterations;
         stored_session_presentation_strategy_ = desired.strategy;
+        stored_session_presentation_gut_ = false;
+        stored_session_presentation_max_cap_ = 0;
+        if (const auto* params = services().paramsOrNull();
+            params && params->isLoaded()) {
+            const auto& active = params->getActiveParams();
+            stored_session_presentation_gut_ = active.gut;
+            stored_session_presentation_max_cap_ = active.max_cap;
+        }
         const char* const presented_state =
             desired.stopped ? "stopped" : session.completed ? "completed"
                                                             : "paused";
@@ -1890,8 +1900,11 @@ namespace lfs::vis {
     int TrainerManager::getMaxGaussians() const {
         if (const auto* params = ready_presentation_params(*this))
             return params->max_cap;
-        if (!trainer_)
+        if (!trainer_) {
+            if (stored_session_presentation_active_)
+                return stored_session_presentation_max_cap_;
             return 0;
+        }
         return trainer_->getParams().optimization.max_cap;
     }
 
@@ -1946,8 +1959,11 @@ namespace lfs::vis {
     bool TrainerManager::isGutEnabled() const {
         if (const auto* params = ready_presentation_params(*this))
             return params->gut;
-        if (!trainer_)
+        if (!trainer_) {
+            if (stored_session_presentation_active_)
+                return stored_session_presentation_gut_;
             return false;
+        }
         return trainer_->getParams().optimization.gut;
     }
 

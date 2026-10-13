@@ -362,8 +362,10 @@ namespace lfs::vis {
         bool restored_finish_published_ = false;
         bool stored_session_presentation_active_ = false;
         bool stored_session_presentation_completed_ = false;
+        bool stored_session_presentation_gut_ = false;
         int stored_session_presentation_iteration_ = 0;
         int stored_session_presentation_max_iterations_ = 0;
+        int stored_session_presentation_max_cap_ = 0;
         std::string stored_session_presentation_strategy_;
 
         [[nodiscard]] FinishReason resolvedRestoredFinishReason() const;

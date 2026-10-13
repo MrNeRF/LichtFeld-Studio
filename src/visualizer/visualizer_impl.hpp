@@ -316,6 +316,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_LazyCheckpointReopenPreservesAppearance_Test;
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
         friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;
+        friend class VisualizerImplResetTest_StoredPausedSessionReportsSavedGutAndCap_Test;
         friend class VisualizerImplResetTest_StopStoredSessionWithoutResumingKeepsCheckpointAndEntersEditMode_Test;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnAutosave_Test;
         friend class VisualizerImplResetTest_CreateProjectAtWritesBindsAndRegistersMru_Test;
