@@ -1209,6 +1209,25 @@ namespace {
         EXPECT_EQ(nlohmann::json::parse(metadata_file).at("first_source_frame_number"), 0);
     }
 
+    TEST(VideoExtractorNaming, ExistingZeroBasedOutputIsDetectedAcrossNumberBases) {
+        TempDir temp("zero_based_existing_output");
+        const auto source = temp.path / "clip.mp4";
+        const auto output = temp.path / "frames";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        std::filesystem::create_directories(output);
+        std::ofstream(output / "frame_00000.png") << "earlier zero-based frame";
+
+        lfs::gui::VideoExtractorDialog dialog;
+        ASSERT_TRUE(dialog.openVideoPath(source));
+        // The default base is one, but zero-based output from an earlier run still conflicts.
+        ASSERT_TRUE(NamingAccess::begin(dialog, output));
+        ASSERT_TRUE(NamingAccess::pending(dialog));
+        NamingAccess::deleteExisting(dialog);
+        ASSERT_TRUE(NamingAccess::waitIdle(dialog));
+        EXPECT_FALSE(std::filesystem::exists(output / "frame_00000.png"));
+        EXPECT_TRUE(std::filesystem::exists(output / "frame_00001.png"));
+    }
+
     TEST(VideoExtractorNaming, ExistingImagesInTheOutputFolderAreKept) {
         TempDir temp("naming_keep_existing_images");
         const auto source = temp.path / "clip.mp4";

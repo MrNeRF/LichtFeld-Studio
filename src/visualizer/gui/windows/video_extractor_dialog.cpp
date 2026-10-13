@@ -284,9 +284,10 @@ namespace lfs::gui {
                 if (!it->is_regular_file(type_ec))
                     continue;
                 const std::string name = lfs::core::path_to_utf8(it->path().filename());
+                // Recognize zero-numbered frames from an earlier extraction even when this run
+                // starts at one, so Delete Existing removes all output for the current pattern.
                 if (name == "extraction_metadata.json" ||
-                    io::isGeneratedFrameFilename(
-                        params.filename_pattern, name, params.first_source_frame_number == 0))
+                    io::isGeneratedFrameFilename(params.filename_pattern, name, true))
                     files.push_back(it->path());
             }
             return files;
