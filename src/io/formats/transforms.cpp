@@ -8,6 +8,7 @@
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "formats/colmap.hpp"
+#include "io/loaders/invalid_dataset_cameras.hpp"
 #include "ply_property_order.hpp"
 #include "tinyply.hpp"
 #include <algorithm>
@@ -347,7 +348,7 @@ namespace lfs::io {
         // Resolve intrinsics for a frame, preferring per-frame fields and falling
         // back to the global object. Mirrors the historical global-only parsing so
         // datasets that only carry root-level intrinsics behave identically.
-        [[nodiscard]] FrameIntrinsics resolve_frame_intrinsics(
+        [[nodiscard]] std::optional<FrameIntrinsics> resolve_frame_intrinsics(
             const nlohmann::json& frame,
             const nlohmann::json& global,
             const int w,
@@ -386,8 +387,21 @@ namespace lfs::io {
             const auto* angle_y_value = find("camera_angle_y");
 
             float fl_x = -1.0f, fl_y = -1.0f;
+            bool invalid_focal = false;
+            const auto read_focal = [&](const nlohmann::json& value, const std::string_view key) {
+                if (!value.is_number())
+                    throw std::runtime_error("Transforms field '" + std::string(key) + "' must be numeric");
+                const double parsed = value.get<double>();
+                if (!std::isfinite(parsed) || std::abs(parsed) > std::numeric_limits<float>::max()) {
+                    invalid_focal = true;
+                    return -1.0f;
+                }
+                const float focal = static_cast<float>(parsed);
+                invalid_focal = invalid_focal || focal <= 0.0f;
+                return focal;
+            };
             if (fl_x_value) {
-                fl_x = finite_json_float_value(*fl_x_value, "fl_x");
+                fl_x = read_focal(*fl_x_value, "fl_x");
             } else if (angle_x_value) {
                 const float angle = finite_json_float_value(*angle_x_value, "camera_angle_x");
                 if (angle <= 0.0f || angle >= std::numbers::pi_v<float>)
@@ -396,7 +410,7 @@ namespace lfs::io {
             }
 
             if (fl_y_value) {
-                fl_y = finite_json_float_value(*fl_y_value, "fl_y");
+                fl_y = read_focal(*fl_y_value, "fl_y");
             } else if (angle_y_value) {
                 const float angle = finite_json_float_value(*angle_y_value, "camera_angle_y");
                 if (angle <= 0.0f || angle >= std::numbers::pi_v<float>)
@@ -421,14 +435,18 @@ namespace lfs::io {
                 }
             }
 
+            if (invalid_focal)
+                return std::nullopt;
+
             if (fl_x < 0.0f && fl_y > 0.0f) {
                 if (w != h)
                     throw std::runtime_error("Transforms JSON is missing horizontal intrinsics for a non-square image");
                 fl_x = fl_y;
             }
+            if (!std::isfinite(fl_x) || !std::isfinite(fl_y) || fl_x <= 0.0f || fl_y <= 0.0f)
+                return std::nullopt;
             const float max_focal = static_cast<float>(std::max(w, h)) * MAX_INTRINSIC_DIMENSION_MULTIPLIER;
-            if (!std::isfinite(fl_x) || !std::isfinite(fl_y) || fl_x <= 0.0f || fl_y <= 0.0f ||
-                fl_x > max_focal || fl_y > max_focal) {
+            if (fl_x > max_focal || fl_y > max_focal) {
                 throw std::runtime_error("Transforms focal lengths must be positive bounded finite values");
             }
             intrinsics.fl_x = fl_x;
@@ -511,7 +529,8 @@ namespace lfs::io {
 
     std::tuple<std::vector<CameraData>, lfs::core::Tensor, std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>>> read_transforms_cameras_and_images(
         const std::filesystem::path& transPath,
-        const LoadOptions& options) {
+        const LoadOptions& options,
+        std::vector<std::string>* warnings) {
 
         LOG_TIMER_TRACE("Read transforms file");
 
@@ -585,6 +604,7 @@ namespace lfs::io {
         }
 
         IntrinsicsWarningState intrinsics_warnings;
+        std::vector<std::string> invalid_focal_names;
         std::vector<CameraData> camerasdata;
         {
             uint64_t counter = 0;
@@ -604,8 +624,13 @@ namespace lfs::io {
                 const auto& frame_json = transforms["frames"][frameInd];
                 const auto [frame_w, frame_h] =
                     resolve_frame_dimensions(frame_json, global_w, global_h, dir_path, frame.file_path);
-                const FrameIntrinsics intrinsics =
+                const auto intrinsics_result =
                     resolve_frame_intrinsics(frame_json, transforms, frame_w, frame_h, intrinsics_warnings);
+                if (!intrinsics_result) {
+                    invalid_focal_names.push_back(frame.file_path);
+                    continue;
+                }
+                const FrameIntrinsics& intrinsics = *intrinsics_result;
 
                 // Create camera-to-world transform matrix
                 lfs::core::Tensor c2w = lfs::core::Tensor::empty({4, 4}, Device::CPU, DataType::Float32);
@@ -730,6 +755,15 @@ namespace lfs::io {
             }
             LOG_WARN("Unsupported distortion coefficients ignored: {}", keys);
         }
+
+        if (!invalid_focal_names.empty()) {
+            const std::string message = format_invalid_dataset_cameras_warning(invalid_focal_names);
+            notify_invalid_dataset_cameras(invalid_focal_names);
+            if (warnings)
+                warnings->push_back(message);
+        }
+        if (camerasdata.empty() && !invalid_focal_names.empty())
+            throw std::runtime_error(format_no_valid_dataset_cameras_error());
 
         auto center = lfs::core::Tensor::zeros({3}, Device::CPU, DataType::Float32);
 

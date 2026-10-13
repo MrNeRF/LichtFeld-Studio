@@ -10,6 +10,7 @@
 #include "core/path_utils.hpp"
 #include "io/atomic_output.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/loaders/invalid_dataset_cameras.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/loaders/missing_dataset_images.hpp"
 #include <algorithm>
@@ -681,6 +682,54 @@ namespace lfs::io {
         {11, {CAMERA_MODEL::UNDEFINED, -1}},
         {17, {CAMERA_MODEL::EQUIRECTANGULAR, 2}}};
 
+    [[nodiscard]] std::pair<size_t, size_t> focal_parameter_indices(const CAMERA_MODEL model) {
+        switch (model) {
+        case CAMERA_MODEL::SIMPLE_PINHOLE:
+        case CAMERA_MODEL::SIMPLE_RADIAL:
+        case CAMERA_MODEL::RADIAL:
+        case CAMERA_MODEL::SIMPLE_RADIAL_FISHEYE:
+        case CAMERA_MODEL::RADIAL_FISHEYE:
+            return {0, 0};
+        case CAMERA_MODEL::PINHOLE:
+        case CAMERA_MODEL::OPENCV:
+        case CAMERA_MODEL::OPENCV_FISHEYE:
+        case CAMERA_MODEL::FULL_OPENCV:
+        case CAMERA_MODEL::FOV:
+        case CAMERA_MODEL::THIN_PRISM_FISHEYE:
+            return {0, 1};
+        default:
+            return {std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()};
+        }
+    }
+
+    static bool has_invalid_focal_length(const CameraDataIntermediate& camera) {
+        const auto model_it = camera_model_ids.find(camera.model_id);
+        if (model_it == camera_model_ids.end() ||
+            model_it->second.first == CAMERA_MODEL::EQUIRECTANGULAR) {
+            return false;
+        }
+
+        const auto [focal_x_index, focal_y_index] = focal_parameter_indices(model_it->second.first);
+        if (focal_x_index >= camera.params.size() || focal_y_index >= camera.params.size()) {
+            return false;
+        }
+
+        const float focal_x = camera.params[focal_x_index];
+        const float focal_y = camera.params[focal_y_index];
+        return !std::isfinite(focal_x) || !std::isfinite(focal_y) || focal_x <= 0.0f || focal_y <= 0.0f;
+    }
+
+    static std::unordered_set<uint32_t> invalid_focal_camera_ids(
+        const std::unordered_map<uint32_t, CameraDataIntermediate>& cameras) {
+        std::unordered_set<uint32_t> invalid_ids;
+        for (const auto& [camera_id, camera] : cameras) {
+            if (has_invalid_focal_length(camera)) {
+                invalid_ids.insert(camera_id);
+            }
+        }
+        return invalid_ids;
+    }
+
     static const std::unordered_map<std::string, CAMERA_MODEL> camera_model_names = {
         {"SIMPLE_PINHOLE", CAMERA_MODEL::SIMPLE_PINHOLE},
         {"PINHOLE", CAMERA_MODEL::PINHOLE},
@@ -893,6 +942,7 @@ namespace lfs::io {
         const fs::path& base,
         const std::string& images_folder,
         const std::vector<ImageData>& images,
+        const std::unordered_map<uint32_t, CameraDataIntermediate>& cameras,
         const LoadOptions& options = {}) {
 
         LOG_TIMER_DEBUG("COLMAP validate dataset layout");
@@ -911,6 +961,7 @@ namespace lfs::io {
 
         std::unordered_map<std::string, size_t> basename_only_metadata_counts;
         basename_only_metadata_counts.reserve(images.size());
+        const auto invalid_camera_ids = invalid_focal_camera_ids(cameras);
         std::vector<std::string> missing_images;
 
         for (size_t i = 0; i < images.size(); ++i) {
@@ -918,6 +969,9 @@ namespace lfs::io {
                 throw_if_load_cancel_requested(options, "COLMAP metadata validation cancelled");
             }
             const auto& image = images[i];
+            if (invalid_camera_ids.contains(image.camera_id)) {
+                continue;
+            }
             const fs::path image_rel_path = lfs::core::utf8_to_path(image.name).lexically_normal();
             if (image_rel_path.parent_path().empty()) {
                 const std::string basename_key = detail::normalize_lookup_key(image_rel_path.filename());
@@ -930,6 +984,9 @@ namespace lfs::io {
                 throw_if_load_cancel_requested(options, "COLMAP dataset validation cancelled");
             }
             const auto& image = images[i];
+            if (invalid_camera_ids.contains(image.camera_id)) {
+                continue;
+            }
             const fs::path image_rel_path = lfs::core::utf8_to_path(image.name).lexically_normal();
             const std::string basename_key = detail::normalize_lookup_key(image_rel_path.filename());
 
@@ -1438,10 +1495,22 @@ namespace lfs::io {
 
             int32_t param_cnt = it->second.second;
             cam.params.resize(param_cnt);
+            const auto [focal_x_index, focal_y_index] = focal_parameter_indices(it->second.first);
 
             for (int j = 0; j < param_cnt; j++) {
-                cam.params[j] = static_cast<float>(read_f64(cur, end, "cameras.bin parameter"));
-                valid = valid && std::isfinite(cam.params[j]);
+                const double parameter = read_f64(cur, end, "cameras.bin parameter");
+                const bool is_focal = static_cast<size_t>(j) == focal_x_index ||
+                                      static_cast<size_t>(j) == focal_y_index;
+                const bool representable = std::isfinite(parameter) &&
+                                           std::abs(parameter) <= std::numeric_limits<float>::max();
+                if (representable) {
+                    cam.params[j] = static_cast<float>(parameter);
+                } else if (is_focal) {
+                    cam.params[j] = std::numeric_limits<float>::quiet_NaN();
+                } else {
+                    valid = false;
+                }
+                valid = valid && (representable || is_focal);
             }
 
             if (!valid) {
@@ -2173,10 +2242,17 @@ namespace lfs::io {
 
             bool valid = true;
             double parameter = 0.0;
+            const auto [focal_x_index, focal_y_index] = focal_parameter_indices(
+                static_cast<CAMERA_MODEL>(cam.model_id));
+            size_t parameter_index = 0;
             while (camera_line >> parameter) {
-                valid = valid && std::isfinite(parameter) &&
-                        std::abs(parameter) <= std::numeric_limits<float>::max();
-                cam.params.push_back(static_cast<float>(parameter));
+                const bool is_focal = parameter_index == focal_x_index || parameter_index == focal_y_index;
+                const bool representable = std::isfinite(parameter) &&
+                                           std::abs(parameter) <= std::numeric_limits<float>::max();
+                valid = valid && (representable || is_focal);
+                cam.params.push_back(representable ? static_cast<float>(parameter)
+                                                   : std::numeric_limits<float>::quiet_NaN());
+                ++parameter_index;
             }
             valid = valid && camera_line.eof();
 
@@ -2825,6 +2901,7 @@ namespace lfs::io {
         undistort_cache.reserve(cam_map.size());
         std::unordered_map<uint32_t, ColmapCameraCalibration> calibrations;
         calibrations.reserve(cam_map.size());
+        std::unordered_set<uint32_t> invalid_focal_camera_ids;
 
         // Undistortion depends only on the COLMAP camera calibration, not on
         // the image pose. Compute it once per camera before workers start so
@@ -2832,6 +2909,12 @@ namespace lfs::io {
         for (const auto& [camera_id, cam_data] : cam_map) {
             auto calibration = make_colmap_camera_calibration(cam_data);
             if (!calibration) {
+                continue;
+            }
+            if (calibration->camera_model_type != lfs::core::CameraModelType::EQUIRECTANGULAR &&
+                (!std::isfinite(calibration->focal_x) || !std::isfinite(calibration->focal_y) ||
+                 calibration->focal_x <= 0.0f || calibration->focal_y <= 0.0f)) {
+                invalid_focal_camera_ids.insert(camera_id);
                 continue;
             }
             if (colmap_calibration_has_distortion(*calibration)) {
@@ -2854,6 +2937,7 @@ namespace lfs::io {
         // Preserve the serial loader's compact UID assignment even though
         // camera construction below is indexed by the source image.
         std::vector<int> camera_indices(images.size(), -1);
+        std::vector<uint8_t> invalid_focal_images(images.size(), 0);
         int next_camera_index = 0;
         for (size_t i = 0; i < images.size(); ++i) {
             const auto camera_it = cam_map.find(images[i].camera_id);
@@ -2886,6 +2970,12 @@ namespace lfs::io {
                 const ImageData& img = images[i];
                 auto& output = assembled[i];
                 output.image = &img;
+
+                if (invalid_focal_camera_ids.contains(img.camera_id)) {
+                    invalid_focal_images[i] = 1;
+                    return;
+                }
+
                 const std::filesystem::path image_rel_path = lfs::core::utf8_to_path(img.name);
                 std::filesystem::path image_path = images_path / image_rel_path;
 
@@ -3215,7 +3305,19 @@ namespace lfs::io {
             }
         }
 
+        std::vector<std::string> invalid_focal_names;
+        for (size_t i = 0; i < invalid_focal_images.size(); ++i) {
+            if (invalid_focal_images[i])
+                invalid_focal_names.push_back(images[i].name);
+        }
+        if (!invalid_focal_names.empty())
+            notify_invalid_dataset_cameras(invalid_focal_names);
+
         if (cameras.empty()) {
+            if (!invalid_focal_names.empty()) {
+                return make_error(ErrorCode::CORRUPTED_DATA,
+                                  format_no_valid_dataset_cameras_error(), base_path);
+            }
             return make_error(ErrorCode::CORRUPTED_DATA,
                               "No usable images remain after skipping cameras with a missing or unsupported model",
                               base_path);
@@ -3290,6 +3392,16 @@ namespace lfs::io {
         if (auto diagnostic = image_tally.to_diagnostic(
                 lfs::ErrorCode::DataLoss, "image(s) with an unusable camera")) {
             warnings.push_back(std::move(*diagnostic));
+        }
+        if (!invalid_focal_names.empty()) {
+            const std::string message = format_invalid_dataset_cameras_warning(invalid_focal_names);
+            warnings.push_back(Diagnostic{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .message = message,
+                .fields = lfs::SmallFields{}
+                              .add("invalid_camera_count", static_cast<std::int64_t>(invalid_focal_names.size()))
+                              .add("examples", join_invalid_dataset_camera_examples(invalid_focal_names)),
+            });
         }
         if (!missing_images.empty()) {
             warnings.push_back(missing_dataset_images_diagnostic(missing_images));
@@ -4371,13 +4483,17 @@ namespace lfs::io {
             }
 
             std::vector<ImageData> images;
+            std::unordered_map<uint32_t, CameraDataIntermediate> cameras;
+            const float scale_factor = extract_scale_from_folder(images_folder);
             if (has_binary_pair) {
+                cameras = read_cameras_binary(cameras_bin, scale_factor, options);
                 images = read_images_binary(images_bin, options);
             } else {
+                cameras = read_cameras_text(cameras_txt, scale_factor, options);
                 images = read_images_text_camera_metadata_only(images_txt, options);
             }
 
-            auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options);
+            auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, cameras, options);
             if (!validation) {
                 return std::unexpected(validation.error());
             }
@@ -4418,7 +4534,7 @@ namespace lfs::io {
             if (point_records)
                 record_views(images, cam_map, *point_records);
 
-            auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options);
+            auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, cam_map, options);
             if (!validation) {
                 return std::unexpected(validation.error());
             }
@@ -4544,7 +4660,7 @@ namespace lfs::io {
             if (point_records)
                 record_views(images, cam_map, *point_records);
 
-            auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options);
+            auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, cam_map, options);
             if (!validation) {
                 return std::unexpected(validation.error());
             }
@@ -4580,6 +4696,7 @@ namespace lfs::io {
 
             std::unordered_map<uint32_t, CameraDataIntermediate> cam_map;
             std::vector<ImageData> images;
+            std::vector<std::string> invalid_focal_names;
             SkipTally camera_tally;
             SkipTally pose_tally;
             SkipTally point2d_tally;
@@ -4778,6 +4895,12 @@ namespace lfs::io {
                     center_x *= x_scale;
                     center_y *= y_scale;
                 }
+                if (model != CAMERA_MODEL::EQUIRECTANGULAR &&
+                    (!std::isfinite(focal_x) || !std::isfinite(focal_y) ||
+                     focal_x <= 0.0f || focal_y <= 0.0f)) {
+                    invalid_focal_names.push_back(img.name);
+                    continue;
+                }
 
                 camera_positions.push_back(cam_pos[0]);
                 camera_positions.push_back(cam_pos[1]);
@@ -4801,7 +4924,13 @@ namespace lfs::io {
                 cameras.push_back(std::move(camera));
             }
 
+            if (!invalid_focal_names.empty())
+                notify_invalid_dataset_cameras(invalid_focal_names);
             if (cameras.empty()) {
+                if (!invalid_focal_names.empty()) {
+                    return make_error(ErrorCode::CORRUPTED_DATA,
+                                      format_no_valid_dataset_cameras_error(), sparse_path);
+                }
                 return make_error(ErrorCode::CORRUPTED_DATA,
                                   "No usable images remain after skipping cameras with a missing or unsupported model",
                                   sparse_path);

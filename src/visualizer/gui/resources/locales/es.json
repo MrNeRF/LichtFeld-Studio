@@ -6,6 +6,8 @@
   "training.reset_before_strategy_change": "Reinicia el entrenamiento antes de cambiar de estrategia.",
   "io.mesh_no_triangle_faces": "El archivo de malla no contiene caras triangulares.",
   "io.no_finite_seed_points": "La nube de puntos no contiene puntos iniciales finitos. Se utilizará una inicialización aleatoria.",
+  "io.dataset_camera_invalid_focal": "Se omitieron {} cámaras del conjunto de datos con una distancia focal cero, negativa o no finita (ejemplos: {}).",
+  "io.dataset_camera_no_valid_focal": "Ninguna cámara del conjunto de datos tiene una distancia focal válida. Comprueba la calibración y vuelve a cargar el conjunto de datos.",
   "io.mesh_nonfinite_vertices": "La malla contiene coordenadas de vértices no finitas.",
   "io.colmap_skipped_invalid_pose": "La importación de COLMAP omitió imágenes con pose no válida (cantidad: {}; muestras: {} [{}])",
   "ui.vram_window_1m": "1 min",

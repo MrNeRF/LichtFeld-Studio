@@ -6,6 +6,8 @@
   "training.reset_before_strategy_change": "Reimposta l’addestramento prima di cambiare strategia.",
   "io.mesh_no_triangle_faces": "Il file della mesh non contiene facce triangolari.",
   "io.no_finite_seed_points": "La nuvola di punti non contiene punti iniziali finiti. Verrà utilizzata un’inizializzazione casuale.",
+  "io.dataset_camera_invalid_focal": "Ignorate {} fotocamere del dataset con lunghezza focale nulla, negativa o non finita (esempi: {}).",
+  "io.dataset_camera_no_valid_focal": "Nessuna fotocamera del dataset ha una lunghezza focale valida. Controlla la calibrazione e ricarica il dataset.",
   "io.mesh_nonfinite_vertices": "La mesh contiene coordinate dei vertici non finite.",
   "io.colmap_skipped_invalid_pose": "L’importazione COLMAP ha ignorato immagini con posa non valida (numero: {}; esempi: {} [{}])",
   "ui.vram_window_1m": "1 min",

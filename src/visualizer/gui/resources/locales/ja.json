@@ -6,6 +6,8 @@
   "training.reset_before_strategy_change": "戦略を変更する前にトレーニングをリセットしてください。",
   "io.mesh_no_triangle_faces": "メッシュファイルに三角形の面がありません。",
   "io.no_finite_seed_points": "点群に有限の座標を持つ初期点がありません。ランダムに初期化します。",
+  "io.dataset_camera_invalid_focal": "焦点距離がゼロ、負、または有限値でないデータセットカメラを {} 台スキップしました（例: {}）。",
+  "io.dataset_camera_no_valid_focal": "有効な焦点距離を持つデータセットカメラがありません。カメラの較正値を確認して、データセットを再読み込みしてください。",
   "io.mesh_nonfinite_vertices": "メッシュに有限でない頂点座標が含まれています。",
   "io.colmap_skipped_invalid_pose": "COLMAP インポートで姿勢が無効な画像を {} 件スキップしました（サンプル {} 件: {}）",
   "ui.vram_window_1m": "1 分",

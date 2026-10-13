@@ -6,6 +6,8 @@
   "training.reset_before_strategy_change": "Reset de training voordat u de strategie wijzigt.",
   "io.mesh_no_triangle_faces": "Het meshbestand bevat geen driehoekige vlakken.",
   "io.no_finite_seed_points": "De puntenwolk bevat geen beginpunten met eindige coördinaten. Er wordt willekeurige initialisatie gebruikt.",
+  "io.dataset_camera_invalid_focal": "{} datasetcamera('s) met een nul, negatieve of niet-eindige brandpuntsafstand overgeslagen (voorbeelden: {}).",
+  "io.dataset_camera_no_valid_focal": "Geen enkele datasetcamera heeft een geldige brandpuntsafstand. Controleer de camerakalibratie en laad de dataset opnieuw.",
   "io.mesh_nonfinite_vertices": "De mesh bevat niet-eindige hoekpuntcoördinaten.",
   "io.colmap_skipped_invalid_pose": "Bij de COLMAP-import zijn afbeeldingen met een ongeldige pose overgeslagen (aantal: {}; voorbeelden: {} [{}])",
   "ui.vram_window_1m": "1 min",

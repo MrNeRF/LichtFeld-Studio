@@ -6,6 +6,8 @@
   "training.reset_before_strategy_change": "전략을 변경하기 전에 훈련을 초기화하세요.",
   "io.mesh_no_triangle_faces": "메시 파일에 삼각형 면이 없습니다.",
   "io.no_finite_seed_points": "포인트 클라우드에 유한한 좌표를 가진 초기 점이 없습니다. 무작위로 초기화합니다.",
+  "io.dataset_camera_invalid_focal": "초점 거리가 0이거나 음수이거나 유한하지 않은 데이터셋 카메라 {}개를 건너뛰었습니다 (예: {}).",
+  "io.dataset_camera_no_valid_focal": "유효한 초점 거리를 가진 데이터셋 카메라가 없습니다. 카메라 보정 값을 확인한 뒤 데이터셋을 다시 불러오세요.",
   "io.mesh_nonfinite_vertices": "메시에 유한하지 않은 정점 좌표가 있습니다.",
   "io.colmap_skipped_invalid_pose": "COLMAP 가져오기에서 자세가 유효하지 않은 이미지 {}개를 건너뛰었습니다(표본 {}개: {})",
   "ui.vram_window_1m": "1분",

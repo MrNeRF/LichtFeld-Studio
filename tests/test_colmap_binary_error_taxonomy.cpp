@@ -290,6 +290,51 @@ namespace {
                   0);
     }
 
+    TEST_F(ColmapBinaryErrorTaxonomyTest, SkipsCamerasWithInvalidFocalLengthsAndKeepsValidCamera) {
+        std::vector<char> camera_bytes;
+        append_pod(camera_bytes, uint64_t{4});
+        append_camera(camera_bytes, 1, 1, 1, 1, {1.0, 1.0, 0.5, 0.5});
+        append_camera(camera_bytes, 2, 1, 1, 1, {0.0, 1.0, 0.5, 0.5});
+        append_camera(camera_bytes, 3, 1, 1, 1, {-1.0, 1.0, 0.5, 0.5});
+        append_camera(camera_bytes, 4, 1, 1, 1,
+                      {std::numeric_limits<double>::quiet_NaN(), 1.0, 0.5, 0.5});
+        std::vector<char> images;
+        append_pod(images, uint64_t{4});
+        append_image(images, 1, 1.0, 1, "valid.png");
+        append_image(images, 2, 1.0, 2, "zero.png");
+        append_image(images, 3, 1.0, 3, "negative.png");
+        append_image(images, 4, 1.0, 4, "nonfinite.png");
+        write_bytes(temp_dir_ / "cameras.bin", camera_bytes);
+        write_bytes(temp_dir_ / "images.bin", images);
+        write_png(temp_dir_ / "images" / "valid.png");
+        write_png(temp_dir_ / "images" / "zero.png");
+        write_png(temp_dir_ / "images" / "negative.png");
+        write_png(temp_dir_ / "images" / "nonfinite.png");
+
+        const auto result = lfs::io::read_colmap_cameras_and_images(temp_dir_);
+        ASSERT_TRUE(result.has_value()) << result.error().format();
+        const auto& cameras = std::get<0>(result->value);
+        ASSERT_EQ(cameras.size(), 1u);
+        EXPECT_FLOAT_EQ(cameras.front()->focal_x(), 1.0f);
+        ASSERT_EQ(result->warnings.size(), 1u);
+        EXPECT_NE(result->warnings.front().message.find("zero.png"), std::string::npos);
+        EXPECT_NE(result->warnings.front().message.find("negative.png"), std::string::npos);
+        EXPECT_NE(result->warnings.front().message.find("nonfinite.png"), std::string::npos);
+    }
+
+    TEST_F(ColmapBinaryErrorTaxonomyTest, RejectsDatasetWhenEveryCameraHasInvalidFocalLength) {
+        std::vector<char> camera_bytes;
+        append_pod(camera_bytes, uint64_t{1});
+        append_camera(camera_bytes, 1, 1, 1, 1, {0.0, 1.0, 0.5, 0.5});
+        write_bytes(temp_dir_ / "cameras.bin", camera_bytes);
+        write_bytes(temp_dir_ / "images.bin", valid_image_file());
+        write_png(temp_dir_ / "images" / "valid.png");
+
+        const auto result = lfs::io::read_colmap_cameras_and_images(temp_dir_);
+        ASSERT_FALSE(result.has_value());
+        EXPECT_NE(result.error().message.find("focal"), std::string::npos);
+    }
+
     TEST_F(ColmapBinaryErrorTaxonomyTest, SkippedImageLeavesNoCameraUidHoles) {
         std::vector<char> images;
         append_pod(images, uint64_t{2});

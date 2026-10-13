@@ -6,6 +6,8 @@
   "training.reset_before_strategy_change": "更改策略前请重置训练。",
   "io.mesh_no_triangle_faces": "网格文件不包含三角形面。",
   "io.no_finite_seed_points": "点云中没有坐标为有限值的初始点。将使用随机初始化。",
+  "io.dataset_camera_invalid_focal": "已跳过 {} 个焦距为零、负数或非有限值的数据集相机（示例：{}）。",
+  "io.dataset_camera_no_valid_focal": "数据集中没有焦距有效的相机。请检查相机标定值并重新加载数据集。",
   "io.mesh_nonfinite_vertices": "网格包含非有限顶点坐标。",
   "io.colmap_skipped_invalid_pose": "COLMAP 导入跳过了 {} 张姿态无效的图像（抽样 {} 张：{}）",
   "ui.vram_window_1m": "1 分钟",

@@ -6,6 +6,8 @@
   "training.reset_before_strategy_change": "Reset training before changing strategy.",
   "io.mesh_no_triangle_faces": "The mesh file contains no triangle faces.",
   "io.no_finite_seed_points": "The point cloud contains no finite seed points. Using random initialization.",
+  "io.dataset_camera_invalid_focal": "Skipped {} dataset camera(s) with zero, negative or non-finite focal lengths (examples: {}).",
+  "io.dataset_camera_no_valid_focal": "No dataset cameras have valid focal lengths. Check the camera calibration values and load the dataset again.",
   "io.mesh_nonfinite_vertices": "Mesh contains non-finite vertex coordinates.",
   "io.colmap_skipped_invalid_pose": "COLMAP import skipped {} image(s) with an invalid pose ({} sampled: {})",
   "ui.vram_window_1m": "1 min",

@@ -6,6 +6,8 @@
   "training.reset_before_strategy_change": "Zresetuj trening przed zmianą strategii.",
   "io.mesh_no_triangle_faces": "Plik siatki nie zawiera trójkątnych ścian.",
   "io.no_finite_seed_points": "Chmura punktów nie zawiera punktów początkowych o skończonych współrzędnych. Zostanie użyta losowa inicjalizacja.",
+  "io.dataset_camera_invalid_focal": "Pominięto {} kamer(y) zbioru danych z zerową, ujemną lub nieskończoną ogniskową (przykłady: {}).",
+  "io.dataset_camera_no_valid_focal": "Żadna kamera zbioru danych nie ma prawidłowej ogniskowej. Sprawdź kalibrację kamer i wczytaj zbiór danych ponownie.",
   "io.mesh_nonfinite_vertices": "Siatka zawiera nieskończone lub nieokreślone współrzędne wierzchołków.",
   "io.colmap_skipped_invalid_pose": "Podczas importu COLMAP pominięto obrazy z nieprawidłową pozą (liczba: {}; próbki: {} [{}])",
   "ui.vram_window_1m": "1 min",

@@ -6,6 +6,8 @@
   "training.reset_before_strategy_change": "Setzen Sie das Training zurück, bevor Sie die Strategie ändern.",
   "io.mesh_no_triangle_faces": "Die Meshdatei enthält keine Dreiecksflächen.",
   "io.no_finite_seed_points": "Die Punktwolke enthält keine endlichen Ausgangspunkte. Die Initialisierung erfolgt zufällig.",
+  "io.dataset_camera_invalid_focal": "{} Dataset-Kamera(s) mit null, negativem oder nicht endlichem Brennpunkt wurden übersprungen (Beispiele: {}).",
+  "io.dataset_camera_no_valid_focal": "Keine Dataset-Kamera hat eine gültige Brennweite. Prüfen Sie die Kamerakalibrierung und laden Sie das Dataset erneut.",
   "io.mesh_nonfinite_vertices": "Das Mesh enthält nicht endliche Scheitelpunktkoordinaten.",
   "io.colmap_skipped_invalid_pose": "COLMAP-Import: Bilder mit ungültiger Pose übersprungen (Anzahl: {}; Beispiele: {} [{}])",
   "ui.vram_window_1m": "1 min",

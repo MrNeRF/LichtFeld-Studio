@@ -190,8 +190,9 @@ namespace lfs::io {
             LOG_INFO("Loading Blender/NeRF dataset from: {}", lfs::core::path_to_utf8(transforms_file));
 
             // Read transforms and create cameras
+            std::vector<std::string> warnings;
             auto [camera_infos, scene_center, train_val_split] =
-                read_transforms_cameras_and_images(transforms_file, options);
+                read_transforms_cameras_and_images(transforms_file, options, &warnings);
 
             std::vector<std::string> missing_images;
             std::vector<std::string> unreadable_images;
@@ -451,7 +452,6 @@ namespace lfs::io {
             }
 
             std::shared_ptr<PointCloud> point_cloud;
-            std::vector<std::string> warnings;
             if (!missing_images.empty()) {
                 warnings.push_back(format_missing_dataset_images_warning(missing_images));
             }

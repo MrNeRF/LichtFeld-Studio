@@ -6,6 +6,8 @@
   "training.reset_before_strategy_change": "Réinitialisez l’entraînement avant de changer de stratégie.",
   "io.mesh_no_triangle_faces": "Le fichier de maillage ne contient aucune face triangulaire.",
   "io.no_finite_seed_points": "Le nuage de points ne contient aucun point initial fini. Une initialisation aléatoire sera utilisée.",
+  "io.dataset_camera_invalid_focal": "{} caméra(s) du jeu de données ont été ignorées car leur focale est nulle, négative ou non finie (exemples : {}).",
+  "io.dataset_camera_no_valid_focal": "Aucune caméra du jeu de données n’a une focale valide. Vérifiez l’étalonnage des caméras et rechargez le jeu de données.",
   "io.mesh_nonfinite_vertices": "Le maillage contient des coordonnées de sommets non finies.",
   "io.colmap_skipped_invalid_pose": "L’import COLMAP a ignoré des images dont la pose est invalide (nombre : {} ; exemples : {} [{}])",
   "ui.vram_window_1m": "1 min",
