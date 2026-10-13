@@ -123,6 +123,7 @@ class KeymapBindingsSection:
             lf.keymap.Action.ASSET_REFRESH,
             lf.keymap.Action.HISTOGRAM_ZOOM_MARKED,
             lf.keymap.Action.TOGGLE_PERFORMANCE_HUD,
+            lf.keymap.Action.TOGGLE_PYTHON_CONSOLE,
         ],
         "sequencer_global": [
             lf.keymap.Action.SEQUENCER_ADD_KEYFRAME,

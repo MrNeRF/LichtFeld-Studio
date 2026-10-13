@@ -342,6 +342,7 @@ def preferences_panel_module(monkeypatch):
                 name="ASSET_GALLERY_COPY_LINK", value=81
             ),
             ASSET_REFRESH=SimpleNamespace(name="ASSET_REFRESH", value=85),
+            TOGGLE_PYTHON_CONSOLE=SimpleNamespace(name="TOGGLE_PYTHON_CONSOLE", value=90),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",

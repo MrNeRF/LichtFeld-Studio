@@ -282,41 +282,13 @@
         <span class="stat-label">{{ peak_bin_label }}</span>
         <span class="stat-value">{{ peak_text }}</span>
       </div>
-    </div>
-
-    <div id="histogram-footer">
-      <div class="footer-stat">
-        <span class="footer-label">{{ marked_label }}</span>
-        <span class="footer-value">{{ marked_range_text }}</span>
+      <div class="stat-card">
+        <span class="stat-label">{{ marked_label }}</span>
+        <span class="stat-value stat-value--small">{{ marked_range_text }}</span>
       </div>
-      <div class="footer-stat">
-        <span class="footer-label">{{ count_label }}</span>
-        <span class="footer-value">{{ marked_count_text }}</span>
-      </div>
-      <span class="footer-hint">{{ status_hint }}</span>
-      <div class="footer-history-actions">
-        <button type="button"
-                class="btn btn--secondary histogram-history-btn"
-                data-attr-title="undo_tooltip"
-                data-event-click="undo_history()"
-                data-attrif-disabled="!undo_enabled">
-          <img class="histogram-history-icon" src="../icon/undo.png" />
-        </button>
-        <button type="button"
-                class="btn btn--secondary histogram-history-btn"
-                data-attr-title="redo_tooltip"
-                data-event-click="redo_history()"
-                data-attrif-disabled="!redo_enabled">
-          <img class="histogram-history-icon" src="../icon/redo.png" />
-        </button>
-      </div>
-      <div class="footer-text-actions">
-        <button class="btn btn--secondary footer-text-action"
-                data-event-click="clear_mark()"
-                data-attrif-disabled="!clear_enabled"><span class="btn-label">{{ clear_label }}</span></button>
-        <button class="btn btn--error footer-text-action"
-                data-event-click="delete_marked()"
-                data-attrif-disabled="!delete_enabled"><span class="btn-label">{{ delete_label }}</span></button>
+      <div class="stat-card">
+        <span class="stat-label">{{ count_label }}</span>
+        <span class="stat-value">{{ marked_count_text }}</span>
       </div>
     </div>
   </div>

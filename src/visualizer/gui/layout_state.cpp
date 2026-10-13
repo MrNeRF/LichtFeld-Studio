@@ -190,7 +190,7 @@ namespace lfs::vis::gui {
                         show_sequencer = read(
                             "show_sequencer",
                             show_sequencer);
-                        if (j.contains("windows") &&
+                        if (lfs::core::persisted_settings::present(j, "windows") &&
                             j["windows"].is_object()) {
                             for (const auto& [key, val] :
                                  j["windows"].items()) {
@@ -201,7 +201,7 @@ namespace lfs::vis::gui {
                                     LOG_WARN("Invalid window visibility in UI settings for '{}'", key);
                                 }
                             }
-                        } else if (j.contains("windows")) {
+                        } else if (lfs::core::persisted_settings::present(j, "windows")) {
                             LOG_WARN("Invalid window visibility map in UI settings");
                         }
                     }
@@ -209,7 +209,7 @@ namespace lfs::vis::gui {
                     file_association = read(
                         "file_association",
                         file_association);
-                    if (j.contains("vram_hud") &&
+                    if (lfs::core::persisted_settings::present(j, "vram_hud") &&
                         j["vram_hud"].is_object()) {
                         const auto& vh =
                             j["vram_hud"];
@@ -235,7 +235,7 @@ namespace lfs::vis::gui {
                         vram_hud_visible_categories = read_hud("visible_categories", vram_hud_visible_categories) & 1023u;
                         vram_hud_movers_collapsed = read_hud("movers_collapsed", vram_hud_movers_collapsed);
                         vram_hud_peak_collapsed = read_hud("peak_collapsed", vram_hud_peak_collapsed);
-                        if (vh.contains("collapsed") &&
+                        if (lfs::core::persisted_settings::present(vh, "collapsed") &&
                             vh["collapsed"].is_array()) {
                             vram_hud_collapsed_paths.clear();
                             for (const auto& entry :
@@ -247,14 +247,14 @@ namespace lfs::vis::gui {
                                     LOG_WARN("Invalid collapsed HUD path in UI settings; skipping it");
                                 }
                             }
-                        } else if (vh.contains("collapsed")) {
+                        } else if (lfs::core::persisted_settings::present(vh, "collapsed")) {
                             LOG_WARN("Invalid collapsed HUD paths in UI settings");
                         }
-                    } else if (j.contains("vram_hud")) {
+                    } else if (lfs::core::persisted_settings::present(j, "vram_hud")) {
                         LOG_WARN("Invalid HUD object in UI settings");
                     }
 
-                    if (j.contains("perf_hud") &&
+                    if (lfs::core::persisted_settings::present(j, "perf_hud") &&
                         j["perf_hud"].is_object()) {
                         const auto& ph = j["perf_hud"];
                         const auto read_perf = [&ph](const char* key, auto fallback) {
@@ -264,7 +264,7 @@ namespace lfs::vis::gui {
                             "visible", perf_hud_visible);
                         perf_hud_expanded = read_perf(
                             "expanded", perf_hud_expanded);
-                    } else if (j.contains("perf_hud")) {
+                    } else if (lfs::core::persisted_settings::present(j, "perf_hud")) {
                         LOG_WARN("Invalid performance HUD object in UI settings");
                     }
                 };

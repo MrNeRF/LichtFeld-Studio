@@ -1942,6 +1942,10 @@ namespace lfs::vis {
                     gui->openPreferences();
                 return;
 
+            case input::Action::TOGGLE_PYTHON_CONSOLE:
+                lfs::python::show_python_console();
+                return;
+
             case input::Action::SELECT_ALL_SCENE_NODES:
                 if (gui)
                     (void)gui->selectAllSceneNodesIfFocused();

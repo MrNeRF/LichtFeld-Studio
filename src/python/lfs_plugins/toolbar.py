@@ -501,6 +501,20 @@ class _GizmoToolbarController:
                 )
             )
 
+        if histogram_mode_available(context):
+            mode_buttons.append(
+                _button_record(
+                    "selection-histogram",
+                    "toggle_histogram",
+                    _HISTOGRAM_PANEL_ID,
+                    _icon_src("histogram.png"),
+                    tooltip_key="toolbar.histogram",
+                    tooltip_text="Histogram",
+                    selected=_panel_enabled(_HISTOGRAM_PANEL_ID),
+                    enabled=enabled,
+                )
+            )
+
         group_button = _button_record(
             "group-selection",
             "tool",
@@ -1216,7 +1230,6 @@ class _UtilityToolbarController:
 
     def snapshot(self):
         import lichtfeld as lf
-        from .histogram_support import histogram_mode_available
 
         try:
             camera_mode = str(lf.get_camera_navigation_mode()).lower()
@@ -1321,21 +1334,6 @@ class _UtilityToolbarController:
                 )
             )
 
-        if histogram_mode_available(lf.ui.context()):
-            utility_bottom_buttons.append(
-                _button_record(
-                    "util-histogram",
-                    "toggle_panel",
-                    _HISTOGRAM_PANEL_ID,
-                    _icon_src("histogram.png"),
-                    tooltip_key="toolbar.histogram",
-                    tooltip_text="Histogram",
-                    selected=_bottom_dock_panel_selected(
-                        _HISTOGRAM_PANEL_ID, _panel_enabled(_HISTOGRAM_PANEL_ID)
-                    ),
-                )
-            )
-
         return {
             "camera_mode_buttons": camera_mode_buttons,
             "primary_buttons": primary_buttons,
@@ -1354,6 +1352,20 @@ class _UtilityToolbarController:
             return
         if action == "focus_selection":
             lf.focus_selection()
+            return
+        if action == "toggle_histogram":
+            if not histogram_mode_available(lf.ui.context()):
+                lf.ui.set_panel_enabled(value, False)
+                return
+            if not _panel_enabled(value):
+                select_tool = ToolRegistry.get("builtin.select")
+                if select_tool is not None and select_tool.can_activate(lf.ui.context()):
+                    ToolRegistry.set_active("builtin.select")
+            _toggle_bottom_dock_panel(
+                value,
+                _panel_enabled(value),
+                lambda visible: lf.ui.set_panel_enabled(value, visible),
+            )
             return
         if action == "toggle_sequencer":
             if RuntimeState.trainer_state.value in _TOOLBAR_HIDDEN_STATES:
