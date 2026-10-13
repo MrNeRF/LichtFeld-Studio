@@ -41,6 +41,7 @@ class KeymapBindingsSection:
         "navigation_global": [
             lf.keymap.Action.CAMERA_RESET_HOME,
             lf.keymap.Action.CAMERA_SET_HOME,
+            lf.keymap.Action.CAMERA_FOCUS_SELECTION,
             lf.keymap.Action.CAMERA_NEXT_VIEW,
             lf.keymap.Action.CAMERA_PREV_VIEW,
         ],
@@ -48,6 +49,12 @@ class KeymapBindingsSection:
             lf.keymap.Action.SELECTION_REPLACE,
             lf.keymap.Action.SELECTION_ADD,
             lf.keymap.Action.SELECTION_REMOVE,
+            lf.keymap.Action.SELECTION_INTERSECT,
+            lf.keymap.Action.CONFIRM_POLYGON,
+            lf.keymap.Action.CANCEL_POLYGON,
+            lf.keymap.Action.UNDO_POLYGON_VERTEX,
+            lf.keymap.Action.DELETE_SELECTED,
+            lf.keymap.Action.BRUSH_RESIZE,
         ],
         "selection_global": [
             lf.keymap.Action.SELECT_MODE_CENTERS,
@@ -58,11 +65,6 @@ class KeymapBindingsSection:
             lf.keymap.Action.SELECT_MODE_COLOR,
             lf.keymap.Action.SELECT_MODE_BOX,
             lf.keymap.Action.SELECT_MODE_SPHERE,
-        ],
-        "selection_modal": [
-            lf.keymap.Action.CONFIRM_POLYGON,
-            lf.keymap.Action.CANCEL_POLYGON,
-            lf.keymap.Action.UNDO_POLYGON_VERTEX,
         ],
         "depth": [
             lf.keymap.Action.TOGGLE_SELECTION_DEPTH_FILTER,
@@ -75,6 +77,7 @@ class KeymapBindingsSection:
         "node_picking": [
             lf.keymap.Action.NODE_PICK,
             lf.keymap.Action.NODE_RECT_SELECT,
+            lf.keymap.Action.DELETE_NODE,
         ],
         "editing": [
             lf.keymap.Action.UNDO,
@@ -111,8 +114,13 @@ class KeymapBindingsSection:
             lf.keymap.Action.SELECT_ALL_SCENE_NODES,
             lf.keymap.Action.TOGGLE_SCENE_SELECTION_VISIBILITY,
             lf.keymap.Action.TOGGLE_SCENE_SELECTION_TRAINING,
+            lf.keymap.Action.GROUP_SELECTED_SCENE_NODES,
+            lf.keymap.Action.UNGROUP_SELECTED_SCENE_NODE,
             lf.keymap.Action.TOGGLE_MCP_SERVER,
             lf.keymap.Action.TOGGLE_MCP_BINDING,
+            lf.keymap.Action.ASSET_GALLERY_PRIMARY,
+            lf.keymap.Action.ASSET_GALLERY_COPY_LINK,
+            lf.keymap.Action.ASSET_REFRESH,
             lf.keymap.Action.HISTOGRAM_ZOOM_MARKED,
             lf.keymap.Action.TOGGLE_PERFORMANCE_HUD,
         ],
@@ -486,13 +494,9 @@ class KeymapBindingsSection:
                 rows.append(self._binding_row_record(action, mode))
 
         if mode == lf.keymap.ToolMode.SELECTION:
-            selection_actions = list(self.BINDING_SECTIONS["selection"])
-            selection_actions.extend(self.BINDING_SECTIONS["selection_modal"])
-            selection_actions.append(lf.keymap.Action.DELETE_SELECTED)
-            selection_actions.append(lf.keymap.Action.BRUSH_RESIZE)
             self._append_binding_section(
                 rows, tr("input_settings.section.selection"),
-                selection_actions, mode)
+                self.BINDING_SECTIONS["selection"], mode)
 
             self._append_binding_section(
                 rows, tr("input_settings.section.depth"),
@@ -509,11 +513,9 @@ class KeymapBindingsSection:
                 self.BINDING_SECTIONS["crop_box"], mode)
 
         if mode in self.SCENE_NODE_MODES:
-            scene_node_actions = list(self.BINDING_SECTIONS["node_picking"])
-            scene_node_actions.append(lf.keymap.Action.DELETE_NODE)
             self._append_binding_section(
                 rows, tr("input_settings.section.node_picking"),
-                scene_node_actions, mode)
+                self.BINDING_SECTIONS["node_picking"], mode)
 
         editing_rows = []
         if mode == lf.keymap.ToolMode.GLOBAL:

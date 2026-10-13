@@ -256,9 +256,11 @@ def preferences_panel_module(monkeypatch):
             CAMERA_SET_HOME=SimpleNamespace(name="CAMERA_SET_HOME", value=17),
             CAMERA_NEXT_VIEW=SimpleNamespace(name="CAMERA_NEXT_VIEW", value=18),
             CAMERA_PREV_VIEW=SimpleNamespace(name="CAMERA_PREV_VIEW", value=19),
+            CAMERA_FOCUS_SELECTION=SimpleNamespace(name="CAMERA_FOCUS_SELECTION", value=76),
             SELECTION_REPLACE=SimpleNamespace(name="SELECTION_REPLACE", value=20),
             SELECTION_ADD=SimpleNamespace(name="SELECTION_ADD", value=21),
             SELECTION_REMOVE=SimpleNamespace(name="SELECTION_REMOVE", value=22),
+            SELECTION_INTERSECT=SimpleNamespace(name="SELECTION_INTERSECT", value=77),
             SELECT_MODE_CENTERS=SimpleNamespace(name="SELECT_MODE_CENTERS", value=23),
             SELECT_MODE_RECTANGLE=SimpleNamespace(name="SELECT_MODE_RECTANGLE", value=24),
             SELECT_MODE_POLYGON=SimpleNamespace(name="SELECT_MODE_POLYGON", value=25),
@@ -327,6 +329,19 @@ def preferences_panel_module(monkeypatch):
             TOGGLE_SCENE_SELECTION_TRAINING=SimpleNamespace(
                 name="TOGGLE_SCENE_SELECTION_TRAINING", value=84
             ),
+            GROUP_SELECTED_SCENE_NODES=SimpleNamespace(
+                name="GROUP_SELECTED_SCENE_NODES", value=78
+            ),
+            UNGROUP_SELECTED_SCENE_NODE=SimpleNamespace(
+                name="UNGROUP_SELECTED_SCENE_NODE", value=79
+            ),
+            ASSET_GALLERY_PRIMARY=SimpleNamespace(
+                name="ASSET_GALLERY_PRIMARY", value=80
+            ),
+            ASSET_GALLERY_COPY_LINK=SimpleNamespace(
+                name="ASSET_GALLERY_COPY_LINK", value=81
+            ),
+            ASSET_REFRESH=SimpleNamespace(name="ASSET_REFRESH", value=85),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",

@@ -7,6 +7,7 @@ from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import json
+import re
 import sys
 
 import pytest
@@ -106,6 +107,11 @@ ACTION_NAMES = (
     "SELECT_ALL_SCENE_NODES",
     "TOGGLE_SCENE_SELECTION_VISIBILITY",
     "TOGGLE_SCENE_SELECTION_TRAINING",
+    "GROUP_SELECTED_SCENE_NODES",
+    "UNGROUP_SELECTED_SCENE_NODE",
+    "ASSET_GALLERY_PRIMARY",
+    "ASSET_GALLERY_COPY_LINK",
+    "ASSET_REFRESH",
 )
 
 
@@ -200,7 +206,12 @@ def _install_lf_stub(monkeypatch):
             return ["mouse_button", "mouse_drag"]
         if action_value in (action.CAMERA_ZOOM, action.CAMERA_ROLL, action.BRUSH_RESIZE):
             return ["mouse_scroll"]
-        if action_value in (action.SELECTION_REPLACE, action.SELECTION_ADD, action.SELECTION_REMOVE):
+        if action_value in (
+            action.SELECTION_REPLACE,
+            action.SELECTION_ADD,
+            action.SELECTION_REMOVE,
+            action.SELECTION_INTERSECT,
+        ):
             return ["mouse_button", "mouse_drag"]
         if action_value == action.NODE_PICK:
             return ["mouse_button"]
@@ -460,6 +471,55 @@ def _bind_panel(prefs):
     ctx = SimpleNamespace(create_data_model=lambda name: model if name == "preferences" else None)
     panel.on_bind_model(ctx)
     return panel, model
+
+
+def _cpp_block(source, marker):
+    start = source.index(marker)
+    opening = source.index("{", start)
+    depth = 0
+    for index in range(opening, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1:index]
+    raise AssertionError(f"Unclosed C++ block after {marker}")
+
+
+def test_default_actions_with_ui_sections_are_listed_in_editor(keymap_bindings_module):
+    prefs, _state = keymap_bindings_module
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "src/visualizer/input/input_bindings.cpp").read_text()
+    defaults = _cpp_block(source, "Profile InputBindings::createDefaultProfile()")
+    description = _cpp_block(source, "const ActionDescriptor& describe(const Action action)")
+    default_actions = set(re.findall(r"Action::([A-Z][A-Z0-9_]*)", defaults))
+    descriptor_sections = {
+        name: bool(re.search(r"\.ui_section\s*=\s*ActionSection::(?!None\b)", body))
+        for name, body in re.findall(
+            r"static constexpr ActionDescriptor (d_\w+)\{(.*?)\};", description, re.S
+        )
+    }
+    switch = _cpp_block(description, "switch (action)")
+    described = set()
+    pending = []
+    for match in re.finditer(r"case Action::(\w+):|return (d_\w+);", switch):
+        if match.group(1):
+            pending.append(match.group(1))
+        else:
+            if descriptor_sections.get(match.group(2), False):
+                described.update(pending)
+            pending.clear()
+
+    editor_actions = {
+        action.name
+        for actions in prefs.KeymapBindingsSection.BINDING_SECTIONS.values()
+        for action in actions
+    }
+    # No intentionally hidden action currently has both a default and a UI section.
+    intentionally_hidden = set()
+    missing = default_actions & described - editor_actions - intentionally_hidden
+    assert not missing, f"Default UI actions missing from the key map editor: {sorted(missing)}"
 
 
 def test_keymap_section_is_wired_through_preferences(keymap_bindings_module):
@@ -883,6 +943,29 @@ def test_keymap_selection_mode_shows_only_streamlined_depth_actions(keymap_bindi
     assert str(prefs.lf.keymap.Action.TOGGLE_DEPTH_MODE.value) not in action_ids
     assert str(prefs.lf.keymap.Action.DEPTH_ADJUST_NEAR.value) not in action_ids
     assert str(prefs.lf.keymap.Action.DEPTH_ADJUST_SIDE.value) not in action_ids
+
+
+def test_selection_intersect_is_editable_and_accepts_alt_drag_capture(keymap_bindings_module):
+    prefs, state = keymap_bindings_module
+    panel, _model = _bind_panel(prefs)
+    section = panel._keymap
+    action = prefs.lf.keymap.Action.SELECTION_INTERSECT
+    mode = prefs.lf.keymap.ToolMode.SELECTION
+
+    section._rebuild_binding_rows(mode)
+    rows = section._handle.records["binding_rows"]
+    assert str(action.value) in {row["action_id"] for row in rows if not row["is_section"]}
+    assert "mouse_drag" in prefs.lf.keymap.get_allowed_trigger_kinds(action)
+    assert section._capture_prompt(action) == "input_settings.click_or_drag_mouse"
+
+    button = _ElementStub()
+    button.attributes = {
+        "data-btn-action": "rebind",
+        "data-action-id": str(action.value),
+        "data-mode-id": str(mode.value),
+    }
+    section._on_table_click(_EventStub(button))
+    assert state.started == [(mode, action)]
 
 
 def test_keymap_transform_mode_exposes_node_picking(keymap_bindings_module):
