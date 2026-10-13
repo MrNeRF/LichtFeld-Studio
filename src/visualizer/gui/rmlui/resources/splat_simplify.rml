@@ -55,16 +55,16 @@
           <span class="text-muted">{{simplify_output_name}}</span>
         </div>
       </div>
-      <div class="rendering-simplify-actions">
-        <button class="btn btn--primary" data-tooltip="tooltip.simplify_apply" data-event-click="simplify_apply()" data-attrif-disabled="!simplify_can_apply">{{label_simplify_apply}}</button>
-        <button class="btn btn--secondary" data-tooltip="tooltip.simplify_cancel" data-event-click="simplify_cancel()" data-attrif-disabled="!simplify_show_progress">{{label_simplify_cancel}}</button>
-      </div>
       <div class="rendering-simplify-progress" data-if="simplify_show_progress">
         <progress max="1" data-attr-value="simplify_progress_value" />
         <span class="progress__text">{{simplify_progress_pct}}</span>
       </div>
       <div class="rendering-simplify-stage text-muted" data-if="simplify_show_progress">{{simplify_progress_stage}}</div>
       <div class="rendering-simplify-error" data-if="simplify_show_error">{{simplify_error_text}}</div>
+    </div>
+    <div class="rendering-simplify-actions">
+      <button class="btn btn--primary" data-tooltip="tooltip.simplify_apply" data-event-click="simplify_apply()" data-attrif-disabled="!simplify_can_apply">{{label_simplify_apply}}</button>
+      <button class="btn btn--secondary" data-attr-data-tooltip="simplify_cancel_tooltip" data-event-click="simplify_cancel()">{{label_simplify_cancel}}</button>
     </div>
   </body>
 </rml>

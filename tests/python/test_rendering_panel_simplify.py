@@ -198,6 +198,7 @@ def test_rendering_panel_simplify_progress_and_cancel_update_retained_state(rend
     assert panel._handle.dirty_fields == [
         "simplify_can_apply",
         "simplify_show_progress",
+        "simplify_cancel_tooltip",
         "simplify_progress_value",
         "simplify_progress_pct",
         "simplify_progress_stage",
@@ -267,3 +268,16 @@ def test_simplify_uses_standard_floating_window_chrome():
     assert root.find("head/link[@type='text/template']").get("href") == "floating_window.rml"
     template = ET.parse(resources / "floating_window.rml").getroot()
     assert template.find(".//*[@id='close-btn']") is not None
+    cancel = root.find("body/div[@class='rendering-simplify-actions']/button[@data-event-click='simplify_cancel()']")
+    assert cancel is not None
+    assert "data-attrif-disabled" not in cancel.attrib
+
+
+def test_simplify_cancel_closes_idle_window_without_cancelling_job(rendering_panel_module, monkeypatch):
+    module, state = rendering_panel_module
+    panel = module.SplatSimplifyPanel()
+    enabled_calls = []
+    monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *args: enabled_calls.append(args), raising=False)
+    panel._on_simplify_cancel()
+    assert enabled_calls == [("lfs.splat_simplify", False)]
+    assert state.cancel_calls == 0

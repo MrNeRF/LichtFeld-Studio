@@ -101,6 +101,8 @@ class SplatSimplifyPanel(Panel):
                          lambda: _tr_fallback("common.apply", "Apply"))
         model.bind_func("label_simplify_cancel",
                          lambda: _tr_fallback("common.cancel", "Cancel"))
+        model.bind_func("simplify_cancel_tooltip", lambda:
+                        "tooltip.simplify_cancel" if self._simplify_task_active else "common.cancel")
         model.bind_func("simplify_has_source", lambda: bool(self._simplify_source_name))
         model.bind_func("simplify_source_name", lambda: self._simplify_source_name)
         model.bind_func("simplify_original_count", lambda: f"{self._simplify_original_count:,}")
@@ -325,6 +327,7 @@ class SplatSimplifyPanel(Panel):
         self._dirty_model(
             "simplify_can_apply",
             "simplify_show_progress",
+            "simplify_cancel_tooltip",
             "simplify_progress_value",
             "simplify_progress_pct",
             "simplify_progress_stage",
@@ -350,6 +353,9 @@ class SplatSimplifyPanel(Panel):
         self._start_simplify()
 
     def _on_simplify_cancel(self, _handle=None, _ev=None, _args=None):
+        if not self._simplify_task_state().get("active", False):
+            lf.ui.set_panel_enabled(self.id, False)
+            return
         cancel = getattr(lf, "cancel_splat_simplify", None)
         if cancel is not None:
             cancel()

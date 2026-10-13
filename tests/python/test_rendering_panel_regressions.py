@@ -436,7 +436,7 @@ def test_rendering_rml_exposes_simplify_tooltips_and_locale_labels():
     assert 'data-tooltip="tooltip.simplify_opacity_prune"' in content
     assert 'data-tooltip="tooltip.simplify_output"' in content
     assert 'data-tooltip="tooltip.simplify_apply"' in content
-    assert 'data-tooltip="tooltip.simplify_cancel"' in content
+    assert 'data-attr-data-tooltip="simplify_cancel_tooltip"' in content
     rendering_content = rendering_rml.with_name("rendering.rml").read_text(encoding="utf-8")
     custom_option_start = rendering_content.find('<option value="__custom__"')
     assert custom_option_start >= 0
