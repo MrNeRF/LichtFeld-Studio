@@ -1691,6 +1691,7 @@
     "action.open_preferences": "Apri preferenze",
     "action.toggle_mcp_server": "Attiva/disattiva server MCP",
     "action.toggle_mcp_binding": "Cambia binding MCP locale/rete",
+    "action.toggle_python_console": "Attiva o disattiva la console Python",
     "action.histogram_zoom_marked": "Zoom istogramma al cursore",
     "action.sequencer_add_keyframe": "Aggiungi keyframe",
     "action.sequencer_update_keyframe": "Aggiorna keyframe",

@@ -72,7 +72,7 @@ namespace lfs::vis::input {
             publishKeymapNotice(lfs::ErrorCode::InvalidArgument, std::move(message));
         }
 
-        constexpr int PROFILE_VERSION = 31; // Store changes to individual defaults.
+        constexpr int PROFILE_VERSION = 32; // Store changes to individual defaults.
 
         [[nodiscard]] std::optional<Binding> parseStoredBinding(const nlohmann::json& value);
         [[nodiscard]] std::string triggerIdentity(const Binding& binding);
@@ -133,7 +133,7 @@ namespace lfs::vis::input {
 
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
-        constexpr Action LAST_ACTION = Action::ASSET_REFRESH;
+        constexpr Action LAST_ACTION = Action::TOGGLE_PYTHON_CONSOLE;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -2034,6 +2034,8 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
             {KeyTrigger{KEY_F10, MODIFIER_NONE}, Action::TOGGLE_PERFORMANCE_HUD, "Performance HUD"},
             {KeyTrigger{KEY_COMMA, MODIFIER_CTRL}, Action::OPEN_PREFERENCES, "Preferences"},
+            {KeyTrigger{KEY_GRAVE_ACCENT, MODIFIER_CTRL}, Action::TOGGLE_PYTHON_CONSOLE,
+             getActionName(Action::TOGGLE_PYTHON_CONSOLE)},
             {KeyTrigger{KEY_A, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::SELECT_ALL_SCENE_NODES,
              getActionName(Action::SELECT_ALL_SCENE_NODES)},
             {KeyTrigger{KEY_H, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_SCENE_SELECTION_VISIBILITY,
@@ -2220,6 +2222,7 @@ namespace lfs::vis::input {
         case Action::ASSET_GALLERY_PRIMARY: return "Gallery Primary Action";
         case Action::ASSET_GALLERY_COPY_LINK: return "Copy Gallery Link";
         case Action::ASSET_REFRESH: return "Refresh Assets";
+        case Action::TOGGLE_PYTHON_CONSOLE: return "Toggle Python Console";
         case Action::UNGROUP_SELECTED_SCENE_NODE: return "Ungroup Selected Scene Node";
         default: return "Unknown";
         }
@@ -2314,6 +2317,7 @@ namespace lfs::vis::input {
         case Action::ASSET_GALLERY_PRIMARY: return "asset_gallery_primary";
         case Action::ASSET_GALLERY_COPY_LINK: return "asset_gallery_copy_link";
         case Action::ASSET_REFRESH: return "asset_refresh";
+        case Action::TOGGLE_PYTHON_CONSOLE: return "toggle_python_console";
         case Action::UNGROUP_SELECTED_SCENE_NODE: return "ungroup_selected_scene_node";
         default: return {};
         }
@@ -3068,6 +3072,7 @@ namespace lfs::vis::input {
         case Action::ASSET_GALLERY_PRIMARY:
         case Action::ASSET_GALLERY_COPY_LINK:
         case Action::ASSET_REFRESH:
+        case Action::TOGGLE_PYTHON_CONSOLE:
         case Action::UNGROUP_SELECTED_SCENE_NODE:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:

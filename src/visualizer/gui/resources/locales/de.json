@@ -1691,6 +1691,7 @@
     "action.open_preferences": "Einstellungen öffnen",
     "action.toggle_mcp_server": "MCP-Server ein-/ausschalten",
     "action.toggle_mcp_binding": "MCP-Bindung lokal/Netzwerk wechseln",
+    "action.toggle_python_console": "Python-Konsole umschalten",
     "action.histogram_zoom_marked": "Histogramm am Cursor zoomen",
     "action.sequencer_add_keyframe": "Keyframe hinzufügen",
     "action.sequencer_update_keyframe": "Keyframe aktualisieren",

@@ -1691,6 +1691,7 @@
     "action.open_preferences": "환경설정 열기",
     "action.toggle_mcp_server": "MCP 서버 켜기/끄기",
     "action.toggle_mcp_binding": "MCP 로컬/네트워크 바인딩 전환",
+    "action.toggle_python_console": "Python 콘솔 전환",
     "action.histogram_zoom_marked": "커서 위치에서 히스토그램 확대/축소",
     "action.sequencer_add_keyframe": "키프레임 추가",
     "action.sequencer_update_keyframe": "키프레임 업데이트",

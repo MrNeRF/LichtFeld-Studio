@@ -179,6 +179,8 @@ class Action(enum.Enum):
 
     ASSET_REFRESH = 89
 
+    TOGGLE_PYTHON_CONSOLE = 90
+
     UNGROUP_SELECTED_SCENE_NODE = 86
 
 class ToolMode(enum.Enum):

@@ -3,7 +3,7 @@
 """Tools menu implementation."""
 
 import lichtfeld as lf
-from .layouts.menus import register_menu, menu_action, menu_operator, menu_separator
+from .layouts.menus import keymap_shortcut, register_menu, menu_action, menu_operator, menu_separator
 
 __lfs_menu_classes__ = ["ToolsMenu"]
 
@@ -58,7 +58,7 @@ class ToolsMenu:
             menu_action(
                 tr("menu.tools.python_console"),
                 lf.ui.show_python_console,
-                shortcut="Ctrl+`",
+                shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_PYTHON_CONSOLE),
             ),
             menu_action(
                 tr("menu.tools.plugin_marketplace"),

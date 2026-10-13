@@ -1691,6 +1691,7 @@
     "action.open_preferences": "Otwórz preferencje",
     "action.toggle_mcp_server": "Włącz/wyłącz serwer MCP",
     "action.toggle_mcp_binding": "Przełącz powiązanie MCP lokalne/sieciowe",
+    "action.toggle_python_console": "Przełącz konsolę Pythona",
     "action.histogram_zoom_marked": "Powiększ histogram przy kursorze",
     "action.sequencer_add_keyframe": "Dodaj klatkę kluczową",
     "action.sequencer_update_keyframe": "Aktualizuj klatkę kluczową",

@@ -1691,6 +1691,7 @@
     "action.open_preferences": "Ouvrir les préférences",
     "action.toggle_mcp_server": "Activer/désactiver le serveur MCP",
     "action.toggle_mcp_binding": "Basculer la liaison MCP local/réseau",
+    "action.toggle_python_console": "Basculer la console Python",
     "action.histogram_zoom_marked": "Zoomer l'histogramme au curseur",
     "action.sequencer_add_keyframe": "Ajouter une image clé",
     "action.sequencer_update_keyframe": "Mettre à jour l'image clé",

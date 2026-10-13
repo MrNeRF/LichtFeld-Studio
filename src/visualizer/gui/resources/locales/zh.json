@@ -1691,6 +1691,7 @@
     "action.open_preferences": "打开偏好设置",
     "action.toggle_mcp_server": "切换 MCP 服务器",
     "action.toggle_mcp_binding": "切换 MCP 本地/网络绑定",
+    "action.toggle_python_console": "切换 Python 控制台",
     "action.histogram_zoom_marked": "在光标处缩放直方图",
     "action.sequencer_add_keyframe": "添加关键帧",
     "action.sequencer_update_keyframe": "更新关键帧",

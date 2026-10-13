@@ -1689,6 +1689,7 @@
     "action.open_preferences": "Open Preferences",
     "action.toggle_mcp_server": "Toggle MCP Server",
     "action.toggle_mcp_binding": "Toggle MCP Local/Network Binding",
+    "action.toggle_python_console": "Toggle Python Console",
     "action.histogram_zoom_marked": "Zoom Histogram at Cursor",
     "action.sequencer_add_keyframe": "Add Keyframe",
     "action.sequencer_update_keyframe": "Update Keyframe",

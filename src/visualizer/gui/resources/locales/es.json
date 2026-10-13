@@ -1691,6 +1691,7 @@
     "action.open_preferences": "Abrir preferencias",
     "action.toggle_mcp_server": "Activar/desactivar servidor MCP",
     "action.toggle_mcp_binding": "Cambiar enlace MCP local/red",
+    "action.toggle_python_console": "Alternar la consola de Python",
     "action.histogram_zoom_marked": "Zoom del Histograma en el Cursor",
     "action.sequencer_add_keyframe": "Añadir fotograma clave",
     "action.sequencer_update_keyframe": "Actualizar fotograma clave",

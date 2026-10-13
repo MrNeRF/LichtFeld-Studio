@@ -137,6 +137,7 @@ def _install_lichtfeld_stub(monkeypatch):
             DESELECT_ALL="deselect_all",
             OPEN_PREFERENCES="open_preferences",
             TOGGLE_PERFORMANCE_HUD="toggle_performance_hud",
+            TOGGLE_PYTHON_CONSOLE="toggle_python_console",
         ),
         ToolMode=SimpleNamespace(GLOBAL="global"),
         is_bound=lambda _action, _mode: True,
@@ -151,6 +152,7 @@ def _install_lichtfeld_stub(monkeypatch):
             "deselect_all": "Ctrl+D",
             "open_preferences": "Ctrl+,",
             "toggle_performance_hud": "F10",
+            "toggle_python_console": "Ctrl+`",
         }.get(action, "Unbound"),
     )
 
@@ -240,6 +242,13 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert edit_items[3]["label"] == "tr:menu.edit.preferences"
 
     assert edit_mod.EditMenu.order < select_mod.SelectMenu.order < tools_mod.ToolsMenu.order
+
+    tools_items = tools_mod.ToolsMenu().menu_items()
+    python_console = next(item for item in tools_items
+                          if item.get("label") == "tr:menu.tools.python_console")
+    assert python_console["shortcut"] == "Ctrl+`"
+    python_console["callback"]()
+    assert state["python_console_shown"] == 1
 
     select_items = select_mod.SelectMenu().menu_items()
     assert len(select_items) == 9
@@ -352,7 +361,7 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert view_items[4]["label"] == "tr:image_preview.reset_view"
     assert view_items[5]["label"] == "tr:main_panel.console"
     view_items[5]["callback"]()
-    assert state["python_console_shown"] == 1
+    assert state["python_console_shown"] == 2
 
     keymap = sys.modules["lichtfeld"].keymap
     keymap.get_trigger_description = lambda action, _mode: {
