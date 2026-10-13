@@ -694,6 +694,21 @@ namespace lfs::vis {
         return settings_;
     }
 
+    RenderingManager::CameraProjectionSettings RenderingManager::getCameraProjectionSettings() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return {settings_.orthographic, settings_.focal_length_mm, settings_.ortho_scale};
+    }
+
+    void RenderingManager::setOrthographicScale(const float scale) {
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            settings_.ortho_scale = std::clamp(scale, 1.0f, 10000.0f);
+            markDirty(DirtyFlag::CAMERA, lfs::vis::FrameReason::CameraMotion);
+        }
+        auto& generation = app_store().render_settings_generation;
+        generation.set(generation.get() + 1);
+    }
+
     void RenderingManager::reportSceneUpscalerRuntimeSelection(
         const SceneUpscalerSelection selection) {
         std::lock_guard lock(settings_mutex_);

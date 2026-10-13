@@ -2407,24 +2407,26 @@ namespace lfs::vis {
         }
 
         // Sync movement key states with actual keyboard (using cached keys)
-        const auto& mk = currentMovementKeys();
-        if (keys_movement_[0] && (mk.forward < 0 || !isKeyPressed(mk.forward))) {
-            keys_movement_[0] = false;
-        }
-        if (keys_movement_[1] && (mk.left < 0 || !isKeyPressed(mk.left))) {
-            keys_movement_[1] = false;
-        }
-        if (keys_movement_[2] && (mk.backward < 0 || !isKeyPressed(mk.backward))) {
-            keys_movement_[2] = false;
-        }
-        if (keys_movement_[3] && (mk.right < 0 || !isKeyPressed(mk.right))) {
-            keys_movement_[3] = false;
-        }
-        if (keys_movement_[4] && (mk.up < 0 || !isKeyPressed(mk.up))) {
-            keys_movement_[4] = false;
-        }
-        if (keys_movement_[5] && (mk.down < 0 || !isKeyPressed(mk.down))) {
-            keys_movement_[5] = false;
+        if (window_) {
+            const auto& mk = currentMovementKeys();
+            if (keys_movement_[0] && (mk.forward < 0 || !isKeyPressed(mk.forward))) {
+                keys_movement_[0] = false;
+            }
+            if (keys_movement_[1] && (mk.left < 0 || !isKeyPressed(mk.left))) {
+                keys_movement_[1] = false;
+            }
+            if (keys_movement_[2] && (mk.backward < 0 || !isKeyPressed(mk.backward))) {
+                keys_movement_[2] = false;
+            }
+            if (keys_movement_[3] && (mk.right < 0 || !isKeyPressed(mk.right))) {
+                keys_movement_[3] = false;
+            }
+            if (keys_movement_[4] && (mk.up < 0 || !isKeyPressed(mk.up))) {
+                keys_movement_[4] = false;
+            }
+            if (keys_movement_[5] && (mk.down < 0 || !isKeyPressed(mk.down))) {
+                keys_movement_[5] = false;
+            }
         }
 
         // Orbit ease-out: while dragging, let a held-still pause fade the stored
@@ -2543,15 +2545,45 @@ namespace lfs::vis {
         } else {
             auto* const movement_viewport = keys_active ? active_movement_viewport : wasd_momentum_viewport_;
             if (movement_viewport && (keys_active || movement_viewport->camera.hasWasdMomentum())) {
-                movement_viewport->camera.advanceWasd(
-                    delta_time,
-                    keys_active && keys_movement_[0],
-                    keys_active && keys_movement_[2],
-                    keys_active && keys_movement_[1],
-                    keys_active && keys_movement_[3],
-                    keys_active && keys_movement_[4],
-                    keys_active && keys_movement_[5],
-                    movement_speed_bonus);
+                const bool move_forward = keys_active && keys_movement_[0];
+                const bool move_backward = keys_active && keys_movement_[2];
+                const bool move_left = keys_active && keys_movement_[1];
+                const bool move_right = keys_active && keys_movement_[3];
+                const bool move_up = keys_active && keys_movement_[4];
+                const bool move_down = keys_active && keys_movement_[5];
+                auto* const rendering = services().renderingOrNull();
+                const auto projection = rendering ? rendering->getCameraProjectionSettings()
+                                                  : RenderingManager::CameraProjectionSettings{};
+                if (rendering && projection.orthographic && movement_viewport->windowSize.y > 0) {
+                    const float distance = std::max(
+                        glm::length(movement_viewport->camera.pivot - movement_viewport->camera.t), 0.01f);
+                    const float half_tan_fov = std::tan(glm::radians(
+                                                            lfs::rendering::focalLengthToVFov(projection.focal_length_mm)) *
+                                                        0.5f);
+                    const float perspective_scale =
+                        static_cast<float>(movement_viewport->windowSize.y) / (2.0f * distance * half_tan_fov);
+                    const float current_scale = movement_viewport->ortho_scale_override.value_or(projection.ortho_scale);
+                    const float next_scale = movement_viewport->camera.advanceOrthographicWasd(
+                        delta_time, move_forward, move_backward, move_left, move_right, move_up, move_down,
+                        current_scale, perspective_scale, distance, movement_speed_bonus);
+                    if (next_scale != current_scale) {
+                        if (movement_viewport != &viewport_ || movement_viewport->ortho_scale_override)
+                            movement_viewport->ortho_scale_override = next_scale;
+                        if (movement_viewport == &viewport_) {
+                            rendering->setOrthographicScale(next_scale);
+                        }
+                    }
+                } else {
+                    movement_viewport->camera.advanceWasd(
+                        delta_time,
+                        keys_active && keys_movement_[0],
+                        keys_active && keys_movement_[2],
+                        keys_active && keys_movement_[1],
+                        keys_active && keys_movement_[3],
+                        keys_active && keys_movement_[4],
+                        keys_active && keys_movement_[5],
+                        movement_speed_bonus);
+                }
 
                 onCameraMovementStart();
                 publishCameraMove(movement_viewport);

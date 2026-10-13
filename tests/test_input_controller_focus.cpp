@@ -318,6 +318,87 @@ namespace lfs::vis {
         EXPECT_TRUE(controller.needsCameraAnimationFrame());
     }
 
+    TEST_F(InputControllerFocusTest, OrthographicWasdMatchesPerspectiveThroughUpdate) {
+        RenderingManager rendering;
+        services().set(&rendering);
+        auto settings = rendering.getSettings();
+        settings.focal_length_mm = 50.0f;
+        settings.orthographic = true;
+        settings.ortho_scale = 70.0f;
+        rendering.updateSettings(settings);
+        constexpr float dt = 1.0f / 60.0f;
+        constexpr int frames = 30;
+        const auto hold = [&](InputController& controller, const int key) {
+            controller.handleKey(key, input::ACTION_PRESS, input::KEYMOD_NONE);
+            for (int i = 0; i < frames; ++i)
+                controller.update(dt);
+            controller.handleKey(key, input::ACTION_RELEASE, input::KEYMOD_NONE);
+        };
+        Viewport ortho(200, 200);
+        InputController ortho_controller(nullptr, ortho);
+        input::InputRouter ortho_router;
+        ortho_controller.setInputRouter(&ortho_router);
+        ortho_controller.initialize();
+        ortho_router.focusViewportKeyboard();
+        const auto eye = ortho.camera.t;
+        const auto pivot = ortho.camera.pivot;
+        const float distance_to_pivot = glm::length(pivot - eye);
+        hold(ortho_controller, input::KEY_A);
+        const float ortho_pixels = glm::length(ortho.camera.t - eye) * settings.ortho_scale;
+        settings.ortho_scale = 140.0f;
+        rendering.updateSettings(settings);
+        ortho.camera.clearWasdMomentum();
+        ortho.camera.t = eye;
+        ortho.camera.pivot = pivot;
+        hold(ortho_controller, input::KEY_A);
+        const float wide_ortho_pixels = glm::length(ortho.camera.t - eye) * settings.ortho_scale;
+        settings.ortho_scale = 70.0f;
+        rendering.updateSettings(settings);
+        Viewport forward_ortho(200, 200);
+        forward_ortho.camera.t = eye;
+        forward_ortho.camera.pivot = pivot;
+        forward_ortho.camera.pivot = pivot;
+        InputController forward_controller(nullptr, forward_ortho);
+        input::InputRouter forward_router;
+        forward_controller.setInputRouter(&forward_router);
+        forward_controller.initialize();
+        forward_router.focusViewportKeyboard();
+        hold(forward_controller, input::KEY_W);
+        EXPECT_GT(rendering.getSettings().ortho_scale, settings.ortho_scale);
+        const glm::vec3 forward = lfs::rendering::cameraForward(forward_ortho.camera.R);
+        const float moved_distance = glm::dot(forward_ortho.camera.t - eye, forward);
+        EXPECT_GT(moved_distance, 0.0f);
+        const float next_distance = glm::length(forward_ortho.camera.pivot - forward_ortho.camera.t);
+        EXPECT_LT(glm::length(forward_ortho.camera.pivot - pivot), 1e-5f);
+        EXPECT_NEAR(next_distance * rendering.getSettings().ortho_scale,
+                    distance_to_pivot * settings.ortho_scale, 1e-3f);
+        settings.orthographic = false;
+        rendering.updateSettings(settings);
+        Viewport perspective(200, 200);
+        perspective.camera.t = eye;
+        perspective.camera.pivot = pivot;
+        InputController perspective_controller(nullptr, perspective);
+        input::InputRouter perspective_router;
+        perspective_controller.setInputRouter(&perspective_router);
+        perspective_controller.initialize();
+        perspective_router.focusViewportKeyboard();
+        auto expected = perspective.camera;
+        perspective_controller.handleKey(input::KEY_A, input::ACTION_PRESS, input::KEYMOD_NONE);
+        for (int i = 0; i < frames; ++i) {
+            perspective_controller.update(dt);
+            expected.advanceWasd(dt, false, false, true, false, false, false);
+        }
+        perspective_controller.handleKey(input::KEY_A, input::ACTION_RELEASE, input::KEYMOD_NONE);
+        EXPECT_EQ(perspective.camera.t, expected.t);
+        EXPECT_EQ(perspective.camera.pivot, expected.pivot);
+        const float perspective_pixels = glm::length(perspective.camera.t - eye) *
+                                         (perspective.windowSize.y /
+                                          (2.0f * distance_to_pivot *
+                                           std::tan(glm::radians(rendering.getFovDegrees()) * 0.5f)));
+        EXPECT_NEAR(ortho_pixels, perspective_pixels, 0.75f);
+        EXPECT_NEAR(wide_ortho_pixels, perspective_pixels, 0.75f);
+    }
+
     TEST_F(InputControllerFocusTest, PausedOrbitDecaysWithoutFrameTicks) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
