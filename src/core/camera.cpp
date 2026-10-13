@@ -4,6 +4,7 @@
 
 #include "core/camera.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/cuda/mask_normalization.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/shared_image_ops.hpp"
 #if LFS_HAS_CUDA
@@ -54,6 +55,48 @@ namespace lfs::core {
         return mode == gpu_ops::Resample::NormalPrior
                    ? resize_normal_prior(source, height, width, stream)
                    : resize_depth_prior(source, height, width, stream);
+    }
+
+    static GpuBackend tensor_backend(const Tensor& tensor) {
+        return gpu_backend_of(tensor).value_or(default_gpu_backend());
+    }
+
+    static Tensor normalize_mask_bytes_for_backend(const Tensor& bytes) {
+#if LFS_HAS_CUDA
+        if (tensor_backend(bytes) == GpuBackend::CUDA)
+            return cuda::normalize_mask_bytes(bytes);
+#endif
+        const auto* const ops = shared_image_ops(tensor_backend(bytes));
+        if (!ops || !ops->convert)
+            throw std::runtime_error("Mask byte normalization is unavailable for the active tensor backend");
+        auto normalized = Tensor::empty(bytes.shape(), Device::GPU, DataType::Float32);
+        ops->convert(bytes, normalized, gpu_ops::ImageConversion::MaskU8HWToF32HW,
+                     bytes.shape()[0], bytes.shape()[1], 1, {});
+        return normalized;
+    }
+
+    static Tensor quantize_mask_to_grid_for_backend(Tensor& mask) {
+#if LFS_HAS_CUDA
+        if (tensor_backend(mask) == GpuBackend::CUDA)
+            return cuda::quantize_mask_to_byte_grid(mask, false);
+#endif
+        mask = mask.contiguous().clamp(0.0f, 1.0f);
+        auto bytes = mask.mul(255.0f).to(DataType::UInt8).contiguous();
+        mask = normalize_mask_bytes_for_backend(bytes);
+        return {};
+    }
+
+    static Tensor threshold_mask_for_backend(const Tensor& mask, const float threshold) {
+#if LFS_HAS_CUDA
+        if (tensor_backend(mask) == GpuBackend::CUDA)
+            return cuda::threshold_mask(mask, threshold);
+#endif
+        auto result = mask.contiguous();
+        const auto* const ops = shared_image_ops(tensor_backend(mask));
+        if (!ops || !ops->mask)
+            throw std::runtime_error("Mask thresholding is unavailable for the active tensor backend");
+        ops->mask(result, gpu_ops::MaskTransform::Threshold, threshold);
+        return result.to(DataType::UInt8).contiguous();
     }
 
     static Tensor world_to_view(const Tensor& R, const Tensor& t) {
@@ -246,6 +289,8 @@ namespace lfs::core {
           _image_width(other._image_width),
           _image_height(other._image_height),
           _image_size_loaded(other._image_size_loaded),
+          _source_image_width(other._source_image_width),
+          _source_image_height(other._source_image_height),
           _world_view_transform(std::move(other._world_view_transform)),
           _cam_position(std::move(other._cam_position)),
           _cached_mask(std::move(other._cached_mask)),
@@ -257,6 +302,7 @@ namespace lfs::core {
           _cached_mask_binarize(other._cached_mask_binarize),
           _cached_mask_was_undistorted(other._cached_mask_was_undistorted),
           _in_memory_mask_raw(std::move(other._in_memory_mask_raw)),
+          _mask_revision(other._mask_revision),
           _cached_depth(std::move(other._cached_depth)),
           _depth_loaded(other._depth_loaded),
           _depth_quantization_step(other._depth_quantization_step),
@@ -317,6 +363,8 @@ namespace lfs::core {
             _image_width = other._image_width;
             _image_height = other._image_height;
             _image_size_loaded = other._image_size_loaded;
+            _source_image_width = other._source_image_width;
+            _source_image_height = other._source_image_height;
             _world_view_transform = std::move(other._world_view_transform);
             _cam_position = std::move(other._cam_position);
             _cached_mask = std::move(other._cached_mask);
@@ -328,6 +376,7 @@ namespace lfs::core {
             _cached_mask_binarize = other._cached_mask_binarize;
             _cached_mask_was_undistorted = other._cached_mask_was_undistorted;
             _in_memory_mask_raw = std::move(other._in_memory_mask_raw);
+            _mask_revision = other._mask_revision;
             _cached_depth = std::move(other._cached_depth);
             _depth_loaded = other._depth_loaded;
             _depth_quantization_step = other._depth_quantization_step;
@@ -380,6 +429,8 @@ namespace lfs::core {
           _image_width(other._image_width),
           _image_height(other._image_height),
           _image_size_loaded(other._image_size_loaded),
+          _source_image_width(other._source_image_width),
+          _source_image_height(other._source_image_height),
           _cam_position(other._cam_position),
           _FoVx(other._FoVx),
           _FoVy(other._FoVy),
@@ -519,6 +570,8 @@ namespace lfs::core {
             w = std::get<0>(result);
             h = std::get<1>(result);
         }
+        _source_image_width = w;
+        _source_image_height = h;
 
         LOG_DEBUG("load_image_size(): Base dimensions: {}x{}, resize_factor={}, max_width={}",
                   w, h, resize_factor, max_width);
@@ -656,6 +709,7 @@ namespace lfs::core {
 
     void Camera::set_mask_tensor(Tensor mask) {
         _in_memory_mask_raw = std::move(mask);
+        ++_mask_revision;
         // Force reprocessing on the next load_and_get_mask call.
         _cached_mask = Tensor();
         _mask_loaded = false;
@@ -669,7 +723,8 @@ namespace lfs::core {
             .path = path,
             .resize_factor = warp_full_resolution ? 1 : resize_factor,
             .max_width = warp_full_resolution ? 0 : max_width,
-            .stream = _stream};
+            .stream = _stream,
+            .mask_grayscale = true};
 
         mask = load_image_cached(params);
 
@@ -687,6 +742,17 @@ namespace lfs::core {
         } else if (mask.ndim() == 3 && mask.shape()[0] == 1) {
             mask = mask.squeeze(0);
         }
+        if (warp_full_resolution) {
+            const auto scaled = prepare_undistort_params(
+                _undistort_params, static_cast<int>(mask.shape()[1]), static_cast<int>(mask.shape()[0]),
+                resize_factor, max_width);
+            if (const auto* ops = shared_image_ops(tensor_backend(mask)); ops && ops->undistort)
+                mask = ops->undistort(mask, scaled, true);
+            else
+                mask = undistort_mask_area(mask, scaled, _stream);
+        }
+        // Match the sidecar training cache before inversion and classification.
+        quantize_mask_to_grid_for_backend(mask);
         return mask;
     }
 
@@ -696,11 +762,6 @@ namespace lfs::core {
             mask = Tensor::full(mask.shape(), 1.0f, mask.device()) - mask;
         }
 
-        if (binarize && !(_undistort_prepared && apply_undistortion) &&
-            mask_threshold > 0.0f && mask_threshold < 1.0f) {
-            mask = mask.ge(mask_threshold).to(DataType::Float32);
-        }
-
         if (_undistort_prepared && apply_undistortion) {
             const auto scaled = prepare_undistort_params(
                 _undistort_params,
@@ -708,15 +769,17 @@ namespace lfs::core {
                 static_cast<int>(mask.shape()[0]),
                 resize_factor,
                 max_width);
-            mask = undistort_mask_area(mask, scaled, _stream);
+            if (const auto* ops = shared_image_ops(tensor_backend(mask)); ops && ops->undistort)
+                mask = ops->undistort(mask, scaled, true);
+            else
+                mask = undistort_mask_area(mask, scaled, _stream);
         }
 
         if (binarize) {
-            const float final_threshold = _undistort_prepared && apply_undistortion &&
-                                                  mask_threshold > 0.0f && mask_threshold < 1.0f
+            const float final_threshold = mask_threshold > 0.0f && mask_threshold <= 1.0f
                                               ? mask_threshold
                                               : 0.5f;
-            mask = mask.ge(final_threshold).to(DataType::UInt8).contiguous();
+            mask = threshold_mask_for_backend(mask, final_threshold);
         } else {
             // Keep Float32 [0,1] so undistorted samples match the pipelined
             // loader / fused-kernel domain (kMaskKeepMin). Rounding through
@@ -736,7 +799,7 @@ namespace lfs::core {
             stream_guard.emplace(_stream);
 #endif
         return finish_mask(read_mask_image(path, resize_factor, max_width, apply_undistortion), resize_factor,
-                           max_width, invert_mask, mask_threshold, binarize, apply_undistortion);
+                           max_width, invert_mask, mask_threshold, binarize, false);
     }
 
     Tensor Camera::load_and_get_mask(const int resize_factor, const int max_width,
@@ -756,16 +819,15 @@ namespace lfs::core {
 
         Tensor mask;
         if (_in_memory_mask_raw.is_valid()) {
-            // In-memory mask (set via set_mask_tensor). The plugin supplies it
-            // at the image's on-disk resolution; further resize_factor /
-            // max_width handling is the trainer's responsibility upstream.
+            // A source-grid mask follows the selected image file's resize.
+            // Already-resized and unknown-grid masks keep their accepted shape.
             mask = _in_memory_mask_raw;
             if (mask.device() != Device::GPU) {
                 mask = mask.to(Device::GPU, _stream);
                 finish_upload(_stream, "mask upload sync");
             }
             if (mask.dtype() == DataType::UInt8) {
-                mask = mask.to(DataType::Float32).div(255.0f);
+                mask = normalize_mask_bytes_for_backend(mask);
             } else if (mask.dtype() != DataType::Float32) {
                 mask = mask.to(DataType::Float32);
             }
@@ -775,6 +837,37 @@ namespace lfs::core {
             } else if (mask.ndim() == 3 && mask.shape()[2] == 1) {
                 mask = mask.squeeze(2);
             }
+            if (mask.ndim() == 2 && !(_undistort_prepared && apply_undistortion) &&
+                (resize_factor > 1 || max_width > 0)) {
+                if (_source_image_width <= 0 || _source_image_height <= 0) {
+                    if (_has_image && !_image_path.empty()) {
+                        std::error_code error;
+                        if (std::filesystem::exists(_image_path, error) && !error) {
+                            try {
+                                const auto [width, height, channels] = get_image_info(_image_path);
+                                if (width > 0 && height > 0) {
+                                    _source_image_width = width;
+                                    _source_image_height = height;
+                                }
+                            } catch (const std::exception& error) {
+                                LOG_DEBUG("Keeping injected mask after image size probe failed: {}", error.what());
+                            }
+                        }
+                    }
+                    if (_source_image_width <= 0 || _source_image_height <= 0) {
+                        _source_image_width = _camera_width;
+                        _source_image_height = _camera_height;
+                    }
+                }
+                if (_source_image_width > 0 && _source_image_height > 0 &&
+                    mask.shape()[0] == static_cast<size_t>(_source_image_height) &&
+                    mask.shape()[1] == static_cast<size_t>(_source_image_width)) {
+                    const auto [target_width, target_height] = resized_image_dimensions(
+                        _source_image_width, _source_image_height, resize_factor, max_width);
+                    if (target_width != _source_image_width || target_height != _source_image_height)
+                        mask = resize_prior(mask, target_height, target_width, gpu_ops::Resample::LanczosGray, _stream);
+                }
+            }
         } else if (!_mask_path.empty() && std::filesystem::exists(_mask_path)) {
             mask = read_mask_image(_mask_path, resize_factor, max_width, apply_undistortion);
         } else {
@@ -782,7 +875,7 @@ namespace lfs::core {
         }
 
         mask = finish_mask(std::move(mask), resize_factor, max_width, invert_mask, mask_threshold, binarize,
-                           apply_undistortion);
+                           apply_undistortion && _in_memory_mask_raw.is_valid());
         _cached_mask = mask;
         _mask_loaded = true;
         _cached_mask_resize_factor = resize_factor;

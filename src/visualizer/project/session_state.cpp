@@ -3437,10 +3437,10 @@ namespace lfs::vis::project {
                     }
                 }
             }
-            const ViewSettings view_settings =
+            ViewSettings view_settings =
                 view3d ? view3d->settings : restored->view();
-            rendering->updateSettings(RenderSettings(restored->scene(), view_settings));
-
+            rendering->restoreSettingsFromProject(
+                RenderSettings(restored->scene(), view_settings));
             if (auto* selection_tool =
                     viewer.getSelectionTool()) {
                 selection_tool

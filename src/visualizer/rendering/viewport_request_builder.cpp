@@ -617,7 +617,7 @@ namespace lfs::vis {
     std::vector<ViewportMeshDrawItem> buildViewportMeshDrawItems(
         const SceneRenderState& scene_state,
         const RenderSettings& settings,
-        const glm::vec3& camera_position) {
+        const glm::vec3& camera_backward) {
         const bool any_selected_mesh = std::any_of(
             scene_state.meshes.begin(),
             scene_state.meshes.end(),
@@ -629,8 +629,8 @@ namespace lfs::vis {
         const bool dim_non_emphasized =
             settings.desaturate_unselected && (any_selected_mesh || any_selected_node);
 
-        const glm::vec3 headlight_dir = glm::length(camera_position) > 1e-6f
-                                            ? glm::normalize(camera_position)
+        const glm::vec3 headlight_dir = glm::length(camera_backward) > 1e-6f
+                                            ? glm::normalize(camera_backward)
                                             : settings.mesh_light_dir;
 
         std::vector<ViewportMeshDrawItem> items;
@@ -643,6 +643,7 @@ namespace lfs::vis {
             item.mesh = mesh.mesh;
             item.model = mesh.transform;
             item.light_dir = headlight_dir;
+            item.camera_relative_light = true;
             item.light_intensity = settings.mesh_light_intensity;
             item.ambient = settings.mesh_ambient;
             item.backface_culling = settings.mesh_backface_culling;
@@ -868,7 +869,12 @@ namespace lfs::vis {
         const auto vp_data = ctx.makeViewportData();
         frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
         frame.camera_position = vp_data.translation;
-        frame.items = buildViewportMeshDrawItems(ctx.scene_state, settings, vp_data.translation);
+        frame.camera_backward = vp_data.rotation[2];
+        frame.depth_view = settings.depth_view;
+        frame.depth_view_min = settings.depth_view_min;
+        frame.depth_view_max = settings.depth_view_max;
+        frame.depth_grayscale = settings.depth_visualization_mode == lfs::rendering::DepthVisualizationMode::Grayscale;
+        frame.items = buildViewportMeshDrawItems(ctx.scene_state, settings, frame.camera_backward);
         return frame;
     }
 

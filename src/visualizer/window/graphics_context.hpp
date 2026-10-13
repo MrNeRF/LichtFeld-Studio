@@ -85,6 +85,10 @@ namespace lfs::vis {
         [[nodiscard]] virtual bool presentBootstrapFrame(float r, float g, float b, float a) = 0;
         [[nodiscard]] virtual bool hasActiveFrame() const noexcept = 0;
         [[nodiscard]] virtual lfs::Result<WindowCapture> captureFinalFrameRgba() = 0;
+        [[nodiscard]] virtual lfs::Result<WindowCapture> captureSceneRgba() {
+            return captureFinalFrameRgba();
+        }
+        virtual void cancelSceneCaptureRequest() noexcept {}
 
         [[nodiscard]] virtual bool waitForNextFrameSlot() = 0;
         [[nodiscard]] virtual bool waitForSubmittedFrames() = 0;

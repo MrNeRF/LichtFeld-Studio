@@ -271,6 +271,7 @@ if(LFS_HAS_CUDA)
     target_sources(lfs_io PRIVATE
         nvcodec_image_loader.hpp
         nvcodec_image_loader.cpp
+        cuda/masked_image_fill.cu
         pipelined_image_loader_cuda.cpp)
 else()
     target_sources(lfs_io PRIVATE pipelined_image_loader_host.cpp)

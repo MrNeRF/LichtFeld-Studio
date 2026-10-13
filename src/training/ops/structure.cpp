@@ -40,12 +40,12 @@ namespace lfs::training::kernels {
         return std::min(aligned, padded_height);
     }
 
-    void RidgeWorkspace::ensure_size(const size_t band_rows, const size_t width) {
+    void RidgeWorkspace::ensure_size(const size_t band_rows, const size_t width, const bool masked) {
         const lfs::core::TensorShape shape{3, band_rows + 2 * 10, width};
         if (!horizontal.is_valid() || horizontal.shape() != shape)
             horizontal = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU);
-        if (!reduction.is_valid())
-            reduction = lfs::core::Tensor::empty({3072}, lfs::core::Device::GPU);
+        if (!reduction.is_valid() || reduction.numel() < (masked ? 4096 : 3072))
+            reduction = lfs::core::Tensor::empty({masked ? 4096u : 3072u}, lfs::core::Device::GPU);
     }
 
     void GradientResidualWorkspace::ensure_allocated() {
@@ -68,7 +68,11 @@ namespace lfs::training::kernels {
         }
     } // namespace
     void ridge_structure_map(const core::Tensor& image, core::Tensor& output, RidgeWorkspace& workspace) {
-        operations(image).ridge(image, output, workspace);
+        operations(image).ridge(image, output, workspace, {}, gpu_ops::MaskPhotoMode::BinaryGt0);
+    }
+    void ridge_structure_map(const core::Tensor& image, core::Tensor& output, RidgeWorkspace& workspace,
+                             const core::Tensor& mask, const gpu_ops::MaskPhotoMode mode) {
+        operations(image).ridge(image, output, workspace, mask, mode);
     }
     void structure_photometric_weight(const core::Tensor& structure, const core::Tensor& base,
                                       core::Tensor& output, float gain, bool valid_padding) {

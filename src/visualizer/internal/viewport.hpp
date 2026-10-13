@@ -423,6 +423,14 @@ class Viewport {
 
         void initScreenPos(const glm::vec2& pos) { prePos = pos; }
 
+        // Keep a live camera drag anchored on the cursor when another handler
+        // consumes the motion, so the next sample is only the new delta.
+        void followDragPointer(const glm::vec2& pos, float time) {
+            prePos = pos;
+            pan_last_time = time;
+            orbit_last_time = time;
+        }
+
         void setPivot(const glm::vec3& new_pivot) {
             if (pivot.x == new_pivot.x && pivot.y == new_pivot.y &&
                 pivot.z == new_pivot.z)

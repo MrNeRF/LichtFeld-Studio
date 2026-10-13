@@ -985,6 +985,7 @@ set(TEST_FILES
     test_warp_cull_blend.cpp
     test_warp_cull_bwd.cpp
     test_thin_structure.cpp
+    test_mask_thin_structure_guidance.cpp
     test_blob_seeding.cpp
     test_rendered_structure.cpp
     test_gradient_residual.cpp
@@ -1113,6 +1114,8 @@ set(TEST_FILES
     test_tensor_zero_dimension.cpp
     test_mask_loss.cpp
     test_mask_preprocess_fusion.cpp
+    test_mask_memory_alignment.cpp
+    test_mask_tiff_consistency.cpp
     test_roi_weight_map.cpp
     test_mesh_mask_kernels.cpp
     test_flip.cpp
@@ -1239,6 +1242,7 @@ set(TEST_FILES
     test_viewport.cpp
     test_navigation_up_axis.cpp
     test_input_controller_focus.cpp
+    test_input_layout_chords.cpp
     test_ordered_input_dispatch.cpp
     test_python_editor_input.cpp
     test_input_controller_dataset_load.cpp
@@ -1286,6 +1290,7 @@ set(TEST_FILES
     test_tensor_backend_facade_c.cpp
     test_modal_registry_regression.cpp
     test_training_notifications.cpp
+    test_camera_training_notice.cpp
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
     test_weight_file_paths.cpp
@@ -1307,6 +1312,11 @@ set(TEST_FILES
     test_export_env_composite.cpp
     test_image_io.cpp
     test_project_thumbnail_image.cpp
+    test_mask_resized_cache.cpp
+    test_mask_rgb_cache.cpp
+    test_mask_cache_endpoints.cpp
+    test_mask_color_consistency.cpp
+    test_camera_mask_threshold.cpp
     test_camera_thumbnail_policy.cpp
     test_undistort.cpp
     gut_camera_model_cuda.cu
@@ -1325,6 +1335,7 @@ set(TEST_FILES
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rml_text_input_native_keys.cpp
+    test_x11_input_modifier.cpp
     test_scene_graph_dnd.cpp
     test_rml_im_mode_layout.cpp
     test_rml_python_listener_lifetime.cpp
@@ -1907,6 +1918,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_histogram_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_http.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_import_dialog_panels.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_settings_version_safety.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_io_hygiene_regressions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_keymap_bindings.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_new_project_panel.py
@@ -1933,6 +1945,8 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rendering_panel_simplify.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_layout.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_pan_scale.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_camera_identity.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_file_revision.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rmlui_image_sources.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_runtime_state.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scripts_panel.py
@@ -2057,7 +2071,45 @@ add_test(NAME lichtfeld.python.point_cloud_lifetime
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_point_cloud_lifetime_runtime.py
 )
+
+if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
+    add_test(NAME lichtfeld.python.camera_set_view_validation
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_camera_set_view_validation.py
+    )
+    set_tests_properties(lichtfeld.python.camera_set_view_validation PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
+    )
+
+    add_test(NAME lichtfeld.python.scene_export_path
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scene_export_path_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.scene_export_path PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration;io"
+        TIMEOUT 600
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
+    )
+endif()
 set_tests_properties(lichtfeld.python.point_cloud_lifetime PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "nightly;gpu;integration"
+    TIMEOUT 300
+    RUN_SERIAL TRUE
+    ENVIRONMENT_MODIFICATION "LFS_EXECUTABLE=set:$<TARGET_FILE:${PROJECT_NAME}>"
+)
+
+add_test(NAME lichtfeld.python.point_cloud_first_open
+    COMMAND ${Python_EXECUTABLE} -m pytest -q
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_project_point_cloud_first_open_runtime.py
+)
+set_tests_properties(lichtfeld.python.point_cloud_first_open PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     LABELS "nightly;gpu;integration"
     TIMEOUT 300
@@ -2113,11 +2165,56 @@ if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
         RESOURCE_LOCK lfs_gui_gpu
         ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
     )
+    add_test(NAME lichtfeld.python.mesh_headlight
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_headlight.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_headlight PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+
+    add_test(NAME lichtfeld.python.capture_mesh
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_render_capture_mesh.py
+    )
+    set_tests_properties(lichtfeld.python.capture_mesh PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
     add_test(NAME lichtfeld.python.capture_environment
         COMMAND ${Python_EXECUTABLE} -m pytest -q
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_render_capture_environment.py
     )
     set_tests_properties(lichtfeld.python.capture_environment PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_depth_view
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_depth_view_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_depth_view PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_empty_split
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_empty_split_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_empty_split PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS "gpu;integration"
         TIMEOUT 300
@@ -2139,6 +2236,17 @@ endif()
 
 # Owns its Xvfb display, GUI process and generated dataset; requires a Linux GPU.
 if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
+    add_test(NAME lichtfeld.python.mcp_ply_sh_degree
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mcp_ply_sh_degree.py
+    )
+    set_tests_properties(lichtfeld.python.mcp_ply_sh_degree PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR};LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
+    )
     add_test(NAME lichtfeld.python.dataset_load_training
         COMMAND ${Python_EXECUTABLE} -m pytest -q
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mcp_dataset_load_training.py

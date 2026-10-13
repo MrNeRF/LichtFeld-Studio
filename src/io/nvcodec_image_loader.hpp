@@ -16,13 +16,15 @@ typedef struct nvimgcodecDecoder* nvimgcodecDecoder_t;
 typedef struct nvimgcodecEncoder* nvimgcodecEncoder_t;
 
 namespace lfs::io {
+    struct MaskedImageFill;
 
     /**
      * @brief Output format for image decoding
      */
     enum class DecodeFormat {
-        RGB,      // 3-channel RGB [C,H,W] or [H,W,C]
-        Grayscale // 1-channel grayscale [H,W]
+        RGB,       // 3-channel RGB [C,H,W] or [H,W,C]
+        Grayscale, // 1-channel grayscale [H,W]
+        Mask       // Grayscale with correctly rounded byte mask normalization
     };
 
     /**
@@ -84,7 +86,7 @@ namespace lfs::io {
             int max_width = 0,
             void* cuda_stream = nullptr,
             DecodeFormat format = DecodeFormat::RGB,
-            bool output_uint8 = false);
+            bool output_uint8 = false, const MaskedImageFill* masked_fill = nullptr);
 
         /**
          * @brief Decode JPEG from memory to GPU
@@ -103,7 +105,7 @@ namespace lfs::io {
             int max_width = 0,
             void* cuda_stream = nullptr,
             DecodeFormat format = DecodeFormat::RGB,
-            bool output_uint8 = false);
+            bool output_uint8 = false, const MaskedImageFill* masked_fill = nullptr);
 
         std::vector<lfs::core::Tensor> decode_jpeg_batch_from_spans(
             const std::vector<std::pair<const uint8_t*, size_t>>& jpeg_spans,
@@ -157,7 +159,8 @@ namespace lfs::io {
             const std::vector<uint8_t>& jpeg2k_data,
             void* cuda_stream = nullptr,
             bool synchronize = true,
-            bool allow_uint8 = false);
+            bool allow_uint8 = false,
+            bool exact_mask = false);
 
         std::vector<lfs::core::Tensor> decode_jpeg2k_16bit_batch_from_spans(
             const std::vector<std::pair<const uint8_t*, size_t>>& jpeg2k_spans,

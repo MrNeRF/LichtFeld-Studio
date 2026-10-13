@@ -857,10 +857,6 @@ TEST_F(PythonIOTest, RejectsMalformedTransformsCameraContractsBeforeCameraConstr
     expect_rejected(std::move(invalid));
 
     invalid = valid;
-    invalid["fl_x"] = 0.0;
-    expect_rejected(std::move(invalid));
-
-    invalid = valid;
     invalid["frames"][0]["transform_matrix"][2] = nlohmann::json::array({0.0, 0.0, 1.0});
     expect_rejected(std::move(invalid));
 
@@ -871,6 +867,74 @@ TEST_F(PythonIOTest, RejectsMalformedTransformsCameraContractsBeforeCameraConstr
     invalid = valid;
     invalid["frames"][0]["transform_matrix"][3] = nlohmann::json::array({0.0, 0.0, 1.0, 1.0});
     expect_rejected(std::move(invalid));
+}
+
+TEST_F(PythonIOTest, SkipsTransformsFramesWithInvalidFocalLengthsAndWarnsOnce) {
+    const fs::path dataset_dir = temp_dir / "invalid_focal_frames";
+    write_png(dataset_dir / "valid.png", 64, 64);
+    write_png(dataset_dir / "zero.png", 64, 64);
+    write_png(dataset_dir / "negative.png", 64, 64);
+    write_png(dataset_dir / "nonfinite.png", 64, 64);
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    const auto frame = [&](const char* name, const double focal) {
+        return nlohmann::json{
+            {"file_path", name},
+            {"fl_x", focal},
+            {"fl_y", 50.0},
+            {"w", 64},
+            {"h", 64},
+            {"transform_matrix", identity_matrix}};
+    };
+    auto nonfinite_frame = frame("nonfinite.png", 50.0);
+    nonfinite_frame.erase("fl_x");
+    nonfinite_frame["camera_angle_x"] = 1e-40;
+    write_text_file(dataset_dir / "transforms.json", nlohmann::json{
+                                                         {"frames", nlohmann::json::array({frame("valid.png", 50.0), frame("zero.png", 0.0), frame("negative.png", -2.0),
+                                                                                           nonfinite_frame})}}
+                                                         .dump());
+
+    auto& localization = lfs::event::LocalizationManager::getInstance();
+    constexpr auto warning_key = "io.dataset_camera_invalid_focal";
+    localization.setOverride(warning_key, "Localized invalid focal warning: {} camera(s) ({})");
+    struct RestoreWarning {
+        ~RestoreWarning() {
+            lfs::event::LocalizationManager::getInstance().clearOverride("io.dataset_camera_invalid_focal");
+        }
+    } restore_warning;
+
+    auto result = Loader::create()->load(dataset_dir);
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_EQ(cameras.front()->image_name(), "valid.png");
+    EXPECT_FLOAT_EQ(cameras.front()->focal_x(), 50.0f);
+    EXPECT_FLOAT_EQ(cameras.front()->focal_y(), 50.0f);
+    const std::string localized_warning =
+        "Localized invalid focal warning: 3 camera(s) (zero.png, negative.png, nonfinite.png)";
+    EXPECT_EQ(std::count(result->warnings.begin(), result->warnings.end(), localized_warning), 1);
+}
+
+TEST_F(PythonIOTest, TransformsDatasetWithOnlyInvalidFocalLengthsReturnsClearError) {
+    const fs::path dataset_dir = temp_dir / "all_invalid_focals";
+    write_png(dataset_dir / "zero.png", 64, 64);
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    write_text_file(dataset_dir / "transforms.json", nlohmann::json{
+                                                         {"frames", nlohmann::json::array({{{"file_path", "zero.png"}, {"fl_x", 0.0}, {"fl_y", 50.0}, {"w", 64}, {"h", 64}, {"transform_matrix", identity_matrix}}})}}
+                                                         .dump());
+
+    const auto result = Loader::create()->load(dataset_dir);
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().message.find("focal"), std::string::npos);
 }
 
 class TransformsMaskTest : public PythonIOTest {
@@ -898,6 +962,70 @@ protected:
                         "end_header\n0 0 -2 255 0 0\n1 0 -2 0 255 0\n");
     }
 };
+
+class TransformsImagePathTest : public TransformsMaskTest {};
+
+TEST_F(TransformsImagePathTest, WindowsSeparatorsLoadBothFramesFromFolderAndJson) {
+    const auto root = temp_dir / "image_separators";
+    write_dataset(root, {{{"file_path", "images\\front\\first.png"}},
+                         {{"file_path", "images\\back\\second.png"}}});
+    write_png(root / "images/front/first.png", 2, 2);
+    write_png(root / "images/back/second.png", 2, 2);
+
+    for (const auto& source : {root, root / "transforms.json"}) {
+        SCOPED_TRACE(lfs::core::path_to_utf8(source));
+        auto result = Loader::create()->load(source);
+        ASSERT_TRUE(result) << result.error().format();
+        const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+        ASSERT_EQ(cameras.size(), 2u);
+        EXPECT_EQ(cameras[0]->image_path(), root / "images/front/first.png");
+        EXPECT_EQ(cameras[1]->image_path(), root / "images/back/second.png");
+    }
+}
+
+TEST_F(TransformsImagePathTest, ForwardSlashesAndExtensionlessPngStillLoad) {
+    const auto root = temp_dir / "image_controls";
+    write_dataset(root, {{{"file_path", "images/front/first.png"}},
+                         {{"file_path", "./train/second"}}});
+    write_png(root / "images/front/first.png", 2, 2);
+    write_png(root / "train/second.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_EQ(cameras[0]->image_path(), root / "images/front/first.png");
+    EXPECT_EQ(cameras[1]->image_path(), root / "./train/second.png");
+}
+
+TEST_F(TransformsImagePathTest, ImagesFolderFallbackAcceptsBothSeparatorStyles) {
+    const auto root = temp_dir / "images_fallback";
+    write_dataset(root, {{{"file_path", "first.png"}},
+                         {{"file_path", "nested\\second.png"}}});
+    write_png(root / "images/first.png", 2, 2);
+    write_png(root / "images/nested/second.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_EQ(cameras[0]->image_path(), root / "images/first.png");
+    EXPECT_EQ(cameras[1]->image_path(), root / "images/nested/second.png");
+}
+
+#ifndef _WIN32
+TEST_F(TransformsImagePathTest, ExistingLiteralBackslashFilenameTakesPrecedence) {
+    const auto root = temp_dir / "literal_image";
+    const auto literal_image = root / "images\\frame.png";
+    write_dataset(root, {{{"file_path", "images\\frame.png"}}});
+    write_png(literal_image, 2, 2);
+    write_png(root / "images/frame.png", 2, 2);
+
+    auto result = Loader::create()->load(root);
+    ASSERT_TRUE(result) << result.error().format();
+    EXPECT_EQ(std::get<LoadedScene>(result->data).cameras.front()->image_path(), literal_image);
+}
+#endif
 
 TEST_F(TransformsMaskTest, ExplicitPathsOverrideDiscoveryForFolderAndJson) {
     const auto root = temp_dir / "explicit_masks";

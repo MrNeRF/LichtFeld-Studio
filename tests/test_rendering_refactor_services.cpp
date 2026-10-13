@@ -16,6 +16,7 @@
 #include "core/services.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/training_manager.hpp"
 #include "cuda_backend_test.hpp"
 #include "gui/volume_guide_visibility.hpp"
 #include "input/key_codes.hpp"
@@ -76,6 +77,36 @@
 #include <vector>
 
 namespace lfs::vis {
+
+    TEST(CameraMetricsStatusTest, DistinguishesUninitializedSessionFromMetricFailure) {
+        const auto needs_session = AppStore::CameraMetrics::unavailable(17, 7000, false);
+        EXPECT_EQ(needs_session.camera_id, 17);
+        EXPECT_EQ(needs_session.iteration, 7000);
+        EXPECT_EQ(needs_session.status, AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession);
+        EXPECT_FALSE(needs_session.ssim.has_value());
+
+        const auto calculation_failed = AppStore::CameraMetrics::unavailable(17, 7000, true);
+        EXPECT_EQ(calculation_failed.status, AppStore::CameraMetricsStatus::CalculationFailed);
+    }
+
+    TEST(CameraMetricsStatusTest, SuccessfulMetricStateRemainsAvailable) {
+        AppStore::CameraMetrics metrics;
+        metrics.camera_id = 17;
+        metrics.iteration = 7000;
+        metrics.psnr = 28.5f;
+        metrics.ssim = 0.91f;
+        EXPECT_EQ(metrics.status, AppStore::CameraMetricsStatus::Available);
+        EXPECT_FLOAT_EQ(metrics.psnr, 28.5f);
+        ASSERT_TRUE(metrics.ssim.has_value());
+        EXPECT_FLOAT_EQ(*metrics.ssim, 0.91f);
+    }
+
+    TEST(CameraMetricsStatusTest, OverlayConfigTracksUnavailableStatus) {
+        AppStore::GTMetricsOverlayConfig config;
+        EXPECT_EQ(config.metrics_status, AppStore::CameraMetricsStatus::Available);
+        config.metrics_status = AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession;
+        EXPECT_NE(config, AppStore::GTMetricsOverlayConfig{});
+    }
 
     TEST(EnvironmentCompositingTest, EnvironmentIdentityCopyCannotAllocate) {
         // Copying pane metadata into the frame and lazy capture must not need
@@ -320,7 +351,8 @@ namespace lfs::vis {
                     {.resize_factor = p.resize_factor,
                      .max_width = p.max_width,
                      .cuda_stream = p.stream,
-                     .output_uint8 = p.output_uint8});
+                     .output_uint8 = p.output_uint8,
+                     .mask_grayscale = p.mask_grayscale});
             });
             initialized = true;
         }
@@ -466,6 +498,38 @@ namespace lfs::vis {
         RenderSettings settings;
         ViewportFrameResult last;
     };
+
+    TEST_F(GTComparisonAsyncTest, UninitializedTrainingSessionPublishesUnavailableCameraMetrics) {
+        struct TrainerServiceGuard {
+            TrainerManager manager;
+            TrainerServiceGuard() { services().set(&manager); }
+            ~TrainerServiceGuard() {
+                app_store().camera_metrics.set(std::nullopt);
+                services().set(static_cast<TrainerManager*>(nullptr));
+                EXPECT_TRUE(manager.clearTrainer());
+            }
+        } trainer_service;
+
+        trainer_service.manager.setTrainer(std::make_unique<lfs::training::Trainer>(scene->getScene()));
+        ASSERT_NE(trainer_service.manager.getTrainer(), nullptr);
+        EXPECT_FALSE(trainer_service.manager.getTrainer()->isInitialized());
+
+        constexpr int camera_id = 17;
+        manager->setCurrentCameraId(camera_id);
+        settings.camera_metrics_mode = RenderSettings::CameraMetricsMode::PSNRSSIM;
+        manager->updateSettings(settings);
+
+        render();
+
+        ASSERT_TRUE(last.rendered || last.image);
+        const auto published = app_store().camera_metrics.get();
+        ASSERT_TRUE(published.has_value());
+        EXPECT_EQ(published->camera_id, camera_id);
+        EXPECT_EQ(published->iteration, trainer_service.manager.getCurrentIteration());
+        EXPECT_EQ(published->status, AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession);
+        EXPECT_EQ(published->psnr, 0.0f);
+        EXPECT_FALSE(published->ssim.has_value());
+    }
 
     TEST_F(GTComparisonAsyncTest, DepthModeCompletesWithoutFurtherInput) {
         refreshReference();
@@ -4330,6 +4394,27 @@ namespace lfs::vis {
         EXPECT_EQ(request.filters.crop_box->transform, glm::mat4(1.0f));
         EXPECT_FALSE(request.filters.crop_inverse);
         EXPECT_FALSE(request.filters.crop_desaturate);
+    }
+
+    TEST(ViewportRequestBuilderTest, MeshHeadlightDirectionIsBoundToEachViewCamera) {
+        SceneRenderState scene_state;
+        lfs::core::MeshData mesh;
+        scene_state.meshes.push_back({
+            .mesh = &mesh,
+            .transform = glm::mat4(1.0f),
+        });
+        const RenderSettings settings{};
+
+        const auto left_items = buildViewportMeshDrawItems(scene_state, settings, {1.0f, 0.0f, 0.0f});
+        const auto right_items = buildViewportMeshDrawItems(scene_state, settings, {0.0f, 0.0f, -1.0f});
+
+        ASSERT_EQ(left_items.size(), 1u);
+        ASSERT_EQ(right_items.size(), 1u);
+        EXPECT_TRUE(left_items.front().camera_relative_light);
+        EXPECT_TRUE(right_items.front().camera_relative_light);
+        EXPECT_EQ(left_items.front().light_dir, glm::vec3(1.0f, 0.0f, 0.0f));
+        EXPECT_EQ(right_items.front().light_dir, glm::vec3(0.0f, 0.0f, -1.0f));
+        EXPECT_NE(left_items.front().light_dir, right_items.front().light_dir);
     }
 
     TEST(ViewportRequestBuilderTest, PointCloudRequestKeepsActiveCropBoxBehavior) {

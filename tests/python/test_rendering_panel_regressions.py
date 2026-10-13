@@ -422,3 +422,46 @@ def test_project_navigation_vertical_does_not_change_global_defaults(rendering_p
     assert len(calls) == 1
     panel._align_navigation_grid()
     assert calls[-1] == ("data_z", True)
+
+
+class _PickerEvent:
+    def __init__(self, x, y):
+        self.values = {"mouse_x": str(x), "mouse_y": str(y)}
+
+    def get_parameter(self, name, default="0"):
+        return self.values.get(name, default)
+
+
+class _PickerPopup:
+    def __init__(self):
+        self.props = {}
+        self.classes = {}
+
+    def set_property(self, name, value):
+        self.props[name] = value
+
+    def set_class(self, name, value):
+        self.classes[name] = value
+
+
+def test_selection_group_color_picker_stays_inside_panel(rendering_panel_module):
+    """A swatch at the bottom of the panel opens the picker above the cursor."""
+    module = rendering_panel_module
+    module.lf.ui.get_ui_scale = lambda: 1.0
+    panel = module.RenderingPanel()
+    popup = _PickerPopup()
+    body = SimpleNamespace(client_height=468.0, client_width=344.0)
+    panel._popup_el = popup
+    panel._doc = SimpleNamespace(get_element_by_id=lambda name: body if name == "body" else None)
+    panel._handle = _HandleStub()
+
+    panel._open_picker(_PickerEvent(44, 341))
+    top = int(str(popup.props["top"]).removesuffix("px"))
+    assert top + 170 <= 468
+    assert top <= 341 - 170
+    assert popup.props["left"] == "0px"
+    assert popup.classes["visible"] is True
+
+    panel._open_picker(_PickerEvent(300, 40))
+    assert popup.props["top"] == "42px"
+    assert popup.props["left"] == "90px"

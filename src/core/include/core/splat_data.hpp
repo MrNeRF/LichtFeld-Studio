@@ -318,6 +318,9 @@ namespace lfs::core {
         // Returns canonical SH coefficients in pageable host memory.
         Tensor shN_canonical_cpu() const;
 
+        // Decode selected compact q16 / IEEE-f16 SH rows into canonical pageable host memory.
+        Tensor shN_canonical_cpu_rows(const Tensor& row_indices) const;
+
         // Returns channel-major PLY rest coefficients in pageable host memory.
         Tensor shN_ply_rest_cpu() const;
 

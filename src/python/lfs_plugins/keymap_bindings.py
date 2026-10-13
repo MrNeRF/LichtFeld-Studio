@@ -160,6 +160,7 @@ class KeymapBindingsSection:
         self._last_current_profile = ""
         self._last_capturing = None
         self._rows_built = False
+        self._altgr_capture_rejected = False
 
     # ── Data model ────────────────────────────────────────────
 
@@ -279,6 +280,7 @@ class KeymapBindingsSection:
         self._last_current_profile = lf.keymap.get_current_profile()
         self._rows_built = False
         self._last_state_key = None
+        self._altgr_capture_rejected = False
 
         self._rebuild_profile_records()
         self._rebuild_mode_records()
@@ -311,6 +313,11 @@ class KeymapBindingsSection:
             self._dirty_model()
 
         is_capturing = lf.keymap.is_capturing()
+        if lf.keymap.take_altgr_capture_rejection():
+            self._altgr_capture_rejected = True
+            self._dirty_model("bindings_hint")
+        elif not is_capturing:
+            self._altgr_capture_rejected = False
         current_profile = lf.keymap.get_current_profile()
         if self._rows_built:
             mode = self.TOOL_MODES[self._selected_mode_idx]
@@ -412,6 +419,8 @@ class KeymapBindingsSection:
 
     def _get_bindings_hint(self):
         tr = lf.ui.tr
+        if self._altgr_capture_rejected:
+            return tr("input_settings.altgr_capture_unsupported")
         mode = self.TOOL_MODES[self._selected_mode_idx]
         if mode == lf.keymap.ToolMode.GLOBAL:
             return tr("input_settings.global_bindings_hint")

@@ -19,6 +19,7 @@
 #include "core/modal_request.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
+#include "core/persisted_settings.hpp"
 #include "core/project_path.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
@@ -2239,20 +2240,14 @@ namespace lfs::vis::project {
                 return fail<ProjectLifecycleSettings>(
                     lfs::ErrorCode::DataLoss,
                     "Project lifecycle settings are invalid.",
-                    "expected an object with version 1 or 2",
+                    "expected an object",
                     "settings.version");
             }
-            const int version =
-                json.value("version", 0);
-            if (version != 1 && version != 2) {
-                return fail<ProjectLifecycleSettings>(
-                    lfs::ErrorCode::DataLoss,
-                    "Project lifecycle settings are invalid.",
-                    "expected an object with version 1 or 2",
-                    "settings.version");
-            }
+            const auto version = lfs::core::persisted_settings::field<std::uint64_t>(json, "version", 2);
+            if (version > 2)
+                LOG_WARN("Reading newer project lifecycle settings version {}", version);
             settings.reopen_last_project =
-                json.value("reopen_last_project", true);
+                lfs::core::persisted_settings::field<bool>(json, "reopen_last_project", true);
             // Version 1 defaulted auto_save_on_close to true.
             // Migrate once to the prompt-first default (false);
             // only an explicit re-enable under version 2 survives.
@@ -2260,100 +2255,80 @@ namespace lfs::vis::project {
                 settings.auto_save_on_close = false;
             } else {
                 settings.auto_save_on_close =
-                    json.value(
-                        "auto_save_on_close", false);
+                    lfs::core::persisted_settings::field<bool>(json, "auto_save_on_close", false);
             }
             settings.embed_dataset_by_default =
-                json.value("embed_dataset_by_default", false);
+                lfs::core::persisted_settings::field<bool>(json, "embed_dataset_by_default", false);
             settings.autosave_interval_seconds =
-                json.value(
-                    "autosave_interval_seconds",
-                    std::uint64_t{5 * 60});
+                lfs::core::persisted_settings::field<std::uint64_t>(json, "autosave_interval_seconds", 5 * 60);
             settings
                 .autosave_dirty_epoch_threshold =
                 std::max<std::uint64_t>(
                     1,
-                    json.value(
-                        "autosave_dirty_epoch_threshold",
-                        std::uint64_t{20}));
+                    lfs::core::persisted_settings::field<std::uint64_t>(json, "autosave_dirty_epoch_threshold", 20));
             settings.autosave_quiet_seconds =
-                json.value(
-                    "autosave_quiet_seconds",
-                    std::uint64_t{2});
+                lfs::core::persisted_settings::field<std::uint64_t>(json, "autosave_quiet_seconds", 2);
             const auto entries = json.find("mru");
             if (entries != json.end()) {
-                if (!entries->is_array()) {
-                    return fail<ProjectLifecycleSettings>(
-                        lfs::ErrorCode::DataLoss,
-                        "The recent-project list is invalid.",
-                        "mru must be an array", "settings.mru");
-                }
-                for (const auto& entry : *entries) {
-                    if (!entry.is_object()) {
-                        continue;
+                if (!entries->is_array())
+                    LOG_WARN("Invalid recent-project list in settings; using an empty list");
+                if (entries->is_array())
+                    for (const auto& entry : *entries) {
+                        if (!entry.is_object()) {
+                            LOG_WARN("Invalid recent-project entry in settings; skipping it");
+                            continue;
+                        }
+                        const auto uuid =
+                            lfs::core::Uuid::from_string(
+                                lfs::core::persisted_settings::field<std::string>(entry, "project_uuid", {}));
+                        const auto path_text =
+                            lfs::core::persisted_settings::field<std::string>(entry, "last_known_path", {});
+                        if (!uuid || uuid->is_nil() ||
+                            path_text.empty()) {
+                            LOG_WARN("Invalid recent-project identity or path in settings; skipping it");
+                            continue;
+                        }
+                        settings.mru.push_back({
+                            .project_uuid = *uuid,
+                            .last_known_path =
+                                lfs::core::utf8_to_path(
+                                    path_text),
+                        });
                     }
-                    const auto uuid =
-                        lfs::core::Uuid::from_string(
-                            entry.value(
-                                "project_uuid",
-                                std::string{}));
-                    const auto path_text =
-                        entry.value(
-                            "last_known_path",
-                            std::string{});
-                    if (!uuid || uuid->is_nil() ||
-                        path_text.empty()) {
-                        continue;
-                    }
-                    settings.mru.push_back({
-                        .project_uuid = *uuid,
-                        .last_known_path =
-                            lfs::core::utf8_to_path(
-                                path_text),
-                    });
-                }
             }
             const auto dismissed =
                 json.find("dismissed_recovery");
             if (dismissed != json.end()) {
-                if (!dismissed->is_array()) {
-                    return fail<ProjectLifecycleSettings>(
-                        lfs::ErrorCode::DataLoss,
-                        "The dismissed-recovery list is invalid.",
-                        "dismissed_recovery must be an array",
-                        "settings.dismissed_recovery");
-                }
-                for (const auto& entry : *dismissed) {
-                    if (!entry.is_object()) {
-                        continue;
+                if (!dismissed->is_array())
+                    LOG_WARN("Invalid dismissed-recovery list in settings; using an empty list");
+                if (dismissed->is_array())
+                    for (const auto& entry : *dismissed) {
+                        if (!entry.is_object()) {
+                            LOG_WARN("Invalid dismissed-recovery entry in settings; skipping it");
+                            continue;
+                        }
+                        const auto path_text =
+                            lfs::core::persisted_settings::field<std::string>(entry, "sidecar_path", {});
+                        if (path_text.empty()) {
+                            LOG_WARN("Invalid dismissed-recovery path in settings; skipping it");
+                            continue;
+                        }
+                        DismissedRecoveryEntry item;
+                        item.sidecar_path =
+                            lfs::core::utf8_to_path(
+                                path_text)
+                                .lexically_normal();
+                        item.autosave_sequence =
+                            lfs::core::persisted_settings::field<std::uint64_t>(entry, "autosave_sequence", 0);
+                        if (const auto commit =
+                                lfs::core::Uuid::from_string(
+                                    lfs::core::persisted_settings::field<std::string>(entry, "commit_uuid", {}));
+                            commit) {
+                            item.commit_uuid = *commit;
+                        }
+                        settings.dismissed_recovery.push_back(
+                            std::move(item));
                     }
-                    const auto path_text =
-                        entry.value(
-                            "sidecar_path",
-                            std::string{});
-                    if (path_text.empty()) {
-                        continue;
-                    }
-                    DismissedRecoveryEntry item;
-                    item.sidecar_path =
-                        lfs::core::utf8_to_path(
-                            path_text)
-                            .lexically_normal();
-                    item.autosave_sequence =
-                        entry.value(
-                            "autosave_sequence",
-                            std::uint64_t{0});
-                    if (const auto commit =
-                            lfs::core::Uuid::from_string(
-                                entry.value(
-                                    "commit_uuid",
-                                    std::string{}));
-                        commit) {
-                        item.commit_uuid = *commit;
-                    }
-                    settings.dismissed_recovery.push_back(
-                        std::move(item));
-                }
             }
             return settings;
         } catch (const std::exception& exception) {
@@ -2393,7 +2368,7 @@ namespace lfs::vis::project {
                      entry.commit_uuid.to_string()},
                 });
             }
-            const Json json{
+            const Json updates{
                 {"version", 2},
                 {"reopen_last_project",
                  settings.reopen_last_project},
@@ -2414,6 +2389,9 @@ namespace lfs::vis::project {
                 {"dismissed_recovery",
                  std::move(dismissed)},
             };
+            const Json json = lfs::core::persisted_settings::mergeForWrite(
+                path, updates, "version", 2, nullptr,
+                {{"mru", "project_uuid"}, {"dismissed_recovery", "sidecar_path"}});
             if (const auto written = lfs::core::writeTextFileAtomically(
                     path, json.dump(2) + '\n');
                 !written) {
@@ -8166,7 +8144,7 @@ namespace lfs::vis::project {
         }
         // Every project-open entry point reaches this committed switch boundary.
         if (auto* loader = viewer_.getDataLoader())
-            loader->cancelPendingImports();
+            loader->rejectPendingImports(LOC("file_drop.cancelled_by_project_switch"));
         if (auto* gui = viewer_.getGuiManager())
             gui->asyncTasks().cancelImport(false);
         viewer_.deactivateProjectTools();
@@ -8336,6 +8314,103 @@ namespace lfs::vis::project {
         resetMaintenanceClocks();
         refreshStorageStats();
         return {};
+    }
+
+    void ProjectLifecycle::recoverDeferredPayloadsAfterUndo(
+        std::vector<lfs::core::Uuid> node_uuids) {
+        if (hydration_.load(std::memory_order_acquire) != Hydration::Complete ||
+            !document_ || !document_->source_path()) {
+            return;
+        }
+        auto* manager = viewer_.getSceneManager();
+        if (!manager) {
+            return;
+        }
+        std::erase_if(node_uuids, [&](const lfs::core::Uuid& uuid) {
+            const auto* node = manager->getScene().getNodeByUuid(uuid);
+            return !node || node->payload_hydration !=
+                                lfs::core::PayloadHydrationState::Unloaded;
+        });
+        if (node_uuids.empty()) {
+            return;
+        }
+        const auto document = document_;
+        const auto source_path = *document->source_path();
+        const auto project_uuid = document->project_uuid();
+        const auto minimum_generation = document->generation();
+        const auto epoch = epoch_.load(std::memory_order_acquire);
+        auto allocator = manager->makeExternalSplatAllocator();
+
+        std::lock_guard lock(thread_mutex_);
+        hydration_threads_.emplace_back(
+            [this, document, source_path, project_uuid, minimum_generation,
+             epoch, allocator = std::move(allocator),
+             node_uuids = std::move(node_uuids)](const std::stop_token stop) mutable {
+                if (stop.stop_requested()) {
+                    return;
+                }
+                auto source = ProjectDocument::open(
+                    source_path,
+                    {.reader = {},
+                     .geometry = {},
+                     .defer_geometry_payloads = true,
+                     .skip_validation = true});
+                if (!source) {
+                    LOG_ERROR("Undo payload recovery could not open its source: {}",
+                              developerError(source.error()));
+                    return;
+                }
+                if (source->project_uuid() != project_uuid ||
+                    source->generation() < minimum_generation) {
+                    LOG_ERROR("Undo payload recovery source changed during reload");
+                    return;
+                }
+                if (stop.stop_requested() ||
+                    epoch_.load(std::memory_order_acquire) != epoch) {
+                    return;
+                }
+                auto* scene_manager = viewer_.getSceneManager();
+                if (!scene_manager) {
+                    return;
+                }
+                auto staged = source->stage_payload_hydration_for_nodes(
+                    scene_manager->getScene(), node_uuids,
+                    std::move(allocator));
+                if (!staged) {
+                    if (!stop.stop_requested()) {
+                        LOG_ERROR("Undo payload recovery failed: {}",
+                                  developerError(staged.error()));
+                    }
+                    return;
+                }
+                if (stop.stop_requested()) {
+                    return;
+                }
+                auto plan = std::make_shared<std::optional<lfs::io::project::ProjectHydrationPlan>>(
+                    std::move(*staged));
+                viewer_.postWork({
+                    .run = [this, document, epoch, plan, node_uuids] {
+                        if (epoch_.load(std::memory_order_acquire) != epoch ||
+                            document_ != document || !plan->has_value()) {
+                            return;
+                        }
+                        auto* scene_manager = viewer_.getSceneManager();
+                        if (!scene_manager) {
+                            return;
+                        }
+                        const auto report = ProjectDocument::commit_partial_hydration(
+                            scene_manager->getScene(), std::move(plan->value()), false);
+                        plan->reset();
+                        if (report.hydrated_payload_units > 0) {
+                            op::undoHistory().bindHydratedPayloadStorage(node_uuids);
+                            lfs::core::events::state::SceneChanged{
+                                .mutation_flags = static_cast<std::uint32_t>(
+                                    lfs::core::Scene::MutationType::MODEL_CHANGED)}
+                                .emit();
+                        }
+                    },
+                });
+            });
     }
 
     lfs::Result<void>

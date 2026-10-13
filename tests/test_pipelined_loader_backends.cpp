@@ -314,6 +314,7 @@ namespace {
         auto rgba = request("rgba.png");
         rgba.extract_alpha_as_mask = true;
         rgba.alpha_mask_params.invert = true;
+        rgba.fill_masked_rgb = false;
         const auto split = load(rgba);
         std::vector<uint8_t> rgb(size_t(WIDTH) * HEIGHT * 3);
         for (size_t i = 0; i < size_t(WIDTH) * HEIGHT; ++i)
@@ -336,9 +337,15 @@ namespace {
         const auto camera = distorted_camera();
         soft.undistort = &camera;
         soft.params.undistort = &camera;
-        expect_close(load(soft).mask,
-                     undistort_mask(host(planar(mask_, 1, UINT8_SCALE), hw), camera, nullptr),
-                     1.5e-4f);
+        Tensor expected_soft_mask;
+        {
+            const GpuBackendScope scope(GetParam());
+            expected_soft_mask = undistort_mask(
+                host(planar(mask_, 1, UINT8_SCALE), hw).to(Device::GPU), camera, nullptr);
+            shared_image_ops(GetParam())->mask(expected_soft_mask,
+                                               lfs::gpu_ops::MaskTransform::QuantizeByteGrid, 0.0f);
+        }
+        expect_close(load(soft).mask, expected_soft_mask.cpu(), 0.0f);
     }
 
     TEST_P(PipelinedLoaderBackends, DepthAndNormalPriorsMatchHostReference) {

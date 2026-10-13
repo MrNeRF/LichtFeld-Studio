@@ -120,6 +120,8 @@ namespace lfs::vis::input {
     constexpr int KEYMOD_CTRL = 0x0002;
     constexpr int KEYMOD_ALT = 0x0004;
     constexpr int KEYMOD_SUPER = 0x0008;
+    // Event-only marker; captures refuse it and saved triggers cannot contain it.
+    constexpr int KEYMOD_ALTGR = 0x0010;
 
     enum class AppMouseButton : int {
         LEFT = 0,

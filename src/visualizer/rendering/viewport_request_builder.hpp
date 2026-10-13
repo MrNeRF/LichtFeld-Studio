@@ -53,7 +53,7 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API std::vector<ViewportMeshDrawItem> buildViewportMeshDrawItems(
         const SceneRenderState& scene_state,
         const RenderSettings& settings,
-        const glm::vec3& camera_position);
+        const glm::vec3& camera_backward);
 
     // Visible splat node shown in a PLY-comparison panel, or null when the
     // scene has fewer than two visible splat slots.

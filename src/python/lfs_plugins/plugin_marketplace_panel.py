@@ -18,7 +18,7 @@ from .marketplace import (
     MarketplacePluginEntry,
     PluginMarketplaceCatalog,
 )
-from .localization import localized_count
+from .localization import localized_count, safe_format
 from .plugin import PluginInfo, PluginState
 from .types import Panel
 from .panels import panel_class
@@ -66,6 +66,7 @@ class CardOpPhase(Enum):
 class CardOpState:
     phase: CardOpPhase = CardOpPhase.IDLE
     message: str = ""
+    warning: str = ""
     progress: float = 0.0
     output_lines: List[str] = field(default_factory=list)
     finished_at: float = 0.0
@@ -1723,10 +1724,14 @@ class PluginMarketplacePanel(Panel):
             self._card_ops[card_id] = state
         self._schedule_model_update()
 
+        unverified_warning = lf.ui.tr("plugin_marketplace.warning.unverified_source")
+
         def on_progress(msg: str):
             with self._lock:
                 self._advance_progress(state, msg)
                 state.message = msg
+                if msg == unverified_warning:
+                    state.warning = msg
                 state.output_lines.append(msg)
                 if len(state.output_lines) > MAX_OUTPUT_LINES:
                     state.output_lines = state.output_lines[-MAX_OUTPUT_LINES:]
@@ -1743,6 +1748,12 @@ class PluginMarketplacePanel(Panel):
                         state.message = success_msg.format(result)
                     else:
                         state.message = success_msg
+                    if state.warning:
+                        state.message = safe_format(
+                            lf.ui.tr("plugin_marketplace.success_with_warning"),
+                            success=state.message,
+                            warning=state.warning,
+                        )
                     state.phase = CardOpPhase.SUCCESS
                     state.finished_at = time.monotonic()
                 self._schedule_card_dismiss(card_id, CardOpPhase.SUCCESS)

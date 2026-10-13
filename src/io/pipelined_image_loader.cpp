@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <bit>
 #include <cassert>
+#include <cctype>
 #include <cerrno>
 #include <charconv>
 #include <cstdlib>
@@ -1540,6 +1541,25 @@ namespace lfs::io {
                 continue;
             }
 
+            auto rgb_key = make_cache_key(request.path, request.params);
+            if (request.fill_masked_rgb &&
+                (request.mask_path || request.rgb_mask || request.extract_alpha_as_mask)) {
+                const auto& policy = request.extract_alpha_as_mask
+                                         ? request.alpha_mask_params
+                                         : request.mask_params;
+                rgb_key += "_maskfill_" + std::to_string(std::bit_cast<std::uint32_t>(policy.threshold)) +
+                           (policy.invert ? "_inv" : "_normal") +
+                           (request.mask_keep_high_band ? "_high" : "_weighted");
+                if (request.extract_alpha_as_mask) {
+                    rgb_key += "_alpha";
+                } else if (request.rgb_mask) {
+                    rgb_key += "_memory_" + std::to_string(request.rgb_mask_revision) + "_" +
+                               std::to_string(reinterpret_cast<std::uintptr_t>(request.rgb_mask->data_ptr()));
+                } else {
+                    rgb_key += "_sidecar_" + lfs::core::path_to_utf8(*request.mask_path);
+                }
+            }
+
             if (!cuda_run) {
                 // As on CUDA, the run cache keeps each JPEG's encoded bytes and
                 // every request decodes them. Other formats, alpha masks and
@@ -1607,8 +1627,7 @@ namespace lfs::io {
             }
 
             if (request.extract_alpha_as_mask) {
-                const auto rgb_key = make_cache_key(request.path, request.params);
-                const auto alpha_key = make_mask_cache_key(request.path, request.params);
+                const auto alpha_key = make_mask_cache_key(request.path, request.params) + (request.alpha_is_transparency ? "_transparency" : "");
                 auto cached_rgb = get_from_jpeg_cache(rgb_key);
                 auto cached_alpha = get_from_jpeg_cache(alpha_key);
 
@@ -1632,6 +1651,7 @@ namespace lfs::io {
                     mask_item.jpeg_data = cached_alpha;
                     mask_item.is_mask = true;
                     mask_item.mask_params = request.alpha_mask_params;
+                    mask_item.alpha_is_transparency = request.alpha_is_transparency;
                     mask_item.is_cache_hit = true;
                     hot_queue_.push(std::move(mask_item));
 
@@ -1645,7 +1665,10 @@ namespace lfs::io {
                     result.params = request.params;
                     result.cache_key = rgb_key;
                     result.alpha_as_mask = true;
+                    result.alpha_is_transparency = request.alpha_is_transparency;
                     result.alpha_mask_params = request.alpha_mask_params;
+                    result.fill_masked_rgb = request.fill_masked_rgb;
+                    result.mask_keep_high_band = request.mask_keep_high_band;
                     result.needs_processing = true;
                     result.undistort = request.undistort;
 
@@ -1663,10 +1686,18 @@ namespace lfs::io {
             result.loader_generation = request.loader_generation;
             result.path = request.path;
             result.params = request.params;
-            result.cache_key = make_cache_key(request.path, request.params);
+            result.cache_key = rgb_key;
+            result.fill_masked_rgb = request.fill_masked_rgb;
+            result.mask_keep_high_band = request.mask_keep_high_band;
+            result.rgb_mask_path = request.mask_path && is_regular_file_no_throw(*request.mask_path)
+                                       ? request.mask_path
+                                       : std::nullopt;
+            result.rgb_mask = request.rgb_mask;
+            result.mask_params = request.mask_params;
             result.is_mask = false;
             result.undistort = request.undistort;
 
+            std::optional<PrefetchedImage> cold_rgb;
             try {
                 const bool needs_requested_processing = load_params_need_processing(request.params);
 
@@ -1700,7 +1731,10 @@ namespace lfs::io {
                         ++stats_.hot_path_hits;
                     } else {
                         result.needs_processing = true;
-                        cold_queue_.push(std::move(result));
+                        if (result.fill_masked_rgb && result.rgb_mask_path && !result.rgb_mask)
+                            cold_rgb = std::move(result);
+                        else
+                            cold_queue_.push(std::move(result));
                         std::lock_guard<std::mutex> lock(stats_mutex_);
                         ++stats_.cold_path_misses;
                     }
@@ -1712,55 +1746,60 @@ namespace lfs::io {
             }
 
             if (request.mask_path) {
-                if (!is_regular_file_no_throw(*request.mask_path)) {
-                    LOG_DEBUG("[PipelinedImageLoader] Skipping missing mask {}", lfs::core::path_to_utf8(*request.mask_path));
-                    std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
-                    fail_sidecar_locked(request.sequence_id, request.loader_generation,
-                                        SidecarKind::Mask,
-                                        *request.mask_path, "file does not exist or is not a regular file", lock);
-                } else {
-                    PrefetchedImage mask_result;
-                    mask_result.sequence_id = request.sequence_id;
-                    mask_result.loader_generation = request.loader_generation;
-                    mask_result.path = *request.mask_path;
-                    mask_result.params = request.params;
-                    mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params);
-                    mask_result.is_mask = true;
-                    mask_result.mask_params = request.mask_params;
-                    mask_result.undistort = request.undistort;
+                PrefetchedImage mask_result;
+                mask_result.sequence_id = request.sequence_id;
+                mask_result.loader_generation = request.loader_generation;
+                mask_result.path = *request.mask_path;
+                mask_result.params = request.params;
+                mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params);
+                mask_result.is_mask = true;
+                mask_result.mask_params = request.mask_params;
+                mask_result.undistort = request.undistort;
 
-                    try {
-                        if (auto cached = get_from_jpeg_cache(mask_result.cache_key)) {
-                            mask_result.jpeg_data = cached;
-                            mask_result.is_cache_hit = true;
-                            hot_queue_.push(std::move(mask_result));
-                            std::lock_guard<std::mutex> lock(stats_mutex_);
-                            ++stats_.mask_cache_hits;
-                        } else {
-                            mask_result.raw_bytes = read_file(*request.mask_path);
-                            mask_result.is_original_jpeg = is_jpeg_data(mask_result.raw_bytes);
-                            mask_result.is_cache_hit = false;
-
-                            {
-                                std::lock_guard<std::mutex> lock(stats_mutex_);
-                                stats_.total_bytes_read += mask_result.raw_bytes.size();
-                            }
-
-                            mask_result.needs_processing = true;
-                            cold_queue_.push(std::move(mask_result));
-                            std::lock_guard<std::mutex> lock(stats_mutex_);
-                            ++stats_.mask_cache_misses;
-                        }
-                    } catch (const std::exception& e) {
-                        LOG_WARN("[PipelinedImageLoader] Mask prefetch error {}: {} - continuing without mask",
-                                 lfs::core::path_to_utf8(*request.mask_path), e.what());
+                try {
+                    if (auto cached = get_from_jpeg_cache(mask_result.cache_key)) {
+                        mask_result.jpeg_data = cached;
+                        mask_result.is_cache_hit = true;
+                        hot_queue_.push(std::move(mask_result));
+                        std::lock_guard<std::mutex> lock(stats_mutex_);
+                        ++stats_.mask_cache_hits;
+                    } else if (!is_regular_file_no_throw(*request.mask_path)) {
+                        LOG_DEBUG("[PipelinedImageLoader] Skipping missing mask {}", lfs::core::path_to_utf8(*request.mask_path));
                         std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
                         fail_sidecar_locked(request.sequence_id, request.loader_generation,
-                                            SidecarKind::Mask,
-                                            *request.mask_path, e.what(), lock);
+                                            SidecarKind::Mask, *request.mask_path,
+                                            "file does not exist or is not a regular file", lock);
+                    } else {
+                        mask_result.raw_bytes = read_file(*request.mask_path);
+                        mask_result.is_original_jpeg = is_jpeg_data(mask_result.raw_bytes);
+                        mask_result.is_cache_hit = false;
+
+                        {
+                            std::lock_guard<std::mutex> lock(stats_mutex_);
+                            stats_.total_bytes_read += mask_result.raw_bytes.size();
+                        }
+
+                        mask_result.needs_processing = true;
+                        if (cold_rgb && cold_rgb->fill_masked_rgb && cold_rgb->rgb_mask_path) {
+                            auto source = std::make_shared<std::promise<lfs::core::Tensor>>();
+                            cold_rgb->rgb_mask_source = source->get_future().share();
+                            mask_result.mask_source_promise = std::move(source);
+                        }
+                        cold_queue_.push(std::move(mask_result));
+                        std::lock_guard<std::mutex> lock(stats_mutex_);
+                        ++stats_.mask_cache_misses;
                     }
+                } catch (const std::exception& e) {
+                    LOG_WARN("[PipelinedImageLoader] Mask prefetch error {}: {} - continuing without mask",
+                             lfs::core::path_to_utf8(*request.mask_path), e.what());
+                    std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
+                    fail_sidecar_locked(request.sequence_id, request.loader_generation,
+                                        SidecarKind::Mask, *request.mask_path, e.what(), lock);
                 }
             }
+
+            if (cold_rgb)
+                cold_queue_.push(std::move(*cold_rgb));
 
             enqueue_depth_request();
             enqueue_normal_request();

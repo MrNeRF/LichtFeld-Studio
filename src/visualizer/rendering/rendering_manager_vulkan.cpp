@@ -258,7 +258,13 @@ namespace lfs::vis {
             VulkanMeshFrame frame;
             frame.view_projection = meshes.view_projection;
             frame.camera_position = meshes.camera_position;
+            frame.camera_backward = meshes.camera_backward;
+            frame.depth_view = meshes.depth_view;
+            frame.depth_view_min = meshes.depth_view_min;
+            frame.depth_view_max = meshes.depth_view_max;
+            frame.depth_grayscale = meshes.depth_grayscale;
             frame.items = std::move(meshes.items);
+            frame.panels = std::move(meshes.panels);
             frame.environment = buildViewportEnvironment(frame_ctx, settings, environmentBackgroundEnabled(settings), environment_map_path);
             frame.split_view = split_view_params;
 
@@ -1642,6 +1648,26 @@ namespace lfs::vis {
             }
 
             if (!panel_has_visible_gaussian_model) {
+                if (splitViewUsesComparisonPanels(frame_settings.split_view_mode) &&
+                    !frame_ctx.scene_state.meshes.empty()) {
+                    const glm::vec4 color{
+                        frame_settings.background_color,
+                        environmentBackgroundUsesTransparentViewerCompositing(frame_settings) ? 0.0f : 1.0f};
+                    if (!mesh_only_split_background_ ||
+                        glm::any(glm::notEqual(mesh_only_split_background_color_, color))) {
+                        auto image = lfs::core::Tensor::from_vector(
+                            {color.r, color.g, color.b, color.a}, {4, 1, 1}, lfs::core::Device::CPU);
+                        mesh_only_split_background_ =
+                            std::make_shared<lfs::core::Tensor>(std::move(image));
+                        mesh_only_split_background_color_ = color;
+                    }
+                    lfs::rendering::FrameMetadata metadata{};
+                    metadata.valid = true;
+                    return RenderedPanel{.image = mesh_only_split_background_,
+                                         .metadata = std::move(metadata),
+                                         .size = {1, 1},
+                                         .alloc_size = {1, 1}};
+                }
                 return std::unexpected("No renderable model for split-view panel");
             }
 

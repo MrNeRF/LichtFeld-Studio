@@ -7566,7 +7566,8 @@ static float* stbi__hdr_load(stbi__context* s, int* x, int* y, int* comp, int re
     // Parse width and height
     // can't use sscanf() if we're not using stdio!
     token = stbi__hdr_gettoken(s, buffer);
-    if (strncmp(token, "-Y ", 3))
+    // +Y and -Y are both stored in file order; the sign is not a row flip.
+    if ((token[0] != '-' && token[0] != '+') || strncmp(token + 1, "Y ", 2))
         return stbi__errpf("unsupported data layout", "Unsupported HDR format");
     token += 3;
     height = (int)strtol(token, &token, 10);
@@ -7716,7 +7717,8 @@ static int stbi__hdr_info(stbi__context* s, int* x, int* y, int* comp) {
         return 0;
     }
     token = stbi__hdr_gettoken(s, buffer);
-    if (strncmp(token, "-Y ", 3)) {
+    // +Y and -Y are both stored in file order; the sign is not a row flip.
+    if ((token[0] != '-' && token[0] != '+') || strncmp(token + 1, "Y ", 2)) {
         stbi__rewind(s);
         return 0;
     }

@@ -36,7 +36,8 @@ namespace lfs::core {
                               GALLERY_SOG = 10,
                               GALLERY_SSOG = 11,
                               GALLERY_SPZ = 12, // Internal local-node staging for gallery bundles.
-                              GLB = 13 };
+                              GLB = 13,
+                              COUNT = 14 }; // Keep last; the scene exporter registry must cover every format.
 
 // Event macro using shared event bridge (solves singleton duplication between exe and Python module)
 #define EVENT(Name, ...)                                   \

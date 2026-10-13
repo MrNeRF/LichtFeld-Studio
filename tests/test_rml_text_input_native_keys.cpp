@@ -85,7 +85,7 @@ namespace {
 
         void SetUp() override {
             context_ = Rml::CreateContext("native_text_input_keys", {320, 80},
-                                          &render_interface_);
+                                          &render_interface_, &text_input_handler_);
             ASSERT_TRUE(context_);
             document_ = context_->LoadDocumentFromMemory(kDocumentRml);
             ASSERT_TRUE(document_);
@@ -132,6 +132,7 @@ namespace {
         }
 
         inline static StubRenderInterface render_interface_;
+        lfs::vis::gui::RmlTextInputHandler text_input_handler_;
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
         Rml::ElementFormControlInput* input_ = nullptr;
@@ -155,6 +156,76 @@ namespace {
         EXPECT_EQ(listener.value, "ello");
 
         input_->RemoveEventListener(Rml::EventId::Change, &listener);
+    }
+
+    TEST_F(RmlTextInputNativeKeysTest, EditingShortcutsUsePrintedLetters) {
+        using namespace lfs::vis;
+        struct Shortcut {
+            SDL_Scancode scancode;
+            SDL_Keycode keycode;
+            const char* result;
+        };
+        // A and Q exchange physical positions on AZERTY.
+        for (const Shortcut shortcut : {
+                 Shortcut{SDL_SCANCODE_Q, SDLK_A, ""},
+                 Shortcut{SDL_SCANCODE_A, SDLK_A, ""},
+                 Shortcut{SDL_SCANCODE_A, SDLK_Q, "ab"},
+             }) {
+            input_->SetValue("abc");
+            input_->SetSelectionRange(3, 3);
+            FrameInputBuffer buffer;
+            SDL_Event key{};
+            key.type = SDL_EVENT_KEY_DOWN;
+            key.key.scancode = shortcut.scancode;
+            key.key.key = shortcut.keycode;
+            key.key.mod = SDL_KMOD_CTRL;
+            buffer.processEvent(key);
+            ASSERT_EQ(buffer.input_events.size(), 1u);
+            gui::rml_input::processKeyboardEvent(*context_, buffer.input_events.front(), &text_input_handler_);
+            context_->ProcessKeyDown(Rml::Input::KI_BACK, 0);
+            EXPECT_EQ(input_->GetValue(), shortcut.result) << static_cast<int>(shortcut.scancode);
+        }
+    }
+
+    TEST_F(RmlTextInputNativeKeysTest, SdlTextInputPreservesUtf8) {
+        using namespace lfs::vis;
+        for (const char* text : {"é", "é", "漢字"}) {
+            input_->SetValue("");
+            input_->SetSelectionRange(0, 0);
+            SDL_Event event{};
+            event.type = SDL_EVENT_TEXT_INPUT;
+            event.text.text = text;
+            FrameInputBuffer buffer;
+            buffer.processEvent(event);
+            ASSERT_EQ(buffer.input_events.size(), 1u);
+            gui::rml_input::processKeyboardEvent(*context_, buffer.input_events.front(),
+                                                 &text_input_handler_);
+            EXPECT_EQ(input_->GetValue(), text);
+        }
+    }
+
+    TEST_F(RmlTextInputNativeKeysTest, ComposedTextPreservesUtf8) {
+        using namespace lfs::vis;
+        input_->SetValue("");
+        input_->SetSelectionRange(0, 0);
+        SDL_Event editing{};
+        editing.type = SDL_EVENT_TEXT_EDITING;
+        editing.edit.text = "漢";
+        editing.edit.start = 1;
+        FrameInputBuffer buffer;
+        buffer.processEvent(editing);
+        ASSERT_EQ(buffer.input_events.size(), 1u);
+        gui::rml_input::processKeyboardEvent(*context_, buffer.input_events.front(),
+                                             &text_input_handler_);
+        SDL_Event commit{};
+        commit.type = SDL_EVENT_TEXT_INPUT;
+        commit.text.text = "漢字";
+        FrameInputBuffer committed;
+        committed.processEvent(commit);
+        ASSERT_EQ(committed.input_events.size(), 1u);
+        gui::rml_input::processKeyboardEvent(*context_, committed.input_events.front(),
+                                             &text_input_handler_);
+        EXPECT_EQ(input_->GetValue(), "漢字");
     }
 
     TEST_F(RmlTextInputNativeKeysTest, DisabledOverlaySkipsAllControlsInBothTabDirections) {

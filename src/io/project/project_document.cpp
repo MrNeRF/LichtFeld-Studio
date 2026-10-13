@@ -5328,7 +5328,8 @@ namespace lfs::io::project {
     stage_scene_graph(const SceneGraphChapter& chapter,
                       lfs::core::Scene& target,
                       const ScenePayloadResolver& resolver,
-                      bool payload_units_only);
+                      bool payload_units_only,
+                      const std::unordered_set<lfs::core::Uuid>* selected_payload_nodes);
 
     lfs::Result<std::unique_ptr<lfs::core::Scene>>
     ProjectDocument::stage_shell(
@@ -5360,6 +5361,29 @@ namespace lfs::io::project {
         const ScenePayloadResolver& external_payloads,
         lfs::core::SplatTensorAllocator splat_allocator,
         std::function<void(std::size_t, std::size_t)> payload_progress) const {
+        return stage_hydration_filtered(
+            destination, external_payloads, std::move(splat_allocator),
+            std::move(payload_progress), std::nullopt);
+    }
+
+    lfs::Result<ProjectHydrationPlan>
+    ProjectDocument::stage_payload_hydration_for_nodes(
+        lfs::core::Scene& destination,
+        std::span<const lfs::core::Uuid> node_uuids,
+        lfs::core::SplatTensorAllocator splat_allocator,
+        std::function<void(std::size_t, std::size_t)> payload_progress) const {
+        return stage_hydration_filtered(
+            destination, {}, std::move(splat_allocator),
+            std::move(payload_progress), node_uuids);
+    }
+
+    lfs::Result<ProjectHydrationPlan>
+    ProjectDocument::stage_hydration_filtered(
+        lfs::core::Scene& destination,
+        const ScenePayloadResolver& external_payloads,
+        lfs::core::SplatTensorAllocator splat_allocator,
+        std::function<void(std::size_t, std::size_t)> payload_progress,
+        std::optional<std::span<const lfs::core::Uuid>> node_uuids) const {
         const auto hydration_started =
             std::chrono::steady_clock::now();
         double splat_read_ms = 0.0;
@@ -5373,8 +5397,17 @@ namespace lfs::io::project {
                     .count();
             };
         try {
+            const bool scoped = node_uuids.has_value();
+            std::unordered_set<lfs::core::Uuid> selected_nodes;
+            if (node_uuids) {
+                selected_nodes.insert(node_uuids->begin(), node_uuids->end());
+            }
+            const auto selected = [&](const lfs::core::Uuid& uuid) {
+                return !scoped || selected_nodes.contains(uuid);
+            };
             std::map<ChunkKey, Hash128, ChunkKeyLess>
-                hashes;
+                hashes = scoped ? impl_->content_hashes
+                                : std::map<ChunkKey, Hash128, ChunkKeyLess>{};
             std::unordered_map<
                 lfs::core::Uuid,
                 std::unique_ptr<lfs::core::SplatData>>
@@ -5393,12 +5426,13 @@ namespace lfs::io::project {
                 staged_meshes;
 
             const auto deferred_count =
-                [this](const Fourcc fourcc) {
+                [this, &selected](const Fourcc fourcc) {
                     return static_cast<std::size_t>(
                         std::ranges::count_if(
                             impl_->deferred_geometry_keys,
-                            [fourcc](const ChunkKey& key) {
-                                return key.fourcc == fourcc;
+                            [fourcc, &selected](const ChunkKey& key) {
+                                return key.fourcc == fourcc &&
+                                       selected(key.instance_uuid);
                             }));
                 };
             const auto read_deferred =
@@ -5433,6 +5467,9 @@ namespace lfs::io::project {
                 impl_->splats.size() + deferred_count(FOURCC_SPLT);
             for (const auto& [uuid, payload] :
                  impl_->splats) {
+                if (!selected(uuid)) {
+                    continue;
+                }
                 const ChunkKey key{
                     .fourcc = FOURCC_SPLT,
                     .instance_uuid = uuid,
@@ -5456,7 +5493,8 @@ namespace lfs::io::project {
                     uuid, std::move(*materialized));
             }
             for (const auto& key : impl_->deferred_geometry_keys) {
-                if (key.fourcc != FOURCC_SPLT) {
+                if (key.fourcc != FOURCC_SPLT ||
+                    !selected(key.instance_uuid)) {
                     continue;
                 }
                 if (!impl_->source_reader) {
@@ -5514,11 +5552,24 @@ namespace lfs::io::project {
             if (!bound_checkpoint) {
                 return std::move(bound_checkpoint).error();
             }
+            bool stage_checkpoint = !scoped;
+            if (scoped && bound_checkpoint->has_value()) {
+                auto nodes = impl_->scene_graph.nodes();
+                if (!nodes) {
+                    return std::move(nodes).error();
+                }
+                stage_checkpoint = std::ranges::any_of(
+                    *nodes, [&](const SceneNodeRecord& node) {
+                        return selected_nodes.contains(node.uuid) &&
+                               node.payload && node.payload->fourcc == "CKPT" &&
+                               node.payload->instance_uuid == **bound_checkpoint;
+                    });
+            }
             staged_checkpoint_splats.reserve(
-                bound_checkpoint->has_value() ? 1 : 0);
+                bound_checkpoint->has_value() && stage_checkpoint ? 1 : 0);
             for (const auto& [uuid, payload] :
                  impl_->checkpoints) {
-                if (!bound_checkpoint->has_value() ||
+                if (!stage_checkpoint || !bound_checkpoint->has_value() ||
                     uuid != **bound_checkpoint) {
                     continue;
                 }
@@ -5631,6 +5682,9 @@ namespace lfs::io::project {
                 impl_->point_clouds.size() +
                 deferred_count(FOURCC_PCLD));
             for (auto& [uuid, payload] : impl_->point_clouds) {
+                if (!selected(uuid)) {
+                    continue;
+                }
                 const ChunkKey key{
                     .fourcc = FOURCC_PCLD,
                     .instance_uuid = uuid,
@@ -5649,7 +5703,8 @@ namespace lfs::io::project {
                     uuid, payload.point_cloud());
             }
             for (const auto& key : impl_->deferred_geometry_keys) {
-                if (key.fourcc != FOURCC_PCLD) {
+                if (key.fourcc != FOURCC_PCLD ||
+                    !selected(key.instance_uuid)) {
                     continue;
                 }
                 auto bytes = read_deferred(key);
@@ -5670,6 +5725,9 @@ namespace lfs::io::project {
                 impl_->meshes.size() +
                 deferred_count(FOURCC_MESH));
             for (auto& [uuid, payload] : impl_->meshes) {
+                if (!selected(uuid)) {
+                    continue;
+                }
                 const ChunkKey key{
                     .fourcc = FOURCC_MESH,
                     .instance_uuid = uuid,
@@ -5687,7 +5745,8 @@ namespace lfs::io::project {
                 staged_meshes.emplace(uuid, payload.mesh());
             }
             for (const auto& key : impl_->deferred_geometry_keys) {
-                if (key.fourcc != FOURCC_MESH) {
+                if (key.fourcc != FOURCC_MESH ||
+                    !selected(key.instance_uuid)) {
                     continue;
                 }
                 auto bytes = read_deferred(key);
@@ -5729,11 +5788,13 @@ namespace lfs::io::project {
             auto published_refs = references().records();
             if (!published_refs)
                 return std::move(published_refs).error();
-            for (const auto& ref : *published_refs) {
-                if (find_dataset_source(ref.uuid) && ref.kind == "environment_map") {
-                    auto asset = materialize_embedded_asset(ref.uuid, "lfsenv");
-                    if (!asset)
-                        return std::move(asset).error();
+            if (!scoped) {
+                for (const auto& ref : *published_refs) {
+                    if (find_dataset_source(ref.uuid) && ref.kind == "environment_map") {
+                        auto asset = materialize_embedded_asset(ref.uuid, "lfsenv");
+                        if (!asset)
+                            return std::move(asset).error();
+                    }
                 }
             }
             ScenePayloadResolver resolver;
@@ -5880,44 +5941,49 @@ namespace lfs::io::project {
                 return external_payloads.mesh(binding);
             };
 
-            bool payload_units_only = false;
-            for (const auto* node : destination.getNodes()) {
-                if (!node) {
-                    continue;
-                }
-                auto found = impl_->scene_graph.find(node->uuid);
-                if (found && found->has_value()) {
-                    payload_units_only = true;
-                    break;
+            bool payload_units_only = scoped;
+            if (!scoped) {
+                for (const auto* node : destination.getNodes()) {
+                    if (!node) {
+                        continue;
+                    }
+                    auto found = impl_->scene_graph.find(node->uuid);
+                    if (found && found->has_value()) {
+                        payload_units_only = true;
+                        break;
+                    }
                 }
             }
             auto staged_scene = stage_scene_graph(
                 impl_->scene_graph, destination, resolver,
-                payload_units_only);
+                payload_units_only, scoped ? &selected_nodes : nullptr);
             if (!staged_scene) {
                 return std::move(staged_scene).error();
             }
-            auto nodes = impl_->scene_graph.nodes();
-            if (!nodes) {
-                return std::move(nodes).error();
+            SelectionHydrationReport selection_report;
+            if (!scoped) {
+                auto nodes = impl_->scene_graph.nodes();
+                if (!nodes) {
+                    return std::move(nodes).error();
+                }
+                std::vector<lfs::core::Uuid> selection_owner_uuids;
+                selection_owner_uuids.reserve(nodes->size());
+                for (const auto& node : *nodes) {
+                    selection_owner_uuids.push_back(node.uuid);
+                }
+                auto staged_selection =
+                    stage_selection_chapter(
+                        impl_->selection, **staged_scene,
+                        selection_owner_uuids);
+                if (!staged_selection) {
+                    return std::move(staged_selection).error();
+                }
+                selection_report =
+                    std::move(staged_selection->report);
+                (*staged_scene)
+                    ->installRestoreSelectionState(
+                        std::move(staged_selection->state));
             }
-            std::vector<lfs::core::Uuid> selection_owner_uuids;
-            selection_owner_uuids.reserve(nodes->size());
-            for (const auto& node : *nodes) {
-                selection_owner_uuids.push_back(node.uuid);
-            }
-            auto staged_selection =
-                stage_selection_chapter(
-                    impl_->selection, **staged_scene,
-                    selection_owner_uuids);
-            if (!staged_selection) {
-                return std::move(staged_selection).error();
-            }
-            auto selection_report =
-                std::move(staged_selection->report);
-            (*staged_scene)
-                ->installRestoreSelectionState(
-                    std::move(staged_selection->state));
             encode_staged_splat_shN(**staged_scene);
 
             auto plan =

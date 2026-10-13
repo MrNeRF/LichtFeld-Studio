@@ -16,6 +16,7 @@
 #include <assimp/scene.h>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <format>
 #include <limits>
 
@@ -478,6 +479,21 @@ namespace lfs::io {
                                   ? LOC("io.mesh_no_triangle_faces")
                                   : "The mesh file contains no triangle faces.",
                               path);
+        }
+
+        for (auto& mesh : sub_meshes) {
+            auto vertices = mesh.vertices.accessor<float, 2>();
+            for (int64_t i = 0; i < mesh.vertex_count(); ++i) {
+                if (!std::isfinite(vertices(i, 0)) || !std::isfinite(vertices(i, 1)) ||
+                    !std::isfinite(vertices(i, 2))) {
+                    const auto& localization = lfs::event::LocalizationManager::getInstance();
+                    return make_error(ErrorCode::CORRUPTED_DATA,
+                                      localization.hasKey("io.mesh_nonfinite_vertices")
+                                          ? LOC("io.mesh_nonfinite_vertices")
+                                          : "Mesh contains non-finite vertex coordinates.",
+                                      path);
+                }
+            }
         }
 
         if (options.progress) {

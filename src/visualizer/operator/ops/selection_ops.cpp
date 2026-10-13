@@ -204,7 +204,9 @@ namespace lfs::vis::op {
                     }
                     return OperatorResult::RUNNING_MODAL;
                 }
-                return OperatorResult::CANCELLED;
+                // Brush, box, and sphere have no vertex to undo. Consuming the
+                // chord keeps the stroke, so a following pan button cannot cancel it.
+                return OperatorResult::RUNNING_MODAL;
 
             case input::Action::CANCEL_POLYGON:
                 return OperatorResult::CANCELLED;

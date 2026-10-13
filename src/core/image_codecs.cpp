@@ -73,13 +73,14 @@ namespace lfs::core::image_codecs {
             return true;
         }
 
-        bool read_prefix(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error) {
+        bool read_prefix(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error,
+                         const std::size_t limit = 32) {
             std::ifstream file(path, std::ios::binary);
             if (!file) {
                 error = "Could not open file " + path_to_utf8(path);
                 return false;
             }
-            data.resize(32);
+            data.resize(limit);
             file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
             data.resize(static_cast<std::size_t>(file.gcount()));
             if (file.bad()) {
@@ -775,7 +776,112 @@ namespace lfs::core::image_codecs {
             return true;
         }
 
+        bool hdr_payload_is_complete(stbi__context& context) {
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+            if (!stbi__hdr_info(&context, &width, &height, &channels) || width <= 0 || height <= 0 ||
+                !stbi__mad4sizes_valid(width, height, 3, sizeof(float), 0))
+                return false;
+
+            const auto read_byte = [&context](stbi_uc& value) {
+                if (context.img_buffer >= context.img_buffer_end) {
+                    if (!context.read_from_callbacks || stbi__at_eof(&context))
+                        return false;
+                    stbi__refill_buffer(&context);
+                    if (context.img_buffer >= context.img_buffer_end)
+                        return false;
+                }
+                value = stbi__get8(&context);
+                return true;
+            };
+            const auto has_bytes_remaining = [&context](const std::uint64_t count) {
+                const auto buffered = static_cast<std::uint64_t>(context.img_buffer_end - context.img_buffer);
+                if (!context.read_from_callbacks)
+                    return buffered >= count;
+
+                auto* file = static_cast<std::FILE*>(context.io_user_data);
+                const auto current = std::ftell(file);
+                if (current < 0 || std::fseek(file, 0, SEEK_END) != 0)
+                    return false;
+                const auto end = std::ftell(file);
+                const bool restored = std::fseek(file, current, SEEK_SET) == 0;
+                return restored && end >= current &&
+                       buffered + static_cast<std::uint64_t>(end - current) >= count;
+            };
+
+            const auto pixel_count = static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
+            const auto flat_payload_size = pixel_count * 4;
+            if (width < 8 || width >= 32768)
+                return has_bytes_remaining(flat_payload_size);
+
+            stbi_uc marker[4]{};
+            for (auto& value : marker)
+                if (!read_byte(value))
+                    return false;
+            if (marker[0] != 2 || marker[1] != 2 || (marker[2] & 0x80) != 0)
+                return has_bytes_remaining(flat_payload_size - sizeof(marker));
+            if ((static_cast<int>(marker[2]) << 8 | marker[3]) != width)
+                return false;
+
+            for (int row = 0; row < height; ++row) {
+                if (row != 0) {
+                    for (auto& value : marker)
+                        if (!read_byte(value))
+                            return false;
+                    if (marker[0] != 2 || marker[1] != 2 || (marker[2] & 0x80) != 0 ||
+                        (static_cast<int>(marker[2]) << 8 | marker[3]) != width)
+                        return false;
+                }
+                for (int channel = 0; channel < 4; ++channel) {
+                    int decoded = 0;
+                    while (decoded < width) {
+                        stbi_uc count = 0;
+                        if (!read_byte(count) || count == 0)
+                            return false;
+                        if (count > 128) {
+                            stbi_uc value = 0;
+                            const int run = count - 128;
+                            if (run > width - decoded || !read_byte(value))
+                                return false;
+                            decoded += run;
+                        } else {
+                            if (count > width - decoded)
+                                return false;
+                            for (int i = 0; i < count; ++i) {
+                                stbi_uc value = 0;
+                                if (!read_byte(value))
+                                    return false;
+                            }
+                            decoded += count;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
+        bool hdr_payload_is_complete(const stbi_uc* data, const std::size_t size) {
+            if (!data || size == 0 || size > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+                return false;
+            stbi__context context{};
+            stbi__start_mem(&context, data, static_cast<int>(size));
+            return hdr_payload_is_complete(context);
+        }
+
+        bool hdr_payload_is_complete(std::FILE* file) {
+            stbi__context context{};
+            stbi__start_file(&context, file);
+            const bool complete = hdr_payload_is_complete(context);
+            std::clearerr(file);
+            return std::fseek(file, 0, SEEK_SET) == 0 && complete;
+        }
+
         bool decode_stb(const std::vector<std::uint8_t>& file_data, bool hdr, Image& result, std::string& error) {
+            if (hdr && !hdr_payload_is_complete(file_data.data(), file_data.size())) {
+                error = "HDR pixel data is truncated or malformed";
+                return false;
+            }
             int width = 0;
             int height = 0;
             int channels = 0;
@@ -853,6 +959,12 @@ namespace lfs::core::image_codecs {
                         int width = 0;
                         int height = 0;
                         int source_channels = 0;
+                        if (!hdr_payload_is_complete(static_cast<const stbi_uc*>(mapped), size)) {
+                            munmap(mapped, size);
+                            close(descriptor);
+                            error = "HDR pixel data is truncated or malformed";
+                            return false;
+                        }
                         auto* decoded = stbi_loadf_from_memory(static_cast<const stbi_uc*>(mapped),
                                                                static_cast<int>(size), &width, &height,
                                                                &source_channels, target.channels);
@@ -883,6 +995,11 @@ namespace lfs::core::image_codecs {
                 if (target.sample_type != SampleType::Float32) {
                     std::fclose(file);
                     error = "Unsupported HDR target layout";
+                    return false;
+                }
+                if (!hdr_payload_is_complete(file)) {
+                    std::fclose(file);
+                    error = "HDR pixel data is truncated or malformed";
                     return false;
                 }
                 auto* decoded = stbi_loadf_from_file(file, &width, &height, &source_channels, target.channels);
@@ -992,6 +1109,15 @@ namespace lfs::core::image_codecs {
 
     } // namespace
 
+    bool radiance_scanlines_complete(const std::filesystem::path& path) {
+        auto* file = open_binary_file(path);
+        if (!file)
+            return false;
+        const bool complete = hdr_payload_is_complete(file);
+        std::fclose(file);
+        return complete;
+    }
+
     bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
                           Probe& result, std::string& error) {
         const auto extension = lower_extension(path);
@@ -1022,6 +1148,49 @@ namespace lfs::core::image_codecs {
         if (size >= kPngSignature.size() && std::equal(kPngSignature.begin(), kPngSignature.end(), data))
             return decode_png_memory_to_buffer(data, size, target, result, error);
         error = "Unsupported image buffer format";
+        return false;
+    }
+
+    bool probe_bounded_header(const std::filesystem::path& path, std::string& error) {
+        constexpr std::size_t kReadLimit = 4096;
+        std::vector<std::uint8_t> header;
+        if (!read_prefix(path, header, error, kReadLimit))
+            return false;
+
+        if (is_png(header)) {
+            if (header.size() >= 26 && std::memcmp(header.data() + 12, "IHDR", 4) == 0 &&
+                std::any_of(header.begin() + 16, header.begin() + 20, [](auto byte) { return byte != 0; }) &&
+                std::any_of(header.begin() + 20, header.begin() + 24, [](auto byte) { return byte != 0; }))
+                return true;
+            error = "Invalid PNG header";
+            return false;
+        }
+        if (is_webp(header)) {
+            int width = 0;
+            int height = 0;
+            if (WebPGetInfo(header.data(), header.size(), &width, &height))
+                return true;
+            error = "Invalid WebP header";
+            return false;
+        }
+        if (is_tiff(header) || is_exr(header)) {
+            if (header.size() >= 16)
+                return true;
+            error = "Incomplete image header";
+            return false;
+        }
+        if (is_jpeg(header) || is_bmp(header) || is_hdr(header) || lower_extension(path) == ".tga") {
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+            if (stbi_info_from_memory(header.data(), static_cast<int>(header.size()), &width, &height, &channels))
+                return true;
+            // Large metadata can put the dimensions beyond the prefix. Keep this advisory
+            // check inconclusive so a valid image remains accepted for the later loader.
+            if (header.size() == kReadLimit)
+                return true;
+        }
+        error = "Unrecognized or incomplete image header";
         return false;
     }
 

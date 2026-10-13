@@ -50,6 +50,10 @@ enum SharedImageConversion : uint {
     kU16HWCToU8CHW,
     kF32CHWToU8CHW,
     kU8HWToF32HW,
+    kNormalPriorF32,
+    kMaskU8HWToF32HW,
+    kU8HWCToF32CHWExactMaskAlpha,
+    kU16HWCToF32CHWExactMaskAlpha,
 };
 
 struct SharedImageConvertParams {
@@ -146,6 +150,18 @@ kernel void shared_image_convert(constant SharedImageConvertParams& p [[buffer(0
         if (index < pixels)
             out_f32[index] = float(u8[index]) * kImageScaleU8;
         return;
+    case kMaskU8HWToF32HW:
+        if (index < pixels)
+            out_f32[index] = float(u8[index]) / 255.0f;
+        return;
+    case kU8HWCToF32CHWExactMaskAlpha:
+        if (index < total)
+            out_f32[chw] = c == 3u ? float(u8[index]) / 255.0f : float(u8[index]) * kImageScaleU8;
+        return;
+    case kU16HWCToF32CHWExactMaskAlpha:
+        if (index < total)
+            out_f32[chw] = c == 3u ? float(u16[index]) / 65535.0f : float(u16[index]) * kImageScaleU16;
+        return;
     }
 }
 
@@ -180,7 +196,12 @@ kernel void shared_image_mask(constant SharedImageMaskParams& p [[buffer(0)]], u
     if (index >= p.count)
         return;
     const float v = p.mask[index];
-    p.mask[index] = p.threshold_mode != 0 ? (v >= p.threshold ? 1.0f : 0.0f) : 1.0f - v;
+    if (p.threshold_mode == 0)
+        p.mask[index] = 1.0f - v;
+    else if (p.threshold_mode == 1)
+        p.mask[index] = v >= p.threshold ? 1.0f : 0.0f;
+    else
+        p.mask[index] = float(uint(clamp(v * 255.0f, 0.0f, 255.0f))) / 255.0f;
 }
 
 // Lanczos resampling: normalized per-output tap weights along each axis, then
@@ -246,7 +267,7 @@ kernel void shared_image_lanczos_resample(constant SharedImageLanczosParams& p [
     const int ly = max(int(cy - float(p.kernel_size) * scale_h + 0.5f), 0);
     const int rx = min(int(cx + float(p.kernel_size) * scale_w + 0.5f), p.input_w);
     const int ry = min(int(cy + float(p.kernel_size) * scale_h + 0.5f), p.input_h);
-    const int channels = int(p.channels);
+    const int channels = p.layout == 1 ? 1 : int(p.channels);
     const uint input_plane = uint(p.input_h * p.input_w);
     device const float* f32 = (device const float*)p.input;
     float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -262,7 +283,8 @@ kernel void shared_image_lanczos_resample(constant SharedImageLanczosParams& p [
                 else if (p.layout == 1)
                     v = p.bytes != 0 ? float(p.input[pixel]) * kImageScaleU8 : f32[pixel];
                 else
-                    v = p.bytes != 0 ? float(p.input[pixel * p.channels + uint(ch)]) / 255.0f : f32[pixel * p.channels + uint(ch)];
+                    v = p.bytes != 0 ? float(p.input[pixel * uint(channels) + uint(ch)]) / 255.0f
+                                     : f32[pixel * uint(channels) + uint(ch)];
                 acc[ch] += v * k;
             }
         }

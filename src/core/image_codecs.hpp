@@ -60,6 +60,9 @@ namespace lfs::core::image_codecs {
     }
 
     LFS_IMAGE_CODECS_API bool probe(const std::filesystem::path& path, Probe& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool probe_bounded_header(const std::filesystem::path& path, std::string& error);
+    // Validate Radiance scanline payload completeness without decoding pixels.
+    LFS_IMAGE_CODECS_API bool radiance_scanlines_complete(const std::filesystem::path& path);
     LFS_IMAGE_CODECS_API bool decode(const std::filesystem::path& path, Image& result, std::string& error);
     inline constexpr std::string_view tiff_sdr_encoding = "tiff16-sdr-v1";
     struct TiffMetadata {

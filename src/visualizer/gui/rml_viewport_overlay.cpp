@@ -461,7 +461,8 @@ namespace lfs::vis::gui {
             std::abs(gt_metrics_overlay_.y - state.y) > 0.5f ||
             gt_metrics_overlay_.psnr_text != state.psnr_text ||
             gt_metrics_overlay_.show_ssim != state.show_ssim ||
-            gt_metrics_overlay_.ssim_text != state.ssim_text;
+            gt_metrics_overlay_.ssim_text != state.ssim_text ||
+            gt_metrics_overlay_.metrics_status != state.metrics_status;
         if (!changed) {
             return;
         }
@@ -557,12 +558,16 @@ namespace lfs::vis::gui {
         state.show_ssim = gt_metrics_config_.show_ssim;
         state.psnr_text = "--";
         state.ssim_text = "--";
+        state.metrics_status = gt_metrics_config_.metrics_status;
 
         if (state.visible && camera_metrics_ &&
             camera_metrics_->camera_id == gt_metrics_config_.current_camera_id) {
-            state.psnr_text = std::format("{:.2f}", camera_metrics_->psnr);
-            if (state.show_ssim && camera_metrics_->ssim.has_value())
-                state.ssim_text = std::format("{:.4f}", *camera_metrics_->ssim);
+            state.metrics_status = camera_metrics_->status;
+            if (state.metrics_status == lfs::vis::AppStore::CameraMetricsStatus::Available) {
+                state.psnr_text = std::format("{:.2f}", camera_metrics_->psnr);
+                if (state.show_ssim && camera_metrics_->ssim.has_value())
+                    state.ssim_text = std::format("{:.4f}", *camera_metrics_->ssim);
+            }
         }
 
         setGTMetricsOverlay(std::move(state));
@@ -891,6 +896,16 @@ namespace lfs::vis::gui {
             ssim->SetInnerRML(metric_text(gt_metrics_overlay_.ssim_text));
             touched = true;
         }
+        if (auto* const reason = document_->GetElementById("gt-metrics-training-required")) {
+            reason->SetClass("hidden", gt_metrics_overlay_.metrics_status !=
+                                           lfs::vis::AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession);
+            touched = true;
+        }
+        if (auto* const reason = document_->GetElementById("gt-metrics-calculation-failed")) {
+            reason->SetClass("hidden", gt_metrics_overlay_.metrics_status !=
+                                           lfs::vis::AppStore::CameraMetricsStatus::CalculationFailed);
+            touched = true;
+        }
 
         if (touched)
             markRenderNeeded(RenderReason::GTMetrics);
@@ -1100,6 +1115,22 @@ namespace lfs::vis::gui {
         }
         // Replay canonical events at their own coordinates, in arrival order.
         // rml_pointer_dispatch.hpp exposes the loop for tests with their own context.
+        for (const auto& event : input.mouse_button_events) {
+            if (!event.down || event.button != 0)
+                continue;
+            const float x = event.x - vp_pos_.x;
+            const float y = event.y - vp_pos_.y;
+            if (x < 0.0f || y < 0.0f || x >= vp_size_.x || y >= vp_size_.y)
+                continue;
+            const auto* element = rml_context_->GetElementAtPoint(Rml::Vector2f(x, y));
+            if (!rml_input::isSelectRelatedElement(const_cast<Rml::Element*>(element)) &&
+                rml_input::hideOpenSelectBoxes(*rml_context_))
+                markRenderNeeded(RenderReason::PointerButton);
+        }
+        if (input.mouse_button_events.empty() && input.mouse_clicked[0] && is_inside &&
+            !rml_input::isSelectRelatedElement(const_cast<Rml::Element*>(point_element)) &&
+            rml_input::hideOpenSelectBoxes(*rml_context_))
+            markRenderNeeded(RenderReason::PointerButton);
         const bool replayed_button_events = rml_input::replayButtonEvents(
             *rml_context_, pointer_down_delivered_, input.mouse_button_events, vp_pos_, vp_size_,
             mods, false,

@@ -25,24 +25,36 @@ namespace lfs::training::structure_detail {
         using Tensor = core::Tensor;
         using Workspace = kernels::RidgeWorkspace;
         using GradientWorkspace = kernels::GradientResidualWorkspace;
-        static void ridge(const Tensor& image, Tensor& output, Workspace& workspace) {
+        static void ridge(const Tensor& image, Tensor& output, Workspace& workspace,
+                          const Tensor& photometric_mask, const gpu_ops::MaskPhotoMode mask_mode) {
             LFS_ASSERT(image.device() == core::Device::GPU && image.ndim() == 3 && image.shape()[0] == 3);
             LFS_ASSERT(image.is_contiguous() && image.shape()[1] > 0 && image.shape()[2] > 0);
             LFS_ASSERT(image.dtype() == core::DataType::Float32 || image.dtype() == core::DataType::UInt8);
             const auto h = image.shape()[1], w = image.shape()[2];
+            const Tensor mask = photometric_mask.is_valid() && photometric_mask.ndim() == 3
+                                    ? photometric_mask.squeeze(0)
+                                    : photometric_mask;
+            const bool masked = mask.is_valid() && mask.numel() > 0;
+            if (masked) {
+                LFS_ASSERT((mask.device() == core::Device::GPU && mask.shape() == core::TensorShape{h, w}));
+                LFS_ASSERT(mask.dtype() == core::DataType::Float32 || mask.dtype() == core::DataType::UInt8 || mask.dtype() == core::DataType::Bool);
+            }
             LFS_ASSERT((output.shape() == core::TensorShape{h, w}));
             LFS_ASSERT(output.dtype() == core::DataType::Float32 && output.is_contiguous());
             const auto band_rows = workspace.band_rows(h, w);
-            workspace.ensure_size(band_rows, w);
+            workspace.ensure_size(band_rows, w, masked);
             Parameters p;
             p.a = Backend::address(image);
             p.b = Backend::address(workspace.horizontal);
             p.c = Backend::address(output);
             p.d = Backend::address(workspace.reduction);
+            p.e = masked ? Backend::address(mask) : 0;
             p.width = static_cast<int>(w);
             p.height = static_cast<int>(h);
             p.stride = static_cast<uint32_t>(workspace.horizontal.numel() / 3);
             p.image_byte = image.dtype() == core::DataType::UInt8;
+            p.mask_byte = masked && mask.dtype() != core::DataType::Float32;
+            p.reserved = static_cast<uint32_t>(mask_mode);
             p.first_scale = 1;
             for (double sigma : {0.8, 1.2, 1.8, 2.5}) {
                 p.radius = static_cast<uint32_t>(4.0 * sigma + 0.5);
@@ -60,8 +72,8 @@ namespace lfs::training::structure_detail {
                 for (size_t row = 0; row < h; row += band_rows) {
                     p.first_row = static_cast<int>(row);
                     p.rows = static_cast<int>(std::min(band_rows, (h - row + 7) / 8 * 8));
-                    Backend::launch(0, p, {&image}, {&workspace.horizontal}, (size_t(p.rows) + 2 * p.radius) * w);
-                    Backend::launch(1, p, {&workspace.horizontal, &output}, {&output}, size_t(p.rows) * w);
+                    Backend::launch(0, p, {&image, &mask}, {&workspace.horizontal}, (size_t(p.rows) + 2 * p.radius) * w);
+                    Backend::launch(1, p, {&workspace.horizontal, &output, &mask}, {&output}, size_t(p.rows) * w);
                 }
                 p.first_scale = 0;
             }

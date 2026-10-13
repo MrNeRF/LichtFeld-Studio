@@ -5,10 +5,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Callable
 
 from . import rml_widgets as w
-from .rml_keys import KI_ESCAPE
+from .rml_keys import KI_ESCAPE, KI_TAB
 
 
 DRAG_THRESHOLD_PX = 4.0
@@ -47,11 +48,13 @@ class ScrubFieldController:
     def __init__(self, specs: dict[str, ScrubFieldSpec],
                  get_value: Callable[[str], float],
                  set_value: Callable[[str, float], None], *,
+                 commit_value: Callable[[str, float], None] | None = None,
                  capture_edit: Callable[[str], object] | None = None,
                  restore_edit: Callable[[str, object], None] | None = None):
         self._specs = dict(specs)
         self._get_value = get_value
         self._set_value = set_value
+        self._commit_value = commit_value
         self._capture_edit = capture_edit
         self._restore_edit = restore_edit
         self._doc = None
@@ -222,6 +225,14 @@ class ScrubFieldController:
 
     def _on_keydown(self, event) -> None:
         key = int(event.get_parameter("key_identifier", "0"))
+        if key == KI_TAB:
+            for state in self._fields.values():
+                if state.editing:
+                    state.commit_on_blur = True
+                    self._commit_edit_value(state)
+                    return
+            return
+
         if key != KI_ESCAPE:
             return
 
@@ -253,6 +264,7 @@ class ScrubFieldController:
 
         state.commit_on_blur = True
         self._commit_edit_value(state)
+        self._commit_if_changed(state)
         state.input_el.blur()
 
     def _on_input_blur(self, prop: str, _event) -> None:
@@ -268,6 +280,7 @@ class ScrubFieldController:
             self._exit_edit(state)
             return
 
+        self._commit_edit_value(state)
         self._exit_edit(state)
 
     def _cancel_other_edits(self, current_prop: str) -> None:
@@ -291,8 +304,22 @@ class ScrubFieldController:
         state.dragging = False
         state.field.set_class("is-dragging", False)
 
+        if was_dragging:
+            self._commit_if_changed(state)
+
         if open_editor and not was_dragging and not state.editing:
             self._enter_edit(state)
+
+    def _commit_if_changed(self, state: _ScrubFieldState) -> None:
+        if self._commit_value is None:
+            return
+        value = self._safe_value(state.prop)
+        if self._values_equal(state.spec, value, state.edit_value_before):
+            return
+        try:
+            self._commit_value(state.prop, value)
+        except (RuntimeError, TypeError, ValueError):
+            return
 
     def _enter_edit(self, state: _ScrubFieldState) -> None:
         state.editing = True
@@ -326,12 +353,27 @@ class ScrubFieldController:
         if not text:
             return
 
+        if text.count(",") == 1 and "." not in text:
+            try:
+                import lichtfeld as lf
+                language = lf.ui.get_current_language()
+            except (ImportError, AttributeError):
+                language = "en"
+            if language in {"de", "es", "fr", "it", "nl", "pl"}:
+                text = text.replace(",", ".")
+
         try:
+            parsed = float(text)
             if state.spec.data_type is int:
-                value = int(float(text))
+                if math.isnan(parsed):
+                    return
+                bounded = max(state.spec.min_value, min(state.spec.max_value, parsed))
+                value = int(bounded)
+            elif not math.isfinite(parsed):
+                return
             else:
-                value = float(text)
-        except (TypeError, ValueError):
+                value = parsed
+        except (TypeError, ValueError, OverflowError):
             return
 
         self._apply_value(state, value)

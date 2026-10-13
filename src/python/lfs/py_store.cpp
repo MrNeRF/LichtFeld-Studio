@@ -274,6 +274,7 @@ namespace lfs::python {
             state["outcome"] = value.outcome;
             state["format"] = value.format;
             state["error"] = value.error;
+            state["warning"] = value.warning;
             state["path"] = value.path;
             return state;
         }
@@ -292,6 +293,7 @@ namespace lfs::python {
             state.outcome = dict_value(dict, "outcome", std::string{"idle"});
             state.format = dict_value(dict, "format", std::string{});
             state.error = dict_value(dict, "error", std::string{});
+            state.warning = dict_value(dict, "warning", std::string{});
             state.path = dict_value(dict, "path", std::string{});
             return state;
         }

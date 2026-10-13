@@ -2764,13 +2764,13 @@ def get_ui_scale() -> float:
 def get_ui_scale_preference() -> float:
     """Get saved UI scale preference (0.0 = auto)"""
 
-def set_zoom_speed_preference(speed: float) -> None:
+def set_zoom_speed_preference(speed: float, persist: bool = True) -> None:
     """Set the default camera zoom speed (1-100)"""
 
 def get_zoom_speed_preference() -> float:
     """Get the default camera zoom speed"""
 
-def set_navigation_speed_preference(speed: float) -> None:
+def set_navigation_speed_preference(speed: float, persist: bool = True) -> None:
     """Set the default WASD navigation speed (1-100)"""
 
 def get_navigation_speed_preference() -> float:
@@ -2779,9 +2779,9 @@ def get_navigation_speed_preference() -> float:
 def get_trackpad_preferences() -> dict:
     """Get trackpad navigation preferences"""
 
-def set_trackpad_preferences(device: str, swipe_pans: bool, swipe_speed: float, zoom_speed: float) -> None:
+def set_trackpad_preferences(device: str, swipe_pans: bool, swipe_speed: float, zoom_speed: float, persist: bool = True) -> None:
     """
-    Persist and apply trackpad navigation preferences (device 'mouse', 'trackpad' or 'automatic'; speeds 1-100, 50 is the default)
+    Apply trackpad navigation preferences with optional persistence (device 'mouse', 'trackpad' or 'automatic'; speeds 1-100, 50 is the default)
     """
 
 def get_project_manager_preferences() -> dict:

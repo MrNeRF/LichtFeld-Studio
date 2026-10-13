@@ -33,6 +33,56 @@ struct Parameters {
 };
 struct Push { uint64_t parameters; };
 
+float exactByteToFloat(uint value)
+{
+    if (value == 0u) return 0.0f;
+    if (value == 255u) return 1.0f;
+
+    const int exponent = firstbithigh(value) - 8;
+    const uint shift = uint(23 - exponent);
+    const uint numerator = value << shift;
+    uint significand = numerator / 255u;
+    if ((numerator % 255u) * 2u > 255u)
+        ++significand;
+    if (significand == (1u << 24u)) {
+        significand >>= 1u;
+        // All non-endpoint byte fractions are less than one, so this can only
+        // occur if rounding crosses a power-of-two boundary.
+        return asfloat(uint(exponent + 128) << 23u);
+    }
+    return asfloat((uint(exponent + 127) << 23u) | (significand - (1u << 23u)));
+}
+
+float exactU16ToFloat(uint value)
+{
+    if (value == 0u) return 0.0f;
+    if (value == 65535u) return 1.0f;
+
+    const int exponent = firstbithigh(value) - 16;
+    const uint shift = uint(23 - exponent);
+    const uint64_t numerator = uint64_t(value) << shift;
+    uint significand = uint(numerator / uint64_t(65535u));
+    const uint64_t remainder = numerator % uint64_t(65535u);
+    if (remainder * 2u > uint64_t(65535u))
+        ++significand;
+    if (significand == (1u << 24u)) {
+        significand >>= 1u;
+        return asfloat(uint(exponent + 128) << 23u);
+    }
+    return asfloat((uint(exponent + 127) << 23u) | (significand - (1u << 23u)));
+}
+
+bool maskValueAtLeast(float value, float threshold)
+{
+    const uint valueBits = asuint(value);
+    const uint thresholdBits = asuint(threshold);
+    if ((valueBits & 0x80000000u) == 0u &&
+        (thresholdBits & 0x80000000u) == 0u &&
+        thresholdBits > 0u && thresholdBits < 0x00800000u)
+        return valueBits >= thresholdBits;
+    return value >= threshold;
+}
+
 void storeImageByte(uint64_t address, uint64_t index, uint value)
 {
     const uint64_t byteAddress = address + index;
@@ -119,6 +169,15 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Push push) {
         case 9: storeImageByte(p.destination, chw, (uint(u16[i]) * 255u + 32767u) / 65535u); return;
         case 10: storeImageByte(p.destination, i, uint(clamp(f32[i], 0.0, 1.0) * 255.0 + 0.5)); return;
         case 11: out32[i] = float(loadByte(p.source, i)) * (1.0 / 255.0); return;
+        case 13: out32[i] = exactByteToFloat(loadByte(p.source, i)); return;
+        case 14:
+            if (channel == 3u) out32[chw] = exactByteToFloat(loadByte(p.source, i));
+            else out32[chw] = float(loadByte(p.source, i)) * (1.0 / 255.0);
+            return;
+        case 15:
+            if (channel == 3u) out32[chw] = exactU16ToFloat(uint(u16[i]));
+            else out32[chw] = float(u16[i]) * (1.0 / 65535.0);
+            return;
         }
         if (p.kind == 4 || p.kind == 5) {
             if (i >= pixels) return;
@@ -159,13 +218,18 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Push push) {
             else out32[c * pixels + i] = float(value) * (1.0 / 255.0);
         }
         ((Ptr<float, Access.ReadWrite>)p.unchanged)[i] =
-            float(loadByte(p.source, i * 4 + 3)) * (1.0 / 255.0);
+            exactByteToFloat(loadByte(p.source, i * 4 + 3));
         return;
     }
     if (kKind == 4) {
         if (i >= p.count) return;
         const float value = out32[i];
-        out32[i] = p.kind == 0 ? 1.0 - value : (value >= p.threshold ? 1.0 : 0.0);
+        if (p.kind == 0)
+            out32[i] = 1.0 - value;
+        else if (p.kind == 1)
+            out32[i] = maskValueAtLeast(value, p.threshold) ? 1.0 : 0.0;
+        else
+            out32[i] = exactByteToFloat(uint(clamp(value * 255.0, 0.0, 255.0)));
         return;
     }
     if (kKind == 5) {

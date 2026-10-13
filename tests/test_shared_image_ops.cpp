@@ -4,11 +4,16 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/parameters.hpp"
+#include "core/shared_image_ops.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "cuda_backend_test.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "lfs/training/ops/registry.hpp"
+#include <algorithm>
+#include <bit>
+#include <cstdint>
+#include <cstring>
 #include <gtest/gtest.h>
 #include <vector>
 
@@ -328,6 +333,85 @@ namespace {
                 expect_same(run);
             }
         }
+    }
+
+    TEST(SharedImageMaskGrid, ByteNormalizationAndQuantizationUseTheSelectedBackend) {
+        const auto backend = lfs::core::default_gpu_backend();
+        const auto* const ops = lfs::core::shared_image_ops(backend);
+        if (!ops)
+            GTEST_SKIP() << "Shared image operations unavailable for the selected backend";
+
+        lfs::core::GpuBackendScope backend_scope(backend);
+        constexpr size_t height = 16, width = 16;
+        std::vector<uint8_t> byte_values(height * width);
+        std::vector<float> byte_reference(byte_values.size());
+        for (size_t i = 0; i < byte_values.size(); ++i) {
+            byte_values[i] = static_cast<uint8_t>(i);
+            byte_reference[i] = static_cast<float>(static_cast<double>(i) / 255.0);
+        }
+        auto byte_cpu = Tensor::empty({height, width}, Device::CPU, DataType::UInt8);
+        std::copy(byte_values.begin(), byte_values.end(), byte_cpu.ptr<uint8_t>());
+        auto bytes_gpu = byte_cpu.to(Device::GPU);
+        auto normalized = Tensor::empty({height, width}, Device::GPU, DataType::Float32);
+        ops->convert(bytes_gpu, normalized, lfs::gpu_ops::ImageConversion::MaskU8HWToF32HW,
+                     height, width, 1, {});
+        const auto actual_normalized = normalized.cpu().to_vector();
+        ASSERT_EQ(actual_normalized.size(), byte_reference.size());
+        for (size_t i = 0; i < byte_reference.size(); ++i)
+            EXPECT_EQ(std::bit_cast<uint32_t>(actual_normalized[i]), std::bit_cast<uint32_t>(byte_reference[i]))
+                << "byte=" << i;
+
+        std::vector<float> source(byte_values.size());
+        std::vector<float> expected(source.size());
+        for (size_t i = 0; i < source.size(); ++i) {
+            source[i] = static_cast<float>(static_cast<int>(i) - 8) / 239.0f;
+            const auto value = std::clamp(source[i] * 255.0f, 0.0f, 255.0f);
+            const auto byte = static_cast<uint8_t>(value);
+            expected[i] = static_cast<float>(static_cast<double>(byte) / 255.0);
+        }
+        auto source_cpu = Tensor::from_vector(source, {height, width}, Device::CPU);
+        auto grid = source_cpu.to(Device::GPU);
+        ops->mask(grid, lfs::gpu_ops::MaskTransform::QuantizeByteGrid, 0.0f);
+        const auto actual_grid = grid.cpu().to_vector();
+        ASSERT_EQ(actual_grid.size(), expected.size());
+        for (size_t i = 0; i < expected.size(); ++i)
+            EXPECT_EQ(std::bit_cast<uint32_t>(actual_grid[i]), std::bit_cast<uint32_t>(expected[i]))
+                << "source=" << source[i];
+
+        constexpr size_t rgba_height = 16, rgba_width = 16, rgba_channels = 4;
+        std::vector<uint8_t> rgba8(rgba_height * rgba_width * rgba_channels);
+        std::vector<uint16_t> rgba16(rgba8.size());
+        for (size_t i = 0; i < rgba8.size(); ++i) {
+            rgba8[i] = static_cast<uint8_t>((i * 73u + i / 7u) & 0xffu);
+            rgba16[i] = static_cast<uint16_t>((i * 3253u + i / 5u) & 0xffffu);
+        }
+        auto rgba8_cpu = Tensor::empty({rgba_height, rgba_width, rgba_channels}, Device::CPU, DataType::UInt8);
+        std::copy(rgba8.begin(), rgba8.end(), rgba8_cpu.ptr<uint8_t>());
+        const auto rgba8_gpu = rgba8_cpu.to(Device::GPU);
+        auto alpha8_chw = Tensor::empty({rgba_channels, rgba_height, rgba_width}, Device::GPU, DataType::Float32);
+        ops->convert(rgba8_gpu, alpha8_chw,
+                     lfs::gpu_ops::ImageConversion::U8HWCToF32CHWExactMaskAlpha,
+                     rgba_height, rgba_width, rgba_channels, {});
+        const auto alpha8 = alpha8_chw.slice(0, 3, 4).contiguous().cpu().to_vector();
+        for (size_t i = 0; i < alpha8.size(); ++i) {
+            const float expected_alpha = static_cast<float>(rgba8[i * rgba_channels + 3]) / 255.0f;
+            EXPECT_EQ(std::bit_cast<uint32_t>(alpha8[i]), std::bit_cast<uint32_t>(expected_alpha));
+        }
+
+        auto rgba16_cpu = Tensor::empty({rgba_height, rgba_width, rgba_channels}, Device::CPU, DataType::Float16);
+        std::memcpy(rgba16_cpu.data_ptr(), rgba16.data(), rgba16.size() * sizeof(uint16_t));
+        const auto rgba16_gpu = rgba16_cpu.to(Device::GPU);
+        auto alpha16_chw = Tensor::empty({rgba_channels, rgba_height, rgba_width}, Device::GPU, DataType::Float32);
+        ops->convert(rgba16_gpu, alpha16_chw,
+                     lfs::gpu_ops::ImageConversion::U16HWCToF32CHWExactMaskAlpha,
+                     rgba_height, rgba_width, rgba_channels, {});
+        const auto alpha16 = alpha16_chw.slice(0, 3, 4).contiguous().cpu().to_vector();
+        for (size_t i = 0; i < alpha16.size(); ++i) {
+            const float expected_alpha = static_cast<float>(rgba16[i * rgba_channels + 3]) / 65535.0f;
+            EXPECT_EQ(std::bit_cast<uint32_t>(alpha16[i]), std::bit_cast<uint32_t>(expected_alpha));
+        }
+        const auto resized_rgba = ops->resize(alpha8_chw, 8, 8, lfs::gpu_ops::Resample::LanczosFloatCHW, 2);
+        EXPECT_EQ(resized_rgba.shape(), TensorShape({rgba_channels, 8, 8}));
     }
 
     TEST_F(SharedImageOpsTest, ResizeMatchDirectLaunchers) {

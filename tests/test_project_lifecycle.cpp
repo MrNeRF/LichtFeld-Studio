@@ -4,6 +4,7 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/services.hpp"
+#include "core/user_paths.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "project/project_lifecycle.hpp"
@@ -14,11 +15,14 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 
 namespace {
 
     namespace fs = std::filesystem;
     using lfs::core::Uuid;
+    using lfs::test::licht::find_backup;
+    using lfs::test::licht::ScopedEnvironmentVariable;
     using lfs::test::licht::TemporaryDirectory;
     using namespace lfs::vis::project;
 
@@ -266,13 +270,86 @@ namespace {
             temporary.path / "project_lifecycle.json";
         {
             std::ofstream stream(path);
-            stream << R"({"version":99,"reopen_last_project":false})";
+            stream << R"(42)";
         }
         auto loaded = loadProjectLifecycleSettings(path);
         ASSERT_FALSE(loaded);
         EXPECT_EQ(
             loaded.error().code(),
             lfs::ErrorCode::DataLoss);
+    }
+
+    TEST(ProjectLifecycleSettingsTest,
+         FutureVersionRetainsRecentProjectsAndUnknownFields) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "project_lifecycle.json";
+        const auto project = temporary.path / "recent.licht";
+        createEmptyProjectFile(project);
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const nlohmann::json original = {
+            {"version", 999},
+            {"reopen_last_project", false},
+            {"dismissed_recovery", "new-shape"},
+            {"future_feature", {{"enabled", true}}},
+            {"mru", nlohmann::json::array({{{"project_uuid", uuid.to_string()},
+                                            {"last_known_path", project.string()},
+                                            {"future_entry", "kept"}},
+                                           {{"project_uuid", "newer-uuid-format"},
+                                            {"last_known_path", "future-project"},
+                                            {"future_only", 42}}})}};
+        std::ofstream(path) << original.dump();
+        auto loaded = loadProjectLifecycleSettings(path);
+        ASSERT_TRUE(loaded) << lfs::format_for_developer(loaded.error());
+        ASSERT_EQ(loaded->mru.size(), 1u);
+        EXPECT_EQ(loaded->mru.front().project_uuid, uuid);
+        EXPECT_FALSE(loaded->reopen_last_project);
+        loaded->auto_save_on_close = true;
+        ASSERT_TRUE(saveProjectLifecycleSettings(path, *loaded));
+        std::ifstream input(path);
+        const auto saved = nlohmann::json::parse(input);
+        EXPECT_EQ(saved.at("version"), 999);
+        EXPECT_EQ(saved.at("future_feature"), original.at("future_feature"));
+        EXPECT_EQ(saved.at("mru"), original.at("mru"));
+        EXPECT_EQ(saved.at("dismissed_recovery"), "new-shape");
+        EXPECT_TRUE(saved.at("auto_save_on_close"));
+    }
+
+    TEST(ProjectLifecycleSettingsTest,
+         BadDismissedRecoveryKeepsRecentProjectOnSettingEdit) {
+        TemporaryDirectory temporary;
+        const ScopedEnvironmentVariable home("LFS_HOME", (temporary.path / "home").string());
+        const auto path = temporary.path / "project_lifecycle.json";
+        const auto project = temporary.path / "recent.licht";
+        createEmptyProjectFile(project);
+        const auto uuid = lfs::core::generate_uuid_v4();
+        std::ofstream(path) << nlohmann::json({{"version", 2},
+                                               {"reopen_last_project", "bad"},
+                                               {"auto_save_on_close", true},
+                                               {"mru", nlohmann::json::array({{{"project_uuid", uuid.to_string()},
+                                                                               {"last_known_path", project.string()}}})},
+                                               {"dismissed_recovery", "broken"}})
+                                   .dump();
+        auto loaded = loadProjectLifecycleSettings(path);
+        ASSERT_TRUE(loaded) << lfs::format_for_developer(loaded.error());
+        ASSERT_EQ(loaded->mru.size(), 1u);
+        EXPECT_EQ(loaded->mru.front().project_uuid, uuid);
+        EXPECT_TRUE(loaded->reopen_last_project);
+        EXPECT_TRUE(loaded->auto_save_on_close);
+        loaded->auto_save_on_close = true;
+        ASSERT_TRUE(saveProjectLifecycleSettings(path, *loaded));
+        std::ifstream input(path);
+        const auto saved = nlohmann::json::parse(input);
+        ASSERT_EQ(saved.at("mru").size(), 1u);
+        EXPECT_EQ(saved.at("mru")[0].at("project_uuid"), uuid.to_string());
+        EXPECT_TRUE(saved.at("auto_save_on_close"));
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        std::ifstream backup(find_backup(paths->backupDir(), path));
+        ASSERT_TRUE(backup);
+        const auto previous = nlohmann::json::parse(backup);
+        EXPECT_EQ(previous.at("dismissed_recovery"), "broken");
+        EXPECT_EQ(previous.at("reopen_last_project"), "bad");
+        EXPECT_EQ(previous.at("mru")[0].at("project_uuid"), uuid.to_string());
     }
 
     TEST(ProjectLifecycleSettingsTest,

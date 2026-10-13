@@ -177,9 +177,18 @@ namespace lfs::core {
                 work_items = total;
                 return total * 4;
             case ImageConversion::U8HWToF32HW:
+            case ImageConversion::MaskU8HWToF32HW:
                 output_bytes = pixels * 4;
                 work_items = pixels;
                 return pixels;
+            case ImageConversion::U8HWCToF32CHWExactMaskAlpha:
+                output_bytes = total * 4;
+                work_items = total;
+                return total;
+            case ImageConversion::U16HWCToF32CHWExactMaskAlpha:
+                output_bytes = total * 4;
+                work_items = total;
+                return total * 2;
             }
             throw std::invalid_argument("unknown image conversion kind");
         }
@@ -238,7 +247,9 @@ namespace lfs::core {
             Parameters p{};
             p.destination = address(value);
             p.count = checked_u32(value.numel(), "mask element count");
-            p.kind = transform == MaskTransform::Threshold ? 1u : 0u;
+            p.kind = transform == MaskTransform::Invert      ? 0u
+                     : transform == MaskTransform::Threshold ? 1u
+                                                             : 2u;
             p.threshold = threshold;
             const std::array writes{storage_ref(value)};
             dispatch(4, p, {}, writes, value.numel());

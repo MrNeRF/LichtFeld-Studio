@@ -94,8 +94,10 @@ namespace lfs::vis {
             float params[4];    // x = intensity, y = ambient, z = shadow_enabled
             float selection[4]; // x = emphasized, y = dim others, zw = reserved
             float light_vp[16]; // light view-projection (column-major) for shadow sampling
+            float camera_forward[4];
+            float depth_view[4];
         };
-        static_assert(sizeof(LightUbo) == 128, "LightUbo layout");
+        static_assert(sizeof(LightUbo) == 160, "LightUbo layout");
 
         struct MaterialUbo {
             float base_color[4];
@@ -268,7 +270,7 @@ namespace lfs::vis {
             std::string vram_label;
         };
 
-        struct MeshShadowState {
+        struct ShadowGroupState {
             ShadowTarget shadow{};
             glm::mat4 cached_light_vp{1.0f};
             bool cached_light_vp_valid = false;
@@ -276,6 +278,10 @@ namespace lfs::vis {
             glm::vec3 shadow_key_light_dir{0.0f};
             int shadow_key_resolution = -1;
             std::uint32_t shadow_key_generation = std::numeric_limits<std::uint32_t>::max();
+        };
+
+        struct MeshShadowState {
+            std::vector<ShadowGroupState> groups;
             std::uint64_t last_used_epoch = 0;
         };
 
@@ -526,7 +532,8 @@ namespace lfs::vis {
 
         void destroy() {
             for (auto& [_, shadow] : mesh_shadows) {
-                destroyShadow(shadow.shadow);
+                for (auto& group : shadow.groups)
+                    destroyShadow(group.shadow);
             }
             mesh_shadows.clear();
             destroyShadow(shadow_dummy);
@@ -1497,9 +1504,10 @@ namespace lfs::vis {
             ubo.camera_pos[1] = params.camera_position.y;
             ubo.camera_pos[2] = params.camera_position.z;
             ubo.camera_pos[3] = 1.0f;
-            ubo.light_dir[0] = item.light_dir.x;
-            ubo.light_dir[1] = item.light_dir.y;
-            ubo.light_dir[2] = item.light_dir.z;
+            const glm::vec3 light_dir = item.camera_relative_light ? params.camera_backward : item.light_dir;
+            ubo.light_dir[0] = light_dir.x;
+            ubo.light_dir[1] = light_dir.y;
+            ubo.light_dir[2] = light_dir.z;
             ubo.light_dir[3] = 0.0f;
             ubo.params[0] = item.light_intensity;
             ubo.params[1] = item.ambient;
@@ -1510,6 +1518,13 @@ namespace lfs::vis {
             ubo.selection[2] = 0.0f;
             ubo.selection[3] = 0.0f;
             std::memcpy(ubo.light_vp, &light_vp[0][0], sizeof(ubo.light_vp));
+            ubo.camera_forward[0] = -params.camera_backward.x;
+            ubo.camera_forward[1] = -params.camera_backward.y;
+            ubo.camera_forward[2] = -params.camera_backward.z;
+            ubo.depth_view[0] = params.depth_view ? 1.0f : 0.0f;
+            ubo.depth_view[1] = params.depth_view_min;
+            ubo.depth_view[2] = params.depth_view_max;
+            ubo.depth_view[3] = params.depth_grayscale ? 1.0f : 0.0f;
             return writeBuffer(resources.allocation, &ubo, sizeof(ubo));
         }
 
@@ -1528,35 +1543,33 @@ namespace lfs::vis {
             vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
         }
 
-        bool ensureShadowTarget(MeshShadowState& gpu, int resolution) {
-            if (gpu.shadow.image != VK_NULL_HANDLE && gpu.shadow.resolution == resolution) {
+        bool ensureShadowTarget(ShadowGroupState& shadow, int resolution) {
+            if (shadow.shadow.image != VK_NULL_HANDLE && shadow.shadow.resolution == resolution) {
                 return true;
             }
             ShadowTarget replacement{};
             if (!createShadowTarget(resolution, replacement)) {
                 return false;
             }
-            // The initialization submit above is ordered after all prior graphics work
-            // and waited to completion, so the old target is no longer referenced.
-            destroyShadow(gpu.shadow);
-            gpu.shadow = std::move(replacement);
-            gpu.cached_light_vp_valid = false;
+            // Target creation waits for its initialization submit; the previous image
+            // is then no longer referenced by queued viewport work.
+            destroyShadow(shadow.shadow);
+            shadow.shadow = std::move(replacement);
+            shadow.cached_light_vp_valid = false;
             return true;
         }
 
-        bool recordShadowPass(MeshShadowState& gpu,
+        bool recordShadowPass(VkCommandBuffer cb,
+                              ShadowGroupState& shadow,
                               const SharedMeshDrawAsset& mesh,
                               const glm::mat4& light_mvp) {
-            if (gpu.shadow.image == VK_NULL_HANDLE || shadow_pipeline == VK_NULL_HANDLE ||
-                mesh.vertex_buffer == VK_NULL_HANDLE || mesh.index_buffer == VK_NULL_HANDLE) {
-                return false;
-            }
-            VkCommandBuffer cb = beginSingleTimeCommands();
-            if (cb == VK_NULL_HANDLE) {
+            if (cb == VK_NULL_HANDLE || shadow.shadow.image == VK_NULL_HANDLE ||
+                shadow_pipeline == VK_NULL_HANDLE || mesh.vertex_buffer == VK_NULL_HANDLE ||
+                mesh.index_buffer == VK_NULL_HANDLE) {
                 return false;
             }
 
-            cmdImageBarrier2(cb, gpu.shadow.image, depthAspectMask(shadow_format),
+            cmdImageBarrier2(cb, shadow.shadow.image, depthAspectMask(shadow_format),
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
@@ -1567,7 +1580,7 @@ namespace lfs::vis {
             clear.depthStencil = {1.0f, 0};
             VkRenderingAttachmentInfo depth_attachment{};
             depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            depth_attachment.imageView = gpu.shadow.view;
+            depth_attachment.imageView = shadow.shadow.view;
             depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -1576,8 +1589,8 @@ namespace lfs::vis {
             VkRenderingInfo rendering{};
             rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
             rendering.renderArea.offset = {0, 0};
-            rendering.renderArea.extent = {static_cast<std::uint32_t>(gpu.shadow.resolution),
-                                           static_cast<std::uint32_t>(gpu.shadow.resolution)};
+            rendering.renderArea.extent = {static_cast<std::uint32_t>(shadow.shadow.resolution),
+                                           static_cast<std::uint32_t>(shadow.shadow.resolution)};
             rendering.layerCount = 1;
             rendering.pDepthAttachment = &depth_attachment;
             vkCmdBeginRendering(cb, &rendering);
@@ -1585,8 +1598,8 @@ namespace lfs::vis {
             VkViewport vp{};
             vp.x = 0.0f;
             vp.y = 0.0f;
-            vp.width = static_cast<float>(gpu.shadow.resolution);
-            vp.height = static_cast<float>(gpu.shadow.resolution);
+            vp.width = static_cast<float>(shadow.shadow.resolution);
+            vp.height = static_cast<float>(shadow.shadow.resolution);
             vp.minDepth = 0.0f;
             vp.maxDepth = 1.0f;
             VkRect2D sc{};
@@ -1605,23 +1618,15 @@ namespace lfs::vis {
             vkCmdBindVertexBuffers(cb, 0, 1, &vbuf, &voff);
             vkCmdBindIndexBuffer(cb, mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(cb, mesh.total_index_count, 1, 0, 0, 0);
-
             vkCmdEndRendering(cb);
 
-            cmdImageBarrier2(cb, gpu.shadow.image, depthAspectMask(shadow_format),
+            cmdImageBarrier2(cb, shadow.shadow.image, depthAspectMask(shadow_format),
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                              VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                              VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-
-            const auto shadow_result = endSingleTimeCommands(cb);
-            if (!shadow_result.completed && !shadow_result.safe_to_release) {
-                // Do not let a later cache eviction or pass shutdown release
-                // an image still referenced by an unretired shadow submit.
-                abandonShadow(gpu.shadow);
-            }
-            return shadow_result.completed;
+            return true;
         }
 
         void prepare(VulkanContext& ctx, const VulkanMeshPassParams& params) {
@@ -1674,41 +1679,63 @@ namespace lfs::vis {
                 return;
             }
 
+            VkCommandBuffer shadow_cb = VK_NULL_HANDLE;
             for (const auto& item : params.items) {
-                if (!item.mesh || !item.shadow_enabled || item.shadow_map_resolution <= 0) {
+                if (!item.mesh || !item.shadow_enabled || item.shadow_map_resolution <= 0)
                     continue;
-                }
                 const auto* asset = assets->findMesh(item.mesh->id());
                 if (!asset)
                     continue;
                 const auto& mesh = *asset;
                 auto& gpu = mesh_shadows[item.mesh->id()];
-                if (!ensureShadowTarget(gpu, item.shadow_map_resolution)) {
-                    continue;
+                if (gpu.groups.size() < params.draw_group_count)
+                    gpu.groups.resize(params.draw_group_count);
+                for (std::size_t group_index = 0; group_index < params.draw_group_count; ++group_index) {
+                    auto& group = gpu.groups[group_index];
+                    if (!ensureShadowTarget(group, item.shadow_map_resolution))
+                        continue;
+                    const glm::vec3 light_dir = item.camera_relative_light
+                                                    ? (group_index < params.panels.size()
+                                                           ? params.panels[group_index].camera_backward
+                                                           : params.camera_backward)
+                                                    : item.light_dir;
+                    const bool shadow_dirty =
+                        !group.cached_light_vp_valid ||
+                        group.shadow_key_generation != mesh.generation ||
+                        group.shadow_key_resolution != item.shadow_map_resolution ||
+                        group.shadow_key_model != item.model ||
+                        group.shadow_key_light_dir != light_dir;
+                    if (!shadow_dirty)
+                        continue;
+                    if (shadow_cb == VK_NULL_HANDLE)
+                        shadow_cb = beginSingleTimeCommands();
+                    if (shadow_cb == VK_NULL_HANDLE)
+                        continue;
+                    const glm::mat4 light_vp =
+                        meshShadowViewProjection(mesh.aabb_min, mesh.aabb_max, item.model, light_dir);
+                    if (!recordShadowPass(shadow_cb, group, mesh, light_vp * item.model)) {
+                        group.cached_light_vp_valid = false;
+                        continue;
+                    }
+                    group.cached_light_vp = light_vp;
+                    group.cached_light_vp_valid = true;
+                    group.shadow_key_generation = mesh.generation;
+                    group.shadow_key_resolution = item.shadow_map_resolution;
+                    group.shadow_key_model = item.model;
+                    group.shadow_key_light_dir = light_dir;
                 }
-                // recordShadowPass does a blocking GPU submit; only pay it when an input
-                // the shadow map depends on actually changed. A static shadowed mesh then
-                // renders its shadow once instead of every frame.
-                const bool shadow_dirty =
-                    !gpu.cached_light_vp_valid ||
-                    gpu.shadow_key_generation != mesh.generation ||
-                    gpu.shadow_key_resolution != item.shadow_map_resolution ||
-                    gpu.shadow_key_model != item.model ||
-                    gpu.shadow_key_light_dir != item.light_dir;
-                if (!shadow_dirty) {
-                    continue;
+            }
+            if (shadow_cb != VK_NULL_HANDLE) {
+                const auto result = endSingleTimeCommands(shadow_cb);
+                if (!result.completed) {
+                    for (auto& [_, gpu] : mesh_shadows) {
+                        for (auto& group : gpu.groups) {
+                            group.cached_light_vp_valid = false;
+                            if (!result.safe_to_release)
+                                abandonShadow(group.shadow);
+                        }
+                    }
                 }
-                const glm::mat4 light_vp = meshShadowViewProjection(mesh.aabb_min, mesh.aabb_max, item.model, item.light_dir);
-                if (!recordShadowPass(gpu, mesh, light_vp * item.model)) {
-                    gpu.cached_light_vp_valid = false;
-                    continue;
-                }
-                gpu.cached_light_vp = light_vp;
-                gpu.cached_light_vp_valid = true;
-                gpu.shadow_key_generation = mesh.generation;
-                gpu.shadow_key_resolution = item.shadow_map_resolution;
-                gpu.shadow_key_model = item.model;
-                gpu.shadow_key_light_dir = item.light_dir;
             }
 
             constexpr std::uint64_t kEvictAfter = 120;
@@ -1754,12 +1781,12 @@ namespace lfs::vis {
                 if (it->second.last_used_epoch > kEvictAfter) {
                     LFS_VK_DEBUG_ASSERT(
                         submitted_frames_retired,
-                        "Deferred mesh shadow destruction requires all submitted frames to retire (frames_retired={}, age={}, eviction_age={}, shadow_image={:#x})",
+                        "Deferred mesh shadow destruction requires all submitted frames to retire (frames_retired={}, age={}, eviction_age={})",
                         submitted_frames_retired,
                         it->second.last_used_epoch,
-                        kEvictAfter,
-                        vkHandleValue(it->second.shadow.image));
-                    destroyShadow(it->second.shadow);
+                        kEvictAfter);
+                    for (auto& group : it->second.groups)
+                        destroyShadow(group.shadow);
                     it = mesh_shadows.erase(it);
                 } else {
                     ++it;
@@ -1819,11 +1846,15 @@ namespace lfs::vis {
                 const auto shadow_it = mesh_shadows.find(item.mesh->id());
                 const MeshShadowState* shadow_state =
                     shadow_it != mesh_shadows.end() ? &shadow_it->second : nullptr;
+                const ShadowGroupState* shadow_group =
+                    shadow_state != nullptr && params.draw_group < shadow_state->groups.size()
+                        ? &shadow_state->groups[params.draw_group]
+                        : nullptr;
 
                 const bool shadow_active = item.shadow_enabled &&
-                                           shadow_state != nullptr &&
-                                           shadow_state->shadow.image != VK_NULL_HANDLE &&
-                                           shadow_state->cached_light_vp_valid;
+                                           shadow_group != nullptr &&
+                                           shadow_group->shadow.image != VK_NULL_HANDLE &&
+                                           shadow_group->cached_light_vp_valid;
                 const std::size_t draw_index = draw_base + item_index;
                 if (draw_index >= frame.draws.size()) {
                     throw std::logic_error(std::format(
@@ -1852,12 +1883,12 @@ namespace lfs::vis {
                 if (!writeLightUbo(draw,
                                    params,
                                    item,
-                                   shadow_active ? shadow_state->cached_light_vp : glm::mat4(1.0f),
+                                   shadow_active ? shadow_group->cached_light_vp : glm::mat4(1.0f),
                                    shadow_active)) {
                     LOG_ERROR("VulkanMeshPass: failed to prepare light state for draw {}", draw_index);
                     continue;
                 }
-                bindShadowMap(draw, shadow_active ? shadow_state->shadow : shadow_dummy);
+                bindShadowMap(draw, shadow_active ? shadow_group->shadow : shadow_dummy);
 
                 VkPipeline main_pipeline = item.backface_culling ? pipeline_cull : pipeline_no_cull;
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, main_pipeline);
@@ -1895,7 +1926,7 @@ namespace lfs::vis {
                 }
 
                 // Wireframe overlay drawn on top of the shaded mesh.
-                if (item.wireframe_overlay && wireframe_pipeline != VK_NULL_HANDLE) {
+                if (item.wireframe_overlay && !params.depth_view && wireframe_pipeline != VK_NULL_HANDLE) {
                     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe_pipeline);
                     const float line_width = context->hasWideLines()
                                                  ? std::clamp(item.wireframe_width,

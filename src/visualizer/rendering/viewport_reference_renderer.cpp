@@ -68,6 +68,11 @@ namespace lfs::vis {
             params.frustum_batches = desc.frustum_batches;
             params.mesh_view_projection = desc.mesh_view_projection;
             params.mesh_camera_position = desc.mesh_camera_position;
+            params.mesh_camera_backward = desc.mesh_camera_backward;
+            params.mesh_depth_view = desc.mesh_depth_view;
+            params.mesh_depth_view_min = desc.mesh_depth_view_min;
+            params.mesh_depth_view_max = desc.mesh_depth_view_max;
+            params.mesh_depth_grayscale = desc.mesh_depth_grayscale;
             params.mesh_items = desc.mesh_items;
             params.mesh_panels = desc.mesh_panels;
             params.environment = desc.environment;
@@ -84,6 +89,11 @@ namespace lfs::vis {
             auto temporal_frame = std::move(mesh_frame.temporal);
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
+            params.mesh_camera_backward = mesh_frame.camera_backward;
+            params.mesh_depth_view = mesh_frame.depth_view;
+            params.mesh_depth_view_min = mesh_frame.depth_view_min;
+            params.mesh_depth_view_max = mesh_frame.depth_view_max;
+            params.mesh_depth_grayscale = mesh_frame.depth_grayscale;
             params.mesh_items = std::move(mesh_frame.items);
             params.mesh_panels = std::move(mesh_frame.panels);
             params.environment = std::move(mesh_frame.environment);

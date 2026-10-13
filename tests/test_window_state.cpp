@@ -4,9 +4,14 @@
 
 #include <gtest/gtest.h>
 
+#include "core/persisted_settings.hpp"
+#include "licht_test_support.hpp"
 #include "window/window_state_utils.hpp"
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <string>
@@ -15,6 +20,51 @@
 namespace {
 
     using lfs::vis::WindowRectangle;
+
+    TEST(WindowStateContract, FutureWindowFieldsSurviveGeometrySave) {
+        const auto root = std::filesystem::temp_directory_path() / "lfs_window_future_settings";
+        std::filesystem::create_directories(root);
+        const auto path = root / "window.json";
+        const nlohmann::json original = {
+            {"schema_version", 999},
+            {"version", 1001},
+            {"x", 4},
+            {"y", 8},
+            {"width", 1000},
+            {"height", 600},
+            {"maximized", false},
+            {"monitor_uuid", "future-display"},
+            {"workspace_layout", {{"new_monitor_behavior", 1}, {"panels", nlohmann::json::array({"scene", "future"})}}},
+        };
+        std::ofstream(path) << original.dump(2) << '\n';
+        const auto merged = lfs::core::persisted_settings::mergeForWrite(
+            path,
+            {{"x", 40}, {"y", 80}, {"width", 1200}, {"height", 700}, {"maximized", true}},
+            "schema_version", 1);
+        std::ofstream(path, std::ios::trunc) << merged.dump(2) << '\n';
+        const auto saved = lfs::core::persisted_settings::readObject(path);
+        auto expected = original;
+        expected.update({{"x", 40}, {"y", 80}, {"width", 1200}, {"height", 700}, {"maximized", true}});
+        EXPECT_EQ(saved, expected);
+        std::filesystem::remove_all(root);
+    }
+
+    TEST(WindowStateContract, DamagedWindowIsBackedUpBeforeReplacement) {
+        const auto root = std::filesystem::temp_directory_path() / "lfs_window_damaged_settings";
+        std::filesystem::remove_all(root);
+        std::filesystem::create_directories(root);
+        const auto path = root / "window.json";
+        const std::string original = R"({"x":440,"y":260,"width":)";
+        std::ofstream(path) << original;
+        const auto merged = lfs::core::persisted_settings::mergeForWrite(
+            path, {{"x", 320}, {"y", 180}, {"width", 1280}}, "schema_version", 1,
+            nullptr, {}, root / "backups");
+        EXPECT_EQ(merged.at("width"), 1280);
+        std::ifstream backup(lfs::test::licht::find_backup(root / "backups", path));
+        ASSERT_TRUE(backup);
+        EXPECT_EQ(std::string(std::istreambuf_iterator<char>(backup), {}), original);
+        std::filesystem::remove_all(root);
+    }
 
     TEST(WindowStateContract, AcceptsWindowVisibleOnAnyConnectedDisplay) {
         const std::vector<WindowRectangle> displays{{0, 0, 1920, 1080}, {1920, -200, 2560, 1440}};

@@ -7,6 +7,7 @@
 #include "core/error_envelope.hpp"
 #include "core/error_reporter.hpp"
 #include "core/event_bridge/command_api.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/guarded_task.hpp"
@@ -24,10 +25,12 @@
 #include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
 #endif
 #include "core/tensor_backend.hpp"
+#include "gui/gui_manager.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/graphics_external_tensor.hpp"
+#include "training/camera_training_notice.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
@@ -1740,8 +1743,11 @@ namespace lfs::vis {
     int TrainerManager::getMaxGaussians() const {
         if (const auto* params = ready_presentation_params(*this))
             return params->max_cap;
-        if (!trainer_)
+        if (!trainer_) {
+            if (stored_session_presentation_active_)
+                return stored_session_presentation_max_cap_;
             return 0;
+        }
         return trainer_->getParams().optimization.max_cap;
     }
 
@@ -1800,8 +1806,11 @@ namespace lfs::vis {
     bool TrainerManager::isGutEnabled() const {
         if (const auto* params = ready_presentation_params(*this))
             return params->gut;
-        if (!trainer_)
+        if (!trainer_) {
+            if (stored_session_presentation_active_)
+                return stored_session_presentation_gut_;
             return false;
+        }
         return trainer_->getParams().optimization.gut;
     }
 
@@ -2182,6 +2191,23 @@ namespace lfs::vis {
                  stopTraining();
              }));
 
+        keep(typeid(state::SceneChanged), state::SceneChanged::when([this](const auto& event) {
+                 if (!viewer_)
+                     return;
+                 auto* const gui_manager = viewer_->getGuiManager();
+                 if (!gui_manager)
+                     return;
+                 const bool training_active = hasLiveTrainingThread() && (isRunning() || isPaused());
+                 detail::dispatch_camera_training_notice(event.mutation_flags, training_active, [gui_manager] {
+                     gui_manager->enqueueToast({
+                         .title = LOC("window.training"),
+                         .message = LOC("toast.camera_training_next_run"),
+                         .level = gui::ErrorNoticeLevel::Info,
+                         .fingerprint = 0x4c465343414d0001ULL,
+                     });
+                 });
+             }));
+
         // Listen for training progress events - update loss buffer
         keep(typeid(state::TrainingProgress), state::TrainingProgress::when([this](const auto& event) {
                  updateLoss(event.loss);
@@ -2216,6 +2242,11 @@ namespace lfs::vis {
         return trainer_->computeCameraMetrics(*cam, include_ssim, appearance);
     }
 
+    bool TrainerManager::hasInitializedTrainer() const {
+        std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
+        return trainer_ && trainer_->isInitialized();
+    }
+
     lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() {
         if (auto* const param_mgr = services().paramsOrNull())
             return param_mgr->getDatasetConfig();
@@ -2241,6 +2272,11 @@ namespace lfs::vis {
         if (isDatasetEditable())
             return true;
         return canonical == core::param::canonical_strategy_name(trainer_->getParams().optimization.strategy);
+    }
+
+    bool TrainerManager::rejectsIterationLimit(const std::size_t iterations) const {
+        return isPaused() &&
+               iterations <= static_cast<std::size_t>(std::max(0, getCurrentIteration()));
     }
 
     lfs::core::param::TrainingParameters TrainerManager::getEditableTrainingParams(

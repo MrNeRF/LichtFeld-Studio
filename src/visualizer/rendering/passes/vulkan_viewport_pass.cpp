@@ -401,6 +401,14 @@ namespace lfs::vis {
                     recordMeshPass(c.cmd, rect_of(c), p);
                 });
             addGraphPass(
+                "scene_capture", P::Geometry,
+                [](const VulkanViewportPassParams& p) {
+                    return !p.mesh_items.empty() && p.record_scene_capture != nullptr;
+                },
+                [](const ViewportRecordContext& c, const VulkanViewportPassParams& p) {
+                    (void)p.record_scene_capture(p.scene_capture_context, c.cmd);
+                });
+            addGraphPass(
                 "textured_overlay", P::WorldOverlay,
                 [this](const VulkanViewportPassParams& p) {
                     const auto& frame = resourcesForFrame(p.frame_slot);
@@ -2394,7 +2402,13 @@ namespace lfs::vis {
             VulkanMeshPassParams mesh_params{
                 .view_projection = params.mesh_view_projection,
                 .camera_position = params.mesh_camera_position,
+                .camera_backward = params.mesh_camera_backward,
+                .depth_view = params.mesh_depth_view,
+                .depth_view_min = params.mesh_depth_view_min,
+                .depth_view_max = params.mesh_depth_view_max,
+                .depth_grayscale = params.mesh_depth_grayscale,
                 .items = params.mesh_items,
+                .panels = params.mesh_panels,
                 .frame_slot = params.frame_slot,
                 .draw_group_count = std::max<std::size_t>(1, params.mesh_panels.size()),
             };
@@ -2751,7 +2765,13 @@ namespace lfs::vis {
             const bool split_active = sceneSplitActive(params);
             const bool split_mesh_panels_active = split_active && !params.mesh_panels.empty();
             VulkanMeshPassParams mesh_params{
+                .camera_backward = params.mesh_camera_backward,
+                .depth_view = params.mesh_depth_view,
+                .depth_view_min = params.mesh_depth_view_min,
+                .depth_view_max = params.mesh_depth_view_max,
+                .depth_grayscale = params.mesh_depth_grayscale,
                 .items = params.mesh_items,
+                .panels = params.mesh_panels,
                 .frame_slot = params.frame_slot,
                 .draw_group_count = std::max<std::size_t>(1, params.mesh_panels.size()),
             };
@@ -2773,6 +2793,7 @@ namespace lfs::vis {
                     }
                     mesh_params.view_projection = panel.view_projection;
                     mesh_params.camera_position = panel.camera_position;
+                    mesh_params.camera_backward = panel.camera_backward;
                     mesh_params.draw_group = panel_index;
                     const VkRect2D mesh_rect{
                         .offset = {x0, rect.y},
@@ -2784,6 +2805,7 @@ namespace lfs::vis {
             } else if (!split_active) {
                 mesh_params.view_projection = params.mesh_view_projection;
                 mesh_params.camera_position = params.mesh_camera_position;
+                mesh_params.camera_backward = params.mesh_camera_backward;
                 const VkRect2D mesh_rect{
                     .offset = {rect.x, rect.y},
                     .extent = {static_cast<std::uint32_t>(rect.width),
@@ -3229,7 +3251,13 @@ namespace lfs::vis {
             const VulkanMeshPassParams mesh_params{
                 .view_projection = params.mesh_view_projection,
                 .camera_position = params.mesh_camera_position,
+                .camera_backward = params.mesh_camera_backward,
+                .depth_view = params.mesh_depth_view,
+                .depth_view_min = params.mesh_depth_view_min,
+                .depth_view_max = params.mesh_depth_view_max,
+                .depth_grayscale = params.mesh_depth_grayscale,
                 .items = params.mesh_items,
+                .panels = params.mesh_panels,
                 .frame_slot = slot,
                 .draw_group_count = std::max<size_t>(1, params.mesh_panels.size())};
             // Preparation does not write per-draw presentation uniforms. Reuse the

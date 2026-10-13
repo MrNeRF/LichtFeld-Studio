@@ -71,6 +71,27 @@ namespace lfs::vis::gui::rml_input {
         return false;
     }
 
+    // Close visible select boxes when a click moves focus outside their control.
+    inline bool hideOpenSelectBoxes(Rml::Context& context) {
+        bool hidden = false;
+        const auto visit = [&](auto&& self, Rml::Element* element) -> void {
+            if (!element)
+                return;
+            if (auto* const select = dynamic_cast<Rml::ElementFormControlSelect*>(element);
+                select && select->IsSelectBoxVisible()) {
+                select->HideSelectBox();
+                hidden = true;
+            }
+            const int child_count = element->GetNumChildren();
+            for (int i = 0; i < child_count; ++i)
+                self(self, element->GetChild(i));
+        };
+        const int document_count = context.GetNumDocuments();
+        for (int i = 0; i < document_count; ++i)
+            visit(visit, context.GetDocument(i));
+        return hidden;
+    }
+
     // Match cancelFocusedElement's targets so the Escape gate can reach every
     // supported cancellation (revert/blur) instead of forwarding an ordinary key.
     // Shared only by sidebar and viewport hosts. Modal/startup hosts keep their
@@ -173,7 +194,9 @@ namespace lfs::vis::gui::rml_input {
         if (wantsTextInput(focused) &&
             ((sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) || sc == SDL_SCANCODE_KP_PERIOD))
             return false;
-        const auto key = sdlScancodeToRml(sc);
+        const auto key = editable
+                             ? sdlTextShortcutToRml(sc, event.keycode, event.modifiers)
+                             : sdlScancodeToRml(sc);
         if (key == Rml::Input::KI_UNKNOWN)
             return false;
         const int mods = sdlModsToRml(event.modifiers & SDL_KMOD_CTRL,

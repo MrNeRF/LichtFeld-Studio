@@ -20,6 +20,7 @@
 #include "vulkan_loader_probe.hpp"
 #endif
 #include "window_state_utils.hpp"
+#include "x11_input_modifier.hpp"
 #include <SDL3/SDL.h>
 #if defined(__linux__)
 #include <X11/Xatom.h>
@@ -133,6 +134,24 @@ namespace lfs::vis {
                 LOG_WARN("Saved window geometry is outside all displays; using SDL default positioning");
             }
         }
+
+#if defined(__linux__)
+        bool ibusXimAvailable() {
+            const char* const input_modifier = SDL_getenv_unsafe("XMODIFIERS");
+            if (!input_modifier || std::strcmp(input_modifier, "@im=ibus") != 0)
+                return false;
+
+            XSetLocaleModifiers("");
+            Display* const display = XOpenDisplay(nullptr);
+            if (!display)
+                return false;
+            XIM const input_method = XOpenIM(display, nullptr, nullptr, nullptr);
+            if (input_method)
+                XCloseIM(input_method);
+            XCloseDisplay(display);
+            return input_method != nullptr;
+        }
+#endif
 
         void configureValidationLayerSearchPath() {
 #ifdef LFS_VULKAN_VALIDATION_LAYER_DIR
@@ -704,6 +723,35 @@ namespace lfs::vis {
         // can tell trackpad swipes from mouse wheels.
         SDL_SetHint(SDL_HINT_TRACKPAD_IS_TOUCH_ONLY, "1");
 
+#if defined(__linux__)
+        // SDL's X11 fallback double-encodes UTF-8 when the IBus XIM server is absent.
+        // Keep IBus selected when its XIM server is available for users who rely on an IME.
+        const bool initialized = window::withX11InputModifier(
+            [] { return SDL_getenv_unsafe("XMODIFIERS"); },
+            [](const std::string& value) { return SDL_setenv_unsafe("XMODIFIERS", value.c_str(), 1); },
+            ibusXimAvailable(),
+            [this] {
+                if (!SDL_Init(SDL_INIT_VIDEO)) {
+                    reportSdlVideoInitFailure();
+                    return false;
+                }
+
+                const auto vulkan_info = probeVulkanLoader();
+                if (vulkan_info.enabled && !vulkan_info.loader_available) {
+                    LOG_WARN("Vulkan viewer dependency is enabled, but the loader probe failed: {}", vulkan_info.error);
+                }
+
+                window_ = SDL_CreateWindow(
+                    title_.c_str(),
+                    window_size_.x,
+                    window_size_.y,
+                    SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN |
+                        SDL_WINDOW_BORDERLESS);
+                return true;
+            });
+        if (!initialized)
+            return false;
+#else
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             reportSdlVideoInitFailure();
             return false;
@@ -729,7 +777,7 @@ namespace lfs::vis {
                 ) |
                 SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN |
                 SDL_WINDOW_BORDERLESS);
-
+#endif
         if (!window_) {
             std::cerr << "Failed to create SDL window: " << SDL_GetError() << std::endl;
             SDL_Quit();
@@ -1266,7 +1314,10 @@ namespace lfs::vis {
             const int action = event.key.down
                                    ? (event.key.repeat ? input::ACTION_REPEAT : input::ACTION_PRESS)
                                    : input::ACTION_RELEASE;
-            const int mods = input::sdlModsToAppMods(event.key.mod);
+            SDL_Keymod sdl_mods = event.key.mod;
+            if ((SDL_GetModState() & SDL_KMOD_MODE) != 0)
+                sdl_mods = static_cast<SDL_Keymod>(sdl_mods | SDL_KMOD_MODE);
+            const int mods = input::sdlModsToAppMods(sdl_mods);
             input_controller_->handleKey(
                 physical_key, logical_key, static_cast<int>(event.key.scancode), action, mods, dispatched.owned_release, dispatched.consumed);
             break;
