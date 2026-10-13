@@ -12,6 +12,7 @@ import unittest
 
 FFMPEG = os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("LFS_MEDIA_TEST_FFPROBE", "ffprobe")
+REFERENCE_FFMPEG = os.environ.get("LFS_MEDIA_TEST_REFERENCE_FFMPEG")
 RUNNER = None
 
 
@@ -85,30 +86,74 @@ class StudioBackends(unittest.TestCase):
                     self.assertAlmostEqual(frame["timestamp"], seconds, places=6)
 
     def test_shared_player_uses_native_decode_and_seeks(self):
-        actual, _ = self.invoke(operation="native-preview")
+        # Spatial/temporal luma identifies the frame and layout. Constant chroma
+        # makes the RGB oracle independent of chroma upsampling changes between
+        # the fixture FFmpeg executable and the linked player FFmpeg version.
+        source = self.root / "native-preview-gradient.mp4"
+        subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+                        "nullsrc=size=128x96:rate=10:duration=0.5,format=yuv420p,"
+                        "geq=lum='32+N*32+X/8+Y/12':cb='96+X/4':cr='160-Y/3'",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source)], check=True, timeout=30)
+        actual, _ = self.invoke(operation="native-preview", input=str(source))
         self.assertTrue(actual["hardware_decode"])
         self.assertEqual(actual["size"], [128, 96])
         self.assertAlmostEqual(actual["time"], .1, places=6)
-        reference = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(self.source),
+        reference = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(source),
                                               "-vf", "format=nv12,select=eq(n\\,1),"
-                                              "scale=flags=fast_bilinear:in_color_matrix=bt601:"
+                                              "scale=flags=bilinear:in_color_matrix=bt601:"
                                               "out_color_matrix=bt709:out_range=full", "-frames:v", "1",
                                               "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
         pixels = bytes(actual["pixels"])
         self.assertEqual(len(pixels), len(reference))
-        # NVDEC supplies NV12; compare the matching conversion, rather than
-        # planar YUV420P with FFmpeg's default scaler. Independent swscale
+        # NVDEC supplies NV12; the player uses SWS_BILINEAR (FAST_BILINEAR
+        # biases neutral limited-range samples). Compare that same conversion,
+        # rather than planar YUV420P with FFmpeg's default scaler. Independent swscale
         # builds can round this path differently. These bounds also pass the
         # unchanged dev player (the migrated player is byte-identical to it).
         errors = [abs(a - b) for a, b in zip(pixels, reference)]
         self.assertLess(sum(errors) / len(errors), 2)
         self.assertLessEqual(max(errors), 8)
+        # This fixture must distinguish the requested frame, matrix, range and UV order;
+        # otherwise avoiding chroma edges would weaken the seek/color contract.
+        for wrong in ("select=eq(n\\,0)", "in_color_matrix=bt709", "in_range=full", "swapuv"):
+            filter_ = ("format=nv12,select=eq(n\\,1),scale=flags=bilinear:"
+                       "in_color_matrix=bt601:out_color_matrix=bt709:out_range=full")
+            if wrong.startswith("select"):
+                filter_ = filter_.replace("select=eq(n\\,1)", wrong)
+            elif wrong.startswith("in_color_matrix"):
+                filter_ = filter_.replace("in_color_matrix=bt601", wrong)
+            elif wrong == "swapuv":
+                filter_ = filter_.replace("format=nv12,", "swapuv,format=nv12,")
+            else:
+                filter_ += ":" + wrong
+            incorrect = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(source), "-vf", filter_,
+                                                "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+            self.assertGreater(sum(abs(a-b) for a,b in zip(reference, incorrect)) / len(reference), 2, wrong)
 
     def test_cuda_conversion_matches_scalar_color_contract(self):
         actual, _ = self.invoke(operation="native-conversion")
         self.assertEqual(actual["extents"], 3)
         self.assertEqual(actual["checked_bytes"], (2 * 2 + 34 * 18 + 320 * 240) * 3 // 2)
         self.assertTrue(actual["nondefault_stream"])
+
+    @unittest.skipUnless(REFERENCE_FFMPEG, "Matched FFmpeg reference executable is not configured")
+    def test_native_preview_chroma_edges_with_matched_reference(self):
+        # Keep the complex chroma-edge check in addition to the portable seek
+        # oracle. Fixture encoding can use system FFmpeg; RGB conversion must
+        # use the qualified executable built from the player's FFmpeg version.
+        actual, _ = self.invoke(operation="native-preview")
+        self.assertTrue(actual["hardware_decode"])
+        self.assertAlmostEqual(actual["time"], .1, places=6)
+        reference = subprocess.check_output([REFERENCE_FFMPEG, "-v", "error", "-i", str(self.source),
+                                              "-vf", "format=nv12,select=eq(n\\,1),"
+                                              "scale=flags=bilinear:in_color_matrix=bt601:"
+                                              "out_color_matrix=bt709:out_range=full", "-frames:v", "1",
+                                              "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+        pixels = bytes(actual["pixels"])
+        self.assertEqual(len(pixels), len(reference))
+        errors = [abs(a-b) for a,b in zip(pixels, reference)]
+        self.assertLess(sum(errors) / len(errors), 2)
+        self.assertLessEqual(max(errors), 8)
 
     def test_shared_encoder_keeps_native_backend_and_studio_producers(self):
         path = self.root / "native-é-日本語.mp4"
