@@ -221,7 +221,9 @@
     "file.configuration": "Konfiguracja…",
     "file.dataset": "Zbiór danych…",
     "file.mesh": "Siatka…",
-    "file.checkpoint": "Punkt kontrolny…"
+    "file.checkpoint": "Punkt kontrolny…",
+    "tools.developer": "Deweloper",
+    "tools.system_console": "Konsola systemowa"
   },
   "window": {
     "export": "Eksportuj",
@@ -826,8 +828,7 @@
     "cannot_delete_training": "Nie można usunąć podczas treningu",
     "background": "Tło",
     "training_enabled_tooltip": "Uwzględniono w treningu",
-    "training_disabled_tooltip": "Wykluczono z treningu",
-    "show_system_console": "Pokaż konsolę systemową"
+    "training_disabled_tooltip": "Wykluczono z treningu"
   },
   "export": {
     "overwrite": "Zastąp",

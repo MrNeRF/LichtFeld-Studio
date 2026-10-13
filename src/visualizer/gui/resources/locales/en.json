@@ -217,7 +217,9 @@
     "file.configuration": "Configuration…",
     "file.dataset": "Dataset…",
     "file.mesh": "Mesh…",
-    "file.checkpoint": "Checkpoint…"
+    "file.checkpoint": "Checkpoint…",
+    "tools.developer": "Developer",
+    "tools.system_console": "System Console"
   },
   "window": {
     "export": "Export",
@@ -822,8 +824,7 @@
     "cannot_delete_training": "Cannot delete while training is in progress",
     "background": "Background",
     "training_enabled_tooltip": "Included in training",
-    "training_disabled_tooltip": "Excluded from training",
-    "show_system_console": "Show System Console"
+    "training_disabled_tooltip": "Excluded from training"
   },
   "export": {
     "overwrite": "Overwrite",

@@ -221,7 +221,9 @@
     "file.configuration": "Configuration…",
     "file.dataset": "Jeu de données…",
     "file.mesh": "Maillage…",
-    "file.checkpoint": "Point de contrôle…"
+    "file.checkpoint": "Point de contrôle…",
+    "tools.developer": "Développeur",
+    "tools.system_console": "Console système"
   },
   "window": {
     "export": "Exporter",
@@ -826,8 +828,7 @@
     "cannot_delete_training": "Suppression impossible pendant l'entraînement",
     "background": "Arrière-plan",
     "training_enabled_tooltip": "Inclus dans l'entraînement",
-    "training_disabled_tooltip": "Exclu de l'entraînement",
-    "show_system_console": "Afficher la console système"
+    "training_disabled_tooltip": "Exclu de l'entraînement"
   },
   "export": {
     "overwrite": "Écraser",

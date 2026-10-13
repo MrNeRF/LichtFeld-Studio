@@ -253,8 +253,7 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert edit_mod.EditMenu.order < select_mod.SelectMenu.order < view_mod.ViewMenu.order < tools_mod.ToolsMenu.order
 
     tools_items = tools_mod.ToolsMenu().menu_items()
-    python_console = next(item for item in tools_items
-                          if item.get("label") == "tr:menu.tools.python_console")
+    python_console = tools_items[3]["items"][0]
     assert python_console["shortcut"] == "Ctrl+`"
     python_console["callback"]()
     assert state["python_console_shown"] == 1
@@ -378,9 +377,23 @@ def test_tools_menu_contains_processing_and_python_tools(monkeypatch):
     items = tools_mod.ToolsMenu().menu_items()
     labels = [item.get("label") for item in items]
     assert labels == ["tr:menu.file.mesh_to_splat", "tr:menu.file.extract_video_frames",
-                      None, "tr:menu.tools.python_console", "tr:menu.tools.plugin_marketplace"]
-    items[3]["callback"]()
+                      None, "tr:menu.tools.developer", "tr:menu.tools.plugin_marketplace"]
+    items[3]["items"][0]["callback"]()
     assert state["python_console_shown"] == 1
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
+def test_developer_system_console_is_windows_only(monkeypatch, platform):
+    state = _install_lichtfeld_stub(monkeypatch)
+    monkeypatch.setattr(sys, "platform", platform)
+    tools_mod = _import_tools_menu(monkeypatch)
+    items = tools_mod.ToolsMenu().menu_items()[3]["items"]
+    assert items[0]["label"] == "tr:menu.tools.python_console"
+    assert len(items) == (2 if platform == "win32" else 1)
+    if platform == "win32":
+        assert items[1]["label"] == "tr:menu.tools.system_console"
+        items[1]["callback"]()
+        assert state["python_console_shown"] == 1
 
 
 def test_tools_menu_projects_selects_scope_when_available(monkeypatch):

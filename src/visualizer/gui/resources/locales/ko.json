@@ -221,7 +221,9 @@
     "file.configuration": "설정…",
     "file.dataset": "데이터셋…",
     "file.mesh": "메시…",
-    "file.checkpoint": "체크포인트…"
+    "file.checkpoint": "체크포인트…",
+    "tools.developer": "개발자",
+    "tools.system_console": "시스템 콘솔"
   },
   "window": {
     "export": "내보내기",
@@ -826,8 +828,7 @@
     "cannot_delete_training": "훈련 중에는 삭제할 수 없습니다",
     "background": "배경",
     "training_enabled_tooltip": "훈련에 포함됨",
-    "training_disabled_tooltip": "훈련에서 제외됨",
-    "show_system_console": "시스템 콘솔 표시"
+    "training_disabled_tooltip": "훈련에서 제외됨"
   },
   "export": {
     "overwrite": "덮어쓰기",

@@ -10,7 +10,6 @@
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "gui/gui_manager.hpp"
-#include "gui/panels/windows_console_utils.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/string_keys.hpp"
@@ -719,13 +718,6 @@ namespace lfs::vis::gui {
         logging_level_select_el_->AddEventListener(Rml::EventId::Change, &listener_);
         logging_export_btn_el_->AddEventListener(Rml::EventId::Click, &listener_);
         logging_copy_btn_el_->AddEventListener(Rml::EventId::Click, &listener_);
-        if (auto* button = document_->GetElementById("logging-console-btn")) {
-#ifdef WIN32
-            button->AddEventListener(Rml::EventId::Click, &listener_);
-#else
-            button->SetProperty("display", "none");
-#endif
-        }
         filter_input_revert_.bind(filter_input_el_, [this](Rml::Element&) {
             applyFilterInputValue();
         });
@@ -1002,9 +994,6 @@ namespace lfs::vis::gui {
         changed |= setCachedText(logging_level_label_el_, LOC(lichtfeld::Strings::Scene::LOG_LEVEL));
         changed |= setCachedText(logging_export_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_EXPORT));
         changed |= setCachedText(logging_copy_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_COPY));
-        changed |= setCachedText(document_->GetElementById("logging-console-btn"), tr("main_panel.console"));
-        changed |= setCachedAttribute(document_->GetElementById("logging-console-btn"), "data-tooltip",
-                                      tr("scene.show_system_console"));
         changed |= setCachedText(logging_note_el_,
                                  LOCF(lichtfeld::Strings::Scene::LOG_NOTE, lfs::core::format_count(MAX_RENDERED_LOG_ENTRIES)));
         changed |= setCachedText(logging_empty_el_, LOC(lichtfeld::Strings::Scene::NO_LOGS));
@@ -1203,15 +1192,6 @@ namespace lfs::vis::gui {
         }
         if (id == "logging-export-btn") {
             exportBufferedLogsToTextFile();
-            event.StopPropagation();
-            return true;
-        }
-        if (id == "logging-console-btn") {
-            if (auto* gm = python::get_gui_manager()) {
-                UIContext console_context{};
-                console_context.window_states = gm->getWindowStates();
-                panels::ShowSystemConsole(console_context);
-            }
             event.StopPropagation();
             return true;
         }

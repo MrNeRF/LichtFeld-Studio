@@ -221,7 +221,9 @@
     "file.configuration": "配置…",
     "file.dataset": "数据集…",
     "file.mesh": "网格…",
-    "file.checkpoint": "检查点…"
+    "file.checkpoint": "检查点…",
+    "tools.developer": "开发者",
+    "tools.system_console": "系统控制台"
   },
   "window": {
     "export": "导出",
@@ -826,8 +828,7 @@
     "cannot_delete_training": "训练进行中无法删除",
     "background": "背景",
     "training_enabled_tooltip": "已包含在训练中",
-    "training_disabled_tooltip": "已从训练中排除",
-    "show_system_console": "显示系统控制台"
+    "training_disabled_tooltip": "已从训练中排除"
   },
   "export": {
     "overwrite": "覆盖",

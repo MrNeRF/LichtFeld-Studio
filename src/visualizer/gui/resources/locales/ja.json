@@ -221,7 +221,9 @@
     "file.configuration": "設定…",
     "file.dataset": "データセット…",
     "file.mesh": "メッシュ…",
-    "file.checkpoint": "チェックポイント…"
+    "file.checkpoint": "チェックポイント…",
+    "tools.developer": "開発者",
+    "tools.system_console": "システムコンソール"
   },
   "window": {
     "export": "エクスポート",
@@ -826,8 +828,7 @@
     "cannot_delete_training": "トレーニング中は削除できません",
     "background": "背景",
     "training_enabled_tooltip": "トレーニングに含まれています",
-    "training_disabled_tooltip": "トレーニングから除外されています",
-    "show_system_console": "システムコンソールを表示"
+    "training_disabled_tooltip": "トレーニングから除外されています"
   },
   "export": {
     "overwrite": "上書き",

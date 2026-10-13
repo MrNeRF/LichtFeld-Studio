@@ -119,9 +119,6 @@
             </div>
 
             <div class="logging-actions">
-                <button id="logging-console-btn"
-                        class="btn btn--secondary history-action"
-                        type="button"></button>
                 <button id="logging-export-btn"
                         class="btn btn--secondary history-action"
                         type="button"></button>
