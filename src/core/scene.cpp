@@ -5235,11 +5235,13 @@ namespace lfs::core {
 
             if (layout_rest > 0 && src.shN_raw().is_valid() && src.shN_raw().numel() > 0 &&
                 shN_requires_float_materialize(src)) {
-                lfs::core::Tensor shN_canon = src.shN_canonical();
-                if (shN_canon.device() != src.means_raw().device()) {
-                    shN_canon = shN_canon.to(src.means_raw().device());
+                auto kept_indices = keep_mask.nonzero();
+                if (kept_indices.ndim() == 2) {
+                    kept_indices = kept_indices.squeeze(1);
                 }
-                shN_canon = shN_canon.index_select(0, keep_mask).contiguous();
+                kept_indices = kept_indices.to(lfs::core::DataType::Int32)
+                                   .to(lfs::core::Device::CPU);
+                auto shN_canon = src.shN_canonical_cpu_rows(kept_indices);
                 auto result = std::make_unique<lfs::core::SplatData>(
                     src.get_max_sh_degree(),
                     src.means_raw().index_select(0, keep_mask).contiguous(),

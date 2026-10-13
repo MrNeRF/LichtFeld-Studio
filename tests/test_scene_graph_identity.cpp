@@ -7,6 +7,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
@@ -577,6 +578,49 @@ TEST_F(SceneGraphIdentityTest, OrdinaryMoveStillRejectsSingularDestinationWithou
     EXPECT_FALSE(scene.moveNode(child, parent, -1));
     EXPECT_EQ(scene.getNodeById(child)->parent_id, lfs::core::NULL_NODE);
     EXPECT_EQ(scene.getWorldTransform(child), before);
+}
+
+TEST_F(SceneGraphIdentityTest, MergeAllocationFailureReportsErrorAndPreservesScene) {
+    auto& scene = scene_manager_->getScene();
+    const auto group_id = scene.addGroup("group");
+    const auto first_id = scene.addSplat("first", make_test_splat({1.f, 2.f, 3.f}), group_id);
+    const auto second_id = scene.addSplat("second", make_test_splat({4.f, 5.f, 6.f}), group_id);
+    ASSERT_NE(group_id, lfs::core::NULL_NODE);
+    ASSERT_NE(first_id, lfs::core::NULL_NODE);
+    ASSERT_NE(second_id, lfs::core::NULL_NODE);
+    const auto* first_model = scene.getNodeById(first_id)->model.get();
+    const auto* second_model = scene.getNodeById(second_id)->model.get();
+    const auto before_undo_count = lfs::vis::op::undoHistory().undoCount();
+
+    class AllocationFailureConsumer final : public lfs::NativeErrorConsumer {
+    public:
+        std::vector<lfs::ErrorNotification> notifications;
+        void on_error(const lfs::ErrorNotification& notification,
+                      const lfs::ErrorDeliveryInfo&) noexcept override {
+            notifications.push_back(notification);
+        }
+    } errors;
+    auto subscription = lfs::ErrorBus::instance().subscribe(errors);
+
+    auto& memory_pressure = lfs::core::MemoryPressureCoordinator::instance();
+    memory_pressure.set_allocation_probe(
+        [](lfs::core::MemoryDomain domain, size_t) {
+            return domain == lfs::core::MemoryDomain::CudaDevice;
+        });
+    const auto merged_name = scene_manager_->mergeGroupNode(group_id);
+    memory_pressure.set_allocation_probe({});
+
+    EXPECT_TRUE(merged_name.empty());
+    EXPECT_NE(scene.getNodeById(group_id), nullptr);
+    ASSERT_NE(scene.getNodeById(first_id), nullptr);
+    ASSERT_NE(scene.getNodeById(second_id), nullptr);
+    EXPECT_EQ(scene.getNodeById(first_id)->model.get(), first_model);
+    EXPECT_EQ(scene.getNodeById(second_id)->model.get(), second_model);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), before_undo_count);
+    ASSERT_EQ(errors.notifications.size(), 1u);
+    EXPECT_EQ(errors.notifications.front().surface, lfs::ErrorSurface::Toast);
+    EXPECT_EQ(errors.notifications.front().error.code(), lfs::ErrorCode::ResourceExhausted);
+    EXPECT_EQ(errors.notifications.front().error.domain(), lfs::ErrorDomain::CUDA);
 }
 
 TEST_F(SceneGraphIdentityTest, MergeKeepsCameraAndPointCloudSubtrees) {

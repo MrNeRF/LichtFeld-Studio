@@ -9,6 +9,7 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/mesh_data.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
@@ -4958,9 +4959,17 @@ namespace lfs::vis {
 
         auto history_options_with_payload = history_options;
         std::vector<core::Uuid> payload_uuids;
-        for (const auto child_id : group->children) {
-            collectSubtreeUuids(scene_, child_id, payload_uuids);
+        for (const core::NodeId id : removal_plan.removed) {
+            const auto* node = scene_.getNodeById(id);
+            if (node && node->type != core::NodeType::SPLAT) {
+                payload_uuids.push_back(node->uuid);
+            }
         }
+        // The splat models are detached and attached to this snapshot after a
+        // successful merge. Cloning them here only duplicates their full payload
+        // during the peak-memory merge operation; on failure the untouched scene
+        // already owns the originals, so this snapshot is discarded. Retain the
+        // small payloads of removed helper nodes, such as crop boxes.
         history_options_with_payload.payload_uuids = std::move(payload_uuids);
         auto history_before = op::SceneGraphPatchEntry::captureStateByIds(
             *this, scene_.getRootNodes(), history_options_with_payload);
@@ -4980,7 +4989,23 @@ namespace lfs::vis {
         };
         collect_splats(group_id, glm::mat4{1.f});
 
-        auto merged_model = core::Scene::mergeSplatsWithTransforms(splats);
+        std::unique_ptr<core::SplatData> merged_model;
+        try {
+            merged_model = core::Scene::mergeSplatsWithTransforms(splats);
+        } catch (const core::MemoryAllocationError& error) {
+            LOG_ERROR("Failed to merge group '{}': {}", group_name, error.what());
+            try {
+                lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                    .error = core::to_error(error.failure(), LFS_SOURCE_SITE_CURRENT()),
+                    .surface = lfs::ErrorSurface::Toast,
+                    .actions = {},
+                    .operation_id = lfs::OperationId::generate(),
+                });
+            } catch (...) {
+                LOG_ERROR("Unable to publish the merge allocation failure notification");
+            }
+            return {};
+        }
         if (!merged_model) {
             LOG_WARN("Failed to merge group '{}'", group_name);
             return {};
