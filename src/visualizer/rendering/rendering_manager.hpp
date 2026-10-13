@@ -34,6 +34,7 @@
 #include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
 #include "visualizer/app_store.hpp"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>

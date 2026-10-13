@@ -19,6 +19,7 @@
 #include "operation/undo_history.hpp"
 #include "project/session_state.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
@@ -3922,6 +3923,34 @@ namespace lfs::vis {
         EXPECT_TRUE(settings.equirectangular);
         EXPECT_EQ(settings.raster_backend, Backend::ThreeDgut);
         EXPECT_TRUE(settings.gut);
+    }
+
+    TEST_F(GTComparisonAsyncTest, EmptyIndependentSplitSkipsMeshPanels) {
+        settings.split_view_mode = SplitViewMode::IndependentDual;
+        manager->updateSettings(settings);
+        const auto deadline = FrameClock::now() + std::chrono::seconds(5);
+        RenderingManager::VulkanMeshFrame frame;
+        do {
+            manager->markDirty(DirtyFlag::SPLIT_VIEW, FrameReason::SettingsChange);
+            render();
+            frame = manager->getVulkanMeshFrame();
+        } while (!frame.split_view.enabled && FrameClock::now() < deadline);
+
+        ASSERT_TRUE(frame.split_view.enabled);
+        EXPECT_TRUE(frame.items.empty());
+        EXPECT_EQ(frame.panels.capacity(), 0u);
+    }
+
+    TEST(MeshDepthSourceTest, UsesOnlyReadyPaneDepth) {
+        VulkanViewportPassParams params;
+        params.split_view.enabled = true;
+        params.mesh_panels.emplace_back();
+        EXPECT_FALSE(meshUsesLeftDepth(params, false));
+        EXPECT_FALSE(meshUsesLeftDepth(params, true));
+        params.split_view.left.depth_blit.depth = std::make_shared<lfs::core::Tensor>();
+        EXPECT_TRUE(meshUsesLeftDepth(params, true));
+        params.mesh_panels.clear();
+        EXPECT_FALSE(meshUsesLeftDepth(params, true));
     }
 
 } // namespace lfs::vis
