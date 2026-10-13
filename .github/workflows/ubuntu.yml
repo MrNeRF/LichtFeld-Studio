@@ -133,7 +133,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.VCPKG_ROOT }}/downloads
-          key: vcpkg-downloads-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.build_type }}
+          key: vcpkg-downloads-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
           restore-keys: vcpkg-downloads-${{ runner.os }}-
 
       - name: Configure
@@ -152,14 +152,14 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-Wl,--compress-debug-sections=zlib" \
             -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--compress-debug-sections=zlib"
 
-      # Save fetched archives even when configure fails later. Unique keys let
-      # later runs retain newly downloaded sources; vcpkg verifies their hashes.
+      # Save fetched archives even when configure fails later. vcpkg verifies
+      # downloaded archives against their hashes.
       - name: Save vcpkg downloads
-        if: always() && !cancelled() && steps.cache-vcpkg-downloads.outcome == 'success'
+        if: always() && !cancelled() && steps.cache-vcpkg-downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ env.VCPKG_ROOT }}/downloads
-          key: vcpkg-downloads-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.build_type }}
+          key: vcpkg-downloads-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
 
       - name: Clean vcpkg buildtrees
         run: |
