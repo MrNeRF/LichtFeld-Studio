@@ -3197,21 +3197,20 @@
     "copy_filtered": "Resultaten kopiëren",
     "export_filtered": "Resultaten exporteren",
     "clear_buffer": "Buffer wissen",
-    "live": "Live",
-    "paused": "Gepauzeerd",
     "time": "Tijd",
     "source_label": "Bron",
     "message": "Bericht",
     "no_matches": "Geen overeenkomende logregels",
     "newer": "Nieuwer",
     "older": "Ouder",
-    "summary": "{shown} getoond · {matched} gevonden · {retained}/{limit} bewaard · {discarded} verwijderd · Pagina {page}/{pages}",
+    "summary": "{matched} gevonden · {retained}/{limit} bewaard · Pagina {page}/{pages}",
     "capture_hint": "Registratie wijzigt de drempel voor console en buffer; weergavefilters doen dat niet.",
-    "limit_hint": "Maximumaantal bewaarde regels, ook begrensd tot 16 MiB. De oudste regels worden eerst verwijderd.",
+    "limit_hint": "Maximaal aantal bufferregels, ook begrensd tot 16 MiB. 0 schakelt buffering uit. Bevestig met Enter of door het veld te verlaten.",
     "clear_hint": "Wis alleen de geheugenbuffer; logbestanden blijven behouden.",
-    "cleared": "Buffer gewist. Logbestanden blijven behouden.",
     "copied": "{count} overeenkomende regels gekopieerd.",
     "exported": "{count} overeenkomende regels geëxporteerd.",
-    "export_failed": "Export mislukt: {error}"
+    "export_failed": "Export mislukt: {error}",
+    "limit_error": "Voer een geheel getal tussen 0 en 50.000 in.",
+    "discarded": "{discarded} verwijderd"
   }
 }

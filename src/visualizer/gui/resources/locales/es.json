@@ -3197,21 +3197,20 @@
     "copy_filtered": "Copiar resultados",
     "export_filtered": "Exportar resultados",
     "clear_buffer": "Vaciar búfer",
-    "live": "En vivo",
-    "paused": "En pausa",
     "time": "Hora",
     "source_label": "Fuente",
     "message": "Mensaje",
     "no_matches": "No hay entradas coincidentes",
     "newer": "Más recientes",
     "older": "Más antiguas",
-    "summary": "{shown} visibles · {matched} coincidencias · {retained}/{limit} guardadas · {discarded} descartadas · Página {page}/{pages}",
+    "summary": "{matched} coincidencias · {retained}/{limit} guardadas · Página {page}/{pages}",
     "capture_hint": "La captura cambia el umbral de consola y búfer; los filtros no.",
-    "limit_hint": "Máximo de entradas, limitado también a 16 MiB. Se descartan primero las más antiguas.",
+    "limit_hint": "Máximo de entradas del búfer, también limitado a 16 MiB. 0 desactiva el búfer. Confirma con Intro o al salir del campo.",
     "clear_hint": "Vaciar solo el búfer de memoria; se conservan los archivos de registro.",
-    "cleared": "Búfer vaciado. Se conservan los archivos.",
     "copied": "{count} entradas copiadas.",
     "exported": "{count} entradas exportadas.",
-    "export_failed": "Error al exportar: {error}"
+    "export_failed": "Error al exportar: {error}",
+    "limit_error": "Introduce un número entero entre 0 y 50.000.",
+    "discarded": "{discarded} descartadas"
   }
 }

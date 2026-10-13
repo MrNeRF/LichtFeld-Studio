@@ -3197,21 +3197,20 @@
     "copy_filtered": "Copy filtered",
     "export_filtered": "Export filtered",
     "clear_buffer": "Clear buffer",
-    "live": "Live",
-    "paused": "Paused",
     "time": "Time",
     "source_label": "Source",
     "message": "Message",
     "no_matches": "No matching log entries",
     "newer": "Newer",
     "older": "Older",
-    "summary": "{shown} shown · {matched} matched · {retained}/{limit} retained · {discarded} discarded · Page {page}/{pages}",
+    "summary": "{matched} matched · {retained}/{limit} retained · Page {page}/{pages}",
     "capture_hint": "Capture changes the console and buffer threshold; display filters do not.",
-    "limit_hint": "Maximum retained entries, also capped at 16 MiB. Oldest entries are discarded first.",
+    "limit_hint": "Maximum entries in the viewer buffer, also capped at 16 MiB. 0 disables buffering. Commit with Enter or by leaving the field.",
     "clear_hint": "Clear only the memory buffer; session log files are preserved.",
-    "cleared": "Buffer cleared. Log files are preserved.",
     "copied": "Copied {count} matching entries.",
     "exported": "Exported {count} matching entries.",
-    "export_failed": "Export failed: {error}"
+    "export_failed": "Export failed: {error}",
+    "limit_error": "Enter a whole number between 0 and 50,000.",
+    "discarded": "{discarded} discarded"
   }
 }

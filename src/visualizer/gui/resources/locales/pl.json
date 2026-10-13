@@ -3197,21 +3197,20 @@
     "copy_filtered": "Kopiuj wyniki",
     "export_filtered": "Eksportuj wyniki",
     "clear_buffer": "Wyczyść bufor",
-    "live": "Na żywo",
-    "paused": "Wstrzymano",
     "time": "Czas",
     "source_label": "Źródło",
     "message": "Wiadomość",
     "no_matches": "Brak pasujących wpisów",
     "newer": "Nowsze",
     "older": "Starsze",
-    "summary": "Wyświetlono {shown} · Dopasowano {matched} · Zachowano {retained}/{limit} · Odrzucono {discarded} · Strona {page}/{pages}",
+    "summary": "Dopasowano {matched} · Zachowano {retained}/{limit} · Strona {page}/{pages}",
     "capture_hint": "Rejestracja zmienia próg konsoli i bufora; filtry wyświetlania go nie zmieniają.",
-    "limit_hint": "Maksymalna liczba wpisów, także ograniczona do 16 MiB. Najstarsze wpisy są usuwane jako pierwsze.",
+    "limit_hint": "Maksymalna liczba wpisów w buforze, także ograniczona do 16 MiB. 0 wyłącza bufor. Zatwierdź Enterem lub opuszczeniem pola.",
     "clear_hint": "Wyczyść tylko bufor pamięci; pliki dziennika zostają zachowane.",
-    "cleared": "Bufor wyczyszczony. Pliki dziennika zachowane.",
     "copied": "Skopiowano {count} pasujących wpisów.",
     "exported": "Wyeksportowano {count} pasujących wpisów.",
-    "export_failed": "Eksport nie powiódł się: {error}"
+    "export_failed": "Eksport nie powiódł się: {error}",
+    "limit_error": "Wpisz liczbę całkowitą od 0 do 50 000.",
+    "discarded": "Odrzucono {discarded}"
   }
 }

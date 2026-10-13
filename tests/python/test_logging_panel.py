@@ -3,6 +3,7 @@
 """Log viewer filtering, paging, export scope, and display/capture separation."""
 import importlib
 import sys
+import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 
 import pytest
@@ -51,7 +52,24 @@ class Element:
     def __init__(self):
         self.markup = ""
         self.attrs = {}
-    def set_inner_rml(self, value): self.markup = value
+        self.nodes = []
+        self.listeners = {}
+    def set_inner_rml(self, value):
+        self.markup = value
+        self.nodes = []
+        for child in ET.fromstring("<root>" + value + "</root>"):
+            node = Element()
+            node.markup = ET.tostring(child, encoding="unicode")
+            self.nodes.append(node)
+    def children(self): return self.nodes
+    def insert_before(self, tag, reference):
+        node = Element()
+        self.nodes.insert(self.nodes.index(reference), node)
+        return node
+    def remove_child(self, node): self.nodes.remove(node)
+    def get_attribute(self, name, default=""): return self.attrs.get(name, default)
+    def add_event_listener(self, name, callback): self.listeners[name] = callback
+    def select(self): return True
     def set_class(self, name, value): pass
     def set_attribute(self, name, value):
         assert isinstance(value, str)
@@ -121,3 +139,54 @@ def test_idle_poll_does_not_rebuild_rows(logging_module):
     element = doc.elements["log-rows"]
     element.set_inner_rml = lambda value: pytest.fail("idle update rebuilt rows")
     panel.on_update(doc)
+
+
+def test_incremental_snapshot_prunes_evicted_rows_and_handles_clear(logging_module):
+    previous = dict(generation=3, entries=[entry(i, str(i)) for i in (1, 2, 3)])
+    update = dict(generation=4, incremental=True, first_sequence=2, entry_count=3,
+                  entries=[entry(4, "4")])
+    merged = logging_module.merge_snapshot(previous, update)
+    assert [row["sequence"] for row in merged["entries"]] == [2, 3, 4]
+    trimmed = logging_module.merge_snapshot(merged, dict(update, generation=5, first_sequence=3,
+                                                         entry_count=2, entries=[]))
+    assert [row["sequence"] for row in trimmed["entries"]] == [3, 4]
+    cleared = logging_module.merge_snapshot(trimmed, dict(update, generation=6, first_sequence=0,
+                                                         entry_count=0, entries=[]))
+    assert cleared["entries"] == []
+    assert previous["entries"][0]["sequence"] == 1
+
+
+def test_retention_edit_commits_on_enter_or_blur_and_preserves_partial_input(logging_module):
+    panel, doc, snapshot = make_panel(logging_module)
+    applied = []
+    logging_module.lf.log.set_buffer_limit = applied.append
+    panel._set_limit("50")
+    panel.on_update(doc)
+    assert panel._limit == "50"
+    assert applied == []
+    field = doc.elements["log-limit"]
+    panel._set_limit("00")
+    panel.on_update(doc)
+    assert panel._limit == "00"
+    assert applied == []
+    field.listeners["change"](SimpleNamespace(get_bool_parameter=lambda *args: False))
+    assert applied == []
+    field.listeners["change"](SimpleNamespace(get_bool_parameter=lambda *args: True))
+    assert applied == [0]
+    assert panel._limit == "0"
+    panel._set_limit("5,000")
+    field.listeners["blur"](None)
+    assert applied == [0, 5000]
+    assert panel._limit == "5000"
+    assert panel._page_size == "250"
+
+
+def test_live_tail_reuses_unchanged_row_nodes(logging_module):
+    panel, doc, snapshot = make_panel(logging_module)
+    original_nodes = list(panel._row_nodes)
+    updated = [entry(300, "new tail"), *reversed(snapshot["entries"][-249:])]
+    panel._sync_rows(doc.elements["log-rows"], updated, "en")
+    assert len(panel._row_nodes) == 250
+    assert panel._row_nodes[0][0] == 300
+    assert panel._row_nodes[1][1] is original_nodes[0][1]
+    assert original_nodes[-1][1] not in doc.elements["log-rows"].nodes

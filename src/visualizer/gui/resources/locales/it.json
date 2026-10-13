@@ -3197,21 +3197,20 @@
     "copy_filtered": "Copia risultati",
     "export_filtered": "Esporta risultati",
     "clear_buffer": "Svuota buffer",
-    "live": "In diretta",
-    "paused": "In pausa",
     "time": "Ora",
     "source_label": "Sorgente",
     "message": "Messaggio",
     "no_matches": "Nessuna voce corrispondente",
     "newer": "Più recenti",
     "older": "Più vecchie",
-    "summary": "{shown} visibili · {matched} risultati · {retained}/{limit} conservati · {discarded} scartati · Pagina {page}/{pages}",
+    "summary": "{matched} risultati · {retained}/{limit} conservati · Pagina {page}/{pages}",
     "capture_hint": "L’acquisizione cambia la soglia di console e buffer; i filtri no.",
-    "limit_hint": "Numero massimo di voci, limitato anche a 16 MiB. Le voci più vecchie vengono scartate per prime.",
+    "limit_hint": "Massimo di voci nel buffer, limitato anche a 16 MiB. 0 disattiva il buffer. Conferma con Invio o uscendo dal campo.",
     "clear_hint": "Svuota solo il buffer in memoria; i file di registro vengono conservati.",
-    "cleared": "Buffer svuotato. File di registro conservati.",
     "copied": "{count} voci copiate.",
     "exported": "{count} voci esportate.",
-    "export_failed": "Esportazione fallita: {error}"
+    "export_failed": "Esportazione fallita: {error}",
+    "limit_error": "Inserisci un numero intero tra 0 e 50.000.",
+    "discarded": "{discarded} scartati"
   }
 }

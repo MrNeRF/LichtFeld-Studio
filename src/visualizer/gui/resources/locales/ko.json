@@ -3197,21 +3197,20 @@
     "copy_filtered": "검색 결과 복사",
     "export_filtered": "검색 결과 내보내기",
     "clear_buffer": "버퍼 지우기",
-    "live": "실시간",
-    "paused": "일시 중지됨",
     "time": "시간",
     "source_label": "소스",
     "message": "메시지",
     "no_matches": "일치하는 로그가 없습니다",
     "newer": "최신",
     "older": "이전",
-    "summary": "표시 {shown} · 일치 {matched} · 보관 {retained}/{limit} · 삭제 {discarded} · 페이지 {page}/{pages}",
+    "summary": "일치 {matched} · 보관 {retained}/{limit} · 페이지 {page}/{pages}",
     "capture_hint": "기록 설정은 콘솔과 버퍼의 임계값을 변경합니다. 표시 필터는 변경하지 않습니다.",
-    "limit_hint": "최대 보관 항목 수이며 16 MiB로도 제한됩니다. 가장 오래된 항목부터 삭제됩니다.",
+    "limit_hint": "표시 버퍼의 최대 항목 수이며 16 MiB로도 제한됩니다. 0은 버퍼링을 끕니다. Enter 또는 필드에서 나갈 때 적용합니다.",
     "clear_hint": "메모리 버퍼만 지웁니다. 로그 파일은 보존됩니다.",
-    "cleared": "버퍼를 지웠습니다. 로그 파일은 보존됩니다.",
     "copied": "{count}개 항목을 복사했습니다.",
     "exported": "{count}개 항목을 내보냈습니다.",
-    "export_failed": "내보내기 실패: {error}"
+    "export_failed": "내보내기 실패: {error}",
+    "limit_error": "0에서 50,000 사이의 정수를 입력하세요.",
+    "discarded": "삭제 {discarded}"
   }
 }

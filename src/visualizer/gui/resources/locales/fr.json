@@ -3197,21 +3197,20 @@
     "copy_filtered": "Copier les résultats",
     "export_filtered": "Exporter les résultats",
     "clear_buffer": "Vider le tampon",
-    "live": "Direct",
-    "paused": "En pause",
     "time": "Heure",
     "source_label": "Source",
     "message": "Message",
     "no_matches": "Aucune entrée correspondante",
     "newer": "Plus récents",
     "older": "Plus anciens",
-    "summary": "{shown} affichés · {matched} résultats · {retained}/{limit} conservés · {discarded} supprimés · Page {page}/{pages}",
+    "summary": "{matched} résultats · {retained}/{limit} conservés · Page {page}/{pages}",
     "capture_hint": "La capture modifie le seuil de la console et du tampon, pas les filtres.",
-    "limit_hint": "Nombre maximal conservé, limité aussi à 16 Mio. Les entrées les plus anciennes sont supprimées en premier.",
+    "limit_hint": "Nombre maximal dans le tampon, limité aussi à 16 Mio. 0 désactive le tampon. Validez avec Entrée ou en quittant le champ.",
     "clear_hint": "Vider uniquement le tampon mémoire ; les fichiers journaux sont conservés.",
-    "cleared": "Tampon vidé. Fichiers journaux conservés.",
     "copied": "{count} entrées copiées.",
     "exported": "{count} entrées exportées.",
-    "export_failed": "Échec de l’export : {error}"
+    "export_failed": "Échec de l’export : {error}",
+    "limit_error": "Saisissez un entier entre 0 et 50 000.",
+    "discarded": "{discarded} supprimés"
   }
 }

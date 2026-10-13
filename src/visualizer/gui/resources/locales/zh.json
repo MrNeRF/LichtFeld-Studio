@@ -3197,21 +3197,20 @@
     "copy_filtered": "复制筛选结果",
     "export_filtered": "导出筛选结果",
     "clear_buffer": "清空缓冲区",
-    "live": "实时",
-    "paused": "已暂停",
     "time": "时间",
     "source_label": "来源",
     "message": "消息",
     "no_matches": "没有匹配的日志",
     "newer": "更新",
     "older": "更早",
-    "summary": "显示 {shown} · 匹配 {matched} · 保留 {retained}/{limit} · 丢弃 {discarded} · 第 {page}/{pages} 页",
+    "summary": "匹配 {matched} · 保留 {retained}/{limit} · 第 {page}/{pages} 页",
     "capture_hint": "记录设置会更改控制台和缓冲区的阈值，显示筛选不会。",
-    "limit_hint": "最大保留条目数，同时限制为 16 MiB。最早的条目会优先丢弃。",
+    "limit_hint": "查看缓冲区的最大条目数，同时限制为 16 MiB。0 表示禁用缓冲。按 Enter 或离开输入框时确认。",
     "clear_hint": "仅清空内存缓冲区，保留日志文件。",
-    "cleared": "缓冲区已清空，日志文件已保留。",
     "copied": "已复制 {count} 条匹配日志。",
     "exported": "已导出 {count} 条匹配日志。",
-    "export_failed": "导出失败：{error}"
+    "export_failed": "导出失败：{error}",
+    "limit_error": "请输入 0 到 50,000 之间的整数。",
+    "discarded": "丢弃 {discarded}"
   }
 }

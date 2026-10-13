@@ -3197,21 +3197,20 @@
     "copy_filtered": "検索結果をコピー",
     "export_filtered": "検索結果をエクスポート",
     "clear_buffer": "バッファを消去",
-    "live": "ライブ",
-    "paused": "一時停止中",
     "time": "時刻",
     "source_label": "ソース",
     "message": "メッセージ",
     "no_matches": "一致するログがありません",
     "newer": "新しいログ",
     "older": "古いログ",
-    "summary": "表示 {shown} · 一致 {matched} · 保持 {retained}/{limit} · 破棄 {discarded} · ページ {page}/{pages}",
+    "summary": "一致 {matched} · 保持 {retained}/{limit} · ページ {page}/{pages}",
     "capture_hint": "記録設定はコンソールとバッファのしきい値を変更します。表示フィルターは変更しません。",
-    "limit_hint": "保持する最大件数。16 MiBにも制限され、古いログから破棄されます。",
+    "limit_hint": "表示バッファの最大件数。16 MiBにも制限されます。0で記録を停止します。Enterまたは欄から離れると確定します。",
     "clear_hint": "メモリバッファのみ消去します。ログファイルは保持されます。",
-    "cleared": "バッファを消去しました。ログファイルは保持されます。",
     "copied": "{count}件をコピーしました。",
     "exported": "{count}件をエクスポートしました。",
-    "export_failed": "エクスポート失敗: {error}"
+    "export_failed": "エクスポート失敗: {error}",
+    "limit_error": "0から50,000までの整数を入力してください。",
+    "discarded": "破棄 {discarded}"
   }
 }
