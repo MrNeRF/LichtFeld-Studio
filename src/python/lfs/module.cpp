@@ -3352,13 +3352,16 @@ NB_MODULE(lichtfeld, m) {
         auto& logger = lfs::core::Logger::get();
         if (previous_generation >= 0 && logger.buffered_log_generation() == static_cast<uint64_t>(previous_generation))
             return nb::none();
-        const auto snapshot = logger.log_buffer_snapshot();
+        const auto snapshot = logger.log_buffer_snapshot(previous_generation < 0 ? 0 : static_cast<uint64_t>(previous_generation));
         nb::dict result;
         result["generation"] = snapshot.generation;
         result["limit"] = snapshot.max_entries;
         result["max_bytes"] = snapshot.max_bytes;
         result["bytes"] = snapshot.bytes;
         result["discarded"] = snapshot.discarded;
+        result["entry_count"] = snapshot.entry_count;
+        result["first_sequence"] = snapshot.first_sequence;
+        result["incremental"] = previous_generation >= 0;
         nb::list entries;
         for (const auto& entry : snapshot.entries) {
             nb::dict row;
@@ -3374,8 +3377,8 @@ NB_MODULE(lichtfeld, m) {
         return result; }, nb::arg("previous_generation") = -1, "Return a consistent bounded log snapshot, or None if unchanged.");
     log_module.def("clear_buffer", [] { lfs::core::Logger::get().clear_log_buffer(); }, "Clear the in-memory log buffer without modifying log files.");
     log_module.def("set_buffer_limit", [](int64_t limit) {
-        if (limit < 100 || limit > 50000)
-            throw std::invalid_argument("limit must be between 100 and 50000 entries");
+        if (limit < 0 || limit > 50000)
+            throw std::invalid_argument("limit must be between 0 and 50000 entries");
         lfs::core::Logger::get().set_log_buffer_limit(static_cast<size_t>(limit)); }, nb::arg("limit"));
     log_module.def("capture_level", [] { return static_cast<int>(lfs::core::Logger::get().level()); });
     log_module.def("set_capture_level", [](int level) {

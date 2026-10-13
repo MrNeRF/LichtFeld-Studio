@@ -72,7 +72,7 @@ namespace lfs::core {
         constexpr const char* ANSI_RESET = "\033[0m";
         constexpr const char* ANSI_PERF = "\033[95m";
         constexpr size_t MAX_BUFFERED_LOG_ENTRIES = 5000;
-        constexpr size_t MAX_BUFFERED_LOG_BYTES = 16 * 1024 * 1024;
+        constexpr size_t MAX_BUFFERED_LOG_BYTES = 64 * 1024 * 1024;
         constexpr size_t MAX_BUFFERED_MESSAGE_BYTES = 64 * 1024;
         constexpr size_t DEFAULT_LOG_ROTATION_MAX_BYTES = 10 * 1024 * 1024;
         constexpr size_t DEFAULT_LOG_ROTATION_MAX_FILES = 4;
@@ -367,14 +367,17 @@ namespace lfs::core {
                 return entries_.size();
             }
 
-            [[nodiscard]] LogBufferSnapshot snapshot() const {
+            [[nodiscard]] LogBufferSnapshot snapshot(const uint64_t since_generation) const {
                 std::lock_guard lock(entries_mutex_);
-                return {generation_.load(std::memory_order_relaxed), max_entries_, MAX_BUFFERED_LOG_BYTES, bytes_, discarded_, {entries_.begin(), entries_.end()}};
+                auto first = entries_.begin();
+                while (first != entries_.end() && first->sequence <= since_generation)
+                    ++first;
+                return {generation_.load(std::memory_order_relaxed), max_entries_, MAX_BUFFERED_LOG_BYTES, bytes_, discarded_, entries_.size(), entries_.empty() ? 0 : entries_.front().sequence, {first, entries_.end()}};
             }
 
             void set_limit(const size_t max_entries) {
                 std::lock_guard lock(entries_mutex_);
-                max_entries_ = std::clamp(max_entries, size_t{100}, size_t{50000});
+                max_entries_ = std::min(max_entries, size_t{50000});
                 trim();
                 generation_.fetch_add(1, std::memory_order_relaxed);
             }
@@ -433,6 +436,8 @@ namespace lfs::core {
             void sink_it_(const spdlog::details::log_msg& msg) override {
                 const std::string_view msg_view(msg.payload.data(), msg.payload.size());
 
+                if (max_entries_.load(std::memory_order_relaxed) == 0)
+                    return;
                 if (filter_regex_ && !std::regex_search(msg_view.begin(), msg_view.end(), *filter_regex_))
                     return;
 
@@ -483,7 +488,7 @@ namespace lfs::core {
                 }
             }
 
-            size_t max_entries_ = MAX_BUFFERED_LOG_ENTRIES;
+            std::atomic<size_t> max_entries_{MAX_BUFFERED_LOG_ENTRIES};
             size_t bytes_ = 0;
             size_t discarded_ = 0;
             mutable std::mutex entries_mutex_;
@@ -819,13 +824,13 @@ namespace lfs::core {
         return memory_sink ? memory_sink->text() : std::string{};
     }
 
-    LogBufferSnapshot Logger::log_buffer_snapshot() const {
+    LogBufferSnapshot Logger::log_buffer_snapshot(const uint64_t since_generation) const {
         std::shared_ptr<MemorySink> sink;
         {
             std::lock_guard lock(impl_->mutex);
             sink = impl_->memory_sink;
         }
-        return sink ? sink->snapshot() : LogBufferSnapshot{};
+        return sink ? sink->snapshot(since_generation) : LogBufferSnapshot{};
     }
 
     void Logger::set_log_buffer_limit(const size_t max_entries) {

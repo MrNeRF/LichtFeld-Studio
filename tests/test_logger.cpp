@@ -259,6 +259,15 @@ TEST(LoggerTest, BufferLimitAndClearKeepGenerationMonotonic) {
     EXPECT_EQ(snapshot.discarded, 5u);
     EXPECT_GT(snapshot.generation, initial);
     EXPECT_LE(snapshot.bytes, snapshot.max_bytes);
+    const auto acknowledged = snapshot.generation;
+    LOG_INFO("incremental-limit-tail");
+    const auto tail = logger.log_buffer_snapshot(acknowledged);
+    ASSERT_EQ(tail.entries.size(), 1u);
+    EXPECT_EQ(tail.entries.front().message, "incremental-limit-tail");
+    EXPECT_EQ(tail.entry_count, 100u);
+    EXPECT_GT(tail.first_sequence, snapshot.first_sequence);
+    EXPECT_TRUE(logger.log_buffer_snapshot(tail.generation).entries.empty());
+    snapshot = logger.log_buffer_snapshot();
     const auto before_clear = snapshot.generation;
     logger.clear_log_buffer();
     snapshot = logger.log_buffer_snapshot();
@@ -269,7 +278,11 @@ TEST(LoggerTest, BufferLimitAndClearKeepGenerationMonotonic) {
     LOG_INFO("after-clear");
     EXPECT_GT(logger.buffered_logs().front().sequence, snapshot.generation);
     logger.set_log_buffer_limit(0);
-    EXPECT_EQ(logger.log_buffer_snapshot().max_entries, 100u);
+    EXPECT_EQ(logger.log_buffer_snapshot().max_entries, 0u);
+    EXPECT_TRUE(logger.log_buffer_snapshot().entries.empty());
+    const auto disabled_generation = logger.buffered_log_generation();
+    LOG_INFO("not-buffered");
+    EXPECT_EQ(logger.buffered_log_generation(), disabled_generation);
     logger.set_log_buffer_limit(100000);
     EXPECT_EQ(logger.log_buffer_snapshot().max_entries, 50000u);
 }
@@ -281,9 +294,10 @@ TEST(LoggerTest, BufferByteBudgetBoundsLargeMessages) {
     logger.clear_log_buffer();
     logger.set_log_buffer_limit(50000);
     const std::string message(128 * 1024, 'x');
-    for (int i = 0; i < 270; ++i)
+    for (int i = 0; i < 1100; ++i)
         LOG_INFO("{}", message);
     const auto snapshot = logger.log_buffer_snapshot();
+    EXPECT_EQ(snapshot.max_bytes, 64u * 1024 * 1024);
     EXPECT_LE(snapshot.bytes, snapshot.max_bytes);
     EXPECT_GT(snapshot.discarded, 0u);
     ASSERT_FALSE(snapshot.entries.empty());
