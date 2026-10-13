@@ -1,10 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/panel_layout.hpp"
+#include "project/project_lifecycle.hpp"
 #include "visualizer/preferences.hpp"
 
 #include <gtest/gtest.h>
@@ -154,6 +156,60 @@ TEST(PreferencesMigration, LegacyLayoutLoadsGeometryAndSequencerPerField) {
     EXPECT_FLOAT_EQ(applied.bottom_dock_height, 280);
     EXPECT_FLOAT_EQ(applied.left_dock_width, 370);
     EXPECT_TRUE(applied.show_sequencer);
+}
+
+TEST(PreferencesMigration, OptionalNullContainersUseDefaultsWithoutWarning) {
+    const auto home = makeHome("lfs_preferences_null_containers");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    const auto layout_path = paths->configDir() / "layout.json";
+    std::ofstream(layout_path) << R"({"windows":null,"vram_hud":null})";
+    std::ofstream(paths->uiPreferencesFile())
+        << json({{"vram_hud", {{"collapsed", nullptr}}},
+                 {"perf_hud", nullptr}})
+               .dump(2);
+    writePreferences(*paths, json::object({
+                                 {"project_manager", json::object({{"state", nullptr}})},
+                                 {"mcp", nullptr},
+                                 {"scene_upscaler_presets", nullptr},
+                             }));
+    const auto preference_fixture = readPreferences(*paths);
+    ASSERT_TRUE(preference_fixture.at("project_manager").is_object());
+    ASSERT_TRUE(preference_fixture.at("project_manager").at("state").is_null());
+
+    std::string warnings;
+    const auto token = lfs::core::Logger::get().add_log_handler(
+        [&warnings](const lfs::core::LogLevel level, const lfs::core::SourceSite&,
+                    const std::string_view message) {
+            if (level == lfs::core::LogLevel::Warn)
+                warnings += std::string(message) + '\n';
+        });
+    lfs::vis::gui::LayoutState state;
+    state.load();
+    EXPECT_TRUE(state.window_visibility.empty());
+    EXPECT_TRUE(state.vram_hud_collapsed_paths.empty());
+    EXPECT_FALSE(state.perf_hud_visible);
+    EXPECT_TRUE(state.perf_hud_expanded);
+    EXPECT_EQ(lfs::vis::loadProjectLocationPreference(), paths->rootDir() / "projects");
+    const auto lifecycle_path = home / "project_lifecycle.json";
+    std::ofstream(lifecycle_path)
+        << R"({"version":2,"mru":null,"dismissed_recovery":null})";
+    const auto lifecycle = lfs::vis::project::loadProjectLifecycleSettings(lifecycle_path);
+    EXPECT_TRUE(lifecycle);
+    if (lifecycle) {
+        EXPECT_TRUE(lifecycle->mru.empty());
+        EXPECT_TRUE(lifecycle->dismissed_recovery.empty());
+    }
+    EXPECT_TRUE(warnings.empty()) << warnings;
+
+    std::ofstream(layout_path, std::ios::trunc) << R"({"windows":5})";
+    lfs::vis::gui::LayoutState wrong_type;
+    wrong_type.load();
+    lfs::core::Logger::get().remove_log_handler(token);
+    EXPECT_TRUE(wrong_type.window_visibility.empty());
+    EXPECT_NE(warnings.find("Invalid window visibility map in UI settings"), std::string::npos);
 }
 
 TEST(PreferencesMigration, UiPreferencesKeepFutureFieldsAndBackUpDamagedFile) {

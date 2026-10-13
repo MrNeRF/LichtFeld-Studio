@@ -342,7 +342,7 @@ namespace lfs::vis {
                 LOG_WARN("Invalid type for preference 'ui_scale'; using its default");
             for (const char* key : {"project_manager", "mcp", "scene_upscaler_presets"}) {
                 const auto item = values.find(key);
-                if (item != values.end() && !item->is_object())
+                if (item != values.end() && !item->is_null() && !item->is_object())
                     LOG_WARN("Invalid type for preference '{}'; using its default", key);
             }
             const auto project_manager = values.find("project_manager");
@@ -351,7 +351,7 @@ namespace lfs::vis {
                 (void)field<bool>(*project_manager, "open_at_startup", true);
                 (void)field<bool>(*project_manager, "remember_state", true);
                 const auto state = project_manager->find("state");
-                if (state != project_manager->end() && !state->is_object())
+                if (state != project_manager->end() && !state->is_null() && !state->is_object())
                     LOG_WARN("Invalid type for preference 'project_manager.state'; using its default");
             }
             const auto mcp = values.find("mcp");
