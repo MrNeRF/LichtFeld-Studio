@@ -2346,13 +2346,9 @@
     "compare_y_bins": "Clases Y",
     "marked": "Marcado",
     "count": "Cantidad",
-    "clear": "Limpiar",
-    "delete": "Eliminar",
     "no_marked_range": "No hay ningún rango marcado",
     "gaussian_count": "{count} gaussianas",
     "range_value": "de {min} a {max}",
-    "status_drag_delete": "Arrastra con el botón izquierdo para marcar un rango y eliminarlo  ·  Ctrl+rueda para ampliar  ·  doble clic para ajustar",
-    "status_selection": "El rango marcado pasa a ser la selección activa de gaussianas.",
     "summary": "Distribución de {metric} entre {count} gaussianas",
     "bin_tooltip": "Clase {index}: de {left} a {right} | {count} gaussianas",
     "compare_with": "Comparar con",
@@ -2361,7 +2357,6 @@
       "off": "Desactivado",
       "summary": "{x_metric} frente a {y_metric} entre {count} gaussianas",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "La región de comparación marcada pasa a ser la selección activa de gaussianas.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} gaussianas",
       "empty": {
         "title": "Comparación no disponible",
@@ -2379,13 +2374,6 @@
     "computing": {
       "title": "Calculando el histograma…",
       "message": "La distribución aparecerá en cuanto los datos estén listos."
-    },
-    "delete_failed": {
-      "title": "Error al eliminar",
-      "status": "Error al eliminar: {message}",
-      "unexpected": "La operación de eliminación produjo un error inesperado.",
-      "invalid_result": "La operación de eliminación devolvió un resultado no válido.",
-      "reported_failure": "La operación de eliminación informó de un error."
     },
     "empty": {
       "unavailable": {
@@ -2470,11 +2458,7 @@
         "label": "Distancia en espacio mundo",
         "description": "Distancia desde el origen del mundo."
       }
-    },
-    "undo": "Deshacer",
-    "redo": "Rehacer",
-    "undo_named": "Deshacer: {name}",
-    "redo_named": "Rehacer: {name}"
+    }
   },
   "ui": {
     "near": "Cerca",

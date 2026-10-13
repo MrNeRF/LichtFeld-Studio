@@ -2346,13 +2346,9 @@
     "compare_y_bins": "Yビン",
     "marked": "マーク済み",
     "count": "数",
-    "clear": "クリア",
-    "delete": "削除",
     "no_marked_range": "マークされた範囲がありません",
     "gaussian_count": "{count} 個のガウシアン",
     "range_value": "{min} ～ {max}",
-    "status_drag_delete": "左ドラッグで範囲をマークしてから削除  ·  Ctrl+スクロールでズーム  ·  ダブルクリックでフィット",
-    "status_selection": "マークした範囲がアクティブなガウシアン選択になります。",
     "summary": "{count} 個のガウシアンにおける {metric} の分布",
     "bin_tooltip": "ビン {index}: {left} ～ {right} | {count} 個のガウシアン",
     "compare_with": "比較対象",
@@ -2361,7 +2357,6 @@
       "off": "オフ",
       "summary": "{count} 個のガウシアンにおける {x_metric} と {y_metric} の比較",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "マークした比較領域がアクティブなガウシアン選択になります。",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} 個のガウシアン",
       "empty": {
         "title": "比較を利用できません",
@@ -2379,13 +2374,6 @@
     "computing": {
       "title": "ヒストグラムを計算中…",
       "message": "データの準備ができ次第、分布が表示されます。"
-    },
-    "delete_failed": {
-      "title": "削除に失敗しました",
-      "status": "削除に失敗しました: {message}",
-      "unexpected": "削除処理で予期しないエラーが発生しました。",
-      "invalid_result": "削除処理が無効な結果を返しました。",
-      "reported_failure": "削除処理が失敗を報告しました。"
     },
     "empty": {
       "unavailable": {
@@ -2470,11 +2458,7 @@
         "label": "ワールド距離",
         "description": "ワールド原点からの距離。"
       }
-    },
-    "undo": "元に戻す",
-    "redo": "やり直す",
-    "undo_named": "元に戻す: {name}",
-    "redo_named": "やり直す: {name}"
+    }
   },
   "ui": {
     "near": "近距離",

@@ -2346,13 +2346,9 @@
     "compare_y_bins": "Classes Y",
     "marked": "Marqué",
     "count": "Nombre",
-    "clear": "Effacer",
-    "delete": "Supprimer",
     "no_marked_range": "Aucune plage marquée",
     "gaussian_count": "{count} gaussiennes",
     "range_value": "de {min} à {max}",
-    "status_drag_delete": "Glisser avec le bouton gauche pour marquer une plage, puis la supprimer  ·  Ctrl+molette pour zoomer  ·  double-clic pour ajuster",
-    "status_selection": "La plage marquée devient la sélection active de gaussiennes.",
     "summary": "Distribution de {metric} sur {count} gaussiennes",
     "bin_tooltip": "Classe {index} : de {left} à {right} | {count} gaussiennes",
     "compare_with": "Comparer avec",
@@ -2361,7 +2357,6 @@
       "off": "Désactivé",
       "summary": "{x_metric} par rapport à {y_metric} sur {count} gaussiennes",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "La région de comparaison marquée devient la sélection active de gaussiennes.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} gaussiennes",
       "empty": {
         "title": "Comparaison indisponible",
@@ -2379,13 +2374,6 @@
     "computing": {
       "title": "Calcul de l'histogramme…",
       "message": "La distribution apparaîtra dès que les données seront prêtes."
-    },
-    "delete_failed": {
-      "title": "Échec de la suppression",
-      "status": "Échec de la suppression : {message}",
-      "unexpected": "L'opération de suppression a produit une erreur inattendue.",
-      "invalid_result": "L'opération de suppression a renvoyé un résultat non valide.",
-      "reported_failure": "L'opération de suppression a signalé un échec."
     },
     "empty": {
       "unavailable": {
@@ -2470,11 +2458,7 @@
         "label": "Distance monde",
         "description": "Distance depuis l'origine du monde."
       }
-    },
-    "undo": "Annuler",
-    "redo": "Rétablir",
-    "undo_named": "Annuler : {name}",
-    "redo_named": "Rétablir : {name}"
+    }
   },
   "ui": {
     "near": "Proche",

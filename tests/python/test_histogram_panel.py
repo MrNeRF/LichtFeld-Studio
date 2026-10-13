@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Regression tests for histogram metric extraction."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from lfs_plugins.rml_keys import KI_A, KI_DELETE, KI_I
 
 RML_KM_CTRL = 1 << 0
 RML_KM_SHIFT = 1 << 1
@@ -34,6 +34,9 @@ class _ModelStub:
 class _SceneSelectionStub:
     def __init__(self, selection_mask=None):
         self.selection_mask = selection_mask
+        self.selection_history = []
+        self._preview_before = None
+        self._preview_active = False
         self.clear_calls = 0
         self.preview_mask_calls = 0
         self.commit_preview_calls = 0
@@ -46,14 +49,23 @@ class _SceneSelectionStub:
         self.selection_mask = (mask.reshape([-1]) != 0).contiguous()
 
     def preview_selection_mask(self, mask):
+        if not self._preview_active:
+            self._preview_before = self.selection_mask
+            self._preview_active = True
         self.preview_mask_calls += 1
         self.set_selection_mask(mask)
 
     def commit_selection_preview(self):
         self.commit_preview_calls += 1
+        self.selection_history.append(self._preview_before)
+        self._preview_before = None
+        self._preview_active = False
 
     def cancel_selection_preview(self):
         self.cancel_preview_calls += 1
+        self.selection_mask = self._preview_before
+        self._preview_before = None
+        self._preview_active = False
 
     def clear_selection(self):
         self.selection_mask = None
@@ -66,6 +78,7 @@ class _KeyEventStub:
         key_identifier: int,
         *,
         ctrl: bool = False,
+        alt: bool = False,
         meta: bool = False,
         shift: bool = False,
         modifiers: int | None = None,
@@ -73,7 +86,7 @@ class _KeyEventStub:
         self._params = {"key_identifier": str(key_identifier)}
         if modifiers is not None:
             self._params["modifiers"] = str(modifiers)
-        self._bools = {"ctrl_key": ctrl, "meta_key": meta, "shift_key": shift}
+        self._bools = {"ctrl_key": ctrl, "alt_key": alt, "meta_key": meta, "shift_key": shift}
         self.stopped = False
 
     def get_parameter(self, name, default=""):
@@ -94,6 +107,7 @@ class _MouseEventStub:
         mouse_y: float = 0.0,
         button: int = 0,
         ctrl: bool = False,
+        alt: bool = False,
         meta: bool = False,
         shift: bool = False,
         modifiers: int | None = None,
@@ -111,7 +125,7 @@ class _MouseEventStub:
             self._params["wheel_delta"] = str(wheel_delta)
         if wheel_delta_y is not None:
             self._params["wheel_delta_y"] = str(wheel_delta_y)
-        self._bools = {"ctrl_key": ctrl, "meta_key": meta, "shift_key": shift}
+        self._bools = {"ctrl_key": ctrl, "alt_key": alt, "meta_key": meta, "shift_key": shift}
         self.stopped = False
 
     def get_parameter(self, name, default=""):
@@ -752,6 +766,79 @@ def test_histogram_drag_live_updates_scene_selection_before_mouseup(histogram_pa
     numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.array([True, True, True]))
 
 
+def test_histogram_range_uses_scene_selection_and_standard_edit_actions(histogram_panel_module, lf, numpy, monkeypatch):
+    from lfs_plugins.selection_controls import SelectionControlsController
+
+    panel = histogram_panel_module.HistogramPanel()
+    panel._show_chart = True
+    panel._chart_el = SimpleNamespace(absolute_left=0.0, absolute_width=160.0)
+    values = lf.Tensor.from_numpy(numpy.array([0.05, 0.15, 0.35], dtype=numpy.float32))
+    panel._primary_values = values
+    panel._primary_finite_mask = values.isfinite()
+    panel._primary_valid_values = values[panel._primary_finite_mask]
+    panel._primary_histogram_min, panel._primary_histogram_max = 0.0, 1.0
+    panel._histogram_bin_count = 16
+    panel._rebuild_histogram_from_cache()
+    scene = _SceneSelectionStub(lf.Tensor.from_numpy(numpy.array([False, False, True])))
+    monkeypatch.setattr(lf, "get_scene", lambda: scene)
+    monkeypatch.setattr(panel, "_any_true", lambda *_args: pytest.fail("Drag must use cached bin counts"))
+
+    panel._on_chart_mousedown(_MouseEventStub(mouse_x=1.0))
+    panel._on_document_mousemove(_MouseEventStub(mouse_x=21.0))
+    panel._on_document_mouseup(_MouseEventStub(mouse_x=21.0))
+    expected = numpy.array([True, True, False])
+    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), expected)
+    assert scene.commit_preview_calls == 1
+
+    deleted_masks = []
+
+    def delete_selected():
+        deleted_masks.append(scene.selection_mask.cpu().numpy().copy())
+        scene.selection_history.append(scene.selection_mask)
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        lf,
+        "pipeline",
+        SimpleNamespace(edit=SimpleNamespace(delete_=lambda: SimpleNamespace(
+            execute=delete_selected
+        ))),
+        raising=False,
+    )
+
+    def undo_selection():
+        scene.selection_mask = scene.selection_history.pop()
+
+    monkeypatch.setattr(
+        lf,
+        "undo",
+        SimpleNamespace(can_undo=lambda: bool(scene.selection_history), undo=undo_selection),
+        raising=False,
+    )
+    controls = SelectionControlsController()
+    controls._refresh_state = lambda: None
+    controls._dirty_all = lambda: None
+    controls._on_action(None, None, ["delete"])
+    controls._on_action(None, None, ["undo"])
+    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), expected)
+    controls._on_action(None, None, ["undo"])
+
+    numpy.testing.assert_array_equal(deleted_masks[0], expected)
+    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.array([False, False, True]))
+
+
+def test_histogram_panel_has_no_action_footer_and_keeps_mark_stats_as_cards():
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "histogram_panel.rml").read_text(encoding="utf-8")
+    rcss = (resources / "histogram_panel.rcss").read_text(encoding="utf-8")
+
+    assert "histogram-footer" not in rml + rcss
+    assert "delete_marked()" not in rml
+    assert "undo_history()" not in rml
+    assert rml.count("{{ marked_label }}") == 1
+    assert rml.count("{{ count_label }}") == 1
+
+
 def test_histogram_selection_geometry_accounts_for_bar_gaps(histogram_panel_module):
     panel = histogram_panel_module.HistogramPanel()
     panel._histogram_bin_count = 4
@@ -850,134 +937,12 @@ def test_compare_drag_can_expand_across_multiple_bins(histogram_panel_module, lf
     assert panel._marked_count == 2
 
 
-def test_histogram_ctrl_a_selects_full_domain(histogram_panel_module, lf, numpy, monkeypatch):
-    panel = histogram_panel_module.HistogramPanel()
-    panel._show_chart = True
-    panel._metric_id = "opacity"
-
-    values = lf.Tensor.from_numpy(numpy.array([0.05, 0.15, 0.35, 0.65, 0.85], dtype=numpy.float32))
-    finite_mask = values.isfinite()
-    panel._primary_values = values
-    panel._primary_finite_mask = finite_mask
-    panel._primary_valid_values = values[finite_mask]
-    panel._primary_histogram_min = 0.0
-    panel._primary_histogram_max = 1.0
-    panel._histogram_bin_count = 16
-    panel._rebuild_histogram_from_cache()
-
-    scene = _SceneSelectionStub()
-    monkeypatch.setattr(lf, "get_scene", lambda: scene)
-
-    event = _KeyEventStub(KI_A, ctrl=True)
-    panel._on_keydown(event)
-
-    assert event.stopped is True
-    assert panel._marked_bounds() == (0, 15)
-    assert panel._marked_count == 5
-    assert panel._selected_histogram_bins == set(range(16))
-    assert panel._histogram_overlay_bounds == (0, 15)
-    panel._rebuild_histogram_from_cache()
-    assert panel._histogram_overlay_bounds == (0, 15)
-    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.ones(5, dtype=bool))
 
 
-def test_histogram_ctrl_i_inverts_current_panel_selection(histogram_panel_module, lf, numpy, monkeypatch):
-    panel = histogram_panel_module.HistogramPanel()
-    panel._show_chart = True
-    panel._metric_id = "opacity"
-
-    values = lf.Tensor.from_numpy(numpy.array([0.05, 0.15, 0.35, 0.65, 0.85], dtype=numpy.float32))
-    finite_mask = values.isfinite()
-    panel._primary_values = values
-    panel._primary_finite_mask = finite_mask
-    panel._primary_valid_values = values[finite_mask]
-    panel._primary_histogram_min = 0.0
-    panel._primary_histogram_max = 1.0
-    panel._histogram_bin_count = 16
-    panel._rebuild_histogram_from_cache()
-
-    scene = _SceneSelectionStub()
-    monkeypatch.setattr(lf, "get_scene", lambda: scene)
-
-    panel._marked_bin_start = 0
-    panel._marked_bin_end = 0
-    panel._sync_marked_range(apply_scene=True)
-
-    event = _KeyEventStub(KI_I, ctrl=True)
-    panel._on_keydown(event)
-
-    assert event.stopped is True
-    assert panel._marked_count == 4
-    assert panel._marked_range_text == "Multiple ranges"
-    assert panel._has_marked_range() is False
-    numpy.testing.assert_array_equal(
-        scene.selection_mask.cpu().numpy(),
-        numpy.array([False, True, True, True, True], dtype=bool),
-    )
 
 
-def test_histogram_ctrl_i_clears_full_selection_immediately(histogram_panel_module, lf, numpy, monkeypatch):
-    panel = histogram_panel_module.HistogramPanel()
-    panel._show_chart = True
-    panel._metric_id = "opacity"
-
-    values = lf.Tensor.from_numpy(numpy.array([0.05, 0.15, 0.35, 0.65, 0.85], dtype=numpy.float32))
-    finite_mask = values.isfinite()
-    panel._primary_values = values
-    panel._primary_finite_mask = finite_mask
-    panel._primary_valid_values = values[finite_mask]
-    panel._primary_histogram_min = 0.0
-    panel._primary_histogram_max = 1.0
-    panel._histogram_bin_count = 16
-    panel._rebuild_histogram_from_cache()
-
-    scene = _SceneSelectionStub()
-    monkeypatch.setattr(lf, "get_scene", lambda: scene)
-
-    panel._on_keydown(_KeyEventStub(KI_A, modifiers=RML_KM_CTRL))
-    panel._on_keydown(_KeyEventStub(KI_I, modifiers=RML_KM_CTRL))
-
-    assert panel._marked_count == 0
-    assert panel._panel_selection_mask is None
-    assert panel._selected_histogram_bins == set()
-    assert panel._histogram_overlay_bounds is None
-    assert panel._has_marked_range() is False
-    assert all(not record["selected"] for record in panel._build_bin_records(panel._hist_counts, panel._hist_edges))
-    assert scene.selection_mask is None
-    assert scene.clear_calls == 1
 
 
-def test_compare_ctrl_a_selects_full_grid(histogram_panel_module, lf, numpy, monkeypatch):
-    panel = histogram_panel_module.HistogramPanel()
-    panel._metric_id = "scale_x"
-    panel._compare_metric_id = "opacity"
-
-    model = _ModelStub(
-        lf,
-        numpy.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]], dtype=numpy.float32),
-        numpy.array([[0.06, 1.0, 1.0], [0.12, 1.0, 1.0], [0.40, 1.0, 1.0]], dtype=numpy.float32),
-        opacity=numpy.array([0.06, 0.12, 0.40], dtype=numpy.float32),
-    )
-    scene_data = SimpleNamespace(get_nodes=lambda: [])
-    primary_values = panel._extract_metric_values(scene_data, model, panel._metric_id)
-    panel._refresh_compare(scene_data, model, primary_values, None)
-
-    scene = _SceneSelectionStub()
-    monkeypatch.setattr(lf, "get_scene", lambda: scene)
-
-    event = _KeyEventStub(KI_A, ctrl=True)
-    panel._on_keydown(event)
-
-    assert event.stopped is True
-    assert panel._has_compare_marked_range() is True
-    assert panel._compare_marked_bounds() == (
-        0,
-        panel._compare_x_bin_count - 1,
-        0,
-        panel._compare_y_bin_count - 1,
-    )
-    assert len(panel._selected_compare_cells) == panel._compare_x_bin_count * panel._compare_y_bin_count
-    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.ones(3, dtype=bool))
 
 
 def test_histogram_ctrl_scroll_zooms_at_cursor_through_keymap(histogram_panel_module, lf, numpy, monkeypatch):
@@ -1062,36 +1027,6 @@ def test_histogram_ctrl_scroll_zooms_at_cursor_through_keymap(histogram_panel_mo
     assert panel._custom_range_max_value is None
 
 
-def test_histogram_delete_shortcut_deletes_panel_selection(histogram_panel_module, lf, numpy, monkeypatch):
-    panel = histogram_panel_module.HistogramPanel()
-    panel._show_chart = True
-    panel._metric_id = "opacity"
-
-    values = lf.Tensor.from_numpy(numpy.array([0.05, 0.15, 0.35], dtype=numpy.float32))
-    finite_mask = values.isfinite()
-    panel._primary_values = values
-    panel._primary_finite_mask = finite_mask
-    panel._primary_valid_values = values[finite_mask]
-    panel._primary_histogram_min = 0.0
-    panel._primary_histogram_max = 1.0
-    panel._histogram_bin_count = 16
-    panel._rebuild_histogram_from_cache()
-
-    scene = _SceneSelectionStub()
-    monkeypatch.setattr(lf, "get_scene", lambda: scene)
-    monkeypatch.setattr(panel, "_execute_delete_pipeline", lambda: None)
-    monkeypatch.setattr(panel, "_refresh", lambda: None)
-
-    panel._marked_bin_start = 0
-    panel._marked_bin_end = 0
-    panel._sync_marked_range(apply_scene=False)
-
-    event = _KeyEventStub(KI_DELETE)
-    panel._on_keydown(event)
-
-    assert event.stopped is True
-    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.array([True, False, False], dtype=bool))
-    assert panel._has_any_mark() is False
 
 
 def test_histogram_shift_drag_adds_to_existing_selection(histogram_panel_module, lf, numpy, monkeypatch):
@@ -1219,8 +1154,7 @@ def test_histogram_ctrl_drag_subtracts_from_existing_selection(histogram_panel_m
     scene = _SceneSelectionStub()
     monkeypatch.setattr(lf, "get_scene", lambda: scene)
 
-    select_all = _KeyEventStub(KI_A, ctrl=True)
-    panel._on_keydown(select_all)
+    scene.selection_mask = lf.Tensor.from_numpy(numpy.ones(3, dtype=bool))
 
     x = 2 * 10.0 + 1.0
     panel._on_chart_mousedown(_MouseEventStub(mouse_x=x, ctrl=True))
@@ -1232,6 +1166,18 @@ def test_histogram_ctrl_drag_subtracts_from_existing_selection(histogram_panel_m
     assert panel._selected_histogram_bins == {0, 5}
     assert panel._marked_range_text == "Multiple ranges"
     assert panel._histogram_overlay_bounds == (2, 2)
+
+
+def test_histogram_alt_drag_intersects_existing_selection(histogram_panel_module, lf, numpy, monkeypatch):
+    panel, scene = _three_bin_panel(histogram_panel_module, lf, numpy, monkeypatch)
+    scene.selection_mask = lf.Tensor.from_numpy(numpy.array([True, False, True], dtype=bool))
+
+    x = 5 * 10.0 + 1.0
+    panel._on_chart_mousedown(_MouseEventStub(mouse_x=x, alt=True))
+    panel._on_document_mousemove(_MouseEventStub(mouse_x=x, alt=True))
+    panel._on_document_mouseup(_MouseEventStub(mouse_x=x, alt=True))
+
+    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.array([False, False, True]))
 
 
 def test_histogram_ctrl_drag_selection_survives_rebuild(histogram_panel_module, lf, numpy, monkeypatch):
@@ -1253,7 +1199,7 @@ def test_histogram_ctrl_drag_selection_survives_rebuild(histogram_panel_module, 
     scene = _SceneSelectionStub()
     monkeypatch.setattr(lf, "get_scene", lambda: scene)
 
-    panel._on_keydown(_KeyEventStub(KI_A, ctrl=True))
+    scene.selection_mask = lf.Tensor.from_numpy(numpy.ones(3, dtype=bool))
 
     x = 2 * 10.0 + 1.0
     panel._on_chart_mousedown(_MouseEventStub(mouse_x=x, ctrl=True))
@@ -1287,7 +1233,7 @@ def test_histogram_ctrl_drag_subtracts_with_modifier_bitmask(histogram_panel_mod
     scene = _SceneSelectionStub()
     monkeypatch.setattr(lf, "get_scene", lambda: scene)
 
-    panel._on_keydown(_KeyEventStub(KI_A, modifiers=RML_KM_CTRL))
+    scene.selection_mask = lf.Tensor.from_numpy(numpy.ones(3, dtype=bool))
 
     x = 2 * 10.0 + 1.0
     panel._on_chart_mousedown(_MouseEventStub(mouse_x=x, modifiers=RML_KM_CTRL))
@@ -1497,7 +1443,7 @@ def test_histogram_ctrl_click_removes_a_bin_like_selection_tools(histogram_panel
     scene = _SceneSelectionStub()
     monkeypatch.setattr(lf, "get_scene", lambda: scene)
 
-    panel._on_keydown(_KeyEventStub(KI_A, ctrl=True))
+    scene.selection_mask = lf.Tensor.from_numpy(numpy.ones(3, dtype=bool))
 
     x = 2 * 10.0 + 1.0
     panel._on_chart_mousedown(_MouseEventStub(mouse_x=x, ctrl=True))
@@ -1698,7 +1644,7 @@ def test_refresh_view_only_falls_back_when_cache_empty(histogram_panel_module, m
 
 
 @pytest.mark.parametrize("compare", [False, True])
-@pytest.mark.parametrize("mode", ["replace", "add", "subtract"])
+@pytest.mark.parametrize("mode", ["replace", "add", "remove", "intersect"])
 def test_chart_mousedown_allows_native_doubleclick(histogram_panel_module, monkeypatch, compare, mode):
     panel = histogram_panel_module.HistogramPanel()
     focused, previews, refreshed = [], [], []
@@ -1722,7 +1668,13 @@ def test_chart_mousedown_allows_native_doubleclick(histogram_panel_module, monke
     down = panel._on_compare_chart_mousedown if compare else panel._on_chart_mousedown
     doubleclick = panel._on_compare_chart_dblclick if compare else panel._on_chart_dblclick
 
-    event = _MouseEventStub(mouse_x=20.0, mouse_y=30.0, shift=mode == "add", ctrl=mode == "subtract")
+    event = _MouseEventStub(
+        mouse_x=20.0,
+        mouse_y=30.0,
+        shift=mode == "add",
+        ctrl=mode == "remove",
+        alt=mode == "intersect",
+    )
     down(event)
 
     assert focused == [True]
@@ -1779,7 +1731,7 @@ def test_mouseup_aborts_drag_when_scene_invalid(histogram_panel_module, monkeypa
     monkeypatch.setattr(histogram_panel_module.lf, "get_scene",
                         lambda: SimpleNamespace(is_valid=lambda: False), raising=False)
     reset = []
-    monkeypatch.setattr(panel, "_reset_marked_state", lambda clear_scene=False: reset.append(clear_scene))
+    monkeypatch.setattr(panel, "_reset_mark_fields", lambda clear_scene=False: reset.append(clear_scene))
 
     event = _MouseEventStub(mouse_x=0.0)
     panel._on_document_mouseup(event)
@@ -1862,24 +1814,8 @@ def test_last_bin_slider_value_is_computed_while_worker_is_pending(histogram_pan
     assert 48 in requested[-1]
 
 
-def test_retained_chart_cannot_delete_using_a_pending_result(histogram_panel_module):
-    panel = histogram_panel_module.HistogramPanel()
-    panel._show_chart = True
-    panel._computing = True
-    panel._marked_count = 10
-    panel._panel_selection_mask = object()
-    panel._has_any_mark = lambda: True
-    panel._apply_scene_selection_mask = lambda *_: pytest.fail("Stale selection must not be applied")
-    panel._on_delete_marked(None, None, None)
 
 
-def test_retained_chart_ignores_selection_shortcuts_while_computing(histogram_panel_module):
-    panel = histogram_panel_module.HistogramPanel()
-    panel._computing = True
-    panel._select_all_current_mode = lambda: pytest.fail("Cannot select stale histogram data")
-    panel._invert_current_mode_selection = lambda: pytest.fail("Cannot invert stale histogram data")
-    panel._on_keydown(_KeyEventStub(KI_A, ctrl=True))
-    panel._on_keydown(_KeyEventStub(KI_I, ctrl=True))
 
 
 @pytest.fixture

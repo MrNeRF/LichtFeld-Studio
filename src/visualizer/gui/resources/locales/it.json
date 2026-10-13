@@ -2346,13 +2346,9 @@
     "compare_y_bins": "Intervalli Y",
     "marked": "Contrassegnato",
     "count": "Conteggio",
-    "clear": "Cancella",
-    "delete": "Elimina",
     "no_marked_range": "Nessun intervallo contrassegnato",
     "gaussian_count": "{count} Gaussiane",
     "range_value": "da {min} a {max}",
-    "status_drag_delete": "Trascina con il tasto sinistro per contrassegnare un intervallo, poi eliminalo  ·  Ctrl+rotellina per lo zoom  ·  doppio clic per adattare",
-    "status_selection": "L'intervallo contrassegnato diventa la selezione attiva delle Gaussiane.",
     "summary": "Distribuzione di {metric} su {count} Gaussiane",
     "bin_tooltip": "Intervallo {index}: da {left} a {right} | {count} Gaussiane",
     "compare_with": "Confronta con",
@@ -2361,7 +2357,6 @@
       "off": "Disattivato",
       "summary": "{x_metric} rispetto a {y_metric} su {count} Gaussiane",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "La regione di confronto contrassegnata diventa la selezione attiva delle Gaussiane.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} Gaussiane",
       "empty": {
         "title": "Confronto non disponibile",
@@ -2379,13 +2374,6 @@
     "computing": {
       "title": "Calcolo dell'istogramma…",
       "message": "La distribuzione apparirà non appena i dati saranno pronti."
-    },
-    "delete_failed": {
-      "title": "Eliminazione non riuscita",
-      "status": "Eliminazione non riuscita: {message}",
-      "unexpected": "La procedura di eliminazione ha generato un errore imprevisto.",
-      "invalid_result": "La procedura di eliminazione ha restituito un risultato non valido.",
-      "reported_failure": "La procedura di eliminazione ha segnalato un errore."
     },
     "empty": {
       "unavailable": {
@@ -2470,11 +2458,7 @@
         "label": "Distanza globale",
         "description": "Distanza dall'origine del mondo."
       }
-    },
-    "undo": "Annulla",
-    "redo": "Ripeti",
-    "undo_named": "Annulla: {name}",
-    "redo_named": "Ripeti: {name}"
+    }
   },
   "ui": {
     "near": "Vicino",

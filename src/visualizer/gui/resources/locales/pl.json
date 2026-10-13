@@ -2346,13 +2346,9 @@
     "compare_y_bins": "Kosze Y",
     "marked": "Zaznaczone",
     "count": "Liczba",
-    "clear": "Wyczyść",
-    "delete": "Usuń",
     "no_marked_range": "Brak zaznaczonego zakresu",
     "gaussian_count": "{count} splatów Gaussa",
     "range_value": "od {min} do {max}",
-    "status_drag_delete": "Przeciągnij lewym przyciskiem, aby zaznaczyć zakres, a następnie go usuń  ·  Ctrl+przewijanie, aby powiększyć  ·  dwuklik, aby dopasować",
-    "status_selection": "Zaznaczony zakres staje się aktywnym wyborem splatów Gaussa.",
     "summary": "Rozkład {metric} dla {count} splatów Gaussa",
     "bin_tooltip": "Kosz {index}: od {left} do {right} | {count} splatów Gaussa",
     "compare_with": "Porównaj z",
@@ -2361,7 +2357,6 @@
       "off": "Wył.",
       "summary": "{x_metric} względem {y_metric} dla {count} splatów Gaussa",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "Zaznaczony obszar porównania staje się aktywnym wyborem splatów Gaussa.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} splatów Gaussa",
       "empty": {
         "title": "Porównanie niedostępne",
@@ -2379,13 +2374,6 @@
     "computing": {
       "title": "Obliczanie histogramu…",
       "message": "Rozkład pojawi się, gdy tylko dane będą gotowe."
-    },
-    "delete_failed": {
-      "title": "Usuwanie nie powiodło się",
-      "status": "Usuwanie nie powiodło się: {message}",
-      "unexpected": "Operacja usuwania wywołała nieoczekiwany błąd.",
-      "invalid_result": "Operacja usuwania zwróciła nieprawidłowy wynik.",
-      "reported_failure": "Operacja usuwania zgłosiła błąd."
     },
     "empty": {
       "unavailable": {
@@ -2470,11 +2458,7 @@
         "label": "Odległość w świecie",
         "description": "Odległość od początku układu świata."
       }
-    },
-    "undo": "Cofnij",
-    "redo": "Ponów",
-    "undo_named": "Cofnij: {name}",
-    "redo_named": "Ponów: {name}"
+    }
   },
   "ui": {
     "near": "Blisko",

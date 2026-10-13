@@ -2346,13 +2346,9 @@
     "compare_y_bins": "Y-bins",
     "marked": "Gemarkeerd",
     "count": "Aantal",
-    "clear": "Wissen",
-    "delete": "Verwijderen",
     "no_marked_range": "Geen gemarkeerd bereik",
     "gaussian_count": "{count} Gaussische splats",
     "range_value": "{min} tot {max}",
-    "status_drag_delete": "Sleep met de linkermuisknop om een bereik te markeren en verwijder het  ·  Ctrl+scrollen om te zoomen  ·  dubbelklik om passend te maken",
-    "status_selection": "Het gemarkeerde bereik wordt de actieve selectie van Gaussische splats.",
     "summary": "Verdeling van {metric} over {count} Gaussische splats",
     "bin_tooltip": "Bin {index}: {left} tot {right} | {count} Gaussische splats",
     "compare_with": "Vergelijken met",
@@ -2361,7 +2357,6 @@
       "off": "Uit",
       "summary": "{x_metric} tegenover {y_metric} over {count} Gaussische splats",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "De gemarkeerde vergelijkingsregio wordt de actieve selectie van Gaussische splats.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} Gaussische splats",
       "empty": {
         "title": "Vergelijking niet beschikbaar",
@@ -2379,13 +2374,6 @@
     "computing": {
       "title": "Histogram wordt berekend…",
       "message": "De verdeling verschijnt zodra de gegevens klaar zijn."
-    },
-    "delete_failed": {
-      "title": "Verwijderen mislukt",
-      "status": "Verwijderen mislukt: {message}",
-      "unexpected": "De verwijderbewerking veroorzaakte een onverwachte fout.",
-      "invalid_result": "De verwijderbewerking gaf een ongeldig resultaat terug.",
-      "reported_failure": "De verwijderbewerking rapporteerde een fout."
     },
     "empty": {
       "unavailable": {
@@ -2470,11 +2458,7 @@
         "label": "Wereldafstand",
         "description": "Afstand vanaf de wereldoorsprong."
       }
-    },
-    "undo": "Ongedaan maken",
-    "redo": "Opnieuw uitvoeren",
-    "undo_named": "Ongedaan maken: {name}",
-    "redo_named": "Opnieuw uitvoeren: {name}"
+    }
   },
   "ui": {
     "near": "Dichtbij",

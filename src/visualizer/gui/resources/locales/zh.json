@@ -2346,13 +2346,9 @@
     "compare_y_bins": "Y 区间",
     "marked": "已标记",
     "count": "计数",
-    "clear": "清除",
-    "delete": "删除",
     "no_marked_range": "无标记范围",
     "gaussian_count": "{count} 个高斯",
     "range_value": "{min} 至 {max}",
-    "status_drag_delete": "左键拖拽标记范围，然后删除  ·  Ctrl+滚轮缩放  ·  双击自适应窗口",
-    "status_selection": "标记范围成为当前的高斯选择。",
     "summary": "{metric} 分布在 {count} 个高斯上",
     "bin_tooltip": "区间 {index}：{left} 至 {right} | {count} 个高斯",
     "compare_with": "对比",
@@ -2361,7 +2357,6 @@
       "off": "关闭",
       "summary": "{x_metric} 对比 {y_metric}，共 {count} 个高斯",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "标记的对比区域成为当前的高斯选择。",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} 个高斯",
       "empty": {
         "title": "对比不可用",
@@ -2379,13 +2374,6 @@
     "computing": {
       "title": "正在计算直方图…",
       "message": "数据准备就绪后将显示分布。"
-    },
-    "delete_failed": {
-      "title": "删除失败",
-      "status": "删除失败：{message}",
-      "unexpected": "删除管线引发意外错误。",
-      "invalid_result": "删除管线返回无效结果。",
-      "reported_failure": "删除管线报告失败。"
     },
     "empty": {
       "unavailable": {
@@ -2470,11 +2458,7 @@
         "label": "世界距离",
         "description": "距世界原点的距离。"
       }
-    },
-    "undo": "撤销",
-    "redo": "重做",
-    "undo_named": "撤销：{name}",
-    "redo_named": "重做：{name}"
+    }
   },
   "ui": {
     "near": "近端",

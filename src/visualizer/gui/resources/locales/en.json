@@ -2345,13 +2345,9 @@
     "compare_y_bins": "Y Bins",
     "marked": "Marked",
     "count": "Count",
-    "clear": "Clear",
-    "delete": "Delete",
     "no_marked_range": "No marked range",
     "gaussian_count": "{count} Gaussians",
     "range_value": "{min} to {max}",
-    "status_drag_delete": "Left-drag to mark a range, then delete it  ·  Ctrl+scroll to zoom  ·  double-click to fit",
-    "status_selection": "Marked range becomes the active Gaussian selection.",
     "summary": "{metric} distribution across {count} Gaussians",
     "bin_tooltip": "Bin {index}: {left} to {right} | {count} Gaussians",
     "compare_with": "Compare With",
@@ -2360,7 +2356,6 @@
       "off": "Off",
       "summary": "{x_metric} vs {y_metric} across {count} Gaussians",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "Marked compare region becomes the active Gaussian selection.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} Gaussians",
       "empty": {
         "title": "Compare unavailable",
@@ -2378,13 +2373,6 @@
     "computing": {
       "title": "Computing histogram…",
       "message": "The distribution will appear as soon as the data is ready."
-    },
-    "delete_failed": {
-      "title": "Delete Failed",
-      "status": "Delete failed: {message}",
-      "unexpected": "The delete pipeline raised an unexpected error.",
-      "invalid_result": "The delete pipeline returned an invalid result.",
-      "reported_failure": "The delete pipeline reported a failure."
     },
     "empty": {
       "unavailable": {
@@ -2469,11 +2457,7 @@
         "label": "World Distance",
         "description": "Distance from the world origin."
       }
-    },
-    "undo": "Undo",
-    "redo": "Redo",
-    "undo_named": "Undo: {name}",
-    "redo_named": "Redo: {name}"
+    }
   },
   "ui": {
     "near": "Near",

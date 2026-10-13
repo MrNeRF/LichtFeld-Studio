@@ -2346,13 +2346,9 @@
     "compare_y_bins": "Y-Bins",
     "marked": "Markiert",
     "count": "Anzahl",
-    "clear": "Löschen",
-    "delete": "Entfernen",
     "no_marked_range": "Kein markierter Bereich",
     "gaussian_count": "{count} Gaußsche Splats",
     "range_value": "{min} bis {max}",
-    "status_drag_delete": "Mit linker Maustaste ziehen, um einen Bereich zu markieren, dann löschen  ·  Strg+Mausrad zum Zoomen  ·  Doppelklick zum Anpassen",
-    "status_selection": "Der markierte Bereich wird zur aktiven Auswahl Gaußscher Splats.",
     "summary": "Verteilung von {metric} über {count} Gaußsche Splats",
     "bin_tooltip": "Bin {index}: {left} bis {right} | {count} Gaußsche Splats",
     "compare_with": "Vergleichen mit",
@@ -2361,7 +2357,6 @@
       "off": "Aus",
       "summary": "{x_metric} gegenüber {y_metric} über {count} Gaußsche Splats",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "Die markierte Vergleichsregion wird zur aktiven Auswahl Gaußscher Splats.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} Gaußsche Splats",
       "empty": {
         "title": "Vergleich nicht verfügbar",
@@ -2379,13 +2374,6 @@
     "computing": {
       "title": "Histogramm wird berechnet…",
       "message": "Die Verteilung wird angezeigt, sobald die Daten bereit sind."
-    },
-    "delete_failed": {
-      "title": "Löschen fehlgeschlagen",
-      "status": "Löschen fehlgeschlagen: {message}",
-      "unexpected": "Der Löschvorgang hat einen unerwarteten Fehler ausgelöst.",
-      "invalid_result": "Der Löschvorgang hat ein ungültiges Ergebnis zurückgegeben.",
-      "reported_failure": "Der Löschvorgang hat einen Fehler gemeldet."
     },
     "empty": {
       "unavailable": {
@@ -2470,11 +2458,7 @@
         "label": "Weltabstand",
         "description": "Abstand vom Weltursprung."
       }
-    },
-    "undo": "Rückgängig",
-    "redo": "Wiederholen",
-    "undo_named": "Rückgängig: {name}",
-    "redo_named": "Wiederholen: {name}"
+    }
   },
   "ui": {
     "near": "Nah",
