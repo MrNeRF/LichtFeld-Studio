@@ -152,6 +152,7 @@ namespace lfs::gui {
         void applyTextInput(const std::string& id);
         [[nodiscard]] bool resolveFilenamePattern(std::string& pattern, std::string& error) const;
         void beginExtractionFromUi();
+        void launchExtraction(const VideoExtractionParams& params);
         void requestStopExtraction();
         void markContentDirty();
         void disablePanel();
@@ -292,6 +293,10 @@ namespace lfs::gui {
         Rml::Element* hdr_to_sdr_el_ = nullptr;
         Rml::Element* hdr_to_sdr_row_el_ = nullptr;
         Rml::Element* overwrite_overlay_el_ = nullptr;
+        Rml::Element* overwrite_message_el_ = nullptr;
+        Rml::Element* overwrite_cancel_btn_el_ = nullptr;
+        Rml::Element* overwrite_delete_btn_el_ = nullptr;
+        Rml::Element* overwrite_proceed_btn_el_ = nullptr;
         int rotation_deg_ = 0;
         bool hdr_to_sdr_ = false;
         std::vector<uint8_t> rotated_buf_;

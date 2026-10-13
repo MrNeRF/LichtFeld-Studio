@@ -604,7 +604,7 @@ select:disabled {
     border-width: 2dp;
     padding: 16dp;
     min-width: 280dp;
-    max-width: 380dp;
+    max-width: 440dp;
     background-color: #1e1e2e;
     color: #cdd6f4;
     border-color: #a6e3a1;
@@ -625,7 +625,7 @@ select:disabled {
 }
 
 .confirm-buttons .btn {
-    min-width: 80dp;
+    min-width: 100dp;
 }
 
 .pattern-input {

@@ -325,9 +325,10 @@ namespace lfs::gui {
             else
                 dialog.setExtractionError("Extraction failed");
         }
-        static void cancelOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-no"); }
+        static void cancelOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-cancel"); }
         static bool pending(const VideoExtractorDialog& dialog) { return dialog.pending_params_set_; }
-        static void confirmOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-yes"); }
+        static void deleteExisting(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-delete"); }
+        static void proceedOverwrite(VideoExtractorDialog& dialog) { dialog.handleClick("overwrite-proceed"); }
         static bool waitIdle(const VideoExtractorDialog& dialog) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             while (dialog.extracting_.load()) {
@@ -1172,14 +1173,27 @@ namespace {
         for (const auto& name : existing)
             EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
 
-        // Earlier frames and metadata ask first; confirming removes only those.
+        // Existing generated output asks first. Proceed keeps unrelated generated output.
+        std::ofstream(output / "frame_00001.png") << "old frame";
         std::ofstream(output / "frame_00099.jpg") << "earlier";
         std::ofstream(output / "extraction_metadata.json") << "{}";
         ASSERT_TRUE(NamingAccess::begin(dialog, output));
         ASSERT_TRUE(NamingAccess::pending(dialog));
-        NamingAccess::confirmOverwrite(dialog);
+        NamingAccess::proceedOverwrite(dialog);
+        ASSERT_TRUE(NamingAccess::waitIdle(dialog));
+        EXPECT_GT(std::filesystem::file_size(output / "frame_00001.png"), 100u);
+        EXPECT_TRUE(std::filesystem::exists(output / "frame_00099.jpg"));
+        EXPECT_TRUE(std::filesystem::exists(output / "extraction_metadata.json"));
+        for (const auto& name : existing)
+            EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
+
+        // Deleting existing output removes only files that match the current pattern and metadata.
+        ASSERT_TRUE(NamingAccess::begin(dialog, output));
+        ASSERT_TRUE(NamingAccess::pending(dialog));
+        NamingAccess::deleteExisting(dialog);
         ASSERT_TRUE(NamingAccess::waitIdle(dialog));
         EXPECT_FALSE(std::filesystem::exists(output / "frame_00099.jpg"));
+        EXPECT_FALSE(std::filesystem::exists(output / "extraction_metadata.json"));
         EXPECT_TRUE(std::filesystem::exists(output / "frame_00001.png"));
         for (const auto& name : existing)
             EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
