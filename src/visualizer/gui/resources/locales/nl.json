@@ -2247,6 +2247,7 @@
     "cancel": "Annuleren",
     "cancelling": "Annuleren...",
     "installation_cancelled": "Installatie geannuleerd",
+    "uv_not_found": "uv is niet gevonden. Installeer uv of voeg het toe aan PATH en probeer het opnieuw.",
     "local_install": "Lokale installatie",
     "install_as_git_checkout": "Als Git-checkout installeren",
     "confirm_uninstall_message": "Weet je zeker dat je \"{name}\" wilt verwijderen?",

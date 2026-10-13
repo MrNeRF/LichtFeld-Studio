@@ -38,6 +38,10 @@ except ImportError:
     import tomli as tomllib
 
 
+class MissingUvError(PluginDependencyError):
+    """The uv executable is unavailable for plugin environment setup."""
+
+
 PLUGIN_SOURCE_METADATA_NAME = ".lichtfeld-source.json"
 GITHUB_API_URL = "https://api.github.com/repos"
 HTTP_USER_AGENT = "LichtFeld-PluginInstaller/1.0"
@@ -887,7 +891,7 @@ class PluginInstaller:
 
         uv = self._find_uv()
         if not uv:
-            raise PluginDependencyError("uv not found - cannot create plugin venv")
+            raise MissingUvError("uv not found - cannot create plugin venv")
 
         failures: list[str] = []
         portable_bundle = self._is_portable_bundle()
@@ -979,7 +983,7 @@ class PluginInstaller:
 
         uv = self._find_uv()
         if not uv:
-            raise PluginDependencyError("uv not found")
+            raise MissingUvError("uv not found")
 
         # Use the venv's python (created by ensure_venv)
         venv_python = self._get_venv_python()
@@ -1030,7 +1034,18 @@ class PluginInstaller:
                 logger.info("uv resolved (bundled): %s", candidate)
                 return candidate
 
-        logger.error("uv not found in bundled runtime; refusing system uv fallback")
+        path_name = "uv.exe" if _is_windows() else "uv"
+        absolute_path = os.pathsep.join(
+            component for component in os.environ.get("PATH", "").split(os.pathsep)
+            if component and Path(component).is_absolute()
+        )
+        system_uv = shutil.which(path_name, path=absolute_path) if absolute_path else None
+        if system_uv:
+            resolved = self._normalize_path(Path(system_uv))
+            logger.info("uv resolved from PATH: %s", resolved)
+            return resolved
+
+        logger.error("uv not found in bundled runtime or on PATH")
         return None
 
     def _get_venv_python(self) -> Path:

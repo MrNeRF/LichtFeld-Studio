@@ -2247,6 +2247,7 @@
     "cancel": "취소",
     "cancelling": "취소 중...",
     "installation_cancelled": "설치가 취소되었습니다",
+    "uv_not_found": "uv를 찾을 수 없습니다. uv를 설치하거나 PATH에 추가한 뒤 다시 시도하세요.",
     "local_install": "로컬 설치",
     "install_as_git_checkout": "Git 체크아웃으로 설치",
     "confirm_uninstall_message": "\"{name}\" 플러그인을 정말 제거하시겠습니까?",

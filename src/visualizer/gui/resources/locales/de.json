@@ -2247,6 +2247,7 @@
     "cancel": "Abbrechen",
     "cancelling": "Wird abgebrochen...",
     "installation_cancelled": "Installation abgebrochen",
+    "uv_not_found": "uv wurde nicht gefunden. Installieren Sie uv oder fügen Sie es zu PATH hinzu und versuchen Sie es erneut.",
     "local_install": "Lokale Installation",
     "install_as_git_checkout": "Als Git-Checkout installieren",
     "confirm_uninstall_message": "Möchten Sie \"{name}\" wirklich deinstallieren?",

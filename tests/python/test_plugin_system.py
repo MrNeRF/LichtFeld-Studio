@@ -4,6 +4,7 @@
 
 import hashlib
 import io
+import os
 import sys
 import tempfile
 import zipfile
@@ -971,32 +972,82 @@ required_features = []
             assert env.get("UV_NO_MANAGED_PYTHON") == "1"
             assert env.get("UV_PYTHON_DOWNLOADS") == "never"
 
-    def test_find_uv_portable_does_not_fallback_to_system(self, installer_plugin):
-        """Portable runtime must not fall back to system uv."""
+    def test_find_uv_falls_back_to_path_when_bundle_is_missing(self, installer_plugin, tmp_path):
+        """A source runtime can use uv from PATH when no bundled copy exists."""
         from unittest.mock import patch
 
         installer = self._make_installer(installer_plugin)
-
-        with patch.object(installer, "_is_portable_bundle", return_value=True), \
-             patch.object(installer, "_bundled_uv_candidates", return_value=[]), \
-             patch("shutil.which") as mock_which:
-            assert installer._find_uv() is None
-            mock_which.assert_not_called()
-
-    def test_find_uv_with_bundled_python_does_not_fallback_to_system(self, installer_plugin):
-        """Runtime with bundled Python must not use system uv fallback."""
-        from unittest.mock import patch
-
-        installer = self._make_installer(installer_plugin)
-        embedded_python = installer_plugin / "python"
-        embedded_python.touch()
+        system_uv = tmp_path / ("uv.exe" if sys.platform == "win32" else "uv")
+        system_uv.touch()
 
         with patch.object(installer, "_is_portable_bundle", return_value=False), \
-             patch.object(installer, "_get_embedded_python", return_value=embedded_python), \
              patch.object(installer, "_bundled_uv_candidates", return_value=[]), \
+             patch("shutil.which", return_value=str(system_uv)) as mock_which:
+            assert installer._find_uv() == system_uv
+            mock_which.assert_called_once()
+
+    def test_find_uv_ignores_relative_path_entries(self, installer_plugin, tmp_path, monkeypatch):
+        """Only absolute PATH entries may resolve system uv, after bundled lookup."""
+        from unittest.mock import patch
+
+        installer = self._make_installer(installer_plugin)
+        relative_dir = tmp_path / "relative"
+        absolute_dir = tmp_path / "absolute"
+        relative_dir.mkdir()
+        absolute_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+        relative_uv = relative_dir / ("uv.exe" if sys.platform == "win32" else "uv")
+        system_uv = absolute_dir / relative_uv.name
+        relative_uv.touch()
+        system_uv.touch()
+        monkeypatch.setenv("PATH", os.pathsep.join(("relative", str(absolute_dir))))
+        expected_path = str(absolute_dir)
+
+        with patch.object(installer, "_is_portable_bundle", return_value=False), \
+             patch.object(installer, "_bundled_uv_candidates", return_value=[]), \
+             patch("shutil.which", return_value=str(system_uv)) as mock_which:
+            assert installer._find_uv() == system_uv
+            mock_which.assert_called_once_with(relative_uv.name, path=expected_path)
+
+    def test_find_uv_keeps_bundled_copy_ahead_of_path(self, installer_plugin, tmp_path):
+        """A bundled uv remains preferred when both sources are available."""
+        from unittest.mock import patch
+
+        installer = self._make_installer(installer_plugin)
+        bundled_uv = tmp_path / ("uv.exe" if sys.platform == "win32" else "uv")
+        bundled_uv.touch()
+
+        with patch.object(installer, "_is_portable_bundle", return_value=False), \
+             patch.object(installer, "_bundled_uv_candidates", return_value=[bundled_uv]), \
              patch("shutil.which") as mock_which:
-            assert installer._find_uv() is None
+            assert installer._find_uv() == bundled_uv
             mock_which.assert_not_called()
+
+    def test_find_uv_returns_none_when_no_source_exists(self, installer_plugin):
+        """Installation remains unavailable when neither bundled nor PATH uv exists."""
+        from unittest.mock import patch
+
+        installer = self._make_installer(installer_plugin)
+        with patch.object(installer, "_is_portable_bundle", return_value=False), \
+             patch.object(installer, "_bundled_uv_candidates", return_value=[]), \
+             patch("shutil.which", return_value=None) as mock_which:
+            assert installer._find_uv() is None
+            mock_which.assert_called_once()
+
+    def test_find_uv_uses_windows_executable_suffix(self, installer_plugin, tmp_path):
+        """Windows lookup asks PATH for the uv executable with its suffix."""
+        from unittest.mock import patch
+
+        installer = self._make_installer(installer_plugin)
+        system_uv = tmp_path / "uv.exe"
+        system_uv.touch()
+        with patch.object(installer, "_is_portable_bundle", return_value=False), \
+             patch.object(installer, "_bundled_uv_candidates", return_value=[]), \
+             patch.dict(os.environ, {"PATH": str(tmp_path)}), \
+             patch("lfs_plugins.installer._is_windows", return_value=True), \
+             patch("shutil.which", return_value=str(system_uv)) as mock_which:
+            assert installer._find_uv() == system_uv
+            mock_which.assert_called_once_with("uv.exe", path=str(tmp_path))
 
     def test_ensure_venv_portable_uses_embedded_only(self, installer_plugin):
         """Portable runtime should use embedded interpreter only for uv venv."""

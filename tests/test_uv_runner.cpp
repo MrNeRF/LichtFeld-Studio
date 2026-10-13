@@ -3,13 +3,55 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "python/package_manager.hpp"
+#include "python/uv_path_resolver.hpp"
 #include "python/uv_runner.hpp"
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <thread>
 #include <vector>
 
 using namespace lfs::python;
+
+TEST(UvPathResolverTest, IgnoresRelativePathAndPrefersBundledUv) {
+    const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("lichtfeld-uv-resolver-test-" + std::to_string(suffix));
+    const auto relative_dir = root / "relative";
+    const auto absolute_dir = root / "absolute";
+    const auto bundled_dir = root / "bundled";
+    std::filesystem::create_directories(relative_dir);
+    std::filesystem::create_directories(absolute_dir);
+    std::filesystem::create_directories(bundled_dir);
+#ifdef _WIN32
+    constexpr auto binary = "uv.exe";
+    constexpr char separator = ';';
+#else
+    constexpr auto binary = "uv";
+    constexpr char separator = ':';
+#endif
+    const auto relative_uv = relative_dir / binary;
+    const auto absolute_uv = absolute_dir / binary;
+    const auto bundled_uv = bundled_dir / binary;
+    for (const auto& path : {relative_uv, absolute_uv, bundled_uv}) {
+        std::ofstream(path).put('\n');
+    }
+#ifndef _WIN32
+    for (const auto& path : {relative_uv, absolute_uv, bundled_uv})
+        std::filesystem::permissions(path, std::filesystem::perms::owner_exec | std::filesystem::perms::owner_read,
+                                     std::filesystem::perm_options::add);
+#endif
+
+    const auto original_cwd = std::filesystem::current_path();
+    std::filesystem::current_path(root);
+    const std::string path_list = std::string("relative") + separator + absolute_dir.string();
+    const auto resolved = detail::resolve_uv_path({}, path_list);
+    EXPECT_EQ(resolved, absolute_uv);
+    EXPECT_EQ(detail::resolve_uv_path({bundled_uv}, path_list), bundled_uv);
+    std::filesystem::current_path(original_cwd);
+    std::filesystem::remove_all(root);
+}
 
 class UvRunnerTest : public ::testing::Test {
 protected:
