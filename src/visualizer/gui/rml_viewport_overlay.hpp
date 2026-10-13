@@ -122,6 +122,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class ViewportDepthLayoutTestAccess;
+        friend class VramHudHeaderClickTest;
         friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         struct ToolbarDragListener final : Rml::EventListener {
             RmlViewportOverlay* owner = nullptr;

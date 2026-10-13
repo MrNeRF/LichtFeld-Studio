@@ -492,8 +492,8 @@ namespace lfs::vis::gui {
         if (!vram_hud_)
             return;
         const bool was_visible = vram_hud_->isVisible();
-        vram_hud_->setState(std::move(state));
-        if (was_visible || vram_hud_->isVisible())
+        const bool changed = vram_hud_->setState(std::move(state));
+        if (changed && (was_visible || vram_hud_->isVisible()))
             markRenderNeeded(RenderReason::VramHud);
     }
 

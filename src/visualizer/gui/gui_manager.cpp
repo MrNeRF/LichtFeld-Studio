@@ -20,6 +20,7 @@
 #include "gui/import_error.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "gui/volume_guide_visibility.hpp"
+#include "gui/vram_hud_sample_policy.hpp"
 #include "preferences.hpp"
 #include "window/vulkan_result.hpp"
 #include <ft2build.h>
@@ -6920,8 +6921,10 @@ namespace lfs::vis::gui {
             else
                 perf_sampler_.start();
             const auto now = std::chrono::steady_clock::now();
-            if (perf_hud_visible_published_ && last_hud_expanded_ == perf_hud_expanded_ &&
-                !idle && now - last_hud_sample_ < std::chrono::milliseconds(250))
+            if (!vram_hud_sample_policy::shouldPublish(perf_hud_visible_published_,
+                                                       last_hud_expanded_ != perf_hud_expanded_,
+                                                       now,
+                                                       last_hud_sample_))
                 return;
             last_hud_sample_ = now;
             last_hud_expanded_ = perf_hud_expanded_;

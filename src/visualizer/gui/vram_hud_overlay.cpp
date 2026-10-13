@@ -126,6 +126,24 @@ namespace lfs::vis::gui {
             return std::format("{:.1f}%", 100.0 * static_cast<double>(part) / static_cast<double>(total));
         }
 
+        [[nodiscard]] std::string displayedDeviceName(std::string_view snapshot_name,
+                                                      std::string_view queried_name) {
+            if (!snapshot_name.empty())
+                return std::string(snapshot_name);
+            return queried_name.empty() ? std::string("No device") : std::string(queried_name);
+        }
+
+        [[nodiscard]] std::string trackingOffSummaryKey(const GpuMemoryInfo& memory,
+                                                        std::string_view snapshot_device) {
+            const auto used = memory.process_valid ? memory.process_used : 0;
+            const std::string extra = memory.process_over_budget
+                                          ? LOC("ui.vram_over_budget")
+                                          : (memory.process_valid ? formatPercent(used, memory.total) : "");
+            return std::format("{}|{}|{}|{}|{}", memory.process_valid ? formatBytes(used) : "—", extra,
+                               formatBytes(memory.total_used), formatPercent(memory.total_used, memory.total),
+                               displayedDeviceName(snapshot_device, memory.device_name));
+        }
+
         [[nodiscard]] std::size_t bestProcessTotal(const lfs::diagnostics::VramProfilerSnapshot& s) {
             if (s.process.process_memory_valid && s.process.total > 0)
                 return s.process.total;
@@ -735,11 +753,8 @@ namespace lfs::vis::gui {
                 "hidden", active_tab_ != "annotations" || !state_.snapshot.enabled);
         if (panel_tree_)
             panel_tree_->SetClass("hidden", active_tab_ != "tree" || !state_.snapshot.enabled);
-        if (tracking_off_) {
-            const bool detailed_tab = active_tab_ == "ledger" || active_tab_ == "allocations" ||
-                                      active_tab_ == "annotations" || active_tab_ == "tree";
-            tracking_off_->SetClass("hidden", !detailed_tab || state_.snapshot.enabled);
-        }
+        if (tracking_off_)
+            tracking_off_->SetClass("hidden", state_.snapshot.enabled);
     }
 
     void VramHudOverlay::updateFilterClearVisibility() {
@@ -834,19 +849,32 @@ namespace lfs::vis::gui {
                old_size_w != size_w_ || old_size_h != size_h_;
     }
 
-    void VramHudOverlay::setState(State state) {
+    bool VramHudOverlay::setState(State state) {
         const auto language_generation = lfs::vis::app_store().language_generation.get();
         const bool language_changed = !has_language_generation_ ||
                                       language_generation != last_language_generation_;
         const bool effective_visible = state.visible || state.perf_hud.visible;
         const bool visibility_changed = last_visible_ != effective_visible;
         const bool data_changed = state.visible && last_sequence_ != state.snapshot.sequence;
+        const bool tracking_off_summary = !state.visible && state.perf_hud.visible &&
+                                          state.perf_hud.expanded && !state.snapshot.enabled;
+        GpuMemoryInfo sampled_memory;
+        const GpuMemoryInfo* sampled = nullptr;
+        std::string summary_key;
+        if (tracking_off_summary) {
+            sampled_memory = queryGpuMemory();
+            sampled = &sampled_memory;
+            summary_key = trackingOffSummaryKey(sampled_memory, state.snapshot.process.device_name);
+        }
+        const bool summary_changed = tracking_off_summary && summary_key != last_tracking_off_summary_key_;
         const bool perf_changed = last_perf_visible_ != state.perf_hud.visible ||
                                   last_perf_expanded_ != state.perf_hud.expanded ||
-                                  last_perf_snapshot_ != state.perf_hud.snapshot;
+                                  last_tracking_off_summary_ != tracking_off_summary ||
+                                  (tracking_off_summary ? summary_changed
+                                                        : last_perf_snapshot_ != state.perf_hud.snapshot);
         state_ = std::move(state);
         if (!visibility_changed && !data_changed && !perf_changed && !language_changed)
-            return;
+            return false;
         if (language_changed) {
             last_language_generation_ = language_generation;
             has_language_generation_ = true;
@@ -860,9 +888,12 @@ namespace lfs::vis::gui {
         last_visible_ = effective_visible;
         last_perf_visible_ = state_.perf_hud.visible;
         last_perf_expanded_ = state_.perf_hud.expanded;
+        last_tracking_off_summary_ = tracking_off_summary;
+        last_tracking_off_summary_key_ = tracking_off_summary ? std::move(summary_key) : std::string{};
         last_perf_snapshot_ = state_.perf_hud.snapshot;
         last_sequence_ = state_.snapshot.sequence;
-        apply();
+        apply(sampled);
+        return true;
     }
 
     bool VramHudOverlay::isDueForProcessSample(std::chrono::milliseconds interval) {
@@ -875,7 +906,7 @@ namespace lfs::vis::gui {
         return false;
     }
 
-    void VramHudOverlay::apply() {
+    void VramHudOverlay::apply(const GpuMemoryInfo* sampled) {
         if (!document_ || !root_)
             return;
 
@@ -890,7 +921,7 @@ namespace lfs::vis::gui {
         if (!visible)
             return;
 
-        applyCompactStrip();
+        applyCompactStrip(sampled);
         if (sparkline_tick_due()) {
             pushSparklineSample();
             pushTimelineSample();
@@ -908,8 +939,14 @@ namespace lfs::vis::gui {
             perf_card_->SetProperty("display", compact ? "none" : "flex");
         }
 
-        if (!state_.visible)
+        if (!state_.visible) {
+            if (!compact && state_.perf_hud.visible) {
+                refreshTabClasses();
+                const auto memory = sampled != nullptr ? *sampled : queryGpuMemory();
+                applySummary(memory, memory.process_valid ? memory.process_used : 0, memory.total);
+            }
             return;
+        }
 
         refreshTabClasses();
         applyTimeline();
@@ -936,7 +973,7 @@ namespace lfs::vis::gui {
                 setText(throughput_label_, cached_throughput_text_, std::move(text));
         }
 
-        applySummary(process_used, process_total);
+        applySummary(memory, process_used, process_total);
         snapshot_paths_.clear();
         if (active_tab_ == "ledger" && s.enabled)
             applyLedger();
@@ -953,7 +990,7 @@ namespace lfs::vis::gui {
         applyTree(process_used);
     }
 
-    void VramHudOverlay::applyCompactStrip() {
+    void VramHudOverlay::applyCompactStrip(const GpuMemoryInfo* sampled) {
         if (!state_.perf_hud.visible || !state_.perf_hud.snapshot)
             return;
         const auto& s = *state_.perf_hud.snapshot;
@@ -971,7 +1008,7 @@ namespace lfs::vis::gui {
             element->SetClass("warn", value >= 80.0f && value < 92.0f);
             element->SetClass("crit", value >= 92.0f);
         };
-        const auto memory = queryGpuMemory();
+        const auto memory = sampled != nullptr ? *sampled : queryGpuMemory();
         const auto process_bytes = memory.process_valid ? memory.process_used : 0;
         const auto total_bytes = memory.total > 0 ? memory.total : s.vram_total_bytes;
         const auto device_bytes = memory.total > 0 ? memory.total_used : s.vram_used_bytes;
@@ -1395,7 +1432,8 @@ namespace lfs::vis::gui {
         render_series(spark_cpu_root_, cached_spark_cpu_, spark_cpu_hist_);
     }
 
-    void VramHudOverlay::applySummary(std::size_t process_used, std::size_t process_total) {
+    void VramHudOverlay::applySummary(const GpuMemoryInfo& memory, std::size_t process_used,
+                                      std::size_t process_total) {
         const auto& s = state_.snapshot;
 
         const auto write = [&](std::string_view key, std::string value, std::string extra = {}) {
@@ -1406,7 +1444,6 @@ namespace lfs::vis::gui {
                       buildSummaryRowValueRml(value, extra));
         };
 
-        const auto memory = queryGpuMemory();
         write("process", memory.process_valid ? formatBytes(process_used) : "—",
               memory.process_over_budget ? LOC("ui.vram_over_budget")
                                          : (memory.process_valid ? formatPercent(process_used, process_total) : ""));
@@ -1416,27 +1453,32 @@ namespace lfs::vis::gui {
                                                             : "ui.vram_process_unavailable_tooltip"));
         write("cuda_context", formatBytes(memory.total_used),
               formatPercent(memory.total_used, memory.total));
-        write("cuda_pool_used",
-              formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_used : 0));
-        write("cuda_pool_reserved",
-              formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_reserved : 0));
-        write("cuda_pool_fragmentation",
-              formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_fragmentation : 0));
-        write("pinned_host", formatBytes(s.process.pinned_host_used),
-              std::format("{} cached / {} peak",
-                          formatBytes(s.process.pinned_host_cached),
-                          formatBytes(s.process.pinned_host_peak)));
-        write("vulkan_blocks", formatBytes(s.process.vulkan_vma_block_bytes));
-        write("allocator_peak", formatBytes(s.accounted_peak_bytes));
-        write("events", std::format("{} alloc / {} free", lfs::core::format_count(s.allocation_events), lfs::core::format_count(s.free_events)));
-        write("iter_events",
-              std::format("{} alloc / {} free", lfs::core::format_count(s.iter_allocation_events), lfs::core::format_count(s.iter_free_events)));
+        if (s.enabled) {
+            write("cuda_pool_used",
+                  formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_used : 0));
+            write("cuda_pool_reserved",
+                  formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_reserved : 0));
+            write("cuda_pool_fragmentation",
+                  formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_fragmentation : 0));
+            write("pinned_host", formatBytes(s.process.pinned_host_used),
+                  std::format("{} cached / {} peak",
+                              formatBytes(s.process.pinned_host_cached),
+                              formatBytes(s.process.pinned_host_peak)));
+            write("vulkan_blocks", formatBytes(s.process.vulkan_vma_block_bytes));
+            write("allocator_peak", formatBytes(s.accounted_peak_bytes));
+            write("events", std::format("{} alloc / {} free", lfs::core::format_count(s.allocation_events), lfs::core::format_count(s.free_events)));
+            write("iter_events",
+                  std::format("{} alloc / {} free", lfs::core::format_count(s.iter_allocation_events), lfs::core::format_count(s.iter_free_events)));
+        } else {
+            for (const auto& spec : kSummaryRows) {
+                if (spec.key != "process" && spec.key != "cuda_context")
+                    write(spec.key, "—");
+            }
+        }
 
         if (device_label_) {
-            const std::string device_text = s.process.device_name.empty()
-                                                ? std::string{"No device"}
-                                                : s.process.device_name;
-            setText(device_label_, cached_device_text_, std::string(device_text));
+            setText(device_label_, cached_device_text_,
+                    displayedDeviceName(s.process.device_name, memory.device_name));
         }
     }
 
