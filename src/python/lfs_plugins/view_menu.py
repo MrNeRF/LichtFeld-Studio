@@ -141,17 +141,23 @@ class ViewMenu:
             )
 
         return [
-            menu_submenu(f"{tr('menu.view.theme')} · {active_theme_label}", theme_items),
-            menu_submenu(tr("menu.view.ui_scale"), scale_items),
+            menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
+            menu_separator(),
+            menu_toggle(tr("menu.view.split_view"), lf.toggle_independent_split_view,
+                        lf.ui.get_split_view_mode() == "independent_dual"),
+            menu_action(tr("ui.hide_ui"), lf.toggle_ui,
+                        shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_UI)),
             menu_separator(),
             menu_toggle(
-                tr("menu.view.performance_hud"),
-                lf.ui.toggle_vram_hud,
+                tr("menu.view.performance_hud"), lf.ui.toggle_vram_hud,
                 bool(getattr(lf.ui, "is_perf_hud_visible", lambda: False)()),
                 shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_PERFORMANCE_HUD),
             ),
-            menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
-            menu_action(_tr_fallback("main_panel.console", "Console"), lf.ui.toggle_system_console),
+            menu_separator(),
+            menu_submenu(tr("preferences.appearance"), [
+                menu_submenu(f"{tr('menu.view.theme')} · {active_theme_label}", theme_items),
+                menu_submenu(tr("menu.view.ui_scale"), scale_items),
+            ]),
         ]
 
 

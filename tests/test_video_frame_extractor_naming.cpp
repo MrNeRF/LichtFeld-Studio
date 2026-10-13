@@ -306,6 +306,9 @@ namespace lfs::gui {
             dialog.video_path_ = video;
             return dialog.resolveFilenamePattern(pattern, error);
         }
+        static void firstSourceFrameNumber(VideoExtractorDialog& dialog, const int value) {
+            dialog.first_source_frame_number_ = value;
+        }
         static bool attach(VideoExtractorDialog& dialog, Rml::ElementDocument* document) {
             dialog.document_ = document;
             dialog.cacheElements();
@@ -1169,6 +1172,7 @@ namespace {
                                  "IMG_1234.JPG", "holiday.png", "_DSC8679.JPG", "my_garden.jpeg",
                                  "extraction_metadata.json"})
             EXPECT_FALSE(isGeneratedFrameFilename("frame_%05d", name)) << name;
+        EXPECT_TRUE(isGeneratedFrameFilename("frame_%05d", "frame_00000.png", true));
         EXPECT_TRUE(isGeneratedFrameFilename("clip 50%%_{x}_frame_%05d", "clip 50%_{x}_frame_00003.png"));
         EXPECT_FALSE(isGeneratedFrameFilename("clip 50%%_{x}_frame_%05d", "clip 50%%_{x}_frame_00003.png"));
         EXPECT_TRUE(isGeneratedFrameFilename("shot_", "shot_7.png"));
@@ -1181,6 +1185,47 @@ namespace {
                     << pattern << ' ' << number;
             }
         }
+    }
+
+    TEST(VideoFrameExtractorOutputNaming, FirstSourceFrameNumberOffsetsOutputNames) {
+        TempDir temp("first_source_frame_number");
+        const auto source = temp.path / "clip.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 65, 0));
+        auto params = extractionParams(source, temp.path / "frames");
+        params.frame_interval = 30;
+        params.end_time = -1.0;
+        params.first_source_frame_number = 0;
+
+        VideoFrameExtractor extractor;
+        std::string error;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        EXPECT_TRUE(std::filesystem::exists(params.output_dir / "frame_0.png"));
+        EXPECT_TRUE(std::filesystem::exists(params.output_dir / "frame_30.png"));
+        EXPECT_TRUE(std::filesystem::exists(params.output_dir / "frame_60.png"));
+        EXPECT_FALSE(std::filesystem::exists(params.output_dir / "frame_1.png"));
+
+        std::ifstream metadata_file(params.output_dir / "extraction_metadata.json");
+        ASSERT_TRUE(metadata_file.good());
+        EXPECT_EQ(nlohmann::json::parse(metadata_file).at("first_source_frame_number"), 0);
+    }
+
+    TEST(VideoExtractorNaming, ExistingZeroBasedOutputIsDetectedAcrossNumberBases) {
+        TempDir temp("zero_based_existing_output");
+        const auto source = temp.path / "clip.mp4";
+        const auto output = temp.path / "frames";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        std::filesystem::create_directories(output);
+        std::ofstream(output / "frame_00000.png") << "earlier zero-based frame";
+
+        lfs::gui::VideoExtractorDialog dialog;
+        ASSERT_TRUE(dialog.openVideoPath(source));
+        // The default base is one, but zero-based output from an earlier run still conflicts.
+        ASSERT_TRUE(NamingAccess::begin(dialog, output));
+        ASSERT_TRUE(NamingAccess::pending(dialog));
+        NamingAccess::deleteExisting(dialog);
+        ASSERT_TRUE(NamingAccess::waitIdle(dialog));
+        EXPECT_FALSE(std::filesystem::exists(output / "frame_00000.png"));
+        EXPECT_TRUE(std::filesystem::exists(output / "frame_00001.png"));
     }
 
     TEST(VideoExtractorNaming, ExistingImagesInTheOutputFolderAreKept) {
@@ -1227,6 +1272,23 @@ namespace {
         EXPECT_TRUE(std::filesystem::exists(output / "frame_00001.png"));
         for (const auto& name : existing)
             EXPECT_TRUE(std::filesystem::exists(output / name)) << name;
+    }
+
+    TEST(VideoExtractorNaming, ZeroBasedExistingOutputAsksBeforeExtraction) {
+        TempDir temp("zero_based_existing_output");
+        const auto source = temp.path / "clip.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        const auto output = temp.path / "frames";
+        std::filesystem::create_directories(output);
+        std::ofstream(output / "frame_00000.png") << "earlier";
+
+        lfs::gui::VideoExtractorDialog dialog;
+        ASSERT_TRUE(dialog.openVideoPath(source));
+        NamingAccess::firstSourceFrameNumber(dialog, 0);
+        ASSERT_TRUE(NamingAccess::begin(dialog, output));
+        EXPECT_TRUE(NamingAccess::pending(dialog));
+        NamingAccess::cancelOverwrite(dialog);
+        EXPECT_TRUE(std::filesystem::exists(output / "frame_00000.png"));
     }
 
     TEST(VideoExtractorNaming, ResolvedPresetProducesRealFilesAndMetadata) {

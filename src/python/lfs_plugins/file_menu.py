@@ -9,13 +9,13 @@ import uuid
 
 import lichtfeld as lf
 from .asset_index import display_name
+from .tools_menu import _open_gallery_scope, _open_projects_scope
 from .types import Operator
 from .layouts.menus import (
     menu_action,
     menu_operator,
     menu_separator,
     menu_submenu,
-    menu_toggle,
     register_menu,
 )
 from .training_confirm import _project_has_path, confirm_discard_work_then
@@ -871,6 +871,12 @@ def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
         lf.ui.message_dialog(title, message, "error")
 
 
+
+def _open_gallery_transfers():
+    from .overlays import show_gallery_transfers
+    show_gallery_transfers()
+
+
 @register_menu
 class FileMenu:
     """File menu for the menu bar."""
@@ -916,49 +922,60 @@ class FileMenu:
                 lf.ui.tr("menu.file.open_recent"),
                 recent_items,
             ),
+            menu_action(lf.ui.tr("menu.file.browse_projects"), _open_projects_scope),
+            menu_separator(),
             menu_operator(
                 SaveProjectOperator,
                 shortcut="Ctrl+S",
             ),
             menu_operator(SaveProjectAsOperator),
-            menu_action(
-                lf.ui.tr("menu.file.update_thumbnail_from_view"),
-                _update_thumbnail_from_view,
-                enabled=_can_update_thumbnail_from_view(),
-            ),
-            menu_action(
-                lf.ui.tr("menu.file.publish_to_gallery"),
-                _publish_current_project_to_gallery,
-                enabled=_can_publish_scene(),
-            ),
-            menu_operator(EmbedDatasetOperator, enabled=bool(getattr(lf, "project_can_embed_dataset", lambda: False)())),
-            menu_operator(CleanProjectOperator, enabled=_can_compact_project()),
-            menu_operator(
-                CompactProjectOperator,
-                enabled=_can_compact_project(),
-            ),
-            menu_toggle(
-                lf.ui.tr("menu.file.auto_save_on_close"),
-                lambda: lf.project_set_auto_save_on_close(
-                    not lf.project_auto_save_on_close_enabled()
-                ),
-                lf.project_auto_save_on_close_enabled(),
-            ),
             menu_separator(),
             menu_submenu(
                 lf.ui.tr("menu.file.import"),
                 [
-                    menu_operator(ImportDatasetOperator),
-                    menu_operator(ImportPlyOperator),
-                    menu_operator(ImportSsogOperator),
-                    menu_operator(ImportMeshOperator),
-                    menu_operator(ImportCheckpointOperator),
+                    menu_operator(ImportDatasetOperator, label=lf.ui.tr("menu.file.dataset")),
+                    menu_operator(ImportPlyOperator, label=lf.ui.tr("menu.file.splat_file")),
+                    menu_operator(ImportSsogOperator, label=lf.ui.tr("menu.file.ssog_folder")),
+                    menu_operator(ImportMeshOperator, label=lf.ui.tr("menu.file.mesh")),
+                    menu_operator(ImportCheckpointOperator, label=lf.ui.tr("menu.file.checkpoint")),
                     menu_separator(),
-                    menu_operator(ImportConfigOperator),
+                    menu_operator(ImportConfigOperator, label=lf.ui.tr("menu.file.configuration")),
                 ],
             ),
-            menu_operator(ExportOperator),
-            menu_operator(ExportConfigOperator),
+            menu_submenu(lf.ui.tr("menu.file.export_menu"), [
+                menu_operator(ExportOperator, label=lf.ui.tr("menu.file.export_scene")),
+                menu_operator(ExportConfigOperator, label=lf.ui.tr("menu.file.configuration")),
+            ]),
+            menu_submenu(
+                lf.ui.tr("menu.tools.gallery"),
+                [
+                    menu_action(lf.ui.tr("menu.file.open_gallery"), _open_gallery_scope),
+                    menu_action(
+                        lf.ui.tr("menu.file.publish_to_gallery"),
+                        _publish_current_project_to_gallery,
+                        enabled=_can_publish_scene(),
+                    ),
+                    menu_action(lf.ui.tr("menu.tools.gallery_transfers"), _open_gallery_transfers),
+                ],
+            ),
+            menu_separator(),
+            menu_submenu(
+                lf.ui.tr("menu.file.project_maintenance"),
+                [
+                    menu_action(
+                        lf.ui.tr("menu.file.update_thumbnail_from_view"),
+                        _update_thumbnail_from_view,
+                        enabled=_can_update_thumbnail_from_view(),
+                    ),
+                    menu_operator(
+                        EmbedDatasetOperator,
+                        enabled=bool(getattr(lf, "project_can_embed_dataset", lambda: False)()),
+                    ),
+                    menu_separator(),
+                    menu_operator(CleanProjectOperator, enabled=_can_compact_project()),
+                    menu_operator(CompactProjectOperator, enabled=_can_compact_project()),
+                ],
+            ),
             menu_separator(),
             menu_operator(ExitOperator),
         ]

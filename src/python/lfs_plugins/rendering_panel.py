@@ -623,8 +623,6 @@ class RenderingPanel(Panel):
         )
 
         model.bind_func("is_windows", lambda: lf.ui.is_windows_platform())
-        model.bind_func("label_console",
-                         lambda: lf.ui.tr("main_panel.console") or "Console")
         model.bind_func("simplify_has_source", lambda: bool(self._simplify_source_name))
         model.bind_func("simplify_source_name", lambda: self._simplify_source_name)
         model.bind_func("simplify_original_count", lambda: f"{self._simplify_original_count:,}")
@@ -668,8 +666,6 @@ class RenderingPanel(Panel):
         model.bind_event("picker_change", self._on_picker_change)
         model.bind_event("simplify_apply", self._on_simplify_apply)
         model.bind_event("simplify_cancel", self._on_simplify_cancel)
-        model.bind_event("toggle_console",
-                         lambda h, e, a: lf.ui.toggle_system_console())
         model.bind_event("browse_environment_map", self._on_browse_environment_map)
         self._selection_groups.bind(model)
 

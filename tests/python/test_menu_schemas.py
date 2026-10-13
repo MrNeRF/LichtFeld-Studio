@@ -117,6 +117,7 @@ def _install_lichtfeld_stub(monkeypatch):
         can_edit_gaussian_selection=lambda: state["can_edit_gaussian_selection"],
         has_gaussian_selection=lambda: state["has_gaussian_selection"],
         has_gaussian_clipboard=lambda: state["has_gaussian_clipboard"],
+        get_split_view_mode=lambda: "independent_dual",
         get_active_tool=lambda: state["active_tool"],
         copy_gaussian_selection=lambda: state.__setitem__("copy_called", True),
         cut_gaussian_selection=lambda: state.__setitem__("cut_called", True),
@@ -137,6 +138,7 @@ def _install_lichtfeld_stub(monkeypatch):
             DESELECT_ALL="deselect_all",
             OPEN_PREFERENCES="open_preferences",
             TOGGLE_PERFORMANCE_HUD="toggle_performance_hud",
+            TOGGLE_UI="toggle_ui",
             TOGGLE_PYTHON_CONSOLE="toggle_python_console",
         ),
         ToolMode=SimpleNamespace(GLOBAL="global"),
@@ -160,6 +162,8 @@ def _install_lichtfeld_stub(monkeypatch):
     lf_stub.ui = ui
     lf_stub.keymap = keymap
     lf_stub.reset_camera = lambda: None
+    lf_stub.toggle_ui = lambda: state.__setitem__("ui_toggled", True)
+    lf_stub.toggle_independent_split_view = lambda: state.__setitem__("split_toggled", True)
     lf_stub.undo = SimpleNamespace(
         can_undo=lambda: True,
         can_redo=lambda: False,
@@ -230,92 +234,66 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     }
 
     edit_items = edit_mod.EditMenu().menu_items()
-    assert len(edit_items) == 4
-    assert edit_items[0]["type"] == "item"
-    assert edit_items[0]["label"] == "Undo"
+    assert [item.get("label") for item in edit_items] == [
+        "Undo", "Redo", None, "tr:menu.select.cut_selection",
+        "tr:menu.select.copy_selection", "tr:menu.select.paste_selection",
+        None, "tr:menu.edit.preferences",
+    ]
     edit_items[0]["callback"]()
-    assert state["undo_called"] is True
-    assert edit_items[1]["type"] == "item"
-    assert edit_items[1]["label"] == "Redo"
-    assert edit_items[1]["enabled"] is False
-    assert edit_items[2]["type"] == "separator"
-    assert edit_items[3]["label"] == "tr:menu.edit.preferences"
-
-    assert edit_mod.EditMenu.order < select_mod.SelectMenu.order < tools_mod.ToolsMenu.order
+    assert state["undo_called"]
+    assert not edit_items[1]["enabled"]
+    for item, flag in [(edit_items[3], "cut_called"), (edit_items[4], "copy_called")]:
+        assert item["enabled"]
+        item["callback"]()
+        assert state[flag]
+    assert not edit_items[5]["enabled"]
+    assert edit_items[3]["shortcut"] == "Ctrl+X"
+    assert edit_items[4]["shortcut"] == "Ctrl+C"
+    assert edit_items[5]["shortcut"] == "Ctrl+V"
+    assert edit_mod.EditMenu.order < select_mod.SelectMenu.order < view_mod.ViewMenu.order < tools_mod.ToolsMenu.order
 
     tools_items = tools_mod.ToolsMenu().menu_items()
-    python_console = next(item for item in tools_items
-                          if item.get("label") == "tr:menu.tools.python_console")
+    python_console = tools_items[3]["items"][0]
     assert python_console["shortcut"] == "Ctrl+`"
     python_console["callback"]()
     assert state["python_console_shown"] == 1
 
     select_items = select_mod.SelectMenu().menu_items()
-    assert len(select_items) == 9
-    assert select_items[0]["label"] == "tr:menu.select.copy_selection"
-    assert select_items[0]["shortcut"] == "Ctrl+C"
-    assert select_items[0]["enabled"] is True
-    select_items[0]["callback"]()
-    assert state["copy_called"] is True
-    assert select_items[1]["label"] == "tr:menu.select.cut_selection"
-    assert select_items[1]["shortcut"] == "Ctrl+X"
-    assert select_items[1]["enabled"] is True
-    select_items[1]["callback"]()
-    assert state["cut_called"] is True
-    assert select_items[2]["label"] == "tr:menu.select.paste_selection"
-    assert select_items[2]["shortcut"] == "Ctrl+V"
-    assert select_items[2]["enabled"] is False
-    assert select_items[3]["type"] == "separator"
-    assert select_items[4]["label"] == "tr:menu.select.invert_selection"
-    assert select_items[4]["enabled"] is True
-    select_items[4]["callback"]()
-    assert state["invert_called"] is True
-    assert select_items[5]["label"] == "tr:menu.select.select_all"
-    assert select_items[5]["shortcut"] == "Ctrl+A"
-    select_items[5]["callback"]()
-    assert state["select_all_called"] is True
-    assert select_items[6]["label"] == "tr:menu.select.deselect_all"
-    assert select_items[6]["shortcut"] == "Ctrl+D"
-    assert select_items[6]["enabled"] is True
-    select_items[6]["callback"]()
-    assert state["deselect_all_called"] is True
-    assert select_items[7]["type"] == "separator"
-    assert select_items[8]["label"] == "tr:menu.select.selection_groups"
-    assert select_items[8]["enabled"] is True
+    assert [item.get("label") for item in select_items] == [
+        "tr:menu.select.select_all", "tr:menu.select.deselect_all",
+        "tr:menu.select.invert_selection", None, "tr:menu.select.selection_groups",
+    ]
+    for index, flag in [(0, "select_all_called"), (1, "deselect_all_called"), (2, "invert_called")]:
+        select_items[index]["callback"]()
+        assert state[flag]
     revealed = []
     state["panels"]["lfs.rendering"] = SimpleNamespace(
         reveal_selection_groups=lambda: revealed.append(True) or True
     )
-    assert select_items[8]["callback"]() is True
+    assert select_items[4]["callback"]()
     assert state["main_panel_active_tab"] == "lfs.rendering"
     assert revealed == [True]
-    assert state["panel_enabled"] == []
-
     state["has_gaussian_selection"] = False
     state["has_gaussian_clipboard"] = True
-    select_items = select_mod.SelectMenu().menu_items()
-    assert select_items[0]["enabled"] is False
-    assert select_items[1]["enabled"] is False
-    assert select_items[2]["enabled"] is True
-    assert select_items[6]["enabled"] is False
-
+    edit_items = edit_mod.EditMenu().menu_items()
+    assert not edit_items[3]["enabled"] and not edit_items[4]["enabled"]
+    assert edit_items[5]["enabled"]
+    edit_items[5]["callback"]()
+    assert state["paste_called"]
+    assert not select_mod.SelectMenu().menu_items()[1]["enabled"]
     state["active_tool"] = "builtin.translate"
-    select_items = select_mod.SelectMenu().menu_items()
-    assert select_items[4]["enabled"] is True
-    assert select_items[5]["enabled"] is False
-    assert select_items[8]["callback"]() is True
-    assert revealed == [True, True]
-
-    state["active_tool"] = "builtin.select"
+    assert not select_mod.SelectMenu().menu_items()[0]["enabled"]
+    assert select_mod.SelectMenu().menu_items()[2]["enabled"]
     state["can_edit_gaussian_selection"] = False
-    select_items = select_mod.SelectMenu().menu_items()
-    assert [item.get("enabled") for item in select_items if item["type"] == "item"] == [False] * 7
+    assert all(not item["enabled"] for item in select_mod.SelectMenu().menu_items() if item["type"] == "item")
+    assert all(not item["enabled"] for item in edit_mod.EditMenu().menu_items()[3:6])
 
     view_items = view_mod.ViewMenu().menu_items()
-    assert view_items[0]["type"] == "submenu"
-    assert view_items[0]["label"] == "tr:menu.view.theme · LichtFeld · Dark"
-    assert view_items[1]["type"] == "submenu"
-    theme_families = view_items[0]["items"]
+    appearance = view_items[-1]["items"]
+    assert appearance[0]["type"] == "submenu"
+    assert appearance[0]["label"] == "tr:menu.view.theme · LichtFeld · Dark"
+    assert appearance[1]["type"] == "submenu"
+    theme_families = appearance[0]["items"]
     assert [item["label"] for item in theme_families] == [
         "LichtFeld · Dark",
         "Signal",
@@ -340,11 +318,11 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert theme_families[2]["type"] == "toggle"
 
     state["supports_system_theme"] = False
-    updated_view_items = view_mod.ViewMenu().menu_items()
-    assert updated_view_items[0]["label"] == (
+    updated_appearance = view_mod.ViewMenu().menu_items()[-1]["items"]
+    assert updated_appearance[0]["label"] == (
         "tr:menu.view.theme · Signal · tr:menu.view.theme.auto"
     )
-    theme_families = updated_view_items[0]["items"]
+    theme_families = updated_appearance[0]["items"]
     assert [item["label"] for item in theme_families] == [
         "LichtFeld",
         "Signal · tr:menu.view.theme.auto",
@@ -352,16 +330,17 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     ]
     assert [item["label"] for item in theme_families[0]["items"]] == ["Dark", "Light"]
     assert [item["label"] for item in theme_families[1]["items"]] == ["Night", "Day"]
-    assert view_items[1]["items"][1]["label"] == "100%"
+    assert appearance[1]["items"][1]["label"] == "100%"
     # theme, ui_scale, separator, performance_hud, reset_view, console
-    assert view_items[3]["label"] == "tr:menu.view.performance_hud"
-    assert view_items[3]["shortcut"] == "F10"
-    view_items[3]["callback"]()
-    assert state.get("vram_hud_toggled") is True
-    assert view_items[4]["label"] == "tr:image_preview.reset_view"
-    assert view_items[5]["label"] == "tr:main_panel.console"
+    assert view_items[5]["label"] == "tr:menu.view.performance_hud"
+    assert view_items[5]["shortcut"] == "F10"
     view_items[5]["callback"]()
-    assert state["python_console_shown"] == 2
+    assert state.get("vram_hud_toggled") is True
+    assert view_items[0]["label"] == "tr:image_preview.reset_view"
+    assert view_items[2]["selected"]
+    view_items[2]["callback"]()
+    view_items[3]["callback"]()
+    assert state["split_toggled"] and state["ui_toggled"]
 
     keymap = sys.modules["lichtfeld"].keymap
     keymap.get_trigger_description = lambda action, _mode: {
@@ -369,13 +348,13 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
         "open_preferences": "Alt+P",
         "copy_selection": "Alt+C",
     }.get(action, "")
-    assert view_mod.ViewMenu().menu_items()[3]["shortcut"] == "Ctrl+F10"
-    assert edit_mod.EditMenu().menu_items()[3]["shortcut"] == "Alt+P"
-    assert select_mod.SelectMenu().menu_items()[0]["shortcut"] == "Alt+C"
+    assert view_mod.ViewMenu().menu_items()[5]["shortcut"] == "Ctrl+F10"
+    assert edit_mod.EditMenu().menu_items()[7]["shortcut"] == "Alt+P"
+    assert edit_mod.EditMenu().menu_items()[4]["shortcut"] == "Alt+C"
     keymap.is_bound = lambda _action, _mode: False
-    assert view_mod.ViewMenu().menu_items()[3]["shortcut"] == ""
-    assert edit_mod.EditMenu().menu_items()[3]["shortcut"] == ""
-    assert select_mod.SelectMenu().menu_items()[0]["shortcut"] == ""
+    assert view_mod.ViewMenu().menu_items()[5]["shortcut"] == ""
+    assert edit_mod.EditMenu().menu_items()[7]["shortcut"] == ""
+    assert edit_mod.EditMenu().menu_items()[4]["shortcut"] == ""
 
 
 def _import_tools_menu(monkeypatch):
@@ -391,20 +370,30 @@ def _import_tools_menu(monkeypatch):
     return import_module("lfs_plugins.tools_menu")
 
 
-def test_tools_menu_includes_gallery_entries(monkeypatch):
+def test_tools_menu_contains_processing_and_python_tools(monkeypatch):
     state = _install_lichtfeld_stub(monkeypatch)
     tools_mod = _import_tools_menu(monkeypatch)
 
     items = tools_mod.ToolsMenu().menu_items()
     labels = [item.get("label") for item in items]
-    assert labels[:2] == [
-        "tr:menu.tools.asset_manager",
-        "tr:menu.tools.gallery",
-    ]
-    assert items[2]["type"] == "separator"
+    assert labels == ["tr:menu.file.mesh_to_splat", "tr:menu.file.extract_video_frames",
+                      None, "tr:menu.tools.developer", "tr:menu.tools.plugin_marketplace"]
+    items[3]["items"][0]["callback"]()
+    assert state["python_console_shown"] == 1
 
-    items[1]["callback"]()
-    assert state["panel_enabled"] == [("lfs.asset_manager", True)]
+
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
+def test_developer_system_console_is_windows_only(monkeypatch, platform):
+    state = _install_lichtfeld_stub(monkeypatch)
+    monkeypatch.setattr(sys, "platform", platform)
+    tools_mod = _import_tools_menu(monkeypatch)
+    items = tools_mod.ToolsMenu().menu_items()[3]["items"]
+    assert items[0]["label"] == "tr:menu.tools.python_console"
+    assert len(items) == (2 if platform == "win32" else 1)
+    if platform == "win32":
+        assert items[1]["label"] == "tr:menu.tools.system_console"
+        items[1]["callback"]()
+        assert state["python_console_shown"] == 1
 
 
 def test_tools_menu_projects_selects_scope_when_available(monkeypatch):
@@ -416,7 +405,7 @@ def test_tools_menu_projects_selects_scope_when_available(monkeypatch):
     tools_mod = _import_tools_menu(monkeypatch)
 
     items = tools_mod.ToolsMenu().menu_items()
-    items[0]["callback"]()
+    tools_mod._open_projects_scope()
     assert state["panel_enabled"] == [("lfs.asset_manager", True)]
     assert selected == [True]
 
@@ -427,7 +416,7 @@ def test_tools_menu_projects_skips_missing_select_projects_scope(monkeypatch):
     tools_mod = _import_tools_menu(monkeypatch)
 
     items = tools_mod.ToolsMenu().menu_items()
-    items[0]["callback"]()
+    tools_mod._open_projects_scope()
     assert state["panel_enabled"] == [("lfs.asset_manager", True)]
 
 
@@ -441,7 +430,7 @@ def test_tools_menu_gallery_selects_scope_when_available(monkeypatch):
     tools_mod = _import_tools_menu(monkeypatch)
 
     items = tools_mod.ToolsMenu().menu_items()
-    items[1]["callback"]()
+    tools_mod._open_gallery_scope()
     assert state["panel_enabled"] == [("lfs.asset_manager", True)]
     assert selected == [True]
 
@@ -452,5 +441,5 @@ def test_tools_menu_gallery_skips_missing_select_gallery_scope(monkeypatch):
     tools_mod = _import_tools_menu(monkeypatch)
 
     items = tools_mod.ToolsMenu().menu_items()
-    items[1]["callback"]()
+    tools_mod._open_gallery_scope()
     assert state["panel_enabled"] == [("lfs.asset_manager", True)]

@@ -60,36 +60,10 @@ class SelectMenu:
         tr = lf.ui.tr
         can_edit = _can_edit_selection()
         has_selection = _has_gaussian_selection()
-        has_clipboard = _has_gaussian_clipboard()
         selection_tool_active = _is_selection_tool_active()
         action = lf.keymap.Action
 
         return [
-            menu_action(
-                tr("menu.select.copy_selection"),
-                lf.ui.copy_gaussian_selection,
-                shortcut=keymap_shortcut(action.COPY_SELECTION),
-                enabled=can_edit and has_selection,
-            ),
-            menu_action(
-                tr("menu.select.cut_selection"),
-                lf.ui.cut_gaussian_selection,
-                shortcut=keymap_shortcut(action.CUT_SELECTION),
-                enabled=can_edit and has_selection,
-            ),
-            menu_action(
-                tr("menu.select.paste_selection"),
-                lf.ui.paste_gaussian_selection,
-                shortcut=keymap_shortcut(action.PASTE_SELECTION),
-                enabled=can_edit and has_clipboard,
-            ),
-            menu_separator(),
-            menu_action(
-                tr("menu.select.invert_selection"),
-                lf.ui.invert_gaussian_selection,
-                shortcut=keymap_shortcut(action.INVERT_SELECTION),
-                enabled=can_edit,
-            ),
             menu_action(
                 tr("menu.select.select_all"),
                 lf.ui.select_all_gaussians,
@@ -101,6 +75,12 @@ class SelectMenu:
                 lf.ui.deselect_all_gaussians,
                 shortcut=keymap_shortcut(action.DESELECT_ALL),
                 enabled=can_edit and has_selection,
+            ),
+            menu_action(
+                tr("menu.select.invert_selection"),
+                lf.ui.invert_gaussian_selection,
+                shortcut=keymap_shortcut(action.INVERT_SELECTION),
+                enabled=can_edit,
             ),
             menu_separator(),
             menu_action(

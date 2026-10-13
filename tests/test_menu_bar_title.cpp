@@ -36,6 +36,28 @@ namespace lfs::vis::gui {
         static void toggleProjection(RmlMenuBar& bar) {
             bar.dispatchToolbarAction("toggle_projection", "");
         }
+        static void dropdown(RmlMenuBar& bar, const std::vector<MenuItemDesc>& items) {
+            bar.dropdown_container_ = bar.document_->GetElementById("dropdown-container");
+            bar.dropdown_popup_ = bar.document_->GetElementById("dropdown-popup");
+            bar.dropdown_overlay_ = bar.document_->GetElementById("dropdown-overlay");
+            bar.dropdown_items_ = bar.buildDropdownItems(items);
+            bar.open_menu_index_ = 0;
+            bar.dropdown_container_->SetClass("visible", true);
+            bar.dropdown_popup_->SetProperty("left", "1400px");
+            bar.dropdown_popup_->SetProperty("top", "30px");
+            bar.menu_model_.DirtyVariable("dropdown_items");
+            bar.rml_context_->Update();
+        }
+        static void openPath(RmlMenuBar& bar, int root, int child, int grandchild) {
+            bar.setOpenSubmenu(root, child, grandchild);
+            bar.sizeOpenDropdowns();
+        }
+        static Rml::Element* menuHit(RmlMenuBar& bar, float x, float y) {
+            return bar.dropdownElementAtPoint(x, y);
+        }
+        static int grandchildIndex(RmlMenuBar& bar, Rml::Element* element) {
+            return bar.grandchildSubmenuIndexForElement(element);
+        }
         static void bind(RmlMenuBar& bar, Rml::Context* context) {
             bar.rml_context_ = context;
             bar.bindModel();
@@ -198,6 +220,69 @@ namespace {
         lfs::vis::gui::RmlUIManager manager_;
         lfs::vis::gui::RmlMenuBar bar_;
     };
+
+    TEST_F(MenuBarTitleTest, ThirdCascadePreservesActionsAndStaysInsideViewport) {
+        using Item = lfs::vis::gui::MenuItemDesc;
+        using Type = Item::Type;
+        const std::vector<Item> items{
+            {.type = Type::SubMenuBegin, .label = "Appearance"},
+            {.type = Type::SubMenuBegin, .label = "Theme"},
+            {.type = Type::SubMenuBegin, .label = "LichtFeld"},
+            {.type = Type::Toggle, .label = "Dark", .selected = true, .callback_index = 41},
+            {.type = Type::Separator},
+            {.type = Type::Toggle, .label = "Light", .enabled = false, .callback_index = 42},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::SubMenuBegin, .label = "Signal"},
+            {.type = Type::Item, .label = "Auto", .callback_index = 43},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::SubMenuBegin, .label = "UI Scale"},
+            {.type = Type::Item, .label = "100%", .callback_index = 44},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::SubMenuEnd},
+        };
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        RmlMenuBarTestAccess::openPath(bar_, 0, 0, 0);
+        Rml::ElementList popups;
+        el("dropdown-popup")->GetElementsByClassName(popups, "submenu-popup");
+        int visible = 0;
+        Rml::Element* dark = nullptr;
+        Rml::Element* light = nullptr;
+        for (auto* popup : popups) {
+            if (popup->GetDisplay() == Rml::Style::Display::None)
+                continue;
+            ++visible;
+            const auto rect = bounds(popup);
+            EXPECT_GE(rect.left, -0.5f);
+            EXPECT_LE(rect.right, 1600.5f);
+            EXPECT_GE(rect.top, -0.5f);
+            EXPECT_LE(rect.bottom, 300.5f);
+        }
+        EXPECT_EQ(visible, 3);
+        Rml::ElementList rows;
+        el("dropdown-popup")->GetElementsByClassName(rows, "menu-item");
+        for (auto* row : rows) {
+            if (row->GetAttribute<int>("data-callback-index", -1) == 41)
+                dark = row;
+            if (row->GetAttribute<int>("data-callback-index", -1) == 42)
+                light = row;
+        }
+        ASSERT_NE(dark, nullptr);
+        ASSERT_NE(light, nullptr);
+        EXPECT_TRUE(light->HasAttribute("disabled"));
+        EXPECT_NE(textContent(dark).find("Dark"), std::string::npos);
+        const auto rect = bounds(dark);
+        auto* hit = RmlMenuBarTestAccess::menuHit(bar_, (rect.left + rect.right) / 2,
+                                                  (rect.top + rect.bottom) / 2);
+        ASSERT_NE(hit, nullptr);
+        EXPECT_EQ(RmlMenuBarTestAccess::grandchildIndex(bar_, hit), 0);
+        RmlMenuBarTestAccess::openPath(bar_, 0, 0, 1);
+        EXPECT_EQ(dark->GetParentNode()->GetParentNode()->GetDisplay(), Rml::Style::Display::None);
+        RmlMenuBarTestAccess::openPath(bar_, 0, 1, -1);
+        RmlMenuBarTestAccess::openPath(bar_, -1, -1, -1);
+        for (auto* popup : popups)
+            EXPECT_EQ(popup->GetDisplay(), Rml::Style::Display::None);
+    }
 
     class MenuBarProjectionTest : public MenuBarTitleTest {
     protected:

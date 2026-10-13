@@ -238,6 +238,10 @@ class PreferencesPanel(Panel):
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False),
             self._set_embed_dataset_by_default,
         )
+        model.bind("auto_save_on_close",
+                   lf.project_auto_save_on_close_enabled,
+                   lf.project_set_auto_save_on_close)
+        model.bind_event("open_default_app_settings", self._open_default_app_settings)
         model.bind("mcp_request_logging", lambda: self._mcp_request_logging, self._set_mcp_request_logging)
         model.bind_func("mcp_safe_mode", lambda: self._mcp_safe_mode)
         model.bind_func("mcp_status", self._mcp_status_text)
@@ -381,6 +385,7 @@ class PreferencesPanel(Panel):
             float(lf.ui.get_navigation_speed_preference()),
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
+            lf.project_auto_save_on_close_enabled(),
             project_manager_preferences["defaultView"],
             project_manager_preferences["openAtStartup"],
             project_manager_preferences["rememberState"],
@@ -388,6 +393,11 @@ class PreferencesPanel(Panel):
             lf.ui.remember_camera_view_snap(),
             self._mcp_status_signature(),
         )
+
+    @staticmethod
+    def _open_default_app_settings(*_):
+        lf.ui.register_file_associations()
+        lf.ui.open_file_association_settings()
 
     def _rebuild_records(self):
         self._sync_scene_reconstruction_catalog()
@@ -1633,6 +1643,7 @@ class PreferencesPanel(Panel):
             self._dirty_mcp()
             self._dirty_project_location()
             self._handle.dirty("embed_dataset_by_default")
+            self._handle.dirty("auto_save_on_close")
             self._handle.dirty("project_manager_default_view")
             self._handle.dirty("project_manager_open_at_startup")
             self._handle.dirty("project_manager_remember_state")
