@@ -619,6 +619,7 @@ set(TEST_FILES
     test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_export_utils.cpp
+    test_video_export_frame_schedule.cpp
     test_video_frame_extractor_naming.cpp
     test_video_cpu_rgb_conversion.cpp
     test_video_cuda_frame_handoff.cpp

@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Video export must include the hold between the last camera key and clip end."""
+"""Video export must cover the camera path and keep the file the same length."""
 
 import json
-import math
 
 import pytest
 
@@ -11,6 +10,12 @@ from test_api_camera_project_runtime import camera_runtime, _editor
 from test_render_on_demand_idle import _tool
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
+
+
+def _export_frame_count(duration, fps):
+    # Positive half-away-from-zero, matching std::llround, then at least one frame.
+    return max(1, int(duration * fps + 0.5))
+
 
 
 @pytest.mark.parametrize("duration,mode", [(2.0, "once"), (8.0, "once"), (8.0, "loop")])
@@ -51,7 +56,7 @@ open({str(state)!r}, "w").write(json.dumps(lf.ui.get_camera_path()))
     })
     (tmp_path / "job.json").write_text(json.dumps(job, indent=2))
     assert job["outcome"] == "completed", job
-    expected = math.ceil(duration * 24) + 1
+    expected = _export_frame_count(duration, 24)
     assert job["details"]["total_frames"] == expected, job
     assert job["details"]["current_frame"] == expected, job
     assert movie.stat().st_size > 0

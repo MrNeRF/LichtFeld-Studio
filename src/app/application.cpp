@@ -40,6 +40,7 @@
 #include "gui/gpu_memory_query.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_encoder.hpp"
+#include "io/video/video_export_schedule.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "preprocessing/preprocess.hpp"
@@ -53,7 +54,6 @@
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
 #include "visualizer/preferences.hpp"
-#include <cmath>
 #include <condition_variable>
 #include <cuda_runtime.h>
 #include <curand.h>
@@ -1320,13 +1320,13 @@ namespace lfs::app {
             }
 
             const float duration = timeline.clipDuration();
-            const int total_frames = static_cast<int>(std::ceil(duration * cfg.fps)) + 1;
+            const int total_frames = lfs::io::video::videoExportFrameCount(duration, cfg.fps);
             LOG_INFO("Rendering {} frame(s) ({:.2f}s @ {}fps) from {} to {}",
                      total_frames, duration, cfg.fps,
                      core::path_to_utf8(cfg.camera_path), core::path_to_utf8(cfg.output_path));
 
             for (int frame = 0; frame < total_frames; ++frame) {
-                const float t = std::min(static_cast<float>(frame) / static_cast<float>(cfg.fps), duration);
+                const float t = lfs::io::video::videoExportSampleTime(frame, cfg.fps);
                 const auto cam_state = timeline.evaluate(t);
 
                 const glm::mat4 data_view = rendering::dataWorldToCameraFromVisualizerPose(
