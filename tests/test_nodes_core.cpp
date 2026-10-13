@@ -275,13 +275,13 @@ namespace {
         NodeTypeRegistry registry;
         register_builtin_nodes(registry);
         NodeTree tree(registry);
-        Node& a = tree.add_node("lfs.transform_geometry", "A");
-        Node& b = tree.add_node("lfs.transform_geometry", "B");
-        EXPECT_TRUE(tree.add_link({tree.input_node().name, "Geometry", a.name, "Geometry"}));
-        EXPECT_TRUE(tree.add_link({a.name, "Geometry", b.name, "Geometry"}));
-        EXPECT_TRUE(tree.add_link({b.name, "Geometry", tree.output_node().name, "Geometry"}));
+        const auto a_name = tree.add_node("lfs.transform_geometry", "A").name;
+        const auto b_name = tree.add_node("lfs.transform_geometry", "B").name;
+        EXPECT_TRUE(tree.add_link({tree.input_node().name, "Geometry", a_name, "Geometry"}));
+        EXPECT_TRUE(tree.add_link({a_name, "Geometry", b_name, "Geometry"}));
+        EXPECT_TRUE(tree.add_link({b_name, "Geometry", tree.output_node().name, "Geometry"}));
         std::string error;
-        EXPECT_FALSE(tree.add_link({b.name, "Geometry", a.name, "Geometry"}, &error));
+        EXPECT_FALSE(tree.add_link({b_name, "Geometry", a_name, "Geometry"}, &error));
         EXPECT_EQ(error, "Node graph contains a cycle");
         EXPECT_TRUE(tree.validate().empty());
         EXPECT_EQ(std::ranges::count_if(tree.links,
@@ -4414,8 +4414,8 @@ namespace {
         NodeTree outer(registry, "Outer");
         ASSERT_TRUE(outer.remove_link({outer.input_node().name, "Geometry",
                                        outer.output_node().name, "Geometry"}));
-        auto& group = outer.add_node("lfs.group", "Instance");
-        group.properties["tree"] = inner.uuid;
+        const auto group_name = outer.add_node("lfs.group", "Instance").name;
+        outer.find_node(group_name)->properties["tree"] = inner.uuid;
         const TreeResolver resolver = [&](const std::string_view uuid) -> const NodeTree* {
             if (uuid == inner.uuid)
                 return &inner;
@@ -4423,9 +4423,9 @@ namespace {
                 return &outer;
             return nullptr;
         };
-        ASSERT_TRUE(outer.add_link({outer.input_node().name, "Geometry", group.name, "Geometry"},
+        ASSERT_TRUE(outer.add_link({outer.input_node().name, "Geometry", group_name, "Geometry"},
                                    nullptr, resolver));
-        ASSERT_TRUE(outer.add_link({group.name, "Geometry", outer.output_node().name, "Geometry"},
+        ASSERT_TRUE(outer.add_link({group_name, "Geometry", outer.output_node().name, "Geometry"},
                                    nullptr, resolver));
         auto result = lfs::nodes::evaluate(outer, {.tree_resolver = resolver});
         EXPECT_TRUE(result.ok);
@@ -4433,26 +4433,26 @@ namespace {
         const auto second = outer.links.back();
         ASSERT_TRUE(outer.remove_link(second));
         auto& reroute = outer.add_node("lfs.reroute", "Route");
-        ASSERT_TRUE(outer.add_link({group.name, "Geometry", reroute.name, "Input"}, nullptr,
+        ASSERT_TRUE(outer.add_link({group_name, "Geometry", reroute.name, "Input"}, nullptr,
                                    resolver));
         ASSERT_TRUE(outer.add_link({reroute.name, "Output", outer.output_node().name, "Geometry"},
                                    nullptr, resolver));
         EXPECT_EQ(effective_outputs(outer, reroute, resolver).front().type, GEOMETRY_SOCKET);
         EXPECT_TRUE(lfs::nodes::evaluate(outer, {.tree_resolver = resolver}).ok);
 
-        group.properties["tree"] = "missing";
+        outer.find_node(group_name)->properties["tree"] = "missing";
         result = lfs::nodes::evaluate(outer, {.tree_resolver = resolver});
         EXPECT_FALSE(result.ok);
-        EXPECT_NE(result.errors.at(group.name).find("Missing graph"), std::string::npos);
+        EXPECT_NE(result.errors.at(group_name).find("Missing graph"), std::string::npos);
 
-        group.properties["tree"] = inner.uuid;
+        outer.find_node(group_name)->properties["tree"] = inner.uuid;
         auto& back = inner.add_node("lfs.group", "Back");
         back.properties["tree"] = outer.uuid;
         std::string cycle;
         EXPECT_TRUE(group_reference_would_cycle(outer, inner.uuid, resolver, &cycle));
         result = lfs::nodes::evaluate(outer, {.tree_resolver = resolver});
         EXPECT_FALSE(result.ok);
-        EXPECT_NE(result.errors.at(group.name).find("Group cycle"), std::string::npos);
+        EXPECT_NE(result.errors.at(group_name).find("Group cycle"), std::string::npos);
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, NodesCoreScale, testing::ValuesIn(test_targets()),
