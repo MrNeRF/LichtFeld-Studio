@@ -166,17 +166,19 @@
     <span class="text-accent">{{label_hdr_camera}}</span>
   </div>
   <div class="section-content" id="sec-camera">
-    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.focal_length">
-      <span class="setting-row__label-col">{{label_focal_length_mm}}</span>
-      <div class="setting-row__control-col setting-row__control-col--slider">
-        <input type="range" class="setting-slider" data-value="focal_length_mm" min="10" max="200" step="0.1" />
-        <span class="slider-value">{{focal_length_mm | format_float(1)}}</span>
+    <div data-if="show_fov_controls">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.focal_length">
+        <span class="setting-row__label-col">{{label_focal_length_mm}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="focal_length_mm" min="10" max="200" step="0.1" />
+          <span class="slider-value">{{focal_length_mm | format_float(1)}}</span>
+        </div>
       </div>
-    </div>
-    <div class="setting-row setting-row--aligned">
-      <span class="setting-row__label-col">@tr:main_panel.fov</span>
-      <div class="setting-row__control-col setting-row__control-col--fill">
-        <span class="text-disabled">{{fov_display}}</span>
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">@tr:main_panel.fov</span>
+        <div class="setting-row__control-col setting-row__control-col--fill">
+          <span class="text-disabled">{{fov_display}}</span>
+        </div>
       </div>
     </div>
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.sh_degree">

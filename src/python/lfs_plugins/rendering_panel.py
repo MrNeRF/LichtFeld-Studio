@@ -613,6 +613,7 @@ class RenderingPanel(Panel):
                          lambda: lf.ui.tr("main_panel.ppisp_crf_advanced") or "CRF")
 
         model.bind_func("fov_display", self._compute_fov)
+        model.bind_func("show_fov_controls", self._show_fov_controls)
 
         model.bind_func("picker_r", lambda: float(self._picker_color()[0]))
         model.bind_func("picker_g", lambda: float(self._picker_color()[1]))
@@ -760,7 +761,11 @@ class RenderingPanel(Panel):
         )
 
     def _dirty_projection_bindings(self):
-        self._dirty_model("raster_backend", "equirectangular")
+        self._dirty_model("raster_backend", "equirectangular", "show_fov_controls")
+
+    def _show_fov_controls(self):
+        settings = lf.get_render_settings()
+        return not bool(getattr(settings, "equirectangular", False)) if settings else True
 
     def _sync_projection_state(self):
         state = self._projection_state_snapshot()
