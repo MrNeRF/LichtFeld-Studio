@@ -213,7 +213,7 @@ scene-graph,
 
 .logging-toolbar {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     align-items: flex-end;
     gap: 8dp;
 }
@@ -241,22 +241,27 @@ scene-graph,
 
 .logging-actions {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 6dp;
-    flex: 0 0 auto;
+    min-width: 0;
+    flex: 1 1 240dp;
 }
 
 .logging-actions .history-action {
     display: inline-block;
-    width: 78dp;
-    min-width: 78dp;
-    height: 26dp;
-    min-height: 26dp;
-    line-height: 20dp;
-    padding: 2dp 8dp;
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    height: 24dp;
+    min-height: 24dp;
+    line-height: 22dp;
+    padding: 0dp 8dp;
     box-sizing: border-box;
     text-align: center;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     flex: 0 0 auto;
 }
 

@@ -1002,7 +1002,9 @@ namespace lfs::vis::gui {
         changed |= setCachedText(logging_level_label_el_, LOC(lichtfeld::Strings::Scene::LOG_LEVEL));
         changed |= setCachedText(logging_export_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_EXPORT));
         changed |= setCachedText(logging_copy_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_COPY));
-        changed |= setCachedText(document_->GetElementById("logging-console-btn"), tr("scene.show_system_console"));
+        changed |= setCachedText(document_->GetElementById("logging-console-btn"), tr("main_panel.console"));
+        changed |= setCachedAttribute(document_->GetElementById("logging-console-btn"), "data-tooltip",
+                                      tr("scene.show_system_console"));
         changed |= setCachedText(logging_note_el_,
                                  LOCF(lichtfeld::Strings::Scene::LOG_NOTE, lfs::core::format_count(MAX_RENDERED_LOG_ENTRIES)));
         changed |= setCachedText(logging_empty_el_, LOC(lichtfeld::Strings::Scene::NO_LOGS));
