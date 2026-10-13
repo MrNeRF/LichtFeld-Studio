@@ -3666,6 +3666,7 @@ namespace lfs::python {
                 }
 
                 lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(it->second)}.emit();
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("tool"), "Switch to a toolbar tool (none, selection, translate, rotate, scale, mirror, align, cropbox)");
 
@@ -4037,6 +4038,7 @@ namespace lfs::python {
                         if (auto* const editor = get_editor_context())
                             editor->setActiveTool(tool);
                         lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(tool)}.emit();
+                        markProjectSessionChapterCommitted("VIEW");
                     });
                 }
             },
@@ -4049,6 +4051,7 @@ namespace lfs::python {
                     if (auto* const editor = get_editor_context())
                         editor->setActiveOperator(id, gizmo_type);
                     vis::UnifiedToolRegistry::instance().setActiveTool(id);
+                    markProjectSessionChapterCommitted("VIEW");
                 });
             },
             nb::arg("id"), nb::arg("gizmo_type") = "", "Set active operator with optional gizmo type");
@@ -4173,6 +4176,7 @@ namespace lfs::python {
             "set_gizmo_type", [](const std::string& type) {
                 if (auto* editor = get_editor_context())
                     editor->setGizmoType(type);
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("type"), "Set gizmo type without blocking camera");
 
@@ -4180,6 +4184,7 @@ namespace lfs::python {
             "clear_gizmo", []() {
                 if (auto* editor = get_editor_context())
                     editor->clearGizmo();
+                markProjectSessionChapterCommitted("VIEW");
             },
             "Clear gizmo type");
 
@@ -4194,7 +4199,7 @@ namespace lfs::python {
 
         m.def(
             "set_selection_mode",
-            [](const std::string& mode) {
+            [](const std::string& mode, const bool mark_session_dirty = true) {
                 static const std::unordered_map<std::string, int> MODE_MAP = {
                     {"centers", static_cast<int>(lfs::vis::SelectionSubMode::Centers)},
                     {"rectangle", static_cast<int>(lfs::vis::SelectionSubMode::Rectangle)},
@@ -4207,13 +4212,15 @@ namespace lfs::python {
                 const auto it = MODE_MAP.find(mode);
                 const std::optional<int> selection_mode =
                     it == MODE_MAP.end() ? std::nullopt : std::optional{it->second};
-                invoke_on_viewer([mode, selection_mode] {
+                invoke_on_viewer([mode, selection_mode, mark_session_dirty] {
                     vis::UnifiedToolRegistry::instance().setActiveSubmode(mode);
                     if (selection_mode)
                         lfs::core::events::tools::SetSelectionSubMode{.selection_mode = *selection_mode}.emit();
+                    if (mark_session_dirty)
+                        markProjectSessionChapterCommitted("VIEW");
                 });
             },
-            nb::arg("mode"), "Set selection mode");
+            nb::arg("mode"), nb::arg("mark_session_dirty") = true, "Set selection mode");
 
         m.def(
             "execute_mirror",
@@ -4228,7 +4235,10 @@ namespace lfs::python {
         // Scene panel context menu actions
         m.def(
             "go_to_camera_view",
-            [](int cam_uid) { lfs::core::events::cmd::GoToCamView{.cam_id = cam_uid}.emit(); },
+            [](int cam_uid) {
+                lfs::core::events::cmd::GoToCamView{.cam_id = cam_uid}.emit();
+                markProjectSessionChapterCommitted("VIEW");
+            },
             nb::arg("cam_uid"), "Go to camera view by UID");
 
         m.def(
@@ -4287,6 +4297,7 @@ namespace lfs::python {
                     throw nb::value_error("GT comparison mode must be 'rgb', 'normal', or 'depth'");
                 }
                 rm->updateSettings(settings, vis::DirtyFlag::ALL);
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("mode"), "Set ground-truth comparison mode.");
 
@@ -4310,6 +4321,7 @@ namespace lfs::python {
                     break;
                 }
                 rm->updateSettings(settings, vis::DirtyFlag::ALL);
+                markProjectSessionChapterCommitted("VIEW");
                 switch (settings.gt_comparison_mode) {
                 case vis::GTComparisonMode::Normal: return "normal";
                 case vis::GTComparisonMode::Depth: return "depth";
@@ -4338,6 +4350,7 @@ namespace lfs::python {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
                     gui->gizmo().setCropToolShape(shape);
                 }
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("shape"),
             "Set the active crop tool shape: box or ellipsoid");
@@ -4358,6 +4371,7 @@ namespace lfs::python {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
                     gui->gizmo().setCropToolOperation(operation);
                 }
+                markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("operation"),
             "Set the active crop or selection-volume gizmo operation: translate, rotate, or scale");
@@ -5219,9 +5233,12 @@ namespace lfs::python {
                 vis::saveZoomSpeedPreference(speed, persist);
                 const float zoom_speed = vis::loadZoomSpeedPreference();
                 const float navigation_speed = vis::loadNavigationSpeedPreference();
-                invoke_on_viewer([zoom_speed, navigation_speed] {
+                invoke_on_viewer([zoom_speed, navigation_speed, persist] {
                     if (auto* const controller = vis::InputController::instance())
                         controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                    if (persist) {
+                        markProjectSessionChapterCommitted("VIEW");
+                    }
                 });
             },
             nb::arg("speed"), nb::arg("persist") = true,
@@ -5238,9 +5255,12 @@ namespace lfs::python {
                 vis::saveNavigationSpeedPreference(speed, persist);
                 const float zoom_speed = vis::loadZoomSpeedPreference();
                 const float navigation_speed = vis::loadNavigationSpeedPreference();
-                invoke_on_viewer([zoom_speed, navigation_speed] {
+                invoke_on_viewer([zoom_speed, navigation_speed, persist] {
                     if (auto* const controller = vis::InputController::instance())
                         controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                    if (persist) {
+                        markProjectSessionChapterCommitted("VIEW");
+                    }
                 });
             },
             nb::arg("speed"), nb::arg("persist") = true,
@@ -5250,6 +5270,24 @@ namespace lfs::python {
             "get_navigation_speed_preference",
             []() -> float { return vis::loadNavigationSpeedPreference(); },
             "Get the default WASD navigation speed");
+
+        m.def("get_rendering_defaults_json", [] { return vis::UserPreferences::instance().renderingDefaults(); }, "Get user defaults for new projects; project VIEW values are independent overrides.");
+        m.def("set_rendering_defaults_json", [](const std::string& serialized) {
+            if (auto result = vis::UserPreferences::instance().setRenderingDefaults(serialized); !result)
+                throw nb::value_error(lfs::format_for_developer(result.error()).c_str()); }, nb::arg("serialized"), "Validate and persist rendering defaults without changing the current project.");
+        m.def("capture_rendering_defaults", [] {
+            if (const auto* rendering = get_rendering_manager()) {
+                const auto result = vis::UserPreferences::instance().setRenderingDefaults(vis::renderingDefaultsFromSettings(rendering->getSettings()));
+                if (!result) throw nb::value_error(lfs::format_for_developer(result.error()).c_str());
+            } }, "Save current project overlay style and LOD cache limits as defaults for new projects.");
+        m.def("apply_rendering_defaults", [] {
+            if (auto* rendering = get_rendering_manager()) {
+                auto settings = rendering->getSettings();
+                if (const auto result = vis::applyRenderingDefaults(settings, vis::UserPreferences::instance().renderingDefaults()); !result)
+                    throw nb::value_error(lfs::format_for_developer(result.error()).c_str());
+                if (const auto result = rendering->updateSettingsFromUser(settings); !result)
+                    throw nb::value_error(lfs::format_for_developer(result.error()).c_str());
+            } }, "Explicitly apply user defaults to the current project; other rendering fields are preserved.");
 
         m.def(
             "get_project_manager_preferences",
@@ -5479,6 +5517,14 @@ namespace lfs::python {
                 return info && info->embed_dataset_by_default;
             },
             "Get whether new projects copy datasets into the project by default.");
+
+        m.def(
+            "mark_project_session_chapter_committed",
+            [](const std::string& chapter) {
+                markProjectSessionChapterCommitted(chapter);
+            },
+            nb::arg("chapter"),
+            "Mark a committed project session setting change for autosave.");
 
         m.def(
             "set_embed_dataset_by_default",

@@ -12,9 +12,11 @@
 #include "core/uuid.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/panel_registry.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/scene_tree_session.hpp"
 #include "gui/sequencer_ui_state.hpp"
+#include "input/input_controller.hpp"
 #include "io/project_document.hpp"
 #include "io/session_chapters.hpp"
 #include "io/video/video_export_options.hpp"
@@ -2670,6 +2672,154 @@ namespace {
         if (const auto* rendering = viewer.getRenderingManager()) {
             EXPECT_EQ(ui.equirectangular, rendering->getSettings().equirectangular);
         }
+    }
+
+} // namespace
+
+namespace lfs::vis {
+    void installSessionTestInputController(VisualizerImpl& viewer) {
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+    }
+} // namespace lfs::vis
+
+namespace {
+
+    class UnknownSessionValueFixture {
+    public:
+        struct TestPanel final : lfs::vis::gui::IPanel {
+            void draw(const lfs::vis::gui::PanelDrawContext&) override {}
+            lfs::vis::gui::PanelRenderCapabilities renderCapabilities() const override { return {.direct = true}; }
+        };
+
+        UnknownSessionValueFixture() {
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            viewer = std::make_unique<lfs::vis::VisualizerImpl>(options);
+            lfs::vis::installSessionTestInputController(*viewer);
+            if (seed_splat_selection(*viewer) == lfs::core::NULL_NODE ||
+                !lfs::vis::gui::PanelRegistry::instance().register_panel({
+                    .panel = std::make_shared<TestPanel>(),
+                    .label = "Session test panel",
+                    .id = panel_id,
+                    .space = lfs::vis::gui::PanelSpace::SidePanel,
+                }))
+                throw std::runtime_error("Failed to initialize unknown-session test fixture");
+        }
+
+        ~UnknownSessionValueFixture() {
+            lfs::vis::gui::PanelRegistry::instance().unregister_panel(panel_id);
+        }
+
+        PreparedGuiSessionRestore restore(
+            const std::string& name,
+            const std::function<void(Json&, Json&, Json&)>& mutate = {}) {
+            auto document = lfs::test::licht::make_empty_document(lfs::core::generate_uuid_v4());
+            auto view = json_root(document->view().dom());
+            auto gui = json_root(document->gui_layout().dom());
+            auto sequencer = json_root(document->sequencer().dom());
+            if (mutate)
+                mutate(view, gui, sequencer);
+            document->edit_view() = require_result(ViewSessionChapter::parse(view.dump()));
+            document->edit_gui_layout() = require_result(GuiLayoutChapter::parse(gui.dump()));
+            document->edit_sequencer() = require_result(SequencerSessionChapter::parse(sequencer.dump()));
+            const auto path = temporary.path / (name + ".licht");
+            (void)require_result(document->save(path));
+            auto reopened = require_result(ProjectDocument::open(path));
+            ProjectSessionChapters chapters{
+                .gui_layout = reopened.gui_layout(),
+                .editor = reopened.editor(),
+                .view = reopened.view(),
+                .sequencer = reopened.sequencer(),
+                .metrics = reopened.metrics(),
+            };
+            auto prepared = require_result(prepareGuiSessionRestore(std::move(chapters)));
+            applyGuiSession(*viewer, prepared, bookmarks);
+            applyGuiSessionTools(*viewer, prepared);
+            return prepared;
+        }
+
+        const std::string panel_id = "test.session.unknown-space";
+        TemporaryDirectory temporary;
+        std::unique_ptr<lfs::vis::VisualizerImpl> viewer;
+        std::vector<CameraBookmarkProjectState> bookmarks;
+    };
+
+    TEST(P5SessionChapterTest, UnknownProjectValuesUseRuntimeDefaults) {
+        UnknownSessionValueFixture test;
+        auto prepared = test.restore("fallbacks", [](Json& view, Json&, Json& sequencer) {
+            view["split"]["focused_panel"] = "future_panel";
+            view["navigation"]["mode"] = "future_navigation";
+            view["navigation"]["up_axis"] = "future_axis";
+            view["render_settings"]["raster_backend"] = "future_backend";
+            view["render_settings"]["camera_metrics_mode"] = 99;
+            view["tools"]["gizmo_operation"] = "future_operation";
+            sequencer["loop_mode"] = "future_loop";
+            sequencer["preferences"]["preset"] = "future_preset";
+        });
+        EXPECT_EQ(test.viewer->getRenderingManager()->getFocusedSplitPanel(), lfs::vis::SplitViewPanelId::Left);
+        EXPECT_EQ(test.viewer->getInputController()->cameraNavigationMode(),
+                  lfs::vis::InputController::CameraNavigationMode::Orbit);
+        EXPECT_EQ(test.viewer->getInputController()->navigationUpAxis(), lfs::vis::NavigationUpAxis::LegacyY);
+        EXPECT_EQ(test.viewer->getRenderingManager()->getSettings().raster_backend,
+                  lfs::vis::RenderSettings{}.raster_backend);
+        EXPECT_EQ(test.viewer->getGuiManager()->gizmo().getOperation(), lfs::vis::gui::GizmoOperation::Translate);
+        EXPECT_EQ(test.viewer->getGuiManager()->sequencer().loopMode(), lfs::vis::LoopMode::ONCE);
+        EXPECT_EQ(test.viewer->getGuiManager()->getSequencerUIState().preset, lfs::io::video::VideoPreset::CUSTOM);
+        EXPECT_EQ(prepared.unsupported_settings.size(), 8u);
+    }
+
+    TEST(P5SessionChapterTest, UnknownNavigationAxisWarnsAndUsesLegacyY) {
+        UnknownSessionValueFixture test;
+        auto prepared = test.restore("axis", [](Json& view, Json&, Json&) {
+            view["navigation"]["up_axis"] = "future_axis";
+        });
+        EXPECT_EQ(test.viewer->getInputController()->navigationUpAxis(), lfs::vis::NavigationUpAxis::LegacyY);
+        ASSERT_EQ(prepared.unsupported_settings.size(), 1u);
+        EXPECT_EQ(prepared.unsupported_settings.front().value, "future_axis");
+        EXPECT_EQ(prepared.unsupported_settings.front().fallback, "legacy_y");
+    }
+
+    TEST(P5SessionChapterTest, UnknownSelectionSubmodesResetIndependently) {
+        UnknownSessionValueFixture test;
+        auto prepared = test.restore("submodes", [](Json& view, Json&, Json&) {
+            view["tools"]["selection_submode"] = "future_selection";
+            view["tools"]["active_submode_id"] = "future_active";
+        });
+        EXPECT_EQ(test.viewer->getGuiManager()->gizmo().getSelectionSubMode(), lfs::vis::SelectionSubMode::Centers);
+        ASSERT_EQ(prepared.unsupported_settings.size(), 2u);
+        EXPECT_NE(prepared.unsupported_settings[0].value, prepared.unsupported_settings[1].value);
+    }
+
+    TEST(P5SessionChapterTest, UnknownValuesSurviveCaptureAndResave) {
+        UnknownSessionValueFixture test;
+        auto prepared = test.restore("preserve", [&](Json& view, Json& gui, Json& sequencer) {
+            view["navigation"]["up_axis"] = "future_axis";
+            view["panel_cameras"][0]["panel"] = "future_camera_role";
+            view["render_settings"]["camera_metrics_mode"] = 99;
+            auto& payload = gui["layouts"][0]["areas"][0]["spaces"][1]["opaque_payload"];
+            payload["panels"] = Json::array({{{"id", test.panel_id}, {"space", "future_space"}}});
+            payload["active_tabs"]["main_panel"] = "future_main_panel";
+            sequencer["preferences"]["preset"] = "future_preset";
+        });
+        auto captured = require_result(captureGuiSession(*test.viewer, prepared.chapters, test.bookmarks));
+        auto document = require_result(ProjectDocument::open(test.temporary.path / "preserve.licht"));
+        document.edit_view() = captured.view;
+        document.edit_gui_layout() = captured.gui_layout;
+        document.edit_sequencer() = captured.sequencer;
+        (void)require_result(document.save(test.temporary.path / "preserve.licht"));
+        auto reopened = require_result(ProjectDocument::open(test.temporary.path / "preserve.licht"));
+        const auto view = json_root(reopened.view().dom());
+        const auto gui = json_root(reopened.gui_layout().dom());
+        const auto sequencer = json_root(reopened.sequencer().dom());
+        EXPECT_EQ(view["navigation"]["up_axis"], "future_axis");
+        EXPECT_EQ(view["panel_cameras"][0]["panel"], "future_camera_role");
+        EXPECT_EQ(view["render_settings"]["camera_metrics_mode"], 99);
+        EXPECT_EQ(gui["layouts"][0]["areas"][0]["spaces"][1]["opaque_payload"]["panels"][0]["space"],
+                  "future_space");
+        EXPECT_EQ(gui["layouts"][0]["areas"][0]["spaces"][1]["opaque_payload"]["active_tabs"]["main_panel"],
+                  "future_main_panel");
+        EXPECT_EQ(sequencer["preferences"]["preset"], "future_preset");
     }
 
     TEST(P5SessionChapterTest, SnapshotAbsolutizesRelativeDatasetPath) {

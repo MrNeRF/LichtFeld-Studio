@@ -333,6 +333,7 @@ namespace lfs::python {
             "set_depth_filter", [](bool enabled, float depth_far, float frustum_half_width, float depth_near) {
                 if (auto* const tool = get_selection_tool()) {
                     tool->setDepthFilterRange(enabled, depth_near, depth_far, frustum_half_width);
+                    lfs::python::markProjectSessionChapterCommitted("VIEW");
                     return;
                 }
                 auto* rm = get_rm();
@@ -341,6 +342,7 @@ namespace lfs::python {
                 auto settings = rm->getSettings();
                 configure_depth_filter(settings, enabled, depth_near, depth_far, frustum_half_width);
                 rm->updateSettings(settings);
+                lfs::python::markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("enabled"), nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, nb::arg("depth_near") = 0.0f, "Set selection depth filter in camera space.");
 
@@ -348,6 +350,7 @@ namespace lfs::python {
             "set_depth_filter_range", [](bool enabled, float depth_near, float depth_far, float frustum_half_width) {
                 if (auto* const tool = get_selection_tool()) {
                     tool->setDepthFilterRange(enabled, depth_near, depth_far, frustum_half_width);
+                    lfs::python::markProjectSessionChapterCommitted("VIEW");
                     return;
                 }
                 auto* rm = get_rm();
@@ -356,6 +359,7 @@ namespace lfs::python {
                 auto settings = rm->getSettings();
                 configure_depth_filter(settings, enabled, depth_near, depth_far, frustum_half_width);
                 rm->updateSettings(settings);
+                lfs::python::markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("enabled"), nb::arg("depth_near") = 0.0f, nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, "Set selection depth filter range in camera space as (near, far, width).");
 
@@ -406,6 +410,7 @@ namespace lfs::python {
                 auto settings = rm->getSettings();
                 settings.crop_filter_for_selection = enabled;
                 rm->updateSettings(settings);
+                lfs::python::markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("enabled"), "Enable/disable crop box filtering for selection");
 

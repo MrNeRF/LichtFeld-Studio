@@ -1039,7 +1039,13 @@
     "reset_all_settings_confirmation": "Taal, thema, UI-schaal, scènereconstructie, invoervoorkeuren, MCP-server, indeling en vensterstatus naar de standaardwaarden herstellen? Dit wordt onmiddellijk toegepast. Als een .licht-project open is, wordt de opgeslagen indeling bij de volgende opslag vervangen; projectinhoud, datasets, exports, plugins en cache blijven ongewijzigd.",
     "reset_all_settings_success": "Alle voorkeuren, de indeling en de vensterstatus zijn onmiddellijk gereset.",
     "window_manager_unavailable": "Vensterbeheer is niet beschikbaar.",
-    "window_state_reset_failed": "De standaardvenstergeometrie kon niet worden hersteld."
+    "window_state_reset_failed": "De standaardvenstergeometrie kon niet worden hersteld.",
+    "viewport": "Weergave",
+    "viewport_defaults": "Standaarden voor nieuwe projecten",
+    "viewport_defaults_hint": "Deze waarden gelden voor nieuwe projecten. Bestaande projecten behouden hun opgeslagen waarden.",
+    "viewport_style_defaults": "Hulplijnen en selectiestijl",
+    "viewport_performance_defaults": "LOD-cachelimieten",
+    "viewport_defaults_invalid": "Voer een geldige waarde binnen het ondersteunde bereik in."
   },
   "main_panel": {
     "console": "Console",
@@ -2091,17 +2097,17 @@
   },
   "rendering_panel": {
     "fov_format": "Gezichtsveld: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_viewport": "Viewport",
+    "section_viewport": "Weergave en hulplijnen",
     "section_camera": "Camera en projectie",
     "section_selection": "Selectie en overlays",
-    "section_post_process": "Nabewerking",
+    "section_post_process": "Kleur en uiterlijk",
     "section_lod": "Detailniveau (LOD)",
     "lod_enabled": "Level of Detail inschakelen",
     "lod_max_splats": "Max. splats",
     "lod_page_pool_splats": "LOD-cachebudget",
     "lod_pool_vram_fraction": "LOD-pool VRAM-aandeel",
     "lod_fade_frames": "LOD-fadeframes",
-    "lod_render_scale": "Render-schaal",
+    "lod_render_scale": "LOD-renderschaal",
     "lod_cone_foveation": "Kegel-foveatie",
     "lod_cone_inner_degrees": "Kegel binnenhoek",
     "lod_cone_outer_degrees": "Kegel buitenhoek",
@@ -2113,7 +2119,16 @@
     "simplify_lod_base": "LOD-basis",
     "simplify_opacity_prune": "Opaciteitssnoei",
     "simplify_original": "Origineel",
-    "simplify_output": "Uitvoer"
+    "simplify_output": "Uitvoer",
+    "section_quality": "Kwaliteit en prestaties",
+    "section_environment": "Omgeving",
+    "advanced": "Geavanceerd",
+    "project_values_hint": "Projectwaarden: hulplijnstijl en LOD-cachelimieten worden in het project opgeslagen.",
+    "save_defaults": "Als standaard opslaan",
+    "apply_defaults": "Standaarden toepassen…",
+    "save_defaults_hint": "Huidige hulplijnstijl en LOD-cachelimieten opslaan voor nieuwe projecten.",
+    "apply_defaults_hint": "Standaarden alleen op dit project toepassen. Andere renderinstellingen blijven gelijk.",
+    "apply_defaults_confirm": "Hulplijnstijl en LOD-cachelimieten van dit project vervangen door uw standaarden?"
   },
   "scripts_panel": {
     "title": "Python-scripts",
@@ -2635,6 +2650,7 @@
     "export_extension_warning": "De geëxporteerde {}-gegevens hebben niet de gebruikelijke extensie. Andere apps herkennen het bestand mogelijk niet.",
     "export_sh_degree_clamped": "De gevraagde SH-graad is voor de geselecteerde modellen beperkt tot {}.",
     "video_encoder_unavailable": "Video-encoder niet beschikbaar",
+    "video_encoder_probe_failed": "Video exporteren op {}x{} is niet mogelijk: {}",
     "scene_manager_unavailable": "Scènebeheerder is niet beschikbaar",
     "no_model_selected": "Geen model geselecteerd om te exporteren",
     "no_scene_manager": "Geen scènebeheerder",
@@ -3193,5 +3209,7 @@
     "export_failed": "Export mislukt: {error}",
     "limit_error": "Voer een geheel getal tussen 0 en 50.000 in.",
     "discarded": "{discarded} verwijderd"
-  }
+  },
+  "project.session.newer_settings.title": "Projectinstellingen van een nieuwere versie",
+  "project.session.newer_settings.message": "Dit project bevat instellingen die deze versie niet herkent. Standaardwaarden gebruikt voor: {}"
 }

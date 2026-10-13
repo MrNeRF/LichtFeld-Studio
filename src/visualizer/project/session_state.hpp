@@ -96,6 +96,15 @@ namespace lfs::vis {
 
         struct PreparedGuiSessionRestore {
             lfs::io::project::ProjectSessionChapters chapters;
+            struct UnsupportedSetting {
+                std::string field;
+                std::string value;
+                std::string fallback;
+                std::string chapter;
+                std::string path;
+                std::string identity;
+            };
+            std::vector<UnsupportedSetting> unsupported_settings;
             // REFS-resolved paths (open-time). Apply injects these into live
             // owners; VIEW/SEQR chapters store UUIDs, not raw machine paths.
             std::optional<std::filesystem::path> environment_map_path = std::nullopt;

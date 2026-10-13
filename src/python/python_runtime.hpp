@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -338,6 +339,7 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_visualizer(vis::Visualizer* viewer);
     LFS_PYTHON_RUNTIME_API vis::Visualizer* get_visualizer();
+    LFS_PYTHON_RUNTIME_API void markProjectSessionChapterCommitted(std::string_view chapter);
 
     LFS_PYTHON_RUNTIME_API void set_parameter_manager(vis::ParameterManager* pm);
     LFS_PYTHON_RUNTIME_API vis::ParameterManager* get_parameter_manager();

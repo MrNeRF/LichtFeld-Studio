@@ -1208,6 +1208,7 @@ namespace lfs::vis::gui {
                 settings.show_crop_box = cropbox_node->visible;
                 settings.use_crop_box = true;
                 rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+                viewer_->projectMarkSessionChapterCommitted("VIEW");
             }
 
             lfs::geometry::BoundingBox crop_box;
@@ -1256,6 +1257,7 @@ namespace lfs::vis::gui {
                 settings.show_ellipsoid = ellipsoid_node->visible;
                 settings.use_ellipsoid = true;
                 rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+                viewer_->projectMarkSessionChapterCommitted("VIEW");
             }
 
             cmd::CropPLYEllipsoid{
@@ -1303,6 +1305,7 @@ namespace lfs::vis::gui {
             settings.show_center_markers = !centers && !rings;
             settings.show_rings = centers && !rings;
             rm->updateSettings(settings);
+            viewer_->projectMarkSessionChapterCommitted("VIEW");
         });
     }
 

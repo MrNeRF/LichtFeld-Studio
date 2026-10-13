@@ -34,6 +34,7 @@
 #include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
 #include "visualizer/app_store.hpp"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -298,6 +299,13 @@ namespace lfs::vis {
         void updateSettings(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
         RenderSettings getSettings() const;
+        struct CameraProjectionSettings {
+            bool orthographic;
+            float focal_length_mm;
+            float ortho_scale;
+        };
+        CameraProjectionSettings getCameraProjectionSettings() const;
+        void setOrthographicScale(float scale);
         // The presentation pass reports its actual runtime choice after pipeline
         // preparation. Rendering uses this feedback on the next frame so a failed
         // reconstruction pipeline never receives a reduced-resolution image.

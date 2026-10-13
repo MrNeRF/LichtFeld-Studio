@@ -17,6 +17,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::core {
@@ -252,6 +253,12 @@ namespace lfs::vis {
         projectHasPath() = 0;
         virtual lfs::Result<ProjectInfo>
         projectGetInfo() = 0;
+        virtual void projectMarkSessionChapterCommitted(std::string_view chapter) {
+            static_cast<void>(chapter);
+        }
+        [[nodiscard]] virtual bool projectSessionRestoreInProgress() const {
+            return false;
+        }
         virtual ProjectDisplayInfo projectGetDisplayInfo() { return {}; }
         virtual lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
         projectGetLicense() = 0;

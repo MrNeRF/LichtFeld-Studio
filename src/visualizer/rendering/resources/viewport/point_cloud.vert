@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#define LFS_EQUIRECT_GLSL
+#include "../../../../rendering/rasterizer/vulkan/shader/src/slang/equirect_projection.inc"
 
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_color;
@@ -146,13 +149,9 @@ void main() {
             reject();
             return;
         }
-        const float pi = 3.14159265358979323846;
-        // At the poles longitude is arbitrary; avoid atan(0, 0).
-        float longitude = (view_pos.x == 0.0 && view_pos.z == 0.0)
-                              ? 0.0 : atan(view_pos.x, -view_pos.z);
-        float latitude = asin(clamp(view_pos.y / distance, -1.0, 1.0));
+        vec2 uv = lfs_equirect_uv(view_pos.xyz / distance);
         clip = pc.view_proj * vec4(0.0, 0.0, -distance, 1.0);
-        clip.xy = vec2(longitude / pi, -2.0 * latitude / pi) * clip.w;
+        clip.xy = (2.0 * uv - 1.0) * clip.w;
         view_z_positive = distance;
     } else {
         clip = pc.view_proj * vec4(ws, 1.0);

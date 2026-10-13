@@ -39,6 +39,12 @@ class TrainingSceneInitConcurrencyTest;
 
 namespace lfs::vis {
 
+    namespace training_memory_detail {
+        using ClearTrainerTrimHook = void (*)() noexcept;
+        LFS_VIS_API void setClearTrainerTrimHookForTesting(ClearTrainerTrimHook hook) noexcept;
+        LFS_VIS_API void shutdownHeapTrimWorker() noexcept;
+    } // namespace training_memory_detail
+
     // Forward declarations
     class VisualizerImpl;
     class ParameterManager;

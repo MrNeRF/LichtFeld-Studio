@@ -1039,7 +1039,13 @@
     "reset_all_settings_confirmation": "Rétablir la langue, le thème, l'échelle de l'interface, la reconstruction de la scène, les préférences de saisie, le serveur MCP, la disposition et l'état de la fenêtre à leurs valeurs par défaut ? Cela s'applique immédiatement. Si un projet .licht est ouvert, sa disposition enregistrée sera remplacée au prochain enregistrement ; le contenu du projet, les jeux de données, les exportations, les plugins et le cache ne sont pas affectés.",
     "reset_all_settings_success": "Toutes les préférences, la disposition et l'état de la fenêtre ont été réinitialisés immédiatement.",
     "window_manager_unavailable": "Le gestionnaire de fenêtres n'est pas disponible.",
-    "window_state_reset_failed": "La géométrie par défaut de la fenêtre n'a pas pu être restaurée."
+    "window_state_reset_failed": "La géométrie par défaut de la fenêtre n'a pas pu être restaurée.",
+    "viewport": "Vue",
+    "viewport_defaults": "Valeurs des nouveaux projets",
+    "viewport_defaults_hint": "Ces valeurs initialisent les nouveaux projets. Les projets existants conservent leurs valeurs enregistrées.",
+    "viewport_style_defaults": "Style des guides et de sélection",
+    "viewport_performance_defaults": "Limites du cache LOD",
+    "viewport_defaults_invalid": "Saisissez une valeur valide dans la plage autorisée."
   },
   "main_panel": {
     "console": "Console",
@@ -2091,17 +2097,17 @@
   },
   "rendering_panel": {
     "fov_format": "FOV : {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_viewport": "Vue",
+    "section_viewport": "Vue et guides",
     "section_camera": "Caméra et projection",
     "section_selection": "Sélection et superpositions",
-    "section_post_process": "Post-traitement",
+    "section_post_process": "Couleur et apparence",
     "section_lod": "Niveau de détail (LOD)",
     "lod_enabled": "Activer le niveau de détail (LOD)",
     "lod_max_splats": "Splats max",
     "lod_page_pool_splats": "Budget du cache LOD",
     "lod_pool_vram_fraction": "Fraction VRAM du pool LOD",
     "lod_fade_frames": "Images de fondu LOD",
-    "lod_render_scale": "Échelle de rendu",
+    "lod_render_scale": "Échelle de rendu LOD",
     "lod_cone_foveation": "Fovéation conique",
     "lod_cone_inner_degrees": "Angle intérieur du cône",
     "lod_cone_outer_degrees": "Angle extérieur du cône",
@@ -2113,7 +2119,16 @@
     "simplify_lod_base": "Base LOD",
     "simplify_opacity_prune": "Élagage d'opacité",
     "simplify_original": "Original",
-    "simplify_output": "Sortie"
+    "simplify_output": "Sortie",
+    "section_quality": "Qualité et performances",
+    "section_environment": "Environnement",
+    "advanced": "Avancé",
+    "project_values_hint": "Valeurs du projet : le style des guides et les limites du cache LOD sont enregistrés dans le projet.",
+    "save_defaults": "Enregistrer par défaut",
+    "apply_defaults": "Appliquer les valeurs…",
+    "save_defaults_hint": "Enregistrer le style des guides et les limites du cache LOD pour les nouveaux projets.",
+    "apply_defaults_hint": "Appliquer les valeurs à ce projet uniquement. Les autres réglages de rendu restent inchangés.",
+    "apply_defaults_confirm": "Remplacer le style des guides et les limites du cache LOD de ce projet par vos valeurs ?"
   },
   "scripts_panel": {
     "title": "Scripts Python",
@@ -2635,6 +2650,7 @@
     "export_extension_warning": "Les données {} exportées n'ont pas leur extension habituelle. D'autres applications risquent de ne pas les reconnaître.",
     "export_sh_degree_clamped": "Le degré SH demandé a été limité à {} pour les modèles sélectionnés.",
     "video_encoder_unavailable": "Encodeur vidéo indisponible",
+    "video_encoder_probe_failed": "Impossible d’exporter la vidéo en {}x{} : {}",
     "scene_manager_unavailable": "Le gestionnaire de scènes est indisponible",
     "no_model_selected": "Aucun modèle sélectionné pour l’exportation",
     "no_scene_manager": "Aucun gestionnaire de scènes",
@@ -3193,5 +3209,7 @@
     "export_failed": "Échec de l’export : {error}",
     "limit_error": "Saisissez un entier entre 0 et 50 000.",
     "discarded": "{discarded} supprimés"
-  }
+  },
+  "project.session.newer_settings.title": "Paramètres du projet issus d’une version plus récente",
+  "project.session.newer_settings.message": "Ce projet contient des paramètres que cette version ne reconnaît pas. Valeurs par défaut utilisées pour : {}"
 }

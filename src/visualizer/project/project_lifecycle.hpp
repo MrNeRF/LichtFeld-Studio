@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -66,7 +67,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
     class VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
     class VisualizerImplResetTest_NavigationVerticalRoundTripPreservesPosesAndGridChoices_Test;
-    class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
+    class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptButArmsAutosave_Test;
     class VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
     class VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
     class VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;
@@ -294,6 +295,7 @@ namespace lfs::vis::project {
             bool defer_recovery_scan = false);
         void runStartupRecoveryScan();
         void markSceneMutation(std::uint32_t mutation_flags);
+        void markSessionChapterCommitted(std::string_view chapter);
         void updateMaintenance();
         void noteProjectFrameRendered(double render_ms);
         [[nodiscard]] bool hasDirtyProject();
@@ -404,7 +406,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
         friend class lfs::vis::VisualizerImplResetTest_NavigationVerticalRoundTripPreservesPosesAndGridChoices_Test;
-        friend class lfs::vis::VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptButArmsAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
         friend class lfs::vis::VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;

@@ -2666,6 +2666,7 @@ namespace lfs::vis {
             lfs::rendering::FrameMetadata metadata;
             VkImageView external_image_view = VK_NULL_HANDLE;
             std::uint64_t external_image_generation = 0;
+            lfs::vis::VulkanDepthBlitParams depth_blit{};
             bool flip_y = false;
             glm::ivec2 size{0, 0};
             glm::ivec2 alloc_size{0, 0};
@@ -2990,10 +2991,30 @@ namespace lfs::vis {
                     lfs::rendering::FrameMetadata metadata{};
                     metadata.valid = true;
                     metadata.flip_y = result->flip_y;
+                    lfs::vis::VulkanDepthBlitParams depth_blit;
+                    if (result->depth_image_view != VK_NULL_HANDLE) {
+                        depth_blit.external_image_view = result->depth_image_view;
+                        depth_blit.external_image_generation = result->depth_generation;
+                        depth_blit.depth_is_ndc = false;
+                        depth_blit.flip_y = result->flip_y;
+                        depth_blit.near_plane = request.frame_view.near_plane > 0.0f
+                                                    ? request.frame_view.near_plane
+                                                    : 0.1f;
+                        depth_blit.far_plane = request.frame_view.far_plane > 0.0f
+                                                   ? request.frame_view.far_plane
+                                                   : 1000.0f;
+                        const glm::ivec2 depth_alloc =
+                            result->alloc_size.x > 0 && result->alloc_size.y > 0
+                                ? result->alloc_size
+                                : result->size;
+                        depth_blit.uv_scale = outputUvScale(result->size, depth_alloc);
+                        depth_blit.uv_clamp_max = outputUvClampMax(result->size, depth_alloc);
+                    }
                     return RenderedPanel{.image = nullptr,
                                          .metadata = std::move(metadata),
                                          .external_image_view = result->image_view,
                                          .external_image_generation = result->generation,
+                                         .depth_blit = std::move(depth_blit),
                                          .flip_y = result->flip_y,
                                          .size = result->size,
                                          .alloc_size = result->alloc_size};
@@ -3029,6 +3050,7 @@ namespace lfs::vis {
                     .flip_y = panel.flip_y,
                     .external_image_view = panel.external_image_view,
                     .external_image_generation = panel.external_image_generation,
+                    .depth_blit = panel.depth_blit,
                     .uv_scale = outputUvScale(valid, alloc),
                     .uv_clamp_max = outputUvClampMax(valid, alloc),
                     .texcoord_scale = {1.0f, 1.0f},
@@ -4744,23 +4766,37 @@ namespace lfs::vis {
             VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view, environment_map_path);
             populate_independent_split_mesh_panels(gpu_mesh_frame);
 
-            // Splat depth -> mesh-pass z-test source. Only meaningful when the
-            // active render path produced a tensor-backed depth output.
-            if (rendered_image && rendered_metadata.depth_panel_count > 0 &&
-                rendered_metadata.depth_panels[0].depth &&
-                rendered_metadata.depth_panels[0].depth->is_valid()) {
-                gpu_mesh_frame.depth_blit.depth = rendered_metadata.depth_panels[0].depth;
-                gpu_mesh_frame.depth_blit.depth_is_ndc = rendered_metadata.depth_is_ndc;
-                // Depth and color tensors share storage orientation; the viewport
-                // pass already flips the screen quad's UVs for the color image,
-                // so the depth-blit pass inherits that flip and needs no extra one.
-                gpu_mesh_frame.depth_blit.flip_y = false;
-                gpu_mesh_frame.depth_blit.near_plane = rendered_metadata.near_plane > 0.0f
-                                                           ? rendered_metadata.near_plane
-                                                           : 0.1f;
-                gpu_mesh_frame.depth_blit.far_plane = rendered_metadata.far_plane > 0.0f
-                                                          ? rendered_metadata.far_plane
-                                                          : 1000.0f;
+            // Splat depth -> mesh-pass z-test sources. Independent split views
+            // retain one depth tensor per panel and need both before mesh drawing.
+            if ((rendered_image || pending_split_view.enabled) && rendered_metadata.depth_panel_count > 0) {
+                const auto populate_depth = [&](lfs::vis::VulkanDepthBlitParams& target,
+                                                const std::shared_ptr<lfs::core::Tensor>& depth) {
+                    if (!depth || !depth->is_valid()) {
+                        return;
+                    }
+                    target.depth = depth;
+                    target.depth_is_ndc = rendered_metadata.depth_is_ndc;
+                    // Depth and color tensors share storage orientation; the viewport
+                    // pass already flips the screen quad's UVs for the color image.
+                    target.flip_y = false;
+                    target.near_plane = rendered_metadata.near_plane > 0.0f
+                                            ? rendered_metadata.near_plane
+                                            : 0.1f;
+                    target.far_plane = rendered_metadata.far_plane > 0.0f
+                                           ? rendered_metadata.far_plane
+                                           : 1000.0f;
+                };
+                const auto& first_depth = rendered_metadata.depth_panels[0].depth;
+                populate_depth(gpu_mesh_frame.depth_blit, first_depth);
+                for (std::size_t panel = 0;
+                     panel < std::min<std::size_t>(rendered_metadata.depth_panel_count,
+                                                   gpu_mesh_frame.split_view.enabled ? 2 : 1);
+                     ++panel) {
+                    auto& target = panel == 0 ? gpu_mesh_frame.split_view.left.depth_blit
+                                              : gpu_mesh_frame.split_view.right.depth_blit;
+                    populate_depth(target,
+                                   rendered_metadata.depth_panels[panel].depth);
+                }
             }
 
             setVulkanMeshFrame(std::move(gpu_mesh_frame));

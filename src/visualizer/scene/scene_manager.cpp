@@ -1753,6 +1753,10 @@ namespace lfs::vis {
             (removed_type == core::NodeType::CROPBOX || removed_type == core::NodeType::ELLIPSOID) &&
             selection_.isNodeSelected(id);
         bool removes_camera_nodes = false;
+        bool removes_scene_model_resources =
+            node_to_remove->type == core::NodeType::SPLAT ||
+            node_to_remove->type == core::NodeType::POINTCLOUD;
+        bool removes_mesh_nodes = node_to_remove->type == core::NodeType::MESH;
         std::vector<core::NodeId> ids_to_deselect;
         std::vector<core::Uuid> uuids_to_remove;
         const core::Uuid removed_uuid = node_to_remove->uuid;
@@ -1762,6 +1766,10 @@ namespace lfs::vis {
                 if (const auto* node = scene_.getNodeById(id)) {
                     uuids_to_remove.push_back(node->uuid);
                     removes_camera_nodes = removes_camera_nodes || node->type == core::NodeType::CAMERA;
+                    removes_scene_model_resources = removes_scene_model_resources ||
+                                                    node->type == core::NodeType::SPLAT ||
+                                                    node->type == core::NodeType::POINTCLOUD;
+                    removes_mesh_nodes = removes_mesh_nodes || node->type == core::NodeType::MESH;
                     for (const core::NodeId child_id : node->children) {
                         collect(child_id);
                     }
@@ -1774,9 +1782,15 @@ namespace lfs::vis {
             removes_camera_nodes = node_to_remove->type == core::NodeType::CAMERA;
         }
 
-        drainGpuForTensorRelease();
-        if (auto* rendering = services().renderingOrNull()) {
-            rendering->releaseSceneModelResources();
+        if (removes_scene_model_resources) {
+            drainGpuForTensorRelease();
+            if (auto* rendering = services().renderingOrNull()) {
+                rendering->releaseSceneModelResources();
+            }
+        } else if (removes_mesh_nodes) {
+            if (auto* rendering = services().renderingOrNull()) {
+                rendering->clearVulkanMeshFrame();
+            }
         }
 
         auto detached_models = scene_.detachSplatModelsForRemoval(id, keep_children);

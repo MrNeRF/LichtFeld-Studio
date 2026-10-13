@@ -88,7 +88,7 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
 
     assert 'data-class-open="item.submenu_open"' in rml
     assert 'data-attr-data-root-index="item.index"' in rml
-    assert 'data-class-active="item.submenu_open"' in rml
+    assert 'data-class-active="item.keyboard_active"' in rml
     assert 'data-class-open="child.submenu_open"' in rml
     assert 'data-attr-data-child-index="child.index"' in rml
     assert 'data-for="grandchild : child.children"' in rml

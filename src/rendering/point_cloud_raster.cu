@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "environment_math.hpp"
 #include "point_cloud_raster.cuh"
 
 #include <cmath>
@@ -138,11 +139,9 @@ namespace lfs::rendering::pcraster {
                 const float dx = view_x / len;
                 const float dy = view_y / len;
                 const float dz = view_z / len;
-                const float pi = 3.14159265358979323846f;
-                const float u = 0.5f + atan2f(dx, -dz) / (2.0f * pi);
-                const float v = 0.5f - asinf(fminf(fmaxf(dy, -1.0f), 1.0f)) / pi;
-                pixel_x = u * static_cast<float>(params.width - 1);
-                pixel_y = v * static_cast<float>(params.height - 1);
+                const auto uv = envmath::equirectUvForDirection({dx, dy, dz});
+                pixel_x = uv.u * static_cast<float>(params.width - 1);
+                pixel_y = uv.v * static_cast<float>(params.height - 1);
                 if (!isfinite(pixel_x) || !isfinite(pixel_y) ||
                     pixel_x < 0.0f || pixel_x >= static_cast<float>(params.width) ||
                     pixel_y < 0.0f || pixel_y >= static_cast<float>(params.height)) {

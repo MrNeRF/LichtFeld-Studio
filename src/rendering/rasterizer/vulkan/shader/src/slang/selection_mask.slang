@@ -359,14 +359,18 @@ bool project_ring_splat(
 }
 
 [ForceInline]
-bool primitive_hit(float2 position, float4 primitive, uint mode)
+bool primitive_hit(float2 position, float4 primitive, SelectionUniforms uniforms)
 {
-    if (mode == SELECTION_MODE_RECTANGLE) {
+    if (uniforms.mode == SELECTION_MODE_RECTANGLE) {
         return position.x >= primitive.x && position.x <= primitive.z &&
                position.y >= primitive.y && position.y <= primitive.w;
     }
 
     float2 delta = position - primitive.xy;
+    if (base_camera_model(uniforms.camera_model) == uint(CameraModel::EQUIRECTANGULAR)) {
+        const float width = float(uniforms.image_width);
+        delta.x -= round(delta.x / width) * width;
+    }
     return dot(delta, delta) <= primitive.z;
 }
 
@@ -525,7 +529,7 @@ void main(
                     selected = polygon_mask_hit(position, uniforms);
                 } else {
                     for (uint primitive_idx = 0u; primitive_idx < uniforms.primitive_count; ++primitive_idx) {
-                        if (primitive_hit(position, primitives[primitive_idx], uniforms.mode)) {
+                        if (primitive_hit(position, primitives[primitive_idx], uniforms)) {
                             selected = true;
                             break;
                         }

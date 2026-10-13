@@ -3062,6 +3062,7 @@ namespace lfs::app {
                     }
 
                     core::events::cmd::GoToCamView{.cam_id = target->camera_uid}.emit();
+                    viewer_impl->projectMarkSessionChapterCommitted("VIEW");
                     return json{{"success", true}, {"camera", camera_node_json(scene, *target)}};
                 });
             });
@@ -3305,6 +3306,7 @@ namespace lfs::app {
                     } catch (const std::invalid_argument& error) {
                         return mcp::invalid_argument_result(error.what(), "environment_map_path");
                     }
+                    viewer_impl->projectMarkSessionChapterCommitted("VIEW");
 
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     auto* const rendering_manager = viewer_impl->getRenderingManager();

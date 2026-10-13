@@ -36,6 +36,8 @@ class _ScrubFieldState:
     dragging: bool = False
     editing: bool = False
     drag_start_mouse_x: float = 0.0
+    drag_last_mouse_x: float = 0.0
+    drag_value: float = 0.0
     edit_value_before: float = 0.0
     edit_snapshot: object = None
     commit_on_blur: bool = False
@@ -191,6 +193,8 @@ class ScrubFieldController:
         mx = self._event_mouse_x(event)
         state.dragging = False
         state.drag_start_mouse_x = mx
+        state.drag_last_mouse_x = mx
+        state.drag_value = self._safe_value(prop)
         state.edit_snapshot = self._capture_edit(prop) if self._capture_edit else None
         state.edit_value_before = self._safe_value(prop)
         self._active_prop = prop
@@ -213,7 +217,7 @@ class ScrubFieldController:
             state.dragging = True
             state.field.set_class("is-dragging", True)
 
-        self._apply_drag_position(state, mx)
+        self._apply_drag_position(state, mx, event)
         event.stop_propagation()
 
     def _on_body_mouseup(self, event) -> None:
@@ -378,13 +382,16 @@ class ScrubFieldController:
 
         self._apply_value(state, value)
 
-    def _apply_drag_position(self, state: _ScrubFieldState, mouse_x: float) -> None:
+    def _apply_drag_position(self, state: _ScrubFieldState, mouse_x: float, event) -> None:
         width = max(float(getattr(state.field, "absolute_width", 0.0)), 1.0)
-        left = float(getattr(state.field, "absolute_left", 0.0))
-        x = mouse_x - left
-        t = max(0.0, min(1.0, x / width))
-        value = state.spec.min_value + t * (state.spec.max_value - state.spec.min_value)
-        value = self._snap_value(state.spec, value)
+        delta_x = mouse_x - state.drag_last_mouse_x
+        state.drag_last_mouse_x = mouse_x
+        factor = 10.0 if event.get_bool_parameter("ctrl_key", False) else (
+            0.1 if event.get_bool_parameter("shift_key", False) else 1.0
+        )
+        state.drag_value += delta_x * (state.spec.max_value - state.spec.min_value) / width * factor
+        state.drag_value = max(state.spec.min_value, min(state.spec.max_value, state.drag_value))
+        value = self._snap_value(state.spec, state.drag_value)
         self._apply_value(state, value)
 
     def _apply_value(self, state: _ScrubFieldState, value: float) -> None:

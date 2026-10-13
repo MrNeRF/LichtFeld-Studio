@@ -190,6 +190,7 @@ namespace lfs::vis::gui {
         // Focus-state aggregators across all live RmlUi contexts so viewport input
         // suppression reflects the actual GUI surface the user is interacting with.
         [[nodiscard]] LFS_VIS_API bool wantsCaptureKeyboard() const;
+        [[nodiscard]] LFS_VIS_API bool wantsModalKeyboardCapture() const;
         [[nodiscard]] LFS_VIS_API bool wantsTextInput() const;
         [[nodiscard]] bool anyItemActive() const;
         bool refreshLocalizedDocuments();
@@ -270,6 +271,9 @@ namespace lfs::vis::gui {
         std::unordered_map<Rml::Context*, InputHandler> input_handlers_;
         std::unordered_map<SDL_Scancode, KeyOwner> key_owners_;
         Rml::Context* keyboard_context_ = nullptr;
+        bool keyboard_capture_target_ = false;
+        bool modal_keyboard_capture_ = false;
+        bool popup_state_dirty_ = true;
         uint64_t input_frame_ = 0;
         bool dispatching_input_ = false;
         bool input_mouse_down_[3] = {};

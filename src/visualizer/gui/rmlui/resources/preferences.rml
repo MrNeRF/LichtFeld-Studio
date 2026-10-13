@@ -8,6 +8,7 @@
     <div class="preferences-nav">
       <button class="btn preferences-nav-item" data-class-active="show_general" data-event-click="show_general">@tr:preferences.general</button>
       <button class="btn preferences-nav-item" data-class-active="show_appearance" data-event-click="show_appearance">@tr:preferences.appearance</button>
+      <button class="btn preferences-nav-item" data-class-active="show_viewport" data-event-click="show_viewport">@tr:preferences.viewport</button>
       <button class="btn preferences-nav-item" data-class-active="show_input" data-event-click="show_input">@tr:preferences.input</button>
       <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
       <button class="btn preferences-nav-item" data-class-active="show_file_associations" data-event-click="show_file_associations" data-if="has_file_associations">@tr:preferences.file_associations</button>
@@ -139,6 +140,70 @@
         </div>
       </div>
 
+      <div class="preferences-section" data-if="show_viewport">
+        <div class="section-header text-accent">@tr:preferences.viewport_defaults</div>
+        <span class="preferences-description">@tr:preferences.viewport_defaults_hint</span>
+        <div class="section-header text-accent">@tr:preferences.viewport_style_defaults</div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.coord_axes">
+          <span class="preferences-label">@tr:main_panel.show_coord_axes</span>
+          <input type="checkbox" class="" data-checked="default_show_coord_axes" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.pivot">
+          <span class="preferences-label">@tr:main_panel.show_pivot</span>
+          <input type="checkbox" class="" data-checked="default_show_pivot" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.grid">
+          <span class="preferences-label">@tr:main_panel.show_grid</span>
+          <input type="checkbox" class="" data-checked="default_show_grid" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.camera_frustums">
+          <span class="preferences-label">@tr:main_panel.camera_frustums</span>
+          <input type="checkbox" class="" data-checked="default_show_camera_frustums" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.desaturate_unselected">
+          <span class="preferences-label">@tr:main_panel.desaturate_unselected</span>
+          <input type="checkbox" class="" data-checked="default_desaturate_unselected" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.desaturate_cropping">
+          <span class="preferences-label">@tr:main_panel.desaturate_cropping</span>
+          <input type="checkbox" class="" data-checked="default_desaturate_cropping" />
+        </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.hide_outside_depth_box">
+          <span class="preferences-label">@tr:main_panel.hide_outside_depth_box</span>
+          <input type="checkbox" class="" data-checked="default_hide_outside_depth_box" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.axes_size">
+          <span class="preferences-label">@tr:main_panel.axes_size</span>
+          <input type="text" class="preferences-select" data-value="default_axes_size" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.grid_opacity">
+          <span class="preferences-label">@tr:main_panel.grid_opacity</span>
+          <input type="text" class="preferences-select" data-value="default_grid_opacity" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.camera_frustum_scale">
+          <span class="preferences-label">@tr:main_panel.camera_frustum_scale</span>
+          <input type="text" class="preferences-select" data-value="default_camera_frustum_scale" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.selection_color_preview">
+          <span class="preferences-label">@tr:main_panel.preview</span>
+          <input type="text" class="preferences-select" data-value="default_selection_color_preview" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.selection_color_center_marker">
+          <span class="preferences-label">@tr:main_panel.center_marker</span>
+          <input type="text" class="preferences-select" data-value="default_selection_color_center_marker" />
+        </div>
+        <div class="section-header text-accent">@tr:preferences.viewport_performance_defaults</div>
+        <div class="preferences-row" data-tooltip="tooltip.lod_page_pool_splats">
+          <span class="preferences-label">@tr:rendering_panel.lod_page_pool_splats</span>
+          <input type="text" class="preferences-select" data-value="default_lod_page_pool_splats" />
+        </div>
+        <div class="preferences-row" data-tooltip="tooltip.lod_pool_vram_fraction">
+          <span class="preferences-label">@tr:rendering_panel.lod_pool_vram_fraction</span>
+          <input type="text" class="preferences-select" data-value="default_lod_pool_vram_fraction" />
+        </div>
+        <span class="preferences-description status-error">{{rendering_defaults_error}}</span>
+      </div>
+
       <div class="preferences-section" data-if="show_appearance">
         <div class="section-header text-accent" data-class-is-expanded="appearance_expanded" data-event-click="toggle_section('appearance')">
           <span class="section-arrow text-accent" data-class-is-expanded="appearance_expanded">&#x25B6;</span>
@@ -183,6 +248,36 @@
             <select class="preferences-select" data-value="scale_idx">
               <option data-for="scale : scales" data-attr-value="scale.index">{{ scale.label }}</option>
             </select>
+          </div>
+        </div>
+        <div class="section-header text-accent">@tr:main_panel.theme_vignette</div>
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.theme_vignette">
+          <span class="setting-row__label-col">@tr:main_panel.theme_vignette</span>
+          <label class="setting-row__control-col setting-row__control-col--checkbox">
+            <input type="checkbox" data-checked="theme_vignette_enabled" />
+          </label>
+        </div>
+        <div data-if="theme_vignette_enabled">
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.theme_vignette_intensity">
+            <span class="setting-row__label-col">@tr:main_panel.theme_vignette_intensity</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="theme_vignette_intensity" min="0" max="1" step="0.01" />
+              <span class="slider-value">{{theme_vignette_intensity | format_float(2)}}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.theme_vignette_radius">
+            <span class="setting-row__label-col">@tr:main_panel.theme_vignette_radius</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="theme_vignette_radius" min="0" max="1" step="0.01" />
+              <span class="slider-value">{{theme_vignette_radius | format_float(2)}}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.theme_vignette_softness">
+            <span class="setting-row__label-col">@tr:main_panel.theme_vignette_softness</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="theme_vignette_softness" min="0" max="1" step="0.01" />
+              <span class="slider-value">{{theme_vignette_softness | format_float(2)}}</span>
+            </div>
           </div>
         </div>
       </div>

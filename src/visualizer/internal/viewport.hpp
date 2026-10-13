@@ -254,6 +254,49 @@ class Viewport {
             pivot += movement;
         }
 
+        float advanceOrthographicWasd(float deltaTime, bool forward, bool backward, bool left,
+                                      bool right, bool up, bool down, float ortho_scale,
+                                      float perspective_scale, float distance_to_pivot,
+                                      float additional_speed = 0.0f) {
+            const glm::vec3 f = lfs::rendering::cameraForward(R);
+            const glm::vec3 r = glm::normalize(R * glm::vec3(1, 0, 0));
+            const glm::vec3 u = glm::normalize(R * glm::vec3(0, 1, 0));
+            const float forward_input = static_cast<float>(forward) - static_cast<float>(backward);
+            const float side_input = static_cast<float>(right) - static_cast<float>(left);
+            const float vertical_input = static_cast<float>(up) - static_cast<float>(down);
+            const bool held = forward_input != 0.0f || side_input != 0.0f || vertical_input != 0.0f;
+            if (held)
+                wasd_hold_seconds_ += deltaTime;
+
+            const float effective_speed = (wasdSpeed + additional_speed) * unitsPerSecondPerLevel();
+            const float lateral_scale = perspective_scale / std::max(ortho_scale, 1e-6f);
+            const glm::vec3 lateral_direction = r * side_input + u * vertical_input;
+            const glm::vec3 target_velocity =
+                f * (forward_input * effective_speed) + lateral_direction * (effective_speed * lateral_scale);
+            const float blend = 1.0f - std::exp(-deltaTime * kWasdInertiaRate);
+            wasd_velocity = glm::mix(wasd_velocity, target_velocity, blend);
+
+            const float stop_speed = kWasdStopFraction * effective_speed * std::min(1.0f, lateral_scale);
+            if (glm::length2(target_velocity) < 1e-8f && glm::length2(wasd_velocity) < stop_speed * stop_speed) {
+                wasd_velocity = glm::vec3(0.0f);
+                if (!held)
+                    wasd_hold_seconds_ = 0.0f;
+                return ortho_scale;
+            }
+
+            const float forward_speed = glm::dot(wasd_velocity, f);
+            constexpr float kMinDistance = lfs::rendering::DEFAULT_NEAR_PLANE;
+            const float distance = std::max(distance_to_pivot, 0.01f);
+            const float next_distance = std::max(kMinDistance, distance - forward_speed * deltaTime);
+            const float next_scale = std::clamp(ortho_scale * distance / next_distance, 1.0f, 10000.0f);
+            const float applied_distance = distance * (1.0f - ortho_scale / next_scale);
+            const glm::vec3 lateral_velocity = wasd_velocity - f * forward_speed;
+            const glm::vec3 lateral_movement = lateral_velocity * deltaTime;
+            t += lateral_movement + f * applied_distance;
+            pivot += lateral_movement;
+            return next_scale;
+        }
+
         [[nodiscard]] bool hasWasdMomentum() const { return glm::length2(wasd_velocity) > 0.0f; }
         void clearWasdMomentum() {
             wasd_velocity = glm::vec3(0.0f);

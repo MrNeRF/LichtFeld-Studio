@@ -14,6 +14,7 @@
 
 #include "config.slang"
 #include "overlay_flags.inc"
+#include "equirect_projection.inc"
 
 #define LFS_PORTAL_INLINE
 #define LFS_PORTAL_VEC3 float3
@@ -174,11 +175,11 @@ float3 project_point_equirect(float3 point, Camera cam) {
         return {0, 0, -1};
 
     float3 dir = view_point / len;
-    float azimuth = atan2(dir.x, dir.z);
-    float elevation = asin(clamp(dir.y, -1.0f, 1.0f));
+    // Rasterizer camera space has +Z forward; convert to the shared -Z convention.
+    float2 uv = lfs_equirect_uv(float3(dir.x, dir.y, -dir.z));
     return {
-        (azimuth / (2.0f * M_PI) + 0.5f) * float(cam.W),
-        (elevation / M_PI + 0.5f) * float(cam.H),
+        uv.x * float(cam.W),
+        uv.y * float(cam.H),
         len
     };
 }

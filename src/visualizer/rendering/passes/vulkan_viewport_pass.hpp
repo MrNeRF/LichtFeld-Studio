@@ -188,6 +188,13 @@ namespace lfs::vis {
         VulkanSplitViewParams split_view;
     };
 
+    [[nodiscard]] inline bool meshUsesLeftDepth(const VulkanViewportPassParams& params,
+                                                const bool split_active) {
+        const auto& left_depth = params.split_view.left.depth_blit;
+        return split_active && !params.mesh_panels.empty() &&
+               (left_depth.depth || left_depth.external_image_view != VK_NULL_HANDLE);
+    }
+
     class LFS_VIS_API VulkanViewportPass {
     public:
         VulkanViewportPass();
