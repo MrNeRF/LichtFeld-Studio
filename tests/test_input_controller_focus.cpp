@@ -2074,6 +2074,7 @@ namespace lfs::vis {
         handlers.subscribe<core::events::cmd::SelectAll>(record(Action::SELECT_ALL));
         handlers.subscribe<core::events::cmd::DeselectAll>(record(Action::DESELECT_ALL));
         handlers.subscribe<core::events::ui::ToggleVramHud>(record(Action::TOGGLE_PERFORMANCE_HUD));
+        handlers.subscribe<core::events::ui::ToggleUI>(record(Action::TOGGLE_UI));
         handlers.subscribe<core::events::cmd::ProjectSave>(record(Action::NONE));
 
         const auto default_profile = InputBindings::createDefaultProfile();
