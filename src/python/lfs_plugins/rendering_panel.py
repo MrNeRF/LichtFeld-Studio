@@ -283,6 +283,21 @@ RENDERING_INITIALLY_COLLAPSED = {
     "ppisp_crf",
 }
 
+# Border box of the color picker popup at 100% UI scale: 160dp picker,
+# 4dp padding and a 1dp border on each side. The horizontal offset is 210.
+_COLOR_PICKER_POPUP_HEIGHT = 170
+
+
+def color_picker_popup_top(mouse_y, panel_height, popup_height, gap=2):
+    """Keep the popup inside the panel, opening above the cursor when needed."""
+    top = int(mouse_y) + gap
+    if panel_height <= 0 or popup_height <= 0 or top + popup_height <= panel_height:
+        return top
+    above = int(mouse_y) - int(popup_height) - gap
+    if above >= 0:
+        return above
+    return max(0, int(panel_height) - int(popup_height))
+
 
 class RenderingPanel(Panel):
     id = "lfs.rendering"
@@ -1172,8 +1187,17 @@ class RenderingPanel(Panel):
         mx = int(float(event.get_parameter("mouse_x", "0")))
         my = int(float(event.get_parameter("mouse_y", "0")))
         left = max(0, mx - 210)
+        scale = float(lf.ui.get_ui_scale() or 1.0)
+        if scale <= 0:
+            scale = 1.0
+        panel_height = 0.0
+        if self._doc is not None:
+            body = self._doc.get_element_by_id("body")
+            if body is not None:
+                panel_height = float(body.client_height)
+        top = color_picker_popup_top(my, panel_height, _COLOR_PICKER_POPUP_HEIGHT * scale)
         self._popup_el.set_property("left", f"{left}px")
-        self._popup_el.set_property("top", f"{my + 2}px")
+        self._popup_el.set_property("top", f"{top}px")
         self._popup_el.set_class("visible", True)
         if self._handle:
             self._handle.dirty("picker_r")
