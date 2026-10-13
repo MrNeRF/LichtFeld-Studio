@@ -1586,6 +1586,7 @@
     "click_again_double": "더블 클릭하려면 다시 클릭...",
     "tool_mode": "도구 모드",
     "select_tool_mode": "바인딩을 보거나 편집하려면 도구 모드 선택",
+    "altgr_capture_unsupported": "AltGr 단축키는 캡처할 수 없습니다. AltGr를 사용하지 않는 단축키를 사용하세요.",
     "global_bindings_hint": "전역 바인딩은 재정의되지 않는 한 모든 곳에 적용됩니다",
     "tool_bindings_hint": "도구별 바인딩은 전역 바인딩을 재정의합니다",
     "section.navigation": "내비게이션",

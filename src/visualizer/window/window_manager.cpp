@@ -1243,7 +1243,10 @@ namespace lfs::vis {
             const int action = event.key.down
                                    ? (event.key.repeat ? input::ACTION_REPEAT : input::ACTION_PRESS)
                                    : input::ACTION_RELEASE;
-            const int mods = input::sdlModsToAppMods(event.key.mod);
+            SDL_Keymod sdl_mods = event.key.mod;
+            if ((SDL_GetModState() & SDL_KMOD_MODE) != 0)
+                sdl_mods = static_cast<SDL_Keymod>(sdl_mods | SDL_KMOD_MODE);
+            const int mods = input::sdlModsToAppMods(sdl_mods);
             input_controller_->handleKey(
                 physical_key, logical_key, static_cast<int>(event.key.scancode), action, mods, dispatched.owned_release, dispatched.consumed);
             break;

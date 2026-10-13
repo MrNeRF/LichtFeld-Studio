@@ -240,5 +240,43 @@ namespace lfs::vis {
             EXPECT_LT(resume, step * 2.5f);
         }
 
+        TEST_F(InputLayoutChordTest, AltGrModeRejectsAndCtrlRightAltCaptures) {
+            auto& bindings = controller_.getBindings();
+            const auto scale_before = bindings.getTriggerDescription(input::Action::TOOL_SCALE, input::ToolMode::GLOBAL);
+            const auto down_before = bindings.getTriggerDescription(input::Action::CAMERA_MOVE_DOWN, input::ToolMode::GLOBAL);
+            const int mode = input::sdlModsToAppMods(SDL_KMOD_MODE);
+            const int ctrl_right_alt = input::sdlModsToAppMods(static_cast<SDL_Keymod>(SDL_KMOD_RALT | SDL_KMOD_CTRL));
+
+            bindings.startCapture(input::ToolMode::GLOBAL, input::Action::TOOL_SCALE);
+            bindings.captureKey(input::KEY_E, input::KEY_E, mode);
+            EXPECT_TRUE(bindings.isCapturing());
+            EXPECT_TRUE(bindings.takeAltGrCaptureRejection());
+            EXPECT_EQ(bindings.getTriggerDescription(input::Action::TOOL_SCALE, input::ToolMode::GLOBAL), scale_before);
+
+            bindings.captureKey(input::KEY_E, input::KEY_E, ctrl_right_alt);
+            EXPECT_FALSE(bindings.isCapturing());
+            EXPECT_FALSE(bindings.takeAltGrCaptureRejection());
+            EXPECT_EQ(bindings.getTriggerDescription(input::Action::CAMERA_MOVE_DOWN, input::ToolMode::GLOBAL), down_before);
+            const auto captured = bindings.getTriggerForAction(input::Action::TOOL_SCALE, input::ToolMode::GLOBAL);
+            ASSERT_TRUE(captured.has_value());
+            const auto* captured_key = std::get_if<input::KeyTrigger>(&*captured);
+            ASSERT_NE(captured_key, nullptr);
+            EXPECT_EQ(captured_key->key, input::KEY_E);
+            EXPECT_EQ(captured_key->modifiers & input::KEYMOD_CTRL, input::KEYMOD_CTRL);
+            EXPECT_EQ(captured_key->modifiers & input::KEYMOD_ALT, input::KEYMOD_ALT);
+            EXPECT_EQ(captured_key->modifiers & input::KEYMOD_ALTGR, 0);
+
+            bindings.startCapture(input::ToolMode::GLOBAL, input::Action::TOOL_SCALE);
+            bindings.captureKey(input::KEY_E, input::KEY_E, mode);
+            EXPECT_TRUE(bindings.isCapturing());
+            EXPECT_TRUE(bindings.takeAltGrCaptureRejection());
+            const auto kept = bindings.getTriggerForAction(input::Action::TOOL_SCALE, input::ToolMode::GLOBAL);
+            ASSERT_TRUE(kept.has_value());
+            const auto* kept_key = std::get_if<input::KeyTrigger>(&*kept);
+            ASSERT_NE(kept_key, nullptr);
+            EXPECT_EQ(kept_key->key, captured_key->key);
+            EXPECT_EQ(kept_key->modifiers, captured_key->modifiers);
+        }
+
     } // namespace
 } // namespace lfs::vis

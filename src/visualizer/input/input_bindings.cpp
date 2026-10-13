@@ -1629,6 +1629,11 @@ namespace lfs::vis::input {
         if (!capture_state_.active)
             return;
 
+        if (mods & KEYMOD_ALTGR) {
+            capture_state_.altgr_rejected = true;
+            return;
+        }
+
         const auto& descriptor = describe(capture_state_.action);
         int key = descriptor.prefers_physical_key ? physical_key : logical_key;
         if (key == KEY_UNKNOWN) {
@@ -1666,6 +1671,12 @@ namespace lfs::vis::input {
         setBinding(capture_state_.mode, capture_state_.action, trigger);
         capture_state_.captured = trigger;
         capture_state_.active = false;
+    }
+
+    bool InputBindings::takeAltGrCaptureRejection() {
+        const bool rejected = capture_state_.altgr_rejected;
+        capture_state_.altgr_rejected = false;
+        return rejected;
     }
 
     void InputBindings::captureMouseButton(int button, int mods, std::optional<int> chord_key) {

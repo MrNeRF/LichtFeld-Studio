@@ -1586,6 +1586,7 @@
     "click_again_double": "Haz clic de nuevo para el doble clic...",
     "tool_mode": "Modo Herramienta",
     "select_tool_mode": "Selecciona el modo de herramienta para ver/editar las asignaciones",
+    "altgr_capture_unsupported": "No se pueden capturar atajos con AltGr. Usa un atajo sin AltGr.",
     "global_bindings_hint": "Las asignaciones globales se aplican en todas partes salvo que se sobrescriban",
     "tool_bindings_hint": "Las asignaciones específicas de la herramienta sobrescriben las asignaciones globales",
     "section.navigation": "NAVEGACIÓN",

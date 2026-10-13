@@ -689,6 +689,8 @@ namespace lfs::vis {
             mods |= input::KEYMOD_SHIFT;
         if (m & SDL_KMOD_ALT)
             mods |= input::KEYMOD_ALT;
+        if (m & SDL_KMOD_MODE)
+            mods |= input::KEYMOD_ALTGR;
         return mods;
     }
 
@@ -1748,10 +1750,12 @@ namespace lfs::vis {
         // scroll chord. Release drops nothing that this press did not insert.
         const bool movement_owns_logical_key =
             physicalMovementConsumesLogicalKey(physical_key, logical_key, mods);
+        const bool altgr_held = (mods & input::KEYMOD_ALTGR) != 0;
         if (wants_text_input && !bindings_.isCapturing()) {
             // Text keys must not become viewport mouse/scroll chords either.
             held_keys_.clear();
-        } else if (!movement_owns_logical_key && !is_modifier_key && logical_key != input::KEY_UNKNOWN) {
+        } else if (!altgr_held && !movement_owns_logical_key && !is_modifier_key &&
+                   logical_key != input::KEY_UNKNOWN) {
             if (action == input::ACTION_RELEASE) {
                 std::erase(held_keys_, logical_key);
             } else if (!std::ranges::contains(held_keys_, logical_key)) {
@@ -1766,6 +1770,12 @@ namespace lfs::vis {
             bindings_.captureKey(physical_key, logical_key, mods);
             return;
         }
+
+        // AltGr produces layout characters for text input, but this build cannot
+        // represent that modifier in saved shortcuts. Never dispatch the bare
+        // logical key or arm a physical movement binding for the same event.
+        if (altgr_held)
+            return;
 
         const auto tool_mode = getCurrentToolMode();
         auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);

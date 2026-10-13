@@ -269,6 +269,7 @@ namespace lfs::vis::input {
 
     struct CaptureState {
         bool active = false;
+        bool altgr_rejected = false;
         ToolMode mode = ToolMode::GLOBAL;
         Action action = Action::NONE;
         std::optional<InputTrigger> captured;
@@ -339,6 +340,7 @@ namespace lfs::vis::input {
         void cancelCapture();
         void captureKey(int key, int mods);
         void captureKey(int physical_key, int logical_key, int mods);
+        bool takeAltGrCaptureRejection();
         void captureMouseButton(int button, int mods, std::optional<int> chord_key = std::nullopt);
         void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);
         void captureMouseButtonRelease(int button);

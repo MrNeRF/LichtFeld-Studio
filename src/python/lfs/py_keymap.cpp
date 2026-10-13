@@ -502,6 +502,15 @@ namespace lfs::python {
             "Check if waiting for potential double-click");
 
         keymap.def(
+            "take_altgr_capture_rejection",
+            []() {
+                if (!get_keymap_bindings())
+                    return false;
+                return get_keymap_bindings()->takeAltGrCaptureRejection();
+            },
+            "Return and clear an unsupported AltGr capture notice");
+
+        keymap.def(
             "get_captured_trigger",
             []() -> nb::object {
                 if (!get_keymap_bindings())

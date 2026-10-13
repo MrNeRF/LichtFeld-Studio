@@ -1586,6 +1586,7 @@
     "click_again_double": "Kliknij ponownie dla podwójnego kliknięcia...",
     "tool_mode": "Tryb Narzędzia",
     "select_tool_mode": "Wybierz tryb narzędzia, aby wyświetlić/edytować przypisania",
+    "altgr_capture_unsupported": "Nie można przechwycić skrótów AltGr. Użyj skrótu bez AltGr.",
     "global_bindings_hint": "Przypisania globalne obowiązują wszędzie, chyba że zostaną nadpisane",
     "tool_bindings_hint": "Przypisania specyficzne dla narzędzi nadpisują przypisania globalne",
     "section.navigation": "NAWIGACJA",

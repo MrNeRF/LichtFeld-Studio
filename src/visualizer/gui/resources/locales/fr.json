@@ -1586,6 +1586,7 @@
     "click_again_double": "Cliquez à nouveau pour double-clic...",
     "tool_mode": "Mode Outil",
     "select_tool_mode": "Sélectionnez le mode outil pour voir/éditer les liaisons",
+    "altgr_capture_unsupported": "Les raccourcis AltGr ne peuvent pas être capturés. Utilisez un raccourci sans AltGr.",
     "global_bindings_hint": "Les liaisons globales s'appliquent partout sauf si remplacées",
     "tool_bindings_hint": "Les liaisons spécifiques aux outils remplacent les liaisons globales",
     "section.navigation": "NAVIGATION",

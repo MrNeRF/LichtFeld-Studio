@@ -342,6 +342,9 @@ def is_capturing() -> bool:
 def is_waiting_for_double_click() -> bool:
     """Check if waiting for potential double-click"""
 
+def take_altgr_capture_rejection() -> bool:
+    """Return and clear an unsupported AltGr capture notice"""
+
 def get_captured_trigger() -> object:
     """Get captured trigger (clears it), returns None if nothing captured"""
 

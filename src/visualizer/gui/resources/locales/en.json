@@ -1584,6 +1584,7 @@
     "click_again_double": "Click again for double-click...",
     "tool_mode": "Tool Mode",
     "select_tool_mode": "Select tool mode to view/edit bindings",
+    "altgr_capture_unsupported": "AltGr shortcuts cannot be captured. Use a shortcut without AltGr.",
     "global_bindings_hint": "Global bindings apply everywhere unless overridden",
     "tool_bindings_hint": "Tool-specific bindings override global bindings",
     "section.navigation": "NAVIGATION",

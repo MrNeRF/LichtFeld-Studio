@@ -131,6 +131,7 @@ def _install_lf_stub(monkeypatch):
         waiting_double=[False],
         conflict=[None],
         captured=[],
+        altgr_rejected=[False],
         triggers={},
         cleared=[],
         set_triggers=[],
@@ -188,6 +189,10 @@ def _install_lf_stub(monkeypatch):
         state.cancelled += 1
         state.capturing[0] = False
 
+    def take_altgr_capture_rejection():
+        rejected, state.altgr_rejected[0] = state.altgr_rejected[0], False
+        return rejected
+
     def get_allowed_trigger_kinds(action_value):
         if action_value in (action.CAMERA_ORBIT, action.CAMERA_PAN):
             return ["mouse_button", "mouse_drag"]
@@ -234,6 +239,7 @@ def _install_lf_stub(monkeypatch):
         get_allowed_trigger_kinds=get_allowed_trigger_kinds,
         is_capturing=lambda: state.capturing[0],
         is_waiting_for_double_click=lambda: state.waiting_double[0],
+        take_altgr_capture_rejection=take_altgr_capture_rejection,
         load_profile=lambda name: state.current_profile.__setitem__(0, name),
         save_profile=lambda _name: None,
         reset_to_default=lambda: None,
@@ -484,6 +490,14 @@ def test_keymap_section_is_wired_through_preferences(keymap_bindings_module):
     panel.on_mount(doc)
     assert doc.elements["bindings-table"].listeners == [("click", section._on_table_click)]
     assert doc.elements["binding-conflict-overlay"].classes["hidden"] is True
+
+
+def test_keymap_altgr_rejection_keeps_capture(keymap_bindings_module):
+    prefs, state = keymap_bindings_module
+    panel, model = _bind_panel(prefs)
+    state.capturing[0] = state.altgr_rejected[0] = True
+    panel.on_update(_DocStub())
+    assert state.capturing[0] and model.funcs["bindings_hint"]() == "input_settings.altgr_capture_unsupported"
 
 
 def test_keymap_builds_profile_and_mode_records(keymap_bindings_module):

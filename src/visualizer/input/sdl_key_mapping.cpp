@@ -193,6 +193,8 @@ namespace lfs::vis::input {
             mods |= KEYMOD_ALT;
         if (sdl_mods & SDL_KMOD_GUI)
             mods |= KEYMOD_SUPER;
+        if (sdl_mods & SDL_KMOD_MODE)
+            mods |= KEYMOD_ALTGR;
         return mods;
     }
 

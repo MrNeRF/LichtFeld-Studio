@@ -1586,6 +1586,7 @@
     "click_again_double": "ダブルクリックにするにはもう一度クリック...",
     "tool_mode": "ツールモード",
     "select_tool_mode": "ツールモードを選択して割り当てを表示/編集",
+    "altgr_capture_unsupported": "AltGr ショートカットは記録できません。AltGr を使わないショートカットを使用してください。",
     "global_bindings_hint": "グローバル割り当ては上書きされない限りどこでも適用されます",
     "tool_bindings_hint": "ツール固有の割り当てはグローバル割り当てを上書きします",
     "section.navigation": "ナビゲーション",

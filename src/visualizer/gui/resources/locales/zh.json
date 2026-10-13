@@ -1586,6 +1586,7 @@
     "click_again_double": "再次点击以双击...",
     "tool_mode": "工具模式",
     "select_tool_mode": "选择工具模式以查看/编辑绑定",
+    "altgr_capture_unsupported": "无法捕获 AltGr 快捷键。请使用不含 AltGr 的快捷键。",
     "global_bindings_hint": "全局绑定在所有地方都适用，除非被覆盖",
     "tool_bindings_hint": "工具特定的绑定会覆盖全局绑定",
     "section.navigation": "导航",

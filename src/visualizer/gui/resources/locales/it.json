@@ -1586,6 +1586,7 @@
     "click_again_double": "Clicca di nuovo per doppio clic...",
     "tool_mode": "Modalità Strumento",
     "select_tool_mode": "Seleziona modalità strumento per visualizzare/modificare le associazioni",
+    "altgr_capture_unsupported": "Le scorciatoie AltGr non possono essere acquisite. Usa una scorciatoia senza AltGr.",
     "global_bindings_hint": "Le associazioni globali si applicano ovunque a meno che non vengano sovrascritte",
     "tool_bindings_hint": "Le associazioni specifiche degli strumenti sovrascrivono le associazioni globali",
     "section.navigation": "NAVIGAZIONE",
