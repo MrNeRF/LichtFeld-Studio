@@ -1786,6 +1786,14 @@ namespace lfs::vis {
         if (gui_consumed && !is_mcp_runtime_action && !owned_release)
             return;
 
+        // Physical movement wins over a different logical shortcut. The printed
+        // character is not dispatched. Press and repeat arm the key; release
+        // clears it. Ctrl/Alt/Super chords stay on the shortcut path.
+        if (physicalMovementConsumesLogicalKey(physical_key, logical_key, mods)) {
+            armPhysicalMovementKey(physical_key, action != input::ACTION_RELEASE);
+            return;
+        }
+
         // Dispatch to modal operators first - if consumed, don't continue
         float mx_f, my_f;
         input::mouseStateInPixels(window_, &mx_f, &my_f);
@@ -2208,21 +2216,37 @@ namespace lfs::vis {
         if ((mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT | input::KEYMOD_SUPER)) != 0)
             return;
 
+        armPhysicalMovementKey(physical_key, action != input::ACTION_RELEASE);
+    }
+
+    bool InputController::physicalMovementConsumesLogicalKey(
+        const int physical_key, const int logical_key, const int mods) const {
+        if (physical_key < 0 || physical_key == logical_key)
+            return false;
+        if ((mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT | input::KEYMOD_SUPER)) != 0)
+            return false;
+        if (!shouldCameraHandleInput() || drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
+            return false;
         const auto& mk = currentMovementKeys();
-        const bool pressed = (action != input::ACTION_RELEASE);
-        if (physical_key == mk.forward) {
+        return physical_key == mk.forward || physical_key == mk.backward ||
+               physical_key == mk.left || physical_key == mk.right ||
+               physical_key == mk.up || physical_key == mk.down;
+    }
+
+    void InputController::armPhysicalMovementKey(const int physical_key, const bool pressed) {
+        const auto& mk = currentMovementKeys();
+        if (physical_key == mk.forward)
             keys_movement_[0] = pressed;
-        } else if (physical_key == mk.left) {
+        else if (physical_key == mk.left)
             keys_movement_[1] = pressed;
-        } else if (physical_key == mk.backward) {
+        else if (physical_key == mk.backward)
             keys_movement_[2] = pressed;
-        } else if (physical_key == mk.right) {
+        else if (physical_key == mk.right)
             keys_movement_[3] = pressed;
-        } else if (physical_key == mk.down) {
+        else if (physical_key == mk.down)
             keys_movement_[5] = pressed;
-        } else if (physical_key == mk.up) {
+        else if (physical_key == mk.up)
             keys_movement_[4] = pressed;
-        }
     }
 
     void InputController::decayHeldDragMomentum() {

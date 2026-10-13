@@ -682,6 +682,7 @@ set(TEST_FILES
     test_viewport.cpp
     test_navigation_up_axis.cpp
     test_input_controller_focus.cpp
+    test_input_layout_chords.cpp
     test_ordered_input_dispatch.cpp
     test_python_editor_input.cpp
     test_input_controller_dataset_load.cpp

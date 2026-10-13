@@ -204,6 +204,11 @@ namespace lfs::vis {
         bool isPointerOverBlockingUi(double x, double y) const;
         bool isPointerOverUiHover(double x, double y) const;
         bool shouldCameraHandleInput() const;
+        // A physical movement key whose printed character is a different shortcut
+        // is movement for as long as the camera is accepting movement. Checked
+        // on key events only, against the cached movement bindings.
+        [[nodiscard]] bool physicalMovementConsumesLogicalKey(int physical_key, int logical_key, int mods) const;
+        void armPhysicalMovementKey(int physical_key, bool pressed);
         void selectCameraByUid(int uid, bool toggle_selection);
         void updateCameraSpeed(bool increase);
         void updateZoomSpeed(bool increase);
