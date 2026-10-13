@@ -42,6 +42,13 @@ namespace lfs::vis::gui {
             bar.dropdown_overlay_ = bar.document_->GetElementById("dropdown-overlay");
             bar.dropdown_items_ = bar.buildDropdownItems(items);
             bar.open_menu_index_ = 0;
+            bar.open_menu_idname_ = "file";
+            bar.open_submenu_index_ = -1;
+            bar.open_child_submenu_index_ = -1;
+            bar.open_grandchild_submenu_index_ = -1;
+            bar.keyboard_path_.fill(-1);
+            bar.keyboard_depth_ = 0;
+            bar.moveKeyboardHighlight(1, true);
             bar.dropdown_container_->SetClass("visible", true);
             bar.dropdown_popup_->SetProperty("left", "1400px");
             bar.dropdown_popup_->SetProperty("top", "30px");
@@ -51,6 +58,71 @@ namespace lfs::vis::gui {
         static void openPath(RmlMenuBar& bar, int root, int child, int grandchild) {
             bar.setOpenSubmenu(root, child, grandchild);
             bar.sizeOpenDropdowns();
+        }
+        static bool keyEvent(RmlMenuBar& bar, lfs::vis::FrameInputEventKind kind,
+                             SDL_Scancode code, bool window_focused = true) {
+            lfs::vis::gui::PanelInputState input{};
+            input.screen_w = 1600;
+            input.screen_h = 300;
+            lfs::vis::InputEventDispatch dispatch;
+            lfs::vis::FrameInputEvent event{.kind = kind, .scancode = code, .dispatch = &dispatch};
+            if (window_focused) {
+                input.input_events.push_back(event);
+                bar.processInput(input);
+            } else {
+                bar.handleMenuKey(event, false, false);
+            }
+            return dispatch.consumed;
+        }
+        static void key(RmlMenuBar& bar, SDL_Scancode code) {
+            SCOPED_TRACE(static_cast<int>(code));
+            EXPECT_TRUE(keyEvent(bar, lfs::vis::FrameInputEventKind::KeyDown, code))
+                << SDL_GetScancodeName(code) << " open=" << bar.isOpen()
+                << " depth=" << bar.keyboard_depth_;
+        }
+        static int depth(const RmlMenuBar& bar) { return bar.keyboard_depth_; }
+        static int path(const RmlMenuBar& bar, int depth) { return bar.keyboard_path_[depth]; }
+        static int menuIndex(const RmlMenuBar& bar) { return bar.open_menu_index_; }
+        static int activeLabel(const RmlMenuBar& bar) { return bar.active_index_; }
+        static void altTap(RmlMenuBar& bar, bool mouse_down = false) {
+            for (const auto kind : {lfs::vis::FrameInputEventKind::KeyDown, lfs::vis::FrameInputEventKind::KeyUp}) {
+                lfs::vis::gui::PanelInputState input{};
+                input.screen_w = 1600;
+                input.screen_h = 300;
+                input.mouse_down[0] = mouse_down;
+                lfs::vis::InputEventDispatch dispatch;
+                input.input_events.push_back({.kind = kind, .scancode = SDL_SCANCODE_LALT, .dispatch = &dispatch});
+                bar.processInput(input);
+                if (kind == lfs::vis::FrameInputEventKind::KeyUp)
+                    EXPECT_EQ(dispatch.consumed, !mouse_down);
+            }
+        }
+        static void enableLeafLabel(RmlMenuBar& bar, int root, int child, int grandchild, int leaf) {
+            bar.dropdown_items_[root].children[child].children[grandchild].children[leaf].enabled = true;
+        }
+        static void windowFocusLost(RmlMenuBar& bar) { bar.onWindowFocusLost(); }
+        static bool renderNeeded(const RmlMenuBar& bar) { return bar.render_needed_; }
+        static void setRenderNeeded(RmlMenuBar& bar, bool needed) { bar.render_needed_ = needed; }
+        static void hover(RmlMenuBar& bar, float x, float y, bool force_input) {
+            lfs::vis::gui::PanelInputState input{};
+            input.screen_w = 1600;
+            input.screen_h = 300;
+            input.mouse_x = x;
+            input.mouse_y = y;
+            input.mouse_wheel = force_input ? 1.0f : 0.0f;
+            bar.processInput(input);
+        }
+        static void outsideClick(RmlMenuBar& bar) {
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.button = SDL_BUTTON_LEFT;
+            event.button.x = 1500.0f;
+            event.button.y = 299.0f;
+            bar.rml_manager_->dispatchInputEvent(event);
+            event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            event.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            bar.rml_manager_->dispatchInputEvent(event);
         }
         static Rml::Element* menuHit(RmlMenuBar& bar, float x, float y) {
             return bar.dropdownElementAtPoint(x, y);
@@ -282,6 +354,137 @@ namespace {
         RmlMenuBarTestAccess::openPath(bar_, -1, -1, -1);
         for (auto* popup : popups)
             EXPECT_EQ(popup->GetDisplay(), Rml::Style::Display::None);
+    }
+
+    TEST_F(MenuBarTitleTest, KeyboardNavigationSequences) {
+        using Item = lfs::vis::gui::MenuItemDesc;
+        using Type = Item::Type;
+        const std::vector<Item> items{
+            {.type = Type::SubMenuBegin, .label = "Group"},
+            {.type = Type::SubMenuBegin, .label = "More"},
+            {.type = Type::SubMenuBegin, .label = "Deep"},
+            {.type = Type::Item, .label = "First", .callback_index = 1},
+            {.type = Type::SubMenuBegin, .label = "Named group"},
+            {.type = Type::Item, .label = "Nested", .callback_index = 5},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::Separator},
+            {.type = Type::Item, .label = "Disabled", .enabled = false, .callback_index = 2},
+            {.type = Type::Item, .label = "Last", .callback_index = 3},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::Item, .label = "Unavailable", .enabled = false},
+            {.type = Type::Toggle, .label = "Toggle", .callback_index = 4},
+            {.type = Type::Operator, .label = "Run", .operator_id = "menu_keyboard_test_missing"},
+        };
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        struct Step {
+            SDL_Scancode key;
+            int depth;
+            int selected;
+        };
+        const std::vector<Step> steps{
+            {SDL_SCANCODE_RIGHT, 1, 0},
+            {SDL_SCANCODE_RIGHT, 2, 0},
+            {SDL_SCANCODE_RIGHT, 3, 0},
+            {SDL_SCANCODE_DOWN, 3, 2},
+            {SDL_SCANCODE_DOWN, 3, 4},
+            {SDL_SCANCODE_DOWN, 3, 0},
+            {SDL_SCANCODE_END, 3, 4},
+            {SDL_SCANCODE_HOME, 3, 0},
+            {SDL_SCANCODE_ESCAPE, 2, 0},
+            {SDL_SCANCODE_LEFT, 1, 0},
+            {SDL_SCANCODE_ESCAPE, 0, 0},
+            {SDL_SCANCODE_DOWN, 0, 2},
+        };
+        RmlMenuBarTestAccess::enableLeafLabel(bar_, 0, 0, 0, 1);
+        for (const auto& step : steps) {
+            RmlMenuBarTestAccess::key(bar_, step.key);
+            EXPECT_EQ(RmlMenuBarTestAccess::depth(bar_), step.depth);
+            EXPECT_EQ(RmlMenuBarTestAccess::path(bar_, step.depth), step.selected);
+        }
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_RIGHT);
+        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 1);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_LEFT);
+        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 0);
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_DOWN);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_RETURN);
+        EXPECT_FALSE(bar_.isOpen());
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_DOWN);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_SPACE);
+        EXPECT_FALSE(bar_.isOpen());
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_DOWN);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_DOWN);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_RETURN);
+        EXPECT_FALSE(bar_.isOpen());
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_ESCAPE);
+        EXPECT_FALSE(bar_.isOpen());
+        RmlMenuBarTestAccess::altTap(bar_, true);
+        EXPECT_EQ(RmlMenuBarTestAccess::activeLabel(bar_), -1);
+        RmlMenuBarTestAccess::altTap(bar_);
+        EXPECT_EQ(RmlMenuBarTestAccess::activeLabel(bar_), 0);
+        EXPECT_FALSE(RmlMenuBarTestAccess::keyEvent(bar_, lfs::vis::FrameInputEventKind::KeyDown,
+                                                    SDL_SCANCODE_A));
+        EXPECT_EQ(RmlMenuBarTestAccess::activeLabel(bar_), -1);
+        RmlMenuBarTestAccess::altTap(bar_);
+        RmlMenuBarTestAccess::outsideClick(bar_);
+        EXPECT_EQ(RmlMenuBarTestAccess::activeLabel(bar_), -1);
+        const struct {
+            bool focused;
+            bool window_focus_lost;
+            lfs::vis::FrameInputEventKind kind;
+            int expected_active;
+        } alt_tab_steps[] = {
+            {true, false, lfs::vis::FrameInputEventKind::KeyDown, -1},
+            {false, true, lfs::vis::FrameInputEventKind::KeyUp, -1},
+        };
+        for (const auto& step : alt_tab_steps) {
+            if (step.window_focus_lost)
+                RmlMenuBarTestAccess::windowFocusLost(bar_);
+            EXPECT_FALSE(RmlMenuBarTestAccess::keyEvent(bar_, step.kind, SDL_SCANCODE_LALT,
+                                                        step.focused));
+            EXPECT_EQ(RmlMenuBarTestAccess::activeLabel(bar_), step.expected_active);
+        }
+        RmlMenuBarTestAccess::altTap(bar_);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_DOWN);
+        EXPECT_TRUE(bar_.isOpen());
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_ESCAPE);
+        EXPECT_FALSE(bar_.isOpen());
+    }
+
+    TEST_F(MenuBarTitleTest, HoveringSameRowDoesNotDirtyTheMenuModel) {
+        using Item = lfs::vis::gui::MenuItemDesc;
+        using Type = Item::Type;
+        const std::vector<Item> items{
+            {.type = Type::SubMenuBegin, .label = "Group"},
+            {.type = Type::SubMenuBegin, .label = "More"},
+            {.type = Type::SubMenuBegin, .label = "Deep"},
+            {.type = Type::Item, .label = "Leaf", .callback_index = 1},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::SubMenuEnd},
+            {.type = Type::SubMenuEnd},
+        };
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        RmlMenuBarTestAccess::openPath(bar_, 0, 0, 0);
+        Rml::ElementList rows;
+        el("dropdown-popup")->GetElementsByClassName(rows, "menu-item");
+        Rml::Element* leaf = nullptr;
+        for (auto* row : rows) {
+            if (row->GetAttribute<int>("data-callback-index", -1) == 1)
+                leaf = row;
+        }
+        ASSERT_NE(leaf, nullptr);
+        const auto rect = bounds(leaf);
+        const float x = (rect.left + rect.right) / 2;
+        const float y = (rect.top + rect.bottom) / 2;
+        RmlMenuBarTestAccess::hover(bar_, x, y, false);
+        RmlMenuBarTestAccess::setRenderNeeded(bar_, false);
+        RmlMenuBarTestAccess::hover(bar_, x, y, true);
+        EXPECT_FALSE(RmlMenuBarTestAccess::renderNeeded(bar_));
     }
 
     class MenuBarProjectionTest : public MenuBarTitleTest {

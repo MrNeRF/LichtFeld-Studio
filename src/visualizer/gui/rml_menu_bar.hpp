@@ -71,6 +71,7 @@ namespace lfs::vis::gui {
     };
 
     struct MenuDropdownLeafView {
+        int index = -1;
         std::string label;
         std::string action;
         std::string operator_id;
@@ -82,6 +83,7 @@ namespace lfs::vis::gui {
         bool has_shortcut = false;
         bool show_checkmark = false;
         bool is_label = false;
+        bool keyboard_active = false;
         int callback_index = -1;
     };
 
@@ -99,6 +101,7 @@ namespace lfs::vis::gui {
         bool show_checkmark = false;
         bool has_children = false;
         bool submenu_open = false;
+        bool keyboard_active = false;
         int callback_index = -1;
         std::vector<MenuDropdownLeafView> children = {};
     };
@@ -117,6 +120,7 @@ namespace lfs::vis::gui {
         bool show_checkmark = false;
         bool has_children = false;
         bool submenu_open = false;
+        bool keyboard_active = false;
         int callback_index = -1;
         std::vector<MenuDropdownGrandchildView> children = {};
     };
@@ -135,6 +139,7 @@ namespace lfs::vis::gui {
         bool show_checkmark = false;
         bool has_children = false;
         bool submenu_open = false;
+        bool keyboard_active = false;
         int callback_index = -1;
         std::vector<MenuDropdownChildView> children;
     };
@@ -189,6 +194,12 @@ namespace lfs::vis::gui {
         void updateProjectTitleLayout(int screen_w, float dp_ratio);
         void updateTitlebarDragRegion(int bar_height_px);
         void clearTitlebarDragRegion();
+        bool handleMenuKey(const FrameInputEvent& event, bool mouse_button_active,
+                           bool window_has_keyboard_focus = true);
+        void onWindowFocusLost();
+        void updateKeyboardHighlight();
+        void moveKeyboardHighlight(int direction, bool to_edge = false);
+        bool activateKeyboardHighlight(bool submenu_only = false);
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -254,6 +265,12 @@ namespace lfs::vis::gui {
         int open_submenu_index_ = -1;
         int open_child_submenu_index_ = -1;
         int open_grandchild_submenu_index_ = -1;
+        std::array<int, 4> keyboard_path_{{-1, -1, -1, -1}};
+        int keyboard_depth_ = 0;
+        int keyboard_focus_menu_index_ = -1;
+        bool alt_pressed_ = false;
+        bool alt_chord_ = false;
+        std::size_t window_focus_lost_handler_id_ = 0;
         std::string open_menu_idname_;
         bool wants_input_ = false;
         bool render_needed_ = true;
