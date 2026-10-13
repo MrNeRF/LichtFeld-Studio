@@ -258,9 +258,9 @@ static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, 
         float ssim, cs;
         if (Decoupled) {
             const float mu_c = v[0], mu_r = v[1], mu_g = v[3];
-            const float sigma_r = v[2] - mu_r * mu_r;
-            const float sigma_g = v[4] - mu_g * mu_g;
-            const float sigma_rg = v[5] - mu_r * mu_g;
+            const float sigma_r = fma(-mu_r, mu_r, v[2]);
+            const float sigma_g = fma(-mu_g, mu_g, v[4]);
+            const float sigma_rg = fma(-mu_r, mu_g, v[5]);
             const float A = mu_c * mu_c + mu_g * mu_g + kSsimC1;
             const float Cn = 2.0f * mu_c * mu_g + kSsimC1;
             const float luminance = Cn / A;
@@ -314,10 +314,11 @@ static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, 
     const float inv_c = 1.0f / float(C);
     const float ssim_mean = ssim_sum * inv_c;
     if (kPhotoChannelMean != 0) {
+        const bool ignored_center = kPhotoMaskedWindow && sm[center] <= 0.0f;
         if (p.write_map != 0)
-            p.ssim_map[b * plane + pixel] = ssim_mean;
+            p.ssim_map[b * plane + pixel] = ignored_center ? 1.0f : ssim_mean;
         if (p.write_cs != 0)
-            p.cs_map[b * plane + pixel] = cs_sum * inv_c;
+            p.cs_map[b * plane + pixel] = ignored_center ? 1.0f : cs_sum * inv_c;
     }
     if (p.write_error != 0)
         p.error[pixel] = fmax(1.0f - (p.error_from_cs != 0 ? cs_sum : ssim_sum) * inv_c, 0.0f);

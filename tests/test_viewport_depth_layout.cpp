@@ -31,6 +31,15 @@ namespace lfs::vis::gui {
 } // namespace lfs::vis::gui
 
 namespace {
+    class DepthLayoutSystem final : public Rml::SystemInterface {
+    public:
+        bool LogMessage(Rml::Log::Type type, const Rml::String& message) override {
+            if (type == Rml::Log::LT_ASSERT)
+                ADD_FAILURE() << "RmlUi assertion: " << message;
+            return true;
+        }
+    };
+
     class DepthLayoutRenderer final : public Rml::RenderInterface {
     public:
         Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
@@ -45,8 +54,14 @@ namespace {
 
     class ViewportDepthLayoutTest : public ::testing::Test {
     protected:
-        static void SetUpTestSuite() { ASSERT_TRUE(Rml::Initialise()); }
-        static void TearDownTestSuite() { Rml::Shutdown(); }
+        static void SetUpTestSuite() {
+            Rml::SetSystemInterface(&system_);
+            ASSERT_TRUE(Rml::Initialise());
+        }
+        static void TearDownTestSuite() {
+            Rml::Shutdown();
+            Rml::SetSystemInterface(nullptr);
+        }
         void SetUp() override {
             context_ = Rml::CreateContext("viewport_depth_layout", {920, 840}, &renderer_);
             ASSERT_NE(context_, nullptr);
@@ -94,7 +109,10 @@ namespace {
             // The top (+Y) circle must fall through to the viewport, not the depth field.
             EXPECT_NE(context_->GetElementAtPoint({right - 47.5f * scale_, 25 * scale_}), panel());
         }
-        DepthLayoutRenderer renderer_;
+        // RmlUi retains render-interface resources until Shutdown, even after
+        // the individual context has been removed.
+        inline static DepthLayoutRenderer renderer_;
+        inline static DepthLayoutSystem system_;
         lfs::vis::gui::RmlViewportOverlay overlay_;
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
