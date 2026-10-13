@@ -28,6 +28,8 @@ namespace lfs::vis {
         [[nodiscard]] bool presentBootstrapFrame(float r, float g, float b, float a) override;
         [[nodiscard]] bool hasActiveFrame() const noexcept override;
         [[nodiscard]] lfs::Result<WindowCapture> captureFinalFrameRgba() override;
+        [[nodiscard]] lfs::Result<WindowCapture> captureSceneRgba() override;
+        void cancelSceneCaptureRequest() noexcept override { context_.cancelSceneCaptureRequest(); }
         [[nodiscard]] bool waitForNextFrameSlot() override;
         [[nodiscard]] bool waitForSubmittedFrames() override;
         [[nodiscard]] bool waitIdle() override;

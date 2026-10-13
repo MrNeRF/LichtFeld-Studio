@@ -4,6 +4,7 @@
 
 #include "io/nvcodec_image_loader.hpp"
 #include "core/assert.hpp"
+#include "core/cuda/mask_normalization.hpp"
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
 #include "core/executable_path.hpp"
@@ -12,6 +13,7 @@
 #include "core/pinned_memory_allocator.hpp"
 #include "core/shared_image_ops.hpp"
 #include "core/tensor.hpp"
+#include "cuda/masked_image_fill.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "image_execution_cuda.hpp"
 
@@ -1196,7 +1198,7 @@ namespace lfs::io {
         int max_width,
         void* cuda_stream,
         DecodeFormat format,
-        bool output_uint8) {
+        bool output_uint8, const MaskedImageFill* masked_fill) {
 
         LOG_DEBUG("NvCodecImageLoader: Loading {}", lfs::core::path_to_utf8(path));
 
@@ -1216,7 +1218,7 @@ namespace lfs::io {
             throw std::runtime_error("WebP not supported by nvImageCodec");
         }
 
-        return load_image_from_memory_gpu(file_data, resize_factor, max_width, cuda_stream, format, output_uint8);
+        return load_image_from_memory_gpu(file_data, resize_factor, max_width, cuda_stream, format, output_uint8, masked_fill);
     }
 
     lfs::core::Tensor NvCodecImageLoader::load_image_from_memory_gpu(
@@ -1225,11 +1227,12 @@ namespace lfs::io {
         [[maybe_unused]] int max_width,
         void* cuda_stream,
         DecodeFormat format,
-        bool output_uint8) {
+        bool output_uint8,
+        const MaskedImageFill* masked_fill) {
         cuda_stream = image_execution_stream(cuda_stream);
         const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
 
-        const bool is_grayscale = (format == DecodeFormat::Grayscale);
+        const bool is_grayscale = (format != DecodeFormat::RGB);
         const int num_channels = is_grayscale ? 1 : 3;
 
         const size_t decoder_idx = impl_->acquire_decoder();
@@ -1401,6 +1404,9 @@ namespace lfs::io {
                                static_cast<size_t>(src_height), jpeg_data.size());
             throw std::runtime_error(std::string("Decode failed: ") + status_str);
         }
+
+        if (masked_fill)
+            fill_masked_image(image_tensor_aux, *masked_fill, static_cast<cudaStream_t>(cuda_stream));
 
         // Lanczos reads uint8 or float32; widen uint16 to normalized float first.
         std::optional<Tensor> u16_as_float;
@@ -2206,7 +2212,8 @@ namespace lfs::io {
         const std::vector<uint8_t>& jpeg2k_data,
         void* cuda_stream,
         const bool synchronize,
-        const bool allow_uint8) {
+        const bool allow_uint8,
+        const bool exact_mask) {
         cuda_stream = image_execution_stream(cuda_stream);
         const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
 
@@ -2373,7 +2380,13 @@ namespace lfs::io {
         if (cuda_stream) {
             output_tensor.set_stream(static_cast<cudaStream_t>(cuda_stream));
         }
-        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(decoded_tensor, output_tensor, lfs::gpu_ops::ImageConversion::U16HWCToF32HWC, height, width, num_components, {});
+        if (exact_mask) {
+            lfs::core::cuda::normalize_mask_u16(
+                reinterpret_cast<const uint16_t*>(decoded_tensor.data_ptr()), output_tensor.ptr<float>(),
+                height * width * num_components, static_cast<cudaStream_t>(cuda_stream));
+        } else {
+            lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(decoded_tensor, output_tensor, lfs::gpu_ops::ImageConversion::U16HWCToF32HWC, height, width, num_components, {});
+        }
 
         if (synchronize) {
             if (const cudaError_t err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));

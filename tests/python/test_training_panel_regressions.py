@@ -1280,6 +1280,29 @@ def test_auto_scale_user_override_survives_camera_change_until_relocked(
     assert params.auto_scaled_for == 800
 
 
+def test_paused_iteration_limit_rejects_current_step_without_scaling(
+    training_panel_module, monkeypatch
+):
+    params = _ParamsStub()
+    params.iterations = 100
+    params.steps_scaler = 2.0
+    params.grow_until_iter = 50
+    monkeypatch.setattr(
+        training_panel_module,
+        "RuntimeState",
+        SimpleNamespace(
+            training_state=SimpleNamespace(value="paused"),
+            iteration=SimpleNamespace(value=100),
+        ),
+    )
+    panel = training_panel_module.TrainingPanel()
+
+    assert panel._set_iterations(params, 99) is False
+    assert params.iterations == 100
+    assert params.steps_scaler == 2.0
+    assert params.grow_until_iter == 50
+
+
 def test_training_panel_progress_updates_bound_value(training_panel_module, monkeypatch):
     panel = training_panel_module.TrainingPanel()
     panel._handle = _HandleStub()
@@ -2861,6 +2884,48 @@ def test_restored_control_echo_is_not_an_edit(
     assert getattr(params, prop) == changed
     setter(*args, changed)
     assert params.writes == [(prop, changed)]
+
+
+@pytest.mark.parametrize(
+    ("prop", "saved", "control_echo"),
+    [
+        ("init_opacity", 0.5, 0.4999999701976776),
+        ("prune_ratio", 0.6000000238418579, 0.5999999642372131),
+        ("lambda_dssim", 0.2, 0.20000000298023224),
+    ],
+)
+def test_slider_float_echo_does_not_edit_saved_value(
+    training_panel_module, monkeypatch, prop, saved, control_echo
+):
+    class Params:
+        def __init__(self):
+            self.value = saved
+            self.writes = []
+
+        def has_params(self):
+            return True
+
+        def __getattr__(self, name):
+            if name == prop:
+                return self.value
+            raise AttributeError(name)
+
+        def set(self, name, value):
+            self.writes.append((name, value))
+            self.value = value
+
+    params = Params()
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    panel = training_panel_module.TrainingPanel()
+    panel._set_slider_prop(prop, control_echo)
+    assert params.writes == []
+    assert params.value == saved
+
+    panel._set_slider_prop(prop, saved + 0.01)
+    assert params.writes == [(prop, saved + 0.01)]
+
+    panel._set_slider_prop(prop, saved + 0.010002)
+    assert params.writes[-1] == (prop, saved + 0.010002)
 
 
 @pytest.mark.parametrize("completed", [False, True])

@@ -81,9 +81,9 @@ namespace lfs::vis {
         [[nodiscard]] bool nativeFloatingWindows();
         void setFloatingWindowGeometry(const std::string& value);
         [[nodiscard]] std::string floatingWindowGeometry();
-        void setZoomSpeed(float value);
+        void setZoomSpeed(float value, bool persist = true);
         [[nodiscard]] float zoomSpeed();
-        void setNavigationSpeed(float value);
+        void setNavigationSpeed(float value, bool persist = true);
         [[nodiscard]] float navigationSpeed();
 
         void setLanguage(const std::string& value);
@@ -104,7 +104,7 @@ namespace lfs::vis {
         [[nodiscard]] bool rememberCameraViewSnap();
         void setSceneGraphSelectionMarkers(bool enabled);
         [[nodiscard]] bool sceneGraphSelectionMarkers();
-        void setTrackpad(const TrackpadPreferenceState& state);
+        void setTrackpad(const TrackpadPreferenceState& state, bool persist = true);
         [[nodiscard]] TrackpadPreferenceState trackpad();
         void setProgressBarStyle(std::string_view value);
         [[nodiscard]] std::string progressBarStyle();
@@ -156,9 +156,9 @@ namespace lfs::vis {
 
     LFS_VIS_API void saveCameraNavigationPreference(const std::string& mode);
     [[nodiscard]] LFS_VIS_API std::string loadCameraNavigationPreference();
-    LFS_VIS_API void saveZoomSpeedPreference(float speed);
+    LFS_VIS_API void saveZoomSpeedPreference(float speed, bool persist = true);
     [[nodiscard]] LFS_VIS_API float loadZoomSpeedPreference();
-    LFS_VIS_API void saveNavigationSpeedPreference(float speed);
+    LFS_VIS_API void saveNavigationSpeedPreference(float speed, bool persist = true);
     [[nodiscard]] LFS_VIS_API float loadNavigationSpeedPreference();
     LFS_VIS_API void setRememberCameraNavigationPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool rememberCameraNavigationPreference();
@@ -168,7 +168,7 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API bool rememberCameraViewSnapPreference();
     LFS_VIS_API void saveSceneGraphSelectionMarkersPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool loadSceneGraphSelectionMarkersPreference();
-    LFS_VIS_API void saveTrackpadPreferences(const TrackpadPreferenceState& state);
+    LFS_VIS_API void saveTrackpadPreferences(const TrackpadPreferenceState& state, bool persist = true);
     [[nodiscard]] LFS_VIS_API TrackpadPreferenceState loadTrackpadPreferences();
     LFS_VIS_API void saveProgressBarStylePreference(std::string_view style);
     [[nodiscard]] LFS_VIS_API std::string loadProgressBarStylePreference();

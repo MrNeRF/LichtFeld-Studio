@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "resumable_file_sink.hpp"
 #include "core/atomic_file.hpp"
+#include "core/image_codecs.hpp"
 #include "core/path_utils.hpp"
 #include "git_version.h"
 #include "media/video_frame_extractor.hpp"
@@ -111,7 +112,8 @@ namespace lfs::media::detail {
     } // namespace
 
     ResumableFileSink::ResumableFileSink(const IngestRequest& request, const FileExtraction& output)
-        : request_(request), output_(output), cancelled_([cancelled = request.cancelled, file_cancelled = output.files.format == FrameFileFormat::EXR ? output.files.exr.cancelled : output.files.image_output.cancelled] {
+        : request_(request), output_(output), cancelled_([cancelled = request.cancelled, file_cancelled = output.files.format == FrameFileFormat::EXR ? output.files.exr.cancelled : output.files.format == FrameFileFormat::TIFF16 ? output.files.tiff16.cancelled
+                                                                                                                                                                                                                                    : output.files.image_output.cancelled] {
               return (cancelled && cancelled()) || (file_cancelled && file_cancelled());
           }),
           checkpoint_(output.files.output_directory / ".media-ingest-checkpoint") {}
@@ -150,6 +152,8 @@ namespace lfs::media::detail {
         identity_["sharpness"] = {r.sharpness.enabled, static_cast<int>(r.sharpness.method), r.sharpness.threshold, r.sharpness.window_candidates, r.sharpness.window};
         identity_["color"] = {static_cast<int>(r.output_format), static_cast<int>(r.input_color.transfer), static_cast<int>(r.input_color.primaries), r.convert_hdr_to_sdr};
         identity_["files"] = {f.filename_pattern, static_cast<int>(f.format), f.jpeg_quality, static_cast<int>(f.exr.precision), static_cast<int>(f.exr.compression), f.exr.provenance};
+        if (f.format == FrameFileFormat::TIFF16)
+            identity_["tiff16"] = {core::image_codecs::tiff_sdr_encoding, static_cast<int>(f.tiff16.transfer), f.tiff16.provenance};
         identity_["layout"] = {session.output.width, session.output.height, static_cast<int>(session.output.format), static_cast<int>(session.output.color.transfer), static_cast<int>(session.output.color.primaries)};
         identity_["metadata"] = output_.write_metadata;
         if (r.float_color_profile != FloatColorProfile::Sdr)
@@ -229,8 +233,9 @@ namespace lfs::media::detail {
             return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint sink is inactive"));
         if (auto size = frame.requiredBytes(); !size)
             return SinkResult::failure(size.error());
-        const auto extension = output_.files.format == FrameFileFormat::PNG ? ".png" : output_.files.format == FrameFileFormat::JPEG ? ".jpg"
-                                                                                                                                     : ".exr";
+        const auto extension = output_.files.format == FrameFileFormat::TIFF16 ? ".tif" : output_.files.format == FrameFileFormat::PNG ? ".png"
+                                                                                      : output_.files.format == FrameFileFormat::JPEG  ? ".jpg"
+                                                                                                                                       : ".exr";
         const auto name = core::utf8_to_path(io::formatFrameFilenameStem(output_.files.filename_pattern, frame.info.legacy_source_frame) + extension);
         if (name != name.filename() || name.empty() || !filenames_.insert(name).second)
             return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Resume requires unique plain frame filenames"));
@@ -275,6 +280,8 @@ namespace lfs::media::detail {
         staging_options.remove_stale_frames = false;
         staging_options.image_output.overwrite = true;
         staging_options.exr.overwrite = true;
+        staging_options.tiff16.overwrite = true;
+        staging_options.tiff16.cancelled = cancelled_;
         const auto staged = checkpoint_ / name;
         Result<std::string> encoded_digest = std::string{};
         if (gpu_jpeg_) {

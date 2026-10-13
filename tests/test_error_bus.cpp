@@ -8,6 +8,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/frame_state_machine.hpp"
+#include "core/logger.hpp"
 #include "core/modal_request.hpp"
 #include "core/source_site.hpp"
 #include "gui/error_event_bridge.hpp"
@@ -24,6 +25,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -396,6 +398,65 @@ TEST(ErrorEventBridgeTest, FutureVideoReconstructionVersionIsNonBlockingWarning)
     EXPECT_EQ(notification.error.severity(), lfs::Severity::Warning);
     EXPECT_EQ(notification.error.code(), lfs::ErrorCode::Unsupported);
     EXPECT_TRUE(notification.actions.empty());
+}
+
+TEST(ErrorEventBridgeTest, FileDropListsAllFivePathsAndLogsThem) {
+    ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+        (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+    const lfs::core::events::state::FileDropFailed event{
+        .files = {"/tmp/drop_one.xyz", "/tmp/drop_two.xyz", "/tmp/drop_three.xyz",
+                  "/tmp/drop_four.xyz", "/tmp/drop_five.xyz"},
+        .error = "Unsupported input"};
+    std::vector<std::string> warnings;
+    auto& logger = lfs::core::Logger::get();
+    const auto token = logger.add_log_handler([&](const lfs::core::LogLevel level,
+                                                  const lfs::core::SourceSite&, const std::string_view message) {
+        if (level == lfs::core::LogLevel::Warn)
+            warnings.emplace_back(message);
+    });
+    const auto notification = lfs::vis::gui::translateFileDropFailed(event);
+    logger.remove_log_handler(token);
+
+    ASSERT_TRUE(notification.has_value());
+    const std::string message(notification->error.user_message());
+    ASSERT_EQ(warnings.size(), 1u);
+    for (const auto& path : event.files) {
+        EXPECT_NE(message.find(std::filesystem::path(path).filename().string()), std::string::npos);
+        EXPECT_NE(warnings.front().find(path), std::string::npos);
+    }
+    EXPECT_EQ(message.find("full list in the log"), std::string::npos);
+}
+
+TEST(ErrorEventBridgeTest, FileDropLimitsDialogAndLogsAllPaths) {
+    ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+        (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+    const lfs::core::events::state::FileDropFailed event{
+        .files = {"/tmp/drop_one.xyz", "/tmp/drop_two.xyz", "/tmp/drop_three.xyz",
+                  "/tmp/drop_four.xyz", "/tmp/drop_five.xyz", "/tmp/drop_six.xyz",
+                  "/tmp/drop_seven.xyz"},
+        .error = "Unsupported input"};
+    auto& locale = lfs::event::LocalizationManager::getInstance();
+    locale.setOverride("notification.and_more_in_log", "plus {} others (full list in the log)");
+    std::vector<std::string> warnings;
+    auto& logger = lfs::core::Logger::get();
+    const auto token = logger.add_log_handler([&](const lfs::core::LogLevel level,
+                                                  const lfs::core::SourceSite&, const std::string_view message) {
+        if (level == lfs::core::LogLevel::Warn)
+            warnings.emplace_back(message);
+    });
+    const auto notification = lfs::vis::gui::translateFileDropFailed(event);
+    logger.remove_log_handler(token);
+    locale.clearOverride("notification.and_more_in_log");
+
+    ASSERT_TRUE(notification.has_value());
+    const std::string message(notification->error.user_message());
+    ASSERT_EQ(warnings.size(), 1u);
+    for (std::size_t i = 0; i < event.files.size(); ++i) {
+        EXPECT_NE(warnings.front().find(event.files[i]), std::string::npos);
+        const auto name = std::filesystem::path(event.files[i]).filename().string();
+        EXPECT_EQ(message.find(name) != std::string::npos, i < 5);
+    }
+    EXPECT_NE(message.find("plus 2 others (full list in the log)"), std::string::npos);
 }
 
 namespace {
@@ -807,8 +868,8 @@ TEST(GuiErrorConsumerTest, SuppressedRepeatsRenderInBody) {
     EXPECT_NE(modal->body_rml.find("x12"), std::string::npos);
 }
 
-// P3 §4.1: the new titleKeyFor Vulkan/Rendering mapping, verified through the
-// public consumer boundary. LOC headless returns the key, so assert the key.
+// The public consumer returns the localized title. Resolve the expected value at
+// assertion time so the test is independent of which earlier test loaded locales.
 TEST(GuiErrorConsumerTest, VulkanDeviceLostMapsToDeviceLostTitle) {
     std::optional<lfs::core::ModalRequest> modal;
     lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
@@ -820,7 +881,7 @@ TEST(GuiErrorConsumerTest, VulkanDeviceLostMapsToDeviceLostTitle) {
                           lfs::ErrorSurface::Modal),
                       lfs::ErrorDeliveryInfo{});
     ASSERT_TRUE(modal.has_value());
-    EXPECT_EQ(modal->title, std::string(lichtfeld::Strings::ErrorModal::RENDERER_DEVICE_LOST));
+    EXPECT_EQ(modal->title, std::string(LOC(lichtfeld::Strings::ErrorModal::RENDERER_DEVICE_LOST)));
 }
 
 TEST(GuiErrorConsumerTest, VulkanDeadlineMapsToStalledTitle) {
@@ -834,7 +895,7 @@ TEST(GuiErrorConsumerTest, VulkanDeadlineMapsToStalledTitle) {
                                            lfs::ErrorSurface::Modal),
                       lfs::ErrorDeliveryInfo{});
     ASSERT_TRUE(modal.has_value());
-    EXPECT_EQ(modal->title, std::string(lichtfeld::Strings::ErrorModal::RENDERER_STALLED));
+    EXPECT_EQ(modal->title, std::string(LOC(lichtfeld::Strings::ErrorModal::RENDERER_STALLED)));
 }
 
 TEST(GuiErrorConsumerTest, RenderFrameOomMapsToGpuMemoryTitle) {
@@ -849,7 +910,7 @@ TEST(GuiErrorConsumerTest, RenderFrameOomMapsToGpuMemoryTitle) {
                              lfs::ErrorSurface::Modal),
         lfs::ErrorDeliveryInfo{});
     ASSERT_TRUE(modal.has_value());
-    EXPECT_EQ(modal->title, std::string(lichtfeld::Strings::ErrorModal::OUT_OF_GPU_MEMORY));
+    EXPECT_EQ(modal->title, std::string(LOC(lichtfeld::Strings::ErrorModal::OUT_OF_GPU_MEMORY)));
 }
 
 namespace {
@@ -874,46 +935,46 @@ namespace {
 TEST(GuiErrorConsumerTest, AppSaveMapsToSaveFailedTitle) {
     EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::Unavailable, lfs::ErrorDomain::App, "save",
                                       lfs::vis::gui::error_op::kSave)),
-              std::string(lichtfeld::Strings::ErrorModal::SAVE_FAILED));
+              std::string(LOC(lichtfeld::Strings::ErrorModal::SAVE_FAILED)));
 }
 
 TEST(GuiErrorConsumerTest, AppOpenProjectMapsToFileOpenFailedTitle) {
     EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::NotFound, lfs::ErrorDomain::App, "open",
                                       lfs::vis::gui::error_op::kOpenProject)),
-              std::string(lichtfeld::Strings::ErrorModal::FILE_OPEN_FAILED));
+              std::string(LOC(lichtfeld::Strings::ErrorModal::FILE_OPEN_FAILED)));
 }
 
 TEST(GuiErrorConsumerTest, AppLoadConfigStillInvalidConfig) {
     EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::InvalidArgument, lfs::ErrorDomain::App,
                                       "config", lfs::vis::gui::error_op::kLoadConfig)),
-              std::string(lichtfeld::Strings::ErrorModal::CONFIG_INVALID));
+              std::string(LOC(lichtfeld::Strings::ErrorModal::CONFIG_INVALID)));
 }
 
 TEST(GuiErrorConsumerTest, IoSaveMapsToSaveFailedTitle) {
     EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::Unavailable, lfs::ErrorDomain::IO, "save",
                                       lfs::vis::gui::error_op::kSave)),
-              std::string(lichtfeld::Strings::ErrorModal::SAVE_FAILED));
+              std::string(LOC(lichtfeld::Strings::ErrorModal::SAVE_FAILED)));
 }
 
 TEST(GuiErrorConsumerTest, IoOpenProjectMapsToFileOpenFailedTitle) {
     EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::NotFound, lfs::ErrorDomain::IO, "open",
                                       lfs::vis::gui::error_op::kOpenProject)),
-              std::string(lichtfeld::Strings::ErrorModal::FILE_OPEN_FAILED));
+              std::string(LOC(lichtfeld::Strings::ErrorModal::FILE_OPEN_FAILED)));
 }
 
 TEST(GuiErrorConsumerTest, IoResourceExhaustedSaveIsNotGpuOom) {
     EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::ResourceExhausted, lfs::ErrorDomain::IO,
                                       "disk full", lfs::vis::gui::error_op::kSave)),
-              std::string(lichtfeld::Strings::ErrorModal::SAVE_FAILED));
+              std::string(LOC(lichtfeld::Strings::ErrorModal::SAVE_FAILED)));
     EXPECT_NE(consumerTitle(makeError(lfs::ErrorCode::ResourceExhausted, lfs::ErrorDomain::IO,
                                       "disk full", lfs::vis::gui::error_op::kSave)),
-              std::string(lichtfeld::Strings::ErrorModal::OUT_OF_GPU_MEMORY));
+              std::string(LOC(lichtfeld::Strings::ErrorModal::OUT_OF_GPU_MEMORY)));
 }
 
 TEST(GuiErrorConsumerTest, TrainingResourceExhaustedStillGpuOom) {
     EXPECT_EQ(consumerTitle(makeError(lfs::ErrorCode::ResourceExhausted, lfs::ErrorDomain::Training,
                                       "vram")),
-              std::string(lichtfeld::Strings::ErrorModal::OUT_OF_GPU_MEMORY));
+              std::string(LOC(lichtfeld::Strings::ErrorModal::OUT_OF_GPU_MEMORY)));
 }
 
 TEST(GuiErrorConsumerTest, AsyncAndSyncSaveShareSaveFailedTitle) {
@@ -926,7 +987,7 @@ TEST(GuiErrorConsumerTest, AsyncAndSyncSaveShareSaveFailedTitle) {
     const std::string sync_title = consumerTitle(sync_preflight, lfs::ErrorSurface::Toast);
     const std::string async_title = consumerTitle(async_worker, lfs::ErrorSurface::Toast);
     EXPECT_EQ(sync_title, async_title);
-    EXPECT_EQ(sync_title, std::string(lichtfeld::Strings::ErrorModal::SAVE_FAILED));
+    EXPECT_EQ(sync_title, std::string(LOC(lichtfeld::Strings::ErrorModal::SAVE_FAILED)));
 }
 
 using lfs::vis::FrameFault;

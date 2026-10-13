@@ -122,6 +122,7 @@ class PreferencesPanel(Panel):
             self.SPEED_SCRUB_FIELD_DEFS,
             self._get_scrub_value,
             self._set_scrub_value,
+            commit_value=self._commit_scrub_value,
         )
 
     @property
@@ -898,13 +899,14 @@ class PreferencesPanel(Panel):
         lf.ui.set_navigation_speed_preference(float(value))
         self._refresh_selection()
 
-    def _set_trackpad(self, **changes):
+    def _set_trackpad(self, persist=True, **changes):
         state = {**lf.ui.get_trackpad_preferences(), **changes}
         lf.ui.set_trackpad_preferences(
             str(state["device"]),
             bool(state["swipe_pans"]),
             float(state["swipe_speed"]),
             float(state["zoom_speed"]),
+            bool(persist),
         )
         self._refresh_selection()
 
@@ -920,6 +922,17 @@ class PreferencesPanel(Panel):
         return self.SPEED_SCRUB_FIELD_DEFS[prop].min_value
 
     def _set_scrub_value(self, prop, value):
+        if prop == "zoom_speed":
+            lf.ui.set_zoom_speed_preference(float(value), persist=False)
+        elif prop == "navigation_speed":
+            lf.ui.set_navigation_speed_preference(float(value), persist=False)
+        elif prop == "trackpad_swipe_speed":
+            self._set_trackpad(persist=False, swipe_speed=float(value))
+        elif prop == "trackpad_zoom_speed":
+            self._set_trackpad(persist=False, zoom_speed=float(value))
+        self._refresh_selection()
+
+    def _commit_scrub_value(self, prop, value):
         if prop == "zoom_speed":
             self._set_zoom_speed(value)
         elif prop == "navigation_speed":

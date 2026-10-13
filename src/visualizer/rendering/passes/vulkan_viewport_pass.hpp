@@ -103,8 +103,17 @@ namespace lfs::vis {
         // viewport pass.
         glm::mat4 mesh_view_projection{1.0f};
         glm::vec3 mesh_camera_position{0.0f};
+        glm::vec3 mesh_camera_backward{0.0f, 0.0f, 1.0f};
+        bool mesh_depth_view = false;
+        float mesh_depth_view_min = 0.0f;
+        float mesh_depth_view_max = 1.0f;
+        bool mesh_depth_grayscale = false;
         std::vector<VulkanMeshDrawItem> mesh_items;
         std::vector<VulkanMeshViewportPanel> mesh_panels;
+        // Set only for a requested scene capture. Invoked after scene geometry and
+        // before world/UI overlays are recorded into the window.
+        bool (*record_scene_capture)(void*, VkCommandBuffer) = nullptr;
+        void* scene_capture_context = nullptr;
 
         // GPU-rendered equirect environment background. Replaces the old CPU
         // `renderEnvironmentBackground` per-pixel sampling loop.

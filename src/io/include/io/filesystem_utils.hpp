@@ -349,12 +349,18 @@ namespace lfs::io {
     // Check if a file has an image extension
     inline bool is_image_file(const fs::path& path) {
         static const std::vector<std::string> image_extensions = {
-            ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"};
+            ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".exr", ".webp"};
 
         std::string ext = path.extension().string();
         detail::ascii_lower_inplace(ext);
 
         return std::find(image_extensions.begin(), image_extensions.end(), ext) != image_extensions.end();
+    }
+
+    inline bool is_legacy_image_file(const fs::path& path) {
+        auto ext = path.extension().string();
+        detail::ascii_lower_inplace(ext);
+        return ext != ".exr" && ext != ".webp" && is_image_file(path);
     }
 
     inline std::string strip_extension(const std::string& filename) {
@@ -619,6 +625,26 @@ namespace lfs::io {
 
         int count = 0;
         std::error_code ec;
+        std::unordered_set<fs::path> legacy_stems;
+        std::vector<fs::path> extended_stems;
+        const auto record = [&](const fs::path& path) {
+            if (!is_image_file(path))
+                return;
+            auto stem = path;
+            stem.replace_extension();
+            if (is_legacy_image_file(path)) {
+                ++count;
+                legacy_stems.insert(std::move(stem));
+            } else {
+                extended_stems.push_back(std::move(stem));
+            }
+        };
+        const auto total = [&] {
+            // Newly discovered EXR/WebP companions must not inflate existing
+            // dataset counts. Standalone files and distinct directories count.
+            return count + static_cast<int>(std::count_if(extended_stems.begin(), extended_stems.end(),
+                                                          [&](const auto& stem) { return !legacy_stems.contains(stem); }));
+        };
 
         if (recursive) {
             for (fs::recursive_directory_iterator it(
@@ -631,23 +657,19 @@ namespace lfs::io {
                 std::error_code file_ec;
                 if (!it->is_regular_file(file_ec) || file_ec)
                     continue;
-                if (is_image_file(it->path())) {
-                    ++count;
-                }
+                record(it->path());
             }
-            return count;
+            return total();
         }
 
         for (fs::directory_iterator it(root_path, ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec)
                 continue;
-            if (is_image_file(it->path())) {
-                ++count;
-            }
+            record(it->path());
         }
 
-        return count;
+        return total();
     }
 
     struct DatasetInfo {

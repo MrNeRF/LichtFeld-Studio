@@ -1136,11 +1136,9 @@ namespace {
             std::_Exit(::testing::Test::HasFailure() ? 1 : 0); }, ::testing::ExitedWithCode(0), "");
     }
 
-    TEST_P(VideoFrameExtractorWriteTest, FullDeviceMetadataWriteFails) {
-        if (!std::filesystem::exists("/dev/full"))
-            GTEST_SKIP() << "A full device is required";
+    TEST_P(VideoFrameExtractorWriteTest, DirectoryAtMetadataPathFails) {
         const auto metadata = params.output_dir / "extraction_metadata.json";
-        std::filesystem::create_symlink("/dev/full", metadata);
+        ASSERT_TRUE(std::filesystem::create_directory(metadata));
         expectFailure(metadata);
     }
 

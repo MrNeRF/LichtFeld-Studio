@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "core/export.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"

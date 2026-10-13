@@ -35,6 +35,14 @@ float st_mask(constant StructureParams& p, int i) {
         return 1.0f;
     return p.mask_byte != 0 ? (st_byte(p.c, i) != 0 ? 1.0f : 0.0f) : st_read(p.c, i);
 }
+bool st_ridge_keeps(constant StructureParams& p, int i) {
+    if (p.e == 0)
+        return true;
+    if (p.reserved == 0)
+        return p.mask_byte != 0 ? st_byte(p.e, i) != 0 : st_read(p.e, i) > 0.0f;
+    return p.mask_byte != 0 ? st_byte(p.e, i) > 250u : st_read(p.e, i) > (250.5f / 255.0f);
+}
+bool st_invalid_response(float value) { return as_type<uint>(value) == 0xff800000u; }
 float st_residual(constant StructureParams& p, int i) {
     int n = p.width * p.height;
     return 0.2126f * (st_read(p.a, i) - st_value(p.b, i, p.image_byte)) +
@@ -46,6 +54,7 @@ kernel void structure_main(constant StructureParams& p [[buffer(0)]],
                            uint group [[threadgroup_position_in_grid]], uint lane [[thread_index_in_threadgroup]]) {
     const uint operation = kStructureOperation;
     threadgroup float3 reduction[256];
+    threadgroup float count_reduction[256];
     threadgroup float residual[432], confidence[432], coefficient_x[340], coefficient_y[340];
     uint i = group * 256u + lane;
     int n = p.width * p.height;
@@ -54,16 +63,20 @@ kernel void structure_main(constant StructureParams& p [[buffer(0)]],
             return;
         int x = int(i) % p.width, row = st_reflect(p.first_row + int(i) / p.width - int(p.radius), p.height);
         float g = 0, d1 = 0, d2 = 0;
+        bool valid = true;
         for (int k = -int(p.radius); k <= int(p.radius); ++k) {
-            float v = st_luma(p, row * p.width + st_reflect(x + k, p.width));
+            int source = row * p.width + st_reflect(x + k, p.width);
+            valid = valid && st_ridge_keeps(p, source);
+            float v = st_luma(p, source);
             int j = k + int(p.radius);
             g = fma(v, p.filter_g[j], g);
             d1 = fma(v, p.filter_d1[j], d1);
             d2 = fma(v, p.filter_d2[j], d2);
         }
-        st_write(p.b, i, g);
-        st_write(p.b, p.stride + i, d1);
-        st_write(p.b, 2 * p.stride + i, d2);
+        float result = valid ? g : as_type<float>(0xff800000u);
+        st_write(p.b, i, result);
+        st_write(p.b, p.stride + i, valid ? d1 : result);
+        st_write(p.b, 2 * p.stride + i, valid ? d2 : result);
         return;
     }
     if (operation == 1) {
@@ -72,6 +85,16 @@ kernel void structure_main(constant StructureParams& p [[buffer(0)]],
         int x = int(i) % p.width, by = int(i) / p.width, y = p.first_row + by;
         if (y >= p.height)
             return;
+        if (p.e != 0) {
+            for (int k = -int(p.radius); k <= int(p.radius); ++k) {
+                int source = (by + k + int(p.radius)) * p.width + x;
+                if (st_invalid_response(st_read(p.b, source))) {
+                    if (p.first_scale != 0)
+                        st_write(p.c, y * p.width + x, 0.0f);
+                    return;
+                }
+            }
+        }
         float hxx = 0, hxy = 0, hyy = 0;
         for (int k = -int(p.radius); k <= int(p.radius); ++k) {
             int j = k + int(p.radius), source = (by + j) * p.width + x;
@@ -92,20 +115,29 @@ kernel void structure_main(constant StructureParams& p [[buffer(0)]],
     }
     if (operation == 2 || operation == 3 || operation == 6 || operation == 7) {
         float3 value = float3(0.0f, 0.0f, 0.0f);
+        float valid_count = 0.0f;
         if (operation == 2 || operation == 3)
             value = float3(0.0f, INFINITY, -INFINITY);
         if (operation == 2) {
             for (uint k = i; k < uint(n); k += p.blocks * 256u) {
+                if (!st_ridge_keeps(p, int(k)))
+                    continue;
                 float l = st_luma(p, int(k));
                 value.x += st_read(p.c, k);
+                if (p.e != 0)
+                    valid_count += 1.0f;
                 value.y = min(value.y, l);
                 value.z = max(value.z, l);
             }
         } else if (operation == 3) {
             for (uint k = lane; k < p.blocks; k += 256u) {
                 value.x += st_read(p.d, k);
-                value.y = min(value.y, st_read(p.d, 1024 + k));
-                value.z = max(value.z, st_read(p.d, 2048 + k));
+                if (p.e != 0)
+                    valid_count += st_read(p.d, 3072 + k);
+                else {
+                    value.y = min(value.y, st_read(p.d, 1024 + k));
+                    value.z = max(value.z, st_read(p.d, 2048 + k));
+                }
             }
         } else if (operation == 6) {
             for (uint k = i; k < uint(n); k += p.blocks * 256u) {
@@ -133,6 +165,7 @@ kernel void structure_main(constant StructureParams& p [[buffer(0)]],
             }
         }
         reduction[lane] = value;
+        count_reduction[lane] = valid_count;
         threadgroup_barrier(mem_flags::mem_threadgroup);
         // Warp XOR followed by the eight warp totals, matching the CUDA reduction order.
         for (uint offset = 16; offset > 0; offset >>= 1) {
@@ -145,13 +178,16 @@ kernel void structure_main(constant StructureParams& p [[buffer(0)]],
             } else
                 value.y += other.y;
             reduction[lane] = value;
+            count_reduction[lane] += count_reduction[lane ^ offset];
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
         value = lane < 8 ? reduction[lane * 32] : float3(0.0f, 0.0f, 0.0f);
+        valid_count = lane < 8 ? count_reduction[lane * 32] : 0.0f;
         if ((operation == 2 || operation == 3) && lane >= 8)
             value = float3(0.0f, INFINITY, -INFINITY);
         threadgroup_barrier(mem_flags::mem_threadgroup);
         reduction[lane] = value;
+        count_reduction[lane] = valid_count;
         threadgroup_barrier(mem_flags::mem_threadgroup);
         for (uint offset = 4; offset > 0; offset >>= 1) {
             float3 other = reduction[lane ^ offset];
@@ -163,18 +199,24 @@ kernel void structure_main(constant StructureParams& p [[buffer(0)]],
             } else
                 value.y += other.y;
             reduction[lane] = value;
+            count_reduction[lane] += count_reduction[lane ^ offset];
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
         value = reduction[0];
+        valid_count = count_reduction[0];
         if (operation == 2) {
             if (lane == 0) {
                 st_write(p.d, group, value.x);
                 st_write(p.d, 1024 + group, value.y);
                 st_write(p.d, 2048 + group, value.z);
+                if (p.e != 0)
+                    st_write(p.d, 3072 + group, valid_count);
             }
         } else if (operation == 3) {
             if (i < uint(n))
-                st_write(p.c, i, st_read(p.c, i) * (value.x > 0.0f && value.z > value.y ? float(n) / value.x : 0.0f));
+                bool range_valid = p.e != 0 ? valid_count > 0.0f : value.z > value.y;
+                float count = p.e != 0 ? valid_count : float(n);
+                st_write(p.c, i, st_read(p.c, i) * (value.x > 0.0f && range_valid ? count / value.x : 0.0f));
         } else if (operation == 6) {
             if (lane == 0) {
                 st_write(p.d, group, value.x);

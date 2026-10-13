@@ -11,6 +11,7 @@
         "avcodec",
         "avfilter",
         "avformat",
+        "dav1d",
         {
           "name": "nvcodec",
           "platform": "!osx"

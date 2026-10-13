@@ -167,19 +167,39 @@ namespace {
         Field ssim, cs, dm_mu, dm_s1, dm_s12, raw_dm_mu;
     };
 
-    SsimForward ssim_forward(const Field& x, const Field& raw, const Field& y, const Shape4& s, const double weight) {
+    SsimForward ssim_forward(const Field& x, const Field& raw, const Field& y, const Shape4& s, const double weight,
+                             const Field& mask = {}) {
         SsimForward out;
         for (Field* f : {&out.ssim, &out.cs, &out.dm_mu, &out.dm_s1, &out.dm_s12, &out.raw_dm_mu})
             f->assign(s.numel(), 0.0);
+        // Outside-image zero padding retains unit weight. Only excluded samples
+        // inside the image reduce the Gaussian window's normalization mass.
+        Field window_mass(s.plane(), 1.0);
+        if (!mask.empty()) {
+            Field excluded(mask.size());
+            std::transform(mask.begin(), mask.end(), excluded.begin(), [](double m) { return 1.0 - m; });
+            const Field missing = blur(excluded, s.h, s.w);
+            for (size_t i = 0; i < window_mass.size(); ++i)
+                window_mass[i] -= missing[i];
+        }
+        const auto moment = [&](const Field& values) {
+            Field out = blur(mask.empty() ? values : product(values, mask), s.h, s.w);
+            for (size_t i = 0; i < out.size(); ++i)
+                out[i] = window_mass[i] >= 1e-30 ? out[i] / window_mass[i] : 0.0;
+            return out;
+        };
         for (int n = 0; n < s.n; ++n) {
             for (int c = 0; c < s.c; ++c) {
                 const Field px = plane_of(x, s, n, c), py = plane_of(y, s, n, c);
                 const Field pr = raw.empty() ? px : plane_of(raw, s, n, c);
-                const Field mx = blur(px, s.h, s.w), my = blur(py, s.h, s.w), mr = blur(pr, s.h, s.w);
-                const Field rr = blur(product(pr, pr), s.h, s.w), yy = blur(product(py, py), s.h, s.w);
-                const Field ry = blur(product(pr, py), s.h, s.w);
+                const Field mx = moment(px), my = moment(py), mr = moment(pr);
+                const Field rr = moment(product(pr, pr)), yy = moment(product(py, py));
+                const Field ry = moment(product(pr, py));
                 const size_t base = (static_cast<size_t>(n) * s.c + c) * s.plane();
                 for (size_t i = 0; i < s.plane(); ++i) {
+                    // Weight before half rounding, as in the saved GPU partials.
+                    const double derivative_weight = mask.empty() ? 1.0 : (window_mass[i] >= 1e-30 ? mask[i] / window_mass[i] : 0.0);
+                    const auto partial = [&](double v) { return to_half(v * derivative_weight); };
                     const double s_r = rr[i] - mr[i] * mr[i], s_y = yy[i] - my[i] * my[i], s_ry = ry[i] - mr[i] * my[i];
                     const double B = s_r + s_y + kC2, D = 2 * s_ry + kC2;
                     const size_t e = base + i;
@@ -188,20 +208,20 @@ namespace {
                         out.ssim[e] = C * D / (A * B);
                         out.cs[e] = D / B;
                         const double mu1 = mx[i], mu2 = my[i];
-                        out.dm_mu[e] = to_half(mu2 * 2 * D / (A * B) - mu2 * 2 * C / (A * B) - mu1 * 2 * C * D / (A * A * B) +
+                        out.dm_mu[e] = partial(mu2 * 2 * D / (A * B) - mu2 * 2 * C / (A * B) - mu1 * 2 * C * D / (A * A * B) +
                                                mu1 * 2 * C * D / (A * B * B));
-                        out.dm_s1[e] = to_half(-C * D / (A * B * B));
-                        out.dm_s12[e] = to_half(2 * C / (A * B));
+                        out.dm_s1[e] = partial(-C * D / (A * B * B));
+                        out.dm_s12[e] = partial(2 * C / (A * B));
                     } else {
                         const double A = mx[i] * mx[i] + my[i] * my[i] + kC1, C = 2 * mx[i] * my[i] + kC1;
                         const double lum = C / A;
                         out.cs[e] = D / B;
                         out.ssim[e] = lum * out.cs[e];
-                        out.dm_mu[e] = to_half(out.cs[e] * 2 * (my[i] * A - mx[i] * C) / (A * A));
+                        out.dm_mu[e] = partial(out.cs[e] * 2 * (my[i] * A - mx[i] * C) / (A * A));
                         const double ds1 = weight * (-(lum * D) / (B * B)), ds12 = weight * (2 * lum / B);
-                        out.dm_s1[e] = to_half(ds1);
-                        out.dm_s12[e] = to_half(ds12);
-                        out.raw_dm_mu[e] = to_half(ds1 * (-2 * mr[i]) + ds12 * (-my[i]));
+                        out.dm_s1[e] = partial(ds1);
+                        out.dm_s12[e] = partial(ds12);
+                        out.raw_dm_mu[e] = partial(ds1 * (-2 * mr[i]) + ds12 * (-my[i]));
                     }
                 }
             }
@@ -211,23 +231,29 @@ namespace {
 
     // fusedL1SSIMBackwardCUDA / maskedFusedL1SSIMBackwardCUDA with chain(pixel).
     Field ssim_backward(const Field& x, const Field& y, const Field& dm_mu, const Field* dm_s1, const Field* dm_s12,
-                        const Field& chain, const double weight, const Shape4& s) {
+                        const Field& chain, const double weight, const Shape4& s, const Field& mask = {}) {
         Field grad(s.numel());
+        double mask_sum = 0.0;
+        for (const double m : mask)
+            mask_sum += m;
+        const double masked_chain = 1.0 / (static_cast<float>(mask_sum) * s.n * s.c + 1e-8);
         for (int n = 0; n < s.n; ++n) {
             for (int c = 0; c < s.c; ++c) {
                 const size_t base = (static_cast<size_t>(n) * s.c + c) * s.plane();
                 Field d0(s.plane()), d1(s.plane(), 0.0), d2(s.plane(), 0.0);
                 for (size_t i = 0; i < s.plane(); ++i) {
-                    d0[i] = -weight * dm_mu[base + i] * chain[i];
+                    const double derivative_chain = mask.empty() ? chain[i] : masked_chain;
+                    d0[i] = -weight * dm_mu[base + i] * derivative_chain;
                     if (dm_s1) {
-                        d1[i] = -weight * (*dm_s1)[base + i] * chain[i];
-                        d2[i] = -weight * (*dm_s12)[base + i] * chain[i];
+                        d1[i] = -weight * (*dm_s1)[base + i] * derivative_chain;
+                        d2[i] = -weight * (*dm_s12)[base + i] * derivative_chain;
                     }
                 }
                 const Field s0 = blur(d0, s.h, s.w), s1 = blur(d1, s.h, s.w), s2 = blur(d2, s.h, s.w);
                 for (size_t i = 0; i < s.plane(); ++i) {
                     const double p1 = x[base + i], p2 = y[base + i];
-                    grad[base + i] = s0[i] + 2 * p1 * s1[i] + p2 * s2[i] + (1 - weight) * sign(p1 - p2) * chain[i];
+                    const double input_mask = mask.empty() ? 1.0 : mask[i];
+                    grad[base + i] = input_mask * (s0[i] + 2 * p1 * s1[i] + p2 * s2[i]) + (1 - weight) * sign(p1 - p2) * chain[i];
                 }
             }
         }
@@ -290,10 +316,18 @@ namespace {
         }
         const bool pure = pc.path == ops::PhotoPath::SSIM;
         const double w = pure ? 1.0 : pc.weight;
-        const SsimForward f = ssim_forward(x, decoupled ? raw : Field{}, y, s, w);
+        const SsimForward f = ssim_forward(x, decoupled ? raw : Field{}, y, s, w, mask);
         const Field ssim_mean = channel_mean(f.ssim, s);
         ref.ssim_map = pure ? f.ssim : ssim_mean;
         ref.cs_map = pure ? f.cs : channel_mean(f.cs, s);
+        if (masked) {
+            for (int n = 0; n < s.n; ++n)
+                for (size_t i = 0; i < s.plane(); ++i)
+                    if (mask[i] <= 0.0) {
+                        ref.ssim_map[n * s.plane() + i] = 1.0;
+                        ref.cs_map[n * s.plane() + i] = 1.0;
+                    }
+        }
 
         Field chain;
         if (masked) {
@@ -330,10 +364,10 @@ namespace {
                 ref.loss = 1.0 - ref.loss;
         }
         if (decoupled) {
-            ref.grad = ssim_backward(x, y, f.dm_mu, nullptr, nullptr, chain, w, s);
-            ref.grad_raw = ssim_backward(raw, y, f.raw_dm_mu, &f.dm_s1, &f.dm_s12, chain, 1.0, s);
+            ref.grad = ssim_backward(x, y, f.dm_mu, nullptr, nullptr, chain, w, s, mask);
+            ref.grad_raw = ssim_backward(raw, y, f.raw_dm_mu, &f.dm_s1, &f.dm_s12, chain, 1.0, s, mask);
         } else {
-            ref.grad = ssim_backward(x, y, f.dm_mu, &f.dm_s1, &f.dm_s12, chain, w, s);
+            ref.grad = ssim_backward(x, y, f.dm_mu, &f.dm_s1, &f.dm_s12, chain, w, s, mask);
         }
         return ref;
     }
@@ -380,7 +414,8 @@ namespace {
         return in;
     }
 
-    void check_photo(const lfs::training::TrainingOps& table, const PhotoCase& pc, const std::string& name) {
+    void check_photo(const lfs::training::TrainingOps& table, const PhotoCase& pc, const std::string& name,
+                     const double map_tolerance = 2e-6) {
         SCOPED_TRACE(name);
         const PhotoInputs in = photo_inputs(pc, 11);
         const bool decoupled = pc.path == ops::PhotoPath::Decoupled || pc.path == ops::PhotoPath::MaskedDecoupled;
@@ -398,8 +433,8 @@ namespace {
         else
             EXPECT_FALSE(grad_raw.is_valid());
         if (pc.path != ops::PhotoPath::L1) {
-            expect_field(download(saved.ssim_map), ref.ssim_map, 2e-6, 0.0, name + " ssim_map");
-            expect_field(download(saved.cs_map), ref.cs_map, 2e-6, 0.0, name + " cs_map");
+            expect_field(download(saved.ssim_map), ref.ssim_map, map_tolerance, 0.0, name + " ssim_map");
+            expect_field(download(saved.cs_map), ref.cs_map, map_tolerance, 0.0, name + " cs_map");
         }
     }
 
@@ -416,6 +451,11 @@ namespace {
         check_photo(*table_, {ops::PhotoPath::MaskedFused, fixture}, "masked_fused");
         check_photo(*table_, {ops::PhotoPath::MaskedFused, odd, true, true}, "masked_fused_u8");
         check_photo(*table_, {ops::PhotoPath::MaskedDecoupled, fixture, false, true}, "masked_decoupled");
+        // Soft normalized moments add float32 rounding before covariance
+        // subtraction. Keep the original cases and all gradient/loss bounds;
+        // this new map comparison allows 3 ppm against the double reference.
+        check_photo(*table_, {ops::PhotoPath::MaskedDecoupled, fixture}, "masked_decoupled_soft", 3e-6);
+        check_photo(*table_, {ops::PhotoPath::MaskedDecoupled, odd, true, true}, "masked_decoupled_batch_u8");
     }
 
     // Central differences of the GPU loss 1 - SSIM against the GPU gradient.

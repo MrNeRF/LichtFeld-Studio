@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "core/executable_path.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -53,8 +54,7 @@ namespace {
     };
 
     void prependBuiltPythonModulePath() {
-        const auto module_dir =
-            std::filesystem::path(PROJECT_ROOT_PATH) / "build/src/python";
+        const auto module_dir = lfs::core::getPythonModuleDir();
         const std::string value = module_dir.string();
         const char* const existing = std::getenv("PYTHONPATH");
 #ifdef _WIN32
@@ -164,7 +164,8 @@ model.get_handle()
         }
 
         static constexpr const char* kDocName = "listener_lifetime";
-        StubRenderInterface render_interface_;
+        // RmlUi retains renderer resources until suite-level Shutdown.
+        inline static StubRenderInterface render_interface_;
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
     };

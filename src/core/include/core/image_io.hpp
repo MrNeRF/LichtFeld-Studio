@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <future>
 #include <memory>
@@ -25,6 +26,10 @@ namespace lfs::core {
 
     LFS_CORE_API std::tuple<int, int, int>
     get_image_info(std::filesystem::path p);
+    // Diagnostic count of full pixel decodes triggered by get_image_info's fallback.
+    LFS_CORE_API std::uint64_t image_info_full_decode_count_for_testing() noexcept;
+    // Advisory content sniff; reads at most 4096 bytes and never decodes pixels.
+    LFS_CORE_API bool probe_image_header_bounded(const std::filesystem::path& p, std::string& error);
     // Header-only validation; unlike get_image_info, never falls back to pixel decoding.
     LFS_CORE_API std::tuple<int, int, int>
     probe_image_info(const std::filesystem::path& p);

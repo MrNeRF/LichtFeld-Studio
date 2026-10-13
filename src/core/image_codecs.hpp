@@ -6,10 +6,13 @@
 #include "core/atomic_file.hpp"
 #include "core/export.hpp"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::core::image_codecs {
@@ -57,7 +60,24 @@ namespace lfs::core::image_codecs {
     }
 
     LFS_IMAGE_CODECS_API bool probe(const std::filesystem::path& path, Probe& result, std::string& error);
+    LFS_IMAGE_CODECS_API bool probe_bounded_header(const std::filesystem::path& path, std::string& error);
+    // Validate Radiance scanline payload completeness without decoding pixels.
+    LFS_IMAGE_CODECS_API bool radiance_scanlines_complete(const std::filesystem::path& path);
     LFS_IMAGE_CODECS_API bool decode(const std::filesystem::path& path, Image& result, std::string& error);
+    inline constexpr std::string_view tiff_sdr_encoding = "tiff16-sdr-v1";
+    // Immutable, lazily initialized once per supported transfer; shared by
+    // export and metadata validation. Unknown transfers return an empty span.
+    LFS_IMAGE_CODECS_API std::span<const std::uint16_t> tiff_transfer_function(std::string_view transfer);
+    struct TiffMetadata {
+        std::optional<std::string> description;
+        std::optional<std::array<float, 8>> chromaticities;
+        int bits = 0, channels = 0;
+        bool unsigned_integer = false;
+        bool straight_alpha = false;
+        bool matching_rgb_transfer = false;
+    };
+    // TIFF metadata only. Pixel decode APIs retain the original file encoding.
+    LFS_IMAGE_CODECS_API bool read_tiff_metadata(const std::filesystem::path&, TiffMetadata&, std::string& error);
     LFS_IMAGE_CODECS_API bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
     LFS_IMAGE_CODECS_API bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
     LFS_IMAGE_CODECS_API bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);
@@ -76,6 +96,16 @@ namespace lfs::core::image_codecs {
                                         std::string& error);
     LFS_IMAGE_CODECS_API bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,
                                          int width, int height, int channels, std::string& error);
+    // Native-endian interleaved UINT16 samples, with a byte stride. Shares the
+    // TIFF encoder and atomic publication service with legacy UINT8 output.
+    struct TiffColorTags {
+        std::optional<std::array<float, 8>> chromaticities;
+        std::span<const std::uint16_t> transfer_function;
+    };
+    LFS_IMAGE_CODECS_API Status write_tiff_u16(const std::filesystem::path& path,
+                                               std::span<const std::uint8_t> data, int width, int height, int channels,
+                                               std::size_t row_stride, const std::optional<std::string>& description,
+                                               const AtomicFileOptions& options, const TiffColorTags& color = {});
 
     // Packed display bytes: preserve samples, PNG/TIFF alpha and legacy codec
     // defaults. JPEG drops RGBA alpha; gray-alpha JPEG is unsupported. This is

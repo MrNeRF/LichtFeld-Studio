@@ -1014,7 +1014,7 @@ namespace {
                     rgb[c * P + i] = static_cast<float>(rgba[i * 4 + c]) * (1.0f / 255.0f);
                     rgb_bytes[c * P + i] = rgba[i * 4 + c];
                 }
-                a[i] = static_cast<float>(rgba[i * 4 + 3]) * (1.0f / 255.0f);
+                a[i] = static_cast<float>(static_cast<double>(rgba[i * 4 + 3]) / 255.0);
             }
             expect_close(host(rgb_f), rgb, 0, 0, "rgba split rgb");
             expect_close(host(alpha), a, 0, 0, "rgba split alpha");

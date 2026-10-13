@@ -399,6 +399,33 @@ namespace lfs::vis {
                 return false;
             }
         }
+
+        void resetViewportToHome(Viewport& target_viewport, lfs::vis::RenderingManager* rendering,
+                                 const ViewId view) {
+            target_viewport.camera.resetToHome();
+            if (!rendering)
+                return;
+
+            const auto current = rendering->settingsForView(view);
+            if (!current.orthographic)
+                return;
+
+            constexpr float kMinDistance = 0.01f;
+            constexpr float kMinScale = 1.0f;
+            constexpr float kMaxScale = 10000.0f;
+            constexpr float kDefaultScale = 100.0f;
+            const float distance = glm::length(target_viewport.camera.home_pivot - target_viewport.camera.home_t);
+            float scale = kDefaultScale;
+            if (target_viewport.windowSize.y > 0 && distance > kMinDistance) {
+                const float vfov = lfs::rendering::focalLengthToVFov(current.focal_length_mm);
+                const float half_tan_fov = std::tan(glm::radians(vfov) * 0.5f);
+                scale = std::clamp(static_cast<float>(target_viewport.windowSize.y) /
+                                       (2.0f * distance * half_tan_fov),
+                                   kMinScale, kMaxScale);
+            }
+
+            rendering->editViewSettings(view, [&](ViewSettings& settings) { settings.ortho_scale = scale; });
+        }
     } // namespace
 
     InputController* InputController::instance_ = nullptr;
@@ -430,9 +457,10 @@ namespace lfs::vis {
 
         dataset_load_completed_handler_id_ = state::DatasetLoadCompleted::when([this](const auto& e) {
             if (e.success) {
-                viewport().camera.resetToHome();
-                if (auto* const rendering = services().renderingOrNull())
-                    rendering->markCameraCut(rendering->activeViewId());
+                auto* const rendering = services().renderingOrNull();
+                resetViewportToHome(viewport(), rendering, views_.viewId(viewport()));
+                if (rendering)
+                    rendering->markCameraCut(views_.viewId(viewport()));
                 publishCameraMove();
             }
         });
@@ -732,6 +760,8 @@ namespace lfs::vis {
             mods |= input::KEYMOD_SHIFT;
         if (m & SDL_KMOD_ALT)
             mods |= input::KEYMOD_ALT;
+        if (m & SDL_KMOD_MODE)
+            mods |= input::KEYMOD_ALTGR;
         return mods;
     }
 
@@ -1480,11 +1510,20 @@ namespace lfs::vis {
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
+        const auto park_camera_drag_anchor = [&]() {
+            if (drag_mode_ != DragMode::Pan && drag_mode_ != DragMode::Orbit &&
+                drag_mode_ != DragMode::Rotate)
+                return;
+            auto* const target = dragViewport() ? dragViewport() : &viewport();
+            const float now = static_cast<float>(SDL_GetTicks() / 1000.0f);
+            target->camera.followDragPointer(glm::vec2(static_cast<float>(x), static_cast<float>(y)), now);
+        };
 
         if (gui && gui->isCapturingInput()) {
             releaseDepthWindowCursor();
             gui->captureMouseMove(x, y);
             last_mouse_pos_ = {x, y};
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1493,6 +1532,7 @@ namespace lfs::vis {
             releaseDepthWindowCursor();
             gui->gizmo().onPieMenuMouseMove({static_cast<float>(x), static_cast<float>(y)});
             last_mouse_pos_ = {x, y};
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1551,6 +1591,7 @@ namespace lfs::vis {
         if (!selection_pointer_blocked &&
             dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui_hover)) {
             last_mouse_pos_ = current_pos;
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1595,6 +1636,7 @@ namespace lfs::vis {
 
             ui::SplitPositionChanged{.position = new_pos}.emit();
             last_mouse_pos_ = {x, y};
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1706,6 +1748,7 @@ namespace lfs::vis {
 
         // Block camera dragging if a transform gizmo is being used
         if (isTransformGizmoUsing()) {
+            park_camera_drag_anchor();
             return;
         }
 
@@ -2004,10 +2047,16 @@ namespace lfs::vis {
             physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL ||
             physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT ||
             physical_key == input::KEY_LEFT_SUPER || physical_key == input::KEY_RIGHT_SUPER;
+        // The same press is movement, so its printed character must not arm a
+        // scroll chord. Release drops nothing that this press did not insert.
+        const bool movement_owns_logical_key =
+            physicalMovementConsumesLogicalKey(physical_key, logical_key, mods);
+        const bool altgr_held = (mods & input::KEYMOD_ALTGR) != 0;
         if (wants_text_input && !bindings_.isCapturing()) {
             // Text keys must not become viewport mouse/scroll chords either.
             held_keys_.clear();
-        } else if (!is_modifier_key && logical_key != input::KEY_UNKNOWN) {
+        } else if (!altgr_held && !movement_owns_logical_key && !is_modifier_key &&
+                   logical_key != input::KEY_UNKNOWN) {
             if (action == input::ACTION_RELEASE) {
                 std::erase(held_keys_, logical_key);
             } else if (!std::ranges::contains(held_keys_, logical_key)) {
@@ -2046,6 +2095,12 @@ namespace lfs::vis {
             return;
         }
 
+        // AltGr produces layout characters for text input, but this build cannot
+        // represent that modifier in saved shortcuts. Never dispatch the bare
+        // logical key or arm a physical movement binding for the same event.
+        if (altgr_held)
+            return;
+
         const auto tool_mode = getCurrentToolMode();
         auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
         if (bound_action == input::Action::NONE) {
@@ -2056,7 +2111,7 @@ namespace lfs::vis {
                                             ? input_router_->keyboardFocus() == input::InputTarget::Gui
                                             : gui::guiFocusState().want_capture_keyboard;
         if (action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE &&
-            isTransformGizmoUsing() && gui && gui->gizmo().cancelActiveNodeTransformDrag()) {
+            gui && gui->gizmo().cancelActiveGizmoDrag()) {
             return;
         }
 
@@ -2081,6 +2136,14 @@ namespace lfs::vis {
 
         if (gui_consumed && !is_mcp_runtime_action && !owned_release)
             return;
+
+        // Physical movement wins over a different logical shortcut. The printed
+        // character is not dispatched. Press and repeat arm the key; release
+        // clears it. Ctrl/Alt/Super chords stay on the shortcut path.
+        if (physicalMovementConsumesLogicalKey(physical_key, logical_key, mods)) {
+            armPhysicalMovementKey(physical_key, action != input::ACTION_RELEASE);
+            return;
+        }
 
         // Dispatch to modal operators first - if consumed, don't continue
         float mx_f, my_f;
@@ -2314,12 +2377,15 @@ namespace lfs::vis {
                 publishCameraMove(&activeKeyboardViewport());
                 return;
 
-            case input::Action::CAMERA_RESET_HOME:
-                activeKeyboardViewport().camera.resetToHome();
-                if (auto* const rendering = services().renderingOrNull())
-                    rendering->markCameraCut(views_.viewId(activeKeyboardViewport()));
-                publishCameraMove(&activeKeyboardViewport());
+            case input::Action::CAMERA_RESET_HOME: {
+                auto& target = activeKeyboardViewport();
+                auto* const rendering = services().renderingOrNull();
+                resetViewportToHome(target, rendering, views_.viewId(target));
+                if (rendering)
+                    rendering->markCameraCut(views_.viewId(target));
+                publishCameraMove(&target);
                 return;
+            }
 
             case input::Action::CAMERA_FOCUS_SELECTION:
                 handleFocusSelection(activeKeyboardViewport());
@@ -2560,21 +2626,37 @@ namespace lfs::vis {
         if ((mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT | input::KEYMOD_SUPER)) != 0)
             return;
 
+        armPhysicalMovementKey(physical_key, action != input::ACTION_RELEASE);
+    }
+
+    bool InputController::physicalMovementConsumesLogicalKey(
+        const int physical_key, const int logical_key, const int mods) const {
+        if (physical_key < 0 || physical_key == logical_key)
+            return false;
+        if ((mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT | input::KEYMOD_SUPER)) != 0)
+            return false;
+        if (!shouldCameraHandleInput() || drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
+            return false;
         const auto& mk = currentMovementKeys();
-        const bool pressed = (action != input::ACTION_RELEASE);
-        if (physical_key == mk.forward) {
+        return physical_key == mk.forward || physical_key == mk.backward ||
+               physical_key == mk.left || physical_key == mk.right ||
+               physical_key == mk.up || physical_key == mk.down;
+    }
+
+    void InputController::armPhysicalMovementKey(const int physical_key, const bool pressed) {
+        const auto& mk = currentMovementKeys();
+        if (physical_key == mk.forward)
             keys_movement_[0] = pressed;
-        } else if (physical_key == mk.left) {
+        else if (physical_key == mk.left)
             keys_movement_[1] = pressed;
-        } else if (physical_key == mk.backward) {
+        else if (physical_key == mk.backward)
             keys_movement_[2] = pressed;
-        } else if (physical_key == mk.right) {
+        else if (physical_key == mk.right)
             keys_movement_[3] = pressed;
-        } else if (physical_key == mk.down) {
+        else if (physical_key == mk.down)
             keys_movement_[5] = pressed;
-        } else if (physical_key == mk.up) {
+        else if (physical_key == mk.up)
             keys_movement_[4] = pressed;
-        }
     }
 
     void InputController::decayHeldDragMomentum() {
@@ -2862,7 +2944,9 @@ namespace lfs::vis {
         std::vector<std::filesystem::path> splat_files;
         std::optional<std::filesystem::path> dataset_path;
         std::optional<std::filesystem::path> environment_map_path;
-        std::vector<std::string> unrecognized_files;
+        std::vector<std::string> skipped_files;
+        bool skipped_video_or_project = false;
+        bool has_unrecognized_files = false;
 
         if (paths.size() == 1) {
             const std::filesystem::path dropped_path = lfs::core::utf8_to_path(paths.front());
@@ -2911,6 +2995,13 @@ namespace lfs::vis {
                     return static_cast<char>(std::tolower(character));
                 });
 
+            if ((ext == ".licht" || lfs::io::video::is_supported_video_extension(ext)) &&
+                !std::filesystem::is_directory(filepath)) {
+                skipped_files.push_back(path_str);
+                skipped_video_or_project = true;
+                continue;
+            }
+
             if (ext == ".resume") {
                 cmd::ShowResumeCheckpointPopup{.checkpoint_path = filepath}.emit();
                 continue;
@@ -2952,7 +3043,8 @@ namespace lfs::vis {
                         continue;
                     }
                 }
-                unrecognized_files.push_back(lfs::core::path_to_utf8(filepath));
+                skipped_files.push_back(path_str);
+                has_unrecognized_files = true;
             } else if (std::filesystem::is_directory(filepath)) {
                 // Check for dataset markers
                 LOG_DEBUG("Checking directory for dataset markers: {}", lfs::core::path_to_utf8(filepath));
@@ -2972,11 +3064,13 @@ namespace lfs::vis {
                         splat_files.push_back(filepath);
                         LOG_DEBUG("Detected SOG directory: {}", lfs::core::path_to_utf8(filepath));
                     } else {
-                        unrecognized_files.push_back(lfs::core::path_to_utf8(filepath));
+                        skipped_files.push_back(path_str);
+                        has_unrecognized_files = true;
                     }
                 }
             } else {
-                unrecognized_files.push_back(lfs::core::path_to_utf8(filepath));
+                skipped_files.push_back(path_str);
+                has_unrecognized_files = true;
             }
         }
 
@@ -3000,12 +3094,18 @@ namespace lfs::vis {
             applyDroppedEnvironmentMap(*environment_map_path);
         }
 
-        if (!unrecognized_files.empty() && splat_files.empty() && !dataset_path && !environment_map_path) {
-            const std::string supported_formats = std::format(
-                "Supported formats: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {}, or dataset directories",
-                lfs::io::video::supported_video_extensions_display());
-            LOG_DEBUG("Dropped {} unrecognized file(s)", unrecognized_files.size());
-            state::FileDropFailed{.files = unrecognized_files, .error = supported_formats}.emit();
+        if (!skipped_files.empty()) {
+            std::string reason;
+            if (skipped_video_or_project)
+                reason = LOC("file_drop.drop_video_project_separately");
+            if (has_unrecognized_files) {
+                if (!reason.empty())
+                    reason += "\n\n";
+                reason += LOCF("file_drop.supported_formats_detail",
+                               lfs::io::video::supported_video_extensions_display());
+            }
+            LOG_DEBUG("Dropped {} file(s) that were not opened", skipped_files.size());
+            state::FileDropFailed{.files = skipped_files, .error = std::move(reason)}.emit();
         }
     }
 
@@ -3275,8 +3375,9 @@ namespace lfs::vis {
     }
 
     void InputController::handleResetCameraHome(Viewport& target_viewport) {
-        target_viewport.camera.resetToHome();
-        if (auto* const rendering = services().renderingOrNull())
+        auto* const rendering = services().renderingOrNull();
+        resetViewportToHome(target_viewport, rendering, views_.viewId(target_viewport));
+        if (rendering)
             rendering->markCameraCut(views_.viewId(target_viewport));
         publishCameraMove(&target_viewport);
     }

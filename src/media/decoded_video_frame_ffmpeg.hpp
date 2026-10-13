@@ -4,6 +4,7 @@
 #include "core/error.hpp"
 #include "media/decoded_video_frame.hpp"
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/dovi_meta.h>
 #include <libavutil/film_grain_params.h>
@@ -17,6 +18,15 @@ extern "C" {
 #include <cstring>
 #include <format>
 namespace lfs::media::detail {
+    inline const AVCodec* softwareVideoDecoder(const AVCodecID id) {
+        // FFmpeg's native AV1 decoder requires a hardware accelerator. A CPU
+        // fallback must select the software implementation explicitly.
+        if (id == AV_CODEC_ID_AV1)
+            if (const auto* dav1d = avcodec_find_decoder_by_name("libdav1d"))
+                return dav1d;
+        // Keep the provider's native choice available in builds without dav1d.
+        return avcodec_find_decoder(id);
+    }
     template <class T>
     inline const T* frameMetadata(const AVFrame* f, AVFrameSideDataType type) {
         const auto* side = av_frame_get_side_data(f, type);

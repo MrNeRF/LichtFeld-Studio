@@ -71,11 +71,12 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 | [DINOv2](https://github.com/facebookresearch/dinov2) | ViT-L/14 image backbone inside the RoMa v1 matcher, © Meta AI. Backbone weights ship as part of the converted RoMa checkpoint | Apache-2.0 |
 | [torchvision VGG19-BN](https://github.com/pytorch/vision) | Fine-feature stem inside the RoMa v1 matcher, © Soumith Chintala and the torchvision authors. Stem weights ship as part of the converted RoMa checkpoint | BSD-3-Clause |
 
-## Video Encoding
+## Video Encoding & Decoding
 | Project | Description | License |
 |---------|-------------|---------|
-| [FFmpeg](https://ffmpeg.org/) | Video encoding (libavcodec, libavformat, libswscale) | LGPL-2.1+ |
+| [FFmpeg](https://ffmpeg.org/) | Video encoding and decoding (libavcodec, libavformat, libswscale) | LGPL-2.1+ |
 | [OpenH264](https://www.openh264.org/) | Cisco H.264 software encoder | BSD-2-Clause |
+| [dav1d](https://code.videolan.org/videolan/dav1d) | AV1 software decoder used by FFmpeg for CPU extraction and preview | BSD-2-Clause (see resources/licenses/dav1d-LICENSE.txt) |
 
 ## Data & I/O Libraries
 | Project | Description | License |

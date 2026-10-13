@@ -15,6 +15,7 @@
 #include "core/checkpoint_format.hpp"
 #include "core/environment.hpp"
 #include "core/event_bridge/command_api.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/exif.hpp"
 #include "core/gpu_device_runtime.hpp"
@@ -5438,6 +5439,25 @@ namespace lfs::training {
         }
     }
 
+    bool Trainer::service_evaluation_controls(int iteration, std::stop_token stop_token) {
+        if (!pause_requested_.load(std::memory_order_acquire) &&
+            !stop_requested_.load(std::memory_order_acquire) &&
+            !stop_token.stop_requested()) {
+            return true;
+        }
+
+        handle_control_requests(iteration, stop_token);
+        while (is_paused_.load(std::memory_order_acquire) &&
+               !stop_requested_.load(std::memory_order_acquire) &&
+               !stop_token.stop_requested()) {
+            consume_requested_project_snapshot(project_snapshot_iteration());
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            handle_control_requests(iteration, stop_token);
+        }
+        return !stop_requested_.load(std::memory_order_acquire) &&
+               !stop_token.stop_requested();
+    }
+
     inline float inv_weight_piecewise(int step, int max_steps) {
         // Phases by fraction of training
         const float phase = std::max(0.f, std::min(1.f, step / float(std::max(1, max_steps))));
@@ -5522,20 +5542,32 @@ namespace lfs::training {
         thin_structure_weight_buffer_ = {};
     }
 
-    core::Tensor Trainer::get_thin_structure_map(const int camera_uid, const core::Tensor& image, const float weight) {
+    core::Tensor Trainer::get_thin_structure_map(const int camera_uid, const core::Tensor& image, const float weight,
+                                                 const core::Tensor& photometric_mask) {
         if (weight == 0.0f)
             return {};
         using namespace lfs::core;
         LFS_ASSERT(image.ndim() == 3 && image.shape()[0] == 3);
         const size_t height = image.shape()[1], width = image.shape()[2];
-        const ThinStructureMapKey key{camera_uid, height, width, edge_weight_preprocessing_generation_};
+        const bool masked = photometric_mask.is_valid() && photometric_mask.numel() > 0;
+        const auto mask_mode = masked && params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore
+                                   ? kernels::MaskPhotoMode::SegmentAndIgnore
+                                   : kernels::MaskPhotoMode::BinaryGt0;
+        const ThinStructureMapKey key{camera_uid, height, width, edge_weight_preprocessing_generation_,
+                                      masked ? photometric_mask.data_ptr() : nullptr, mask_mode,
+                                      masked ? params_.optimization.mask_threshold : 0.0f,
+                                      masked && params_.optimization.invert_masks};
         if (thin_structure_map_key_ == key) {
             thin_structure_map_buffer_.sync_to_stream(image.execution_target());
             return thin_structure_map_buffer_;
         }
         if (!thin_structure_map_buffer_.is_valid() || thin_structure_map_buffer_.shape() != TensorShape{height, width})
             thin_structure_map_buffer_ = Tensor::empty({height, width}, Device::GPU);
-        kernels::ridge_structure_map(image, thin_structure_map_buffer_, thin_structure_workspace_);
+        if (masked)
+            kernels::ridge_structure_map(image, thin_structure_map_buffer_, thin_structure_workspace_,
+                                         photometric_mask, mask_mode);
+        else
+            kernels::ridge_structure_map(image, thin_structure_map_buffer_, thin_structure_workspace_);
         thin_structure_map_key_ = key;
         return thin_structure_map_buffer_;
     }
@@ -6624,23 +6656,26 @@ namespace lfs::training {
                             LOG_VRAM_DIFF("train.photometric_loss");
                             const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
                                                   (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
-                            const auto structure_map = get_thin_structure_map(
-                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight);
-                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
-                                lfs::core::Tensor mask;
-                                if (use_mask) {
-                                    if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
-                                        pipelined_mask_.numel() > 0) {
-                                        mask = pipelined_mask_;
-                                    } else {
-                                        mask = cam->load_and_get_mask(
-                                            params_.dataset.resize_factor,
-                                            params_.dataset.max_width,
-                                            params_.optimization.invert_masks,
-                                            params_.optimization.mask_threshold,
-                                            params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
-                                    }
+                            lfs::core::Tensor mask;
+                            if (use_mask) {
+                                if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
+                                    pipelined_mask_.numel() > 0) {
+                                    mask = pipelined_mask_;
+                                } else {
+                                    mask = cam->load_and_get_mask(
+                                        params_.dataset.resize_factor,
+                                        params_.dataset.max_width,
+                                        params_.optimization.invert_masks,
+                                        params_.optimization.mask_threshold,
+                                        params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                                 }
+                            }
+                            const auto structure_map = get_thin_structure_map(
+                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight,
+                                use_mask && params_.optimization.mask_mode != lfs::core::param::MaskMode::AlphaConsistent
+                                    ? mask
+                                    : lfs::core::Tensor{});
+                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
 
                                 lfs::core::Tensor mask_tile = mask;
 
@@ -6873,25 +6908,25 @@ namespace lfs::training {
                         {
                             LFS_VRAM_SCOPE("train.photometric_loss");
                             LOG_VRAM_DIFF("train.photometric_loss");
-                            const auto structure_map = get_thin_structure_map(
-                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight);
-                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
-                                lfs::core::Tensor mask;
-                                if (use_mask) {
-                                    if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
-                                        pipelined_mask_.numel() > 0) {
-                                        mask = pipelined_mask_;
-                                    } else {
-                                        mask = cam->load_and_get_mask(
-                                            params_.dataset.resize_factor,
-                                            params_.dataset.max_width,
-                                            params_.optimization.invert_masks,
-                                            params_.optimization.mask_threshold,
-                                            params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
-                                    }
+                            if (use_mask) {
+                                if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
+                                    pipelined_mask_.numel() > 0) {
+                                    mask_tile = pipelined_mask_;
+                                } else {
+                                    mask_tile = cam->load_and_get_mask(
+                                        params_.dataset.resize_factor,
+                                        params_.dataset.max_width,
+                                        params_.optimization.invert_masks,
+                                        params_.optimization.mask_threshold,
+                                        params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                                 }
-
-                                mask_tile = mask;
+                            }
+                            const auto structure_map = get_thin_structure_map(
+                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight,
+                                use_mask && params_.optimization.mask_mode != lfs::core::param::MaskMode::AlphaConsistent
+                                    ? mask_tile
+                                    : lfs::core::Tensor{});
+                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
@@ -7401,7 +7436,10 @@ namespace lfs::training {
 
                         if (tile_error_map.is_valid() && params_.optimization.densify_structure_weight > 0.0f) {
                             const auto structure_map = get_thin_structure_map(
-                                cam->uid(), stable_gt, params_.optimization.densify_structure_weight);
+                                cam->uid(), stable_gt, params_.optimization.densify_structure_weight,
+                                use_mask && params_.optimization.mask_mode != lfs::core::param::MaskMode::AlphaConsistent
+                                    ? mask_tile
+                                    : lfs::core::Tensor{});
                             kernels::structure_densification_weight(tile_error_map, structure_map,
                                                                     params_.optimization.densify_structure_weight);
                         }
@@ -8099,12 +8137,22 @@ namespace lfs::training {
                         eval_ppisp_exif_.store(0);
                         eval_ppisp_nearest_.store(0);
                         const auto evaluation_image_loader = getActiveImageLoader();
+                        evaluation_active_.store(true, std::memory_order_release);
+                        auto evaluation_guard = makeScopeGuard([this] {
+                            evaluation_active_.store(false, std::memory_order_release);
+                        });
                         auto metrics = evaluator_->evaluate(iter,
                                                             strategy_->get_model(),
                                                             val_dataset_,
                                                             background_,
-                                                            evaluation_image_loader.get());
-                        if (!metrics.valid) {
+                                                            evaluation_image_loader.get(),
+                                                            [this, iter, stop_token] {
+                                                                return service_evaluation_controls(iter, stop_token);
+                                                            });
+                        service_evaluation_controls(iter, stop_token);
+                        if (metrics.cancelled) {
+                            LOG_INFO("Final evaluation stopped at iteration {}", iter);
+                        } else if (!metrics.valid) {
                             auto error = lfs::make_error(lfs::ErrorInit{
                                 .code = lfs::ErrorCode::FailedPrecondition,
                                 .domain = lfs::ErrorDomain::Training,
@@ -8353,7 +8401,7 @@ namespace lfs::training {
         return result;
     }
 
-    void Trainer::evaluate_at(const int iteration) {
+    void Trainer::evaluate_at(const int iteration, const std::stop_token stop_token) {
         prepare_evaluation_workspaces();
         evaluator_->print_evaluation_header(iteration);
         lfs::diagnostics::VramProfiler::instance().mark("evaluation");
@@ -8361,11 +8409,25 @@ namespace lfs::training {
         eval_ppisp_exif_.store(0);
         eval_ppisp_nearest_.store(0);
         const auto evaluation_image_loader = getActiveImageLoader();
+        evaluation_active_.store(true, std::memory_order_release);
+        auto evaluation_guard = makeScopeGuard([this] {
+            evaluation_active_.store(false, std::memory_order_release);
+        });
         auto metrics = evaluator_->evaluate(iteration,
                                             strategy_->get_model(),
                                             val_dataset_,
                                             background_,
-                                            evaluation_image_loader.get());
+                                            evaluation_image_loader.get(),
+                                            [this, iteration, stop_token] {
+                                                return service_evaluation_controls(iteration, stop_token);
+                                            });
+        service_evaluation_controls(iteration, stop_token);
+        if (metrics.cancelled) {
+            LOG_INFO("Evaluation stopped at iteration {}", iteration);
+            if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
+                training_ops_->photometric->shrink_to_required(photo_saved_);
+            return;
+        }
         if (!metrics.valid) {
             auto error = lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::FailedPrecondition,
@@ -8670,6 +8732,8 @@ namespace lfs::training {
                 });
             }
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
+                aux_pipeline_config.fill_masked_rgb = true;
+                aux_pipeline_config.mask_keep_high_band = params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
                 aux_pipeline_config.invert_masks = params_.optimization.invert_masks;
                 aux_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
                 if (params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
@@ -8691,6 +8755,7 @@ namespace lfs::training {
             composite_target_alpha_ = params_.optimization.mask_mode == lfs::core::param::MaskMode::None &&
                                       params_.optimization.use_alpha_as_mask && alpha_available;
             if (composite_target_alpha_) {
+                aux_pipeline_config.alpha_is_transparency = true;
                 aux_pipeline_config.use_alpha_as_mask = true;
                 aux_pipeline_config.invert_masks = false;
                 aux_pipeline_config.mask_threshold = 0.0f;
@@ -8906,7 +8971,7 @@ namespace lfs::training {
             if (iter > get_total_iterations() &&
                 evaluator_->is_enabled() &&
                 evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations())) {
-                evaluate_at(current_iteration_.load());
+                evaluate_at(current_iteration_.load(), stop_token);
             }
 
             clearActiveImageLoader();
@@ -8938,10 +9003,17 @@ namespace lfs::training {
         } catch (const lfs::Exception& e) {
             append_terminal_error(e.error());
         } catch (const std::exception& e) {
+            const std::string_view detail = e.what();
+            const bool image_read_error = detail.starts_with("Image probe failed:");
+            const auto& localization = lfs::event::LocalizationManager::getInstance();
             append_terminal_error(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Internal,
                 .domain = lfs::ErrorDomain::Training,
-                .user_message = "Training failed.",
+                .user_message = image_read_error
+                                    ? (localization.hasKey("training.unreadable_image")
+                                           ? LOC("training.unreadable_image")
+                                           : "A training image could not be read. Open Details for the file and decoder error.")
+                                    : "Training failed.",
                 .detail = std::format("Training failed: {}", e.what()),
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
@@ -9267,7 +9339,7 @@ namespace lfs::training {
 
     int Trainer::project_snapshot_iteration() const {
         const int current = current_iteration_.load();
-        if (is_paused_.load() && current > 0) {
+        if (is_paused_.load() && !evaluation_active_.load() && current > 0) {
             return current - 1;
         }
         return current;

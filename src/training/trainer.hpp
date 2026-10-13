@@ -508,7 +508,8 @@ namespace lfs::training {
         lfs::core::Tensor get_edge_weight_map(int camera_uid, const lfs::core::Tensor& gt_image,
                                               const lfs::core::Tensor& photometric_mask);
         void clearEdgeWeightCache();
-        core::Tensor get_thin_structure_map(int camera_uid, const core::Tensor& image, float weight);
+        core::Tensor get_thin_structure_map(int camera_uid, const core::Tensor& image, float weight,
+                                            const core::Tensor& photometric_mask = {});
         void clear_thin_structure_cache();
         friend struct TrainerThinStructureTestAccess;
         friend struct TrainerGradientResidualTestAccess;
@@ -658,7 +659,8 @@ namespace lfs::training {
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
         lfs::core::Tensor applyPPISPForEval(const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) const;
         void log_eval_appearance() const;
-        void evaluate_at(int iteration);
+        void evaluate_at(int iteration, std::stop_token stop_token = {});
+        bool service_evaluation_controls(int iteration, std::stop_token stop_token);
         [[nodiscard]] lfs::core::param::TrainingParameters params_for_project_snapshot() const;
         [[nodiscard]] std::function<std::uint64_t(std::uint64_t)> release_image_cache_for_snapshot() const;
         [[nodiscard]] TrainingProgress::Phase get_progress_phase(
@@ -958,6 +960,10 @@ namespace lfs::training {
             size_t height;
             size_t width;
             uint64_t preprocessing_generation;
+            const void* mask_data;
+            kernels::MaskPhotoMode mask_mode;
+            float mask_threshold;
+            bool invert_masks;
             bool operator==(const ThinStructureMapKey&) const = default;
         };
         std::optional<ThinStructureMapKey> thin_structure_map_key_;
@@ -989,6 +995,7 @@ namespace lfs::training {
         std::atomic<bool> stop_requested_{false};
         std::atomic<bool> is_paused_{false};
         std::atomic<bool> is_running_{false};
+        std::atomic<bool> evaluation_active_{false};
         std::atomic<bool> training_complete_{false};
         std::atomic<bool> saving_model_{false};
         std::atomic<bool> ready_to_start_{false};

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """An owned GUI process for generated-fixture GPU integration tests."""
 
+import json
 import os
 import select
 import socket
@@ -31,6 +32,14 @@ def isolated_app(directory):
     assert executable.is_file(), f"Build the GUI executable first: {executable}"
     home = directory / "home"
     home.mkdir()
+    requested_backend = os.environ.get("LFS_TEST_TENSOR_BACKEND")
+    if requested_backend:
+        preferences = home / ".lichtfeld" / "config" / "preferences.json"
+        preferences.parent.mkdir(parents=True)
+        preferences.write_text(json.dumps({
+            "schema_version": 2,
+            "tensor_backend": {"backend": requested_backend},
+        }))
     env = os.environ.copy()
     for key in ("PYTHONHOME", "PYTHONPATH"):
         env.pop(key, None)

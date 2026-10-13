@@ -101,18 +101,24 @@ namespace lfs::io {
 
         // Inversion precedes binarization; threshold compares with >=.
         Tensor finish_mask(Tensor mask, const MaskParams& params) {
-            if (params.invert)
-                mask = mask.neg().add(1.0f);
-            mask = params.threshold > 0.0f ? mask.ge(params.threshold).to(DataType::Float32)
-                                           : mask.clamp(0.0f, 1.0f);
+            const auto backend = lfs::core::gpu_backend_of(mask).value_or(lfs::core::default_gpu_backend());
+            const auto* const ops = lfs::core::shared_image_ops(backend);
+            if (params.invert && ops && ops->mask)
+                ops->mask(mask, lfs::gpu_ops::MaskTransform::Invert, 0.0f);
+            if (params.threshold > 0.0f && ops && ops->mask)
+                ops->mask(mask, lfs::gpu_ops::MaskTransform::Threshold, params.threshold);
+            else
+                mask = mask.clamp(0.0f, 1.0f);
             return mask.contiguous();
         }
 
         std::pair<Tensor, Tensor> decode_rgba(const std::filesystem::path& path,
                                               const LoadParams& params,
-                                              const bool decode_16bit) {
+                                              const bool decode_16bit,
+                                              const bool alpha_is_transparency) {
             const auto rgba = load_rgba_image_cpu_decoded(path, params.undistort ? 1 : params.resize_factor,
-                                                          params.undistort ? 0 : params.max_width, nullptr, decode_16bit);
+                                                          params.undistort ? 0 : params.max_width, nullptr,
+                                                          decode_16bit, !alpha_is_transparency);
             Tensor rgb = rgba.slice(0, 0, 3).contiguous();
             if (params.output_uint8)
                 rgb = float_to_uint8(rgb);
@@ -299,7 +305,8 @@ namespace lfs::io {
 
             try {
                 if (item.alpha_as_mask) {
-                    auto [rgb, alpha] = decode_rgba(item.path, params, config_.use_16bit_color);
+                    auto [rgb, alpha] = decode_rgba(item.path, params, config_.use_16bit_color,
+                                                    item.alpha_is_transparency);
                     try_complete_pair(item.sequence_id, item.loader_generation, std::move(rgb),
                                       finish_mask(std::move(alpha), item.alpha_mask_params));
                 } else if (item.is_mask) {
@@ -311,23 +318,23 @@ namespace lfs::io {
                     const auto [target_w, target_h] = sidecar_target_size(item, width, height);
                     Tensor mask;
                     if (target_w == width && target_h == height) {
-                        mask = to_device(upload, host_uint8(gray, image_shape(height, width, 1), stbi_image_free))
-                                   .to(DataType::Float32)
-                                   .mul(UINT8_SCALE);
+                        auto bytes = to_device(upload, host_uint8(gray, image_shape(height, width, 1), stbi_image_free));
+                        mask = Tensor::empty(bytes.shape(), Device::GPU, DataType::Float32);
+                        lfs::core::shared_image_ops(config_.backend)->convert(bytes, mask, lfs::gpu_ops::ImageConversion::MaskU8HWToF32HW, static_cast<size_t>(height), static_cast<size_t>(width), 1, {});
                     } else {
-                        const std::unique_ptr<void, ReleaseFn> owner(gray, stbi_image_free);
-                        auto source = Tensor::empty_pageable_host(image_shape(height, width, 1), DataType::Float32);
-                        std::transform(gray, gray + source.numel(), source.ptr<float>(),
-                                       [](const stbi_uc value) { return static_cast<float>(value) * UINT8_SCALE; });
-                        auto resized = Tensor::empty_pageable_host(image_shape(target_h, target_w, 1), DataType::Float32);
-                        lfs::core::resample_bilinear_f32(source.ptr<float>(), width, height, 1,
-                                                         resized.ptr<float>(), target_w, target_h);
-                        mask = to_device(upload, resized);
+                        auto bytes = to_device(upload, host_uint8(gray, image_shape(height, width, 1), stbi_image_free));
+                        Tensor source = Tensor::empty(bytes.shape(), Device::GPU, DataType::Float32);
+                        lfs::core::shared_image_ops(config_.backend)->convert(bytes, source, lfs::gpu_ops::ImageConversion::MaskU8HWToF32HW, static_cast<size_t>(height), static_cast<size_t>(width), 1, {});
+                        mask = lfs::core::shared_image_ops(config_.backend)->resize(source, target_h, target_w, lfs::gpu_ops::Resample::LanczosGray, 2);
                     }
                     if (item.undistort) {
-                        mask = lfs::core::undistort_mask(
-                            mask.contiguous(), undistort_for(*item.undistort, mask, params.resize_factor, params.max_width), nullptr);
+                        const auto scaled = undistort_for(*item.undistort, mask, params.resize_factor, params.max_width);
+                        const auto* const ops = lfs::core::shared_image_ops(config_.backend);
+                        mask = ops && ops->undistort ? ops->undistort(mask.contiguous(), scaled, true)
+                                                     : lfs::core::undistort_mask(mask.contiguous(), scaled, nullptr);
                     }
+                    if (const auto* const ops = lfs::core::shared_image_ops(config_.backend); ops && ops->mask)
+                        ops->mask(mask, lfs::gpu_ops::MaskTransform::QuantizeByteGrid, 0.0f);
                     try_complete_pair(item.sequence_id, item.loader_generation, std::nullopt,
                                       finish_mask(std::move(mask), item.mask_params));
                 } else if (item.is_depth || item.is_normal) {

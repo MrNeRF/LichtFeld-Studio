@@ -92,6 +92,7 @@ namespace lfs::io::project {
         }
         std::optional<std::filesystem::path> first;
         std::string first_key;
+        bool first_legacy = false;
         std::filesystem::directory_iterator it(
             images_dir,
             std::filesystem::directory_options::skip_permission_denied,
@@ -111,9 +112,11 @@ namespace lfs::io::project {
             }
             auto key = lfs::core::path_to_generic_utf8(
                 path.filename());
-            if (!first || key < first_key) {
+            const bool legacy = lfs::io::is_legacy_image_file(path);
+            if (!first || (legacy && !first_legacy) || (legacy == first_legacy && key < first_key)) {
                 first = std::move(path);
                 first_key = std::move(key);
+                first_legacy = legacy;
             }
         }
         return first;

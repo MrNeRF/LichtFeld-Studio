@@ -69,8 +69,10 @@ namespace lfs::mcp {
                     return std::unexpected("max_iterations must be 1 or greater");
                 params.optimization.iterations = static_cast<size_t>(max_iterations);
             }
-            if (args.contains("output_path"))
+            if (args.contains("output_path")) {
                 params.dataset.output_path = args["output_path"].get<std::string>();
+                params.dataset.output_path_explicit = !params.dataset.output_path.empty();
+            }
             if (args.contains("min_track_length")) {
                 const int min_track = args["min_track_length"].get<int>();
                 if (min_track < 0)

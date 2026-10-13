@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/scene_export_path.hpp"
 #include "gui/utils/file_dialog_path.hpp"
 #include <cctype>
 #include <gtest/gtest.h>
@@ -40,5 +41,39 @@ namespace {
         EXPECT_EQ(appendRequiredExtension("cloud.sog", ".ply"), "cloud.sog.ply");
         EXPECT_EQ(appendRequiredExtension("cloud.ply.backup", ".ply"), "cloud.ply.backup.ply");
         EXPECT_EQ(appendRequiredExtension(".hidden", ".ply"), ".hidden.ply");
+    }
+
+    TEST(SceneExportPathTest, RejectsOnlyConflictingSupportedExtensions) {
+        using lfs::core::ExportFormat;
+        using lfs::core::scene_export_path_status;
+        using lfs::core::SceneExportPathStatus;
+
+        EXPECT_EQ(scene_export_path_status(ExportFormat::PLY, "cloud.spz"), SceneExportPathStatus::Conflict);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::PLY, "cloud.SpZ"), SceneExportPathStatus::Conflict);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::PLY, "cloud.ssog"), SceneExportPathStatus::Conflict);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::PLY, "cloud.rad"), SceneExportPathStatus::Conflict);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::PLY, "cloud.glb"), SceneExportPathStatus::Warn);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::PLY, "cloud.html"), SceneExportPathStatus::Warn);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::PLY, "cloud.usdz"), SceneExportPathStatus::Conflict);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::SOG, "cloud.ply"), SceneExportPathStatus::Conflict);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::SPZ, "cloud.sog"), SceneExportPathStatus::Conflict);
+        for (const auto format : {ExportFormat::PLY, ExportFormat::SOG, ExportFormat::SPZ}) {
+            for (const auto* path : {"cloud", "cloud.bak", "cloud.tmp", "cloud.data", "cloud.ply.backup"}) {
+                EXPECT_EQ(scene_export_path_status(format, path), SceneExportPathStatus::Warn)
+                    << path;
+            }
+        }
+    }
+
+    TEST(SceneExportPathTest, PreservesMatchingExtensionsAndOtherFormats) {
+        using lfs::core::ExportFormat;
+        using lfs::core::scene_export_path_status;
+        using lfs::core::SceneExportPathStatus;
+
+        EXPECT_EQ(scene_export_path_status(ExportFormat::PLY, "cloud.PLY"), SceneExportPathStatus::Match);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::SOG, "cloud.SoG"), SceneExportPathStatus::Match);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::SPZ, "cloud.SPZ"), SceneExportPathStatus::Match);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::USD, "cloud.usda"), SceneExportPathStatus::Match);
+        EXPECT_EQ(scene_export_path_status(ExportFormat::SSOG, "bundle"), SceneExportPathStatus::Match);
     }
 } // namespace

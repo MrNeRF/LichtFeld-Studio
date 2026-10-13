@@ -190,15 +190,23 @@ namespace lfs::io {
             LOG_INFO("Loading Blender/NeRF dataset from: {}", lfs::core::path_to_utf8(transforms_file));
 
             // Read transforms and create cameras
+            std::vector<std::string> warnings;
             auto [camera_infos, scene_center, train_val_split] =
-                read_transforms_cameras_and_images(transforms_file, options);
+                read_transforms_cameras_and_images(transforms_file, options, &warnings);
 
             std::vector<std::string> missing_images;
+            std::vector<std::string> unreadable_images;
             for (const auto& info : camera_infos) {
                 if (!info._has_image) {
                     missing_images.push_back(info._image_name.empty()
                                                  ? lfs::core::path_to_utf8(info._image_path.filename())
                                                  : info._image_name);
+                } else {
+                    std::string probe_error;
+                    if (!lfs::core::probe_image_header_bounded(info._image_path, probe_error)) {
+                        unreadable_images.push_back(info._image_name);
+                        LOG_DEBUG("Could not read dataset image '{}': {}", info._image_name, probe_error);
+                    }
                 }
             }
             if (!camera_infos.empty() && missing_images.size() == camera_infos.size()) {
@@ -407,6 +415,9 @@ namespace lfs::io {
             if (!missing_images.empty()) {
                 notify_missing_dataset_images(missing_images);
             }
+            if (!unreadable_images.empty()) {
+                notify_unreadable_dataset_images(unreadable_images);
+            }
 
             prior_resolutions.log();
 
@@ -442,9 +453,11 @@ namespace lfs::io {
             }
 
             std::shared_ptr<PointCloud> point_cloud;
-            std::vector<std::string> warnings;
             if (!missing_images.empty()) {
                 warnings.push_back(format_missing_dataset_images_warning(missing_images));
+            }
+            if (!unreadable_images.empty()) {
+                warnings.push_back(format_unreadable_dataset_images_warning(unreadable_images));
             }
             std::optional<PointCloud> loaded_point_cloud;
             if (!normalized_candidate.empty()) {

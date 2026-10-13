@@ -3,6 +3,7 @@
 """Depth range cancellation and shared numeric scrub guards."""
 
 from importlib import import_module
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -162,3 +163,138 @@ def test_independent_scalar_drag_cancel_release_and_threshold():
     scrub._on_body_mousemove(Event(mouse_x=83))
     scrub._on_body_mouseup(Event())
     assert values["scale"] == pytest.approx(0.83, abs=1e-15)
+
+
+@pytest.mark.parametrize("language,text,expected", [
+    ("de", "0,5", 0.5),
+    ("fr", "0,5", 0.5),
+    ("es", "0,5", 0.5),
+    ("it", "0,5", 0.5),
+    ("nl", "0,5", 0.5),
+    ("pl", "0,5", 0.5),
+    ("de", "0.5", 0.5),
+    ("fr", "0.5", 0.5),
+    ("en", "0.5", 0.5),
+    ("en", "0,5", 1.0),
+])
+def test_numeric_text_uses_ui_decimal_separator(monkeypatch, language, text, expected):
+    module = import_module("lfs_plugins.scrub_fields")
+    monkeypatch.setitem(sys.modules, "lichtfeld", SimpleNamespace(
+        ui=SimpleNamespace(get_current_language=lambda: language)))
+    values = {"scale": 1.0}
+    scrub = module.ScrubFieldController(
+        {"scale": module.ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")},
+        values.__getitem__, values.__setitem__)
+    attach_fields(scrub)
+    state = scrub._fields["scale"]
+    state.editing = True
+    state.input_el.set_attribute("value", text)
+
+    scrub._commit_edit_value(state)
+
+    assert values["scale"] == expected
+
+
+def test_numeric_text_commits_when_tab_moves_focus():
+    module = import_module("lfs_plugins.scrub_fields")
+    values = {"scale": 1.0}
+    scrub = module.ScrubFieldController(
+        {"scale": module.ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")},
+        values.__getitem__, values.__setitem__)
+    attach_fields(scrub)
+    state = scrub._fields["scale"]
+    state.editing = True
+    state.input_el.set_attribute("value", "0.5")
+    state.input_el.blur = lambda: scrub._on_input_blur("scale", Event())
+
+    event = Event(key_identifier=70)  # Rml::Input::KI_TAB
+    scrub._on_keydown(event)
+    state.input_el.blur()
+
+    assert values["scale"] == 0.5
+    assert not state.editing
+    assert not event.stopped
+
+def test_numeric_text_commits_when_mouse_click_moves_focus_away():
+    module = import_module("lfs_plugins.scrub_fields")
+    values = {"scale": 1.0}
+    scrub = module.ScrubFieldController(
+        {"scale": module.ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")},
+        values.__getitem__, values.__setitem__)
+    attach_fields(scrub)
+    state = scrub._fields["scale"]
+    state.editing = True
+    state.input_el.set_attribute("value", "0.5")
+
+    # A mouse click on another control causes blur without a key event.
+    state.input_el.blur = lambda: scrub._on_input_blur("scale", Event())
+    state.input_el.blur()
+
+    assert values["scale"] == 0.5
+    assert not state.editing
+
+
+def test_escape_then_mouse_click_away_keeps_numeric_edit_cancelled():
+    module = import_module("lfs_plugins.scrub_fields")
+    values = {"scale": 1.0}
+    scrub = module.ScrubFieldController(
+        {"scale": module.ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")},
+        values.__getitem__, values.__setitem__)
+    attach_fields(scrub)
+    state = scrub._fields["scale"]
+    state.editing = True
+    state.edit_value_before = 1.0
+    state.input_el.set_attribute("value", "0.5")
+    state.input_el.blur = lambda: scrub._on_input_blur("scale", Event())
+
+    scrub._on_keydown(Event(key_identifier=module.KI_ESCAPE))
+    # The click-away blur after Escape must not reapply the discarded text.
+    state.input_el.blur()
+
+    assert values["scale"] == 1.0
+    assert not state.editing
+
+@pytest.mark.parametrize("text,expected", [
+    ("1e309", 100),
+    ("inf", 100),
+    ("-inf", 1),
+    ("999999999999999999999999999999", 100),
+    ("12", 12),
+    ("nan", 11),
+])
+def test_integer_scrub_handles_out_of_range_text_without_callback_exception(text, expected):
+    module = import_module("lfs_plugins.scrub_fields")
+    values = {"speed": 11}
+    scrub = module.ScrubFieldController(
+        {"speed": module.ScrubFieldSpec(1, 100, 1, "%d", data_type=int)},
+        values.__getitem__, values.__setitem__)
+    attach_fields(scrub)
+    state = scrub._fields["speed"]
+    state.editing = True
+    state.input_el.set_attribute("value", text)
+    state.input_el.blur = lambda: scrub._on_input_blur("speed", Event())
+
+    scrub._on_input_change("speed", Event(linebreak=True))
+
+    assert values["speed"] == expected
+    assert not state.editing
+
+def test_float_scrub_keeps_prior_value_for_non_finite_text():
+    module = import_module("lfs_plugins.scrub_fields")
+    values = {"scale": 0.5}
+    scrub = module.ScrubFieldController(
+        {"scale": module.ScrubFieldSpec(0.25, 1.0, 0.01, "%.2f")},
+        values.__getitem__,
+        values.__setitem__,
+    )
+    attach_fields(scrub)
+    state = scrub._fields["scale"]
+    state.input_el.blur = lambda: scrub._on_input_blur("scale", Event())
+
+    for text in ("nan", "NaN", "inf", "-inf", "abc", ""):
+        values["scale"] = 0.5
+        state.editing = True
+        state.edit_value_before = 0.5
+        state.input_el.set_attribute("value", text)
+        scrub._on_input_change("scale", Event(linebreak=True))
+        assert values["scale"] == 0.5, text

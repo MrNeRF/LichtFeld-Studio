@@ -850,7 +850,13 @@ namespace lfs::vis {
         desc.split_view = view.split_view_;
         desc.mesh_view_projection = view.viewport_meshes_.view_projection;
         desc.mesh_camera_position = view.viewport_meshes_.camera_position;
+        desc.mesh_camera_backward = view.viewport_meshes_.camera_backward;
+        desc.mesh_depth_view = view.viewport_meshes_.depth_view;
+        desc.mesh_depth_view_min = view.viewport_meshes_.depth_view_min;
+        desc.mesh_depth_view_max = view.viewport_meshes_.depth_view_max;
+        desc.mesh_depth_grayscale = view.viewport_meshes_.depth_grayscale;
         desc.mesh_items = view.viewport_meshes_.items;
+        desc.mesh_panels = view.viewport_meshes_.panels;
         desc.scene_outputs = {{
             .target = view.main_render_target_,
             .color = desc.scene_image,

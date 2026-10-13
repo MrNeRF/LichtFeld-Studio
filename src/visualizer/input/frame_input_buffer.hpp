@@ -32,6 +32,7 @@ namespace lfs::vis {
     struct FrameInputEvent {
         FrameInputEventKind kind = FrameInputEventKind::KeyDown;
         SDL_Scancode scancode = SDL_SCANCODE_UNKNOWN;
+        SDL_Keycode keycode = SDLK_UNKNOWN;
         SDL_Keymod modifiers = SDL_KMOD_NONE;
         bool repeat = false;
         std::string text{};
@@ -172,13 +173,20 @@ namespace lfs::vis {
                 break;
             case SDL_EVENT_KEY_DOWN:
                 event_mods_ = event.key.mod;
-                input_events.push_back({.kind = FrameInputEventKind::KeyDown, .scancode = event.key.scancode, .modifiers = event.key.mod, .repeat = event.key.repeat});
+                input_events.push_back({.kind = FrameInputEventKind::KeyDown,
+                                        .scancode = event.key.scancode,
+                                        .keycode = event.key.key,
+                                        .modifiers = event.key.mod,
+                                        .repeat = event.key.repeat});
                 if (!event.key.repeat)
                     keys_pressed.push_back(event.key.scancode);
                 break;
             case SDL_EVENT_KEY_UP:
                 event_mods_ = event.key.mod;
-                input_events.push_back({.kind = FrameInputEventKind::KeyUp, .scancode = event.key.scancode, .modifiers = event.key.mod});
+                input_events.push_back({.kind = FrameInputEventKind::KeyUp,
+                                        .scancode = event.key.scancode,
+                                        .keycode = event.key.key,
+                                        .modifiers = event.key.mod});
 
                 break;
             case SDL_EVENT_TEXT_INPUT:

@@ -9,6 +9,8 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
+#include "input/input_router.hpp"
+#include "input/key_codes.hpp"
 #include "licht_test_support.hpp"
 #include "rendering/render_pass.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -138,6 +140,155 @@ namespace lfs::vis {
         rendering.editViewSettings(screens.activeView(), [](ViewSettings& settings) { settings.ortho_scale = 1.0f; });
         controller.handleScroll(0.0, -1.0);
         EXPECT_FLOAT_EQ(renderedScale(viewport, rendering), 1.0f);
+    }
+
+    TEST_F(OrthographicZoomTest, HomeKeyRestoresOrthographicScaleForHomePose) {
+        Viewport viewport(200, 200);
+        TestViewTargets targets(viewport);
+        InputController controller(nullptr, targets);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        router.focusViewportKeyboard();
+        controller.setInputRouter(&router);
+        controller.initialize();
+        screen::ScreenService screens;
+        RenderingManager rendering(screens);
+        configure(rendering);
+        const auto view = screens.activeView();
+        auto settings = rendering.getSettings();
+        settings.ortho_scale = 2.14f;
+        rendering.updateSettings(settings);
+        viewport.camera.t = glm::vec3(0.0f, 0.0f, 10.0f);
+        viewport.camera.pivot = glm::vec3(0.0f);
+        viewport.camera.R = glm::mat3(1.0f);
+        viewport.camera.saveHomePosition();
+        viewport.camera.t = glm::vec3(1.0f, 2.0f, 3.0f);
+        viewport.camera.pivot = glm::vec3(2.0f);
+
+        controller.handleKey(input::KEY_H, input::ACTION_PRESS, input::KEYMOD_NONE);
+
+        const float vfov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
+        const float expected_scale = viewport.windowSize.y /
+                                     (2.0f * glm::length(viewport.camera.home_pivot - viewport.camera.home_t) *
+                                      std::tan(glm::radians(vfov) * 0.5f));
+        EXPECT_NEAR(rendering.settingsForView(view).ortho_scale, expected_scale, 1e-4f);
+        EXPECT_EQ(viewport.camera.t, viewport.camera.home_t);
+        EXPECT_EQ(viewport.camera.pivot, viewport.camera.home_pivot);
+    }
+
+    TEST_F(OrthographicZoomTest, ResetCameraCommandRestoresOrthographicScale) {
+        Viewport viewport(200, 200);
+        TestViewTargets targets(viewport);
+        InputController controller(nullptr, targets);
+        screen::ScreenService screens;
+        RenderingManager rendering(screens);
+        configure(rendering);
+        auto settings = rendering.getSettings();
+        settings.ortho_scale = 2.14f;
+        rendering.updateSettings(settings);
+        viewport.camera.t = glm::vec3(0.0f, 0.0f, 10.0f);
+        viewport.camera.pivot = glm::vec3(0.0f);
+        viewport.camera.R = glm::mat3(1.0f);
+        viewport.camera.saveHomePosition();
+
+        lfs::core::events::cmd::ResetCamera{}.emit();
+
+        const float vfov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
+        const float expected_scale = viewport.windowSize.y /
+                                     (2.0f * glm::length(viewport.camera.home_pivot - viewport.camera.home_t) *
+                                      std::tan(glm::radians(vfov) * 0.5f));
+        EXPECT_NEAR(rendering.settingsForView(screens.activeView()).ortho_scale, expected_scale, 1e-4f);
+    }
+
+    TEST_F(OrthographicZoomTest, HomeKeyUpdatesActiveViewScale) {
+        Viewport viewport(200, 200);
+        TestViewTargets targets(viewport);
+        InputController controller(nullptr, targets);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        router.focusViewportKeyboard();
+        controller.setInputRouter(&router);
+        controller.initialize();
+        screen::ScreenService screens;
+        RenderingManager rendering(screens);
+        configure(rendering);
+        rendering.editViewSettings(screens.activeView(), [](ViewSettings& settings) { settings.ortho_scale = 2.14f; });
+        viewport.camera.t = glm::vec3(0.0f, 0.0f, 10.0f);
+        viewport.camera.pivot = glm::vec3(0.0f);
+        viewport.camera.R = glm::mat3(1.0f);
+        viewport.camera.saveHomePosition();
+
+        controller.handleKey(input::KEY_H, input::ACTION_PRESS, input::KEYMOD_NONE);
+
+        const float vfov = lfs::rendering::focalLengthToVFov(rendering.getSettings().focal_length_mm);
+        const float expected_scale = viewport.windowSize.y /
+                                     (2.0f * glm::length(viewport.camera.home_pivot - viewport.camera.home_t) *
+                                      std::tan(glm::radians(vfov) * 0.5f));
+        EXPECT_NEAR(rendering.settingsForView(screens.activeView()).ortho_scale, expected_scale, 1e-4f);
+    }
+
+    TEST_F(OrthographicZoomTest, HomeKeyRestoresOnlyTheFocusedSplitViewScale) {
+        screen::ScreenService screens;
+        const auto primary_id = screens.screen().activeView();
+        const auto secondary_id = screens.screen().split(primary_id, screen::SplitAxis::Columns, 0.5f);
+        ASSERT_TRUE(secondary_id.valid());
+        auto& primary = screens.view3D(primary_id)->camera;
+        auto& secondary = screens.view3D(secondary_id)->camera;
+        primary.windowSize = secondary.windowSize = {200, 200};
+        secondary.camera.t = glm::vec3(0.0f, 0.0f, 10.0f);
+        secondary.camera.pivot = glm::vec3(0.0f);
+        secondary.camera.R = glm::mat3(1.0f);
+        secondary.camera.saveHomePosition();
+        RenderingManager rendering(screens);
+        configure(rendering);
+        rendering.editViewSettings(secondary_id.value, [](ViewSettings& settings) {
+            settings.orthographic = true;
+            settings.ortho_scale = 2.14f;
+        });
+        struct SecondaryTargets : ViewTargets {
+            SecondaryTargets(Viewport& camera, ViewId id) : camera(camera), id(id) {}
+            ViewTarget activeView() override { return {id, &camera, {0, 0}, glm::vec2(camera.windowSize)}; }
+            ViewTarget viewAt(float, float) override { return activeView(); }
+            ViewTarget findView(ViewId value) override { return value == id ? activeView() : ViewTarget{}; }
+            ViewId viewId(const Viewport&) const override { return id; }
+            std::uint64_t viewEpoch() const override { return 1; }
+            void activateView(ViewId) override {}
+            bool runViewCommand(ViewId, std::string_view) override { return false; }
+            Viewport& camera;
+            ViewId id;
+        } targets(secondary, secondary_id.value);
+        InputController controller(nullptr, targets);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        router.focusViewportKeyboard();
+        controller.setInputRouter(&router);
+        controller.initialize();
+
+        controller.handleKey(input::KEY_H, input::ACTION_PRESS, input::KEYMOD_NONE);
+
+        const float vfov = lfs::rendering::focalLengthToVFov(rendering.getSettings().focal_length_mm);
+        const float expected_scale = secondary.windowSize.y /
+                                     (2.0f * glm::length(secondary.camera.home_pivot - secondary.camera.home_t) *
+                                      std::tan(glm::radians(vfov) * 0.5f));
+        EXPECT_NEAR(rendering.settingsForView(secondary_id.value).ortho_scale, expected_scale, 1e-4f);
+        EXPECT_FLOAT_EQ(rendering.settingsForView(primary_id.value).ortho_scale, 70.0f);
+    }
+
+    TEST_F(OrthographicZoomTest, PerspectiveHomeDoesNotChangeOrthographicScaleSetting) {
+        Viewport viewport(200, 200);
+        TestViewTargets targets(viewport);
+        InputController controller(nullptr, targets);
+        screen::ScreenService screens;
+        RenderingManager rendering(screens);
+        configure(rendering);
+        auto settings = rendering.getSettings();
+        settings.orthographic = false;
+        settings.ortho_scale = 2.14f;
+        rendering.updateSettings(settings);
+
+        lfs::core::events::cmd::ResetCamera{}.emit();
+
+        EXPECT_FLOAT_EQ(rendering.getSettings().ortho_scale, 2.14f);
     }
 
     TEST_F(OrthographicZoomTest, SecondaryWheelZoomDoesNotChangePrimaryScale) {

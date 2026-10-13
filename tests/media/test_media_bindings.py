@@ -6,11 +6,13 @@ import errno
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import shutil
 from pathlib import Path
 import sys
 import subprocess
+import struct
 import tempfile
 import threading
 import unicodedata
@@ -25,6 +27,133 @@ MEDIA_ERROR = None
 
 
 class MediaBindings(unittest.TestCase):
+    def test_tiff16_public_output_precision_alpha_and_failures(self):
+        ffmpeg = os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg")
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt709
+        options = media.Tiff16OutputOptions()
+        samples = (0., .125, .5, 1., .9, .0001)
+        frame = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBFloat32,
+                                              struct.pack("=6f", *samples), color=color)
+        path = self.root / "tiff16-precision.tif"
+        for transfer in (media.ColorTransfer.Linear, media.ColorTransfer.Srgb, media.ColorTransfer.Bt709):
+            options.transfer = transfer
+            options.overwrite = True
+            media.ImageOutput.write_tiff16(path, frame, options)
+            result = subprocess.run([ffmpeg, "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "rgb48le", "-"],
+                                    check=True, capture_output=True, timeout=30)
+            actual = struct.unpack("<6H", result.stdout)
+            def encode(v):
+                if transfer == media.ColorTransfer.Srgb:
+                    v = 12.92 * v if v <= .0031308 else 1.055 * v ** (1 / 2.4) - .055
+                elif transfer == media.ColorTransfer.Bt709:
+                    v = 4.5 * v if v < .018 else 1.099 * v ** .45 - .099
+                return math.floor(max(0., min(1., v)) * 65535 + .5)
+            self.assertLessEqual(max(abs(a - encode(v)) for a, v in zip(actual, samples)), 1)
+            self.assertTrue(any(v % 257 for v in actual), "genuine precision beyond RGB8")
+        before = path.read_bytes()
+        options.overwrite = False
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_tiff16(path, frame, options)
+        options.overwrite = True
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_tiff16(path, frame, options, cancelled=lambda: True)
+        self.assertEqual(path.read_bytes(), before)
+        for units in (media.ColorUnits.Nits, media.ColorUnits.SceneRelative):
+            color.units = units
+            invalid = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBFloat32,
+                                                    struct.pack("=6f", *samples), color=color)
+            with self.assertRaises(MEDIA_ERROR):
+                media.ImageOutput.write_tiff16(path, invalid, options)
+            self.assertEqual(path.read_bytes(), before)
+        color.units = media.ColorUnits.Relative
+        options.transfer = media.ColorTransfer.Linear
+        for alpha in (media.AlphaMode.Straight, media.AlphaMode.Premultiplied):
+            color.alpha = alpha
+            rgba = (.25, .125, .5, .5) if alpha == media.AlphaMode.Premultiplied else (.5, .25, 1., .5)
+            rgba_frame = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGBAFloat32,
+                                                       struct.pack("=4f", *rgba), color=color)
+            media.ImageOutput.write_tiff16(path, rgba_frame, options)
+            result = subprocess.run([ffmpeg, "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "rgba64le", "-"],
+                                    check=True, capture_output=True, timeout=30)
+            self.assertEqual(struct.unpack("<4H", result.stdout), (32768, 16384, 65535, 32768))
+        zero_alpha = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGBAFloat32,
+                                                   struct.pack("=4f", 1., .5, .25, 0.), color=color)
+        media.ImageOutput.write_tiff16(path, zero_alpha, options)
+        raw = subprocess.check_output([ffmpeg, "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "rgba64le", "-"], timeout=30)
+        self.assertEqual(struct.unpack("<4H", raw), (0, 0, 0, 0))
+        before = path.read_bytes()
+        for rgba in ((float("nan"), 0., 0., 1.), (0., float("inf"), 0., 1.), (0., 0., 0., -.1), (0., 0., 0., 1.1)):
+            invalid = media.FrameSurface.from_bytes(1, 1, media.FramePixelFormat.RGBAFloat32,
+                                                    struct.pack("=4f", *rgba), color=color)
+            with self.assertRaises(MEDIA_ERROR):
+                media.ImageOutput.write_tiff16(path, invalid, options)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_tiff16_sequence_precision_metadata_and_resume(self):
+        ffmpeg = os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg")
+        source = self.root / "tiff16-source.mkv"
+        expression = ("nullsrc=s=32x24:r=4:d=1,format=gbrp10le,"
+                      "geq=r='mod(X*17+Y*3+N*31,1024)':g='mod(X*7+Y*11+N*29,1024)':b='mod(X*13+Y*5+N*23,1024)',"
+                      "setparams=color_primaries=bt709:color_trc=linear:colorspace=gbr:range=full")
+        subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i", expression, "-c:v", "ffv1", "-level", "3",
+                        "-pix_fmt", "gbrp10le", "-color_trc", "linear", "-color_primaries", "bt709",
+                        "-colorspace", "rgb", "-color_range", "pc", str(source)], check=True, capture_output=True, timeout=60)
+        request = media.IngestRequest()
+        request.input = source
+        request.allow_hardware_decode = False
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        request.selection.fps = 4
+        output = media.FileExtraction()
+        output.files.output_directory = self.root / "tiff16-sequence"
+        output.files.format = media.FrameFileFormat.TIFF16
+        output.files.tiff16.transfer = media.ColorTransfer.Linear
+        output.resume = True
+        output.write_metadata = True
+        report = media.MediaIngest.extract_files(request, output)
+        self.assertEqual(report.frames_accepted, 4)
+        paths = sorted(output.files.output_directory.glob("*.tif"))
+        self.assertEqual(len(paths), 4)
+        values = subprocess.run([ffmpeg, "-v", "error", "-i", str(paths[0]), "-f", "rawvideo", "-pix_fmt", "rgb48le", "-"],
+                                check=True, capture_output=True, timeout=30).stdout
+        actual = struct.unpack("<" + "H" * (len(values) // 2), values)
+        expected = [math.floor((v / 1023) * 65535 + .5) for y in range(24) for x in range(32)
+                    for v in ((x * 17 + y * 3) % 1024, (x * 7 + y * 11) % 1024, (x * 13 + y * 5) % 1024)]
+        self.assertLessEqual(max(abs(a - b) for a, b in zip(actual, expected)), 1)
+        metadata = json.loads((output.files.output_directory / "extraction_metadata.json").read_text())
+        self.assertEqual(metadata["output"]["bit_depth"], 16)
+        self.assertEqual(metadata["output"]["source_component_depth"], 10)
+        self.assertEqual(metadata["output"]["pixel_format"], "rgb_uint16")
+        self.assertEqual(metadata["output"]["transfer"], "linear")
+        hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in paths]
+        mtimes = [path.stat().st_mtime_ns for path in paths]
+        metadata_path = output.files.output_directory / "extraction_metadata.json"
+        metadata_before = metadata_path.read_bytes()
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertEqual(metadata_path.read_bytes(), metadata_before)
+        output.files.tiff16.overwrite = True
+        self.assertEqual(media.MediaIngest.extract_files(request, output).frames_accepted, 4)
+        self.assertEqual([hashlib.sha256(path.read_bytes()).hexdigest() for path in paths], hashes)
+        self.assertEqual([path.stat().st_mtime_ns for path in paths], mtimes)
+        output.files.tiff16.transfer = media.ColorTransfer.Srgb
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        output.files.tiff16.transfer = media.ColorTransfer.Linear
+        identity_path = output.files.output_directory / ".media-ingest-checkpoint" / "identity.json"
+        identity = json.loads(identity_path.read_text())
+        self.assertEqual(identity["tiff16"][0], "tiff16-sdr-v1")
+        # Older or incompatible encoding identities must not reuse verified files.
+        identity["tiff16"][0] = "tiff16-sdr-v0"
+        identity_path.write_text(json.dumps(identity))
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertEqual([hashlib.sha256(path.read_bytes()).hexdigest() for path in paths], hashes)
+        self.assertEqual([path.stat().st_mtime_ns for path in paths], mtimes)
+
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="lfs-python-media-")
@@ -324,10 +453,11 @@ class MediaBindings(unittest.TestCase):
     def test_resume_reconstructs_missing_image_and_pending_publication(self):
         for label, file_format, extension in (("png", media.FrameFileFormat.PNG, "png"),
                                                ("jpeg", media.FrameFileFormat.JPEG, "jpg"),
-                                               ("exr", media.FrameFileFormat.EXR, "exr")):
+                                               ("exr", media.FrameFileFormat.EXR, "exr"),
+                                               ("tiff16", media.FrameFileFormat.TIFF16, "tif")):
             with self.subTest(format=label):
                 request = self.request()
-                if label == "exr":
+                if label in ("exr", "tiff16"):
                     request.output_format = media.FramePixelFormat.RGBFloat32
                     request.input_color.transfer = media.ColorTransfer.Linear
                     request.input_color.primaries = media.ColorPrimaries.Bt709

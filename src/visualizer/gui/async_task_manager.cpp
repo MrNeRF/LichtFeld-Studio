@@ -15,6 +15,7 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/scene_export_path.hpp"
 #include "core/services.hpp"
 #include "core/training_manager.hpp"
 #include "gui/error_event_bridge.hpp"
@@ -2198,6 +2199,14 @@ namespace lfs::vis::gui {
             return;
         }
 
+        if (core::scene_export_path_status(format, path) == core::SceneExportPathStatus::Conflict) {
+            publishExportFailureState(
+                format, path,
+                LOCF(lichtfeld::Strings::Runtime::EXPORT_EXTENSION_REQUIRED,
+                     core::required_scene_export_extension(format)));
+            return;
+        }
+
         if (!beginJob(
                 export_state_.job, JobType::Export,
                 LOC(lichtfeld::Strings::Runtime::TASK_STARTING))) {
@@ -2543,10 +2552,20 @@ namespace lfs::vis::gui {
         state.error =
             job ? job->error : std::string{};
         state.outcome = jobOutcome(export_state_.job);
+        bool warn_for_extension = false;
+        std::string_view format_name;
         {
             const std::lock_guard lock(export_state_.mutex);
             state.format = exportProgressFormatName(export_state_.format);
             state.path = lfs::core::path_to_utf8(export_state_.path);
+            if (state.outcome == "completed" && state.error.empty()) {
+                warn_for_extension = core::scene_export_path_status(export_state_.format, export_state_.path) == core::SceneExportPathStatus::Warn;
+                format_name = core::scene_export_format_name(export_state_.format);
+            }
+        }
+        if (state.outcome == "completed" && state.error.empty() && warn_for_extension) {
+            state.warning = LOCF(lichtfeld::Strings::Runtime::EXPORT_EXTENSION_WARNING,
+                                 format_name);
         }
         lfs::vis::app_store().export_progress_state.set(std::move(state));
     }

@@ -26,6 +26,8 @@
 #include "visualizer/nodes/modifier_manager.hpp"
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include "core/legacy_settings_migration.hpp"
+#include "core/persisted_settings.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
@@ -3915,16 +3917,22 @@ namespace lfs::vis::gui {
                 return std::nullopt;
             }
             try {
-                std::ifstream file(paths->windowStateFile());
-                const auto json = nlohmann::json::parse(file);
+                const auto json = lfs::core::persisted_settings::readObject(paths->windowStateFile());
                 WindowManager::PersistentWindowState state;
-                state.x = json.value("x", state.x);
-                state.y = json.value("y", state.y);
-                state.width = json.value("width", state.width);
-                state.height = json.value("height", state.height);
-                state.maximized = json.value("maximized", state.maximized);
-                if (state.width <= 0 || state.height <= 0)
-                    return std::nullopt;
+                const WindowManager::PersistentWindowState defaults;
+                state.x = lfs::core::persisted_settings::field(json, "x", state.x);
+                state.y = lfs::core::persisted_settings::field(json, "y", state.y);
+                state.width = lfs::core::persisted_settings::field(json, "width", state.width);
+                state.height = lfs::core::persisted_settings::field(json, "height", state.height);
+                state.maximized = lfs::core::persisted_settings::field(json, "maximized", state.maximized);
+                if (state.width <= 0) {
+                    LOG_WARN("Invalid saved window width; using its default");
+                    state.width = defaults.width;
+                }
+                if (state.height <= 0) {
+                    LOG_WARN("Invalid saved window height; using its default");
+                    state.height = defaults.height;
+                }
                 return state;
             } catch (const std::exception& error) {
                 LOG_WARN("Unable to load window state: {}", error.what());
@@ -3941,16 +3949,56 @@ namespace lfs::vis::gui {
                          lfs::format_for_developer(paths.error()));
                 return;
             }
-            const nlohmann::json json = {
+            const nlohmann::json updates = {
                 {"x", state.x},
                 {"y", state.y},
                 {"width", state.width},
                 {"height", state.height},
                 {"maximized", state.maximized},
             };
-            if (const auto result = paths->writeWindowStateAtomically(json.dump(2) + '\n'); !result)
-                LOG_WARN("Unable to save window state: {}",
-                         lfs::format_for_developer(result.error()));
+            try {
+                const auto path = paths->windowStateFile();
+                std::error_code error;
+                if (std::filesystem::exists(path, error)) {
+                    std::optional<nlohmann::json> old;
+                    try {
+                        old = lfs::core::persisted_settings::readObject(path);
+                    } catch (const std::exception&) {
+                        // LFS-CENSUS-OK(empty-catch): mergeForWrite backs up unreadable files.
+                    }
+                    if (old) {
+                        const auto invalid_range = [&old](const char* key, bool positive) {
+                            if (!old->contains(key) || !(*old)[key].is_number_integer())
+                                return false;
+                            try {
+                                if ((*old)[key].is_number_unsigned() &&
+                                    (*old)[key].get<std::uint64_t>() > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+                                    return true;
+                                if (!(*old)[key].is_number_unsigned()) {
+                                    const auto number = (*old)[key].get<std::int64_t>();
+                                    if (number < std::numeric_limits<int>::min() ||
+                                        number > std::numeric_limits<int>::max())
+                                        return true;
+                                }
+                                return positive && (*old)[key].get<int>() <= 0;
+                            } catch (const std::exception&) {
+                                // LFS-CENSUS-OK(empty-catch): an out-of-range coordinate needs a backup.
+                                return true;
+                            }
+                        };
+                        if (invalid_range("x", false) || invalid_range("y", false) ||
+                            invalid_range("width", true) || invalid_range("height", true))
+                            lfs::core::persisted_settings::backupDamaged(path, paths->backupDir());
+                    }
+                }
+                const auto json = lfs::core::persisted_settings::mergeForWrite(
+                    path, updates, "schema_version", 1, nullptr, {}, paths->backupDir());
+                if (const auto result = paths->writeWindowStateAtomically(json.dump(2) + '\n'); !result)
+                    LOG_WARN("Unable to save window state: {}",
+                             lfs::format_for_developer(result.error()));
+            } catch (const std::exception& error) {
+                LOG_WARN("Unable to save window state: {}", error.what());
+            }
         }
     } // namespace
 
@@ -4741,6 +4789,19 @@ namespace lfs::vis::gui {
                 }
             }
         }
+
+        if (LayoutState::takeLegacyLayoutBackupNotice())
+            enqueueToast(ToastRequest{
+                .title = LOC("preferences.ui_preferences_backup_title"),
+                .message = LOC("preferences.legacy_layout_backup_message"),
+                .level = ErrorNoticeLevel::Warning,
+            });
+        if (lfs::core::takeLegacySettingsMigrationNotice())
+            enqueueToast(ToastRequest{
+                .title = LOC("preferences.legacy_settings_conflict_title"),
+                .message = LOC("preferences.legacy_settings_conflict_message"),
+                .level = ErrorNoticeLevel::Warning,
+            });
 
         float saved_scale = lfs::vis::loadUiScalePreference();
         if (saved_scale <= 0.0f)
@@ -6595,6 +6656,12 @@ namespace lfs::vis::gui {
                 gt_metrics_config.visible = true;
                 gt_metrics_config.show_ssim =
                     settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::PSNRSSIM;
+                const auto* const trainer_manager = viewer_ ? viewer_->getTrainerManager() : nullptr;
+                const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
+                if (!trainer || !trainer->isInitialized()) {
+                    gt_metrics_config.metrics_status =
+                        AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession;
+                }
 
                 const auto content_bounds = rendering->getContentBounds(rendering->activeViewId(), glm::ivec2(
                                                                                                        std::max(static_cast<int>(viewport_layout_.size.x), 0),
@@ -7154,6 +7221,7 @@ namespace lfs::vis::gui {
                 // Mark the due refresh consumed before buildViewportFrameDesc
                 // can re-arm the timer for a partial upload batch.
                 static_cast<void>(consumeCameraThumbnailRefresh());
+                bool viewport_pass_ready = false;
                 for (auto id : visible_views) {
                     auto& view = rendering->viewState(id);
                     auto& compositor = viewport_compositors_[id];
@@ -7172,9 +7240,10 @@ namespace lfs::vis::gui {
                         compositor = createViewportReferenceRenderer(
                             *window_manager->getGraphicsContext(),
                             viewport_compositor_resources_);
-                    const bool viewport_pass_ready = compositor &&
-                                                     compositor->initialize(*window_manager->getGraphicsContext());
-                    if (viewport_pass_ready) {
+                    const bool view_pass_ready = compositor &&
+                                                 compositor->initialize(*window_manager->getGraphicsContext());
+                    viewport_pass_ready |= view_pass_ready;
+                    if (view_pass_ready) {
                         LOG_TIMER_THRESHOLD("gui_render.viewport_pass_prepare_record", 0.25);
                         compositor->prepare(*window_manager->getGraphicsContext(), viewport_desc, view);
                         compositor->recordFrame(graphics_frame, viewport_desc, view);
@@ -7203,6 +7272,7 @@ namespace lfs::vis::gui {
                     }
                 }
                 if (viewer_) {
+                    viewer_->completeSceneCaptureFrame(viewport_pass_ready);
                     viewer_->processRenderWorkQueue();
                 }
                 // Synchronous full-window capture explicitly submits and consumes
@@ -7229,6 +7299,7 @@ namespace lfs::vis::gui {
                              interactive_transition_resume_training_);
                 }
                 if (viewer_) {
+                    viewer_->completeSceneCaptureFrame(false);
                     viewer_->processRenderWorkQueue();
                 }
             }
@@ -7247,6 +7318,7 @@ namespace lfs::vis::gui {
         }
 
         if (!vulkan_gui_ && viewer_) {
+            viewer_->completeSceneCaptureFrame(false);
             viewer_->processRenderWorkQueue();
         }
         updateInteractiveTransitionGuard();
@@ -7885,13 +7957,24 @@ namespace lfs::vis::gui {
             queueUiVisibilityToggle();
         });
 
-        ui::ToggleVramHud::when([this](const auto&) {
+        const auto save_hud_preferences = [this](LayoutState& state) {
+            bool backed_up = false;
+            state.saveUserPreferences(&backed_up);
+            if (backed_up)
+                enqueueToast(ToastRequest{
+                    .title = LOC("preferences.ui_preferences_backup_title"),
+                    .message = LOC("preferences.ui_preferences_backup_message"),
+                    .level = ErrorNoticeLevel::Warning,
+                });
+        };
+
+        ui::ToggleVramHud::when([this, save_hud_preferences](const auto&) {
             show_vram_hud_ = !show_vram_hud_;
             LayoutState state;
             state.load();
             state.perf_hud_visible = show_vram_hud_;
             state.perf_hud_expanded = perf_hud_expanded_;
-            state.saveUserPreferences();
+            save_hud_preferences(state);
             if (auto* rm = viewer_->getRenderingManager())
                 rm->frameDemandLedger().request({.reason = FrameReason::GuiLayout,
                                                  .scope = FrameScope::Gui,
@@ -7899,13 +7982,13 @@ namespace lfs::vis::gui {
                                                  .detail = "performance_hud"});
         });
 
-        ui::TogglePerfHudExpanded::when([this](const auto&) {
+        ui::TogglePerfHudExpanded::when([this, save_hud_preferences](const auto&) {
             perf_hud_expanded_ = !perf_hud_expanded_;
             LayoutState state;
             state.load();
             state.perf_hud_visible = show_vram_hud_;
             state.perf_hud_expanded = perf_hud_expanded_;
-            state.saveUserPreferences();
+            save_hud_preferences(state);
             if (auto* rm = viewer_->getRenderingManager())
                 rm->frameDemandLedger().request({.reason = FrameReason::GuiLayout,
                                                  .scope = FrameScope::Gui,
@@ -7913,14 +7996,14 @@ namespace lfs::vis::gui {
                                                  .detail = "performance_hud"});
         });
 
-        ui::OpenPerfHudLedger::when([this](const auto&) {
+        ui::OpenPerfHudLedger::when([this, save_hud_preferences](const auto&) {
             perf_hud_expanded_ = true;
             LayoutState state;
             state.load();
             state.perf_hud_visible = show_vram_hud_;
             state.perf_hud_expanded = true;
             state.vram_hud_active_tab = "ledger";
-            state.saveUserPreferences();
+            save_hud_preferences(state);
             if (auto* rm = viewer_->getRenderingManager())
                 rm->frameDemandLedger().request({.reason = FrameReason::GuiLayout,
                                                  .scope = FrameScope::Gui,

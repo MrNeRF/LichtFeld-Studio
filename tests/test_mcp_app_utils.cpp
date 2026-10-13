@@ -2,10 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/include/app/mcp_app_utils.hpp"
+#include "core/camera.hpp"
 #include "core/error.hpp"
 #include "core/scene.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "visualizer/gui/utils/native_file_dialog.hpp"
+#include "visualizer/scene_capture_job_queue.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <chrono>
@@ -209,6 +211,69 @@ namespace {
     };
 
 } // namespace
+
+TEST(SceneCaptureJobQueueTest, MeshAddedBeforeRequestUsesNextFramesMeshState) {
+    lfs::vis::SceneCaptureJobQueue jobs;
+    int completed = 0;
+    int canceled = 0;
+    bool scene_has_mesh = false;
+    ASSERT_TRUE(jobs.post({.run = [&] { ++completed; }, .cancel = [&] { ++canceled; }}));
+    scene_has_mesh = true; // mutation after posting, before the next frame
+    ASSERT_TRUE(jobs.beginFrame(scene_has_mesh));
+    EXPECT_TRUE(jobs.needsSceneReadback());
+    jobs.completeFrame();
+    EXPECT_EQ(completed, 1);
+    EXPECT_EQ(canceled, 0);
+}
+
+TEST(SceneCaptureJobQueueTest, ViewerThreadRenderWorkWaitsForNextCaptureGate) {
+    lfs::vis::SceneCaptureJobQueue jobs;
+    int completed = 0;
+    EXPECT_FALSE(jobs.beginFrame(true));
+    EXPECT_FALSE(jobs.needsSceneReadback()); // current frame's gate
+    ASSERT_TRUE(jobs.post({.run = [&] { ++completed; }, .cancel = [] {}}));
+    jobs.completeFrame(); // current frame's render work
+    EXPECT_EQ(completed, 0);
+    ASSERT_TRUE(jobs.beginFrame(true));
+    EXPECT_TRUE(jobs.needsSceneReadback());
+    jobs.completeFrame();
+    EXPECT_EQ(completed, 1);
+}
+
+TEST(SceneCaptureJobQueueTest, SceneSwitchCancelsPendingAndActiveJobsExactlyOnce) {
+    lfs::vis::SceneCaptureJobQueue jobs;
+    int completed = 0;
+    int canceled = 0;
+    const auto post = [&] {
+        return jobs.post({.run = [&] { ++completed; }, .cancel = [&] { ++canceled; }});
+    };
+    ASSERT_TRUE(post());
+    ASSERT_TRUE(jobs.beginFrame(true));
+    ASSERT_TRUE(post());
+    jobs.cancelAll(); // scene replacement before the capture gate
+    jobs.cancelAll(); // scene cleared event may follow
+    EXPECT_FALSE(jobs.needsSceneReadback());
+    EXPECT_FALSE(jobs.beginFrame(true));
+    jobs.completeFrame();
+    EXPECT_EQ(completed, 0);
+    EXPECT_EQ(canceled, 2);
+}
+
+TEST(SceneCaptureJobQueueTest, IdleRequestDemandsAFrameWithoutAnotherSceneEvent) {
+    lfs::vis::SceneCaptureJobQueue jobs;
+    int completed = 0;
+    EXPECT_FALSE(jobs.hasPending());
+    EXPECT_FALSE(jobs.hasWork());
+    ASSERT_TRUE(jobs.post({.run = [&] { ++completed; }, .cancel = [] {}}));
+    EXPECT_TRUE(jobs.hasPending());
+    EXPECT_TRUE(jobs.hasWork());
+    ASSERT_TRUE(jobs.beginFrame(false));
+    EXPECT_FALSE(jobs.hasPending());
+    EXPECT_FALSE(jobs.needsSceneReadback());
+    jobs.completeFrame();
+    EXPECT_EQ(completed, 1);
+    EXPECT_FALSE(jobs.hasWork());
+}
 
 TEST(McpAppUtilsTest, PostAndWaitExecutesInlineOnViewerThread) {
     FakeVisualizer viewer;
@@ -436,4 +501,37 @@ TEST(McpAppUtilsTest, PointListSchemaRejectsShortAndMalformedPointsBeforeTheHand
 
     EXPECT_EQ(registry.call_tool(kToolName, json{{"points", json::parse("[[1,2],[3,4],[5,6]]")}})["success"], true);
     EXPECT_EQ(handler_calls, 1);
+}
+
+TEST(SceneNodeCountsTest, ReopenedCameraGroupReportsCameraChildren) {
+    // Project restore writes camera-group gaussian_count as 0. The scene tree
+    // counts camera children, and that is the count MCP must report.
+    const auto make_camera = []() {
+        return std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            lfs::core::Tensor(), lfs::core::Tensor(), lfs::core::CameraModelType::PINHOLE,
+            "frame.png", std::filesystem::path{}, std::filesystem::path{}, 64, 64, 0);
+    };
+
+    lfs::core::Scene scene;
+    const auto group_id = scene.addCameraGroup("Training", lfs::core::NULL_NODE, 0);
+    ASSERT_NE(group_id, lfs::core::NULL_NODE);
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_NE(scene.addCamera("frame" + std::to_string(i) + ".png", group_id, make_camera()),
+                  lfs::core::NULL_NODE);
+    }
+
+    const auto* group = scene.getNodeById(group_id);
+    ASSERT_NE(group, nullptr);
+    EXPECT_EQ(group->gaussian_count.load(std::memory_order_acquire), 0u);
+    EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*group), 3u);
+    EXPECT_EQ(group->gaussian_count.load(std::memory_order_acquire), 0u);
+
+    const auto plain = scene.addGroup("notes");
+    ASSERT_NE(plain, lfs::core::NULL_NODE);
+    const auto* plain_node = scene.getNodeById(plain);
+    ASSERT_NE(plain_node, nullptr);
+    EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*plain_node), 0u);
 }

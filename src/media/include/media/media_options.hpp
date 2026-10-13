@@ -18,7 +18,7 @@ namespace lfs::media {
     inline constexpr auto outputOptionValues = std::array<NamedOption<T>, 0>{};
     template <>
     inline constexpr auto outputOptionValues<FrameFileFormat> = std::array{
-        NamedOption{FrameFileFormat::PNG, "png"sv}, NamedOption{FrameFileFormat::JPEG, "jpeg"sv}, NamedOption{FrameFileFormat::EXR, "exr"sv}};
+        NamedOption{FrameFileFormat::PNG, "png"sv}, NamedOption{FrameFileFormat::JPEG, "jpeg"sv}, NamedOption{FrameFileFormat::EXR, "exr"sv}, NamedOption{FrameFileFormat::TIFF16, "tiff16"sv}};
     template <>
     inline constexpr auto outputOptionValues<ExrPrecision> = std::array{
         NamedOption{ExrPrecision::Half, "half"sv}, NamedOption{ExrPrecision::Float, "float"sv}};
@@ -63,4 +63,5 @@ namespace lfs::media {
     [[nodiscard]] LFS_MEDIA_API SinkResult validateFloatSdrSource(const StreamDescription&, FrameColor = {});
     // Same validation for extraction, file sinks and independently produced EXR.
     [[nodiscard]] LFS_MEDIA_API SinkResult validateExrOutputOptions(const ExrOutputOptions&);
+    [[nodiscard]] LFS_MEDIA_API SinkResult validateTiff16OutputOptions(const Tiff16OutputOptions&);
 } // namespace lfs::media

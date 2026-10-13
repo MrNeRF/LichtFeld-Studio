@@ -2,9 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "lfs/training/ops/domain_types.hpp"
 #include "lfs/training/ops/types.hpp"
 
 namespace lfs::training::kernels {
+
+    using MaskPhotoMode = lfs::gpu_ops::MaskPhotoMode;
 
     // The separable passes run over row bands so the intermediate stays a few MiB at any image size.
     struct RidgeWorkspace {
@@ -12,7 +15,7 @@ namespace lfs::training::kernels {
         lfs::core::Tensor reduction;
         size_t band_bytes = size_t{16} << 20;
         [[nodiscard]] size_t band_rows(size_t height, size_t width) const;
-        void ensure_size(size_t band_rows, size_t width);
+        void ensure_size(size_t band_rows, size_t width, bool masked = false);
     };
 
     float structure_base_denominator(const lfs::core::Tensor& base_weight, int height, int width, bool valid_padding);
@@ -20,6 +23,11 @@ namespace lfs::training::kernels {
     void ridge_structure_map(const lfs::core::Tensor& image,
                              lfs::core::Tensor& output,
                              RidgeWorkspace& workspace);
+    void ridge_structure_map(const lfs::core::Tensor& image,
+                             lfs::core::Tensor& output,
+                             RidgeWorkspace& workspace,
+                             const lfs::core::Tensor& photometric_mask,
+                             lfs::gpu_ops::MaskPhotoMode mask_mode);
 
     void structure_photometric_weight(const lfs::core::Tensor& structure,
                                       const lfs::core::Tensor& base_weight,
@@ -56,7 +64,7 @@ namespace lfs::training::kernels {
 
 namespace lfs::gpu_ops {
     struct StructureOps {
-        void (*ridge)(In, Out, training::kernels::RidgeWorkspace&);
+        void (*ridge)(In, Out, training::kernels::RidgeWorkspace&, In, MaskPhotoMode);
         void (*photometric_weight)(In, In, Out, float, bool);
         void (*densification_weight)(Out, In, float);
         Tensor (*gradient_residual)(In, In, In, Out, float, training::kernels::GradientResidualWorkspace&);

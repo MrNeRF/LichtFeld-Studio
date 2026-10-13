@@ -181,6 +181,60 @@ TEST_F(MeshLoaderTest, RejectsMeshesWithoutTriangleFaces) {
     }
 }
 
+TEST_F(MeshLoaderTest, RejectsNonFiniteVertexCoordinates) {
+    const auto obj = temp_dir_ / "nonfinite.obj";
+    std::ofstream(obj) << "v 0 0 0\n"
+                          "v 1 0 0\n"
+                          "v nan 1 0\n"
+                          "v 0 inf 0\n"
+                          "f 1 2 3\n"
+                          "f 1 2 4\n";
+    const auto ply = temp_dir_ / "nonfinite.ply";
+    std::ofstream(ply) << "ply\nformat ascii 1.0\n"
+                          "element vertex 4\nproperty float x\nproperty float y\nproperty float z\n"
+                          "element face 2\nproperty list uchar int vertex_indices\nend_header\n"
+                          "0 0 0\n1 0 0\n0 1 0\nnan inf 0\n"
+                          "3 0 1 3\n3 1 2 3\n";
+
+    for (const auto& path : {obj, ply}) {
+        for (const bool geometry_only : {false, true}) {
+            SCOPED_TRACE(path.extension().string());
+            SCOPED_TRACE(geometry_only);
+            lfs::io::LoadOptions options;
+            options.mesh_geometry_only = geometry_only;
+            const auto result = loader_.load(path, options);
+            EXPECT_FALSE(result.has_value());
+            if (!result)
+                EXPECT_EQ(result.error().code, lfs::io::ErrorCode::CORRUPTED_DATA);
+        }
+    }
+}
+
+TEST_F(MeshLoaderTest, KeepsFinitePlyGeometry) {
+    const auto path = temp_dir_ / "finite.ply";
+    std::ofstream(path) << "ply\nformat ascii 1.0\n"
+                           "element vertex 3\nproperty float x\nproperty float y\nproperty float z\n"
+                           "element face 1\nproperty list uchar int vertex_indices\nend_header\n"
+                           "0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n";
+    for (const bool geometry_only : {false, true}) {
+        lfs::io::LoadOptions options;
+        options.mesh_geometry_only = geometry_only;
+        const auto result = loader_.load(path, options);
+        ASSERT_TRUE(result.has_value());
+        const auto mesh = std::get<std::shared_ptr<MeshData>>(result->data);
+        ASSERT_EQ(mesh->vertex_count(), 3);
+        ASSERT_EQ(mesh->face_count(), 1);
+        auto vertices = mesh->vertices.accessor<float, 2>();
+        bool found_top = false;
+        for (int i = 0; i < 3; ++i) {
+            for (int axis = 0; axis < 3; ++axis)
+                EXPECT_TRUE(std::isfinite(vertices(i, axis)));
+            found_top |= vertices(i, 0) == 0.0f && vertices(i, 1) == 1.0f && vertices(i, 2) == 0.0f;
+        }
+        EXPECT_TRUE(found_top);
+    }
+}
+
 // Both import modes bake placement; geometry-only loads omit render attributes.
 TEST_F(MeshLoaderTest, GeometryOnlyBakesNodeTransformAndSkipsRenderAttributes) {
     const auto gltf_path = temp_dir_ / "transformed.gltf";

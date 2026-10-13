@@ -38,6 +38,8 @@ static const uint U_VERTEX_COLORS = 19;
 static const uint U_TEXTURE_SIZES = 20;   // albedo w,h, normal w,h
 static const uint U_TEXTURE_SIZES2 = 21;  // metallic-roughness w,h
 static const uint U_WIRE_COLOR = 22;
+static const uint U_CAMERA_FORWARD = 23;
+static const uint U_DEPTH_VIEW = 24;
 
 float4 uniformRecord(uint index) { return p.uniforms[index]; }
 
@@ -132,6 +134,32 @@ float3 fresnelSchlick(float cosTheta, float3 f0) {
     return f0 + (1.0 - f0) * pow(saturate(1.0 - cosTheta), 5.0);
 }
 
+float normalizedDepth(float depth, float lo, float hi) {
+    lo = max(lo, 1.0e-4);
+    hi = max(hi, lo + 1.0e-4);
+    depth = clamp(depth, lo, hi);
+    const float linearT = clamp((depth - lo) / max(hi - lo, 1.0e-5), 0.0, 1.0);
+    const float logSpan = max(log2(hi / lo), 1.0e-4);
+    const float logT = clamp(log2(depth / lo) / logSpan, 0.0, 1.0);
+    const float logWeight = smoothstep(1.75, 24.0, hi / lo);
+    return smoothstep(0.0, 1.0, lerp(linearT, logT, logWeight));
+}
+
+float3 depthPalette(float nearT) {
+    nearT = saturate(nearT);
+    const float3 far0 = float3(0.050, 0.040, 0.150);
+    const float3 far1 = float3(0.060, 0.195, 0.500);
+    const float3 mid0 = float3(0.000, 0.500, 0.650);
+    const float3 mid1 = float3(0.360, 0.735, 0.410);
+    const float3 near0 = float3(0.965, 0.820, 0.300);
+    const float3 near1 = float3(0.985, 0.430, 0.125);
+    if (nearT < 0.20) return lerp(far0, far1, smoothstep(0.00, 0.20, nearT));
+    if (nearT < 0.43) return lerp(far1, mid0, smoothstep(0.20, 0.43, nearT));
+    if (nearT < 0.67) return lerp(mid0, mid1, smoothstep(0.43, 0.67, nearT));
+    if (nearT < 0.86) return lerp(mid1, near0, smoothstep(0.67, 0.86, nearT));
+    return lerp(near0, near1, smoothstep(0.86, 1.00, nearT));
+}
+
 // 3x3 percentage-closer filtering of the light-space depth map.
 float shadowFactor(float3 world) {
     float4 light = mul(uniformMatrix(U_LIGHT_VP), float4(world, 1.0));
@@ -153,6 +181,18 @@ float shadowFactor(float3 world) {
 
 [shader("fragment")]
 float4 meshFragment(MeshOutput input, bool front : SV_IsFrontFace) : SV_Target {
+    float4 depthView = uniformRecord(U_DEPTH_VIEW);
+    if (depthView.x > 0.5) {
+        float hi = depthView.z;
+        const float lo = depthView.y;
+        if (hi <= lo + 1.0e-5) hi = lo + 1.0;
+        const float depth = dot(input.world - uniformRecord(U_CAMERA).xyz,
+                                uniformRecord(U_CAMERA_FORWARD).xyz);
+        const float nearT = 1.0 - normalizedDepth(depth, lo, hi);
+        const float3 color = depthView.w > 0.5 ? float3(nearT) : depthPalette(nearT);
+        return float4(color, 1.0);
+    }
+
     float4 flags = uniformRecord(U_ROUGHNESS_FLAGS);
     float4 sizes = uniformRecord(U_TEXTURE_SIZES);
     float4 albedo = uniformRecord(U_BASE_COLOR);

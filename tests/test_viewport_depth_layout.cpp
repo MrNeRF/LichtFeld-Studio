@@ -5,6 +5,7 @@
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "input/frame_input_buffer.hpp"
+#include "visualizer/app_store.hpp"
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/RenderInterface.h>
@@ -15,7 +16,9 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <sstream>
+#include <string>
 
 namespace lfs::vis::gui {
     class ViewportDepthLayoutTestAccess {
@@ -27,10 +30,25 @@ namespace lfs::vis::gui {
             overlay.toolbar_position_preference_dirty_ = false;
         }
         static bool update(RmlViewportOverlay& overlay) { return overlay.updateToolbarRoots(); }
+        static void bindStore(RmlViewportOverlay& overlay) { overlay.bindReactiveStore(); }
+        static void releaseStore(RmlViewportOverlay& overlay) {
+            overlay.gt_metrics_config_subscription_.reset();
+            overlay.camera_metrics_subscription_.reset();
+            overlay.document_sync_subscriptions_.clear();
+        }
     };
 } // namespace lfs::vis::gui
 
 namespace {
+    class DepthLayoutSystem final : public Rml::SystemInterface {
+    public:
+        bool LogMessage(Rml::Log::Type type, const Rml::String& message) override {
+            if (type == Rml::Log::LT_ASSERT)
+                ADD_FAILURE() << "RmlUi assertion: " << message;
+            return true;
+        }
+    };
+
     class DepthLayoutRenderer final : public Rml::RenderInterface {
     public:
         Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
@@ -45,8 +63,14 @@ namespace {
 
     class ViewportDepthLayoutTest : public ::testing::Test {
     protected:
-        static void SetUpTestSuite() { ASSERT_TRUE(Rml::Initialise()); }
-        static void TearDownTestSuite() { Rml::Shutdown(); }
+        static void SetUpTestSuite() {
+            Rml::SetSystemInterface(&system_);
+            ASSERT_TRUE(Rml::Initialise());
+        }
+        static void TearDownTestSuite() {
+            Rml::Shutdown();
+            Rml::SetSystemInterface(nullptr);
+        }
         void SetUp() override {
             context_ = Rml::CreateContext("viewport_depth_layout", {920, 840}, &renderer_);
             ASSERT_NE(context_, nullptr);
@@ -94,7 +118,10 @@ namespace {
             // The top (+Y) circle must fall through to the viewport, not the depth field.
             EXPECT_NE(context_->GetElementAtPoint({right - 47.5f * scale_, 25 * scale_}), panel());
         }
-        DepthLayoutRenderer renderer_;
+        // RmlUi retains render-interface resources until Shutdown, even after
+        // the individual context has been removed.
+        inline static DepthLayoutRenderer renderer_;
+        inline static DepthLayoutSystem system_;
         lfs::vis::gui::RmlViewportOverlay overlay_;
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
@@ -263,5 +290,114 @@ namespace {
         std::sort(timings.begin(), timings.end());
         RecordProperty("median_update_us", std::to_string(timings[timings.size() / 2]));
         EXPECT_FALSE(lfs::vis::gui::ViewportDepthLayoutTestAccess::update(overlay_));
+    }
+
+    std::string viewportGtMetricsMarkup() {
+        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) /
+                          "src/visualizer/gui/rmlui/resources/viewport_overlay.rml";
+        std::ifstream input(path);
+        if (!input.is_open())
+            return {};
+        const std::string file((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        const std::string opener = "<div id=\"gt-metrics-overlay\"";
+        const auto start = file.find(opener);
+        if (start == std::string::npos)
+            return {};
+        int depth = 0;
+        for (std::size_t i = start; i < file.size();) {
+            const bool div_open = file.compare(i, 4, "<div") == 0 &&
+                                  (i + 4 >= file.size() || file[i + 4] == ' ' || file[i + 4] == '>' ||
+                                   file[i + 4] == '\n' || file[i + 4] == '\r' || file[i + 4] == '\t');
+            if (div_open) {
+                ++depth;
+                i += 4;
+                continue;
+            }
+            if (file.compare(i, 6, "</div>") == 0) {
+                --depth;
+                i += 6;
+                if (depth == 0)
+                    return file.substr(start, i - start);
+                continue;
+            }
+            ++i;
+        }
+        return {};
+    }
+
+    TEST_F(ViewportDepthLayoutTest, PublishedUnavailableCameraMetricsShowsReason) {
+        const auto markup = viewportGtMetricsMarkup();
+        ASSERT_NE(markup.find("id=\"gt-metrics-training-required\""), std::string::npos);
+        ASSERT_NE(markup.find("gt_metrics_training_required"), std::string::npos);
+        auto* const metrics_document = context_->LoadDocumentFromMemory(
+            "<rml><head></head><body>" + markup + "</body></rml>");
+        ASSERT_NE(metrics_document, nullptr);
+        metrics_document->Show();
+        lfs::vis::gui::ViewportDepthLayoutTestAccess::attach(overlay_, metrics_document);
+
+        struct StoreGuard {
+            lfs::vis::gui::RmlViewportOverlay* overlay = nullptr;
+            ~StoreGuard() {
+                if (overlay)
+                    lfs::vis::gui::ViewportDepthLayoutTestAccess::releaseStore(*overlay);
+                lfs::vis::app_store().camera_metrics.set(std::nullopt);
+                lfs::vis::app_store().gt_metrics_overlay_config.set({});
+            }
+        } store_guard{&overlay_};
+
+        lfs::vis::app_store().camera_metrics.set(std::nullopt);
+        lfs::vis::app_store().gt_metrics_overlay_config.set({});
+        (void)lfs::vis::app_store().store().drain_dirty_into_frame();
+        lfs::vis::gui::ViewportDepthLayoutTestAccess::bindStore(overlay_);
+
+        lfs::vis::AppStore::GTMetricsOverlayConfig config;
+        config.visible = true;
+        config.show_ssim = true;
+        config.current_camera_id = 17;
+        config.x = 24.0f;
+        config.y = 32.0f;
+        ASSERT_TRUE(lfs::vis::app_store().gt_metrics_overlay_config.set(config));
+        ASSERT_TRUE(lfs::vis::app_store().camera_metrics.set(
+            lfs::vis::AppStore::CameraMetrics::unavailable(17, 7000, false)));
+        ASSERT_TRUE(lfs::vis::app_store().store().drain_dirty_into_frame());
+
+        auto* const training_reason = metrics_document->GetElementById("gt-metrics-training-required");
+        auto* const failed_reason = metrics_document->GetElementById("gt-metrics-calculation-failed");
+        auto* const psnr = metrics_document->GetElementById("gt-metrics-psnr");
+        auto* const overlay = metrics_document->GetElementById("gt-metrics-overlay");
+        ASSERT_NE(training_reason, nullptr);
+        ASSERT_NE(failed_reason, nullptr);
+        ASSERT_NE(psnr, nullptr);
+        ASSERT_NE(overlay, nullptr);
+        EXPECT_FALSE(overlay->IsClassSet("hidden"));
+        EXPECT_FALSE(training_reason->IsClassSet("hidden"));
+        EXPECT_TRUE(failed_reason->IsClassSet("hidden"));
+        EXPECT_NE(std::string(training_reason->GetInnerRML()).find("gt_metrics_training_required"), std::string::npos);
+        EXPECT_EQ(std::string(psnr->GetInnerRML()), "--");
+
+        lfs::vis::AppStore::CameraMetrics available;
+        available.camera_id = 17;
+        available.iteration = 7000;
+        available.psnr = 28.5f;
+        available.ssim = 0.91f;
+        ASSERT_TRUE(lfs::vis::app_store().camera_metrics.set(available));
+        ASSERT_TRUE(lfs::vis::app_store().store().drain_dirty_into_frame());
+        EXPECT_TRUE(training_reason->IsClassSet("hidden"));
+        EXPECT_TRUE(failed_reason->IsClassSet("hidden"));
+        EXPECT_EQ(std::string(psnr->GetInnerRML()), "28.50");
+        auto* const ssim = metrics_document->GetElementById("gt-metrics-ssim");
+        auto* const ssim_row = metrics_document->GetElementById("gt-metrics-ssim-row");
+        ASSERT_NE(ssim, nullptr);
+        ASSERT_NE(ssim_row, nullptr);
+        EXPECT_FALSE(ssim_row->IsClassSet("hidden"));
+        EXPECT_EQ(std::string(ssim->GetInnerRML()), "0.9100");
+
+        ASSERT_TRUE(lfs::vis::app_store().camera_metrics.set(
+            lfs::vis::AppStore::CameraMetrics::unavailable(17, 7000, true)));
+        ASSERT_TRUE(lfs::vis::app_store().store().drain_dirty_into_frame());
+        EXPECT_TRUE(training_reason->IsClassSet("hidden"));
+        EXPECT_FALSE(failed_reason->IsClassSet("hidden"));
+        EXPECT_NE(std::string(failed_reason->GetInnerRML()).find("gt_metrics_calculation_failed"), std::string::npos);
+        EXPECT_EQ(std::string(psnr->GetInnerRML()), "--");
     }
 } // namespace

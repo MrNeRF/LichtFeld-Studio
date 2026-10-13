@@ -7,7 +7,7 @@ namespace lfs::training {
     const gpu_ops::StructureOps& cuda_structure_ops();
 }
 namespace lfs::training::kernels {
-    void cuda_ridge_structure_map(const core::Tensor&, core::Tensor&, RidgeWorkspace&);
+    void cuda_ridge_structure_map(const core::Tensor&, core::Tensor&, RidgeWorkspace&, const core::Tensor&, lfs::gpu_ops::MaskPhotoMode);
     void cuda_structure_photometric_weight(const core::Tensor&, const core::Tensor&, core::Tensor&, float, bool);
     void cuda_structure_densification_weight(core::Tensor&, const core::Tensor&, float);
     core::Tensor cuda_gradient_residual_loss_gradient(const core::Tensor&, const core::Tensor&, const core::Tensor&,

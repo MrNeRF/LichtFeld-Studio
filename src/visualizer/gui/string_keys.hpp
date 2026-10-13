@@ -671,6 +671,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SUPPORTED_BY = "startup.supported_by";
         inline constexpr const char* CLICK_TO_CONTINUE = "startup.click_to_continue";
         inline constexpr const char* LOADED_PLUGINS = "startup.loaded_plugins";
+        inline constexpr const char* PLUGIN_INVALID_MANIFEST = "startup.plugin_invalid_manifest";
+        inline constexpr const char* PLUGIN_INCOMPATIBLE_API = "startup.plugin_incompatible_api";
+        inline constexpr const char* PLUGIN_LOAD_FAILED = "startup.plugin_load_failed";
         inline constexpr const char* DROP_FILES_TITLE = "startup.drop_files_title";
         inline constexpr const char* DROP_FILES_SUBTITLE = "startup.drop_files_subtitle";
         inline constexpr const char* DROP_FILES_HINT = "startup.drop_files_hint";
@@ -927,6 +930,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EXPORT_CANCELLED = "runtime.export_cancelled";
         inline constexpr const char* NO_SPLAT_DATA = "runtime.no_splat_data";
         inline constexpr const char* EXPORT_STREAMED_LOD = "runtime.export_streamed_lod";
+        inline constexpr const char* EXPORT_EXTENSION_REQUIRED = "runtime.export_extension_required";
+        inline constexpr const char* EXPORT_EXTENSION_WARNING = "runtime.export_extension_warning";
+        inline constexpr const char* EXPORT_SH_DEGREE_CLAMPED = "runtime.export_sh_degree_clamped";
         inline constexpr const char* VIDEO_ENCODER_UNAVAILABLE = "runtime.video_encoder_unavailable";
         inline constexpr const char* SCENE_MANAGER_UNAVAILABLE = "runtime.scene_manager_unavailable";
         inline constexpr const char* NO_MODEL_SELECTED = "runtime.no_model_selected";

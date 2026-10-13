@@ -1,4 +1,70 @@
-# Linear frames and EXR output
+# Linear frames, EXR and TIFF16 output
+
+## TIFF16 SDR output
+
+`ImageOutput::writeTiff16` (Python `ImageOutput.write_tiff16`) writes single
+images independently of decoding or rendering. `FrameFileFormat::TIFF16`
+uses the same writer for sequences, including resumable extraction. Existing
+PNG/JPEG, TIFF8 and EXR defaults are unchanged.
+
+Input must be native-endian RGBFloat32/RGBAFloat32, linear, with relative SDR
+units and declared BT.709 or BT.2020 primaries. Padded and unaligned views are
+accepted. NaN/Inf, incompatible alpha and HDR nits/scene-relative units are
+rejected. Finite RGB is clamped to [0,1], encoded using the selected transfer
+(sRGB by default; linear or BT.709 also available), and rounded half up to
+UINT16. Alpha is unassociated, stays linear and must be in [0,1]; premultiplied
+input is unpremultiplied, with zero-alpha RGB canonicalized to zero.
+
+Files use `.tif` or `.tiff`, LZW compression and standard TIFF chromaticities,
+D65 white point and a 65536-entry transfer-function table. ImageDescription
+contains JSON transfer, primaries, alpha, provenance and available timing and
+source precision and a versioned `lfsEncoding: tiff16-sdr-v1` identifier.
+LichtFeld's RGB/RGBA image loaders recognize this contract, invert the declared
+transfer, convert BT.2020 to BT.709 in linear light when needed, and encode
+the existing bounded sRGB display/training representation. Alpha is unchanged.
+Conversion runs at 16-bit precision before an optional RGB8 request or resizing;
+wide-gamut colors outside BT.709 are clipped to that display contract.
+The default dataset/training path requests RGB8, so its tensors remain quantized
+in 1/255 steps. TIFF16 export and color-aware reimport do not enable higher
+precision training input. Explicit 16-bit decoding is available to callers;
+a higher precision dataset/training path requires a separate loader followup.
+If libtiff cannot inspect the tags, loading falls back to the existing decoder,
+which remains responsible for deciding whether the file content is readable.
+Raw codec decode, `load_image_float` and high-bitdepth data/normal loaders retain
+the stored samples and do not apply display color management. Untagged TIFFs
+keep their existing behavior. Malformed JSON, non-object descriptions, missing
+or unsupported encoding markers and oversized descriptions remain foreign TIFFs
+and preserve legacy loading, even when they contain other `lfs` field names.
+Only a valid object with the supported `lfsEncoding` opts into strict validation:
+incomplete or duplicate-key records are rejected, and their
+sample type, alpha, primaries and complete transfer table must agree with the
+TIFF tags. Oversized external descriptions remain outside this color contract.
+The TIFF tags are not an ICC profile; other software must interpret them itself.
+The expected transfer tables are initialized once per transfer and reused for
+export and direct comparison against libtiff-owned tables on load, without a
+per-image table copy or repeated transfer-function evaluation.
+The transfer table adds approximately 128 KiB per
+image. Conversion and encoding run on the CPU with a packed UINT16 image buffer;
+this is not a device-resident or zero-copy writer.
+
+CLI extraction selects `--format tiff16`, optionally `--tiff16-transfer
+linear|srgb|bt709`. MCP uses `format: "tiff16"` and `tiff16_transfer`. Input
+transfer/primaries overrides retain the existing float SDR contract. TIFF16
+extraction writes metadata automatically; it does not pass through RGB8 before
+quantization. EXR precision/compression and JPEG quality do not apply.
+
+Writes reuse the existing atomic-file service. Overwrite is opt-in; cancellation
+or failure preserves an existing destination. Resume identity includes transfer
+and provenance and rejects incompatible reuse. As for EXR, replay that would
+replace existing extraction metadata requires explicit overwrite permission;
+verified frame files are retained without rewriting. The checkpoint includes the
+TIFF encoding version as well as transfer and provenance; incompatible versions
+cannot reuse already published frames.
+
+The shared image loader honors `LoadParams::decode_16bit` and separates cached
+RGB8 and UINT16 decode results, including cold/warm loads and resized requests.
+RGBA resizing uses the existing Lanczos service on CUDA, Vulkan and Metal;
+the Metal path accepts four channels and retains alpha alongside RGB.
 
 `lfs_media` provides `RGBFloat32` and `RGBAFloat32` CPU frame views and immutable
 owning surfaces. `RGB8` remains the default for ingest, preview and PNG/JPEG.
@@ -298,7 +364,7 @@ it is not inferred from mastering metadata or silently assigned a 1000-nit peak.
 Only declared HLG with BT.709 or BT.2020 primaries is accepted. Primaries are
 retained, not converted; BT.709-tagged input support is not a claim of full
 BT.2100 production conformance. Input transfer/primaries overrides are rejected.
-Integer RGB/YUV 8–16-bit layout/range/matrix/siting validation is shared with PQ;
+Integer RGB/YUV 8â€“16-bit layout/range/matrix/siting validation is shared with PQ;
 RGB requires explicit full range. Reconstructed encoded RGB is clamped to [0,1]
 before inverse OETF. Missing declarations, PQ under HLG, HLG under PQ, LOG,
 Dolby Vision and BT.2020 CL fail rather than being relabeled.
@@ -328,3 +394,47 @@ references, frame-only HEVC color declarations, trim, mastering independence,
 midstream transfer/primaries rejection, API/MCP and verified resume/replay.
 Synthetic fixtures do not qualify every camera, damaged stream, HLG grading
 convention or external application's interpretation of custom EXR attributes.
+
+## Existing-format portability checks
+
+Dataset discovery includes EXR and WebP alongside JPEG, PNG, BMP and TIFF.
+These formats use the existing CPU image decoders; recognizing their paths
+also applies to flat COLMAP layouts, image counts and basename ambiguity checks.
+For previews, existing JPEG/PNG/BMP/TIFF files retain priority over EXR/WebP;
+lexical order is preserved within each group. Same-directory, same-stem
+EXR/WebP companions of an existing format do not inflate image counts.
+Standalone EXR/WebP files and files in different directories still count.
+COLMAP reference resolution and basename ambiguity rules remain unchanged.
+This does not change the existing training RGB conversion or preserve an EXR
+HDR master inside a display-byte training cache. The extraction master and the
+training representation remain distinct contracts.
+
+TIFF sample descriptions and decoding accept unsigned 8/16-bit samples and
+32-bit floating-point samples. Unsigned 32-bit integer TIFF is converted to
+Float32 using `sample / (2^32 - 1)`, preserving 0 and 1 endpoints with float32
+precision. Both extension and signature probes report this supported output
+type. The direct-buffer path refuses UINT32 because it requires conversion;
+native Float32 TIFF retains its original samples and direct-buffer support.
+
+CPU AV1 extraction and preview use FFmpeg's libdav1d decoder. The manifest
+explicitly enables the dav1d feature, because FFmpeg's native AV1 decoder in the
+pinned version requires hardware acceleration. CUDA/VideoToolbox selection is
+retained; software selection prefers dav1d without changing other codec choices.
+If dav1d is absent from another provider's registry, the native AV1 decoder is
+still attempted as before; this does not promise CPU capability for FFmpeg's
+hardware-only native implementation.
+The dav1d BSD-2-Clause notice is included with the distributed licenses.
+
+Regression fixtures cover flat EXR/WebP loading and ambiguous basenames, TIFF
+sample types and both byte orders, and AV1 8/10-bit extraction plus CPU preview
+against an independently decoded RGB reference. The AV1 inputs are checked-in
+project-generated four-frame fixtures, so missing AV1 encoders cannot skip
+CPU decoder coverage. These checks do not add new
+image writers, new sequence formats, or new video encoders. TIFF16 output is
+described above; HEIF/AVIF/JPEG XL support and HEVC export remain separate
+increments.
+
+The native Mac Release-only dependency profile keeps its macOS 26 deployment
+target when using SDK 27. For curl, the profile disables `pipe2` detection below
+macOS 27 and uses curl's existing compatible fallback. This setting is limited
+to curl; an additional private curl overlay is not required.

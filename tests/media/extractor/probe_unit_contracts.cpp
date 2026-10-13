@@ -21,6 +21,12 @@ namespace {
 
 int runProbeUnitContracts() {
     using namespace lfs::media;
+    const auto* dav1d = avcodec_find_decoder_by_name("libdav1d");
+    require(detail::softwareVideoDecoder(AV_CODEC_ID_AV1) ==
+                (dav1d ? dav1d : avcodec_find_decoder(AV_CODEC_ID_AV1)),
+            "AV1 prefers dav1d and retains the registered fallback when absent");
+    require(detail::softwareVideoDecoder(AV_CODEC_ID_H264) == avcodec_find_decoder(AV_CODEC_ID_H264),
+            "AV1 selection does not change other codec choices");
     require(MediaProbe::inspect({}).error().code() == lfs::ErrorCode::InvalidArgument, "empty path rejected");
     const auto optionFailure = MediaProbe::inspect({});
     require(!optionFailure && !optionFailure.error().native(), "option failure has no native FFmpeg status");

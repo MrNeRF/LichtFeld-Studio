@@ -170,6 +170,30 @@ namespace lfs::vis {
 
         constexpr auto kVksplatIdleScratchReleaseDelay = std::chrono::seconds{3};
 
+        [[nodiscard]] lfs::Result<void> validateEnvironmentMapForUser(
+            const std::filesystem::path& path) {
+            try {
+                rendering::probeEnvironmentImage(path);
+                return {};
+            } catch (const std::exception& failure) {
+                auto error = lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::App,
+                    .user_message = LOCF("runtime.environment_map_failed", core::path_to_utf8(path.filename())),
+                    .detail = failure.what(),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+                LOG_WARN("{}", failure.what());
+                lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                    .error = error,
+                    .surface = lfs::ErrorSurface::Toast,
+                    .actions = {},
+                    .operation_id = lfs::OperationId::generate(),
+                });
+                return lfs::Result<void>::failure(std::move(error));
+            }
+        }
+
         [[nodiscard]] bool applySparkLodViewerDefaults(RenderSettings& settings) {
             bool changed = false;
 
@@ -218,7 +242,8 @@ namespace lfs::vis {
                 .iteration = iteration,
                 .psnr = metrics->psnr,
                 .ssim = metrics->ssim,
-                .used_mask = metrics->used_mask};
+                .used_mask = metrics->used_mask,
+                .status = AppStore::CameraMetricsStatus::Available};
         }
 
         [[nodiscard]] AppStore::CameraMetrics toAppCameraMetrics(
@@ -228,7 +253,8 @@ namespace lfs::vis {
                 .iteration = metrics.iteration,
                 .psnr = metrics.psnr,
                 .ssim = metrics.ssim,
-                .used_mask = metrics.used_mask};
+                .used_mask = metrics.used_mask,
+                .status = metrics.status};
         }
     } // namespace
 
@@ -896,27 +922,18 @@ namespace lfs::vis {
         }
         if (validate_environment) {
             const auto path = core::utf8_to_path(new_settings.environment_map_path);
-            try {
-                rendering::probeEnvironmentImage(path);
-            } catch (const std::exception& failure) {
-                auto error = lfs::make_error(lfs::ErrorInit{
-                    .code = lfs::ErrorCode::InvalidArgument,
-                    .domain = lfs::ErrorDomain::App,
-                    .user_message = LOCF("runtime.environment_map_failed", core::path_to_utf8(path.filename())),
-                    .detail = failure.what(),
-                    .detection = LFS_SOURCE_SITE_CURRENT(),
-                });
-                LOG_WARN("{}", failure.what());
-                lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
-                    .error = error,
-                    .surface = lfs::ErrorSurface::Toast,
-                    .actions = {},
-                    .operation_id = lfs::OperationId::generate(),
-                });
-                return lfs::Result<void>::failure(std::move(error));
-            }
+            if (const auto result = validateEnvironmentMapForUser(path); !result)
+                return result;
         }
         return {};
+    }
+
+    void RenderingManager::restoreSettingsFromProject(const RenderSettings& settings) {
+        if (settings.environment_mode == EnvironmentBackgroundMode::Equirectangular) {
+            (void)validateEnvironmentMapForUser(
+                core::utf8_to_path(settings.environment_map_path));
+        }
+        updateSettings(settings);
     }
 
     void RenderingManager::updateSettings(const RenderSettings& new_settings) {
@@ -1504,9 +1521,11 @@ namespace lfs::vis {
         }
 
         auto* const trainer_mgr = scene_manager->getTrainerManager();
-        if (!trainer_mgr || !trainer_mgr->getTrainer()) {
+        if (!trainer_mgr) {
             return;
         }
+        const auto* const trainer = trainer_mgr->getTrainer();
+        const bool training_session_initialized = trainer && trainer->isInitialized();
 
         const auto settings = settingsForView(view);
         if (!splitViewUsesGTComparison(settings.split_view_mode) ||
@@ -1520,6 +1539,17 @@ namespace lfs::vis {
         }
 
         const int current_iteration = trainer_mgr->getCurrentIteration();
+        if (!training_session_initialized) {
+            const std::optional<AppStore::CameraMetrics> unavailable =
+                AppStore::CameraMetrics::unavailable(current_camera_id, current_iteration, false);
+            if (app_store().camera_metrics.get() != unavailable) {
+                invalidateCameraMetricsRequests(true);
+                app_store().camera_metrics.set(unavailable);
+                markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
+            }
+            return;
+        }
+
         const bool include_ssim =
             settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::PSNRSSIM;
         const auto now = std::chrono::steady_clock::now();
@@ -1671,6 +1701,10 @@ namespace lfs::vis {
                         app_metrics = toAppCameraMetrics(*metrics);
                     } else {
                         latest_camera_metrics_.reset();
+                        app_metrics = AppStore::CameraMetrics::unavailable(
+                            request.camera_id,
+                            request.iteration,
+                            request.trainer_manager->hasInitializedTrainer());
                     }
                     last_camera_metrics_refresh_time_ = std::chrono::steady_clock::now();
                     applied = true;

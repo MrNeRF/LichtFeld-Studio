@@ -34,8 +34,9 @@ def test_project_folder_remove_label_uses_sentence_case_in_all_locales():
 def preferences_panel_module(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
     source_python = project_root / "src" / "python"
-    if str(source_python) not in sys.path:
-        sys.path.insert(0, str(source_python))
+    if str(source_python) in sys.path:
+        sys.path.remove(str(source_python))
+    sys.path.insert(0, str(source_python))
 
     state = SimpleNamespace(
         language="it",
@@ -86,6 +87,7 @@ def preferences_panel_module(monkeypatch):
         zoom_speed=11.0,
         navigation_speed=10.0,
         trackpad={"device": "mouse", "swipe_pans": False, "swipe_speed": 50.0, "zoom_speed": 50.0},
+        trackpad_persist_calls=[],
         project_location="",
         embed_dataset_by_default=False,
         project_manager_preferences={
@@ -149,7 +151,8 @@ def preferences_panel_module(monkeypatch):
     def set_speed(name, value):
         setattr(state, name, max(1.0, min(100.0, float(value))))
 
-    def set_trackpad(device, swipe_pans, swipe_speed, zoom_speed):
+    def set_trackpad(device, swipe_pans, swipe_speed, zoom_speed, persist=True):
+        state.trackpad_persist_calls.append(bool(persist))
         state.trackpad = {
             "device": device,
             "swipe_pans": swipe_pans,
@@ -243,7 +246,7 @@ def preferences_panel_module(monkeypatch):
         get_viewport_toolbar_position=lambda: state.viewport_toolbar_position,
         set_viewport_toolbar_position=set_viewport_toolbar_position,
         get_zoom_speed_preference=lambda: state.zoom_speed,
-        set_zoom_speed_preference=lambda value: set_speed("zoom_speed", value),
+        set_zoom_speed_preference=lambda value, persist=True: set_speed("zoom_speed", value),
         get_navigation_speed_preference=lambda: state.navigation_speed,
         set_navigation_speed_preference=lambda value: set_speed("navigation_speed", value),
         get_trackpad_preferences=lambda: dict(state.trackpad),
@@ -598,6 +601,36 @@ def test_navigation_speed_preferences_round_trip_and_clamp(preferences_panel_mod
     assert state.navigation_speed == 100
 
 
+@pytest.mark.parametrize("field", ["zoom_speed", "navigation_speed"])
+def test_speed_scrub_moves_preview_and_write_once_on_commit(preferences_panel_module,
+                                                              monkeypatch, tmp_path, field):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    writes = []
+    reads = []
+    path = tmp_path / "preferences.json"
+    path.write_text(json.dumps({field: getattr(state, field)}))
+
+    def set_speed(value, persist=True):
+        setattr(state, field, float(value))
+        if persist:
+            reads.append(path.read_text())
+            path.write_text(json.dumps({field: float(value)}))
+            writes.append(float(value))
+
+    monkeypatch.setattr(module.lf.ui, f"set_{field}_preference", set_speed)
+    for move in range(20):
+        panel._set_scrub_value(field, 20 + move)
+        assert getattr(state, field) == 20 + move
+    assert writes == []
+    assert reads == []
+    panel._commit_scrub_value(field, getattr(state, field))
+    assert writes == [39.0]
+    assert len(reads) == 1
+    assert json.loads(path.read_text())[field] == 39.0
+
+
 def test_navigation_speed_preferences_reset_with_input_section(preferences_panel_module):
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
@@ -619,12 +652,18 @@ def test_trackpad_preferences_round_trip_and_reset_with_input_section(preference
 
     panel._set_trackpad(device="automatic")
     panel._set_trackpad(swipe_pans=True)
+    state.trackpad_persist_calls.clear()
     panel._set_scrub_value("trackpad_swipe_speed", 70)
     panel._set_scrub_value("trackpad_zoom_speed", 120)
     assert state.trackpad["device"] == "automatic"
     assert state.trackpad["swipe_pans"] is True
     assert panel._get_scrub_value("trackpad_swipe_speed") == 70
     assert state.trackpad["zoom_speed"] == 100
+    assert state.trackpad_persist_calls == [False, False]
+
+    panel._commit_scrub_value("trackpad_swipe_speed", 70)
+    panel._commit_scrub_value("trackpad_zoom_speed", 100)
+    assert state.trackpad_persist_calls == [False, False, True, True]
 
     panel._reset_section()
 

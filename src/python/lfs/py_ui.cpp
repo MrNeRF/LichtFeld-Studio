@@ -4956,6 +4956,7 @@ namespace lfs::python {
                 state["format"] = export_state.format;
                 state["path"] = export_state.path;
                 state["error"] = export_state.error;
+                state["warning"] = export_state.warning;
                 state["commit_uuid"] = export_state.commit_uuid;
                 return state;
             },
@@ -5395,8 +5396,8 @@ namespace lfs::python {
 
         m.def(
             "set_zoom_speed_preference",
-            [](const float speed) {
-                vis::saveZoomSpeedPreference(speed);
+            [](const float speed, const bool persist) {
+                vis::saveZoomSpeedPreference(speed, persist);
                 const float zoom_speed = vis::loadZoomSpeedPreference();
                 const float navigation_speed = vis::loadNavigationSpeedPreference();
                 invoke_on_viewer([zoom_speed, navigation_speed] {
@@ -5404,7 +5405,8 @@ namespace lfs::python {
                         controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
                 });
             },
-            nb::arg("speed"), "Set the default camera zoom speed (1-100)");
+            nb::arg("speed"), nb::arg("persist") = true,
+            "Set the default camera zoom speed (1-100)");
 
         m.def(
             "get_zoom_speed_preference",
@@ -5413,8 +5415,8 @@ namespace lfs::python {
 
         m.def(
             "set_navigation_speed_preference",
-            [](const float speed) {
-                vis::saveNavigationSpeedPreference(speed);
+            [](const float speed, const bool persist) {
+                vis::saveNavigationSpeedPreference(speed, persist);
                 const float zoom_speed = vis::loadZoomSpeedPreference();
                 const float navigation_speed = vis::loadNavigationSpeedPreference();
                 invoke_on_viewer([zoom_speed, navigation_speed] {
@@ -5422,7 +5424,8 @@ namespace lfs::python {
                         controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
                 });
             },
-            nb::arg("speed"), "Set the default WASD navigation speed (1-100)");
+            nb::arg("speed"), nb::arg("persist") = true,
+            "Set the default WASD navigation speed (1-100)");
 
         m.def(
             "get_navigation_speed_preference",
@@ -5444,16 +5447,18 @@ namespace lfs::python {
 
         m.def(
             "set_trackpad_preferences",
-            [](const std::string& device, const bool swipe_pans, const float swipe_speed, const float zoom_speed) {
+            [](const std::string& device, const bool swipe_pans, const float swipe_speed, const float zoom_speed,
+               const bool persist) {
                 const auto parsed = vis::parseNavigationDevice(device);
                 if (!parsed)
                     throw nb::value_error("device must be 'mouse', 'trackpad' or 'automatic'");
                 vis::saveTrackpadPreferences({
-                    .device = *parsed,
-                    .swipe_pans = swipe_pans,
-                    .swipe_speed = swipe_speed,
-                    .zoom_speed = zoom_speed,
-                });
+                                                 .device = *parsed,
+                                                 .swipe_pans = swipe_pans,
+                                                 .swipe_speed = swipe_speed,
+                                                 .zoom_speed = zoom_speed,
+                                             },
+                                             persist);
                 const auto state = vis::loadTrackpadPreferences();
                 invoke_on_viewer([state] {
                     if (auto* const controller = vis::InputController::instance())
@@ -5461,7 +5466,8 @@ namespace lfs::python {
                 });
             },
             nb::arg("device"), nb::arg("swipe_pans"), nb::arg("swipe_speed"), nb::arg("zoom_speed"),
-            "Persist and apply trackpad navigation preferences (device 'mouse', 'trackpad' or 'automatic'; speeds 1-100, 50 is the default)");
+            nb::arg("persist") = true,
+            "Apply trackpad navigation preferences with optional persistence (device 'mouse', 'trackpad' or 'automatic'; speeds 1-100, 50 is the default)");
 
         m.def(
             "get_project_manager_preferences",

@@ -8,3 +8,9 @@ set(VCPKG_BUILD_TYPE release)
 
 # Keep dependency binaries on the same macOS baseline as the native viewer.
 set(VCPKG_OSX_DEPLOYMENT_TARGET 26.0)
+
+# curl 8.19's function-only probe finds pipe2 in SDK 27 even when the
+# deployment target cannot use it. Keep curl's existing pipe fallback.
+if(PORT STREQUAL "curl" AND VCPKG_OSX_DEPLOYMENT_TARGET VERSION_LESS 27.0)
+    list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS "-DHAVE_PIPE2=OFF")
+endif()

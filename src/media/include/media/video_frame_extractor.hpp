@@ -55,7 +55,8 @@ namespace lfs::io {
     enum class ImageFormat {
         PNG,
         JPG,
-        EXR
+        EXR,
+        TIFF16
     };
 
     enum class ResolutionMode {
@@ -124,6 +125,7 @@ namespace lfs::io {
             media::ExrCompression exr_compression = media::ExrCompression::ZIP;
             bool overwrite_metadata = false;
             bool allow_hardware_encode = true;
+            media::ColorTransfer tiff16_transfer = media::ColorTransfer::Srgb;
         };
 
         struct ValidatedLayout {

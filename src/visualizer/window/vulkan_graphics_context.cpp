@@ -100,6 +100,13 @@ namespace lfs::vis {
         return WindowCapture{capture->width, capture->height, std::move(capture->rgba)};
     }
 
+    lfs::Result<WindowCapture> VulkanGraphicsContext::captureSceneRgba() {
+        auto capture = context_.captureAndEndActiveFrameRgba(true);
+        if (!capture)
+            return graphicsError(lfs::ErrorCode::Internal, std::move(capture.error()));
+        return WindowCapture{capture->width, capture->height, std::move(capture->rgba)};
+    }
+
     bool VulkanGraphicsContext::waitForNextFrameSlot() { return context_.waitForNextFrameSlot(); }
     bool VulkanGraphicsContext::waitForSubmittedFrames() { return context_.waitForSubmittedFrames(); }
     bool VulkanGraphicsContext::waitIdle() { return context_.deviceWaitIdle(); }

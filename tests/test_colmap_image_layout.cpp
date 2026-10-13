@@ -1659,6 +1659,27 @@ TEST_F(ColmapImageLayoutTest, WarnsOnImageAspectMismatchWithoutChangingCameraCal
     }
 }
 
+TEST_F(ColmapImageLayoutTest, SkipsInvalidFocalCameraBeforeAmbiguousImageLookup) {
+    fs::create_directories(temp_dir_ / "images");
+    write_text_file(temp_dir_ / "cameras.txt",
+                    "1 PINHOLE 1 1 1 1 0.5 0.5\n"
+                    "2 PINHOLE 1 1 0 1 0.5 0.5\n");
+    write_text_file(temp_dir_ / "images.txt",
+                    "1 1 0 0 0 0 0 0 1 valid.png\n\n"
+                    "2 1 0 0 0 0 0 0 2 zero.png\n\n");
+    write_png(temp_dir_ / "images" / "valid.png");
+    write_png(temp_dir_ / "images" / "first" / "zero.png");
+    write_png(temp_dir_ / "images" / "second" / "zero.png");
+
+    const auto loaded = lfs::io::read_colmap_cameras_and_images_text(temp_dir_, "images");
+    ASSERT_TRUE(loaded) << loaded.error().format();
+    const auto& cameras = std::get<0>(loaded->value);
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_EQ(cameras.front()->image_name(), "valid.png");
+    ASSERT_EQ(loaded->warnings.size(), 1u);
+    EXPECT_NE(loaded->warnings.front().message.find("zero.png"), std::string::npos);
+}
+
 TEST_F(ColmapImageLayoutTest, UnreadableImageHeaderDoesNotRejectCameraImport) {
     write_minimal_colmap_text_dataset(temp_dir_, "frame.jpg");
     write_text_file(temp_dir_ / "images/frame.jpg", "unreadable image header");
@@ -1666,7 +1687,8 @@ TEST_F(ColmapImageLayoutTest, UnreadableImageHeaderDoesNotRejectCameraImport) {
     ASSERT_TRUE(loaded) << loaded.error().format();
     ASSERT_EQ(std::get<0>(loaded->value).size(), 1u);
     EXPECT_TRUE(std::get<0>(loaded->value).front()->has_image());
-    EXPECT_TRUE(loaded->warnings.empty());
+    ASSERT_EQ(loaded->warnings.size(), 1u);
+    EXPECT_NE(loaded->warnings.front().message.find("frame.jpg"), std::string::npos);
 }
 
 TEST_F(ColmapImageLayoutTest, NerfNestedDuplicateSidecars) {

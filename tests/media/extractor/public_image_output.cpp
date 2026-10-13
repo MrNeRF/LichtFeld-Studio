@@ -34,5 +34,17 @@ int main() {
         return 2;
     }
     auto collision = ImageOutput::writeExr(path, view, options);
-    return !collision && collision.error().code() == lfs::ErrorCode::AlreadyExists && std::filesystem::file_size(path) > 100 ? 0 : 3;
+    if (collision || collision.error().code() != lfs::ErrorCode::AlreadyExists || std::filesystem::file_size(path) <= 100)
+        return 3;
+    auto tiff_path = path;
+    tiff_path.replace_extension(".tif");
+    Cleanup tiff_cleanup{tiff_path};
+    Tiff16OutputOptions tiff_options;
+    auto tiff_result = ImageOutput::writeTiff16(tiff_path, surface->view(), tiff_options);
+    if (!tiff_result) {
+        std::cerr << tiff_result.error().detail();
+        return 4;
+    }
+    auto tiff_collision = ImageOutput::writeTiff16(tiff_path, view, tiff_options);
+    return !tiff_collision && tiff_collision.error().code() == lfs::ErrorCode::AlreadyExists && std::filesystem::file_size(tiff_path) > 100 ? 0 : 5;
 }

@@ -1993,7 +1993,7 @@ namespace {
         auto ridge = Tensor::empty({37, 61}, Device::GPU);
         lfs::training::kernels::RidgeWorkspace workspace;
         workspace.band_bytes = 0;
-        table->ridge(image, ridge, workspace);
+        table->ridge(image, ridge, workspace, {}, lfs::gpu_ops::MaskPhotoMode::BinaryGt0);
         keep(out.snapshot, backend, "structure.ridge", ridge, kReduce);
         Tensor weight;
         table->photometric_weight(ridge, mask, weight, 0.5f, true);

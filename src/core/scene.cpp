@@ -5163,6 +5163,12 @@ namespace lfs::core {
             return result;
         };
 
+        const auto shN_requires_float_materialize = [](const lfs::core::SplatData& src) {
+            return src.shN_raw().is_valid() && src.shN_raw().numel() > 0 &&
+                   (src.shN_raw().dtype() != lfs::core::DataType::Float32 ||
+                    src.shN_value_quantized() || src.shN_ieee_f16());
+        };
+
         int max_sh = 0;
         int max_active_sh = 0;
         for (const auto& [model, _] : splats) {
@@ -5198,13 +5204,48 @@ namespace lfs::core {
             }
 
             const auto keep_mask = src.deleted().logical_not();
-            const size_t visible = static_cast<size_t>(keep_mask.sum_scalar());
+            const size_t visible = static_cast<size_t>(src.size()) - src.deleted().count_nonzero();
             if (visible == 0) {
                 return nullptr;
             }
 
             const int active_sh = src.get_active_sh_degree();
             const auto layout_rest = static_cast<std::uint32_t>(src.max_sh_coeffs_rest());
+
+            if (layout_rest > 0 && src.shN_raw().is_valid() && src.shN_raw().numel() > 0 &&
+                shN_requires_float_materialize(src)) {
+                auto kept_indices = keep_mask.nonzero();
+                if (kept_indices.ndim() == 2) {
+                    kept_indices = kept_indices.squeeze(1);
+                }
+                kept_indices = kept_indices.to(lfs::core::Device::CPU)
+                                   .to(lfs::core::DataType::Int32);
+                auto shN_canonical = src.shN_canonical_cpu_rows(kept_indices);
+                auto shN_cpu_swizzled = lfs::core::Tensor::empty_pageable_host(
+                    {lfs::core::sh_swizzled_float_count(visible, layout_rest)},
+                    lfs::core::DataType::Float32);
+                sh_codec(shN_canonical, shN_cpu_swizzled,
+                         {.source_format = ShFormat::Canonical,
+                          .destination_format = ShFormat::Float32,
+                          .source_rows = visible,
+                          .destination_rows = visible,
+                          .count = visible,
+                          .source_rest = layout_rest,
+                          .destination_rest = layout_rest});
+                auto shN = shN_cpu_swizzled.to(src.means_raw().device());
+                auto result = std::make_unique<lfs::core::SplatData>(
+                    src.get_max_sh_degree(),
+                    src.means_raw().index_select(0, keep_mask).contiguous(),
+                    src.sh0_raw().index_select(0, keep_mask).contiguous(),
+                    std::move(shN),
+                    src.scaling_raw().index_select(0, keep_mask).contiguous(),
+                    src.rotation_raw().index_select(0, keep_mask).contiguous(),
+                    src.opacity_raw().index_select(0, keep_mask).contiguous(),
+                    src.get_scene_scale(),
+                    lfs::core::SplatData::ShNLayout::Swizzled);
+                result->set_active_sh_degree(active_sh);
+                return limit_degree(std::move(result));
+            }
 
             lfs::core::Tensor shN;
             if (layout_rest > 0 && src.shN_raw().is_valid() && src.shN_raw().numel() > 0) {
@@ -6493,6 +6534,8 @@ namespace lfs::core {
         auto* node = getNodeById(id);
         if (node && node->type == NodeType::CAMERA && node->training_enabled != enabled) {
             node->training_enabled = enabled;
+            if (!restore_staging_)
+                pending_mutations_ |= static_cast<uint32_t>(MutationType::CAMERA_TRAINING_CHANGED);
             notifyMutation(MutationType::VISIBILITY_CHANGED);
         }
     }

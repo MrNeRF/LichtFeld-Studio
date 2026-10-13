@@ -284,9 +284,10 @@ class RegistryClient:
             supported_features=supported_features,
         )
 
-    def verify_checksum(self, path: Path, expected: str) -> bool:
-        """Verify SHA-256 checksum of a file."""
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    def verify_checksum(self, archive: Path | bytes, expected: str) -> bool:
+        """Verify SHA-256 checksum of an archive or its bytes."""
+        data = archive if isinstance(archive, bytes) else Path(archive).read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
         return actual == expected.removeprefix("sha256:")
 
     def _get_index(self) -> Dict:

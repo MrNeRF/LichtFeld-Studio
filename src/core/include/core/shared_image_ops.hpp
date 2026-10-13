@@ -32,10 +32,14 @@ namespace lfs::gpu_ops {
         U16HWCToU8CHW,
         F32CHWToU8CHW,
         U8HWToF32HW,
-        NormalPriorF32
+        NormalPriorF32,
+        MaskU8HWToF32HW,
+        U8HWCToF32CHWExactMaskAlpha,
+        U16HWCToF32CHWExactMaskAlpha
     };
     enum class MaskTransform { Invert,
-                               Threshold };
+                               Threshold,
+                               QuantizeByteGrid };
     enum class Resample { LanczosRGB,
                           LanczosGray,
                           LanczosFloatCHW,

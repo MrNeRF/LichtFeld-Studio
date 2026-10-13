@@ -1,3 +1,5 @@
+#include "core/cuda/mask_normalization.cuh"
+#include <type_traits>
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-FileCopyrightText: 2025 Youyu Chen (original Lanczos implementation)
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -192,7 +194,7 @@ namespace lfs::core {
             }
         }
 
-        template <uint32_t CHANNELS, typename T>
+        template <uint32_t CHANNELS, typename T, bool ExactAlpha = false>
         __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
             LanczosResampleCUDA(
                 const int input_h, const int input_w,
@@ -238,7 +240,13 @@ namespace lfs::core {
                     const float kernel_value = kernel_value_y * kernel_value_x;
 
                     for (int ch = 0; ch < CHANNELS; ch++) {
-                        accumulator[ch] += PixelTraits<T>::load_and_normalize(input, input_pix_id * CHANNELS + ch) * kernel_value;
+                        if constexpr (ExactAlpha && CHANNELS == 4 && std::is_same_v<T, uint8_t>) {
+                            const float value = ch == 3 ? cuda::normalize_mask_byte(input[input_pix_id * CHANNELS + ch])
+                                                        : PixelTraits<T>::load_and_normalize(input, input_pix_id * CHANNELS + ch);
+                            accumulator[ch] += value * kernel_value;
+                        } else {
+                            accumulator[ch] += PixelTraits<T>::load_and_normalize(input, input_pix_id * CHANNELS + ch) * kernel_value;
+                        }
                     }
                 }
             }
@@ -250,7 +258,7 @@ namespace lfs::core {
             }
         }
 
-        template <typename TIn>
+        template <typename TIn, bool ExactMask = false>
         __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
             LanczosResampleGrayscaleCUDA(
                 const int input_h, const int input_w,
@@ -295,7 +303,11 @@ namespace lfs::core {
                     const uint32_t input_pix_id = input_w * y + x;
                     const float kernel_value_x = pre_coef_x[pix.x * coefficient_stride_x + x - LU.x];
                     const float kernel_value = kernel_value_y * kernel_value_x;
-                    const float pixel_value = (float)input[input_pix_id] * input_scale;
+                    float pixel_value;
+                    if constexpr (ExactMask && std::is_same_v<TIn, uint8_t>)
+                        pixel_value = cuda::normalize_mask_byte(input[input_pix_id]);
+                    else
+                        pixel_value = (float)input[input_pix_id] * input_scale;
                     accumulator += pixel_value * kernel_value;
                 }
             }
@@ -362,7 +374,7 @@ namespace lfs::core {
             }
         }
 
-        template <typename T>
+        template <typename T, bool ExactAlpha = false>
         static Tensor lanczos_resize_impl(
             const Tensor& input,
             int output_h,
@@ -414,7 +426,7 @@ namespace lfs::core {
             const dim3 block(BLOCK_X, BLOCK_Y, 1);
 
             const auto launch = [&]<uint32_t CHANNELS>() {
-                detail::LanczosResampleCUDA<CHANNELS, T>
+                detail::LanczosResampleCUDA<CHANNELS, T, ExactAlpha>
                     <<<tile_grid, block, 0, cuda_stream>>>(
                         input_h, input_w, output_h, output_w, kernel_size,
                         layout_x->stride, layout_y->stride,
@@ -439,7 +451,7 @@ namespace lfs::core {
         int output_h,
         int output_w,
         int kernel_size,
-        cudaStream_t cuda_stream) {
+        cudaStream_t cuda_stream, bool normalize_mask_alpha) {
 
         if (!input.is_valid() || input.device() != Device::GPU) {
             LOG_ERROR("lanczos_resize: Input must be a valid CUDA tensor");
@@ -460,7 +472,9 @@ namespace lfs::core {
             return {};
         }
 
-        if (input.dtype() == DataType::UInt8) {
+        if (input.dtype() == DataType::UInt8 && normalize_mask_alpha) {
+            return detail::lanczos_resize_impl<uint8_t, true>(input, output_h, output_w, kernel_size, cuda_stream);
+        } else if (input.dtype() == DataType::UInt8) {
             return detail::lanczos_resize_impl<uint8_t>(
                 input, output_h, output_w, kernel_size, cuda_stream);
         } else if (input.dtype() == DataType::Float32) {
@@ -478,7 +492,7 @@ namespace lfs::core {
         int output_h,
         int output_w,
         int kernel_size,
-        cudaStream_t cuda_stream) {
+        cudaStream_t cuda_stream, bool normalize_mask) {
 
         if (!input.is_valid() || input.device() != Device::GPU) {
             LOG_ERROR("lanczos_resize_grayscale: Input must be a valid CUDA tensor");
@@ -542,12 +556,21 @@ namespace lfs::core {
         const dim3 block(BLOCK_X, BLOCK_Y, 1);
 
         if (input.dtype() == DataType::UInt8) {
-            detail::LanczosResampleGrayscaleCUDA<uint8_t><<<tile_grid, block, 0, cuda_stream>>>(
-                input_h, input_w, output_h, output_w, kernel_size,
-                layout_x->stride, layout_y->stride,
-                coef_x.get(), coef_y.get(),
-                input.ptr<uint8_t>(), 1.0f / 255.0f, output.ptr<float>());
-            LFS_CUDA_LAUNCH_CHECK(cuda_stream, "core.lanczos.grayscale_resample");
+            if (normalize_mask) {
+                detail::LanczosResampleGrayscaleCUDA<uint8_t, true><<<tile_grid, block, 0, cuda_stream>>>(
+                    input_h, input_w, output_h, output_w, kernel_size,
+                    layout_x->stride, layout_y->stride,
+                    coef_x.get(), coef_y.get(),
+                    input.ptr<uint8_t>(), 1.0f / 255.0f, output.ptr<float>());
+                LFS_CUDA_LAUNCH_CHECK(cuda_stream, "core.lanczos.grayscale_resample");
+            } else {
+                detail::LanczosResampleGrayscaleCUDA<uint8_t><<<tile_grid, block, 0, cuda_stream>>>(
+                    input_h, input_w, output_h, output_w, kernel_size,
+                    layout_x->stride, layout_y->stride,
+                    coef_x.get(), coef_y.get(),
+                    input.ptr<uint8_t>(), 1.0f / 255.0f, output.ptr<float>());
+                LFS_CUDA_LAUNCH_CHECK(cuda_stream, "core.lanczos.grayscale_resample");
+            }
         } else {
             detail::LanczosResampleGrayscaleCUDA<float><<<tile_grid, block, 0, cuda_stream>>>(
                 input_h, input_w, output_h, output_w, kernel_size,
@@ -594,8 +617,8 @@ namespace lfs::core {
         const int channels = static_cast<int>(input.size(0));
         const int input_h = static_cast<int>(input.size(1));
         const int input_w = static_cast<int>(input.size(2));
-        if (channels != NUM_CHANNELS) {
-            LOG_ERROR("lanczos_resize_float_chw: Only 3-channel images supported, got {}", channels);
+        if (channels != 3 && channels != 4) {
+            LOG_ERROR("lanczos_resize_float_chw: Only 3- or 4-channel images supported, got {}", channels);
             return Tensor();
         }
 
@@ -633,12 +656,19 @@ namespace lfs::core {
         const dim3 tile_grid((output_w + BLOCK_X - 1) / BLOCK_X, (output_h + BLOCK_Y - 1) / BLOCK_Y);
         const dim3 block(BLOCK_X, BLOCK_Y, 1);
 
-        detail::LanczosResamplePlanarCUDA<NUM_CHANNELS><<<tile_grid, block, 0, cuda_stream>>>(
-            input_h, input_w, output_h, output_w, kernel_size,
-            layout_x->stride, layout_y->stride,
-            coef_x.get(), coef_y.get(),
-            input.ptr<float>(), output.ptr<float>());
-        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Lanczos CHW resample kernel launch");
+        if (channels == 3) {
+            detail::LanczosResamplePlanarCUDA<3><<<tile_grid, block, 0, cuda_stream>>>(
+                input_h, input_w, output_h, output_w, kernel_size,
+                layout_x->stride, layout_y->stride,
+                coef_x.get(), coef_y.get(), input.ptr<float>(), output.ptr<float>());
+            LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Lanczos CHW resample kernel launch");
+        } else {
+            detail::LanczosResamplePlanarCUDA<4><<<tile_grid, block, 0, cuda_stream>>>(
+                input_h, input_w, output_h, output_w, kernel_size,
+                layout_x->stride, layout_y->stride,
+                coef_x.get(), coef_y.get(), input.ptr<float>(), output.ptr<float>());
+            LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Lanczos CHW resample kernel launch");
+        }
         LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(cuda_stream), "Lanczos CHW resample completion");
 
         return output;

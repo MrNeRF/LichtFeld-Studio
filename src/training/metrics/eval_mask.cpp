@@ -25,7 +25,9 @@ namespace lfs::training {
 
         [[nodiscard]] lfs::core::Tensor finalize_binary_metrics_mask(
             lfs::core::Tensor mask, const float threshold = 0.5f) {
-            return mask.ge(threshold).to(lfs::core::DataType::UInt8).contiguous();
+            lfs::training::training_ops(lfs::core::default_gpu_backend())
+                .shared_image->mask(mask, lfs::gpu_ops::MaskTransform::Threshold, threshold);
+            return mask;
         }
 
         [[nodiscard]] std::expected<LoadedMetricsMask, std::string> load_rgba_metrics_inputs(
@@ -36,7 +38,7 @@ namespace lfs::training {
                 const auto rgba = lfs::io::load_rgba_image_cpu_decoded(
                     camera.image_path(),
                     undistort ? 1 : config.resize_factor,
-                    undistort ? 0 : config.max_width);
+                    undistort ? 0 : config.max_width, nullptr, false, true);
                 const auto H = rgba.shape()[1];
                 const auto W = rgba.shape()[2];
                 const auto rgb_float = rgba.slice(0, 0, 3).contiguous();

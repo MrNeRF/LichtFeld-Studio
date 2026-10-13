@@ -60,7 +60,7 @@ namespace lfs::vis {
         static_assert(sizeof(DepthParameters) == 64);
 
         // Uniform record layout of viewport_mesh.slang.
-        constexpr std::size_t kRecords = 23;
+        constexpr std::size_t kRecords = 25;
         enum : std::size_t {
             kMvp = 0,
             kModel = 4,
@@ -76,6 +76,8 @@ namespace lfs::vis {
             kTextureSizes = 20,
             kTextureSizes2 = 21,
             kWireColor = 22,
+            kCameraForward = 23,
+            kDepthView = 24,
         };
         using Uniforms = std::array<Record, kRecords>;
 
@@ -259,18 +261,19 @@ namespace lfs::vis {
             return &mesh;
         }
 
-        void renderShadow(Mesh& mesh, const ViewportMeshDrawItem& item, TensorFrameUploads& uploads) {
+        void renderShadow(Mesh& mesh, const ViewportMeshDrawItem& item, const glm::vec3& light_dir,
+                          TensorFrameUploads& uploads) {
             const int resolution = std::clamp(item.shadow_map_resolution, 256, 8192);
             auto& shadow = mesh.shadow;
             if (shadow.valid && shadow.resolution == resolution && shadow.model == item.model &&
-                shadow.light_dir == item.light_dir)
+                shadow.light_dir == light_dir)
                 return;
             if (shadow.resolution != resolution || !shadow.depth.is_valid()) {
                 shadow.color = Tensor::empty({std::size_t(resolution), std::size_t(resolution), 4}, Device::GPU, DataType::UInt8);
                 shadow.depth = Tensor::empty({std::size_t(resolution), std::size_t(resolution)}, Device::GPU, DataType::Float32);
                 shadow.resolution = resolution;
             }
-            shadow.light_vp = meshShadowViewProjection(mesh.aabb_min, mesh.aabb_max, item.model, item.light_dir);
+            shadow.light_vp = meshShadowViewProjection(mesh.aabb_min, mesh.aabb_max, item.model, light_dir);
             Uniforms uniforms{};
             putMatrix(uniforms, kMvp, shadow.light_vp * item.model);
             auto uniform_tensor = uploads.upload(std::as_bytes(std::span(uniforms)), {kRecords, 4}, DataType::Float32);
@@ -298,7 +301,7 @@ namespace lfs::vis {
                 return;
             }
             shadow.model = item.model;
-            shadow.light_dir = item.light_dir;
+            shadow.light_dir = light_dir;
             shadow.valid = true;
         }
 
@@ -364,20 +367,25 @@ namespace lfs::vis {
                 Mesh* mesh = prepareMesh(*item.mesh, uploads);
                 if (!mesh)
                     continue;
-                if (item.shadow_enabled)
-                    renderShadow(*mesh, item, uploads);
-                const bool shadow = item.shadow_enabled && mesh->shadow.valid;
+                const glm::vec3 light_dir = item.camera_relative_light ? desc.mesh_camera_backward : item.light_dir;
+                if (item.shadow_enabled && !desc.mesh_depth_view)
+                    renderShadow(*mesh, item, light_dir, uploads);
+                const bool shadow = item.shadow_enabled && !desc.mesh_depth_view && mesh->shadow.valid;
                 Uniforms base{};
                 putMatrix(base, kMvp, desc.mesh_view_projection * item.model);
                 putMatrix(base, kModel, item.model);
                 putMatrix(base, kLightVp, shadow ? mesh->shadow.light_vp : glm::mat4(1.0f));
                 base[kCamera] = {desc.mesh_camera_position.x, desc.mesh_camera_position.y, desc.mesh_camera_position.z, 0};
-                base[kLightDir] = {item.light_dir.x, item.light_dir.y, item.light_dir.z, 0};
+                base[kLightDir] = {light_dir.x, light_dir.y, light_dir.z, 0};
                 base[kLight] = {item.light_intensity, item.ambient, shadow ? 1.0f : 0.0f,
                                 shadow ? float(mesh->shadow.resolution) : 1.0f};
                 base[kSelection] = {item.is_emphasized ? 1.0f : 0.0f, item.dim_non_emphasized ? 1.0f : 0.0f,
                                     0.0f, item.wireframe_width};
                 base[kWireColor] = {item.wireframe_color.r, item.wireframe_color.g, item.wireframe_color.b, 1};
+                base[kCameraForward] = {-desc.mesh_camera_backward.x, -desc.mesh_camera_backward.y,
+                                        -desc.mesh_camera_backward.z, 0};
+                base[kDepthView] = {desc.mesh_depth_view ? 1.0f : 0.0f, desc.mesh_depth_view_min,
+                                    desc.mesh_depth_view_max, desc.mesh_depth_grayscale ? 1.0f : 0.0f};
                 for (const auto& submesh : mesh->submeshes) {
                     const auto& material = mesh->materials[submesh.material];
                     Uniforms record = base;
@@ -393,7 +401,7 @@ namespace lfs::vis {
                                      submesh.index_count,
                                      item.backface_culling ? Module::Cull::Back : Module::Cull::None, false, shadow});
                 }
-                if (item.wireframe_overlay) {
+                if (item.wireframe_overlay && !desc.mesh_depth_view) {
                     uniforms.push_back(base);
                     draws.push_back({"wireVertex", "wireFragment", mesh, nullptr, 0, mesh->index_count,
                                      Module::Cull::None, true, false});

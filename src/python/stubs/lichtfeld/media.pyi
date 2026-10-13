@@ -31,6 +31,8 @@ class FrameFileFormat(enum.Enum):
 
     EXR = 2
 
+    TIFF16 = 3
+
 class ExrPrecision(enum.Enum):
     Half = 0
 
@@ -336,6 +338,27 @@ class IngestRequest:
     @float_color_profile.setter
     def float_color_profile(self, arg: FloatColorProfile, /) -> None: ...
 
+class Tiff16OutputOptions:
+    def __init__(self) -> None: ...
+
+    @property
+    def transfer(self) -> ColorTransfer: ...
+
+    @transfer.setter
+    def transfer(self, arg: ColorTransfer, /) -> None: ...
+
+    @property
+    def overwrite(self) -> bool: ...
+
+    @overwrite.setter
+    def overwrite(self, arg: bool, /) -> None: ...
+
+    @property
+    def provenance(self) -> str: ...
+
+    @provenance.setter
+    def provenance(self, arg: str, /) -> None: ...
+
 class FileFrameSinkOptions:
     def __init__(self) -> None: ...
 
@@ -368,6 +391,12 @@ class FileFrameSinkOptions:
 
     @exr.setter
     def exr(self, arg: ExrOutputOptions, /) -> None: ...
+
+    @property
+    def tiff16(self) -> Tiff16OutputOptions: ...
+
+    @tiff16.setter
+    def tiff16(self, arg: Tiff16OutputOptions, /) -> None: ...
 
 class FileExtraction:
     def __init__(self) -> None: ...
@@ -645,6 +674,9 @@ class IngestCapabilities:
     def exr(self) -> bool: ...
 
     @property
+    def tiff16(self) -> bool: ...
+
+    @property
     def float_sdr_profile(self) -> str: ...
 
     @property
@@ -685,6 +717,9 @@ class FrameSurface:
 class ImageOutput:
     @staticmethod
     def write_exr(path: str | os.PathLike, frame: FrameSurface, options: ExrOutputOptions = ..., cancelled: object | None = None) -> None: ...
+
+    @staticmethod
+    def write_tiff16(path: str | os.PathLike, frame: FrameSurface, options: Tiff16OutputOptions = ..., cancelled: object | None = None) -> None: ...
 
 class MediaIngest:
     @staticmethod

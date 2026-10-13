@@ -107,7 +107,13 @@ namespace lfs::core::internal {
             case ImageConversion::U8HWCToU8CHW: return {total, total, total};
             case ImageConversion::U16HWCToU8CHW: return {total * 2, total, total};
             case ImageConversion::F32CHWToU8CHW: return {total * 4, total, total};
-            case ImageConversion::U8HWToF32HW: return {pixels, pixels * 4, pixels};
+            case ImageConversion::U8HWToF32HW:
+            case ImageConversion::MaskU8HWToF32HW:
+                return { pixels, pixels * 4, pixels };
+            case ImageConversion::U8HWCToF32CHWExactMaskAlpha:
+                return { total, total * 4, total };
+            case ImageConversion::U16HWCToF32CHWExactMaskAlpha:
+                return { total * 2, total * 4, total };
             }
             throw std::invalid_argument(std::format("unknown image conversion {}", static_cast<int>(kind)));
         }
@@ -163,8 +169,11 @@ namespace lfs::core::internal {
             if (value.dtype() != DataType::Float32)
                 throw std::invalid_argument(std::format("mask transform needs float32, got {}", dtype_name(value.dtype())));
             Operands operands{&value};
-            const MaskParams params{operands.addresses[0], checked_u32(value.numel(), "mask element count"),
-                                    transform == MaskTransform::Threshold ? 1u : 0u, threshold};
+            const MaskParams params { operands.addresses[0], checked_u32(value.numel(), "mask element count"),
+                transform == MaskTransform::Invert          ? 0u
+                    : transform == MaskTransform::Threshold ? 1u
+                                                            : 2u,
+                threshold };
             operands.dispatch("shared_image_mask", params, value.numel());
         }
 
@@ -177,7 +186,7 @@ namespace lfs::core::internal {
         struct LanczosParams {
             uint64_t input, output, coef_x, coef_y;
             int32_t input_h, input_w, output_h, output_w, kernel_size;
-            uint32_t stride_x, stride_y, layout, bytes;
+            uint32_t stride_x, stride_y, layout, bytes, channels;
         };
 
         // Taps of one output along an axis: the box of 2 * kernel_size * scale plus one.
@@ -199,7 +208,7 @@ namespace lfs::core::internal {
             return table;
         }
 
-        // layout: 0 HWC RGB, 1 HW gray, 2 CHW RGB (see image.metal).
+        // layout: 0 HWC RGB(A), 1 HW gray, 2 CHW RGB(A) (see image.metal).
         Tensor lanczos(const Tensor& input, const int input_h, const int input_w, const int h, const int w,
                        const int kernel_size, const uint32_t layout) {
             if (h <= 0 || w <= 0 || kernel_size <= 0 || input_h <= 0 || input_w <= 0)
@@ -212,12 +221,15 @@ namespace lfs::core::internal {
             const Tensor coef_x = coefficients(input_w, w, kernel_size, stride_x);
             const Tensor coef_y = coefficients(input_h, h, kernel_size, stride_y);
             const auto rows = static_cast<size_t>(h), columns = static_cast<size_t>(w);
-            Tensor output = Tensor::empty(layout == 1 ? TensorShape{rows, columns} : TensorShape{3, rows, columns},
-                                          Device::GPU, DataType::Float32);
+            const auto channels = layout == 1 ? size_t { 1 } : layout == 2 ? source.shape()[0]
+                                                                           : source.shape()[2];
+            Tensor output = Tensor::empty(layout == 1 ? TensorShape { rows, columns } : TensorShape { channels, rows, columns },
+                Device::GPU, DataType::Float32);
             Operands operands{&source, &output, &coef_x, &coef_y};
-            const LanczosParams params{operands.addresses[0], operands.addresses[1], operands.addresses[2],
-                                       operands.addresses[3], input_h, input_w, h, w, kernel_size, stride_x,
-                                       stride_y, layout, source.dtype() == DataType::UInt8 ? 1u : 0u};
+            const LanczosParams params { operands.addresses[0], operands.addresses[1], operands.addresses[2],
+                operands.addresses[3], input_h, input_w, h, w, kernel_size, stride_x,
+                stride_y, layout, source.dtype() == DataType::UInt8 ? 1u : 0u,
+                static_cast<uint32_t>(channels) };
             operands.dispatch("shared_image_lanczos_resample", params, rows * columns);
             return output;
         }
@@ -232,9 +244,9 @@ namespace lfs::core::internal {
             const bool bytes_or_float = source.dtype() == DataType::UInt8 || source.dtype() == DataType::Float32;
             switch (mode) {
             case Resample::LanczosRGB:
-                if (source.ndim() != 3 || source.shape()[2] != 3 || !bytes_or_float)
-                    throw std::invalid_argument(std::format("Lanczos RGB needs uint8 or float32 [H, W, 3], got {} {}",
-                                                            dtype_name(source.dtype()), source.shape().str()));
+                if (source.ndim() != 3 || (source.shape()[2] != 3 && source.shape()[2] != 4) || !bytes_or_float)
+                    throw std::invalid_argument(std::format("Lanczos RGB needs uint8 or float32 [H, W, 3|4], got {} {}",
+                        dtype_name(source.dtype()), source.shape().str()));
                 return lanczos(source, image_dim(source, 0), image_dim(source, 1), h, w, kernel_size, 0);
             case Resample::LanczosGray:
                 if (source.ndim() != 2 || !bytes_or_float)
@@ -242,9 +254,9 @@ namespace lfs::core::internal {
                                                             dtype_name(source.dtype()), source.shape().str()));
                 return lanczos(source, image_dim(source, 0), image_dim(source, 1), h, w, kernel_size, 1);
             case Resample::LanczosFloatCHW:
-                if (source.ndim() != 3 || source.shape()[0] != 3 || source.dtype() != DataType::Float32)
-                    throw std::invalid_argument(std::format("Lanczos CHW needs float32 [3, H, W], got {} {}",
-                                                            dtype_name(source.dtype()), source.shape().str()));
+                if (source.ndim() != 3 || (source.shape()[0] != 3 && source.shape()[0] != 4) || source.dtype() != DataType::Float32)
+                    throw std::invalid_argument(std::format("Lanczos CHW needs float32 [3|4, H, W], got {} {}",
+                        dtype_name(source.dtype()), source.shape().str()));
                 return lanczos(source, image_dim(source, 1), image_dim(source, 2), h, w, kernel_size, 2);
             case Resample::DepthPrior: return resize_image_prior_tensor(source, h, w, false);
             case Resample::NormalPrior: return resize_image_prior_tensor(source, h, w, true);

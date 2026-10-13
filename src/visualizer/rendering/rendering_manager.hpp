@@ -39,6 +39,7 @@
 #include "viewport_frame_result.hpp"
 #include "viewport_interaction_context.hpp"
 #include "viewport_overlay_service.hpp"
+#include "visualizer/app_store.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -305,6 +306,7 @@ namespace lfs::vis {
         [[nodiscard]] lfs::Result<void> validateSettingsFromUser(const RenderSettings& settings) const;
 
         // Settings management (also used for restoring saved state).
+        void restoreSettingsFromProject(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings);
         void updateSettings(
             const RenderSettings& settings,
@@ -460,6 +462,7 @@ namespace lfs::vis {
             float psnr = 0.0f;
             std::optional<float> ssim;
             bool used_mask = false;
+            AppStore::CameraMetricsStatus status = AppStore::CameraMetricsStatus::Available;
         };
 
         void clearLatestCameraMetrics();
@@ -742,6 +745,8 @@ namespace lfs::vis {
         std::uint64_t screen_epoch_ = 0;
         std::uint64_t view_lifetime_epoch_ = 0;
         mutable std::unordered_map<ViewId, std::pair<uint64_t, uint64_t>> depth_window_epochs_;
+        std::shared_ptr<lfs::core::Tensor> mesh_only_split_background_;
+        glm::vec4 mesh_only_split_background_color_{-1.0f};
         enum class PreviewImageReadback {
             FloatRgb,
             LinearRgba,
