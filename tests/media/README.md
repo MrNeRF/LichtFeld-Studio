@@ -154,9 +154,9 @@ configurations, adds no CI job, and reports CTest skip code 77 when no CUDA devi
 is present. See [module contracts](../../docs/development/media-ingest-core-cli.md)
 for the runtime graph, Python API, shared ownership and remaining boundaries.
 
-The seek/color oracle uses temporally varying luma and constant chroma so it
-does not depend on chroma upsampling differences between system FFmpeg and the
-linked player libraries. It checks that wrong frames, matrices and ranges are
+The seek/color oracle uses temporally varying luma and smooth spatial chroma ramps so it
+avoids sharp chroma upsampling differences between system FFmpeg and the
+linked player libraries. It checks that wrong frames, matrices, ranges and swapped chroma channels are
 distinguishable, with the original RGB error thresholds unchanged.
 For the additional complex chroma-edge comparison, set
 `LFS_MEDIA_TEST_REFERENCE_FFMPEG` to a qualified reference executable built from

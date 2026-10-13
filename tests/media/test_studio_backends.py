@@ -92,7 +92,7 @@ class StudioBackends(unittest.TestCase):
         source = self.root / "native-preview-gradient.mp4"
         subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i",
                         "nullsrc=size=128x96:rate=10:duration=0.5,format=yuv420p,"
-                        "geq=lum='32+N*32+X/8+Y/12':cb=96:cr=160",
+                        "geq=lum='32+N*32+X/8+Y/12':cb='96+X/4':cr='160-Y/3'",
                         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source)], check=True, timeout=30)
         actual, _ = self.invoke(operation="native-preview", input=str(source))
         self.assertTrue(actual["hardware_decode"])
@@ -113,15 +113,17 @@ class StudioBackends(unittest.TestCase):
         errors = [abs(a - b) for a, b in zip(pixels, reference)]
         self.assertLess(sum(errors) / len(errors), 2)
         self.assertLessEqual(max(errors), 8)
-        # This fixture must distinguish the requested frame, matrix and range;
+        # This fixture must distinguish the requested frame, matrix, range and UV order;
         # otherwise avoiding chroma edges would weaken the seek/color contract.
-        for wrong in ("select=eq(n\\,0)", "in_color_matrix=bt709", "in_range=full"):
+        for wrong in ("select=eq(n\\,0)", "in_color_matrix=bt709", "in_range=full", "swapuv"):
             filter_ = ("format=nv12,select=eq(n\\,1),scale=flags=bilinear:"
                        "in_color_matrix=bt601:out_color_matrix=bt709:out_range=full")
             if wrong.startswith("select"):
                 filter_ = filter_.replace("select=eq(n\\,1)", wrong)
             elif wrong.startswith("in_color_matrix"):
                 filter_ = filter_.replace("in_color_matrix=bt601", wrong)
+            elif wrong == "swapuv":
+                filter_ = filter_.replace("format=nv12,", "swapuv,format=nv12,")
             else:
                 filter_ += ":" + wrong
             incorrect = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(source), "-vf", filter_,
