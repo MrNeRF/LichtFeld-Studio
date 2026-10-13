@@ -619,6 +619,7 @@ set(TEST_FILES
     test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_export_utils.cpp
+    test_video_export_frame_schedule.cpp
     test_video_frame_extractor_naming.cpp
     test_video_cpu_rgb_conversion.cpp
     test_video_cuda_frame_handoff.cpp
@@ -1572,6 +1573,17 @@ if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_empty_split_runtime.py
     )
     set_tests_properties(lichtfeld.python.mesh_empty_split PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_panorama
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_panorama_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_panorama PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS "gpu;integration"
         TIMEOUT 300

@@ -28,6 +28,7 @@
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "io/video/video_export_schedule.hpp"
 #include "project/session_state.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -727,6 +728,7 @@ namespace lfs::vis::gui {
                     .view_projection = projection * viewport.getViewMatrix(),
                     .camera_position = viewport.translation,
                     .items = {},
+                    .panels = {},
                     .frame_slot = 0,
                     .draw_group = 0,
                     .draw_group_count = 1,
@@ -3147,16 +3149,14 @@ namespace lfs::vis::gui {
         const auto export_options = *validated_options;
         const auto render_settings = rendering_manager->getSettings();
         const float duration = timeline.clipDuration();
-        const int total_frames = static_cast<int>(std::ceil(duration * export_options.framerate)) + 1;
+        const int total_frames = lfs::io::video::videoExportFrameCount(duration, export_options.framerate);
         const int width = export_options.width;
         const int height = export_options.height;
 
         std::vector<lfs::sequencer::CameraState> frame_states;
         frame_states.reserve(total_frames);
-        const float start_time = 0.0f;
-        const float time_step = 1.0f / static_cast<float>(export_options.framerate);
         for (int i = 0; i < total_frames; ++i) {
-            const float time = start_time + static_cast<float>(i) * time_step;
+            const float time = lfs::io::video::videoExportSampleTime(i, export_options.framerate);
             frame_states.push_back(timeline.evaluate(time));
             if (sequence)
                 sequence_frames.push_back(*gui_manager->sequencer().plySequenceFrameIndex(time));
@@ -3188,7 +3188,7 @@ namespace lfs::vis::gui {
         const auto job = video_export_state_.job;
         video_export_state_.thread.emplace(
             [this, job, viewer = viewer_, path, export_options, total_frames, width, height,
-             engine, scene_manager, rendering_manager, render_settings, start_time, time_step,
+             engine, scene_manager, rendering_manager, render_settings,
              sequence_uuid, sequence_frames = std::move(sequence_frames),
              environment_state = video_export_environment_state_.get(),
              mesh_renderer_state = video_export_mesh_renderer_state_.get(),
@@ -3270,7 +3270,7 @@ namespace lfs::vis::gui {
                             [viewer, engine, scene_manager, rendering_manager, environment_state,
                              mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
                              cam_state = frame_states[frame],
-                             clip_time = start_time + static_cast<float>(frame) * time_step]() mutable
+                             clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate)]() mutable
                             -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();

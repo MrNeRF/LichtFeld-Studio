@@ -112,7 +112,8 @@ set_target_properties(spz_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Video encoding library (FFmpeg + CUDA for GPU-accelerated encoding)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+# Keep pkg-config results separate from FindFFMPEG's cached variables.
+pkg_check_modules(LFS_FFMPEG REQUIRED IMPORTED_TARGET
         libavcodec
         libavformat
         libswscale
@@ -157,7 +158,7 @@ target_include_directories(lfs_video SYSTEM PRIVATE
 target_link_libraries(lfs_video
         PRIVATE
         lfs_core
-        PkgConfig::FFMPEG
+        PkgConfig::LFS_FFMPEG
         spdlog::spdlog
         CUDA::cudart
         CUDA::cuda_driver

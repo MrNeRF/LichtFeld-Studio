@@ -2630,7 +2630,7 @@ namespace lfs::vis {
 
         const auto populate_independent_split_mesh_panels =
             [&](VulkanMeshFrame& frame) {
-                if (!pending_split_view.enabled ||
+                if (frame.items.empty() || !pending_split_view.enabled ||
                     !splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
                     return;
                 }
@@ -2644,12 +2644,18 @@ namespace lfs::vis {
                         const auto& layout = (*layouts)[index];
                         const glm::ivec2 panel_size{std::max(layout.width, 1), render_size.y};
                         const auto panel_view = frame_ctx.makeViewportData(viewport, panel_size);
-                        frame.panels.push_back(lfs::vis::VulkanMeshViewportPanel{
+                        lfs::vis::VulkanMeshViewportPanel panel{
                             .start_position = layout.start_position,
                             .end_position = layout.end_position,
                             .view_projection = panel_view.getProjectionMatrix() * panel_view.getViewMatrix(),
                             .camera_position = panel_view.translation,
-                            .camera_backward = panel_view.rotation[2]});
+                            .camera_backward = panel_view.rotation[2]};
+                        if (frame_settings.equirectangular) {
+                            panel.view = panel_view.getViewMatrix();
+                            panel.projection = panel_view.getProjectionMatrix();
+                            panel.equirectangular = true;
+                        }
+                        frame.panels.push_back(panel);
                     };
                 append_panel(context.viewport, 0);
                 append_panel(split_view_service_.secondaryViewport(), 1);

@@ -2407,6 +2407,9 @@ namespace lfs::vis {
 
         void recordMeshPass(VkCommandBuffer command_buffer, const FramebufferRect& rect,
                             const VulkanViewportPassParams& params) {
+            if (params.mesh_items.empty()) {
+                return;
+            }
             LFS_VK_DEBUG_ASSERT(
                 !params.mesh_items.empty(),
                 "Viewport mesh pass requires at least one mesh draw item (frame_slot={}, mesh_items={}, mesh_panels={}, split_enabled={})",
@@ -2458,6 +2461,26 @@ namespace lfs::vis {
                 mesh_params.view_projection = params.mesh_view_projection;
                 mesh_params.camera_position = params.mesh_camera_position;
                 mesh_params.camera_backward = params.mesh_camera_backward;
+                if (params.environment.equirectangular_view) {
+                    glm::mat4 camera_to_world(params.environment.camera_to_world);
+                    camera_to_world[3] = glm::vec4(params.mesh_camera_position, 1.0f);
+                    VulkanMeshViewportPanel projection_state;
+                    projection_state.view_projection = params.mesh_view_projection;
+                    projection_state.view = glm::inverse(camera_to_world);
+                    projection_state.projection = params.mesh_view_projection * camera_to_world;
+                    projection_state.camera_position = params.mesh_camera_position;
+                    projection_state.camera_backward = params.mesh_camera_backward;
+                    projection_state.equirectangular = true;
+                    mesh_params.panels = std::span<const VulkanMeshViewportPanel>(&projection_state, 1);
+                    mesh_params.draw_group_count = 1;
+                    const VkRect2D mesh_rect{
+                        .offset = {rect.x, rect.y},
+                        .extent = {static_cast<std::uint32_t>(rect.width),
+                                   static_cast<std::uint32_t>(rect.height)},
+                    };
+                    mesh_pass.record(command_buffer, mesh_rect, mesh_params);
+                    return;
+                }
                 const VkRect2D mesh_rect{
                     .offset = {rect.x, rect.y},
                     .extent = {static_cast<std::uint32_t>(rect.width),

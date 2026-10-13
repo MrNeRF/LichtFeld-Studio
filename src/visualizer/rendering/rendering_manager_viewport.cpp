@@ -1075,6 +1075,7 @@ namespace lfs::vis {
             .camera_position = view.translation,
             .camera_backward = view.rotation[2],
             .items = buildViewportMeshDrawItems(render_state, settings, view.rotation[2]),
+            .panels = {},
         };
         if (mesh_params.items.empty()) {
             return {};
