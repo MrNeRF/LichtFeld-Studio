@@ -204,6 +204,16 @@ body {
     white-space: nowrap;
 }
 
+/* Translations exceed the shared 120dp column. Wrap inside that column. */
+.training-scroll-region .prop-label,
+.training-scroll-region .prop-label__text {
+    height: auto;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    word-break: break-word;
+}
+
 .prop-label--with-action > .steps-scale-lock-btn {
     display: flex;
     align-items: center;
