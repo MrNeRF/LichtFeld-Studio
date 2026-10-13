@@ -5548,6 +5548,95 @@ contract["check_selection_submode_follows_native_mode"](lf)
     }
 
     TEST_F(VisualizerImplResetTest,
+           RecoverThenAutosaveEditsForNextRecovery) {
+        const auto project_path =
+            temporary_.path / "recover-autosave-again.licht";
+        const auto sidecar =
+            lfs::io::project::autosave_sidecar_path(project_path);
+        std::optional<lfs::core::Uuid> ppisp_uuid;
+        write_recoverable_project(project_path);
+        auto options = projectOptions();
+        const auto recover = [&](VisualizerImpl& viewer) {
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
+            auto pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges);
+            ASSERT_TRUE(pending);
+            ASSERT_EQ(*pending, ProjectOpenOutcome::RecoveryPromptPending);
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_,
+                gui->rml_modal_overlay_->queue_);
+            ASSERT_TRUE(request.on_result);
+            request.on_result({.button_label =
+                                   LOC(lichtfeld::Strings::Recovery::RECOVER)});
+            ASSERT_TRUE(waitForHydrationComplete(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        };
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer.getViewport());
+            ASSERT_NO_FATAL_FAILURE(recover(viewer));
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(lifecycle->recovered_master_path_);
+            ASSERT_TRUE(lifecycle->recovery_session_);
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Post recovery edit"),
+                lfs::core::NULL_NODE);
+            lifecycle->settings_.autosave_interval_seconds = 2;
+            lifecycle->settings_.autosave_quiet_seconds = 0;
+            lifecycle->settings_.autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosave_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->last_mutation_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            ASSERT_TRUE(lifecycle->project_write_job_)
+                << lifecycle->last_project_write_error_;
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            const auto saved = lfs::test::licht::require_result(
+                lfs::io::project::ProjectReader::open(sidecar));
+            EXPECT_EQ(saved.superblock().autosave_sequence, 2u);
+            const auto ppisp = std::ranges::find_if(
+                saved.chunks(), [](const auto& row) {
+                    return row.key.fourcc ==
+                           lfs::io::project::FOURCC_PPIS;
+                });
+            ASSERT_NE(ppisp, saved.chunks().end());
+            ppisp_uuid = ppisp->key.instance_uuid;
+        }
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            ASSERT_NO_FATAL_FAILURE(recover(viewer));
+            const auto& document = *viewer.project_lifecycle_->document_;
+            const auto nodes = lfs::test::licht::require_result(
+                document.scene_graph().nodes());
+            const auto marker = document.view().dom().get_json("recovery_marker");
+            ASSERT_TRUE(marker);
+            EXPECT_EQ(*marker, "autosaved");
+            ASSERT_TRUE(ppisp_uuid);
+            EXPECT_NE(document.find_ppisp(*ppisp_uuid), nullptr);
+            EXPECT_TRUE(std::ranges::any_of(
+                nodes, [](const auto& node) {
+                    return node.name == "Post recovery edit";
+                }));
+        }
+        EXPECT_TRUE(std::filesystem::is_regular_file(sidecar));
+    }
+
+    TEST_F(VisualizerImplResetTest,
            StartupOffersScratchRecoveryAsUntitled) {
         auto options = projectOptions();
         std::filesystem::path scratch;

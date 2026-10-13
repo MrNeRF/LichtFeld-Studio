@@ -474,6 +474,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
         friend class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
         friend class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+        friend class VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
         friend class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
         friend class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         friend class VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;

@@ -5024,8 +5024,24 @@ namespace lfs::vis::project {
             return {};
         }
 
-        const auto base_commit_uuid =
-            document_->source_commit_uuid();
+        const auto autosave_base_path =
+            recovered_master_path_.value_or(
+                *document_->source_path());
+        auto base_commit_uuid =
+            recovered_master_path_
+                ? std::optional<lfs::core::Uuid>{}
+                : document_->source_commit_uuid();
+        if (recovered_master_path_) {
+            auto master =
+                lfs::io::project::ProjectReader::open(
+                    autosave_base_path);
+            if (!master) {
+                return lfs::Status::failure(
+                    std::move(master).error());
+            }
+            base_commit_uuid =
+                master->commit().commit_uuid;
+        }
         if (!base_commit_uuid) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
@@ -5035,7 +5051,7 @@ namespace lfs::vis::project {
         }
         std::error_code exists_error;
         if (!std::filesystem::exists(
-                *document_->source_path(),
+                autosave_base_path,
                 exists_error) ||
             exists_error) {
             return fail<void>(
@@ -5049,7 +5065,7 @@ namespace lfs::vis::project {
         const auto sidecar =
             lfs::io::project::
                 autosave_sidecar_path(
-                    *document_->source_path());
+                    autosave_base_path);
         auto started = startDocumentWrite(
             ProjectWritePurpose::Autosave,
             document_, sidecar, {},
@@ -5070,7 +5086,9 @@ namespace lfs::vis::project {
                         64ull * 1024 * 1024,
                     .writer_lock_lease =
                         snapshotWriterLease(
-                            *document_->source_path()),
+                            autosave_base_path),
+                    .recovery_base_path =
+                        recovered_master_path_,
                     .boundary_observer = {},
                 });
         if (!started) {
@@ -5908,9 +5926,6 @@ namespace lfs::vis::project {
         }
         const bool training_write_window =
             isTrainingWriteWindowOpen();
-        if (recovered_master_path_) {
-            return;
-        }
         const auto scene_serial =
             scene_mutation_serial_.load(
                 std::memory_order_acquire);
@@ -7745,6 +7760,12 @@ namespace lfs::vis::project {
             temporary;
         recovery_session_ =
             std::move(*session);
+        if (auto prepared =
+                document_->prepare_recovery_autosave(
+                    sidecar_path);
+            !prepared) {
+            return prepared;
+        }
         // Recovered content is not the durable master yet.
         scene_dirty_.store(
             true, std::memory_order_release);
