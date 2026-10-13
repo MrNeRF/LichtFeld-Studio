@@ -3133,6 +3133,11 @@ namespace lfs::vis::gui {
             return;
         }
 
+        auto encoder = lfs::gui::createVideoEncoder();
+        if (!encoder) {
+            fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODER_UNAVAILABLE));
+            return;
+        }
         const auto snapshot_result = captureVideoExportSceneSnapshot(
             *scene_manager, sequence ? VideoExportCapture::ImmediateRender : VideoExportCapture::Owned);
         if (!snapshot_result) {
@@ -3190,6 +3195,7 @@ namespace lfs::vis::gui {
             [this, job, viewer = viewer_, path, export_options, total_frames, width, height,
              engine, scene_manager, rendering_manager, render_settings,
              sequence_uuid, sequence_frames = std::move(sequence_frames),
+             encoder = std::move(encoder),
              environment_state = video_export_environment_state_.get(),
              mesh_renderer_state = video_export_mesh_renderer_state_.get(),
              snapshot = sequence_uuid ? VideoExportSceneSnapshot{} : *snapshot_result,
@@ -3215,23 +3221,23 @@ namespace lfs::vis::gui {
                     }
                 };
 
-                auto encoder = lfs::gui::createVideoEncoder();
-                if (!encoder) {
-                    error_msg = LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODER_UNAVAILABLE);
+                auto fail_encoder = [this, job, width, height, &error_msg, &cleanup_video_export_state](std::string message) {
+                    error_msg = LOCF(
+                        lichtfeld::Strings::Runtime::VIDEO_ENCODER_PROBE_FAILED,
+                        width,
+                        height,
+                        message);
                     jobs_.report(
                         job, std::nullopt,
-                        LOC(lichtfeld::Strings::Runtime::TASK_FAILED),
+                        LOCF(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL, error_msg),
                         error_msg);
+                    LOG_ERROR("Failed to initialize encoder: {}", error_msg);
+                    lfs::core::events::state::VideoExportFailed{.error = error_msg}.emit();
                     publishVideoExportOverlayState();
-                    lfs::core::events::state::VideoExportFailed{
-                        .error = LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODER_UNAVAILABLE)}
-                        .emit();
                     cleanup_video_export_state();
-                    jobs_.finishWork(
-                        job, false, error_msg);
+                    jobs_.finishWork(job, false, error_msg);
                     wakeMainThreadForAsyncWork();
-                    return;
-                }
+                };
 
                 jobs_.report(
                     job, std::nullopt,
@@ -3240,20 +3246,7 @@ namespace lfs::vis::gui {
 
                 auto result = encoder->open(path, export_options);
                 if (!result) {
-                    error_msg = result.error();
-                    jobs_.report(
-                        job, std::nullopt,
-                        LOCF(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL, result.error()),
-                        error_msg);
-                    LOG_ERROR("Failed to open encoder: {}", result.error());
-                    lfs::core::events::state::VideoExportFailed{
-                        .error = result.error()}
-                        .emit();
-                    publishVideoExportOverlayState();
-                    cleanup_video_export_state();
-                    jobs_.finishWork(
-                        job, false, error_msg);
-                    wakeMainThreadForAsyncWork();
+                    fail_encoder(result.error());
                     return;
                 }
 

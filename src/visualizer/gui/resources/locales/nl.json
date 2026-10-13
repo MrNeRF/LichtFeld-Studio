@@ -2654,6 +2654,7 @@
     "export_extension_warning": "De geëxporteerde {}-gegevens hebben niet de gebruikelijke extensie. Andere apps herkennen het bestand mogelijk niet.",
     "export_sh_degree_clamped": "De gevraagde SH-graad is voor de geselecteerde modellen beperkt tot {}.",
     "video_encoder_unavailable": "Video-encoder niet beschikbaar",
+    "video_encoder_probe_failed": "Video exporteren op {}x{} is niet mogelijk: {}",
     "scene_manager_unavailable": "Scènebeheerder is niet beschikbaar",
     "no_model_selected": "Geen model geselecteerd om te exporteren",
     "no_scene_manager": "Geen scènebeheerder",

@@ -2654,6 +2654,7 @@
     "export_extension_warning": "Wyeksportowane dane {} nie mają zwykłego rozszerzenia. Inne aplikacje mogą ich nie rozpoznać.",
     "export_sh_degree_clamped": "Żądany stopień SH został ograniczony do {} dla wybranych modeli.",
     "video_encoder_unavailable": "Enkoder wideo jest niedostępny",
+    "video_encoder_probe_failed": "Nie można wyeksportować wideo w rozmiarze {}x{}: {}",
     "scene_manager_unavailable": "Menedżer scen jest niedostępny",
     "no_model_selected": "Nie wybrano modelu do eksportu",
     "no_scene_manager": "Brak menedżera scen",

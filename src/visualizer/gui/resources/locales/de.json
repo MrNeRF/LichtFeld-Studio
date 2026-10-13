@@ -2654,6 +2654,7 @@
     "export_extension_warning": "Die exportierten {}-Daten haben nicht die übliche Dateiendung. Andere Anwendungen erkennen sie möglicherweise nicht.",
     "export_sh_degree_clamped": "Der angeforderte SH-Grad wurde für die ausgewählten Modelle auf {} begrenzt.",
     "video_encoder_unavailable": "Video-Encoder nicht verfügbar",
+    "video_encoder_probe_failed": "Videoexport mit {}x{} nicht möglich: {}",
     "scene_manager_unavailable": "Szenenverwaltung ist nicht verfügbar",
     "no_model_selected": "Kein Modell zum Exportieren ausgewählt",
     "no_scene_manager": "Keine Szenenverwaltung",

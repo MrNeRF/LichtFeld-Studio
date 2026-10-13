@@ -2654,6 +2654,7 @@
     "export_extension_warning": "エクスポートした{}データのファイル名には通常の拡張子がありません。他のアプリで認識されない可能性があります。",
     "export_sh_degree_clamped": "要求された SH 次数は、選択したモデルに合わせて {} に制限されました。",
     "video_encoder_unavailable": "ビデオエンコーダーを利用できません",
+    "video_encoder_probe_failed": "{}x{} で動画をエクスポートできません: {}",
     "scene_manager_unavailable": "シーンマネージャーを利用できません",
     "no_model_selected": "エクスポートするモデルが選択されていません",
     "no_scene_manager": "シーンマネージャーがありません",

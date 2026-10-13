@@ -2654,6 +2654,7 @@
     "export_extension_warning": "导出的 {} 数据文件没有常用扩展名，其他应用可能无法识别。",
     "export_sh_degree_clamped": "所请求的 SH 阶数已针对所选模型限制为 {}。",
     "video_encoder_unavailable": "视频编码器不可用",
+    "video_encoder_probe_failed": "无法以 {}x{} 导出视频：{}",
     "scene_manager_unavailable": "场景管理器不可用",
     "no_model_selected": "未选择要导出的模型",
     "no_scene_manager": "没有场景管理器",

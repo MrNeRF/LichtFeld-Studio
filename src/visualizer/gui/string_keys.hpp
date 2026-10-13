@@ -926,6 +926,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EXPORT_EXTENSION_WARNING = "runtime.export_extension_warning";
         inline constexpr const char* EXPORT_SH_DEGREE_CLAMPED = "runtime.export_sh_degree_clamped";
         inline constexpr const char* VIDEO_ENCODER_UNAVAILABLE = "runtime.video_encoder_unavailable";
+        inline constexpr const char* VIDEO_ENCODER_PROBE_FAILED = "runtime.video_encoder_probe_failed";
         inline constexpr const char* SCENE_MANAGER_UNAVAILABLE = "runtime.scene_manager_unavailable";
         inline constexpr const char* NO_MODEL_SELECTED = "runtime.no_model_selected";
         inline constexpr const char* NO_SCENE_MANAGER = "runtime.no_scene_manager";

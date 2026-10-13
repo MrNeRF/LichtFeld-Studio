@@ -2653,6 +2653,7 @@
     "export_extension_warning": "Exported {} data to a file without its usual extension. Other apps may not recognize it.",
     "export_sh_degree_clamped": "Requested SH degree was clamped to {} for the selected models.",
     "video_encoder_unavailable": "Video encoder not available",
+    "video_encoder_probe_failed": "Cannot export video at {}x{}: {}",
     "scene_manager_unavailable": "Scene manager is not available",
     "no_model_selected": "No model selected for export",
     "no_scene_manager": "No scene manager",

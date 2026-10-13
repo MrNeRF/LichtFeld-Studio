@@ -2654,6 +2654,7 @@
     "export_extension_warning": "Les données {} exportées n'ont pas leur extension habituelle. D'autres applications risquent de ne pas les reconnaître.",
     "export_sh_degree_clamped": "Le degré SH demandé a été limité à {} pour les modèles sélectionnés.",
     "video_encoder_unavailable": "Encodeur vidéo indisponible",
+    "video_encoder_probe_failed": "Impossible d’exporter la vidéo en {}x{} : {}",
     "scene_manager_unavailable": "Le gestionnaire de scènes est indisponible",
     "no_model_selected": "Aucun modèle sélectionné pour l’exportation",
     "no_scene_manager": "Aucun gestionnaire de scènes",

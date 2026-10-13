@@ -671,6 +671,32 @@ namespace {
     };
 } // namespace
 
+TEST(VideoEncoderOpenTest, RejectsUnsupportedDimensionsWithoutCreatingOutput) {
+    VideoOutputDirectory directory;
+    const auto path = directory.path / "unsupported.mp4";
+    const lfs::io::video::VideoExportOptions options{
+        .preset = lfs::io::video::VideoPreset::CUSTOM,
+        .width = 8192,
+        .height = 4096,
+        .framerate = 2,
+        .crf = 20,
+    };
+
+    lfs::io::video::VideoEncoder encoder;
+    const auto result = encoder.open(path, options);
+    if (!result && result.error().find("h264_nvenc: encoder unavailable") != std::string::npos &&
+        result.error().find("H.264 fallback: H.264 encoder not found") != std::string::npos) {
+        GTEST_SKIP() << "No H.264 encoder is available in this build";
+    }
+
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("8192x4096"), std::string::npos);
+    EXPECT_NE(result.error().find("h264_nvenc"), std::string::npos);
+    EXPECT_NE(result.error().find("H.264 fallback"), std::string::npos);
+    EXPECT_NE(result.error().find("codec open failed"), std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(path));
+}
+
 TEST(VideoEncoderValidationTest, RejectsConflictingExtensionsWithoutTouchingDestination) {
     VideoOutputDirectory directory;
     const auto options = lfs::io::video::VideoExportOptions{

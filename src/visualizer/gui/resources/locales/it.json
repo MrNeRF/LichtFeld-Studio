@@ -2654,6 +2654,7 @@
     "export_extension_warning": "I dati {} esportati non hanno l'estensione abituale. Altre applicazioni potrebbero non riconoscerli.",
     "export_sh_degree_clamped": "Il grado SH richiesto è stato limitato a {} per i modelli selezionati.",
     "video_encoder_unavailable": "Encoder video non disponibile",
+    "video_encoder_probe_failed": "Impossibile esportare il video a {}x{}: {}",
     "scene_manager_unavailable": "Il gestore della scena non è disponibile",
     "no_model_selected": "Nessun modello selezionato per l’esportazione",
     "no_scene_manager": "Nessun gestore della scena",
