@@ -3,6 +3,7 @@
 #include "core/image_codecs.hpp"
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -19,6 +20,24 @@
 
 namespace {
     namespace codec = lfs::core::image_codecs;
+
+    TEST(ProductionTiff, TransferTablesAreSharedAndMatchIndependentReference) {
+        EXPECT_TRUE(codec::tiff_transfer_function("unknown").empty());
+        for (const auto name : {"linear", "srgb", "bt709"}) {
+            const auto table = codec::tiff_transfer_function(name);
+            ASSERT_EQ(table.size(), 65536);
+            EXPECT_EQ(table.data(), codec::tiff_transfer_function(name).data());
+            for (size_t i = 0; i < table.size(); ++i) {
+                const double value = double(i) / 65535.;
+                const double linear = std::string_view(name) == "srgb"
+                                          ? (value <= .04045 ? value / 12.92 : std::pow((value + .055) / 1.055, 2.4))
+                                      : std::string_view(name) == "bt709"
+                                          ? (value < .081 ? value / 4.5 : std::pow((value + .099) / 1.099, 1. / .45))
+                                          : value;
+                EXPECT_LE(std::abs(int(table[i]) - int(std::floor(linear * 65535. + .5))), 1) << name << " entry " << i;
+            }
+        }
+    }
 
     struct PngMetadataReader {
         png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
@@ -176,7 +195,7 @@ namespace {
         EXPECT_EQ(std::distance(std::filesystem::directory_iterator(temporary.path), std::filesystem::directory_iterator{}), 1);
     }
 
-    TEST(ProductionTiff, OversizedOwnMetadataFailsWhileExternalDescriptionKeepsLegacyDecode) {
+    TEST(ProductionTiff, OversizedDescriptionsKeepLegacyDecodeRegardlessOfLfsSubstring) {
         TemporaryDirectory temporary;
         const auto path = temporary.path / "description.tif";
         for (const bool own : {false, true}) {
@@ -198,7 +217,7 @@ namespace {
             owner.reset();
             codec::TiffMetadata metadata;
             std::string error;
-            EXPECT_EQ(codec::read_tiff_metadata(path, metadata, error), !own);
+            EXPECT_TRUE(codec::read_tiff_metadata(path, metadata, error));
             EXPECT_FALSE(metadata.description);
             codec::Image raw;
             ASSERT_TRUE(codec::decode(path, raw, error));

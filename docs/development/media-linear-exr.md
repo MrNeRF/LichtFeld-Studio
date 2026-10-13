@@ -26,11 +26,17 @@ Conversion runs at 16-bit precision before an optional RGB8 request or resizing;
 wide-gamut colors outside BT.709 are clipped to that display contract.
 Raw codec decode, `load_image_float` and high-bitdepth data/normal loaders retain
 the stored samples and do not apply display color management. Untagged TIFFs
-keep their existing behavior. Unknown versioned LichtFeld encodings fail explicitly.
-Incomplete, malformed or duplicate-key LichtFeld metadata is rejected; its
+keep their existing behavior. Malformed JSON, non-object descriptions, missing
+or unsupported encoding markers and oversized descriptions remain foreign TIFFs
+and preserve legacy loading, even when they contain other `lfs` field names.
+Only a valid object with the supported `lfsEncoding` opts into strict validation:
+incomplete or duplicate-key records are rejected, and their
 sample type, alpha, primaries and complete transfer table must agree with the
 TIFF tags. Oversized external descriptions remain outside this color contract.
 The TIFF tags are not an ICC profile; other software must interpret them itself.
+The expected transfer tables are initialized once per transfer and reused for
+export and direct comparison against libtiff-owned tables on load, without a
+per-image table copy or repeated transfer-function evaluation.
 The transfer table adds approximately 128 KiB per
 image. Conversion and encoding run on the CPU with a packed UINT16 image buffer;
 this is not a device-resident or zero-copy writer.
@@ -410,9 +416,7 @@ pinned version requires hardware acceleration. CUDA/VideoToolbox selection is
 retained; software selection prefers dav1d without changing other codec choices.
 If dav1d is absent from another provider's registry, the native AV1 decoder is
 still attempted as before; this does not promise CPU capability for FFmpeg's
-hardware-only native implementation. Preview failures retain a non-empty
-diagnostic when probing fails, no decoder is registered, or the native
-decoder cannot submit/decode frames.
+hardware-only native implementation.
 The dav1d BSD-2-Clause notice is included with the distributed licenses.
 
 Regression fixtures cover flat EXR/WebP loading and ambiguous basenames, TIFF

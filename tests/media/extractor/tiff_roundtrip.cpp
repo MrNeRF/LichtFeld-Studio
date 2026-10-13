@@ -10,6 +10,7 @@
 #include <iostream>
 #include <media/image_output.hpp>
 #include <memory>
+#include <tiffio.h>
 
 int main() {
     using namespace lfs::media;
@@ -112,8 +113,7 @@ int main() {
             }
         }
     }
-    // External/untagged TIFFs retain raw legacy values; an unsupported explicit
-    // LichtFeld contract must fail instead of silently assuming sRGB.
+    // Only a supported, well-formed encoding opts into color management.
     const std::array<uint16_t, 3> legacy{1234, 23456, 54321};
     const auto legacy_bytes = std::span(reinterpret_cast<const uint8_t*>(legacy.data()), sizeof(legacy));
     if (!lfs::core::image_codecs::write_tiff_u16(path, legacy_bytes, 1, 1, 3, 6, std::nullopt, {.overwrite = true}))
@@ -140,7 +140,38 @@ int main() {
              R"({"lfsEncoding":"tiff16-sdr-v99"})",
              R"({"lfsEncoding":"tiff16-sdr-v1",)",
              R"({"lfsTransfer":"linear","lfsPrimaries":"bt709","lfsUnits":"relative"})",
-             R"({"lfsEncoding":7,"lfsTransfer":"linear","lfsPrimaries":"bt709","lfsUnits":"relative","lfsAlpha":"none"})",
+             R"({"lfsEncoding":7,"lfsTransfer":"linear"})",
+             R"(unstructured description containing "lfsTransfer" and "lfsEncoding")",
+             R"([{"lfsEncoding":"tiff16-sdr-v1"}])"}) {
+        if (!lfs::core::image_codecs::write_tiff_u16(path, legacy_bytes, 1, 1, 3, 6, description, {.overwrite = true}, tags))
+            return 19;
+        auto [foreign, fw, fh, fc] = lfs::core::load_image_u16(path);
+        std::unique_ptr<uint16_t, decltype(&lfs::core::free_image)> foreign_owner(foreign, lfs::core::free_image);
+        if (!foreign || fw != 1 || fh != 1 || fc != 3 || !std::equal(legacy.begin(), legacy.end(), foreign))
+            return 20;
+    }
+    // Inject oversized descriptions through libtiff, independently of the
+    // export API's bounded metadata contract. Even an apparent owned marker
+    // inside malformed/oversized text must preserve foreign TIFF pixels.
+    for (const auto prefix : {"external description ", "{\"lfsEncoding\":\"tiff16-sdr-v1\",\"padding\":\""}) {
+        if (!lfs::core::image_codecs::write_tiff_u16(path, legacy_bytes, 1, 1, 3, 6, std::nullopt, {.overwrite = true}))
+            return 22;
+        auto* tiff = TIFFOpen(path.string().c_str(), "r+");
+        if (!tiff)
+            return 23;
+        std::string description = prefix;
+        description.append(1024 * 1024, 'x');
+        const bool written = TIFFSetField(tiff, TIFFTAG_IMAGEDESCRIPTION, description.c_str()) && TIFFRewriteDirectory(tiff);
+        TIFFClose(tiff);
+        if (!written)
+            return 24;
+        auto [foreign, fw, fh, fc] = lfs::core::load_image_u16(path);
+        std::unique_ptr<uint16_t, decltype(&lfs::core::free_image)> owner(foreign, lfs::core::free_image);
+        if (!foreign || fw != 1 || fh != 1 || fc != 3 || !std::equal(legacy.begin(), legacy.end(), foreign))
+            return 25;
+    }
+    for (const auto description : {
+             R"({"lfsEncoding":"tiff16-sdr-v1"})",
              R"({"lfsEncoding":"tiff16-sdr-v1","lfsTransfer":"srgb","lfsPrimaries":"bt709","lfsUnits":"relative","lfsAlpha":"none"})",
              R"({"lfsEncoding":"tiff16-sdr-v1","lfsTransfer":"linear","lfsPrimaries":"bt2020","lfsUnits":"relative","lfsAlpha":"none"})",
              R"({"lfsEncoding":"tiff16-sdr-v1","lfsTransfer":"linear","lfsPrimaries":"bt709","lfsUnits":"relative","lfsAlpha":"independent"})",
@@ -161,5 +192,10 @@ int main() {
         return 17;
     if (!rejects())
         return 18;
+    for (const auto delta : {-1, 1}) {
+        table[65000] = uint16_t(65000 + delta);
+        if (!lfs::core::image_codecs::write_tiff_u16(path, legacy_bytes, 1, 1, 3, 6, valid, {.overwrite = true}, tags) || rejects())
+            return 21;
+    }
     return 0;
 }

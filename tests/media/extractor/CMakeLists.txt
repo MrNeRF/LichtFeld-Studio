@@ -109,7 +109,7 @@ add_test(NAME MediaAtomicFileContracts COMMAND media_extraction_runner --atomic-
 set_tests_properties(MediaAtomicFileContracts PROPERTIES LABELS "media;cpu;offline" TIMEOUT 30)
 add_executable(media_public_image_output public_image_output.cpp)
 add_executable(media_tiff_roundtrip tiff_roundtrip.cpp)
-target_link_libraries(media_tiff_roundtrip PRIVATE lfs_media lfs_core lfs_image_codecs)
+target_link_libraries(media_tiff_roundtrip PRIVATE lfs_media lfs_core lfs_image_codecs TIFF::TIFF)
 target_include_directories(media_tiff_roundtrip PRIVATE ${MEDIA_ROOT}/src)
 set_target_properties(media_tiff_roundtrip PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_test(NAME MediaTiffRoundTripContracts COMMAND media_tiff_roundtrip)

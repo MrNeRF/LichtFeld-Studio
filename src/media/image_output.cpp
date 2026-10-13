@@ -133,13 +133,7 @@ namespace lfs::media {
                         pixels[offset + 3] = quantize(sample[3]);
                 }
             }
-            std::vector<uint16_t> lookup(65536);
-            for (size_t i = 0; i < lookup.size(); ++i) {
-                const float v = float(i) / 65535.0f;
-                lookup[i] = quantize(options.transfer == ColorTransfer::Srgb    ? core::color::srgbToLinear(v)
-                                     : options.transfer == ColorTransfer::Bt709 ? core::color::bt709ToLinear(v)
-                                                                                : v);
-            }
+            const auto lookup = core::image_codecs::tiff_transfer_function(outputOptionName(options.transfer));
             nlohmann::json description{{"lfsTransfer", outputOptionName(options.transfer)}, {"lfsPrimaries", outputOptionName(layout.color.primaries)}, {"lfsUnits", "relative"}, {"lfsAlpha", rgba ? "independent" : "none"}, {"lfsProvenance", options.provenance}, {"lfsOrigin", static_cast<int>(frame.info.origin)}, {"lfsQuantization", "clamp-round-half-up-uint16"}};
             description["lfsEncoding"] = core::image_codecs::tiff_sdr_encoding;
             if (frame.info.source_timestamp)

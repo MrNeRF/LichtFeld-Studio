@@ -65,10 +65,12 @@ namespace lfs::core::image_codecs {
     LFS_IMAGE_CODECS_API bool radiance_scanlines_complete(const std::filesystem::path& path);
     LFS_IMAGE_CODECS_API bool decode(const std::filesystem::path& path, Image& result, std::string& error);
     inline constexpr std::string_view tiff_sdr_encoding = "tiff16-sdr-v1";
+    // Immutable, lazily initialized once per supported transfer; shared by
+    // export and metadata validation. Unknown transfers return an empty span.
+    LFS_IMAGE_CODECS_API std::span<const std::uint16_t> tiff_transfer_function(std::string_view transfer);
     struct TiffMetadata {
         std::optional<std::string> description;
         std::optional<std::array<float, 8>> chromaticities;
-        std::vector<std::uint16_t> transfer_function;
         int bits = 0, channels = 0;
         bool unsigned_integer = false;
         bool straight_alpha = false;

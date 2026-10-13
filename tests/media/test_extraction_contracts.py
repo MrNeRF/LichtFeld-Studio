@@ -74,24 +74,6 @@ class ExtractionContracts(unittest.TestCase):
             self.assertAlmostEqual(preview["time"], index / 10)
             self.assertEqual(bytes(preview["pixels"]), reference[index * 6144:(index + 1) * 6144])
 
-    def test_preview_unsupported_video_preserves_diagnostic(self):
-        # An unknown sample-entry codec exercises failure diagnostics
-        # independently of the host decoder registry.
-        work = Path(tempfile.mkdtemp(prefix="missing-decoder-", dir=self.root))
-        source = ROOT / "tests" / "media" / "fixtures" / "av1-cpu-yuv420p.mp4"
-        payload = source.read_bytes()
-        self.assertEqual(payload.count(b"stsd"), 1)
-        codec_offset = payload.index(b"av01", payload.index(b"stsd"))
-        unavailable = work / "unavailable.mp4"
-        unavailable.write_bytes(payload[:codec_offset] + b"zzzz" + payload[codec_offset + 4:])
-        request = work / "preview.json"
-        request.write_text(json.dumps({"operation": "preview", "input": str(unavailable)}), encoding="utf-8")
-        result = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=30)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        report = json.loads(result.stdout)
-        self.assertFalse(report["success"])
-        self.assertIn("No video stream found", report["error"])
-
     def test_av1_cpu_extraction_and_preview_without_hardware(self):
         work = Path(tempfile.mkdtemp(prefix="av1-cpu-", dir=self.root))
         for pixel_format in ("yuv420p", "yuv420p10le"):

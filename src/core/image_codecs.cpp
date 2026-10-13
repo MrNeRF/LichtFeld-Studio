@@ -4,6 +4,7 @@
 #include "image_codecs.hpp"
 #include "image_exr.hpp"
 
+#include "core/color_transfer.h"
 #include "core/path_utils.hpp"
 
 #include <jpeglib.h>
@@ -29,6 +30,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <thread>
 #include <vector>
 
@@ -950,7 +952,7 @@ namespace lfs::core::image_codecs {
 #ifndef _WIN32
             if (hdr && target.sample_type == SampleType::Float32) {
                 const int descriptor = open(path.c_str(), O_RDONLY);
-                struct stat file_status {};
+                struct stat file_status{};
                 if (descriptor >= 0 && fstat(descriptor, &file_status) == 0 && file_status.st_size > 0 &&
                     file_status.st_size <= std::numeric_limits<int>::max()) {
                     const auto size = static_cast<std::size_t>(file_status.st_size);
@@ -1849,6 +1851,33 @@ namespace lfs::core::image_codecs {
         return write_tiff_stream(path, data, width, height, channels, error, nullptr);
     }
 
+    std::span<const std::uint16_t> tiff_transfer_function(std::string_view transfer) {
+        const auto build = [](std::string_view name) {
+            std::array<std::uint16_t, 65536> table{};
+            for (size_t i = 0; i < table.size(); ++i) {
+                const float value = float(i) / 65535.f;
+                const float linear = name == "srgb"    ? color::srgbToLinear(value)
+                                     : name == "bt709" ? color::bt709ToLinear(value)
+                                                       : value;
+                table[i] = static_cast<uint16_t>(std::floor(std::clamp(double(linear), 0., 1.) * 65535. + .5));
+            }
+            return table;
+        };
+        if (transfer == "linear") {
+            static const auto table = build("linear");
+            return table;
+        }
+        if (transfer == "srgb") {
+            static const auto table = build("srgb");
+            return table;
+        }
+        if (transfer == "bt709") {
+            static const auto table = build("bt709");
+            return table;
+        }
+        return {};
+    }
+
     bool read_tiff_metadata(const std::filesystem::path& path, TiffMetadata& result, std::string& error) {
         result = {};
         TIFF* tiff = open_tiff(path, "r", error);
@@ -1872,10 +1901,6 @@ namespace lfs::core::image_codecs {
             while (length <= limit && text[length])
                 ++length;
             if (length > limit) {
-                if (std::string_view(text, limit).find("\"lfs") != std::string_view::npos) {
-                    error = "LichtFeld TIFF16 metadata exceeds the supported limit";
-                    return false;
-                }
                 // Oversized external descriptions are not our bounded export
                 // contract. Preserve legacy pixel loading without parsing them.
                 return true;
@@ -1884,16 +1909,26 @@ namespace lfs::core::image_codecs {
         }
         // Color tables are needed only for our explicitly versioned exports.
         // Avoid allocating/parsing arbitrary external TIFF profiles.
-        if (!result.description || result.description->find("\"lfsEncoding\"") == std::string::npos)
+        if (!result.description)
+            return true;
+        const auto metadata = nlohmann::json::parse(*result.description, nullptr, false);
+        if (!metadata.is_object() || !metadata.contains("lfsEncoding") ||
+            !metadata["lfsEncoding"].is_string() || metadata["lfsEncoding"].get<std::string>() != tiff_sdr_encoding)
             return true;
         float *primaries = nullptr, *white = nullptr;
         if (TIFFGetField(tiff, TIFFTAG_PRIMARYCHROMATICITIES, &primaries) &&
             TIFFGetField(tiff, TIFFTAG_WHITEPOINT, &white))
             result.chromaticities = std::array<float, 8>{primaries[0], primaries[1], primaries[2], primaries[3], primaries[4], primaries[5], white[0], white[1]};
         uint16_t *red = nullptr, *green = nullptr, *blue = nullptr;
+        const auto transfer = metadata.find("lfsTransfer");
+        const auto expected = transfer != metadata.end() && transfer->is_string()
+                                  ? tiff_transfer_function(transfer->get<std::string>())
+                                  : std::span<const uint16_t>{};
         if (bits == 16 && channels >= 3 && TIFFGetField(tiff, TIFFTAG_TRANSFERFUNCTION, &red, &green, &blue) && red && green && blue) {
-            result.transfer_function.assign(red, red + 65536);
-            result.matching_rgb_transfer = std::equal(red, red + 65536, green) && std::equal(red, red + 65536, blue);
+            result.matching_rgb_transfer = !expected.empty();
+            for (size_t i = 0; result.matching_rgb_transfer && i < expected.size(); ++i)
+                result.matching_rgb_transfer = red[i] == green[i] && red[i] == blue[i] &&
+                                               std::abs(int(red[i]) - int(expected[i])) <= 1;
         }
         return true;
     }

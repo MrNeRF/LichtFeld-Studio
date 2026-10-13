@@ -3,7 +3,6 @@
 #pragma once
 
 #include "core/error.hpp"
-#include "core/export.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -31,7 +30,7 @@ namespace lfs::vis {
         std::unique_ptr<Impl> impl_;
     };
 
-    [[nodiscard]] LFS_VIS_API lfs::Result<lfs::core::Tensor> makeGraphicsExternalTensor(
+    [[nodiscard]] lfs::Result<lfs::core::Tensor> makeGraphicsExternalTensor(
         GraphicsContext& context, lfs::core::TensorShape shape,
         lfs::core::DataType dtype, std::size_t capacity, const char* debug_name);
 

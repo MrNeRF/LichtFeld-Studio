@@ -154,19 +154,6 @@ configurations, adds no CI job, and reports CTest skip code 77 when no CUDA devi
 is present. See [module contracts](../../docs/development/media-ingest-core-cli.md)
 for the runtime graph, Python API, shared ownership and remaining boundaries.
 
-The seek/color oracle uses temporally varying luma and constant chroma so it
-does not depend on chroma upsampling differences between system FFmpeg and the
-linked player libraries. It checks that wrong frames, matrices and ranges are
-distinguishable, with the original RGB error thresholds unchanged.
-For the additional complex chroma-edge comparison, set
-`LFS_MEDIA_TEST_REFERENCE_FFMPEG` to a qualified reference executable built from
-the same FFmpeg version/configuration as the player. This variable is inherited
-by CTest. Fixture generation still uses `LFS_MEDIA_TEST_FFMPEG`, which may provide
-test-only encoders absent from the application's FFmpeg build. The chroma-edge
-test reports an explicit skip when its reference executable is not configured;
-the seek/color oracle still runs. Do not widen RGB thresholds to compensate for
-different libswscale versions. The current hosted media jobs exclude `gpu` tests.
-
 `MediaMcpContracts` builds the production MCP media adapter in the root test configuration. It validates probe/extraction, asynchronous state, event routing, duplicate-job rejection, cancellation and nested request errors using synthetic public-tool fixtures. It does not require a GPU device.
 The macOS native runner supplies CPython's complete embedding archive because
 Studio's shared libraries resolve Python from their host process. Running this

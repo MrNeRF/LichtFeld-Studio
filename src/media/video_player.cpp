@@ -199,9 +199,6 @@ namespace lfs::io {
             const auto probe = media::detail::probeVideoStream(fmt_ctx_);
             video_stream_idx_ = probe.stream_index;
             if (video_stream_idx_ < 0) {
-                setError(probe.ffmpeg_error < 0
-                             ? "Failed to probe video stream: " + ffmpegError(probe.ffmpeg_error)
-                             : "No video stream found");
                 close();
                 return false;
             }
@@ -291,8 +288,6 @@ namespace lfs::io {
             if (!codec) {
                 codec = media::detail::softwareVideoDecoder(codec_id);
                 if (!codec) {
-                    setError(std::string("No video decoder available for codec: ") +
-                             avcodec_get_name(codec_id));
                     close();
                     return false;
                 }

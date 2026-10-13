@@ -3,11 +3,9 @@
 
 #include "core/error.hpp"
 #include "core/guarded_task.hpp"
-#include "core/logger.hpp"
 
 #include <gtest/gtest.h>
 
-#include <cstdio>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -165,17 +163,9 @@ TEST(RunGuardedDeathTest, UnexpectedThreadTerminatesBeforeBodyExecution) {
     auto context = make_context();
     context.expected_thread = other_thread;
     EXPECT_DEATH(
-        {
-            // Death tests capture stderr; the console logger may use stdout.
-            (void)lfs::core::Logger::get().add_log_handler([](auto, const auto&, std::string_view message) {
-                std::fwrite(message.data(), 1, message.size(), stderr);
-                std::fputc('\n', stderr);
-                std::fflush(stderr);
-            });
-            lfs::core::run_guarded<void>(
-                context,
-                [] { return lfs::Result<void>{}; },
-                [](lfs::Result<void>&&) {});
-        },
+        lfs::core::run_guarded<void>(
+            context,
+            [] { return lfs::Result<void>{}; },
+            [](lfs::Result<void>&&) {}),
         "run_guarded: body invoked on unexpected thread");
 }

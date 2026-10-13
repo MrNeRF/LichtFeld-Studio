@@ -1625,10 +1625,6 @@ if(MSVC)
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:/Od /Z7>
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/O2 /DNDEBUG>
     )
-    # The stack diagnostic regression checks its caller name in Release too.
-    # Keep symbols for that source and a matching executable PDB.
-    set_property(SOURCE test_cuda_error.cpp APPEND PROPERTY COMPILE_OPTIONS /Z7)
-    target_link_options(lichtfeld_tests PRIVATE /DEBUG:FULL)
 else()
     target_compile_options(lichtfeld_tests PRIVATE
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>

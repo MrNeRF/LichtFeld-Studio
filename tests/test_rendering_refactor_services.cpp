@@ -418,12 +418,8 @@ namespace lfs::vis {
         void SetUp() override {
             RenderingManagerEventsTest::SetUp();
             int devices = 0;
-            if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
-                GTEST_SKIP() << "Requires CUDA";
-#ifndef _WIN32
-            if (!std::getenv("DISPLAY"))
-                GTEST_SKIP() << "Requires a Vulkan display";
-#endif
+            if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0 || !std::getenv("DISPLAY"))
+                GTEST_SKIP() << "Requires CUDA and a Vulkan display";
             window = std::make_unique<WindowManager>("GT comparison test", 128, 128);
             ASSERT_TRUE(window->init());
             scene = std::make_unique<SceneManager>();

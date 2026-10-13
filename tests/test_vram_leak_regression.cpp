@@ -9,7 +9,6 @@
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/error.hpp"
-#include "core/host_metrics.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
@@ -22,6 +21,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -30,8 +30,21 @@ using namespace lfs::core;
 
 namespace {
 
+    // Resident set size in bytes from /proc/self/status (Linux).
     std::size_t host_rss_bytes() {
-        return host_metrics::sample().process_rss_bytes;
+        std::ifstream in("/proc/self/status");
+        std::string key;
+        while (in >> key) {
+            if (key == "VmRSS:") {
+                std::size_t kib = 0;
+                in >> kib;
+                return kib * 1024;
+            }
+            // Skip rest of line.
+            std::string rest;
+            std::getline(in, rest);
+        }
+        return 0;
     }
 
     std::size_t cuda_free_bytes() {

@@ -65,19 +65,14 @@ namespace {
             if (depth == 1 && event == nlohmann::json::parse_event_t::key && !keys.insert(parsed.template get<std::string>()).second)
                 duplicate = true;
             return true; }, false);
-        if (metadata.is_discarded() && tags.description->find("\"lfs") != std::string::npos)
-            throw std::runtime_error("Malformed LichtFeld TIFF16 metadata");
         if (!metadata.is_object())
             return {};
-        if (!metadata.contains("lfsEncoding")) {
-            if (metadata.contains("lfsTransfer") || metadata.contains("lfsPrimaries") || metadata.contains("lfsUnits"))
-                throw std::runtime_error("Missing LichtFeld TIFF16 encoding version");
-            return {};
-        }
         const auto text = [&](const char* key) -> std::string {
             const auto field = metadata.find(key);
             return field != metadata.end() && field->is_string() ? field->get<std::string>() : std::string{};
         };
+        if (text("lfsEncoding") != image_codecs::tiff_sdr_encoding)
+            return {};
         const auto transfer = text("lfsTransfer");
         const auto primaries = text("lfsPrimaries");
         if (duplicate || text("lfsEncoding") != image_codecs::tiff_sdr_encoding || text("lfsUnits") != "relative" ||
@@ -86,7 +81,7 @@ namespace {
             throw std::runtime_error("Unsupported LichtFeld TIFF16 color encoding");
         if (tags.bits != 16 || !tags.unsigned_integer ||
             (tags.channels != 3 && tags.channels != 4) || !tags.chromaticities ||
-            !tags.matching_rgb_transfer || tags.transfer_function.size() != 65536 ||
+            !tags.matching_rgb_transfer ||
             (tags.channels == 4 ? text("lfsAlpha") != "independent" || !tags.straight_alpha : text("lfsAlpha") != "none" || tags.straight_alpha))
             throw std::runtime_error("LichtFeld TIFF16 metadata contradicts TIFF sample or alpha tags");
         const std::array<float, 8> expected = primaries == "bt709" ? std::array<float, 8>{.64f, .33f, .30f, .60f, .15f, .06f, .3127f, .3290f}
@@ -94,14 +89,6 @@ namespace {
         for (size_t i = 0; i < expected.size(); ++i)
             if (!std::isfinite((*tags.chromaticities)[i]) || std::abs((*tags.chromaticities)[i] - expected[i]) > 1e-5f)
                 throw std::runtime_error("LichtFeld TIFF16 primaries contradict TIFF chromaticities");
-        for (size_t i = 0; i < tags.transfer_function.size(); ++i) {
-            const float value = float(i) / 65535.f;
-            const float linear = transfer == "linear" ? value : transfer == "srgb" ? lfs::core::color::srgbToLinear(value)
-                                                                                   : lfs::core::color::bt709ToLinear(value);
-            const auto expected_value = std::lround(std::clamp(double(linear), 0., 1.) * 65535.);
-            if (std::abs(long(tags.transfer_function[i]) - expected_value) > 1)
-                throw std::runtime_error("LichtFeld TIFF16 transfer contradicts TIFF transfer function");
-        }
         return TiffDisplayEncoding{transfer, primaries == "bt2020"};
     }
 
