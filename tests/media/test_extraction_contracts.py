@@ -75,21 +75,10 @@ class ExtractionContracts(unittest.TestCase):
             self.assertEqual(bytes(preview["pixels"]), reference[index * 6144:(index + 1) * 6144])
 
     def test_av1_cpu_extraction_and_preview_without_hardware(self):
-        encoders = subprocess.check_output([FFMPEG, "-hide_banner", "-encoders"], stderr=subprocess.STDOUT)
-        if b"libaom-av1" in encoders:
-            encoder = ["-c:v", "libaom-av1", "-cpu-used", "8"]
-        elif b"libsvtav1" in encoders:
-            encoder = ["-c:v", "libsvtav1", "-preset", "12", "-svtav1-params", "lp=2"]
-        else:
-            self.skipTest("Fixture FFmpeg has no software AV1 encoder")
         work = Path(tempfile.mkdtemp(prefix="av1-cpu-", dir=self.root))
         for pixel_format in ("yuv420p", "yuv420p10le"):
-            source = work / (pixel_format + ".mp4")
-            subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i",
-                            "nullsrc=size=64x64:rate=4:duration=1,geq=lum='32+N*32':cb=90:cr=180",
-                            "-pix_fmt", pixel_format,
-                            *encoder, "-crf", "30", str(source)],
-                           check=True, capture_output=True, timeout=60)
+            source = ROOT / "tests" / "media" / "fixtures" / ("av1-cpu-" + pixel_format + ".mp4")
+            self.assertTrue(source.is_file(), "Required generated AV1 fixture is missing")
             request = work / "request.json"
             request.write_text(json.dumps({"input": str(source), "output": str(work / "unused"),
                                            "sink": "memory"}), encoding="utf-8")

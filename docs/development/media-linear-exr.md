@@ -334,24 +334,36 @@ convention or external application's interpretation of custom EXR attributes.
 Dataset discovery includes EXR and WebP alongside JPEG, PNG, BMP and TIFF.
 These formats use the existing CPU image decoders; recognizing their paths
 also applies to flat COLMAP layouts, image counts and basename ambiguity checks.
+For previews, existing JPEG/PNG/BMP/TIFF files retain priority over EXR/WebP;
+lexical order is preserved within each group. Same-directory, same-stem
+EXR/WebP companions of an existing format do not inflate image counts.
+Standalone EXR/WebP files and files in different directories still count.
+COLMAP reference resolution and basename ambiguity rules remain unchanged.
 This does not change the existing training RGB conversion or preserve an EXR
 HDR master inside a display-byte training cache. The extraction master and the
 training representation remain distinct contracts.
 
 TIFF sample descriptions and decoding accept unsigned 8/16-bit samples and
-32-bit floating-point samples. Unsigned 32-bit integer TIFF is unsupported and
-must fail both probing and decoding, rather than being reported as UInt8.
-Float32 TIFF remains supported; integer32 and float32 are not interchangeable.
+32-bit floating-point samples. Unsigned 32-bit integer TIFF is converted to
+Float32 using `sample / (2^32 - 1)`, preserving 0 and 1 endpoints with float32
+precision. Both extension and signature probes report this supported output
+type. The direct-buffer path refuses UINT32 because it requires conversion;
+native Float32 TIFF retains its original samples and direct-buffer support.
 
 CPU AV1 extraction and preview use FFmpeg's libdav1d decoder. The manifest
 explicitly enables the dav1d feature, because FFmpeg's native AV1 decoder in the
 pinned version requires hardware acceleration. CUDA/VideoToolbox selection is
-retained; software fallback selects dav1d without changing other codec choices.
+retained; software selection prefers dav1d without changing other codec choices.
+If dav1d is absent from another provider's registry, the native AV1 decoder is
+still attempted as before; this does not promise CPU capability for FFmpeg's
+hardware-only native implementation.
 The dav1d BSD-2-Clause notice is included with the distributed licenses.
 
 Regression fixtures cover flat EXR/WebP loading and ambiguous basenames, TIFF
 sample types and both byte orders, and AV1 8/10-bit extraction plus CPU preview
-against an independently decoded RGB reference. These checks do not add new
+against an independently decoded RGB reference. The AV1 inputs are checked-in
+project-generated four-frame fixtures, so missing AV1 encoders cannot skip
+CPU decoder coverage. These checks do not add new
 image writers, new sequence formats, or new video encoders. TIFF16 export,
 HEIF/AVIF/JPEG XL support and HEVC export remain separate increments.
 

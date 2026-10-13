@@ -595,7 +595,7 @@ namespace lfs::core::image_codecs {
         }
 
         bool supported_tiff_samples(const std::uint16_t bits, const std::uint16_t sample_format) {
-            return (sample_format == SAMPLEFORMAT_UINT && (bits == 8 || bits == 16)) ||
+            return (sample_format == SAMPLEFORMAT_UINT && (bits == 8 || bits == 16 || bits == 32)) ||
                    (sample_format == SAMPLEFORMAT_IEEEFP && bits == 32);
         }
 
@@ -650,8 +650,8 @@ namespace lfs::core::image_codecs {
             result.width = static_cast<int>(width);
             result.height = static_cast<int>(height);
             result.channels = channels;
-            result.sample_type = sample_format == SAMPLEFORMAT_IEEEFP ? SampleType::Float32 : bits == 16 ? SampleType::UInt16
-                                                                                                         : SampleType::UInt8;
+            result.sample_type = sample_format == SAMPLEFORMAT_IEEEFP || bits == 32 ? SampleType::Float32 : bits == 16 ? SampleType::UInt16
+                                                                                                                       : SampleType::UInt8;
             result.data.resize(static_cast<std::size_t>(width) * height * channels * sample_size);
             const tmsize_t scanline_size = TIFFScanlineSize(tiff);
             std::vector<std::uint8_t> row(static_cast<std::size_t>(std::max<tmsize_t>(scanline_size, 1)));
@@ -678,6 +678,17 @@ namespace lfs::core::image_codecs {
                                         row.data() + static_cast<std::size_t>(x) * sample_size, sample_size);
                         }
                     }
+                }
+            }
+            // UINT32 TIFF is retained as normalized float rather than being
+            // mislabeled UInt8 or rejected. Preserve endpoints using 2^32-1;
+            // float32 precision is the supported in-memory representation.
+            if (sample_format == SAMPLEFORMAT_UINT && bits == 32) {
+                for (size_t offset = 0; offset < result.data.size(); offset += 4) {
+                    uint32_t sample;
+                    std::memcpy(&sample, result.data.data() + offset, 4);
+                    const float normalized = static_cast<float>(double(sample) / 4294967295.0);
+                    std::memcpy(result.data.data() + offset, &normalized, 4);
                 }
             }
             TIFFClose(tiff);
@@ -1047,8 +1058,8 @@ namespace lfs::core::image_codecs {
                 return false;
             }
             result = {static_cast<int>(width), static_cast<int>(height), static_cast<int>(channels),
-                      sample_format == SAMPLEFORMAT_IEEEFP ? SampleType::Float32 : bits == 16 ? SampleType::UInt16
-                                                                                              : SampleType::UInt8};
+                      sample_format == SAMPLEFORMAT_IEEEFP || bits == 32 ? SampleType::Float32 : bits == 16 ? SampleType::UInt16
+                                                                                                            : SampleType::UInt8};
             return true;
         }
 
@@ -1077,8 +1088,8 @@ namespace lfs::core::image_codecs {
                 return false;
             }
             result = {static_cast<int>(width), static_cast<int>(height), static_cast<int>(channels),
-                      sample_format == SAMPLEFORMAT_IEEEFP ? SampleType::Float32 : bits == 16 ? SampleType::UInt16
-                                                                                              : SampleType::UInt8};
+                      sample_format == SAMPLEFORMAT_IEEEFP || bits == 32 ? SampleType::Float32 : bits == 16 ? SampleType::UInt16
+                                                                                                            : SampleType::UInt8};
             return true;
         }
         std::vector<std::uint8_t> data;

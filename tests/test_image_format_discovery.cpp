@@ -4,6 +4,7 @@
 #include "core/image_io.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/loaders/colmap_loader.hpp"
+#include "io/project_document.hpp"
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -36,6 +37,35 @@ namespace {
             write_text_file(path / "images.txt", "1 1 0 0 0 0 0 0 1 " + name + "\n\n");
         }
     };
+    TEST_F(ImageFormatDiscoveryTest, ExistingDatasetKeepsPreviewAndCountsWithFormatCompanions) {
+        const auto dataset = temp_dir_ / "companions";
+        write_minimal_colmap_text_dataset(dataset, "frame.jpg");
+        const std::array<uint8_t, 12> rgb{255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0};
+        std::string error;
+        ASSERT_TRUE(lfs::core::image_codecs::write_jpeg(dataset / "frame.jpg", rgb.data(), 2, 2, 3, 95, std::nullopt, error));
+        write_text_file(dataset / "frame.exr", "unreferenced depth/HDR companion");
+        write_text_file(dataset / "frame.webp", "unreferenced image companion");
+        lfs::io::ColmapLoader loader;
+        ASSERT_TRUE(loader.load(dataset, {.validate_only = true}).has_value());
+        EXPECT_EQ(lfs::io::count_image_files(dataset, false), 1);
+        EXPECT_EQ(lfs::io::detect_dataset_info(dataset).image_count, 1);
+        lfs::core::param::DatasetConfig config;
+        config.data_path = dataset;
+        config.images = ".";
+        ASSERT_TRUE(lfs::io::project::first_dataset_image(config).has_value());
+        EXPECT_EQ(lfs::io::project::first_dataset_image(config)->lexically_normal(), dataset / "frame.jpg");
+        write_text_file(dataset / "second.JPG", "legacy uppercase extension");
+        write_text_file(dataset / "second.WEBP", "same-stem uppercase companion");
+        write_text_file(dataset / "nested" / "frame.exr", "standalone in a different directory");
+        EXPECT_EQ(lfs::io::count_image_files(dataset, false), 2);
+        EXPECT_EQ(lfs::io::count_image_files(dataset, true), 3);
+        EXPECT_EQ(lfs::io::detect_dataset_info(dataset).image_count, 2);
+        fs::remove(dataset / "frame.jpg");
+        fs::remove(dataset / "second.JPG");
+        EXPECT_EQ(lfs::io::count_image_files(dataset, false), 3);
+        ASSERT_TRUE(lfs::io::project::first_dataset_image(config).has_value());
+        EXPECT_EQ(lfs::io::project::first_dataset_image(config)->lexically_normal(), dataset / "frame.exr");
+    }
     TEST_F(ImageFormatDiscoveryTest, FlatExrAndWebpDatasetsUseExistingCpuDecoders) {
         for (const auto extension : {".exr", ".webp"}) {
             const auto dataset = temp_dir_ / std::string(extension + 1);

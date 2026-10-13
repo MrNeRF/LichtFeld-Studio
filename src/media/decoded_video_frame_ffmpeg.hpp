@@ -21,8 +21,11 @@ namespace lfs::media::detail {
     inline const AVCodec* softwareVideoDecoder(const AVCodecID id) {
         // FFmpeg's native AV1 decoder requires a hardware accelerator. A CPU
         // fallback must select the software implementation explicitly.
-        return id == AV_CODEC_ID_AV1 ? avcodec_find_decoder_by_name("libdav1d")
-                                     : avcodec_find_decoder(id);
+        if (id == AV_CODEC_ID_AV1)
+            if (const auto* dav1d = avcodec_find_decoder_by_name("libdav1d"))
+                return dav1d;
+        // Keep the provider's native choice available in builds without dav1d.
+        return avcodec_find_decoder(id);
     }
     template <class T>
     inline const T* frameMetadata(const AVFrame* f, AVFrameSideDataType type) {
