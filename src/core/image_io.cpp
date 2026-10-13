@@ -47,7 +47,7 @@ namespace {
     bool decode_display_image(const std::filesystem::path& path, image_codecs::Image& image, std::string& error) {
         auto extension = path.extension().string();
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (extension == ".heic" || extension == ".heif")
+        if (extension == ".avif" || extension == ".heic" || extension == ".heif")
             return image_codecs::decode_heif(path, image, error, true);
         return image_codecs::decode(path, image, error);
     }
@@ -55,7 +55,7 @@ namespace {
     bool decode_display_to_buffer(const std::filesystem::path& path, image_codecs::DecodeTarget& target, image_codecs::Probe& info, std::string& error) {
         auto extension = path.extension().string();
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (extension == ".heic" || extension == ".heif")
+        if (extension == ".avif" || extension == ".heic" || extension == ".heif")
             return image_codecs::decode_heif_to_buffer(path, target, info, error, true);
         return image_codecs::decode_to_buffer(path, target, info, error);
     }

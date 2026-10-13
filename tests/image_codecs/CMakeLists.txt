@@ -11,6 +11,7 @@ endif()
 
 get_filename_component(LFS_CODEC_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 find_package(GTest REQUIRED)
+find_package(libheif CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenEXR 3.4.15 CONFIG REQUIRED)
 find_package(JPEG REQUIRED)
@@ -54,7 +55,7 @@ target_include_directories(lichtfeld_image_codec_tests PRIVATE ${LFS_CODEC_ROOT}
 target_include_directories(lichtfeld_image_codec_tests BEFORE PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_include_directories(lichtfeld_image_codec_tests SYSTEM PRIVATE ${LFS_CODEC_ROOT}/external)
 target_link_libraries(lichtfeld_image_codec_tests PRIVATE
-    lfs_image_codecs
+    lfs_image_codecs heif
     GTest::gtest_main Threads::Threads OpenEXR::OpenEXRCore OpenEXR::OpenEXR
     JPEG::JPEG PNG::PNG TIFF::TIFF WebP::webp ZLIB::ZLIB)
 if(MSVC)

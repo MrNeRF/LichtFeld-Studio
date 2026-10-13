@@ -314,7 +314,7 @@ void heifCacheAndQueueContracts() {
         io::CacheLoader& cache;
         ~Reset() { cache.reset_cache(); }
     } reset{cache};
-    for (const auto name : {"rgb12.heic", "p3.heic"}) {
+    for (const auto name : {"rgb12.avif", "p3.avif"}) {
         const auto path = std::filesystem::path(LFS_HEIF_FIXTURES) / name;
         cache.reset_cache();
         cache.update_cache_params(true, 2, 0.f, 0.f, false, 1);

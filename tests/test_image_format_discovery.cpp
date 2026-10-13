@@ -123,9 +123,10 @@ namespace {
     }
 
     TEST_F(ImageFormatDiscoveryTest, HeifDatasetLoadsAndCompanionsPreserveLegacyCounts) {
-        const auto fixture = fs::path(LFS_HEIF_FIXTURES) / "rgb12.heic";
-        for (const auto extension : {".heic", ".HEIF"}) {
-            const auto dataset = temp_dir_ / std::string(extension + 1);
+        const auto fixture = fs::path(LFS_HEIF_FIXTURES) / "rgb12.avif";
+        size_t case_index = 0;
+        for (const auto extension : {".avif", ".AVIF", ".HEIF"}) {
+            const auto dataset = temp_dir_ / std::to_string(case_index++);
             const auto name = std::string("frame") + extension;
             write_minimal_colmap_text_dataset(dataset, name);
             write_text_file(dataset / "cameras.txt", "1 PINHOLE 32 24 30 30 16 12\n");
@@ -162,16 +163,16 @@ namespace {
         const auto root = fs::path(LFS_HEIF_FIXTURES);
         codec::Image expected;
         std::string error;
-        ASSERT_TRUE(codec::decode_heif(root / "p3.heic", expected, error, true)) << error;
-        auto [rgb, w, h, c] = lfs::core::load_image(root / "p3.heic");
+        ASSERT_TRUE(codec::decode_heif(root / "p3.avif", expected, error, true)) << error;
+        auto [rgb, w, h, c] = lfs::core::load_image(root / "p3.avif");
         std::unique_ptr<uint8_t, decltype(&lfs::core::free_image)> rgb_owner(rgb, lfs::core::free_image);
         ASSERT_NE(rgb, nullptr);
         ASSERT_EQ(c, 3);
         ASSERT_EQ(w, 32);
         ASSERT_EQ(h, 24);
         EXPECT_TRUE(std::equal(expected.data.begin(), expected.data.end(), rgb));
-        ASSERT_TRUE(codec::decode(root / "rgba8.heic", expected, error)) << error;
-        auto [rgba, aw, ah, ac] = lfs::core::load_image_with_alpha(root / "rgba8.heic");
+        ASSERT_TRUE(codec::decode(root / "rgba8.avif", expected, error)) << error;
+        auto [rgba, aw, ah, ac] = lfs::core::load_image_with_alpha(root / "rgba8.avif");
         std::unique_ptr<uint8_t, decltype(&lfs::core::free_image)> rgba_owner(rgba, lfs::core::free_image);
         ASSERT_NE(rgba, nullptr);
         ASSERT_EQ(ac, 4);
@@ -179,14 +180,14 @@ namespace {
         ASSERT_EQ(ah, 24);
         for (size_t i = 3; i < expected.data.size(); i += 4)
             EXPECT_EQ(rgba[i], expected.data[i]);
-        auto [small, sw, sh, sc] = lfs::core::load_image_with_alpha(root / "rgba8.heic", 2);
+        auto [small, sw, sh, sc] = lfs::core::load_image_with_alpha(root / "rgba8.avif", 2);
         std::unique_ptr<uint8_t, decltype(&lfs::core::free_image)> small_owner(small, lfs::core::free_image);
         ASSERT_NE(small, nullptr);
         EXPECT_EQ(sw, 16);
         EXPECT_EQ(sh, 12);
         EXPECT_EQ(sc, 4);
-        EXPECT_THROW(lfs::core::load_image(root / "pq.heic"), std::runtime_error);
-        auto [raw, rw, rh, rc] = lfs::core::load_image_float(root / "pq.heic");
+        EXPECT_THROW(lfs::core::load_image(root / "pq.avif"), std::runtime_error);
+        auto [raw, rw, rh, rc] = lfs::core::load_image_float(root / "pq.avif");
         std::unique_ptr<float, decltype(&lfs::core::free_image)> raw_owner(raw, lfs::core::free_image);
         ASSERT_NE(raw, nullptr);
         EXPECT_EQ(rw, 32);
@@ -195,8 +196,8 @@ namespace {
     }
 
     TEST_F(ImageFormatDiscoveryTest, HeifBoundedHeaderAndMemoryAreReadable) {
-        const auto path = temp_dir_ / "frame.heic";
-        fs::copy_file(fs::path(LFS_HEIF_FIXTURES) / "p3.heic", path);
+        const auto path = temp_dir_ / "frame.avif";
+        fs::copy_file(fs::path(LFS_HEIF_FIXTURES) / "p3.avif", path);
         std::string error;
         EXPECT_TRUE(lfs::core::probe_image_header_bounded(path, error)) << error;
         std::ifstream input(path, std::ios::binary);
@@ -214,8 +215,8 @@ namespace {
     TEST_F(ImageFormatDiscoveryTest, HeifBlenderDatasetCreatesCamerasWithoutUnreadableWarning) {
         if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend()))
             GTEST_SKIP() << "Blender camera construction requires a GPU backend; bounded-header and memory decode are tested independently";
-        fs::copy_file(fs::path(LFS_HEIF_FIXTURES) / "p3.heic", temp_dir_ / "frame.heic");
-        write_text_file(temp_dir_ / "transforms.json", R"({"camera_angle_x":0.8,"camera_angle_y":0.6,"frames":[{"file_path":"frame.heic","transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}]})");
+        fs::copy_file(fs::path(LFS_HEIF_FIXTURES) / "p3.avif", temp_dir_ / "frame.avif");
+        write_text_file(temp_dir_ / "transforms.json", R"({"camera_angle_x":0.8,"camera_angle_y":0.6,"frames":[{"file_path":"frame.avif","transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}]})");
         lfs::io::BlenderLoader loader;
         const auto loaded = loader.load(temp_dir_);
         ASSERT_TRUE(loaded.has_value()) << loaded.error().format();

@@ -76,7 +76,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 |---------|-------------|---------|
 | [FFmpeg](https://ffmpeg.org/) | Video encoding and decoding (libavcodec, libavformat, libswscale) | LGPL-2.1+ |
 | [OpenH264](https://www.openh264.org/) | Cisco H.264 software encoder | BSD-2-Clause |
-| [dav1d](https://code.videolan.org/videolan/dav1d) | AV1 software decoder used by FFmpeg for CPU extraction and preview | BSD-2-Clause (see resources/licenses/dav1d-LICENSE.txt) |
+| [dav1d](https://code.videolan.org/videolan/dav1d) | AV1 software decoder used by FFmpeg and libheif for video and AVIF/HEIF import | BSD-2-Clause (see resources/licenses/dav1d-LICENSE.txt) |
 
 ## Data & I/O Libraries
 | Project | Description | License |
@@ -91,8 +91,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 | [stb](https://github.com/nothings/stb) | Image decode and encode headers | MIT / Public Domain |
 | [nlohmann/json](https://github.com/nlohmann/json) | JSON for Modern C++ | MIT |
 | [LibArchive](https://libarchive.org/) | Multi-format archive library | BSD |
-| [libheif](https://github.com/strukturag/libheif) | HEIF container and HEIC decode | LGPL-3.0-only (library); MIT (wrappers/examples) |
-| [libde265](https://github.com/strukturag/libde265) | Software HEVC image decoder | LGPL-3.0-only |
+| [libheif](https://github.com/strukturag/libheif) | HEIF/AVIF container with AV1-only decode | LGPL-3.0-only (library); MIT (wrappers/examples) |
 | [Little CMS](https://github.com/mm2/Little-CMS) | HEIF SDR ICC/NCLX display conversion | MIT |
 | [libwebp](https://github.com/webmproject/libwebp) | WebP image format library | BSD-3-Clause |
 | [TinyUSDZ](https://github.com/lighttransport/tinyusdz) | Flat USD/USDZ reader and writer | Apache-2.0 |

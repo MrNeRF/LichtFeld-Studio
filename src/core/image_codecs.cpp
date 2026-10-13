@@ -1124,7 +1124,7 @@ namespace lfs::core::image_codecs {
     bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
                           Probe& result, std::string& error) {
         const auto extension = lower_extension(path);
-        if (extension == ".heic" || extension == ".heif")
+        if (extension == ".avif" || extension == ".heic" || extension == ".heif")
             return decode_heif_to_buffer(path, target, result, error);
         if (extension == ".jpg" || extension == ".jpeg")
             return decode_jpeg_file_to_buffer(path, target, result, error);
@@ -1205,7 +1205,7 @@ namespace lfs::core::image_codecs {
 
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error) {
         const auto extension = lower_extension(path);
-        if (extension == ".heic" || extension == ".heif")
+        if (extension == ".avif" || extension == ".heic" || extension == ".heif")
             return probe_heif(path, result, error);
         if (extension == ".exr")
             return probe_exr(path, result, error);
@@ -1355,7 +1355,7 @@ namespace lfs::core::image_codecs {
 
     bool decode(const std::filesystem::path& path, Image& result, std::string& error) {
         const auto extension = lower_extension(path);
-        if (extension == ".heic" || extension == ".heif")
+        if (extension == ".avif" || extension == ".heic" || extension == ".heif")
             return decode_heif(path, result, error);
         if (extension == ".tif" || extension == ".tiff")
             return decode_tiff(path, result, error);

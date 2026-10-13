@@ -1,30 +1,35 @@
-# Synthetic HEIF/HEIC decoder fixtures
+# Original AV1/HEIF decoder fixtures
 
-Original procedural RGB/RGBA ramps, licensed GPL-3.0-or-later with this repository.
-No photographs, camera data or third-party binary samples are included.
+Procedural RGB/RGBA/monochrome images, licensed GPL-3.0-or-later with this repo.
+No photographs or third-party image samples are included. `rgb8.heic` is an
+original earlier HEVC grid retained only to assert unsupported-codec behavior;
+no HEVC decoder or encoder is needed to execute the tests.
 
-Regenerate with `uv run --no-project --with pillow-heif==1.8.1 python tests/data/heif/generate.py`.
-The generation environment is not an application or CI dependency. Tests read
-committed HEVC fixtures and reference pixels without requiring any encoder.
-`manifest.json` records the actual decoded size, precision, color tags and file hashes.
+Regenerate the positive fixtures with:
 
-Reference RGB is decoded with pillow-heif's bundled libheif, independently of
-the application's pinned dependency. High precision reference samples are
-left-aligned little-endian; the core UINT16 contract expands them to full range.
-Color assertions additionally use a scalar Display P3 to sRGB matrix/reference.
-The original Display P3 ICC profile is also tested against contradictory sRGB
-NCLX tags to establish ICC precedence. SDR BT.709/linear transfers have scalar
-references. The untagged fixture is monochrome. YUV420 uses lossy coding, a
-nonidentity matrix and explicitly verified limited-range tags. High precision
-fixtures originate from adjacent native codes inside one RGB8 bucket, including
-RGBA12; they are not enlarged RGB8 inputs. Generated ICC creation dates are fixed
-so repeated regeneration does not change the fixture just because time passed.
-The rotation fixture contains a container transform; an EXIF label alone would
-not verify that transform. PQ is explicitly tagged and exercises raw-preserving
-read versus unsupported implicit SDR display conversion.
+```
+uv run --no-project --with pillow-heif==0.18.0 python tests/data/heif/generate.py
+```
 
-The RGB8 fixture is a 128x96 grid of 64-pixel tiles, exercising a partial bottom
-tile; other fixtures are single images. Only the primary image is decoded.
-The small single-image fixtures contain clean-aperture (`clap`) crop properties
-for padded coded dimensions; the decoded dimensions/pixels test that crop along
-with rotation/mirroring. The grid case separately tests partial tile assembly.
+That isolated wheel supplies AOM AV1 encoding and independent decoding. It is
+not a build, runtime or CI dependency. The application uses dav1d and enables
+no encoder. Tests consume committed `.avif` files and reference pixels.
+`manifest.json` records actual decoded dimensions, precision, tags and hashes.
+
+High-precision inputs originate from adjacent native 10/12-bit codes within
+one RGB8 bucket, including RGBA12. Independent reference samples are left-aligned
+little-endian; the application's UINT16 contract expands them to full range.
+SDR P3, BT.709 and linear transfers also have scalar color references.
+
+The generator explicitly appends a second NCLX property beside ICC, updating
+box sizes, associations and absolute item offsets. Tests change only its
+transfer field to sRGB/PQ/HLG and read back both declarations before asserting
+precedence. Invalid ICC still fails. ICC dates are fixed for repeatability.
+
+Container `irot`/`imir` properties are authored explicitly; EXIF alone does not
+establish transform coverage. The RGB8 fixture is a 2x2 grid of original 64x64
+AV1 tiles cropped to 128x96, exercising partial bottom tiles. Fixture-specific
+container construction runs only during generation; no image encoder is used
+by the test executable. The other fixtures are ordinary single images except
+the primary-selection case. PQ/HLG without ICC is raw-readable but rejected by
+implicit SDR display loading.

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "image_heif.hpp"
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdlib>
@@ -9,8 +10,10 @@
 #include <fstream>
 #include <lcms2.h>
 #include <libheif/heif.h>
+#include <libheif/heif_items.h>
 #include <limits>
 #include <memory>
+#include <unordered_set>
 
 namespace lfs::core::image_codecs {
     namespace {
@@ -85,6 +88,46 @@ namespace lfs::core::image_codecs {
                 if (!checked(heif_context_get_primary_image_handle(context.get(), &primary), error))
                     return false;
                 handle.reset(primary);
+                heif_item_id id = 0;
+                if (!checked(heif_context_get_primary_image_ID(context.get(), &id), error))
+                    return false;
+                std::vector<heif_item_id> pending{id};
+                std::unordered_set<heif_item_id> visited;
+                bool av1 = false;
+                while (!pending.empty()) {
+                    const auto item = pending.back();
+                    pending.pop_back();
+                    if (!visited.insert(item).second)
+                        continue;
+                    const auto type = heif_item_get_item_type(context.get(), item);
+                    if (type == heif_fourcc('a', 'v', '0', '1')) {
+                        av1 = true;
+                        continue;
+                    }
+                    if (type == heif_fourcc('h', 'v', 'c', '1') || type == heif_fourcc('h', 'e', 'v', '1')) {
+                        error = "HEIF: HEVC-coded HEIC is unsupported in this build; use AV1-based AVIF/HEIF";
+                        return false;
+                    }
+                    if (type != heif_fourcc('g', 'r', 'i', 'd') && type != heif_fourcc('i', 'd', 'e', 'n')) {
+                        error = "HEIF: only AV1-coded primary images are supported";
+                        return false;
+                    }
+                    for (int index = 0;; ++index) {
+                        uint32_t reference_type = 0;
+                        heif_item_id* raw = nullptr;
+                        const auto count = heif_context_get_item_references(context.get(), item, index, &reference_type, &raw);
+                        const auto release = [this](heif_item_id* p) { heif_release_item_references(context.get(), &p); };
+                        std::unique_ptr<heif_item_id, decltype(release)> references(raw, release);
+                        if (!count)
+                            break;
+                        if (reference_type == heif_fourcc('d', 'i', 'm', 'g'))
+                            pending.insert(pending.end(), raw, raw + count);
+                    }
+                }
+                if (!av1) {
+                    error = "HEIF: AV1-coded primary image data is required";
+                    return false;
+                }
                 return true;
             }
         };
@@ -101,29 +144,36 @@ namespace lfs::core::image_codecs {
             return true;
         }
         using Profile = std::unique_ptr<void, decltype(&cmsCloseProfile)>;
+        using Transform = std::unique_ptr<void, decltype(&cmsDeleteTransform)>;
+        struct DisplayKey {
+            std::vector<uint8_t> icc;
+            // White point followed by red, green and blue chromaticities.
+            std::array<double, 8> primaries{};
+            int transfer = 0;
+            cmsUInt32Number format = 0;
+            bool operator==(const DisplayKey&) const = default;
+        };
+        struct DisplayTransform {
+            DisplayKey key;
+            Transform transform{nullptr, cmsDeleteTransform};
+        };
         bool to_display(const heif_image_handle* handle, Image& image, std::string& error) {
-            heif_color_profile_nclx* declared = nullptr;
-            const auto declared_status = heif_image_handle_get_nclx_color_profile(handle, &declared);
-            std::unique_ptr<heif_color_profile_nclx, decltype(&heif_nclx_color_profile_free)> declared_profile(declared, heif_nclx_color_profile_free);
-            if (declared_status.code == heif_error_Ok &&
-                (declared->transfer_characteristics == 16 || declared->transfer_characteristics == 18)) {
-                error = "HEIF: HDR display import requires an explicit conversion to SDR; raw decoding remains available";
-                return false;
-            }
-            Profile source{nullptr, cmsCloseProfile};
+            const bool wide = image.sample_type == SampleType::UInt16;
+            DisplayKey key;
+            key.format = image.channels == 4 ? (wide ? TYPE_RGBA_16 : TYPE_RGBA_8) : (wide ? TYPE_RGB_16 : TYPE_RGB_8);
             const auto profile_size = heif_image_handle_get_raw_color_profile_size(handle);
             if (profile_size) {
                 if (profile_size > 4 * 1024 * 1024) {
                     error = "HEIF: ICC profile exceeds import limit";
                     return false;
                 }
-                std::vector<uint8_t> bytes(profile_size);
-                if (!checked(heif_image_handle_get_raw_color_profile(handle, bytes.data()), error))
+                key.icc.resize(profile_size);
+                if (!checked(heif_image_handle_get_raw_color_profile(handle, key.icc.data()), error))
                     return false;
-                source.reset(cmsOpenProfileFromMem(bytes.data(), static_cast<cmsUInt32Number>(bytes.size())));
             } else {
-                const auto status = declared_status;
-                const auto& nclx = declared_profile;
+                heif_color_profile_nclx* declared = nullptr;
+                const auto status = heif_image_handle_get_nclx_color_profile(handle, &declared);
+                std::unique_ptr<heif_color_profile_nclx, decltype(&heif_nclx_color_profile_free)> nclx(declared, heif_nclx_color_profile_free);
                 if (status.code == heif_error_Color_profile_does_not_exist)
                     return true; // Untagged RGB follows the existing sRGB assumption.
                 if (!checked(status, error))
@@ -132,23 +182,43 @@ namespace lfs::core::image_codecs {
                     return true;
                 const int transfer = nclx->transfer_characteristics;
                 // PQ and HLG have different physical units; never label their samples SDR.
+                if (transfer == 16 || transfer == 18) {
+                    error = "HEIF: HDR display import requires an explicit conversion to SDR; raw decoding remains available";
+                    return false;
+                }
                 if (transfer != 1 && transfer != 6 && transfer != 13 && transfer != 8) {
                     error = "HEIF: display import requires a supported SDR transfer; raw decoding remains available";
                     return false;
                 }
-                cmsCIExyY white{nclx->color_primary_white_x, nclx->color_primary_white_y, 1};
-                cmsCIExyYTRIPLE primaries{{nclx->color_primary_red_x, nclx->color_primary_red_y, 1},
-                                          {nclx->color_primary_green_x, nclx->color_primary_green_y, 1},
-                                          {nclx->color_primary_blue_x, nclx->color_primary_blue_y, 1}};
-                if (white.y <= 0 || primaries.Red.y <= 0 || primaries.Green.y <= 0 || primaries.Blue.y <= 0) {
+                key.transfer = transfer;
+                key.primaries = {nclx->color_primary_white_x, nclx->color_primary_white_y,
+                                 nclx->color_primary_red_x, nclx->color_primary_red_y,
+                                 nclx->color_primary_green_x, nclx->color_primary_green_y,
+                                 nclx->color_primary_blue_x, nclx->color_primary_blue_y};
+                if (key.primaries[1] <= 0 || key.primaries[3] <= 0 || key.primaries[5] <= 0 || key.primaries[7] <= 0) {
                     error = "HEIF: unsupported color primaries";
                     return false;
                 }
+            }
+            // One entry per worker bounds retention and avoids sharing LCMS's mutable
+            // transform state across threads. Layout/precision are part of the key.
+            thread_local DisplayTransform cached;
+            if (cached.transform && cached.key == key) {
+                cmsDoTransform(cached.transform.get(), image.data.data(), image.data.data(), static_cast<cmsUInt32Number>(image.width * image.height));
+                return true;
+            }
+            Profile source{nullptr, cmsCloseProfile};
+            if (!key.icc.empty()) {
+                source.reset(cmsOpenProfileFromMem(key.icc.data(), static_cast<cmsUInt32Number>(key.icc.size())));
+            } else {
+                const auto& p = key.primaries;
+                cmsCIExyY white{p[0], p[1], 1};
+                cmsCIExyYTRIPLE primaries{{p[2], p[3], 1}, {p[4], p[5], 1}, {p[6], p[7], 1}};
                 // Analytic parametric curves avoid rebuilding a lookup table per image.
                 const double srgb[]{2.4, 1. / 1.055, .055 / 1.055, 1. / 12.92, .04045};
                 const double bt709[]{1. / .45, 1. / 1.099, .099 / 1.099, 1. / 4.5, .081};
                 std::unique_ptr<cmsToneCurve, decltype(&cmsFreeToneCurve)> curve(
-                    transfer == 8 ? cmsBuildGamma(nullptr, 1.) : cmsBuildParametricToneCurve(nullptr, 4, transfer == 13 ? srgb : bt709), cmsFreeToneCurve);
+                    key.transfer == 8 ? cmsBuildGamma(nullptr, 1.) : cmsBuildParametricToneCurve(nullptr, 4, key.transfer == 13 ? srgb : bt709), cmsFreeToneCurve);
                 if (!curve) {
                     error = "HEIF: cannot create transfer curve";
                     return false;
@@ -165,14 +235,14 @@ namespace lfs::core::image_codecs {
                 error = "HEIF: cannot create sRGB profile";
                 return false;
             }
-            const bool wide = image.sample_type == SampleType::UInt16;
-            const auto format = image.channels == 4 ? (wide ? TYPE_RGBA_16 : TYPE_RGBA_8) : (wide ? TYPE_RGB_16 : TYPE_RGB_8);
-            std::unique_ptr<void, decltype(&cmsDeleteTransform)> transform(cmsCreateTransform(source.get(), format, destination.get(), format, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_COPY_ALPHA), cmsDeleteTransform);
+            Transform transform(cmsCreateTransform(source.get(), key.format, destination.get(), key.format, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_COPY_ALPHA), cmsDeleteTransform);
             if (!transform) {
                 error = "HEIF: cannot create display color transform";
                 return false;
             }
-            cmsDoTransform(transform.get(), image.data.data(), image.data.data(), static_cast<cmsUInt32Number>(image.width * image.height));
+            cached.key = std::move(key);
+            cached.transform = std::move(transform);
+            cmsDoTransform(cached.transform.get(), image.data.data(), image.data.data(), static_cast<cmsUInt32Number>(image.width * image.height));
             return true;
         }
     } // namespace
@@ -198,6 +268,7 @@ namespace lfs::core::image_codecs {
             }
             options->convert_hdr_to_8bit = 0;
             options->strict_decoding = 1;
+            options->decoder_id = "dav1d";
             heif_image* raw = nullptr;
             if (!checked(heif_decode_image(source.handle.get(), &raw, heif_colorspace_RGB, chroma, options.get()), error))
                 return false;
