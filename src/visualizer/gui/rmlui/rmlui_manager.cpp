@@ -1121,15 +1121,8 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        if (pointer && window_ && event.type != SDL_EVENT_PINCH_UPDATE) {
-            const auto scale = input::windowPixelScale(window_);
-            single.mouse_x *= scale.x;
-            single.mouse_y *= scale.y;
-            for (auto& button : single.mouse_button_events) {
-                button.x *= scale.x;
-                button.y *= scale.y;
-            }
-        }
+        // pointerEventInPixels converted the SDL coordinates at entry. RmlUi
+        // consumes framebuffer pixels, including with an independently scaled UI.
         auto invoke = [&](const uint64_t id) {
             auto* context = contextById(id);
             const auto it = input_handlers_.find(context);

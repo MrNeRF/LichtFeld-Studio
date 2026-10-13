@@ -1208,6 +1208,33 @@ namespace lfs::vis {
         gui::rml_input::TextInputEscapeRevertController revert_;
     };
 
+    TEST_F(WindowInputDispatchTest, EmbeddedPointerCoordinatesConvertToPixelsOnlyOnce) {
+        context_->SetDensityIndependentPixelRatio(2.0f);
+        float move_x = -1, press_x = -1;
+        manager().routeInput(context_, {}, [&](const gui::PanelInputState& input) {
+            move_x = input.mouse_x;
+            if (!input.mouse_button_events.empty())
+                press_x = input.mouse_button_events.front().x;
+        });
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_MOTION;
+        event.motion.windowID = SDL_GetWindowID(window_->getWindow());
+        event.motion.x = 37;
+        event.motion.y = 23;
+        manager().dispatchInputEvent(event);
+        const auto scale = input::windowPixelScale(window_->getWindow());
+        EXPECT_FLOAT_EQ(move_x, 37 * scale.x);
+        event = {};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.windowID = SDL_GetWindowID(window_->getWindow());
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = 37;
+        event.button.y = 23;
+        manager().dispatchInputEvent(event);
+        EXPECT_FLOAT_EQ(move_x, 37 * scale.x);
+        EXPECT_FLOAT_EQ(press_x, 37 * scale.x);
+    }
+
     TEST_F(WindowInputDispatchTest, NodeDeletionPreservesTransformToolThroughReselectionAndHistory) {
         auto& sm = *viewer_->getSceneManager();
         auto& scene = viewer_->getScene();
