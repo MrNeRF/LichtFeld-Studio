@@ -59,6 +59,7 @@ namespace lfs::vis {
             void updateCropFlash();
             void deactivateAllTools();
             bool cancelActiveNodeTransformDrag();
+            bool cancelActiveGizmoDrag();
             void setSelectionSubMode(SelectionSubMode mode);
             void setSelectionVolumeFromDrag(SelectionSubMode mode,
                                             SelectionMode apply_mode,
@@ -167,6 +168,10 @@ namespace lfs::vis {
             core::NodeId crop_tool_volume_node_id_ = core::NULL_NODE;
             bool crop_tool_drag_active_ = false;
             bool crop_tool_drag_changed_ = false;
+            glm::vec3 crop_tool_box_min_before_drag_{-0.5f};
+            glm::vec3 crop_tool_box_max_before_drag_{0.5f};
+            glm::vec3 crop_tool_ellipsoid_radii_before_drag_{1.0f};
+            glm::mat4 crop_tool_visualizer_transform_before_drag_{1.0f};
             glm::vec3 crop_tool_box_min_{-0.5f};
             glm::vec3 crop_tool_box_max_{0.5f};
             glm::vec3 crop_tool_ellipsoid_radii_{1.0f};
@@ -185,6 +190,10 @@ namespace lfs::vis {
             bool viewport_gizmo_dragging_ = false;
             SplitViewPanelId viewport_gizmo_active_panel_ = SplitViewPanelId::Left;
             glm::dvec2 gizmo_drag_start_cursor_{0.0, 0.0};
+            glm::vec3 viewport_gizmo_camera_position_before_drag_{0.0f};
+            glm::vec3 viewport_gizmo_camera_pivot_before_drag_{0.0f};
+            glm::mat3 viewport_gizmo_camera_rotation_before_drag_{1.0f};
+            bool viewport_gizmo_camera_snapshot_valid_ = false;
             bool show_viewport_gizmo_ = true;
             static constexpr float VIEWPORT_GIZMO_SIZE = 95.0f;
             static constexpr float VIEWPORT_GIZMO_MARGIN_X = 10.0f;

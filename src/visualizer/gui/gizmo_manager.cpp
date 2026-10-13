@@ -859,6 +859,10 @@ namespace lfs::vis::gui {
         if (selection_volume_gizmo_active_)
             return;
 
+        crop_tool_box_min_before_drag_ = crop_tool_box_min_;
+        crop_tool_box_max_before_drag_ = crop_tool_box_max_;
+        crop_tool_ellipsoid_radii_before_drag_ = crop_tool_ellipsoid_radii_;
+        crop_tool_visualizer_transform_before_drag_ = crop_tool_visualizer_transform_;
         selection_volume_selection_before_drag_ = {};
         if (auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr) {
             selection_volume_selection_before_drag_ = sm->getScene().captureSelectionState();
@@ -2233,6 +2237,10 @@ namespace lfs::vis::gui {
         if (isCropToolActive() && is_using && !crop_tool_drag_active_) {
             crop_tool_drag_active_ = true;
             crop_tool_drag_changed_ = false;
+            crop_tool_box_min_before_drag_ = crop_tool_box_min_;
+            crop_tool_box_max_before_drag_ = crop_tool_box_max_;
+            crop_tool_ellipsoid_radii_before_drag_ = crop_tool_ellipsoid_radii_;
+            crop_tool_visualizer_transform_before_drag_ = crop_tool_visualizer_transform_;
         }
 
         if (changed) {
@@ -2757,6 +2765,10 @@ namespace lfs::vis::gui {
         if (isCropToolActive() && is_using && !crop_tool_drag_active_) {
             crop_tool_drag_active_ = true;
             crop_tool_drag_changed_ = false;
+            crop_tool_box_min_before_drag_ = crop_tool_box_min_;
+            crop_tool_box_max_before_drag_ = crop_tool_box_max_;
+            crop_tool_ellipsoid_radii_before_drag_ = crop_tool_ellipsoid_radii_;
+            crop_tool_visualizer_transform_before_drag_ = crop_tool_visualizer_transform_;
         }
 
         if (changed) {
@@ -3192,6 +3204,10 @@ namespace lfs::vis::gui {
                 } else {
                     viewport_gizmo_dragging_ = true;
                     viewport_gizmo_active_panel_ = hovered_panel->panel;
+                    viewport_gizmo_camera_position_before_drag_ = active_viewport.camera.t;
+                    viewport_gizmo_camera_pivot_before_drag_ = active_viewport.camera.pivot;
+                    viewport_gizmo_camera_rotation_before_drag_ = active_viewport.camera.R;
+                    viewport_gizmo_camera_snapshot_valid_ = true;
                     active_viewport.camera.startRotateAroundCenter(capture_mouse_pos, time);
                     if (SDL_Window* const window = viewer_->getWindow()) {
                         float fx, fy;
@@ -3229,6 +3245,7 @@ namespace lfs::vis::gui {
                         rendering_manager->markCameraPoseChanged();
                     }
                     viewport_gizmo_dragging_ = false;
+                    viewport_gizmo_camera_snapshot_valid_ = false;
 
                     if (SDL_Window* const window = viewer_->getWindow()) {
                         SDL_SetWindowRelativeMouseMode(window, false);
@@ -3329,6 +3346,111 @@ namespace lfs::vis::gui {
             rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, FrameReason::SceneChange);
         }
         return true;
+    }
+
+    bool GizmoManager::cancelActiveGizmoDrag() {
+        bool cancelled = cancelActiveNodeTransformDrag();
+        auto* const scene_manager = viewer_ ? viewer_->getSceneManager() : nullptr;
+        auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr;
+
+        if (cropbox_gizmo_active_) {
+            if (scene_manager) {
+                auto& scene = scene_manager->getScene();
+                if (auto* const node = scene.getMutableNode(cropbox_node_name_); node && node->cropbox) {
+                    scene.setCropBoxData(node->id, cropbox_data_before_drag_);
+                    scene.setNodeTransform(cropbox_node_name_, cropbox_transform_before_drag_);
+                    using namespace lfs::core::events;
+                    ui::CropBoxChanged{.min_bounds = cropbox_data_before_drag_.min,
+                                       .max_bounds = cropbox_data_before_drag_.max,
+                                       .enabled = cropbox_data_before_drag_.enabled}
+                        .emit();
+                }
+            }
+            cropbox_gizmo_active_ = false;
+            cropbox_node_name_.clear();
+            gizmo_context_.reset();
+            cancelled = true;
+        }
+
+        if (ellipsoid_gizmo_active_) {
+            if (scene_manager) {
+                auto& scene = scene_manager->getScene();
+                if (auto* const node = scene.getMutableNode(ellipsoid_node_name_); node && node->ellipsoid) {
+                    scene.setEllipsoidData(node->id, ellipsoid_data_before_drag_);
+                    scene.setNodeTransform(ellipsoid_node_name_, ellipsoid_transform_before_drag_);
+                    using namespace lfs::core::events;
+                    ui::EllipsoidChanged{.radii = ellipsoid_data_before_drag_.radii,
+                                         .enabled = ellipsoid_data_before_drag_.enabled}
+                        .emit();
+                }
+            }
+            ellipsoid_gizmo_active_ = false;
+            ellipsoid_node_name_.clear();
+            gizmo_context_.reset();
+            cancelled = true;
+        }
+
+        if (crop_tool_drag_active_ || selection_volume_gizmo_active_) {
+            crop_tool_box_min_ = crop_tool_box_min_before_drag_;
+            crop_tool_box_max_ = crop_tool_box_max_before_drag_;
+            crop_tool_ellipsoid_radii_ = crop_tool_ellipsoid_radii_before_drag_;
+            crop_tool_visualizer_transform_ = crop_tool_visualizer_transform_before_drag_;
+            crop_tool_drag_active_ = false;
+            crop_tool_drag_changed_ = false;
+            if (selection_volume_gizmo_active_) {
+                if (scene_manager) {
+                    scene_manager->getScene().restoreSelectionState(selection_volume_selection_before_drag_);
+                }
+                selection_volume_selection_before_drag_ = {};
+                selection_volume_gizmo_active_ = false;
+                selection_volume_drag_changed_ = false;
+            }
+            if (isVolumeGizmoToolActive())
+                updateCropToolOverlayState();
+            cancelled = true;
+        }
+
+        if (viewport_gizmo_dragging_) {
+            Viewport* active_viewport = viewer_ ? &viewer_->getViewport() : nullptr;
+            if (active_viewport && rendering_manager &&
+                viewport_gizmo_active_panel_ == SplitViewPanelId::Right &&
+                rendering_manager->isIndependentSplitViewActive()) {
+                active_viewport = &rendering_manager->projectSecondaryViewport();
+            }
+            if (active_viewport) {
+                active_viewport->camera.endRotateAroundCenter();
+                if (viewport_gizmo_camera_snapshot_valid_) {
+                    active_viewport->camera.t = viewport_gizmo_camera_position_before_drag_;
+                    active_viewport->camera.pivot = viewport_gizmo_camera_pivot_before_drag_;
+                    active_viewport->camera.R = viewport_gizmo_camera_rotation_before_drag_;
+                }
+            }
+            viewport_gizmo_dragging_ = false;
+            viewport_gizmo_camera_snapshot_valid_ = false;
+            if (SDL_Window* const window = viewer_ ? viewer_->getWindow() : nullptr) {
+                SDL_SetWindowRelativeMouseMode(window, false);
+                SDL_WarpMouseInWindow(window,
+                                      static_cast<float>(gizmo_drag_start_cursor_.x),
+                                      static_cast<float>(gizmo_drag_start_cursor_.y));
+            }
+            if (rendering_manager)
+                rendering_manager->markCameraPoseChanged();
+            cancelled = true;
+        }
+
+        if (cancelled) {
+            cancelTranslationGizmoDrag();
+            cancelRotationGizmoDrag();
+            cancelScaleGizmoDrag();
+            cancelBoundsGizmoDrag();
+            if (rendering_manager) {
+                rendering_manager->setCropboxGizmoActive(false);
+                rendering_manager->setEllipsoidGizmoActive(false);
+                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY,
+                                             lfs::vis::FrameReason::SceneChange);
+            }
+        }
+        return cancelled;
     }
 
     void GizmoManager::setSelectionSubMode(SelectionSubMode mode) {

@@ -1020,6 +1020,162 @@ namespace lfs::vis {
             }
         }
 
+        void exerciseCropToolGizmoEscape(const bool ellipsoid, const bool crop_tool = true) {
+            auto& sm = *viewer_->getSceneManager();
+            auto& scene = sm.getScene();
+            auto& gizmo = gui_->gizmo();
+            auto& camera = viewer_->getViewport().camera;
+            camera.t = {0.0f, 0.0f, 12.0f};
+            camera.pivot = {0.0f, 0.0f, 0.0f};
+            camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+
+            const auto shape = ellipsoid ? "ellipsoid" : "box";
+            const auto parent = scene.addSplat(std::string("Escape crop parent ") + shape,
+                                               lfs::test::licht::make_splat(3));
+            ASSERT_NE(parent, core::NULL_NODE);
+            const auto volume = ellipsoid ? scene.addEllipsoid(std::string("Escape crop ") + shape, parent)
+                                          : scene.addCropBox(std::string("Escape crop ") + shape, parent);
+            ASSERT_NE(volume, core::NULL_NODE);
+            sm.changeContentType(SceneManager::ContentType::SplatFiles);
+            sm.selectNode(volume);
+            viewer_->getEditorContext().update(&sm, viewer_->getTrainerManager());
+            if (crop_tool) {
+                UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+                gizmo.setCropToolShape(shape);
+            } else {
+                viewer_->getEditorContext().setActiveTool(ToolType::Translate);
+                UnifiedToolRegistry::instance().setActiveTool("builtin.translate");
+            }
+            gizmo.setOperation(gui::GizmoOperation::Translate);
+            gizmo.setTransformSpace(TransformSpace::World);
+            const gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+            gizmo.updateToolState(ui, false);
+            controller_->setViewer(viewer_.get());
+            controller_->updateViewportBounds(0.0f, 0.0f, 400.0f, 300.0f);
+
+            const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+            auto& frame = frameInput();
+            frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
+            const auto render = [&] {
+                if (ellipsoid)
+                    gizmo.renderEllipsoidGizmo(ui, layout);
+                else
+                    gizmo.renderCropBoxGizmo(ui, layout);
+            };
+            bool found = false;
+            for (int y = 45; y <= 255 && !found; y += 3) {
+                for (int x = 45; x <= 355 && !found; x += 3) {
+                    frame.mouse_x = static_cast<float>(x);
+                    frame.mouse_y = static_cast<float>(y);
+                    gui::guiFocusState().want_capture_mouse = false;
+                    render();
+                    found = gui::isTranslationGizmoHovered();
+                }
+            }
+            ASSERT_TRUE(found) << "no crop " << shape << " translation handle found";
+
+            const glm::mat4 before_transform = scene.getNodeTransform(volume);
+            const auto before_box = scene.getNodeById(volume)->cropbox
+                                        ? std::optional{*scene.getNodeById(volume)->cropbox}
+                                        : std::nullopt;
+            const auto before_ellipsoid = scene.getNodeById(volume)->ellipsoid
+                                              ? std::optional{*scene.getNodeById(volume)->ellipsoid}
+                                              : std::nullopt;
+            op::undoHistory().clear();
+            const size_t undo_before = op::undoHistory().undoCount();
+            const glm::vec2 start(frame.mouse_x, frame.mouse_y);
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_PRESS,
+                                           start.x, start.y);
+            frame.mouse_down[0] = true;
+            frame.mouse_clicked[0] = true;
+            frame.mouse_released[0] = false;
+            render();
+            frame.mouse_clicked[0] = false;
+            frame.mouse_x = start.x + 24.0f;
+            frame.mouse_y = start.y + 12.0f;
+            render();
+            ASSERT_TRUE(gui::isTranslationGizmoActive());
+
+            controller_->handleKey(input::KEY_ESCAPE, input::ACTION_PRESS, input::KEYMOD_NONE);
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_RELEASE,
+                                           frame.mouse_x, frame.mouse_y);
+            frame.mouse_down[0] = false;
+            frame.mouse_released[0] = true;
+            render();
+            frame.mouse_released[0] = false;
+
+            EXPECT_TRUE(sameMatrixBits(before_transform, scene.getNodeTransform(volume)));
+            ASSERT_NE(scene.getNodeById(volume), nullptr);
+            if (ellipsoid) {
+                ASSERT_NE(scene.getNodeById(volume)->ellipsoid, nullptr);
+                EXPECT_EQ(scene.getNodeById(volume)->ellipsoid->radii, before_ellipsoid->radii);
+            } else {
+                ASSERT_NE(scene.getNodeById(volume)->cropbox, nullptr);
+                EXPECT_EQ(scene.getNodeById(volume)->cropbox->min, before_box->min);
+                EXPECT_EQ(scene.getNodeById(volume)->cropbox->max, before_box->max);
+            }
+            EXPECT_EQ(op::undoHistory().undoCount(), undo_before);
+            gizmo.deactivateAllTools();
+            op::undoHistory().clear();
+        }
+
+        void exerciseViewportGizmoEscape() {
+            auto& gizmo = gui_->gizmo();
+            auto& camera = viewer_->getViewport().camera;
+            camera.t = {0.0f, 0.0f, 12.0f};
+            camera.pivot = {0.0f, 0.0f, 0.0f};
+            camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+            const glm::vec3 before_position = camera.t;
+            const glm::vec3 before_pivot = camera.pivot;
+            const glm::mat4 before_rotation(camera.R);
+            const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+            controller_->setViewer(viewer_.get());
+            controller_->updateViewportBounds(0.0f, 0.0f, 400.0f, 300.0f);
+            auto& frame = frameInput();
+            frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
+            gui::guiFocusState().want_capture_mouse = false;
+
+            bool found = false;
+            for (int y = 12; y < 118 && !found; y += 2) {
+                for (int x = 280; x < 398 && !found; x += 2) {
+                    camera.t = before_position;
+                    camera.pivot = before_pivot;
+                    camera.R = glm::mat3(before_rotation);
+                    frame.mouse_x = static_cast<float>(x);
+                    frame.mouse_y = static_cast<float>(y);
+                    frame.mouse_down[0] = frame.mouse_clicked[0] = true;
+                    gizmo.renderViewportGizmo(layout);
+                    found = gizmo.isViewportGizmoDragging();
+                    frame.mouse_down[0] = frame.mouse_clicked[0] = false;
+                    if (!found)
+                        gizmo.renderViewportGizmo(layout);
+                }
+            }
+            ASSERT_TRUE(found) << "no empty area of the viewport orientation gizmo found";
+
+            op::undoHistory().clear();
+            const size_t undo_before = op::undoHistory().undoCount();
+            frame.mouse_x += 18.0f;
+            frame.mouse_y += 11.0f;
+            frame.mouse_down[0] = true;
+            gizmo.renderViewportGizmo(layout);
+            EXPECT_FALSE(sameMatrixBits(before_rotation, glm::mat4(camera.R)));
+
+            controller_->handleKey(input::KEY_ESCAPE, input::ACTION_PRESS, input::KEYMOD_NONE);
+            controller_->handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_RELEASE,
+                                           frame.mouse_x, frame.mouse_y);
+            frame.mouse_down[0] = false;
+            frame.mouse_released[0] = true;
+            gizmo.renderViewportGizmo(layout);
+            frame.mouse_released[0] = false;
+
+            EXPECT_TRUE(sameMatrixBits(before_rotation, glm::mat4(camera.R)));
+            EXPECT_EQ(camera.t, before_position);
+            EXPECT_EQ(camera.pivot, before_pivot);
+            EXPECT_EQ(op::undoHistory().undoCount(), undo_before);
+            EXPECT_FALSE(gizmo.isViewportGizmoDragging());
+        }
+
         Viewport viewport_{400, 300};
         std::unique_ptr<VisualizerImpl> viewer_;
         WindowManager* window_ = nullptr;
@@ -1145,6 +1301,26 @@ namespace lfs::vis {
     TRANSFORM_DRAG_CANCEL_TEST(EscapeCancelsBoundsScaleAndAddsNoUndo, BoundsScale, Escape)
     TRANSFORM_DRAG_CANCEL_TEST(RightClickCancelsBoundsScaleAndAddsNoUndo, BoundsScale, RightClick)
     TRANSFORM_DRAG_CANCEL_TEST(LeftReleaseCommitsBoundsScaleAndAddsOneUndo, BoundsScale, LeftRelease)
+
+    TEST_F(WindowInputDispatchTest, EscapeCancelsCropBoxGizmoDragAndAddsNoUndo) {
+        exerciseCropToolGizmoEscape(false);
+    }
+
+    TEST_F(WindowInputDispatchTest, EscapeCancelsCropEllipsoidGizmoDragAndAddsNoUndo) {
+        exerciseCropToolGizmoEscape(true);
+    }
+
+    TEST_F(WindowInputDispatchTest, EscapeCancelsPassiveCropBoxGizmoDragAndAddsNoUndo) {
+        exerciseCropToolGizmoEscape(false, false);
+    }
+
+    TEST_F(WindowInputDispatchTest, EscapeCancelsPassiveEllipsoidGizmoDragAndAddsNoUndo) {
+        exerciseCropToolGizmoEscape(true, false);
+    }
+
+    TEST_F(WindowInputDispatchTest, EscapeCancelsViewportGizmoDragAndRestoresCamera) {
+        exerciseViewportGizmoEscape();
+    }
 
     TEST_F(WindowInputDispatchTest, SameFrameReleaseAppliesFinalTranslatePosition) {
         exerciseTransformDrag(TransformDragMode::Translate, TransformDragFinish::ReleaseAtStart);

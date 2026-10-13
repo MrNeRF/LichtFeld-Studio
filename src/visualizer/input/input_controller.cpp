@@ -1760,7 +1760,7 @@ namespace lfs::vis {
                                             ? input_router_->keyboardFocus() == input::InputTarget::Gui
                                             : gui::guiFocusState().want_capture_keyboard;
         if (action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE &&
-            isTransformGizmoUsing() && gui && gui->gizmo().cancelActiveNodeTransformDrag()) {
+            gui && gui->gizmo().cancelActiveGizmoDrag()) {
             return;
         }
 
