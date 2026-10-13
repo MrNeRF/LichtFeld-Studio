@@ -109,23 +109,31 @@ namespace lfs::media {
                     p.allow_hardware_encode = !files->resume;
                     p.output_dir = files->files.output_directory;
                     p.filename_pattern = files->files.filename_pattern;
-                    p.format = files->files.format == FrameFileFormat::PNG ? io::ImageFormat::PNG : files->files.format == FrameFileFormat::EXR ? io::ImageFormat::EXR
-                                                                                                                                                : io::ImageFormat::JPG;
+                    p.format = files->files.format == FrameFileFormat::TIFF16 ? io::ImageFormat::TIFF16 : files->files.format == FrameFileFormat::PNG ? io::ImageFormat::PNG
+                                                                                                      : files->files.format == FrameFileFormat::EXR   ? io::ImageFormat::EXR
+                                                                                                                                                      : io::ImageFormat::JPG;
                     p.jpg_quality = files->files.jpeg_quality;
-                    p.generate_metadata = files->write_metadata || files->files.format == FrameFileFormat::EXR;
-                    p.overwrite_metadata = files->files.exr.overwrite;
+                    p.generate_metadata = files->write_metadata || files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16;
+                    p.overwrite_metadata = files->files.format == FrameFileFormat::TIFF16 ? files->files.tiff16.overwrite : files->files.exr.overwrite;
+                    p.tiff16_transfer = files->files.tiff16.transfer;
                     p.exr_precision = files->files.exr.precision;
                     p.exr_compression = files->files.exr.compression;
-                    if ((files->files.format == FrameFileFormat::EXR) != (request.output_format == FramePixelFormat::RGBFloat32))
+                    if ((files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16) != (request.output_format == FramePixelFormat::RGBFloat32))
                         return failure(ErrorCode::InvalidArgument, "EXR file extraction requires float output; PNG/JPEG require RGB8", 0);
                     if (files->files.format == FrameFileFormat::EXR) {
                         if (auto valid = validateExrOutputOptions(files->files.exr); !valid)
                             return std::move(valid).error();
                     }
+                    if (files->files.format == FrameFileFormat::TIFF16) {
+                        if (request.float_color_profile != FloatColorProfile::Sdr)
+                            return failure(ErrorCode::Unsupported, "TIFF16 requires relative SDR; PQ/HLG masters require EXR", 0);
+                        if (auto valid = validateTiff16OutputOptions(files->files.tiff16); !valid)
+                            return std::move(valid).error();
+                    }
                     if (files->files.output_directory.empty() ||
                         files->files.output_directory.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
                         files->files.filename_pattern.find('\0') != std::string::npos ||
-                        (files->files.format != FrameFileFormat::PNG && files->files.format != FrameFileFormat::JPEG && files->files.format != FrameFileFormat::EXR))
+                        (files->files.format != FrameFileFormat::PNG && files->files.format != FrameFileFormat::JPEG && files->files.format != FrameFileFormat::EXR && files->files.format != FrameFileFormat::TIFF16))
                         return failure(ErrorCode::InvalidArgument, "File extraction requires a nonempty output directory, supported format and NUL-free paths/names", 0);
                 }
                 // Request-only validation reuses the same rules as the compatibility
@@ -153,6 +161,11 @@ namespace lfs::media {
                     const auto sink_cancel = files->files.exr.cancelled;
                     file_options.exr.cancelled = [&, sink_cancel] { return (request.cancelled && request.cancelled()) || (sink_cancel && sink_cancel()); };
                     p.cancel_requested = file_options.exr.cancelled;
+                }
+                if (files && files->files.format == FrameFileFormat::TIFF16) {
+                    const auto sink_cancel = files->files.tiff16.cancelled;
+                    file_options.tiff16.cancelled = [&, sink_cancel] { return (request.cancelled && request.cancelled()) || (sink_cancel && sink_cancel()); };
+                    p.cancel_requested = file_options.tiff16.cancelled;
                 }
                 FileFrameSink file_sink(std::move(file_options));
                 std::unique_ptr<detail::ResumableFileSink> resume_sink;

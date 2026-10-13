@@ -24,10 +24,14 @@ namespace lfs::media {
         if (options_.output_directory.empty() ||
             options_.output_directory.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
             options_.filename_pattern.find('\0') != std::string::npos ||
-            (options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::EXR))
+            (options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::TIFF16))
             return sinkError(ErrorCode::InvalidArgument, "Invalid file sink directory or format");
         if (options_.format == FrameFileFormat::EXR) {
             if (auto valid = validateExrOutputOptions(options_.exr); !valid)
+                return valid;
+        }
+        if (options_.format == FrameFileFormat::TIFF16) {
+            if (auto valid = validateTiff16OutputOptions(options_.tiff16); !valid)
                 return valid;
         }
         if (options_.format == FrameFileFormat::JPEG)
@@ -59,7 +63,7 @@ namespace lfs::media {
         const auto required = frame.requiredBytes();
         if (!required)
             return SinkResult::failure(required.error());
-        if (options_.format != FrameFileFormat::EXR && frame.layout.format != FramePixelFormat::RGB8)
+        if (options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::TIFF16 && frame.layout.format != FramePixelFormat::RGB8)
             return sinkError(ErrorCode::Unsupported, "PNG/JPEG file sink requires RGB8; use EXR for float samples");
         const auto row_bytes = static_cast<std::size_t>(frame.layout.width) * pixelBytes(frame.layout.format);
         const auto height = static_cast<std::size_t>(frame.layout.height);
@@ -67,14 +71,17 @@ namespace lfs::media {
             return sinkError(ErrorCode::InvalidArgument, "File sink packed buffer size overflows");
         if (frame.info.legacy_source_frame < 1)
             return sinkError(ErrorCode::InvalidArgument, "File sink requires a positive source frame number");
-        const auto extension = options_.format == FrameFileFormat::PNG ? ".png" : options_.format == FrameFileFormat::EXR ? ".exr"
-                                                                                                                          : ".jpg";
+        const auto extension = options_.format == FrameFileFormat::TIFF16 ? ".tif" : options_.format == FrameFileFormat::PNG ? ".png"
+                                                                                 : options_.format == FrameFileFormat::EXR   ? ".exr"
+                                                                                                                             : ".jpg";
         const auto filename = options_.output_directory /
                               (io::formatFrameFilenameStem(options_.filename_pattern, frame.info.legacy_source_frame) + extension);
         if (!filenames_.insert(filename).second)
             return sinkError(ErrorCode::AlreadyExists, "Duplicate file sink filename");
         if (options_.format == FrameFileFormat::EXR)
             return ImageOutput::writeExr(filename, frame, options_.exr);
+        if (options_.format == FrameFileFormat::TIFF16)
+            return ImageOutput::writeTiff16(filename, frame, options_.tiff16);
         // Legacy extraction is already packed: no additional pixel copy.
         std::vector<std::uint8_t> packed;
         const auto* pixels = frame.pixels.data();

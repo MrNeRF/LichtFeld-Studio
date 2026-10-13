@@ -964,11 +964,11 @@ namespace lfs::io {
     }
 
     bool isGeneratedFrameFilename(const std::string_view pattern, const std::string_view filename) {
-        // The writer appends one of these lowercase extensions (all four characters long).
-        if (!filename.ends_with(".png") && !filename.ends_with(".jpg") && !filename.ends_with(".exr"))
+        // Generated extraction files use only these lowercase image extensions.
+        if (!filename.ends_with(".png") && !filename.ends_with(".jpg") && !filename.ends_with(".exr") && !filename.ends_with(".tif") && !filename.ends_with(".tiff"))
             return false;
         return matchFrameNameSegments(parseFrameFilenamePattern(pattern), 0,
-                                      filename.substr(0, filename.size() - 4), 0);
+                                      filename.substr(0, filename.size() - (filename.ends_with(".tiff") ? 5 : 4)), 0);
     }
 
     std::vector<std::filesystem::path> generatedExtractionFiles(
@@ -1013,7 +1013,7 @@ namespace lfs::io {
             const size_t pixel_bytes = float_output ? 12 : 3;
             if ((params.output_format != media::FramePixelFormat::RGB8 && !float_output) ||
                 (float_output && (!provided_sink || params.convert_hdr_to_sdr)) ||
-                (params.format == ImageFormat::EXR && !float_output)) {
+                ((params.format == ImageFormat::EXR || params.format == ImageFormat::TIFF16) && !float_output)) {
                 failure_ = make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "EXR requires float samples; float extraction requires a CPU sink and the SDR profile", .detection = LFS_SOURCE_SITE_CURRENT()});
                 error = std::string(failure_->detail());
                 return false;
@@ -1766,8 +1766,9 @@ namespace lfs::io {
                 auto generate_filename = [&](int frame_num) {
                     if (custom_sink)
                         return std::filesystem::path{};
-                    std::string ext = params.format == ImageFormat::PNG ? ".png" : params.format == ImageFormat::EXR ? ".exr"
-                                                                                                                     : ".jpg";
+                    std::string ext = params.format == ImageFormat::TIFF16 ? ".tif" : params.format == ImageFormat::PNG ? ".png"
+                                                                                  : params.format == ImageFormat::EXR   ? ".exr"
+                                                                                                                        : ".jpg";
                     return params.output_dir / (formatFrameFilenameStem(params.filename_pattern, frame_num) + ext);
                 };
 
@@ -2557,8 +2558,9 @@ namespace lfs::io {
                                                                   : nlohmann::json(nullptr);
                         root["input"]["video"]["relative_origin_pts"] = stream_start_timestamp;
                         root["output"] = {
-                            {"format", params.format == ImageFormat::PNG ? "png" : params.format == ImageFormat::EXR ? "exr"
-                                                                                                                     : "jpg"},
+                            {"format", params.format == ImageFormat::TIFF16 ? "tiff16" : params.format == ImageFormat::PNG ? "png"
+                                                                                     : params.format == ImageFormat::EXR   ? "exr"
+                                                                                                                           : "jpg"},
                             {"size", (params.rotation == 90 || params.rotation == 270)
                                          ? nlohmann::json{out_height, out_width}
                                          : nlohmann::json{out_width, out_height}},
@@ -2608,6 +2610,16 @@ namespace lfs::io {
                             root["output"]["primaries_override"] = params.input_color.primaries != media::ColorPrimaries::Unspecified;
                             root["output"]["resize_filter"] = "area reduction / bilinear enlargement in linear light";
                             root["output"]["sharpness_domain"] = params.sharpness.enabled ? (pq_nits ? "linear cd/m2 divided by 10000, clipped quantized RGB8 proxy" : (hlg_scene ? "clipped quantized scene-linear RGB8 proxy" : "clipped quantized linear RGB8 proxy")) : "disabled";
+                        }
+                        if (params.format == ImageFormat::TIFF16) {
+                            root["output"]["bit_depth"] = 16;
+                            root["output"]["pixel_format"] = "rgb_uint16";
+                            root["output"]["compression"] = "lzw";
+                            root["output"]["transfer"] = media::outputOptionName(params.tiff16_transfer);
+                            root["output"]["color_profile"] = "uint16-sdr";
+                            root["output"]["color_space"] = std::string(media::outputOptionName(params.tiff16_transfer)) +
+                                                            (output_color.primaries == media::ColorPrimaries::Bt709 ? " BT709, relative" : " BT2020, relative");
+                            root["output"]["quantization"] = "clamp-round-half-up-uint16";
                         }
                         root["processing"] = {
                             {"decoder", {
@@ -2664,8 +2676,9 @@ namespace lfs::io {
                         root["output_size"] = (params.rotation == 90 || params.rotation == 270)
                                                   ? nlohmann::json{out_height, out_width}
                                                   : nlohmann::json{out_width, out_height};
-                        root["output_format"] = params.format == ImageFormat::PNG ? "png" : params.format == ImageFormat::EXR ? "exr"
-                                                                                                                              : "jpg";
+                        root["output_format"] = params.format == ImageFormat::TIFF16 ? "tiff16" : params.format == ImageFormat::PNG ? "png"
+                                                                                              : params.format == ImageFormat::EXR   ? "exr"
+                                                                                                                                    : "jpg";
                         if (!float_output)
                             root["output_quality"] = params.jpg_quality;
                         root["filename_pattern"] = params.filename_pattern;

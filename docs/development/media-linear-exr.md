@@ -1,4 +1,48 @@
-# Linear frames and EXR output
+# Linear frames, EXR and TIFF16 output
+
+## TIFF16 SDR output
+
+`ImageOutput::writeTiff16` (Python `ImageOutput.write_tiff16`) writes single
+images independently of decoding or rendering. `FrameFileFormat::TIFF16`
+uses the same writer for sequences, including resumable extraction. Existing
+PNG/JPEG, TIFF8 and EXR defaults are unchanged.
+
+Input must be native-endian RGBFloat32/RGBAFloat32, linear, with relative SDR
+units and declared BT.709 or BT.2020 primaries. Padded and unaligned views are
+accepted. NaN/Inf, incompatible alpha and HDR nits/scene-relative units are
+rejected. Finite RGB is clamped to [0,1], encoded using the selected transfer
+(sRGB by default; linear or BT.709 also available), and rounded half up to
+UINT16. Alpha is unassociated, stays linear and must be in [0,1]; premultiplied
+input is unpremultiplied, with zero-alpha RGB canonicalized to zero.
+
+Files use `.tif` or `.tiff`, LZW compression and standard TIFF chromaticities,
+D65 white point and a 65536-entry transfer-function table. ImageDescription
+contains JSON transfer, primaries, alpha, provenance and available timing and
+source precision and a versioned `lfsEncoding: tiff16-sdr-v1` identifier.
+LichtFeld's RGB/RGBA image loaders recognize this contract, invert the declared
+transfer, convert BT.2020 to BT.709 in linear light when needed, and encode
+the existing bounded sRGB display/training representation. Alpha is unchanged.
+Conversion runs at 16-bit precision before an optional RGB8 request or resizing;
+wide-gamut colors outside BT.709 are clipped to that display contract.
+Raw codec decode, `load_image_float` and high-bitdepth data/normal loaders retain
+the stored samples and do not apply display color management. Untagged TIFFs
+keep their existing behavior. Unknown versioned LichtFeld encodings fail explicitly.
+The TIFF tags are not an ICC profile; other software must interpret them itself.
+The transfer table adds approximately 128 KiB per
+image. Conversion and encoding run on the CPU with a packed UINT16 image buffer;
+this is not a device-resident or zero-copy writer.
+
+CLI extraction selects `--format tiff16`, optionally `--tiff16-transfer
+linear|srgb|bt709`. MCP uses `format: "tiff16"` and `tiff16_transfer`. Input
+transfer/primaries overrides retain the existing float SDR contract. TIFF16
+extraction writes metadata automatically; it does not pass through RGB8 before
+quantization. EXR precision/compression and JPEG quality do not apply.
+
+Writes reuse the existing atomic-file service. Overwrite is opt-in; cancellation
+or failure preserves an existing destination. Resume identity includes transfer
+and provenance and rejects incompatible reuse. As for EXR, replay that would
+replace existing extraction metadata requires explicit overwrite permission;
+verified frame files are retained without rewriting.
 
 `lfs_media` provides `RGBFloat32` and `RGBAFloat32` CPU frame views and immutable
 owning surfaces. `RGB8` remains the default for ingest, preview and PNG/JPEG.

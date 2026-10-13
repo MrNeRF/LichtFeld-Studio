@@ -224,6 +224,7 @@ namespace lfs::app {
                     {"convert_hdr_to_sdr", boolean},
                     {"allow_hardware_decode", boolean},
                     {"format", {{"type", "string"}, {"enum", option_names<FrameFileFormat>()}}},
+                    {"tiff16_transfer", {{"type", "string"}, {"enum", {"linear", "srgb", "bt709"}}}},
                     {"jpeg_quality", integer},
                     {"exr_precision", {{"type", "string"}, {"enum", option_names<ExrPrecision>()}}},
                     {"exr_compression", {{"type", "string"}, {"enum", option_names<ExrCompression>()}}},
@@ -286,7 +287,7 @@ namespace lfs::app {
             request.end_seconds = args.value("end_seconds", -1.0);
             request.convert_hdr_to_sdr = args.value("convert_hdr_to_sdr", false);
             request.allow_hardware_decode = args.value("allow_hardware_decode", true);
-            if (args.value("format", "png") == "exr")
+            if (args.value("format", "png") == "exr" || args.value("format", "png") == "tiff16")
                 request.output_format = FramePixelFormat::RGBFloat32;
             const auto transfer = parseOutputOption<ColorTransfer>(args.value("input_transfer", "auto"));
             const auto primaries = parseOutputOption<ColorPrimaries>(args.value("input_primaries", "auto"));
@@ -317,7 +318,7 @@ namespace lfs::app {
                                [](const json&) {
                                    const auto caps = MediaIngest::capabilities();
                                    const auto codecs = MediaIngest::codecBuildInfo();
-                                   return json{{"success", true}, {"software_decode", caps.software_decode}, {"rgb8", caps.rgb8}, {"png", caps.png}, {"jpeg", caps.jpeg}, {"hardware_decode", caps.hardware_decode}, {"hdr_to_sdr", caps.hdr_to_sdr}, {"rgb_float_sdr", caps.rgb_float_sdr}, {"exr", caps.exr}, {"float_sdr_profile", caps.float_sdr_profile}, {"rgb_float_pq", caps.rgb_float_pq}, {"float_pq_profile", caps.float_pq_profile}, {"rgb_float_hlg", caps.rgb_float_hlg}, {"float_hlg_profile", caps.float_hlg_profile}, {"ffmpeg_version", codecs.ffmpeg_version}, {"ffmpeg_license", codecs.ffmpeg_license}, {"ffmpeg_configuration", codecs.ffmpeg_configuration}};
+                                   return json{{"success", true}, {"software_decode", caps.software_decode}, {"rgb8", caps.rgb8}, {"png", caps.png}, {"jpeg", caps.jpeg}, {"hardware_decode", caps.hardware_decode}, {"hdr_to_sdr", caps.hdr_to_sdr}, {"rgb_float_sdr", caps.rgb_float_sdr}, {"exr", caps.exr}, {"tiff16", caps.tiff16}, {"float_sdr_profile", caps.float_sdr_profile}, {"rgb_float_pq", caps.rgb_float_pq}, {"float_pq_profile", caps.float_pq_profile}, {"rgb_float_hlg", caps.rgb_float_hlg}, {"float_hlg_profile", caps.float_hlg_profile}, {"ffmpeg_version", codecs.ffmpeg_version}, {"ffmpeg_license", codecs.ffmpeg_license}, {"ffmpeg_configuration", codecs.ffmpeg_configuration}};
                                });
         registry.register_tool(mcp::McpTool{
                                    .name = "media.probe",
@@ -346,8 +347,12 @@ namespace lfs::app {
                                    files.files.output_directory = core::utf8_to_path(args.at("output_directory").get<std::string>());
                                    const auto format = args.value("format", "png");
                                    const bool exr = format == "exr";
-                                   if ((!exr && (args.contains("exr_precision") || args.contains("exr_compression") || args.contains("overwrite") || args.contains("input_transfer") || args.contains("input_primaries") || args.contains("float_profile"))) || (exr && (args.contains("jpeg_quality") || args.value("convert_hdr_to_sdr", false))))
-                                       return mcp::invalid_argument_result("EXR options require EXR; EXR does not accept JPEG quality or HDR to SDR", "media.extract");
+                                   const bool tiff = format == "tiff16";
+                                   if ((!exr && (args.contains("exr_precision") || args.contains("exr_compression"))) ||
+                                       (!(exr || tiff) && (args.contains("overwrite") || args.contains("input_transfer") || args.contains("input_primaries") || args.contains("float_profile"))) ||
+                                       ((exr || tiff) && (args.contains("jpeg_quality") || args.value("convert_hdr_to_sdr", false))) ||
+                                       (!tiff && args.contains("tiff16_transfer")))
+                                       return mcp::invalid_argument_result("Image options must match EXR/TIFF16 format; float output does not accept JPEG quality or HDR to SDR", "media.extract");
                                    const auto parsed_format = parseOutputOption<FrameFileFormat>(format);
                                    const auto precision = parseOutputOption<ExrPrecision>(args.value("exr_precision", "half"));
                                    const auto compression = parseOutputOption<ExrCompression>(args.value("exr_compression", "zip"));
@@ -358,6 +363,11 @@ namespace lfs::app {
                                    if (!compression)
                                        throw Exception(compression.error());
                                    files.files.format = *parsed_format;
+                                   const auto tiff_transfer = parseOutputOption<ColorTransfer>(args.value("tiff16_transfer", "srgb"));
+                                   if (!tiff_transfer)
+                                       throw Exception(tiff_transfer.error());
+                                   files.files.tiff16.transfer = *tiff_transfer;
+                                   files.files.tiff16.overwrite = args.value("overwrite", false);
                                    files.files.exr.precision = *precision;
                                    files.files.exr.compression = *compression;
                                    files.files.exr.overwrite = args.value("overwrite", false);

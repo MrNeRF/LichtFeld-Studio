@@ -17,6 +17,12 @@ namespace lfs::core::color {
     LFS_COLOR_INLINE float bt709ToLinear(float v) {
         return v < 0.081f ? v / 4.5f : pow((v + 0.099f) / 1.099f, 1.0f / 0.45f);
     }
+    LFS_COLOR_INLINE float linearToSrgb(float v) {
+        return v <= 0.0031308f ? 12.92f * v : 1.055f * pow(v, 1.0f / 2.4f) - 0.055f;
+    }
+    LFS_COLOR_INLINE float linearToBt709(float v) {
+        return v < 0.018f ? 4.5f * v : 1.099f * pow(v, 0.45f) - 0.099f;
+    }
     // ITU-R BT.2100 PQ EOTF normalized to the 10,000 cd/m2 reference peak.
     // PQ is defined on [0,1]; callers clamp encoded RGB before this operation.
     LFS_COLOR_INLINE float pqToLinear(float v) {

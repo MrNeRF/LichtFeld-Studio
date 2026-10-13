@@ -27,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <queue>
 #include <stdexcept>
@@ -40,6 +41,69 @@
 namespace image_codecs = lfs::core::image_codecs;
 
 namespace {
+
+    struct TiffDisplayEncoding {
+        std::string transfer;
+        bool bt2020 = false;
+    };
+
+    std::optional<TiffDisplayEncoding> tiff_display_encoding(const std::filesystem::path& path) {
+        auto extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (extension != ".tif" && extension != ".tiff")
+            return {};
+        std::optional<std::string> description;
+        std::string error;
+        if (!image_codecs::read_tiff_description(path, description, error))
+            throw std::runtime_error("TIFF metadata read failed: " + error);
+        if (!description)
+            return {};
+        const auto metadata = nlohmann::json::parse(*description, nullptr, false);
+        if (!metadata.is_object() || !metadata.contains("lfsEncoding"))
+            return {};
+        const auto text = [&](const char* key) -> std::string {
+            const auto field = metadata.find(key);
+            return field != metadata.end() && field->is_string() ? field->get<std::string>() : std::string{};
+        };
+        const auto transfer = text("lfsTransfer");
+        const auto primaries = text("lfsPrimaries");
+        if (text("lfsEncoding") != "tiff16-sdr-v1" || text("lfsUnits") != "relative" ||
+            (transfer != "linear" && transfer != "srgb" && transfer != "bt709") ||
+            (primaries != "bt709" && primaries != "bt2020"))
+            throw std::runtime_error("Unsupported LichtFeld TIFF16 color encoding");
+        return TiffDisplayEncoding{transfer, primaries == "bt2020"};
+    }
+
+    void tiff_to_display_rgb(image_codecs::Image& image, const TiffDisplayEncoding& encoding) {
+        if (image.sample_type != image_codecs::SampleType::UInt16 || (image.channels != 3 && image.channels != 4))
+            throw std::runtime_error("LichtFeld TIFF16 metadata does not match the image layout");
+        if (encoding.transfer == "srgb" && !encoding.bt2020)
+            return;
+        const size_t count = static_cast<size_t>(image.width) * image.height;
+        for (size_t pixel = 0; pixel < count; ++pixel) {
+            std::array<float, 3> linear{};
+            for (size_t channel = 0; channel < 3; ++channel) {
+                uint16_t sample;
+                std::memcpy(&sample, image.data.data() + (pixel * image.channels + channel) * 2, 2);
+                const float v = sample / 65535.f;
+                linear[channel] = encoding.transfer == "linear" ? v : encoding.transfer == "srgb" ? lfs::core::color::srgbToLinear(v)
+                                                                                                  : lfs::core::color::bt709ToLinear(v);
+            }
+            if (encoding.bt2020) {
+                // D65 BT.2020 -> D65 BT.709 in linear light. The existing
+                // display/training RGB contract is bounded sRGB/BT.709.
+                const auto rgb = linear;
+                linear = {1.660491f * rgb[0] - .587641f * rgb[1] - .072850f * rgb[2],
+                          -.124550f * rgb[0] + 1.132900f * rgb[1] - .008349f * rgb[2],
+                          -.018151f * rgb[0] - .100579f * rgb[1] + 1.118730f * rgb[2]};
+            }
+            for (size_t channel = 0; channel < 3; ++channel) {
+                const float encoded = lfs::core::color::linearToSrgb(std::clamp(linear[channel], 0.f, 1.f));
+                const auto sample = static_cast<uint16_t>(std::floor(std::clamp(double(encoded), 0., 1.) * 65535. + .5));
+                std::memcpy(image.data.data() + (pixel * image.channels + channel) * 2, &sample, 2);
+            }
+        }
+    }
 
     constexpr int DEFAULT_JPEG_QUALITY = 95;
     constexpr std::size_t kJpegExifReadLimit = 64u * 1024u;
@@ -470,10 +534,13 @@ namespace {
     template <typename T>
     std::tuple<T*, int, int, int>
     load_image_with_alpha_t(const std::filesystem::path& p, const int res_div, const int max_width) {
+        const auto encoding = tiff_display_encoding(p);
         image_codecs::Image decoded;
         std::string error;
         if (!image_codecs::decode(p, decoded, error))
             throw std::runtime_error("Load failed: " + lfs::core::path_to_utf8(p) + (error.empty() ? "" : " : " + error));
+        if (encoding)
+            tiff_to_display_rgb(decoded, *encoding);
         if (decoded.channels != 4) {
             LOG_ERROR("load_image_with_alpha: expected 4 channels, got {}", decoded.channels);
             return std::make_tuple(nullptr, 0, 0, 0);
@@ -551,6 +618,7 @@ namespace {
         if (used_embedded_thumbnail)
             *used_embedded_thumbnail = false;
         const std::string path_utf8 = lfs::core::path_to_utf8(p);
+        const auto encoding = tiff_display_encoding(p);
         constexpr auto sample_type = std::is_same_v<T, uint8_t> ? image_codecs::SampleType::UInt8
                                                                 : image_codecs::SampleType::UInt16;
         image_codecs::DecodeTarget target{3, sample_type, nullptr, allocate_image_buffer, nullptr,
@@ -589,7 +657,7 @@ namespace {
                 error.clear();
             }
         }
-        if (!decoded_embedded && image_codecs::decode_to_buffer(p, target, direct_info, error)) {
+        if (!decoded_embedded && !encoding && image_codecs::decode_to_buffer(p, target, direct_info, error)) {
             source_width = direct_info.width;
             source_height = direct_info.height;
             base = static_cast<T*>(target.data);
@@ -601,6 +669,8 @@ namespace {
                 throw std::runtime_error("Load failed: " + path_utf8 + (error.empty() ? "" : " : " + error));
             if (decoded.width <= 0 || decoded.height <= 0 || decoded.channels <= 0)
                 throw std::runtime_error("Invalid image dimensions: " + path_utf8);
+            if (encoding)
+                tiff_to_display_rgb(decoded, *encoding);
             source_width = decoded.width;
             source_height = decoded.height;
             base = convert_to_rgb<T>(decoded);

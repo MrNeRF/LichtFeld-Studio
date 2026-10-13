@@ -89,6 +89,24 @@ class McpMedia(unittest.TestCase):
             self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")
             self.assertFalse(output.exists())
 
+    def test_tiff16_job_and_schema_validation(self):
+        result, output = self.invoke(format="tiff16", tiff16_transfer="bt709",
+                                     input_transfer="linear", input_primaries="bt709")
+        self.assertTrue(result["capabilities"]["tiff16"])
+        self.assertTrue(result["start"]["success"])
+        self.assertEqual(result["job"]["status"], "finished")
+        self.assertEqual(len(list(output.glob("*.tif"))), 4)
+        metadata = json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["output"]["bit_depth"], 16)
+        self.assertEqual(metadata["output"]["transfer"], "bt709")
+        for options in ({"format": "tiff16", "jpeg_quality": 95},
+                        {"format": "tiff16", "exr_precision": "half"},
+                        {"format": "png", "tiff16_transfer": "linear"},
+                        {"format": "tiff16", "tiff16_transfer": "pq"}):
+            result, output = self.invoke(**options)
+            self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")
+            self.assertFalse(output.exists())
+
     def test_hdr_profile_job_and_explicit_units(self):
         for hlg,profile,transfer in [(False,"pq-nits","smpte2084"),(True,"hlg-scene","arib-std-b67")]:
             source=self.root/("hlg.mkv" if hlg else "pq.mkv")

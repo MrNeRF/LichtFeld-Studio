@@ -90,6 +90,91 @@ namespace {
             std::filesystem::remove_all(path, error);
         }
     };
+    TEST(ProductionTiff, WritesExactUint16SamplesAndPreservesBorrowedRows) {
+        TemporaryDirectory temporary;
+        for (const int channels : {1, 2, 3, 4}) {
+            const int width = 3, height = 2;
+            const auto stride = static_cast<size_t>(width * channels * 2 + 5);
+            // Deliberately unaligned with odd padding; the codec owns its
+            // writable, aligned scanline and must never change the source.
+            std::vector<uint8_t> storage(1 + stride * height, 0xa5);
+            const std::array<uint16_t, 8> values{0, 1, 255, 256, 257, 32768, 65534, 65535};
+            for (int y = 0; y < height; ++y)
+                for (int x = 0; x < width * channels; ++x) {
+                    const auto value = values[(y * width * channels + x) % values.size()];
+                    std::memcpy(storage.data() + 1 + y * stride + x * 2, &value, 2);
+                }
+            const auto before = storage;
+            const auto path = temporary.path / (std::to_string(channels) + ".tiff");
+            std::vector<uint16_t> transfer(65536);
+            for (size_t i = 0; i < transfer.size(); ++i)
+                transfer[i] = static_cast<uint16_t>(i);
+            codec::TiffColorTags tags;
+            if (channels >= 3) {
+                tags.chromaticities = std::array<float, 8>{.64f, .33f, .30f, .60f, .15f, .06f, .3127f, .3290f};
+                tags.transfer_function = transfer;
+            }
+            const auto result = codec::write_tiff_u16(path, std::span(storage).subspan(1), width, height, channels,
+                                                      stride, "precision fixture", {.overwrite = false}, tags);
+            ASSERT_TRUE(result) << result.error().detail();
+            EXPECT_EQ(storage, before);
+            auto* tiff = TIFFOpen(path.string().c_str(), "r");
+            ASSERT_NE(tiff, nullptr);
+            uint16_t bits = 0, format = 0;
+            ASSERT_EQ(TIFFGetField(tiff, TIFFTAG_BITSPERSAMPLE, &bits), 1);
+            TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLEFORMAT, &format);
+            EXPECT_EQ(bits, 16);
+            EXPECT_EQ(format, SAMPLEFORMAT_UINT);
+            char* description = nullptr;
+            ASSERT_EQ(TIFFGetField(tiff, TIFFTAG_IMAGEDESCRIPTION, &description), 1);
+            EXPECT_STREQ(description, "precision fixture");
+            if (channels >= 3) {
+                float *primaries = nullptr, *white = nullptr;
+                ASSERT_EQ(TIFFGetField(tiff, TIFFTAG_PRIMARYCHROMATICITIES, &primaries), 1);
+                ASSERT_EQ(TIFFGetField(tiff, TIFFTAG_WHITEPOINT, &white), 1);
+                EXPECT_NEAR(primaries[0], .64f, 1e-6f);
+                EXPECT_NEAR(white[0], .3127f, 1e-6f);
+                uint16_t *red = nullptr, *green = nullptr, *blue = nullptr;
+                ASSERT_EQ(TIFFGetField(tiff, TIFFTAG_TRANSFERFUNCTION, &red, &green, &blue), 1);
+                for (const auto value : values) {
+                    EXPECT_EQ(red[value], value);
+                    EXPECT_EQ(green[value], value);
+                    EXPECT_EQ(blue[value], value);
+                }
+            }
+            std::vector<uint16_t> row(width * channels);
+            for (int y = 0; y < height; ++y) {
+                ASSERT_GE(TIFFReadScanline(tiff, row.data(), y), 0);
+                for (int x = 0; x < width * channels; ++x)
+                    EXPECT_EQ(row[x], values[(y * width * channels + x) % values.size()]);
+            }
+            TIFFClose(tiff);
+        }
+    }
+
+    TEST(ProductionTiff, Uint16ValidationAndCancellationPreserveExistingFile) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "previous.tif";
+        const std::array<uint16_t, 12> pixels{};
+        const auto bytes = std::span(reinterpret_cast<const uint8_t*>(pixels.data()), sizeof(pixels));
+        ASSERT_TRUE(codec::write_tiff_u16(path, bytes, 2, 2, 3, 12, std::nullopt, {}));
+        const auto contents = [&] {
+            std::ifstream input(path, std::ios::binary);
+            return std::vector<uint8_t>(std::istreambuf_iterator<char>(input), {});
+        };
+        const auto before = contents();
+        EXPECT_FALSE(codec::write_tiff_u16(path, bytes.first(5), 2, 2, 3, 12, std::nullopt, {.overwrite = true}));
+        EXPECT_EQ(contents(), before);
+        // Atomic preflight calls the callback first; cancel during scanlines.
+        int calls = 0;
+        const auto cancelled = codec::write_tiff_u16(path, bytes, 2, 2, 3, 12, std::nullopt,
+                                                     {.overwrite = true, .cancelled = [&] { return ++calls >= 2; }});
+        ASSERT_FALSE(cancelled);
+        EXPECT_EQ(cancelled.error().code(), lfs::ErrorCode::Cancelled);
+        EXPECT_EQ(contents(), before);
+        EXPECT_EQ(std::distance(std::filesystem::directory_iterator(temporary.path), std::filesystem::directory_iterator{}), 1);
+    }
+
     TEST(ProductionTiff, NormalizesUnsignedInteger32WithoutMisreportingSamples) {
         TemporaryDirectory temporary;
         for (const auto extension : {".tiff", ".data"})

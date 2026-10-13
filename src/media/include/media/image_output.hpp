@@ -15,11 +15,20 @@ namespace lfs::media {
         std::string provenance;
         std::function<bool()> cancelled;
     };
+    struct Tiff16OutputOptions {
+        ColorTransfer transfer = ColorTransfer::Srgb;
+        bool overwrite = false;
+        std::string provenance;
+        std::function<bool()> cancelled;
+    };
     // Synchronous CPU image output independent of decoder or renderer. Float
     // RGB/RGBA must be linear with declared primaries. Straight alpha is converted
     // to EXR premultiplied convention. Failed/cancelled writes never commit target.
     class LFS_MEDIA_API ImageOutput {
     public:
         [[nodiscard]] static SinkResult writeExr(const std::filesystem::path&, const FrameView&, const ExrOutputOptions& = {});
+        // Relative scene-linear RGB/RGBA to UINT16 SDR. Explicit transfer,
+        // primaries preserved, straight alpha, finite samples clamped to [0,1].
+        [[nodiscard]] static SinkResult writeTiff16(const std::filesystem::path&, const FrameView&, const Tiff16OutputOptions& = {});
     };
 } // namespace lfs::media
