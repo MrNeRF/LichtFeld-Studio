@@ -4,9 +4,11 @@
 #include "core/crash_handler.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/image_codecs.hpp"
+#include "core/image_io.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_color.hpp"
 #include "core/tensor_upload.hpp"
+#include "io/cache_image_loader.hpp"
 #include "io/image_output.hpp"
 #include "io/video/video_encoder.hpp"
 #include "media/media_probe.hpp"
@@ -176,6 +178,51 @@ namespace {
             throw std::runtime_error("Tensor EXR silently relabelled display color as linear");
     }
 } // namespace
+
+// Uses an ordinary 16-bit PNG; this regression does not depend on TIFF export.
+void imageCachePrecisionContracts() {
+    using namespace lfs;
+    constexpr size_t width = 8, height = 4, channels = 3;
+    std::vector<uint16_t> samples(width * height * channels);
+    for (size_t i = 0; i < samples.size(); ++i)
+        samples[i] = static_cast<uint16_t>(1 + (i * 683) % 65535);
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("lfs-cache-precision-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".png");
+    auto& cache = io::CacheLoader::getInstance(true);
+    struct Cleanup {
+        std::filesystem::path path;
+        io::CacheLoader& cache;
+        ~Cleanup() {
+            cache.reset_cache();
+            std::error_code error;
+            std::filesystem::remove(path, error);
+        }
+    } cleanup{path, cache};
+    if (!core::save_png(path, samples.data(), width, height, channels, 16, 6))
+        throw std::runtime_error("Cannot write the cache precision PNG fixture");
+    cache.reset_cache();
+    cache.update_cache_params(true, 2, 0.f, 0.f, false, 1);
+    for (const auto params : {io::LoadParams{}, io::LoadParams{.decode_16bit = true},
+                              io::LoadParams{.resize_factor = 2, .decode_16bit = true},
+                              io::LoadParams{.max_width = 3, .output_uint8 = true, .decode_16bit = true}}) {
+        const auto reference = io::load_rgb_image_cpu_decoded(path, params, params.decode_16bit).cpu().contiguous();
+        for (const auto actual : {io::load_rgb_image_cpu_decoded(path, params),
+                                  cache.load_cached_image(path, params), cache.load_cached_image(path, params)}) {
+            const auto host = actual.cpu().contiguous();
+            if (host.shape() != reference.shape() || host.dtype() != reference.dtype() || host.bytes() != reference.bytes() ||
+                std::memcmp(host.data_ptr(), reference.data_ptr(), host.bytes()))
+                throw std::runtime_error("Direct/cold/warm image load lost the requested decode precision");
+            if (params.decode_16bit && params.resize_factor == 1 && params.max_width == 0)
+                for (size_t c = 0; c < channels; ++c)
+                    for (size_t pixel = 0; pixel < width * height; ++pixel)
+                        if (std::abs(host.ptr<float>()[c * width * height + pixel] - samples[pixel * channels + c] / 65535.f) > 2.f / 65535.f)
+                            throw std::runtime_error("Sixteen-bit image cache request was quantized to RGB8");
+        }
+        if (cache.get_cache_mode() != io::CacheLoader::CacheMode::CPU_memory)
+            throw std::runtime_error("Precision regression did not exercise the decoded memory cache");
+    }
+}
+
 int main(int argc, char** argv) {
     using namespace lfs;
     using namespace media::detail;
@@ -199,6 +246,8 @@ int main(int argc, char** argv) {
         struct Shutdown {
             ~Shutdown() { core::teardown_gpu_before_exit(); }
         } shutdown;
+        if (!cpu)
+            imageCachePrecisionContracts();
         imageOutputContracts(cpu ? core::Device::CPU : core::Device::GPU);
         // CUDA builds select NVENC by default even for a CPU source. Keep the
         // CPU-only contract independent of hardware; GPU profiles also exercise
