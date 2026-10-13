@@ -21,6 +21,9 @@ def test_vksplat_viewer_supports_equirectangular_through_gut():
     assert "request.equirectangular && !request.gut" in source
     assert "VkSplat equirectangular rendering requires the 3DGUT backend" in source
     assert "VkSplat equirectangular selection requires the 3DGUT backend" in source
+    projection = _read("src/rendering/rasterizer/vulkan/shader/src/slang/equirect_projection.inc")
+    assert "LFS_EQUIRECT_ATAN2(direction.x, -direction.z)" in projection
+    assert "0.5 - latitude / LFS_EQUIRECT_PI" in projection
 
 
 def test_vksplat_equirectangular_shaders_project_rays_and_wrap_tiles():
@@ -31,7 +34,7 @@ def test_vksplat_equirectangular_shaders_project_rays_and_wrap_tiles():
 
     assert "EQUIRECTANGULAR = 3" in utils
     assert "project_point_equirect" in utils
-    assert "float azimuth = 2.0f * M_PI * (pixel.x / float(cam.W) - 0.5f);" in utils
+    assert "lfs_equirect_uv(float3(dir.x, dir.y, -dir.z))" in utils
     assert "unwrap_image_points_x(image_points, cam)" in vertex
     assert "covariance_mean2d" in vertex
     assert "get_wrapped_rectangle_tile_space" in vertex
@@ -55,7 +58,8 @@ def test_gpu_environment_pass_uses_top_down_viewport_coordinates():
     source = _read("src/visualizer/rendering/resources/viewport/environment.frag")
 
     assert "vec2 viewport_uv = vec2(TexCoord.x, 1.0 - TexCoord.y);" in source
-    assert "float lat = (viewport_uv.y - 0.5) * PI;" in source
+    assert "return lfs_equirect_direction(vec2(viewport_uv.x, 1.0 - viewport_uv.y));" in source
+    assert "return lfs_equirect_uv(dir);" in source
     assert "vec2 pixel = viewport_uv * viewport;" in source
 
 

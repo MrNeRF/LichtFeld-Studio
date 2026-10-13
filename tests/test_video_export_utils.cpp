@@ -22,8 +22,11 @@
 
 #include <cuda_runtime.h>
 
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -38,12 +41,14 @@ using lfs::core::Tensor;
 
 namespace {
 
-    std::unique_ptr<lfs::core::SplatData> make_test_splat(const std::vector<float>& xyz) {
+    std::unique_ptr<lfs::core::SplatData> make_test_splat(const std::vector<float>& xyz,
+                                                          const float log_scale = 0.0f) {
         const size_t count = xyz.size() / 3;
         auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::CUDA).to(lfs::core::DataType::Float32);
         auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CUDA, lfs::core::DataType::Float32);
         auto shN = Tensor::zeros({count, size_t{3}, size_t{3}}, Device::CUDA, lfs::core::DataType::Float32);
-        auto scaling = Tensor::zeros({count, size_t{3}}, Device::CUDA, lfs::core::DataType::Float32);
+        auto scaling = Tensor::full({count, size_t{3}}, log_scale, Device::CUDA,
+                                    lfs::core::DataType::Float32);
 
         std::vector<float> rotation_data(count * 4, 0.0f);
         for (size_t i = 0; i < count; ++i) {
@@ -284,6 +289,92 @@ TEST(VideoExportUtilsTest, UnconsolidatedAllNodeCacheVisibilityReachesCudaAndVul
         EXPECT_EQ(render(), shown);
     }
     cuda_renderer->shutdown();
+}
+
+TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
+    ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_VIDEO)) << SDL_GetError();
+    struct VideoGuard {
+        ~VideoGuard() { SDL_QuitSubSystem(SDL_INIT_VIDEO); }
+    } video_guard;
+    std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
+        SDL_CreateWindow("Equirectangular markers", 64, 64, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN), SDL_DestroyWindow);
+    ASSERT_TRUE(window) << SDL_GetError();
+    lfs::vis::VulkanContext context;
+    ASSERT_TRUE(context.init(window.get(), 64, 64)) << context.lastError();
+    lfs::rendering::setExpectedVulkanDeviceUuid(context.deviceUUID());
+
+    constexpr std::array points{std::array{0.0f, 0.0f, -5.0f}, std::array{0.0f, 0.0f, 5.0f},
+                                std::array{0.0f, -5.0f, 0.0f}, std::array{0.0f, 5.0f, 0.0f}};
+    lfs::vis::SceneManager manager;
+    auto& scene = manager.getScene();
+    std::array<lfs::core::NodeId, points.size()> ids;
+    for (size_t i = 0; i < points.size(); ++i) {
+        const auto p = lfs::rendering::visualizerWorldPointFromDataWorld(
+            glm::vec3{points[i][0], points[i][1], points[i][2]});
+        ids[i] = scene.addSplat(std::format("marker_{}", i), make_test_splat({p.x, p.y, p.z}, -2.0f));
+        ASSERT_NE(ids[i], lfs::core::NULL_NODE);
+    }
+    scene.setCombinedModelAllocator([&context](lfs::core::TensorShape shape, size_t capacity,
+                                               lfs::core::DataType dtype, std::string_view name) {
+        auto tensor = lfs::vis::makeVulkanExternalTensor(context, std::move(shape), dtype, capacity,
+                                                         std::string(name).c_str());
+        if (!tensor)
+            throw std::runtime_error(tensor.error());
+        return std::move(*tensor);
+    });
+    scene.requestCombinedModelBuild(true);
+    while (scene.combinedModelBuildPending()) {
+        (void)scene.combinedModelBuildError();
+        std::this_thread::yield();
+    }
+    const auto* model = scene.getCombinedModel();
+    ASSERT_TRUE(model);
+    auto transforms = scene.getVisibleNodeTransforms();
+    for (auto& transform : transforms)
+        transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+    const auto indices = scene.getTransformIndices();
+    lfs::vis::VksplatViewportRenderer renderer;
+
+    const auto check_marker = [&](size_t marker, bool panorama) {
+        for (size_t i = 0; i < ids.size(); ++i)
+            scene.setNodeVisibility(ids[i], i == marker);
+        lfs::rendering::ViewportRenderRequest request;
+        request.frame_view.rotation = glm::mat3(-1.0f, 0.0f, 0.0f,
+                                                0.0f, 1.0f, 0.0f,
+                                                0.0f, 0.0f, -1.0f);
+        request.frame_view.size = {1024, 512};
+        request.frame_view.focal_length_mm = 50.0f;
+        request.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+        request.gut = true;
+        request.equirectangular = panorama;
+        request.sh_degree = 0;
+        request.scene = {&transforms, indices, scene.getNodeVisibilityMask()};
+        auto result = renderer.render(context, *model, request, false,
+                                      lfs::vis::VksplatViewportRenderer::OutputSlot::Preview, false, true);
+        ASSERT_TRUE(result) << (result ? "" : result.error());
+        auto image = renderer.readOutputImageRgb8(context, lfs::vis::VksplatViewportRenderer::OutputSlot::Preview);
+        ASSERT_TRUE(image) << (image ? "" : image.error());
+        const auto* bytes = (*image)->ptr<uint8_t>();
+        const int expected_y = panorama ? std::array{256, 256, 0, 511}[marker] : 256;
+        const bool pole = panorama && (marker == 2 || marker == 3);
+        const bool seam = panorama && marker == 0;
+        constexpr int expected_x = 512;
+        bool found = false;
+        for (int y = std::max(0, expected_y - 16); y <= std::min(511, expected_y + 16) && !found; ++y)
+            for (int x = 0; x < 1024; ++x) {
+                const bool x_matches = pole || (seam ? x < 16 || x >= 1008 : std::abs(x - expected_x) <= 16);
+                const size_t offset = (static_cast<size_t>(y) * 1024 + x) * 3;
+                if (x_matches && bytes[offset] + bytes[offset + 1] + bytes[offset + 2] > 24) {
+                    found = true;
+                    break;
+                }
+            }
+        EXPECT_TRUE(found) << "marker=" << marker << " panorama=" << panorama;
+    };
+    for (bool panorama : {false, true})
+        for (size_t marker = 0; marker < points.size(); ++marker)
+            if (panorama || marker == 1)
+                check_marker(marker, panorama);
 }
 
 TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {

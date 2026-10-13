@@ -68,6 +68,7 @@
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
+#include "environment_math.hpp"
 #include "gui/error_surface_types.hpp"
 #include "python/gil.hpp"
 #include "python/package_manager.hpp"
@@ -1214,9 +1215,10 @@ namespace lfs::vis::gui {
                         return std::nullopt;
                     }
                     const glm::vec3 dir = view / len;
-                    const float ndc_x = std::atan2(dir.x, -dir.z) / glm::pi<float>();
-                    const float ndc_y = -std::asin(std::clamp(dir.y, -1.0f, 1.0f)) /
-                                        (glm::pi<float>() * 0.5f);
+                    const auto uv = lfs::rendering::envmath::equirectUvForDirection(
+                        {dir.x, dir.y, dir.z});
+                    const float ndc_x = uv.u * 2.0f - 1.0f;
+                    const float ndc_y = uv.v * 2.0f - 1.0f;
                     if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) {
                         return std::nullopt;
                     }
@@ -3105,9 +3107,10 @@ namespace lfs::vis::gui {
                                     break;
                                 }
                                 const glm::vec3 direction = view / len;
-                                const float ndc_x = std::atan2(direction.x, -direction.z) / glm::pi<float>();
-                                const float ndc_y = -std::asin(std::clamp(direction.y, -1.0f, 1.0f)) /
-                                                    (glm::pi<float>() * 0.5f);
+                                const auto uv = lfs::rendering::envmath::equirectUvForDirection(
+                                    {direction.x, direction.y, direction.z});
+                                const float ndc_x = uv.u * 2.0f - 1.0f;
+                                const float ndc_y = uv.v * 2.0f - 1.0f;
                                 screen_points[corner] = panel.pos + glm::vec2(
                                                                         (ndc_x * 0.5f + 0.5f) * panel.size.x,
                                                                         (ndc_y * 0.5f + 0.5f) * panel.size.y);
