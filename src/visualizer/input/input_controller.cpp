@@ -1379,10 +1379,19 @@ namespace lfs::vis {
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
+        const auto park_camera_drag_anchor = [&]() {
+            if (drag_mode_ != DragMode::Pan && drag_mode_ != DragMode::Orbit &&
+                drag_mode_ != DragMode::Rotate)
+                return;
+            auto* const target = drag_viewport_ ? drag_viewport_ : &viewport_;
+            const float now = static_cast<float>(SDL_GetTicks() / 1000.0f);
+            target->camera.followDragPointer(glm::vec2(static_cast<float>(x), static_cast<float>(y)), now);
+        };
 
         if (gui && gui->isCapturingInput()) {
             gui->captureMouseMove(x, y);
             last_mouse_pos_ = {x, y};
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1390,6 +1399,7 @@ namespace lfs::vis {
         if (gui && gui->gizmo().isPieMenuOpen()) {
             gui->gizmo().onPieMenuMouseMove({static_cast<float>(x), static_cast<float>(y)});
             last_mouse_pos_ = {x, y};
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1419,6 +1429,7 @@ namespace lfs::vis {
         if (!selection_pointer_blocked &&
             dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui_hover)) {
             last_mouse_pos_ = current_pos;
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1452,6 +1463,7 @@ namespace lfs::vis {
 
             ui::SplitPositionChanged{.position = new_pos}.emit();
             last_mouse_pos_ = {x, y};
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1562,6 +1574,7 @@ namespace lfs::vis {
 
         // Block camera dragging if a transform gizmo is being used
         if (isTransformGizmoUsing()) {
+            park_camera_drag_anchor();
             return;
         }
 

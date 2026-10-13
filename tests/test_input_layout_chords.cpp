@@ -198,5 +198,47 @@ namespace lfs::vis {
             }
         }
 
+        TEST_F(InputLayoutChordTest, SelectionAndPanButtonOrder) {
+            constexpr int left = static_cast<int>(input::AppMouseButton::LEFT);
+            constexpr int right = static_cast<int>(input::AppMouseButton::RIGHT);
+            const auto translation = viewport_.camera.t;
+
+            controller_.handleMouseButton(left, input::ACTION_PRESS, 100.0, 100.0);
+            controller_.handleMouseMove(140.0, 100.0);
+            ASSERT_TRUE(selectionActive());
+            controller_.handleMouseButton(right, input::ACTION_PRESS, 140.0, 100.0);
+            controller_.handleMouseMove(180.0, 100.0);
+            EXPECT_TRUE(selectionActive());
+            EXPECT_FALSE(controller_.isCameraDragging());
+            EXPECT_LT(glm::distance(translation, viewport_.camera.t), 1e-5f);
+            controller_.handleMouseButton(left, input::ACTION_RELEASE, 180.0, 100.0);
+            controller_.handleMouseButton(right, input::ACTION_RELEASE, 180.0, 100.0);
+            const auto selected = mask();
+            ASSERT_EQ(selected.size(), 3u);
+            EXPECT_EQ(selected[0], 1u);
+            EXPECT_EQ(selected[1], 1u);
+            EXPECT_EQ(selected[2], 0u);
+
+            controller_.handleMouseButton(right, input::ACTION_PRESS, 100.0, 100.0);
+            ASSERT_TRUE(controller_.isCameraDragging());
+            const auto origin = viewport_.camera.t;
+            controller_.handleMouseMove(110.0, 100.0);
+            const float step = glm::distance(origin, viewport_.camera.t);
+            const auto parked = viewport_.camera.t;
+            controller_.handleMouseButton(left, input::ACTION_PRESS, 110.0, 100.0);
+            ASSERT_TRUE(selectionActive());
+            controller_.handleMouseMove(400.0, 100.0);
+            EXPECT_LT(glm::distance(parked, viewport_.camera.t), 1e-5f);
+            EXPECT_TRUE(controller_.isCameraDragging());
+            controller_.handleMouseButton(left, input::ACTION_RELEASE, 400.0, 100.0);
+            const auto after = mask();
+            ASSERT_EQ(after.size(), 3u);
+            EXPECT_EQ(after[2], 1u);
+            controller_.handleMouseMove(410.0, 100.0);
+            const float resume = glm::distance(parked, viewport_.camera.t);
+            EXPECT_GT(resume, step * 0.4f);
+            EXPECT_LT(resume, step * 2.5f);
+        }
+
     } // namespace
 } // namespace lfs::vis
