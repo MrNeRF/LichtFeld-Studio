@@ -88,6 +88,18 @@ namespace lfs::vis::input {
     constexpr int KEY_F10 = 299;
     constexpr int KEY_F11 = 300;
     constexpr int KEY_F12 = 301;
+    constexpr int KEY_F13 = 302;
+    constexpr int KEY_F14 = 303;
+    constexpr int KEY_F15 = 304;
+    constexpr int KEY_F16 = 305;
+    constexpr int KEY_F17 = 306;
+    constexpr int KEY_F18 = 307;
+    constexpr int KEY_F19 = 308;
+    constexpr int KEY_F20 = 309;
+    constexpr int KEY_F21 = 310;
+    constexpr int KEY_F22 = 311;
+    constexpr int KEY_F23 = 312;
+    constexpr int KEY_F24 = 313;
     constexpr int KEY_KP_0 = 320;
     constexpr int KEY_KP_1 = 321;
     constexpr int KEY_KP_2 = 322;
@@ -127,6 +139,8 @@ namespace lfs::vis::input {
         LEFT = 0,
         RIGHT = 1,
         MIDDLE = 2,
+        BACK = 3,
+        FORWARD = 4,
     };
 
     constexpr int ACTION_RELEASE = 0;

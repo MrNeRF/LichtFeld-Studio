@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "python/python_runtime.hpp"
@@ -13,6 +14,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <cstdint>
+#include <stdexcept>
 
 namespace nb = nanobind;
 
@@ -302,6 +304,9 @@ namespace lfs::python {
                 if (!get_keymap_bindings())
                     return;
                 KeyTrigger trigger{key, modifiers, false};
+                if (!InputBindings::isValidTriggerForAction(action, trigger))
+                    throw nb::value_error(lfs::event::LocalizationManager::getInstance().get(
+                        "input_settings.invalid_binding"));
                 get_keymap_bindings()->setBinding(mode, action, trigger);
             },
             nb::arg("mode"), nb::arg("action"), nb::arg("key"), nb::arg("modifiers") = 0,
@@ -314,6 +319,8 @@ namespace lfs::python {
                     return false;
                 const auto trigger = triggerFromDict(trigger_dict);
                 if (!trigger)
+                    return false;
+                if (!InputBindings::isValidTriggerForAction(action, *trigger))
                     return false;
                 get_keymap_bindings()->setBinding(mode, action, *trigger);
                 return true;
@@ -417,6 +424,9 @@ namespace lfs::python {
         keymap.def(
             "load_profile",
             [](const std::string& name) {
+                if (!InputBindings::isValidProfileName(name))
+                    throw nb::value_error(lfs::event::LocalizationManager::getInstance().get(
+                        "input_settings.invalid_profile_name"));
                 if (!get_keymap_bindings())
                     return;
                 get_keymap_bindings()->loadProfile(name);
@@ -427,9 +437,14 @@ namespace lfs::python {
         keymap.def(
             "save_profile",
             [](const std::string& name) {
+                if (!InputBindings::isValidProfileName(name))
+                    throw nb::value_error(lfs::event::LocalizationManager::getInstance().get(
+                        "input_settings.invalid_profile_name"));
                 if (!get_keymap_bindings())
                     return;
-                get_keymap_bindings()->saveProfile(name);
+                if (!get_keymap_bindings()->saveProfile(name))
+                    throw std::runtime_error(lfs::event::LocalizationManager::getInstance().get(
+                        "input_settings.profile_save_failed"));
             },
             nb::arg("name"),
             "Save current bindings as a named profile");

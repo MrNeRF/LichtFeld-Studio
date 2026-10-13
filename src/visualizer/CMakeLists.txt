@@ -259,6 +259,7 @@ target_link_libraries(lfs_visualizer
         nlohmann_json::nlohmann_json
         OpenSSL::SSL
         OpenSSL::Crypto
+        ZLIB::ZLIB
         CUDA::cudart
         Freetype::Freetype
         nfd::nfd

@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/vram_hud_geometry.hpp"
+#include "gui/vram_hud_sample_policy.hpp"
 
+#include <chrono>
 #include <gtest/gtest.h>
 
 #include <limits>
@@ -54,6 +56,15 @@ namespace lfs::vis::gui::vram_hud_geometry {
         EXPECT_TRUE(movedPastClickSlop(25.0f, 0.0f));
         EXPECT_TRUE(movedPastClickSlop(-3.0f, 3.0f));
         EXPECT_FALSE(movedPastClickSlop(std::numeric_limits<float>::quiet_NaN(), 10.0f));
+    }
+
+    TEST(VramHudSamplePolicy, PublishesAtCadenceOrWhenExpandedChanges) {
+        using namespace std::chrono_literals;
+        const auto start = std::chrono::steady_clock::time_point{};
+        EXPECT_TRUE(vram_hud_sample_policy::shouldPublish(false, false, start, start));
+        EXPECT_FALSE(vram_hud_sample_policy::shouldPublish(true, false, start + 249ms, start));
+        EXPECT_TRUE(vram_hud_sample_policy::shouldPublish(true, false, start + 250ms, start));
+        EXPECT_TRUE(vram_hud_sample_policy::shouldPublish(true, true, start + 1ms, start));
     }
 
 } // namespace lfs::vis::gui::vram_hud_geometry

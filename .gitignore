@@ -18,6 +18,10 @@ results
 data
 !tests/data/
 tests/data/*
+!tests/data/keymap_contract/
+!tests/data/keymap_contract/*.digest
+!tests/data/keymap_layouts/
+!tests/data/keymap_layouts/*.json
 !tests/data/usd/
 !tests/data/usd/**
 !tests/data/param_json_golden/

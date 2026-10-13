@@ -122,6 +122,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class ViewportDepthLayoutTestAccess;
+        friend class VramHudHeaderClickTest;
         friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         struct ToolbarDragListener final : Rml::EventListener {
             RmlViewportOverlay* owner = nullptr;
@@ -137,6 +138,7 @@ namespace lfs::vis::gui {
         bool syncBuiltinDocument(bool force);
         bool updateToolbarRoots();
         bool updateToolbarRailLayout();
+        bool updateViewportOverlayPanelLayout();
         bool applyToolbarPosition();
         void attachToolbarDragListeners();
         void resetToolbarDragListeners();

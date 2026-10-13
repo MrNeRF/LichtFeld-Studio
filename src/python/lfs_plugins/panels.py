@@ -82,7 +82,8 @@ PANEL_SPECS = {
     ),
     "preferences": _PanelSpec(
         "lfs_plugins.preferences_panel", "PreferencesPanel", "lfs.preferences",
-        "Preferences", "FLOATING", 100, "rmlui/preferences.rml", "FILL", (780, 440), update_policy="dirty",
+        "Preferences", "FLOATING", 100, "rmlui/preferences.rml", "FILL", (780, 440),
+        update_policy="interval", update_interval_ms=100,
     ),
     "mesh2splat": _PanelSpec(
         "lfs_plugins.mesh2splat_panel", "Mesh2SplatPanel", "native.mesh2splat",

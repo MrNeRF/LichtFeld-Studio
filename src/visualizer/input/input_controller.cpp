@@ -41,6 +41,7 @@
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_keyboard.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -338,13 +339,15 @@ namespace lfs::vis {
 
         input::Action resolveCrossToolActivationShortcut(const input::InputBindings& bindings,
                                                          const input::ToolMode current_mode,
-                                                         const int key,
+                                                         const int physical_key,
+                                                         const int logical_key,
                                                          const int mods) {
             for (const auto mode : input::kAllToolModes) {
                 if (mode == current_mode) {
                     continue;
                 }
-                const auto candidate = bindings.getActionForKey(mode, key, mods);
+                const auto candidate = bindings.getActionForShortcut(
+                    mode, physical_key, logical_key, mods);
                 if (ownerToolForActivationAction(candidate).has_value()) {
                     return candidate;
                 }
@@ -1778,9 +1781,25 @@ namespace lfs::vis {
             return;
 
         const auto tool_mode = getCurrentToolMode();
-        auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
+        SDL_Keymod sdl_modifiers = SDL_KMOD_NONE;
+        if (mods & input::MODIFIER_SHIFT)
+            sdl_modifiers |= SDL_KMOD_SHIFT;
+        const auto key_scancode = static_cast<SDL_Scancode>(scancode);
+        const auto printed_keycode = scancode > 0
+                                         ? SDL_GetKeyFromScancode(key_scancode, sdl_modifiers, false)
+                                         : SDLK_UNKNOWN;
+        const auto unshifted_keycode = scancode > 0
+                                           ? SDL_GetKeyFromScancode(key_scancode, SDL_KMOD_NONE, false)
+                                           : SDLK_UNKNOWN;
+        const int printed_punctuation = input::sdlPrintedKeyToAppKey(printed_keycode);
+        const bool shift_needed_for_printed_key =
+            (mods & input::MODIFIER_SHIFT) != 0 && printed_keycode != unshifted_keycode;
+        auto bound_action = bindings_.getActionForShortcut(
+            tool_mode, physical_key, logical_key, mods, printed_punctuation,
+            shift_needed_for_printed_key);
         if (bound_action == input::Action::NONE) {
-            bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
+            bound_action = resolveCrossToolActivationShortcut(
+                bindings_, tool_mode, physical_key, logical_key, mods);
         }
 
         const bool gui_keyboard_focus = input_router_

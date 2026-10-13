@@ -364,7 +364,7 @@ namespace lfs::vis {
         lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgs;
         bool gut = false;
         bool equirectangular = false;
-        // Live projection override only; excluded from proxies and project serialization.
+        // Live projection override; persisted as optional VIEW state, excluded from render proxies.
         std::optional<lfs::rendering::GaussianRasterBackend> raster_backend_before_equirectangular;
         bool orthographic = false;
         float ortho_scale = 100.0f; // Pixels per world unit (larger = more zoomed in)

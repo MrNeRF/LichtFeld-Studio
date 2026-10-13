@@ -19,6 +19,7 @@
 #include <cmath>
 #include <format>
 #include <limits>
+#include <string_view>
 
 namespace lfs::io {
 
@@ -39,6 +40,22 @@ namespace lfs::io {
             if (ai_mat->Get(AI_MATKEY_BASE_COLOR, color) == AI_SUCCESS ||
                 ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, color) == AI_SUCCESS) {
                 mat.base_color = {color.r, color.g, color.b, color.a};
+            }
+
+            ai_mat->Get("$mat.gltf.alphaCutoff", 0, 0, mat.alpha_cutoff);
+            if (!std::isfinite(mat.alpha_cutoff)) {
+                mat.alpha_cutoff = 0.5f;
+            }
+            mat.alpha_cutoff = std::clamp(mat.alpha_cutoff, 0.0f, 1.0f);
+
+            aiString alpha_mode;
+            if (ai_mat->Get("$mat.gltf.alphaMode", 0, 0, alpha_mode) == AI_SUCCESS) {
+                const std::string_view mode = alpha_mode.C_Str();
+                if (mode == "MASK") {
+                    mat.alpha_mode = lfs::core::AlphaMode::Mask;
+                } else if (mode == "BLEND") {
+                    mat.alpha_mode = lfs::core::AlphaMode::Blend;
+                }
             }
 
             aiColor3D emissive;

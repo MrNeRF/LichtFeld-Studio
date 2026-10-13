@@ -756,6 +756,38 @@ namespace lfs::vis::project {
                             settings.raster_backend);
                         return lfs::Result<void>{};
                     }),
+                custom_field<RenderSettings>(
+                    "raster_backend_before_equirectangular",
+                    [](const RenderSettings& settings) {
+                        if (!settings.equirectangular ||
+                            !settings.raster_backend_before_equirectangular) {
+                            return Json(nullptr);
+                        }
+                        return Json(std::string(
+                            lfs::rendering::gaussianRasterBackendId(
+                                *settings.raster_backend_before_equirectangular)));
+                    },
+                    [](const Json& json, RenderSettings& settings,
+                       std::string_view prefix, std::string_view field) {
+                        const auto found = json.find(field);
+                        if (found == json.end() || found->is_null()) {
+                            settings.raster_backend_before_equirectangular.reset();
+                            return lfs::Result<void>{};
+                        }
+                        const auto value = scalar<std::string>(json, field);
+                        if (!value ||
+                            !lfs::rendering::isGaussianRasterBackendId(*value)) {
+                            settings.raster_backend_before_equirectangular.reset();
+                            LOG_WARN(
+                                "Ignoring unsupported optional previous raster backend in {}.{}",
+                                prefix,
+                                field);
+                            return lfs::Result<void>{};
+                        }
+                        settings.raster_backend_before_equirectangular =
+                            lfs::rendering::gaussianRasterBackendFromId(*value);
+                        return lfs::Result<void>{};
+                    }),
                 required_field("equirectangular", &RenderSettings::equirectangular),
                 required_field("orthographic", &RenderSettings::orthographic),
                 required_field("ortho_scale", &RenderSettings::ortho_scale),
@@ -892,6 +924,9 @@ namespace lfs::vis::project {
         }
 
         RenderSettings settings = base;
+        // A restored project uses only its own saved projection override. In particular,
+        // never carry an unsaved override from the project that was open previously.
+        settings.raster_backend_before_equirectangular.reset();
         if (auto status = read_fields(
                 json,
                 settings,
@@ -900,7 +935,7 @@ namespace lfs::vis::project {
             !status) {
             return std::move(status).error();
         }
-        enforceProjectionBackend(settings);
+        enforceProjectionBackend(settings, true);
         settings.gut =
             lfs::rendering::isGutBackend(
                 settings.raster_backend);
