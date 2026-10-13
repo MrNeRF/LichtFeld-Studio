@@ -7,6 +7,7 @@
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project/project_filesystem.hpp"
+#include "io/project/project_framing.hpp"
 #include "io/project/project_path_utils.hpp"
 #include "io/project_container.hpp"
 #include "io/project_path.hpp"
@@ -1044,6 +1045,109 @@ namespace {
         require_status(writer.commit());
     }
 
+    std::vector<std::byte> reference_framed_zstd(
+        const std::span<const std::byte> input) {
+        constexpr std::size_t kStreamThreshold = 8ull * 1024 * 1024;
+        constexpr std::size_t kOutputWindow = 8ull * 1024 * 1024;
+        constexpr int kCompressionLevel = 1;
+        const auto record_count = detail::framed_record_count(input.size());
+        std::vector<std::vector<std::byte>> records(record_count);
+        for (std::size_t index = 0; index < record_count; ++index) {
+            const auto offset = index * detail::FRAMED_RECORD_TARGET_BYTES;
+            const auto size = std::min(detail::FRAMED_RECORD_TARGET_BYTES,
+                                       input.size() - offset);
+            const auto record = input.subspan(offset, size);
+            if (record.size() < kStreamThreshold) {
+                auto& compressed = records[index];
+                compressed.resize(ZSTD_compressBound(record.size()));
+                const auto written = ZSTD_compress(
+                    compressed.data(), compressed.size(), record.data(),
+                    record.size(), kCompressionLevel);
+                EXPECT_FALSE(ZSTD_isError(written));
+                compressed.resize(written);
+                continue;
+            }
+
+            ZSTD_CCtx* context = ZSTD_createCCtx();
+            EXPECT_NE(context, nullptr);
+            if (context == nullptr) {
+                return {};
+            }
+            EXPECT_FALSE(ZSTD_isError(ZSTD_CCtx_setParameter(
+                context, ZSTD_c_compressionLevel, kCompressionLevel)));
+            EXPECT_FALSE(ZSTD_isError(ZSTD_CCtx_setParameter(
+                context, ZSTD_c_contentSizeFlag, 1)));
+            EXPECT_FALSE(ZSTD_isError(
+                ZSTD_CCtx_setPledgedSrcSize(context, record.size())));
+            auto& compressed = records[index];
+            compressed.reserve(record.size());
+            std::vector<std::byte> output_window(kOutputWindow);
+            std::size_t input_offset = 0;
+            while (input_offset < record.size()) {
+                const auto chunk = std::min(kOutputWindow,
+                                            record.size() - input_offset);
+                ZSTD_inBuffer source{record.data() + input_offset, chunk, 0};
+                const auto mode = input_offset + chunk == record.size()
+                                      ? ZSTD_e_end
+                                      : ZSTD_e_continue;
+                std::size_t remaining = 1;
+                while (source.pos < source.size ||
+                       (mode == ZSTD_e_end && remaining != 0)) {
+                    ZSTD_outBuffer destination{output_window.data(),
+                                               output_window.size(), 0};
+                    remaining = ZSTD_compressStream2(
+                        context, &destination, &source, mode);
+                    EXPECT_FALSE(ZSTD_isError(remaining));
+                    compressed.insert(
+                        compressed.end(), output_window.begin(),
+                        output_window.begin() +
+                            static_cast<std::ptrdiff_t>(destination.pos));
+                    if (mode != ZSTD_e_end && source.pos == source.size) {
+                        break;
+                    }
+                }
+                input_offset += chunk;
+            }
+            ZSTD_freeCCtx(context);
+        }
+
+        const auto table_size = detail::FRAMED_HEADER_BYTES +
+                                record_count * detail::FRAMED_RECORD_BYTES;
+        std::size_t total = table_size;
+        for (const auto& record : records) {
+            total += record.size();
+        }
+        std::vector<std::byte> framed(total);
+        std::copy(detail::FRAMED_MAGIC.begin(), detail::FRAMED_MAGIC.end(),
+                  framed.begin());
+        const auto put_le = [&](const std::size_t offset,
+                                const std::uint64_t value,
+                                const std::size_t bytes) {
+            for (std::size_t byte = 0; byte < bytes; ++byte) {
+                framed[offset + byte] =
+                    static_cast<std::byte>(value >> (8 * byte));
+            }
+        };
+        put_le(8, detail::FRAMED_VERSION, 2);
+        put_le(12, record_count, 4);
+        std::size_t cursor = table_size;
+        for (std::size_t index = 0; index < record_count; ++index) {
+            const auto input_offset =
+                index * detail::FRAMED_RECORD_TARGET_BYTES;
+            const auto uncompressed = std::min(
+                detail::FRAMED_RECORD_TARGET_BYTES,
+                input.size() - input_offset);
+            const auto table_offset = detail::FRAMED_HEADER_BYTES +
+                                      index * detail::FRAMED_RECORD_BYTES;
+            put_le(table_offset, records[index].size(), 8);
+            put_le(table_offset + 8, uncompressed, 8);
+            std::copy(records[index].begin(), records[index].end(),
+                      framed.begin() + static_cast<std::ptrdiff_t>(cursor));
+            cursor += records[index].size();
+        }
+        return framed;
+    }
+
     TEST(ProjectContainerReader, BoundedStreamMatchesReadChunkForFramedPayloads) {
         constexpr std::size_t kBytes =
             2ull * 64ull * 1024ull * 1024ull + 32ull * 1024ull * 1024ull;
@@ -1070,6 +1174,11 @@ namespace {
             ASSERT_GE(record_count, 3u) << name;
             const auto materialized = require_result(reader.read_chunk(chunk));
             ASSERT_EQ(materialized, payload) << name;
+            if (compression == Compression::ZstdFramed) {
+                std::vector<std::byte> stored(chunk.stored_bytes);
+                require_status(reader.read_stored_at(chunk, 0, stored));
+                EXPECT_EQ(stored, reference_framed_zstd(payload));
+            }
             auto bounded = reader.open_bounded_stream(chunk);
             ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
             expect_bounded_stream_matches(*bounded, materialized);
@@ -1466,6 +1575,11 @@ namespace {
             const ChunkInfo& chunk = reader.chunks().front();
             const auto records = read_framed_table(path, chunk);
             ASSERT_GE(records.size(), 3u) << name;
+            if (compression == Compression::ZstdFramed) {
+                std::vector<std::byte> stored(chunk.stored_bytes);
+                require_status(reader.read_stored_at(chunk, 0, stored));
+                EXPECT_EQ(stored, reference_framed_zstd(payload));
+            }
             const auto& victim = records[2];
             ASSERT_GT(victim.stored_bytes, 8u) << name;
             const std::uint64_t corrupt_rel =
