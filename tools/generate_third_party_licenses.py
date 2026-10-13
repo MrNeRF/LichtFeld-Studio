@@ -336,7 +336,9 @@ def generate(args: argparse.Namespace) -> str:
     for component in components:
         groups[component["license"]].append(component)
 
-    lines = ["# Third-party licenses", "", "Generated at install time from the selected vcpkg triplet and files shipped with this distribution.", "", f"Library count: **{len(components)}**", ""]
+    lines = ["# Third-party licenses", "", "Generated at install time from the selected vcpkg triplet and files shipped with this distribution.", "",
+             "LichtFeld Studio is licensed under GPL-3.0-or-later (LICENSE) with an additional permission for NVIDIA GPU libraries (LICENSE-EXCEPTION.txt).", "",
+             f"Library count: **{len(components)}**", ""]
     for license_id in sorted(groups, key=str.casefold):
         rows = sorted(groups[license_id], key=lambda x: (x["name"].casefold(), x["version"]))
         lines += [f"## {license_id}", "", "| Library | Version | Copyright |", "|---|---|---|"]
