@@ -676,8 +676,8 @@ namespace lfs::io {
             auto bytes = lossless
                              ? nvcodec.encode_to_jpeg2k(
                                    tensor.dtype() == lfs::core::DataType::UInt8
-                                       ? tensor.to(lfs::core::DataType::Float32) / 255.0f
-                                       : tensor,
+                                       ? (tensor.to(lfs::core::DataType::Float32) / 255.0f).permute({1, 2, 0}).contiguous()
+                                       : tensor.permute({1, 2, 0}).contiguous(),
                                    cuda_stream)
                              : nvcodec.encode_to_jpeg(tensor, config_.cache_jpeg_quality, cuda_stream);
             put_in_jpeg_cache(cache_key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));

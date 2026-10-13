@@ -26,7 +26,13 @@ is unpremultiplied for display. Out-of-gamut colors are clipped by that bounded
 contract. Untagged RGB follows the existing sRGB assumption. Unknown or invalid
 profiles produce an error rather than a silently guessed color conversion.
 PQ/HLG display import requires an explicit HDR policy and is currently rejected;
-raw decoding remains available. A higher precision training path is not enabled.
+raw decoding remains available. The existing `decode_16bit` option preserves
+source precision through image loading; its default and training policy are unchanged.
+
+File, memory and caller-allocated target entrypoints share this decoder. Memory
+input stays alive for the duration of decoding; target decode stages the decoded
+image before copying/converting it, and is not a zero-copy claim. Bounded header
+recognition is advisory; full decoding still validates the container and pixels.
 
 Dependencies are pinned by the existing vcpkg baseline: libheif 1.21.2,
 libde265 and Little CMS. The default encoder features are disabled. CPU decode
@@ -42,9 +48,37 @@ before treating this development increment as release-ready.
 
 ## Targeted qualification
 
-Windows, Linux CPU and macOS pass the codec, dataset/image-loader, exports and
-TIFF regression CTest groups. Codec results: Windows 256 passed; Linux 258
-passed; macOS 256 passed and 2 existing `/dev/full` output-failure cases skipped
-because that device is absent. Dataset/image-loader coverage has 4 passing cases. Fixtures include a grid with a partial tile and concurrent reads.
-The Windows CMake stub check matches committed stubs. These results do not claim
-hosted CI, installer or full root-suite qualification, nor a real iPhone corpus.
+Windows and macOS pass six targeted CTest groups, including asynchronous/cache
+consumers on CUDA/Vulkan and Metal/Vulkan respectively. Linux CPU passes four
+groups. Codec results: Windows 258 passed; Linux 260 passed; macOS 258 passed
+with two existing `/dev/full` output-failure skips. Dataset/image-loader results:
+Windows/macOS six passed; Linux five passed with the actual Blender camera
+construction skipped because the validation container has no GPU. Header and
+memory tests still execute there. CMake-generated Python stubs match committed stubs.
+
+Fixtures cover native adjacent 10/12-bit codes, high-bitdepth alpha, monochrome,
+lossy limited-range YUV420, nonidentity matrices, SDR transfers, nontrivial ICC,
+ICC/NCLX precedence, HDR rejection, geometric transforms and partial grid tiles.
+Cold decoded caches and asynchronous loaders preserve original samples exactly.
+The existing CUDA derived JPEG 2000 cache bounds and rounds resized float samples
+to UINT16; its test uses that explicit contract rather than byte equality.
+The audit also fixed the cache writer's ambiguous CHW layout for tiny images by
+passing HWC explicitly at that call site.
+
+A private 4032x3024 iPhone 13 photo with an 8x6 grid, partial edge tiles and a
+Display P3 ICC profile decodes identically on all three platforms and with the
+independent decoder. Apple ImageIO is not pixel-identical: mean absolute RGB8
+error is 0.626, with a maximum of 62; 99.68% of channel samples differ by at most
+eight levels. Applying the same LCMS transform to ImageIO's original-space RGB
+retains the difference, whereas Apple's color conversion alone differs by at
+most one level. This records a decoder/provider difference, not an equivalence
+claim or a widened fixture-test tolerance. The photo is not redistributed.
+Two private alternatives were measured and rejected: forced bilinear chroma
+upsampling barely lowered mean error (0.619) but increased the maximum to 96
+and nearly doubled decode time; UINT16 display intermediates increased mean
+error to 1.223. Neither experimental setting is enabled in this revision.
+
+A Windows consumer runs with resolved DLLs from an isolated directory and a
+system-only PATH. The three new decoder/color DLLs total 2,135,040 bytes. This
+does not establish full installer, hosted CI or root-suite qualification.
+Recorded photo decode measurements are diagnostic, not acceleration claims.

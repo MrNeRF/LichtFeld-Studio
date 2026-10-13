@@ -14,7 +14,7 @@ namespace {
     namespace codec = lfs::core::image_codecs;
     const std::filesystem::path fixtures = LFS_HEIF_FIXTURES;
     TEST(ProductionHeif, PrimaryRgbAlphaRotationAndPrecisionMatchIndependentDecode) {
-        for (const auto name : {"rgb8", "rgba8", "rotated", "mirrored", "rgb10", "rgb12", "pq"}) {
+        for (const auto name : {"rgb8", "rgba8", "rotated", "mirrored", "rgb10", "rgb12", "pq", "yuv420", "bt709", "linear", "untagged", "hlg", "rgba12"}) {
             SCOPED_TRACE(name);
             codec::Probe info;
             codec::Image image;
@@ -24,7 +24,7 @@ namespace {
             ASSERT_TRUE(codec::decode(path, image, error)) << error;
             EXPECT_EQ(image.width, info.width);
             EXPECT_EQ(image.height, info.height);
-            EXPECT_EQ(image.channels, std::string_view(name) == "rgba8" ? 4 : 3);
+            EXPECT_EQ(image.channels, (std::string_view(name) == "rgba8" || std::string_view(name) == "rgba12") ? 4 : 3);
             EXPECT_EQ(image.width, std::string_view(name) == "rotated" ? 24 : std::string_view(name) == "rgb8" ? 128
                                                                                                                : 32);
             EXPECT_EQ(image.height, std::string_view(name) == "rotated" ? 32 : std::string_view(name) == "rgb8" ? 96
@@ -32,7 +32,7 @@ namespace {
             std::ifstream file(fixtures / (std::string(name) + ".reference"), std::ios::binary);
             std::vector<uint8_t> expected((std::istreambuf_iterator<char>(file)), {});
             ASSERT_EQ(expected.size(), image.data.size());
-            if (std::string_view(name) == "rgb12" || std::string_view(name) == "rgb10" || std::string_view(name) == "pq") {
+            if (std::string_view(name) == "rgb12" || std::string_view(name) == "rgb10" || std::string_view(name) == "pq" || std::string_view(name) == "hlg" || std::string_view(name) == "rgba12") {
                 ASSERT_EQ(image.sample_type, codec::SampleType::UInt16);
                 bool precision = false;
                 for (size_t i = 0; i < expected.size(); i += 2) {
@@ -46,6 +46,11 @@ namespace {
                     precision |= actual % 257 != 0;
                 }
                 EXPECT_TRUE(precision);
+                uint16_t first, second;
+                std::memcpy(&first, image.data.data(), 2);
+                std::memcpy(&second, image.data.data() + 2, 2);
+                EXPECT_NE(first, second);
+                EXPECT_EQ((uint32_t(first) + 128) / 257, (uint32_t(second) + 128) / 257) << "Fixture must contain distinct native codes inside one RGB8 bucket";
             } else {
                 for (size_t i = 0; i < expected.size(); ++i)
                     ASSERT_LE(std::abs(int(expected[i]) - image.data[i]), 1) << i;
@@ -55,20 +60,24 @@ namespace {
     TEST(ProductionHeif, DisplayP3MatchesIndependentMatrixAndHdrIsNotSilentlySdr) {
         codec::Image raw, display;
         std::string error;
-        ASSERT_TRUE(codec::decode_heif(fixtures / "p3.heic", raw, error)) << error;
-        ASSERT_TRUE(codec::decode_heif(fixtures / "p3.heic", display, error, true)) << error;
-        EXPECT_NE(raw.data, display.data);
-        const auto linear = [](double v) { return v <= .04045 ? v / 12.92 : std::pow((v + .055) / 1.055, 2.4); };
-        const auto encoded = [](double v) {v=std::clamp(v,0.,1.);return v<=.0031308?v*12.92:1.055*std::pow(v,1./2.4)-.055; };
-        for (size_t i = 0; i < raw.data.size(); i += 3) {
-            const double r = linear(raw.data[i] / 255.), g = linear(raw.data[i + 1] / 255.), b = linear(raw.data[i + 2] / 255.);
-            const std::array<double, 3> reference{encoded(1.224940176 * r - .224940176 * g), encoded(-.042056955 * r + 1.042056955 * g), encoded(-.019637555 * r - .078636046 * g + 1.098273601 * b)};
-            for (size_t c = 0; c < 3; ++c)
-                EXPECT_NEAR(display.data[i + c], std::lround(reference[c] * 255), 2) << i << ":" << c;
+        for (const auto name : {"p3.heic", "p3icc.heic"}) {
+            ASSERT_TRUE(codec::decode_heif(fixtures / name, raw, error)) << error;
+            ASSERT_TRUE(codec::decode_heif(fixtures / name, display, error, true)) << error;
+            EXPECT_NE(raw.data, display.data);
+            const auto linear = [](double v) { return v <= .04045 ? v / 12.92 : std::pow((v + .055) / 1.055, 2.4); };
+            const auto encoded = [](double v) {v=std::clamp(v,0.,1.);return v<=.0031308?v*12.92:1.055*std::pow(v,1./2.4)-.055; };
+            for (size_t i = 0; i < raw.data.size(); i += 3) {
+                const double r = linear(raw.data[i] / 255.), g = linear(raw.data[i + 1] / 255.), b = linear(raw.data[i + 2] / 255.);
+                const std::array<double, 3> reference{encoded(1.224940176 * r - .224940176 * g), encoded(-.042056955 * r + 1.042056955 * g), encoded(-.019637555 * r - .078636046 * g + 1.098273601 * b)};
+                for (size_t c = 0; c < 3; ++c)
+                    EXPECT_NEAR(display.data[i + c], std::lround(reference[c] * 255), 2) << i << ":" << c;
+            }
         }
         ASSERT_TRUE(codec::decode_heif(fixtures / "pq.heic", raw, error)) << error;
         EXPECT_FALSE(codec::decode_heif(fixtures / "pq.heic", display, error, true));
         EXPECT_NE(error.find("SDR"), std::string::npos);
+        ASSERT_TRUE(codec::decode_heif(fixtures / "hlg.heic", raw, error));
+        EXPECT_FALSE(codec::decode_heif(fixtures / "hlg.heic", display, error, true));
     }
     TEST(ProductionHeif, IccProfilesAndPrimaryItemAreExplicit) {
         codec::Image image, raw;
@@ -92,6 +101,25 @@ namespace {
         EXPECT_NEAR(image.data[0], 200, 1);
         EXPECT_NEAR(image.data[1], 80, 1);
         EXPECT_NEAR(image.data[2], 30, 1);
+    }
+    TEST(ProductionHeif, SdrTransfersMatchScalarReferenceAndUntaggedDefaultsToSrgb) {
+        for (const auto name : {"bt709", "linear", "untagged"}) {
+            SCOPED_TRACE(name);
+            codec::Image raw, display;
+            std::string error;
+            const auto path = fixtures / (std::string(name) + ".heic");
+            ASSERT_TRUE(codec::decode_heif(path, raw, error)) << error;
+            ASSERT_TRUE(codec::decode_heif(path, display, error, true)) << error;
+            ASSERT_EQ(raw.data.size(), display.data.size());
+            for (size_t i = 0; i < raw.data.size(); ++i) {
+                const double v = raw.data[i] / 255.;
+                const double linear = std::string_view(name) == "linear" ? v : v < .081 ? v / 4.5
+                                                                                        : std::pow((v + .099) / 1.099, 1. / .45);
+                const double encoded = std::string_view(name) == "untagged" ? v : linear <= .0031308 ? 12.92 * linear
+                                                                                                     : 1.055 * std::pow(linear, 1. / 2.4) - .055;
+                EXPECT_NEAR(display.data[i], std::lround(encoded * 255), 1) << i;
+            }
+        }
     }
     TEST(ProductionHeif, PremultipliedDisplayAlphaAndConcurrentReads) {
         codec::Image raw, display;
@@ -117,6 +145,45 @@ namespace {
             }));
         for (auto& read : reads)
             EXPECT_TRUE(read.get());
+    }
+    TEST(ProductionHeif, MemoryAndDirectTargetsMatchFileWithoutLosingPrecision) {
+        for (const auto name : {"rgb12", "rgba12", "p3", "yuv420", "rotated"}) {
+            SCOPED_TRACE(name);
+            std::ifstream file(fixtures / (std::string(name) + ".heic"), std::ios::binary);
+            std::vector<uint8_t> encoded((std::istreambuf_iterator<char>(file)), {});
+            codec::Image raw, memory;
+            std::string error;
+            ASSERT_TRUE(codec::decode(fixtures / (std::string(name) + ".heic"), raw, error)) << error;
+            ASSERT_TRUE(codec::decode_memory(encoded.data(), encoded.size(), memory, error)) << error;
+            EXPECT_EQ(raw.data, memory.data);
+            for (const auto type : {codec::SampleType::UInt8, codec::SampleType::UInt16, codec::SampleType::Float32}) {
+                codec::DecodeTarget target{raw.channels, type};
+                codec::Probe info;
+                ASSERT_TRUE(codec::decode_memory_to_buffer(encoded.data(), encoded.size(), target, info, error)) << error;
+                std::unique_ptr<void, decltype(&std::free)> owner(target.data, std::free);
+                ASSERT_EQ(info.width, raw.width);
+                ASSERT_EQ(info.height, raw.height);
+                ASSERT_EQ(info.channels, raw.channels);
+                for (size_t i = 0; i < size_t(raw.width) * raw.height * raw.channels; ++i) {
+                    uint16_t sample = raw.data[i] * 257u;
+                    if (raw.sample_type == codec::SampleType::UInt16)
+                        std::memcpy(&sample, raw.data.data() + i * 2, 2);
+                    if (type == codec::SampleType::UInt16)
+                        EXPECT_EQ(static_cast<uint16_t*>(target.data)[i], sample);
+                    else if (type == codec::SampleType::UInt8)
+                        EXPECT_EQ(static_cast<uint8_t*>(target.data)[i], (uint32_t(sample) + 128) / 257);
+                    else
+                        EXPECT_FLOAT_EQ(static_cast<float*>(target.data)[i], sample / 65535.f);
+                }
+            }
+            codec::DecodeTarget bad{2, codec::SampleType::UInt8};
+            codec::Probe info;
+            EXPECT_FALSE(codec::decode_memory_to_buffer(encoded.data(), encoded.size(), bad, info, error));
+            EXPECT_EQ(bad.data, nullptr);
+            codec::DecodeTarget allocation{3, codec::SampleType::UInt8, nullptr, [](size_t, void*) -> void* { return nullptr; }, nullptr};
+            EXPECT_FALSE(codec::decode_memory_to_buffer(encoded.data(), encoded.size(), allocation, info, error));
+            EXPECT_EQ(allocation.data, nullptr);
+        }
     }
     TEST(ProductionHeif, ExtensionAliasesUnicodeAndTruncation) {
         const auto root = std::filesystem::temp_directory_path() / ("lfs-heif-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));

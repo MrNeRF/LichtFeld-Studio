@@ -3,7 +3,9 @@
 #include "core/image_exr.hpp"
 #include "core/image_heif.hpp"
 #include "core/image_io.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/loaders/blender_loader.hpp"
 #include "io/loaders/colmap_loader.hpp"
 #include "io/project_document.hpp"
 #include <array>
@@ -192,4 +194,32 @@ namespace {
         EXPECT_EQ(rc, 3);
     }
 
+    TEST_F(ImageFormatDiscoveryTest, HeifBoundedHeaderAndMemoryAreReadable) {
+        const auto path = temp_dir_ / "frame.heic";
+        fs::copy_file(fs::path(LFS_HEIF_FIXTURES) / "p3.heic", path);
+        std::string error;
+        EXPECT_TRUE(lfs::core::probe_image_header_bounded(path, error)) << error;
+        std::ifstream input(path, std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});
+        auto [memory, w, h, c] = lfs::core::load_image_from_memory(bytes.data(), bytes.size(), 1, 0);
+        std::unique_ptr<uint8_t, decltype(&lfs::core::free_image)> owner(memory, lfs::core::free_image);
+        auto [disk, dw, dh, dc] = lfs::core::load_image(path);
+        std::unique_ptr<uint8_t, decltype(&lfs::core::free_image)> disk_owner(disk, lfs::core::free_image);
+        ASSERT_NE(memory, nullptr);
+        ASSERT_EQ(w, dw);
+        ASSERT_EQ(h, dh);
+        ASSERT_EQ(c, dc);
+        EXPECT_EQ(std::memcmp(memory, disk, size_t(w) * h * c), 0);
+    }
+    TEST_F(ImageFormatDiscoveryTest, HeifBlenderDatasetCreatesCamerasWithoutUnreadableWarning) {
+        if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend()))
+            GTEST_SKIP() << "Blender camera construction requires a GPU backend; bounded-header and memory decode are tested independently";
+        fs::copy_file(fs::path(LFS_HEIF_FIXTURES) / "p3.heic", temp_dir_ / "frame.heic");
+        write_text_file(temp_dir_ / "transforms.json", R"({"camera_angle_x":0.8,"camera_angle_y":0.6,"frames":[{"file_path":"frame.heic","transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}]})");
+        lfs::io::BlenderLoader loader;
+        const auto loaded = loader.load(temp_dir_);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error().format();
+        for (const auto& warning : loaded->warnings)
+            EXPECT_EQ(warning.find("unreadable"), std::string::npos) << warning;
+    }
 } // namespace

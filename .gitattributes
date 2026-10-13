@@ -7,3 +7,4 @@ src/python/stubs/**/*.pyi text eol=lf
 # Encoded images and numeric reference buffers must survive checkout byte-exact.
 tests/data/heif/*.heic binary
 tests/data/heif/*.reference binary
+tests/data/heif/*.icc binary

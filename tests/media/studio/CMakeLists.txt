@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 add_executable(media_linear_video_contracts linear_video_contracts.cpp)
+target_compile_definitions(media_linear_video_contracts PRIVATE LFS_HEIF_FIXTURES="${CMAKE_SOURCE_DIR}/tests/data/heif")
 set_target_properties(media_linear_video_contracts PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 target_compile_features(media_linear_video_contracts PRIVATE cxx_std_23)
 target_include_directories(media_linear_video_contracts PRIVATE "${CMAKE_SOURCE_DIR}/src")

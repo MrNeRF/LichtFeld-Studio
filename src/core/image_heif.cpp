@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <lcms2.h>
@@ -63,6 +64,23 @@ namespace lfs::core::image_codecs {
                     }};
                 if (!checked(heif_context_read_from_reader(context.get(), &reader, this, nullptr), error))
                     return false;
+                return primary_image(error);
+            }
+            bool open(std::span<const uint8_t> bytes, std::string& error) {
+                if (bytes.empty()) {
+                    error = "HEIF: empty input";
+                    return false;
+                }
+                context.reset(heif_context_alloc());
+                if (!context) {
+                    error = "HEIF: cannot allocate context";
+                    return false;
+                }
+                if (!checked(heif_context_read_from_memory_without_copy(context.get(), bytes.data(), bytes.size(), nullptr), error))
+                    return false;
+                return primary_image(error);
+            }
+            bool primary_image(std::string& error) {
                 heif_image_handle* primary = nullptr;
                 if (!checked(heif_context_get_primary_image_handle(context.get(), &primary), error))
                     return false;
@@ -110,6 +128,8 @@ namespace lfs::core::image_codecs {
                     return true; // Untagged RGB follows the existing sRGB assumption.
                 if (!checked(status, error))
                     return false;
+                if (nclx->transfer_characteristics == 2 && nclx->color_primaries == 2)
+                    return true;
                 const int transfer = nclx->transfer_characteristics;
                 // PQ and HLG have different physical units; never label their samples SDR.
                 if (transfer != 1 && transfer != 6 && transfer != 13 && transfer != 8) {
@@ -161,78 +181,146 @@ namespace lfs::core::image_codecs {
         Source source;
         return source.open(path, error) && layout(source.handle.get(), result, error);
     }
+    namespace {
+        bool decode_source(Source& source, Image& result, std::string& error, bool display) {
+            Probe info;
+            if (!layout(source.handle.get(), info, error))
+                return false;
+            const bool wide = info.sample_type == SampleType::UInt16;
+            const bool alpha = info.channels == 4;
+            const auto chroma = wide ? (std::endian::native == std::endian::little ? (alpha ? heif_chroma_interleaved_RRGGBBAA_LE : heif_chroma_interleaved_RRGGBB_LE)
+                                                                                   : (alpha ? heif_chroma_interleaved_RRGGBBAA_BE : heif_chroma_interleaved_RRGGBB_BE))
+                                     : (alpha ? heif_chroma_interleaved_RGBA : heif_chroma_interleaved_RGB);
+            std::unique_ptr<heif_decoding_options, decltype(&heif_decoding_options_free)> options(heif_decoding_options_alloc(), heif_decoding_options_free);
+            if (!options) {
+                error = "HEIF: cannot allocate decoding options";
+                return false;
+            }
+            options->convert_hdr_to_8bit = 0;
+            options->strict_decoding = 1;
+            heif_image* raw = nullptr;
+            if (!checked(heif_decode_image(source.handle.get(), &raw, heif_colorspace_RGB, chroma, options.get()), error))
+                return false;
+            std::unique_ptr<heif_image, decltype(&heif_image_release)> decoded(raw, heif_image_release);
+            const int width = heif_image_get_width(raw, heif_channel_interleaved), height = heif_image_get_height(raw, heif_channel_interleaved);
+            const int bits = heif_image_get_bits_per_pixel_range(raw, heif_channel_interleaved);
+            int stride = 0;
+            const auto* plane = heif_image_get_plane_readonly(raw, heif_channel_interleaved, &stride);
+            const size_t row_bytes = static_cast<size_t>(width) * info.channels * (wide ? 2 : 1);
+            if (!plane || width != info.width || height != info.height || bits < 1 || bits > 16 || stride < 0 || static_cast<size_t>(stride) < row_bytes) {
+                error = "HEIF: inconsistent decoded layout";
+                return false;
+            }
+            Image image{width, height, info.channels, info.sample_type, std::vector<uint8_t>(row_bytes * height)};
+            for (int y = 0; y < height; ++y)
+                std::memcpy(image.data.data() + row_bytes * y, plane + static_cast<size_t>(stride) * y, row_bytes);
+            // libheif stores high-bitdepth integer samples right-aligned. The core
+            // UINT16 contract spans [0,65535], including alpha.
+            if (wide && bits < 16) {
+                const uint32_t maximum = (uint32_t{1} << bits) - 1;
+                for (size_t i = 0; i < image.data.size(); i += 2) {
+                    uint16_t value;
+                    std::memcpy(&value, image.data.data() + i, 2);
+                    value = static_cast<uint16_t>((uint32_t(value) * 65535 + maximum / 2) / maximum);
+                    std::memcpy(image.data.data() + i, &value, 2);
+                }
+            }
+            if (display && alpha && heif_image_handle_is_premultiplied_alpha(source.handle.get())) {
+                const uint32_t maximum = wide ? 65535 : 255;
+                const size_t step = wide ? 2 : 1;
+                for (size_t pixel = 0; pixel < static_cast<size_t>(width) * height; ++pixel) {
+                    const auto read = [&](size_t channel) -> uint32_t {
+                        const auto* p = image.data.data() + (pixel * 4 + channel) * step;
+                        if (!wide)
+                            return *p;
+                        uint16_t value;
+                        std::memcpy(&value, p, 2);
+                        return value;
+                    };
+                    const auto a = read(3);
+                    for (size_t channel = 0; channel < 3; ++channel) {
+                        const uint32_t v = a ? std::min(maximum, (read(channel) * maximum + a / 2) / a) : 0;
+                        auto* p = image.data.data() + (pixel * 4 + channel) * step;
+                        if (wide) {
+                            const auto value = static_cast<uint16_t>(v);
+                            std::memcpy(p, &value, 2);
+                        } else
+                            *p = static_cast<uint8_t>(v);
+                    }
+                }
+            }
+            if (display && !to_display(source.handle.get(), image, error))
+                return false;
+            result = std::move(image);
+            return true;
+        }
+        bool copy_target(const Image& image, DecodeTarget& target, Probe& info, std::string& error) {
+            if ((target.channels != 3 && target.channels != 4) ||
+                (target.sample_type != SampleType::UInt8 && target.sample_type != SampleType::UInt16 && target.sample_type != SampleType::Float32)) {
+                error = "HEIF: unsupported output target";
+                return false;
+            }
+            const size_t pixels = static_cast<size_t>(image.width) * image.height;
+            const size_t step = target.sample_type == SampleType::UInt8 ? 1 : target.sample_type == SampleType::UInt16 ? 2
+                                                                                                                       : 4;
+            const size_t bytes = pixels * target.channels * step;
+            if (!target.data)
+                target.data = target.allocate ? target.allocate(bytes, target.user) : std::malloc(bytes);
+            if (!target.data) {
+                error = "HEIF: cannot allocate output target";
+                return false;
+            }
+            for (size_t pixel = 0; pixel < pixels; ++pixel)
+                for (int channel = 0; channel < target.channels; ++channel) {
+                    uint32_t value = 65535;
+                    if (channel < image.channels) {
+                        const size_t index = pixel * image.channels + channel;
+                        if (image.sample_type == SampleType::UInt8)
+                            value = image.data[index] * 257u;
+                        else {
+                            uint16_t sample;
+                            std::memcpy(&sample, image.data.data() + index * 2, 2);
+                            value = sample;
+                        }
+                    }
+                    const size_t index = pixel * target.channels + channel;
+                    if (target.sample_type == SampleType::UInt8)
+                        static_cast<uint8_t*>(target.data)[index] = static_cast<uint8_t>((value + 128) / 257);
+                    else if (target.sample_type == SampleType::UInt16)
+                        static_cast<uint16_t*>(target.data)[index] = static_cast<uint16_t>(value);
+                    else
+                        static_cast<float*>(target.data)[index] = value / 65535.f;
+                }
+            info = {image.width, image.height, target.channels, target.sample_type};
+            return true;
+        }
+        template <class Input>
+        bool decode_target(Input input, DecodeTarget& target, Probe& info, std::string& error, bool display) {
+            info = {};
+            Image image;
+            return decode_heif(input, image, error, display) && copy_target(image, target, info, error);
+        }
+    } // namespace
+    bool is_heif(std::span<const uint8_t> bytes) {
+        if (bytes.size() < 12)
+            return false;
+        const auto type = heif_check_filetype(bytes.data(), static_cast<int>(std::min(bytes.size(), size_t{4096})));
+        return type == heif_filetype_yes_supported || type == heif_filetype_yes_unsupported;
+    }
     bool decode_heif(const std::filesystem::path& path, Image& result, std::string& error, bool display) {
         result = {};
         Source source;
-        Probe info;
-        if (!source.open(path, error) || !layout(source.handle.get(), info, error))
-            return false;
-        const bool wide = info.sample_type == SampleType::UInt16;
-        const bool alpha = info.channels == 4;
-        const auto chroma = wide ? (std::endian::native == std::endian::little ? (alpha ? heif_chroma_interleaved_RRGGBBAA_LE : heif_chroma_interleaved_RRGGBB_LE)
-                                                                               : (alpha ? heif_chroma_interleaved_RRGGBBAA_BE : heif_chroma_interleaved_RRGGBB_BE))
-                                 : (alpha ? heif_chroma_interleaved_RGBA : heif_chroma_interleaved_RGB);
-        std::unique_ptr<heif_decoding_options, decltype(&heif_decoding_options_free)> options(heif_decoding_options_alloc(), heif_decoding_options_free);
-        if (!options) {
-            error = "HEIF: cannot allocate decoding options";
-            return false;
-        }
-        options->convert_hdr_to_8bit = 0;
-        options->strict_decoding = 1;
-        heif_image* raw = nullptr;
-        if (!checked(heif_decode_image(source.handle.get(), &raw, heif_colorspace_RGB, chroma, options.get()), error))
-            return false;
-        std::unique_ptr<heif_image, decltype(&heif_image_release)> decoded(raw, heif_image_release);
-        const int width = heif_image_get_width(raw, heif_channel_interleaved), height = heif_image_get_height(raw, heif_channel_interleaved);
-        const int bits = heif_image_get_bits_per_pixel_range(raw, heif_channel_interleaved);
-        int stride = 0;
-        const auto* plane = heif_image_get_plane_readonly(raw, heif_channel_interleaved, &stride);
-        const size_t row_bytes = static_cast<size_t>(width) * info.channels * (wide ? 2 : 1);
-        if (!plane || width != info.width || height != info.height || bits < 1 || bits > 16 || stride < 0 || static_cast<size_t>(stride) < row_bytes) {
-            error = "HEIF: inconsistent decoded layout";
-            return false;
-        }
-        Image image{width, height, info.channels, info.sample_type, std::vector<uint8_t>(row_bytes * height)};
-        for (int y = 0; y < height; ++y)
-            std::memcpy(image.data.data() + row_bytes * y, plane + static_cast<size_t>(stride) * y, row_bytes);
-        // libheif stores high-bitdepth integer samples right-aligned. The core
-        // UINT16 contract spans [0,65535], including alpha.
-        if (wide && bits < 16) {
-            const uint32_t maximum = (uint32_t{1} << bits) - 1;
-            for (size_t i = 0; i < image.data.size(); i += 2) {
-                uint16_t value;
-                std::memcpy(&value, image.data.data() + i, 2);
-                value = static_cast<uint16_t>((uint32_t(value) * 65535 + maximum / 2) / maximum);
-                std::memcpy(image.data.data() + i, &value, 2);
-            }
-        }
-        if (display && alpha && heif_image_handle_is_premultiplied_alpha(source.handle.get())) {
-            const uint32_t maximum = wide ? 65535 : 255;
-            const size_t step = wide ? 2 : 1;
-            for (size_t pixel = 0; pixel < static_cast<size_t>(width) * height; ++pixel) {
-                const auto read = [&](size_t channel) -> uint32_t {
-                    const auto* p = image.data.data() + (pixel * 4 + channel) * step;
-                    if (!wide)
-                        return *p;
-                    uint16_t value;
-                    std::memcpy(&value, p, 2);
-                    return value;
-                };
-                const auto a = read(3);
-                for (size_t channel = 0; channel < 3; ++channel) {
-                    const uint32_t v = a ? std::min(maximum, (read(channel) * maximum + a / 2) / a) : 0;
-                    auto* p = image.data.data() + (pixel * 4 + channel) * step;
-                    if (wide) {
-                        const auto value = static_cast<uint16_t>(v);
-                        std::memcpy(p, &value, 2);
-                    } else
-                        *p = static_cast<uint8_t>(v);
-                }
-            }
-        }
-        if (display && !to_display(source.handle.get(), image, error))
-            return false;
-        result = std::move(image);
-        return true;
+        return source.open(path, error) && decode_source(source, result, error, display);
+    }
+    bool decode_heif(std::span<const uint8_t> bytes, Image& result, std::string& error, bool display) {
+        result = {};
+        Source source;
+        return source.open(bytes, error) && decode_source(source, result, error, display);
+    }
+    bool decode_heif_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& info, std::string& error, bool display) {
+        return decode_target(path, target, info, error, display);
+    }
+    bool decode_heif_to_buffer(std::span<const uint8_t> bytes, DecodeTarget& target, Probe& info, std::string& error, bool display) {
+        return decode_target(bytes, target, info, error, display);
     }
 } // namespace lfs::core::image_codecs
