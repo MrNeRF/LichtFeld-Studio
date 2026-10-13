@@ -546,7 +546,8 @@ namespace lfs::training {
         lfs::core::Tensor get_edge_weight_map(int camera_uid, const lfs::core::Tensor& gt_image,
                                               const lfs::core::Tensor& photometric_mask);
         void clearEdgeWeightCache();
-        core::Tensor get_thin_structure_map(int camera_uid, const core::Tensor& image, float weight);
+        core::Tensor get_thin_structure_map(int camera_uid, const core::Tensor& image, float weight,
+                                            const core::Tensor& photometric_mask = {});
         void clear_thin_structure_cache();
         friend struct TrainerThinStructureTestAccess;
         friend struct TrainerGradientResidualTestAccess;
@@ -988,6 +989,10 @@ namespace lfs::training {
             size_t height;
             size_t width;
             uint64_t preprocessing_generation;
+            const void* mask_data;
+            kernels::MaskPhotoMode mask_mode;
+            float mask_threshold;
+            bool invert_masks;
             bool operator==(const ThinStructureMapKey&) const = default;
         };
         std::optional<ThinStructureMapKey> thin_structure_map_key_;

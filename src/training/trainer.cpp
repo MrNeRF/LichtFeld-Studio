@@ -5799,20 +5799,32 @@ namespace lfs::training {
         thin_structure_weight_buffer_ = {};
     }
 
-    core::Tensor Trainer::get_thin_structure_map(const int camera_uid, const core::Tensor& image, const float weight) {
+    core::Tensor Trainer::get_thin_structure_map(const int camera_uid, const core::Tensor& image, const float weight,
+                                                 const core::Tensor& photometric_mask) {
         if (weight == 0.0f)
             return {};
         using namespace lfs::core;
         LFS_ASSERT(image.ndim() == 3 && image.shape()[0] == 3);
         const size_t height = image.shape()[1], width = image.shape()[2];
-        const ThinStructureMapKey key{camera_uid, height, width, edge_weight_preprocessing_generation_};
+        const bool masked = photometric_mask.is_valid() && photometric_mask.numel() > 0;
+        const auto mask_mode = masked && params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore
+                                   ? kernels::MaskPhotoMode::SegmentAndIgnore
+                                   : kernels::MaskPhotoMode::BinaryGt0;
+        const ThinStructureMapKey key{camera_uid, height, width, edge_weight_preprocessing_generation_,
+                                      masked ? photometric_mask.data_ptr() : nullptr, mask_mode,
+                                      masked ? params_.optimization.mask_threshold : 0.0f,
+                                      masked && params_.optimization.invert_masks};
         if (thin_structure_map_key_ == key) {
             thin_structure_map_buffer_.sync_to_stream(image.stream());
             return thin_structure_map_buffer_;
         }
         if (!thin_structure_map_buffer_.is_valid() || thin_structure_map_buffer_.shape() != TensorShape{height, width})
             thin_structure_map_buffer_ = Tensor::empty({height, width}, Device::CUDA);
-        kernels::ridge_structure_map(image, thin_structure_map_buffer_, thin_structure_workspace_);
+        if (masked)
+            kernels::ridge_structure_map(image, thin_structure_map_buffer_, thin_structure_workspace_,
+                                         photometric_mask, mask_mode);
+        else
+            kernels::ridge_structure_map(image, thin_structure_map_buffer_, thin_structure_workspace_);
         thin_structure_map_key_ = key;
         return thin_structure_map_buffer_;
     }
@@ -6917,23 +6929,26 @@ namespace lfs::training {
                             LOG_VRAM_DIFF("train.photometric_loss");
                             const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
                                                   (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
-                            const auto structure_map = get_thin_structure_map(
-                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight);
-                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
-                                lfs::core::Tensor mask;
-                                if (use_mask) {
-                                    if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
-                                        pipelined_mask_.numel() > 0) {
-                                        mask = pipelined_mask_;
-                                    } else {
-                                        mask = cam->load_and_get_mask(
-                                            params_.dataset.resize_factor,
-                                            params_.dataset.max_width,
-                                            params_.optimization.invert_masks,
-                                            params_.optimization.mask_threshold,
-                                            params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
-                                    }
+                            lfs::core::Tensor mask;
+                            if (use_mask) {
+                                if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
+                                    pipelined_mask_.numel() > 0) {
+                                    mask = pipelined_mask_;
+                                } else {
+                                    mask = cam->load_and_get_mask(
+                                        params_.dataset.resize_factor,
+                                        params_.dataset.max_width,
+                                        params_.optimization.invert_masks,
+                                        params_.optimization.mask_threshold,
+                                        params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                                 }
+                            }
+                            const auto structure_map = get_thin_structure_map(
+                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight,
+                                use_mask && params_.optimization.mask_mode != lfs::core::param::MaskMode::AlphaConsistent
+                                    ? mask
+                                    : lfs::core::Tensor{});
+                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
 
                                 lfs::core::Tensor mask_tile = mask;
 
@@ -7160,25 +7175,25 @@ namespace lfs::training {
                         {
                             LFS_VRAM_SCOPE("train.photometric_loss");
                             LOG_VRAM_DIFF("train.photometric_loss");
-                            const auto structure_map = get_thin_structure_map(
-                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight);
-                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
-                                lfs::core::Tensor mask;
-                                if (use_mask) {
-                                    if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
-                                        pipelined_mask_.numel() > 0) {
-                                        mask = pipelined_mask_;
-                                    } else {
-                                        mask = cam->load_and_get_mask(
-                                            params_.dataset.resize_factor,
-                                            params_.dataset.max_width,
-                                            params_.optimization.invert_masks,
-                                            params_.optimization.mask_threshold,
-                                            params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
-                                    }
+                            if (use_mask) {
+                                if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
+                                    pipelined_mask_.numel() > 0) {
+                                    mask_tile = pipelined_mask_;
+                                } else {
+                                    mask_tile = cam->load_and_get_mask(
+                                        params_.dataset.resize_factor,
+                                        params_.dataset.max_width,
+                                        params_.optimization.invert_masks,
+                                        params_.optimization.mask_threshold,
+                                        params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                                 }
-
-                                mask_tile = mask;
+                            }
+                            const auto structure_map = get_thin_structure_map(
+                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight,
+                                use_mask && params_.optimization.mask_mode != lfs::core::param::MaskMode::AlphaConsistent
+                                    ? mask_tile
+                                    : lfs::core::Tensor{});
+                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
@@ -7751,7 +7766,10 @@ namespace lfs::training {
 
                         if (tile_error_map.is_valid() && params_.optimization.densify_structure_weight > 0.0f) {
                             const auto structure_map = get_thin_structure_map(
-                                cam->uid(), stable_gt, params_.optimization.densify_structure_weight);
+                                cam->uid(), stable_gt, params_.optimization.densify_structure_weight,
+                                use_mask && params_.optimization.mask_mode != lfs::core::param::MaskMode::AlphaConsistent
+                                    ? mask_tile
+                                    : lfs::core::Tensor{});
                             kernels::structure_densification_weight(tile_error_map, structure_map,
                                                                     params_.optimization.densify_structure_weight);
                         }
