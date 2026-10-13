@@ -2301,6 +2301,52 @@ contract["check_selection_submode_follows_native_mode"](lf)
                               std::chrono::seconds(3)));
     }
 
+    TEST_F(VisualizerImplResetTest,
+           FailedSplatHydrationRefusesSaveWithoutDirtyingProject) {
+        const auto valid_path = temporary_.path / "valid-payload.licht";
+        const auto corrupt_path = temporary_.path / "corrupt-payload.licht";
+        write_splt_project(valid_path, lfs::test::licht::make_splat(50'000),
+                           "First", lfs::test::licht::make_splat(50'000), "Second");
+        std::filesystem::copy_file(valid_path, corrupt_path);
+        auto reader = lfs::test::licht::require_result(
+            lfs::io::project::ProjectReader::open(corrupt_path));
+        const auto splt = std::ranges::find_if(reader.chunks(), [](const auto& chunk) {
+            return chunk.key.fourcc == lfs::io::project::FOURCC_SPLT;
+        });
+        ASSERT_NE(splt, reader.chunks().end());
+        auto bytes = lfs::test::licht::read_file_bytes(corrupt_path);
+        bytes[static_cast<std::size_t>(splt->payload_offset + splt->stored_bytes / 2)] ^=
+            std::byte{1};
+        lfs::test::licht::write_file_bytes(corrupt_path, bytes);
+        const auto before = lfs::test::licht::read_file_bytes(corrupt_path);
+
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.projectOpen(valid_path, ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "complete";
+        }));
+        ASSERT_TRUE(viewer.projectOpen(corrupt_path, ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "failed";
+        }));
+
+        EXPECT_FALSE(viewer.projectGetInfo()->dirty);
+        const auto saved = viewer.projectSave(false);
+        EXPECT_FALSE(saved);
+        if (saved) {
+            ASSERT_TRUE(waitUntil([&] {
+                viewer.pumpPostedWorkForProjectWrite();
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
+        }
+        EXPECT_EQ(lfs::test::licht::read_file_bytes(corrupt_path), before);
+    }
+
     TEST_F(VisualizerImplResetTest, RedoDeletedDeferredNodeAfterUndoHydrates) {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";

@@ -179,6 +179,14 @@ namespace lfs::vis::project {
             });
         }
 
+        [[nodiscard]] lfs::Error failedHydrationWriteError(
+            const std::string& detail) {
+            return lifecycleError(
+                lfs::ErrorCode::FailedPrecondition,
+                "The project could not be opened.", detail,
+                "project.hydration");
+        }
+
         template <typename T>
         [[nodiscard]] lfs::Result<T> fail(
             const lfs::ErrorCode code,
@@ -3609,6 +3617,11 @@ namespace lfs::vis::project {
             lfs::io::project::
                 ProjectDocumentAutosaveOptions>
             autosave) {
+        if (hydration_.load(std::memory_order_acquire) ==
+            Hydration::Failed) {
+            return lfs::Status::failure(
+                failedHydrationWriteError(hydration_error_));
+        }
         const auto start_write_started =
             std::chrono::steady_clock::now();
         auto license = document->project().license();
@@ -4897,6 +4910,11 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::startAutosave() {
+        if (hydration_.load(std::memory_order_acquire) ==
+            Hydration::Failed) {
+            return lfs::Status::failure(
+                failedHydrationWriteError(hydration_error_));
+        }
         if (!document_) {
             return {};
         }
@@ -7234,6 +7252,11 @@ namespace lfs::vis::project {
                 "Only one project save may run at a time",
                 "project.save");
         }
+        if (hydration_.load(std::memory_order_acquire) ==
+            Hydration::Failed) {
+            return lfs::Status::failure(
+                failedHydrationWriteError(hydration_error_));
+        }
         if (pending_explicit_save_regenerate_preview_) {
             return {};
         }
@@ -8724,6 +8747,12 @@ namespace lfs::vis::project {
                         std::memory_order_release);
                     viewer_.noteHydrationTerminalForRestoreTicket(
                         active_restore_ticket_);
+                    const bool scene_was_dirty =
+                        scene_dirty_.load(
+                            std::memory_order_acquire);
+                    const bool payload_was_dirty =
+                        payload_dirty_.load(
+                            std::memory_order_acquire);
                     if (auto* manager =
                             viewer_.getSceneManager()) {
                         auto& scene =
@@ -8758,6 +8787,12 @@ namespace lfs::vis::project {
                             }
                         }
                     }
+                    scene_dirty_.store(
+                        scene_was_dirty,
+                        std::memory_order_release);
+                    payload_dirty_.store(
+                        payload_was_dirty,
+                        std::memory_order_release);
                     LOG_ERROR(
                         "Project hydration failed; the coherent shell remains active: {}",
                         detail);
@@ -9266,6 +9301,19 @@ namespace lfs::vis::project {
             }
             removeScratchAutosave();
             return CloseSaveStatus::NotDirty;
+        }
+        if (hydration_.load(std::memory_order_acquire) ==
+            Hydration::Failed) {
+            const auto error = failedHydrationWriteError(
+                hydration_error_);
+            {
+                std::lock_guard lock(close_save_mutex_);
+                close_save_error_ = developerError(error);
+            }
+            close_save_state_.store(
+                CloseSaveState::Failed,
+                std::memory_order_release);
+            return CloseSaveStatus::Failed;
         }
         if (viewer_.jobs().anyRunning(
                 JobType::ProjectWrite)) {
