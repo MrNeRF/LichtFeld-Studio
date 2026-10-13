@@ -2191,7 +2191,7 @@ namespace lfs::vis::project {
             settings.autosave_quiet_seconds =
                 lfs::core::persisted_settings::field<std::uint64_t>(json, "autosave_quiet_seconds", 2);
             const auto entries = json.find("mru");
-            if (entries != json.end()) {
+            if (lfs::core::persisted_settings::present(json, "mru")) {
                 if (!entries->is_array())
                     LOG_WARN("Invalid recent-project list in settings; using an empty list");
                 if (entries->is_array())
@@ -2220,7 +2220,7 @@ namespace lfs::vis::project {
             }
             const auto dismissed =
                 json.find("dismissed_recovery");
-            if (dismissed != json.end()) {
+            if (lfs::core::persisted_settings::present(json, "dismissed_recovery")) {
                 if (!dismissed->is_array())
                     LOG_WARN("Invalid dismissed-recovery list in settings; using an empty list");
                 if (dismissed->is_array())
