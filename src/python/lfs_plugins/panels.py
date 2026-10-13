@@ -30,6 +30,11 @@ class _PanelSpec:
 # Keep the registration contract in one place. The implementation classes use
 # panel_metadata() too, so registration cannot silently drift from the class.
 PANEL_SPECS = {
+    "logging": _PanelSpec(
+        "lfs_plugins.logging_panel", "LoggingPanel", "lfs.logging", "Logging",
+        "FLOATING", 95, "rmlui/logging_panel.rml", "FILL", (960, 600),
+        update_policy="interval", update_interval_ms=200,
+    ),
     "new_project": _PanelSpec(
         "lfs_plugins.import_panels", "NewProjectPanel", "lfs.new_project",
         "New Project", "FLOATING", 11, "rmlui/new_project_panel.rml",
@@ -311,6 +316,9 @@ def _build_builtin_panel_steps(lf):
     def scripts_panel():
         _register_lazy_panel(lf, "scripts")
 
+    def logging_panel():
+        _register_lazy_panel(lf, "logging")
+
     def preferences_panel():
         _register_lazy_panel(lf, "preferences")
 
@@ -351,6 +359,7 @@ def _build_builtin_panel_steps(lf):
         ("image_preview_panel", image_preview_panel),
         ("histogram_panel", histogram_panel),
         ("scripts_panel", scripts_panel),
+        ("logging_panel", logging_panel),
         ("preferences_panel", preferences_panel),
         ("mesh2splat_panel", mesh2splat_panel),
         ("plugin_marketplace_panel", plugin_marketplace_panel),

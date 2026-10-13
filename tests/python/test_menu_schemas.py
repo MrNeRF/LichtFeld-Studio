@@ -109,6 +109,7 @@ def _install_lichtfeld_stub(monkeypatch):
         toggle_system_console=lambda: state.__setitem__("python_console_shown", state["python_console_shown"] + 1),
         toggle_vram_hud=lambda: state.__setitem__("vram_hud_toggled", True),
         is_perf_hud_visible=lambda: False,
+        is_panel_enabled=lambda panel_id: False,
         set_panel_enabled=lambda panel_id, enabled: state["panel_enabled"].append((panel_id, enabled)),
         get_panel_object=lambda panel_id: state["panels"].get(panel_id),
         set_main_panel_active_tab=lambda panel_id: state.__setitem__("main_panel_active_tab", panel_id),
@@ -289,6 +290,10 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert all(not item["enabled"] for item in edit_mod.EditMenu().menu_items()[3:6])
 
     view_items = view_mod.ViewMenu().menu_items()
+    logging = next(item for item in view_items if item.get("label") == "tr:scene.logging")
+    assert logging["selected"] is False
+    logging["callback"]()
+    assert state["panel_enabled"][-1] == ("lfs.logging", True)
     appearance = view_items[-1]["items"]
     assert appearance[0]["type"] == "submenu"
     assert appearance[0]["label"] == "tr:menu.view.theme · LichtFeld · Dark"

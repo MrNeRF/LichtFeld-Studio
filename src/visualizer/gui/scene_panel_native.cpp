@@ -5,46 +5,34 @@
 #include "gui/scene_panel_native.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/logger.hpp"
 #include "core/number_format.hpp"
 #include "core/parameter_manager.hpp"
-#include "core/path_utils.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/string_keys.hpp"
-#include "gui/utils/native_file_dialog.hpp"
 #include "gui/utils/summary_labels.hpp"
 #include "internal/resource_paths.hpp"
 #include "operation/undo_history.hpp"
 #include "preferences.hpp"
-#include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/services.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
-#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
-#include <SDL3/SDL_clipboard.h>
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cmath>
-#include <ctime>
 #include <format>
-#include <fstream>
 #include <limits>
-#include <memory>
 #include <optional>
 #include <string_view>
-#include <thread>
 
 namespace lfs::vis::gui {
 
     namespace {
-        constexpr size_t MAX_RENDERED_LOG_ENTRIES = 250;
 
         [[nodiscard]] std::string tr(const char* key) {
             const std::string value = LOC(key);
@@ -82,23 +70,6 @@ namespace lfs::vis::gui {
                 return {};
             }
         }
-
-        struct LogLevelChoice {
-            core::LogLevel level;
-            std::string_view label;
-            std::string_view css_suffix;
-        };
-
-        constexpr std::array LOG_LEVEL_CHOICES{
-            LogLevelChoice{core::LogLevel::Trace, "Trace", "trace"},
-            LogLevelChoice{core::LogLevel::Debug, "Debug", "debug"},
-            LogLevelChoice{core::LogLevel::Info, "Info", "info"},
-            LogLevelChoice{core::LogLevel::Performance, "Performance", "perf"},
-            LogLevelChoice{core::LogLevel::Warn, "Warn", "warn"},
-            LogLevelChoice{core::LogLevel::Error, "Error", "error"},
-            LogLevelChoice{core::LogLevel::Critical, "Critical", "critical"},
-            LogLevelChoice{core::LogLevel::Off, "Off", "off"},
-        };
 
         [[nodiscard]] bool setCachedInnerRml(Rml::Element* el, const std::string& value) {
             if (!el)
@@ -262,63 +233,6 @@ namespace lfs::vis::gui {
             return nullptr;
         }
 
-        [[nodiscard]] int logLevelSelectionIndex(const core::LogLevel level) {
-            for (size_t index = 0; index < LOG_LEVEL_CHOICES.size(); ++index) {
-                if (LOG_LEVEL_CHOICES[index].level == level)
-                    return static_cast<int>(index);
-            }
-            return 2;
-        }
-
-        [[nodiscard]] core::LogLevel logLevelFromSelection(const int selection) {
-            if (selection >= 0 && selection < static_cast<int>(LOG_LEVEL_CHOICES.size()))
-                return LOG_LEVEL_CHOICES[static_cast<size_t>(selection)].level;
-            return core::LogLevel::Info;
-        }
-
-        [[nodiscard]] std::string_view logLevelLabel(const core::LogLevel level) {
-            return LOG_LEVEL_CHOICES[static_cast<size_t>(logLevelSelectionIndex(level))].label;
-        }
-
-        [[nodiscard]] std::string_view logLevelCssSuffix(const core::LogLevel level) {
-            return LOG_LEVEL_CHOICES[static_cast<size_t>(logLevelSelectionIndex(level))].css_suffix;
-        }
-
-        [[nodiscard]] std::string formatLogTimestamp(const std::chrono::system_clock::time_point& timestamp) {
-            const auto time_t_val = std::chrono::system_clock::to_time_t(timestamp);
-            std::tm tm{};
-#ifdef WIN32
-            localtime_s(&tm, &time_t_val);
-#else
-            localtime_r(&time_t_val, &tm);
-#endif
-            const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    timestamp.time_since_epoch())
-                                    .count() %
-                                1000;
-            return std::format("{:02}:{:02}:{:02}.{:03}",
-                               tm.tm_hour,
-                               tm.tm_min,
-                               tm.tm_sec,
-                               static_cast<int>(millis));
-        }
-
-        [[nodiscard]] std::string formatLoggingSummary(const size_t entry_count,
-                                                       const size_t displayed_entry_count,
-                                                       const core::LogLevel level) {
-            const std::string level_label(logLevelLabel(level));
-            const char* const entry_word_key =
-                entry_count == 1 ? "runtime.log_entry_word" : "runtime.log_entries_word";
-            const std::string entry_word = LOC(entry_word_key);
-            if (entry_count == 0)
-                return LOCF("runtime.cli_no_logs", level_label);
-            if (displayed_entry_count < entry_count) {
-                return LOCF("runtime.cli_logs_latest", lfs::core::format_count(entry_count),
-                            entry_word, lfs::core::format_count(displayed_entry_count), level_label);
-            }
-            return LOCF("runtime.cli_logs_summary", lfs::core::format_count(entry_count), entry_word, level_label);
-        }
-
         [[nodiscard]] int optionalMetricMilli(const std::optional<float>& value) {
             if (!value || !std::isfinite(*value))
                 return std::numeric_limits<int>::min();
@@ -338,23 +252,6 @@ namespace lfs::vis::gui {
                    !input->input_events.empty();
         }
 
-        [[nodiscard]] std::string loggingRowInnerRml(const core::LogEntrySnapshot& entry) {
-            const std::string timestamp = formatLogTimestamp(entry.timestamp);
-            const std::string source = entry.line > 0
-                                           ? std::format("{}:{}",
-                                                         entry.file.empty() ? std::string("runtime")
-                                                                            : entry.file,
-                                                         entry.line)
-                                           : (entry.file.empty() ? std::string("runtime")
-                                                                 : entry.file);
-            return std::format(
-                R"(<div class="log-entry__header"><span class="log-entry__level">{}</span><span class="log-entry__meta text-muted">{} · {}</span></div><div class="log-entry__message text-default">{}</div>)",
-                Rml::StringUtilities::EncodeRml(std::string(logLevelLabel(entry.level))),
-                Rml::StringUtilities::EncodeRml(timestamp),
-                Rml::StringUtilities::EncodeRml(source),
-                Rml::StringUtilities::EncodeRml(entry.message));
-        }
-
     } // namespace
 
     NativeScenePanel::NativeScenePanel(RmlUIManager* manager)
@@ -362,7 +259,6 @@ namespace lfs::vis::gui {
           host_(manager, "scene_panel_native", "rmlui/scene_tree.rml") {
         listener_.owner = this;
         last_history_generation_ = std::numeric_limits<uint64_t>::max();
-        last_log_generation_ = std::numeric_limits<uint64_t>::max();
     }
 
     bool NativeScenePanel::needsAnimationFrame() const {
@@ -376,19 +272,15 @@ namespace lfs::vis::gui {
     }
 
     NativeScenePanel::~NativeScenePanel() {
-        if (log_handler_)
-            core::Logger::get().remove_log_handler(*log_handler_);
         clearElementCache();
     }
 
     void NativeScenePanel::clearElementCache() {
-        logging_rows_.clear();
         if (manager_)
             manager_->setActiveSceneGraphElement(nullptr);
         tree_el_ = nullptr;
         scene_tab_el_ = nullptr;
         history_tab_el_ = nullptr;
-        logging_tab_el_ = nullptr;
         chip_row_el_ = nullptr;
         summary_model_chip_el_ = nullptr;
         summary_node_chip_el_ = nullptr;
@@ -426,18 +318,6 @@ namespace lfs::vis::gui {
         history_redo_list_el_ = nullptr;
         history_empty_undo_el_ = nullptr;
         history_empty_redo_el_ = nullptr;
-        logging_container_el_ = nullptr;
-        logging_summary_label_el_ = nullptr;
-        logging_summary_value_el_ = nullptr;
-        logging_level_label_el_ = nullptr;
-        logging_level_select_el_ = nullptr;
-        logging_export_btn_el_ = nullptr;
-        logging_copy_btn_el_ = nullptr;
-        logging_feedback_el_ = nullptr;
-        logging_note_el_ = nullptr;
-        logging_scroll_el_ = nullptr;
-        logging_list_el_ = nullptr;
-        logging_empty_el_ = nullptr;
     }
 
     void NativeScenePanel::reloadRmlResources() {
@@ -447,10 +327,8 @@ namespace lfs::vis::gui {
         clearElementCache();
         last_language_.clear();
         last_history_generation_ = std::numeric_limits<uint64_t>::max();
-        last_log_generation_ = std::numeric_limits<uint64_t>::max();
         last_prepare_frame_ = 0;
         has_last_sync_stamp_ = false;
-        logging_feedback_dirty_ = true;
     }
 
     void NativeScenePanel::preload(const PanelDrawContext& ctx) {
@@ -601,7 +479,6 @@ namespace lfs::vis::gui {
             manager_->setActiveSceneGraphElement(tree_el_);
         scene_tab_el_ = document_->GetElementById("scene-tab");
         history_tab_el_ = document_->GetElementById("history-tab");
-        logging_tab_el_ = document_->GetElementById("logging-tab");
         chip_row_el_ = document_->GetElementById("scene-chip-row");
         summary_model_chip_el_ = document_->GetElementById("summary-model-chip");
         summary_node_chip_el_ = document_->GetElementById("summary-node-chip");
@@ -635,19 +512,6 @@ namespace lfs::vis::gui {
         history_redo_list_el_ = document_->GetElementById("history-redo-list");
         history_empty_undo_el_ = document_->GetElementById("history-empty-undo");
         history_empty_redo_el_ = document_->GetElementById("history-empty-redo");
-        logging_container_el_ = document_->GetElementById("logging-container");
-        logging_summary_label_el_ = document_->GetElementById("logging-summary-label");
-        logging_summary_value_el_ = document_->GetElementById("logging-summary-value");
-        logging_level_label_el_ = document_->GetElementById("logging-level-label");
-        logging_level_select_el_ =
-            dynamic_cast<Rml::ElementFormControlSelect*>(document_->GetElementById("logging-level-select"));
-        logging_export_btn_el_ = document_->GetElementById("logging-export-btn");
-        logging_copy_btn_el_ = document_->GetElementById("logging-copy-btn");
-        logging_feedback_el_ = document_->GetElementById("logging-feedback");
-        logging_note_el_ = document_->GetElementById("logging-note");
-        logging_scroll_el_ = document_->GetElementById("logging-scroll");
-        logging_list_el_ = document_->GetElementById("logging-list");
-        logging_empty_el_ = document_->GetElementById("logging-empty");
 
         if (auto* search_icon = document_->GetElementById("search-icon")) {
             const std::string search_icon_source = resolveRmlImageSource("icon/scene/search.png");
@@ -680,7 +544,7 @@ namespace lfs::vis::gui {
                 icon->SetAttribute("src", source);
         }
 
-        if (!tree_el_ || !scene_tab_el_ || !history_tab_el_ || !logging_tab_el_ || !chip_row_el_ ||
+        if (!tree_el_ || !scene_tab_el_ || !history_tab_el_ || !chip_row_el_ ||
             !summary_model_chip_el_ || !summary_node_chip_el_ ||
             !summary_filter_chip_el_ || !scene_view_el_ || !search_container_el_ ||
             !filter_input_el_ || !filter_clear_el_ || !selection_action_bar_el_ ||
@@ -692,18 +556,13 @@ namespace lfs::vis::gui {
             !history_summary_value_el_ || !history_transaction_el_ || !history_undo_btn_el_ ||
             !history_redo_btn_el_ || !history_clear_btn_el_ || !history_note_el_ ||
             !history_undo_title_el_ || !history_redo_title_el_ || !history_undo_list_el_ ||
-            !history_redo_list_el_ || !history_empty_undo_el_ || !history_empty_redo_el_ ||
-            !logging_container_el_ || !logging_summary_label_el_ || !logging_summary_value_el_ ||
-            !logging_level_label_el_ || !logging_level_select_el_ || !logging_export_btn_el_ ||
-            !logging_copy_btn_el_ || !logging_feedback_el_ || !logging_note_el_ ||
-            !logging_scroll_el_ || !logging_list_el_ || !logging_empty_el_) {
+            !history_redo_list_el_ || !history_empty_undo_el_ || !history_empty_redo_el_) {
             LOG_ERROR("NativeScenePanel: missing required DOM elements");
             return;
         }
 
         scene_tab_el_->AddEventListener(Rml::EventId::Click, &listener_);
         history_tab_el_->AddEventListener(Rml::EventId::Click, &listener_);
-        logging_tab_el_->AddEventListener(Rml::EventId::Click, &listener_);
         filter_clear_el_->AddEventListener(Rml::EventId::Click, &listener_);
         filter_input_el_->AddEventListener("input", &listener_);
         selection_visibility_el_->AddEventListener(Rml::EventId::Click, &listener_);
@@ -715,9 +574,6 @@ namespace lfs::vis::gui {
         history_clear_btn_el_->AddEventListener(Rml::EventId::Click, &listener_);
         history_undo_list_el_->AddEventListener(Rml::EventId::Click, &listener_);
         history_redo_list_el_->AddEventListener(Rml::EventId::Click, &listener_);
-        logging_level_select_el_->AddEventListener(Rml::EventId::Change, &listener_);
-        logging_export_btn_el_->AddEventListener(Rml::EventId::Click, &listener_);
-        logging_copy_btn_el_->AddEventListener(Rml::EventId::Click, &listener_);
         filter_input_revert_.bind(filter_input_el_, [this](Rml::Element&) {
             applyFilterInputValue();
         });
@@ -743,7 +599,6 @@ namespace lfs::vis::gui {
         changed |= syncLocale();
         changed |= syncSceneState(current_ctx);
         changed |= syncHistoryState();
-        changed |= syncLoggingState();
         changed |= syncTabState();
         changed |= syncSummaryChips();
         changed |= syncSelectionActions();
@@ -758,8 +613,6 @@ namespace lfs::vis::gui {
 
     bool NativeScenePanel::shouldSyncPanel(const PanelInputState* input) const {
         if (!tree_el_ || !has_last_sync_stamp_)
-            return true;
-        if (logging_feedback_dirty_)
             return true;
         if (hasDiscreteInputActivity(input))
             return true;
@@ -790,10 +643,6 @@ namespace lfs::vis::gui {
             stamp.eval_ssim_milli = optionalMetricMilli(store.eval_ssim.get());
         } else if (active_tab_ == Tab::History) {
             stamp.history_generation = op::undoHistory().generation();
-        } else if (active_tab_ == Tab::Logging) {
-            auto& logger = core::Logger::get();
-            stamp.log_generation = logger.buffered_log_generation();
-            stamp.log_level = logger.level();
         }
 
         return stamp;
@@ -854,121 +703,6 @@ namespace lfs::vis::gui {
         return changed;
     }
 
-    bool NativeScenePanel::syncLoggingState() {
-        if (active_tab_ != Tab::Logging && !logging_feedback_dirty_)
-            return false;
-
-        auto& logger = core::Logger::get();
-        const uint64_t generation = logger.buffered_log_generation();
-        const core::LogLevel level = logger.level();
-        if (generation == last_log_generation_ &&
-            level == last_log_level_ &&
-            !logging_feedback_dirty_) {
-            return false;
-        }
-
-        const bool level_changed = level != last_log_level_;
-        const bool generation_regressed = generation < last_log_generation_;
-        const bool rebuild = last_log_generation_ == std::numeric_limits<uint64_t>::max() ||
-                             level_changed || generation_regressed;
-        last_log_level_ = level;
-        logging_feedback_dirty_ = false;
-
-        bool rows_changed = false;
-        if (rebuild) {
-            rows_changed = rebuildLoggingRows(logger.buffered_logs());
-        } else if (generation != last_log_generation_) {
-            rows_changed = appendLoggingRows(
-                logger.buffered_logs_since(last_log_generation_, MAX_RENDERED_LOG_ENTRIES));
-        }
-        last_log_generation_ = logger.buffered_log_generation();
-        const size_t entry_count = logger.buffered_log_count();
-        const bool has_entries = entry_count != 0;
-        const size_t displayed_entry_count = std::min(entry_count, MAX_RENDERED_LOG_ENTRIES);
-        const int desired_selection = logLevelSelectionIndex(level);
-
-        bool changed = rows_changed;
-        changed |= setCachedText(logging_summary_value_el_,
-                                 formatLoggingSummary(entry_count, displayed_entry_count, level));
-        changed |= setCachedProperty(logging_empty_el_, "display", has_entries ? "none" : "block");
-        changed |= setCachedProperty(logging_list_el_, "display", has_entries ? "flex" : "none");
-        changed |= setCachedText(logging_feedback_el_, logging_feedback_text_);
-        changed |= setCachedProperty(logging_feedback_el_, "display",
-                                     logging_feedback_text_.empty() ? "none" : "block");
-        changed |= setCachedClass(logging_feedback_el_, "status-info",
-                                  logging_feedback_tone_ == FeedbackTone::Info);
-        changed |= setCachedClass(logging_feedback_el_, "status-success",
-                                  logging_feedback_tone_ == FeedbackTone::Success);
-        changed |= setCachedClass(logging_feedback_el_, "status-error",
-                                  logging_feedback_tone_ == FeedbackTone::Error);
-
-        if (logging_level_select_el_ &&
-            logging_level_select_el_->GetSelection() != desired_selection) {
-            // Guard the Change listener so programmatic selection does not re-enter
-            // applyLogLevelSelection → setLoggingFeedback → dirty latch.
-            syncing_logging_selection_ = true;
-            logging_level_select_el_->SetSelection(desired_selection);
-            syncing_logging_selection_ = false;
-            changed = true;
-        }
-
-        return changed;
-    }
-
-    bool NativeScenePanel::rebuildLoggingRows(
-        const std::vector<core::LogEntrySnapshot>& entries) {
-        if (!logging_list_el_)
-            return false;
-
-        while (auto* const child = logging_list_el_->GetFirstChild())
-            logging_list_el_->RemoveChild(child);
-        logging_rows_.clear();
-
-        auto* const document = logging_list_el_->GetOwnerDocument();
-        if (!document)
-            return false;
-
-        const size_t first = entries.size() > MAX_RENDERED_LOG_ENTRIES
-                                 ? entries.size() - MAX_RENDERED_LOG_ENTRIES
-                                 : 0;
-        for (auto it = entries.end(); it != entries.begin() + static_cast<std::ptrdiff_t>(first);) {
-            --it;
-            auto row = document->CreateElement("div");
-            row->SetAttribute("class",
-                              std::format("log-entry log-entry--{}", logLevelCssSuffix(it->level)));
-            row->SetInnerRML(loggingRowInnerRml(*it));
-            logging_rows_.push_back(logging_list_el_->AppendChild(std::move(row)));
-        }
-        return true;
-    }
-
-    bool NativeScenePanel::appendLoggingRows(
-        const std::vector<core::LogEntrySnapshot>& entries) {
-        if (!logging_list_el_ || entries.empty())
-            return false;
-
-        auto* const document = logging_list_el_->GetOwnerDocument();
-        if (!document)
-            return false;
-
-        for (const auto& entry : entries) {
-            auto row = document->CreateElement("div");
-            row->SetAttribute("class",
-                              std::format("log-entry log-entry--{}", logLevelCssSuffix(entry.level)));
-            row->SetInnerRML(loggingRowInnerRml(entry));
-            auto* const raw = logging_list_el_->InsertBefore(std::move(row),
-                                                             logging_list_el_->GetFirstChild());
-            if (raw)
-                logging_rows_.push_front(raw);
-        }
-
-        while (logging_rows_.size() > MAX_RENDERED_LOG_ENTRIES) {
-            logging_list_el_->RemoveChild(logging_rows_.back());
-            logging_rows_.pop_back();
-        }
-        return true;
-    }
-
     bool NativeScenePanel::syncLocale() {
         const std::string language = lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
         if (language == last_language_)
@@ -979,7 +713,6 @@ namespace lfs::vis::gui {
         bool changed = false;
         changed |= setCachedText(scene_tab_el_, tr("window.scene"));
         changed |= setCachedText(history_tab_el_, tr("scene.history"));
-        changed |= setCachedText(logging_tab_el_, tr("scene.logging"));
         changed |= setCachedAttribute(filter_input_el_, "placeholder", tr("scene.search"));
         changed |= setCachedText(empty_primary_el_, tr("scene.no_data_loaded"));
         changed |= setCachedText(empty_secondary_el_, tr("scene.use_file_menu"));
@@ -990,24 +723,7 @@ namespace lfs::vis::gui {
         changed |= setCachedText(history_undo_btn_el_, LOC(lichtfeld::Strings::Common::UNDO));
         changed |= setCachedText(history_redo_btn_el_, LOC(lichtfeld::Strings::Common::REDO));
         changed |= setCachedText(history_clear_btn_el_, tr(lichtfeld::Strings::DebugInfo::CLEAR_HISTORY));
-        changed |= setCachedText(logging_summary_label_el_, LOC(lichtfeld::Strings::Scene::LOG_MIRROR));
-        changed |= setCachedText(logging_level_label_el_, LOC(lichtfeld::Strings::Scene::LOG_LEVEL));
-        changed |= setCachedText(logging_export_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_EXPORT));
-        changed |= setCachedText(logging_copy_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_COPY));
-        changed |= setCachedText(logging_note_el_,
-                                 LOCF(lichtfeld::Strings::Scene::LOG_NOTE, lfs::core::format_count(MAX_RENDERED_LOG_ENTRIES)));
-        changed |= setCachedText(logging_empty_el_, LOC(lichtfeld::Strings::Scene::NO_LOGS));
-        const std::array log_option_keys{
-            lichtfeld::Strings::Scene::LOG_TRACE, lichtfeld::Strings::Scene::LOG_DEBUG,
-            lichtfeld::Strings::Scene::LOG_INFO, lichtfeld::Strings::Scene::LOG_PERFORMANCE,
-            lichtfeld::Strings::Scene::LOG_WARN, lichtfeld::Strings::Scene::LOG_ERROR,
-            lichtfeld::Strings::Scene::LOG_CRITICAL, lichtfeld::Strings::Scene::LOG_OFF};
-        for (size_t i = 0; i < log_option_keys.size(); ++i)
-            if (auto* const option = logging_level_select_el_->GetOption(static_cast<int>(i)))
-                changed |= setCachedText(option, LOC(log_option_keys[i]));
-        logging_level_select_el_->SetSelection(logging_level_select_el_->GetSelection());
         last_history_generation_ = std::numeric_limits<uint64_t>::max();
-        last_log_generation_ = std::numeric_limits<uint64_t>::max();
         return changed;
     }
 
@@ -1015,13 +731,10 @@ namespace lfs::vis::gui {
         bool changed = false;
         changed |= setCachedClass(scene_tab_el_, "active", active_tab_ == Tab::Scene);
         changed |= setCachedClass(history_tab_el_, "active", active_tab_ == Tab::History);
-        changed |= setCachedClass(logging_tab_el_, "active", active_tab_ == Tab::Logging);
         changed |= setCachedProperty(scene_view_el_, "display",
                                      active_tab_ == Tab::Scene ? "flex" : "none");
         changed |= setCachedProperty(history_container_el_, "display",
                                      active_tab_ == Tab::History ? "flex" : "none");
-        changed |= setCachedProperty(logging_container_el_, "display",
-                                     active_tab_ == Tab::Logging ? "flex" : "none");
         return changed;
     }
 
@@ -1102,21 +815,6 @@ namespace lfs::vis::gui {
             return true;
         }
 
-        if (type == "change") {
-            const Rml::String current_id = current ? current->GetId() : "";
-            if (current_id == "logging-level-select") {
-                // Ignore Change events raised by programmatic SetSelection during sync.
-                if (syncing_logging_selection_) {
-                    event.StopPropagation();
-                    return true;
-                }
-                applyLogLevelSelection();
-                event.StopPropagation();
-                return true;
-            }
-            return false;
-        }
-
         if (type != "click" || !target)
             return false;
 
@@ -1129,11 +827,6 @@ namespace lfs::vis::gui {
         }
         if (id == "history-tab") {
             setTab(Tab::History);
-            event.StopPropagation();
-            return true;
-        }
-        if (id == "logging-tab") {
-            setTab(Tab::Logging);
             event.StopPropagation();
             return true;
         }
@@ -1190,17 +883,6 @@ namespace lfs::vis::gui {
             event.StopPropagation();
             return true;
         }
-        if (id == "logging-export-btn") {
-            exportBufferedLogsToTextFile();
-            event.StopPropagation();
-            return true;
-        }
-        if (id == "logging-copy-btn") {
-            copyBufferedLogsToClipboard();
-            event.StopPropagation();
-            return true;
-        }
-
         if (auto* action_target = findHistoryActionTarget(target)) {
             const std::string kind = action_target->GetAttribute<Rml::String>("data-kind", "");
             const int steps = action_target->GetAttribute<int>("data-steps", 0);
@@ -1228,100 +910,10 @@ namespace lfs::vis::gui {
         host_.markContentDirty();
     }
 
-    void NativeScenePanel::applyLogLevelSelection() {
-        if (!logging_level_select_el_)
-            return;
-
-        const core::LogLevel selected_level =
-            logLevelFromSelection(logging_level_select_el_->GetSelection());
-        // No-op when the selection already matches the applied level — avoids
-        // re-dirtying via setLoggingFeedback on programmatic Change events.
-        if (selected_level == core::Logger::get().level())
-            return;
-
-        core::Logger::get().set_level(selected_level);
-        setLoggingFeedback(LOCF("runtime.log_level_set", logLevelLabel(selected_level)),
-                           FeedbackTone::Success);
-    }
-
-    void NativeScenePanel::copyBufferedLogsToClipboard() {
-        auto& logger = core::Logger::get();
-        const size_t entry_count = logger.buffered_log_count();
-        if (entry_count == 0) {
-            setLoggingFeedback(LOC("runtime.no_logs_to_copy"), FeedbackTone::Info);
-            return;
-        }
-
-        const std::string log_text = logger.buffered_logs_as_text();
-        SDL_SetClipboardText(log_text.c_str());
-        const char* const entry_word_key =
-            entry_count == 1 ? "runtime.log_entry_word" : "runtime.log_entries_word";
-        setLoggingFeedback(LOCF("runtime.logs_copied", lfs::core::format_count(entry_count),
-                                LOC(entry_word_key)),
-                           FeedbackTone::Success);
-    }
-
-    void NativeScenePanel::exportBufferedLogsToTextFile() {
-        auto& logger = core::Logger::get();
-        const size_t entry_count = logger.buffered_log_count();
-        if (entry_count == 0) {
-            setLoggingFeedback(LOC("runtime.no_logs_to_export"), FeedbackTone::Info);
-            return;
-        }
-
-        const auto path = SaveTextFileDialog("lichtfeld_logs");
-        if (path.empty())
-            return;
-
-        const std::string log_text = logger.buffered_logs_as_text();
-        std::ofstream file;
-        if (!core::open_file_for_write(path, file)) {
-            setLoggingFeedback(LOC("runtime.log_file_open_failed"),
-                               FeedbackTone::Error);
-            return;
-        }
-
-        file << log_text;
-        if (!file.good()) {
-            setLoggingFeedback(LOC("runtime.log_write_failed"), FeedbackTone::Error);
-            return;
-        }
-
-        const std::string exported_count = LOCF(
-            entry_count == 1 ? "runtime.log_entry_count" : "runtime.log_entries_count", lfs::core::format_count(entry_count));
-        setLoggingFeedback(LOCF("runtime.logs_exported", exported_count, lfs::core::path_to_utf8(path.filename())),
-                           FeedbackTone::Success);
-    }
-
-    void NativeScenePanel::setLoggingFeedback(std::string message, const FeedbackTone tone) {
-        if (message == logging_feedback_text_ && tone == logging_feedback_tone_)
-            return;
-        logging_feedback_text_ = std::move(message);
-        logging_feedback_tone_ = tone;
-        logging_feedback_dirty_ = true;
-        host_.markContentDirty();
-    }
-
     void NativeScenePanel::setTab(const Tab tab) {
         if (active_tab_ == tab)
             return;
-        if (log_handler_) {
-            core::Logger::get().remove_log_handler(*log_handler_);
-            log_handler_.reset();
-        }
         active_tab_ = tab;
-        if (tab == Tab::Logging) {
-            const auto generation = std::make_shared<std::atomic<uint64_t>>(
-                core::Logger::get().buffered_log_generation());
-            log_handler_ = core::Logger::get().add_log_handler(
-                [generation, gui_thread = std::this_thread::get_id()](auto, const auto&, auto) {
-                    const auto current = core::Logger::get().buffered_log_generation();
-                    const auto previous = generation->exchange(current);
-                    // Rendering can itself log; only background producers need a wakeup.
-                    if (current != previous && std::this_thread::get_id() != gui_thread)
-                        python::request_redraw();
-                });
-        }
         host_.markContentDirty();
     }
 
@@ -1329,7 +921,6 @@ namespace lfs::vis::gui {
         switch (active_tab_) {
         case Tab::Scene: return "scene";
         case Tab::History: return "history";
-        case Tab::Logging: return "logging";
         }
         return "scene";
     }
@@ -1338,8 +929,6 @@ namespace lfs::vis::gui {
         const std::string_view tab) {
         if (tab == "history") {
             setTab(Tab::History);
-        } else if (tab == "logging") {
-            setTab(Tab::Logging);
         } else {
             setTab(Tab::Scene);
         }
