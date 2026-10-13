@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Regression tests for hook-driven viewport toolbar updates."""
 
+import inspect
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -513,6 +514,30 @@ def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
     assert state.active_tool == ""
     assert snapshot["selection_group_buttons"][0]["selected"] is False
 
+
+def test_histogram_toolbar_entry_is_a_selection_mode_not_a_utility(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    select_tool = SimpleNamespace(
+        id="builtin.select",
+        icon="selection",
+        label="Select",
+        submodes=(SimpleNamespace(id="centers", label="Centers", icon="circle-dot"),),
+        can_activate=lambda _context: True,
+    )
+    monkeypatch.setattr(module, "histogram_mode_available", lambda _context: True)
+    monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "centers", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "is_panel_enabled", lambda _panel_id: False, raising=False)
+
+    _groups, modes = module._GizmoToolbarController()._build_selection_records(
+        select_tool, "builtin.select", SimpleNamespace()
+    )
+    utility_source = inspect.getsource(module._UtilityToolbarController.snapshot)
+
+    histogram = next(button for button in modes if button["button_id"] == "selection-histogram")
+    assert histogram["action"] == "toggle_histogram"
+    assert histogram["tooltip_text"] == "Histogram"
+    assert "util-histogram" not in utility_source
 
 def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module

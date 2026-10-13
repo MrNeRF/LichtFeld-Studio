@@ -112,6 +112,7 @@ ACTION_NAMES = (
     "ASSET_GALLERY_PRIMARY",
     "ASSET_GALLERY_COPY_LINK",
     "ASSET_REFRESH",
+    "TOGGLE_PYTHON_CONSOLE",
 )
 
 
@@ -266,6 +267,8 @@ def _install_lf_stub(monkeypatch):
     )
 
     lf_stub = ModuleType("lichtfeld")
+    lf_stub.project_auto_save_on_close_enabled = lambda: False
+    lf_stub.project_set_auto_save_on_close = lambda _value: None
     lf_stub.keymap = keymap
     lf_stub.get_camera_navigation_mode = lambda: "orbit"
     lf_stub.get_new_project_navigation_up_axis = lambda: "legacy_y"
@@ -1011,6 +1014,7 @@ def test_keymap_global_mode_exposes_system_sections(keymap_bindings_module):
 
     assert str(prefs.lf.keymap.Action.TOOL_TRANSLATE.value) in action_ids
     assert str(prefs.lf.keymap.Action.TOGGLE_UI.value) in action_ids
+    assert str(prefs.lf.keymap.Action.TOGGLE_PYTHON_CONSOLE.value) in action_ids
     assert str(prefs.lf.keymap.Action.OPEN_PREFERENCES.value) in action_ids
     assert str(prefs.lf.keymap.Action.HISTOGRAM_ZOOM_MARKED.value) in action_ids
     assert str(prefs.lf.keymap.Action.TOGGLE_CAMERA_FRUSTUMS.value) in action_ids

@@ -40,6 +40,7 @@ v26_group 95770df08
 v29 27dd365aa
 v29_master 11926fd5f2f8968514e1378f2e1212ffe25a6cfb
 v30 11926fd5f2f8968514e1378f2e1212ffe25a6cfb
+v31 2f4f139745259857dbfca51f644b55d66705cdaf
 '''
 SOURCES = dict(row.split() for row in SOURCE_ROWS.splitlines() if row.strip())
 VERSION_OVERRIDES = {"v30": 30}  # v30 changed storage only; defaults match v29_master.
@@ -142,9 +143,10 @@ def main():
         name = f'v{previous["version"]}'
         if name in SOURCES and SOURCES[name] != ref: raise SystemExit(f"{name} is already recorded from a different revision")
         if name not in SOURCES:
-            script = Path(__file__); source = script.read_text(); marker = "SOURCE_ROWS = '''\n"
+            script = Path(__file__); source = script.read_text(); marker = "\n'''\nSOURCES = dict"
             if marker not in source: raise SystemExit("Could not update historical source list")
-            script.write_text(source.replace(marker, marker + f"{name} {ref}\n", 1))
+            source = source.replace(marker, f"\n{name} {ref}" + marker, 1)
+            script.write_text(source)
             SOURCES[name] = ref
     profiles, data, indices = [], [], {}
     for name, ref in SOURCES.items():

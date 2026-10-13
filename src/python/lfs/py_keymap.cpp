@@ -192,6 +192,7 @@ namespace lfs::python {
             .value("ASSET_GALLERY_PRIMARY", Action::ASSET_GALLERY_PRIMARY)
             .value("ASSET_GALLERY_COPY_LINK", Action::ASSET_GALLERY_COPY_LINK)
             .value("ASSET_REFRESH", Action::ASSET_REFRESH)
+            .value("TOGGLE_PYTHON_CONSOLE", Action::TOGGLE_PYTHON_CONSOLE)
             .value("UNGROUP_SELECTED_SCENE_NODE", Action::UNGROUP_SELECTED_SCENE_NODE);
 
         // Expose ToolMode enum

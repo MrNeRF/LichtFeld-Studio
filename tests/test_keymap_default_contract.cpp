@@ -124,7 +124,7 @@ namespace lfs::vis::input {
                 ++locale_count;
                 const auto locale = nlohmann::json::parse(std::ifstream(entry.path()));
                 const auto& labels = locale.at("input_settings");
-                for (int i = 0; i <= static_cast<int>(Action::ASSET_REFRESH); ++i) {
+                for (int i = 0; i <= static_cast<int>(Action::TOGGLE_PYTHON_CONSOLE); ++i) {
                     const auto action = static_cast<Action>(i);
                     const auto name = actionNameKey(action);
                     if (name.empty())

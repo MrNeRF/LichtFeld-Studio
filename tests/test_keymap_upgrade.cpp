@@ -99,7 +99,7 @@ namespace lfs::vis::input {
             ASSERT_TRUE(loaded.loadProfileFromFile(path));
             ASSERT_TRUE(loaded.saveProfileToFile(path));
             const auto upgraded = json::parse(std::ifstream(path));
-            EXPECT_EQ(upgraded.at("version"), 31);
+            EXPECT_EQ(upgraded.at("version"), 32);
             size_t brush_additions = 0;
             size_t brush_removals = 0;
             for (const auto& addition : upgraded["overrides"]["bindings"])
@@ -221,6 +221,8 @@ namespace lfs::vis::input {
                 }
                 InputBindings bindings;
                 EXPECT_FALSE(bindings.loadProfileFromFile(path)) << version;
+                EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_4, MODIFIER_NONE),
+                          Action::TOOL_SCALE);
                 EXPECT_EQ(bindings.getActionForDrag(ToolMode::SELECTION, MouseButton::MIDDLE, 0),
                           Action::CAMERA_ORBIT);
                 EXPECT_FALSE(bindings.saveProfileToFile(path)) << version;

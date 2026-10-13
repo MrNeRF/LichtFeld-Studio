@@ -154,6 +154,7 @@ namespace lfs::vis::input {
         ASSET_GALLERY_PRIMARY,
         ASSET_GALLERY_COPY_LINK,
         ASSET_REFRESH,
+        TOGGLE_PYTHON_CONSOLE,
 
     };
 

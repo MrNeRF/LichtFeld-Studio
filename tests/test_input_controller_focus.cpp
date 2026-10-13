@@ -28,6 +28,7 @@
 #include "visualizer/visualizer.hpp"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
@@ -39,6 +40,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <thread>
@@ -74,6 +76,23 @@ namespace lfs::vis {
 
             std::string name_;
             std::optional<std::string> previous_;
+        };
+
+        int python_console_toggle_calls = 0;
+
+        void recordPythonConsoleToggle() {
+            ++python_console_toggle_calls;
+        }
+
+        class RestorePythonConsoleCallback {
+        public:
+            RestorePythonConsoleCallback() {
+                python_console_toggle_calls = 0;
+                lfs::python::set_show_python_console_callback(&recordPythonConsoleToggle);
+            }
+            ~RestorePythonConsoleCallback() {
+                lfs::python::set_show_python_console_callback(nullptr);
+            }
         };
 
         class InputControllerFocusTest : public ::testing::Test {
@@ -1925,7 +1944,7 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 31"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 32"), std::string::npos); // PROFILE_VERSION
         EXPECT_NE(contents.find("Gallery Primary Action"), std::string::npos);
         EXPECT_NE(contents.find("Copy Gallery Link"), std::string::npos);
         EXPECT_NE(contents.find("Refresh Assets"), std::string::npos);
@@ -1987,6 +2006,124 @@ namespace lfs::vis {
         EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_ENTER, MODIFIER_CTRL), Action::NONE);
         EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_F5, MODIFIER_NONE), Action::NONE);
         std::filesystem::remove(path);
+    }
+
+    TEST_F(InputControllerFocusTest, MenuAcceleratorsResolveAndDispatchThroughInputBindings) {
+        using namespace input;
+        RestorePythonConsoleCallback restore_console_callback;
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        const auto& bindings = controller.getBindings();
+
+        struct MenuAccelerator {
+            std::string source;
+            Action action = Action::NONE;
+            bool save_project = false;
+        };
+        const auto menu_root = std::filesystem::path(PROJECT_ROOT_PATH) / "src/python/lfs_plugins";
+        std::vector<MenuAccelerator> menu_accelerators;
+        for (const auto& entry : std::filesystem::directory_iterator(menu_root)) {
+            if (entry.path().extension() != ".py" ||
+                !entry.path().filename().string().ends_with("_menu.py"))
+                continue;
+            std::ifstream input(entry.path());
+            ASSERT_TRUE(input.good()) << entry.path();
+            std::string line;
+            while (std::getline(input, line)) {
+                const auto start = line.find("shortcut=");
+                if (start == std::string::npos)
+                    continue;
+                if (line.find("\"Ctrl+S\"", start) != std::string::npos) {
+                    menu_accelerators.push_back(
+                        {.source = entry.path().filename().string(),
+                         .save_project = true});
+                    continue;
+                }
+                auto action_start = line.find("Action.", start);
+                if (action_start == std::string::npos)
+                    action_start = line.find("action.", start);
+                ASSERT_NE(action_start, std::string::npos)
+                    << entry.path().filename().string() << ": " << line;
+                action_start += 7;
+                auto action_end = action_start;
+                while (action_end < line.size() &&
+                       (std::isalnum(static_cast<unsigned char>(line[action_end])) ||
+                        line[action_end] == '_'))
+                    ++action_end;
+                const auto action = actionFromName(
+                    std::string_view(line).substr(action_start, action_end - action_start));
+                ASSERT_TRUE(action)
+                    << entry.path().filename().string() << ": " << line;
+                menu_accelerators.push_back(
+                    {.source = entry.path().filename().string(), .action = *action});
+            }
+        }
+        ASSERT_FALSE(menu_accelerators.empty());
+
+        lfs::event::ScopedHandler handlers;
+        std::map<Action, int> dispatched;
+        const auto record = [&](const Action action) {
+            return [&, action](const auto&) { ++dispatched[action]; };
+        };
+        handlers.subscribe<core::events::cmd::Undo>(record(Action::UNDO));
+        handlers.subscribe<core::events::cmd::Redo>(record(Action::REDO));
+        handlers.subscribe<core::events::cmd::CopySelection>(record(Action::COPY_SELECTION));
+        handlers.subscribe<core::events::cmd::CutSelection>(record(Action::CUT_SELECTION));
+        handlers.subscribe<core::events::cmd::PasteSelection>(record(Action::PASTE_SELECTION));
+        handlers.subscribe<core::events::cmd::InvertSelection>(record(Action::INVERT_SELECTION));
+        handlers.subscribe<core::events::cmd::SelectAll>(record(Action::SELECT_ALL));
+        handlers.subscribe<core::events::cmd::DeselectAll>(record(Action::DESELECT_ALL));
+        handlers.subscribe<core::events::ui::ToggleVramHud>(record(Action::TOGGLE_PERFORMANCE_HUD));
+        handlers.subscribe<core::events::cmd::ProjectSave>(record(Action::NONE));
+
+        const auto default_profile = InputBindings::createDefaultProfile();
+        for (const auto& accelerator : menu_accelerators) {
+            SCOPED_TRACE(accelerator.source);
+            if (accelerator.save_project) {
+                const auto before = dispatched[Action::NONE];
+                const int physical_key = sdlScancodeToAppKey(SDL_SCANCODE_S);
+                const int logical_key = sdlShortcutKeyToAppKey(
+                    SDL_SCANCODE_S,
+                    SDL_GetKeyFromScancode(SDL_SCANCODE_S, SDL_KMOD_NONE, false));
+                EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, logical_key,
+                                                   MODIFIER_CTRL),
+                          Action::NONE);
+                controller.handleKey(physical_key, logical_key, SDL_SCANCODE_S,
+                                     ACTION_PRESS, MODIFIER_CTRL);
+                EXPECT_EQ(dispatched[Action::NONE], before + 1);
+                continue;
+            }
+
+            const auto binding = std::ranges::find_if(
+                default_profile.bindings, [&](const auto& candidate) {
+                    return candidate.mode == ToolMode::GLOBAL &&
+                           candidate.action == accelerator.action;
+                });
+            ASSERT_NE(binding, default_profile.bindings.end())
+                << getActionName(accelerator.action);
+            const auto* trigger = std::get_if<KeyTrigger>(&binding->trigger);
+            ASSERT_NE(trigger, nullptr) << getActionName(accelerator.action);
+            const auto scancode = appKeyToSdlScancode(trigger->key);
+            ASSERT_NE(scancode, SDL_SCANCODE_UNKNOWN)
+                << getActionName(accelerator.action);
+            const int physical_key = sdlScancodeToAppKey(scancode);
+            const int logical_key = sdlShortcutKeyToAppKey(
+                scancode, SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false));
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, logical_key,
+                                               trigger->modifiers),
+                      accelerator.action);
+            const auto before = dispatched[accelerator.action];
+            const int console_before = python_console_toggle_calls;
+            controller.handleKey(physical_key, logical_key, scancode,
+                                 ACTION_PRESS, trigger->modifiers);
+            controller.handleKey(physical_key, logical_key, scancode,
+                                 ACTION_RELEASE, trigger->modifiers);
+            if (accelerator.action == Action::TOGGLE_PYTHON_CONSOLE)
+                EXPECT_EQ(python_console_toggle_calls, console_before + 1);
+            else if (accelerator.action != Action::OPEN_PREFERENCES)
+                EXPECT_EQ(dispatched[accelerator.action], before + 1)
+                    << getActionName(accelerator.action);
+        }
     }
 
     TEST_F(InputControllerFocusTest, GalleryActionsHaveRebindableNativeDefaults) {

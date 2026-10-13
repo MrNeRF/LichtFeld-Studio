@@ -71,8 +71,7 @@
 .stat-card,
 #histogram-card,
 .empty-card,
-#compare-card,
-#histogram-footer {
+#compare-card {
     background-color: rgba(30, 30, 46, 236);
     border-width: 1dp;
     border-color: rgba(88, 91, 112, 148);
@@ -737,92 +736,6 @@
 .axis-label {
     font-size: 12dp;
     color: #bac2de;
-}
-
-#histogram-footer {
-    min-height: 54dp;
-    padding: 10dp 12dp;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12dp;
-    flex-shrink: 0;
-    min-width: 0;
-    border-width: 1dp;
-    border-color: rgba(88, 91, 112, 148);
-    border-radius: 12dp;
-}
-
-.footer-stat {
-    display: flex;
-    flex-direction: column;
-    gap: 2dp;
-    min-width: 120dp;
-}
-
-.footer-label {
-    font-size: 12dp;
-    letter-spacing: 0.2dp;
-    text-transform: uppercase;
-    color: #bac2de;
-}
-
-.footer-value {
-    font-size: 12dp;
-    color: #cdd6f4;
-}
-
-.footer-hint {
-    flex: 1;
-    min-width: 160dp;
-    color: #bac2de;
-    font-size: 12dp;
-    line-height: 1.35;
-}
-
-.footer-history-actions,
-.footer-text-actions {
-    display: flex;
-    align-items: center;
-    gap: 8dp;
-}
-
-.footer-history-actions {
-    padding: 2dp;
-    border-width: 1dp;
-    border-color: rgba(69, 71, 90, 190);
-    border-radius: 10dp;
-    background-color: rgba(49, 50, 68, 210);
-}
-
-.histogram-history-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 30dp;
-    height: 30dp;
-    min-width: 30dp;
-    padding: 0;
-    border-radius: 9dp;
-}
-
-.histogram-history-icon {
-    display: block;
-    width: 16dp;
-    height: 16dp;
-    margin: 0;
-    image-color: rgba(236, 241, 255, 235);
-}
-
-.histogram-history-btn:disabled .histogram-history-icon {
-    image-color: rgba(188, 194, 214, 118);
-}
-
-.footer-text-action {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 78dp;
 }
 
 #histogram-floating-header.hidden,
