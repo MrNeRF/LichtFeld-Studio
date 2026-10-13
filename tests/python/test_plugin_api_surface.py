@@ -140,9 +140,9 @@ def test_ui_stub_surface_matches_panel_api_names():
     assert "    None: int = ..." not in stub_text
     assert "class ThemeVignette:" in stub_text
     assert "def vignette(self) -> ThemeVignette: ..." in stub_text
-    assert "def set_theme_vignette_enabled(arg: bool, /) -> None:" in stub_text
-    assert "def set_theme_vignette_intensity(arg: float, /) -> None:" in stub_text
-    assert "def set_theme_vignette_style(arg0: float, arg1: float, arg2: float, /) -> None:" in stub_text
+    assert "def set_theme_vignette_enabled(enabled: bool, persist: bool = True) -> None:" in stub_text
+    assert "def set_theme_vignette_intensity(intensity: float, persist: bool = True) -> None:" in stub_text
+    assert "def set_theme_vignette_style(intensity: float, radius: float, softness: float, persist: bool = True) -> None:" in stub_text
 
 
 def test_training_session_stub_surface():
