@@ -356,7 +356,9 @@ pinned version requires hardware acceleration. CUDA/VideoToolbox selection is
 retained; software selection prefers dav1d without changing other codec choices.
 If dav1d is absent from another provider's registry, the native AV1 decoder is
 still attempted as before; this does not promise CPU capability for FFmpeg's
-hardware-only native implementation.
+hardware-only native implementation. Preview failures retain a non-empty
+diagnostic when probing fails, no decoder is registered, or the native
+decoder cannot submit/decode frames.
 The dav1d BSD-2-Clause notice is included with the distributed licenses.
 
 Regression fixtures cover flat EXR/WebP loading and ambiguous basenames, TIFF
