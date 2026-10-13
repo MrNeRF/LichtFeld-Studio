@@ -21,6 +21,14 @@ namespace {
 
     using lfs::vis::WindowRectangle;
 
+    TEST(WindowStateContract, ExternalPanelsRequireOptInAndHonorBothSafeModePaths) {
+        EXPECT_FALSE(lfs::vis::externalFloatingWindowsEnabled(true, false, false, false));
+        EXPECT_TRUE(lfs::vis::externalFloatingWindowsEnabled(true, false, false, true));
+        EXPECT_FALSE(lfs::vis::externalFloatingWindowsEnabled(true, true, false, true));
+        EXPECT_FALSE(lfs::vis::externalFloatingWindowsEnabled(true, false, true, true));
+        EXPECT_FALSE(lfs::vis::externalFloatingWindowsEnabled(false, false, false, true));
+    }
+
     TEST(WindowStateContract, FutureWindowFieldsSurviveGeometrySave) {
         const auto root = std::filesystem::temp_directory_path() / "lfs_window_future_settings";
         std::filesystem::create_directories(root);
@@ -63,6 +71,7 @@ namespace {
         std::ifstream backup(lfs::test::licht::find_backup(root / "backups", path));
         ASSERT_TRUE(backup);
         EXPECT_EQ(std::string(std::istreambuf_iterator<char>(backup), {}), original);
+        backup.close();
         std::filesystem::remove_all(root);
     }
 

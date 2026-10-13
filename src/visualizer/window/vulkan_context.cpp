@@ -1917,6 +1917,7 @@ namespace lfs::vis {
             copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             copy_region.imageSubresource.mipLevel = 0;
             copy_region.imageSubresource.baseArrayLayer = 0;
+            copy_region.imageSubresource.layerCount = 1;
             copy_region.imageOffset = {0, 0, 0};
             copy_region.imageExtent = {extent.width, extent.height, 1};
             vkCmdCopyImageToBuffer(command_buffer,

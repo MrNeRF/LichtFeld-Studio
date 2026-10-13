@@ -13,6 +13,11 @@
 
 namespace lfs::vis {
 
+    [[nodiscard]] inline bool externalFloatingWindowsEnabled(bool has_renderer, bool launch_safe_mode,
+                                                             bool environment_safe_mode, bool opted_in) {
+        return has_renderer && !launch_safe_mode && !environment_safe_mode && opted_in;
+    }
+
     [[nodiscard]] inline bool automaticWindowStatePersistenceEnabled() {
         return !lfs::core::environment::flag("LFS_SAFE_MODE", false);
     }

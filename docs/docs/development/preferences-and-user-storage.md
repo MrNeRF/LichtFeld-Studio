@@ -26,19 +26,26 @@ The Preferences panel currently exposes:
 - interface, layout, and window reset actions;
 - experimental native floating windows (restart required).
 
-On the `feat/native-floating-windows` experiment, ordinary floating panels use
-separate desktop windows by default. Preferences > Interface can restore the
-embedded mode on the next start. `LFS_NATIVE_FLOATING_WINDOWS=0` overrides this
-for one run; safe mode always keeps panels embedded. Initialization failures
-also fall back to an embedded panel.
+External floating panels are opt-in and disabled by default. Enable the
+experimental setting in Preferences > Interface and restart to allow dragging
+an existing floating panel outside the main application window. Opening or
+preloading a panel keeps it embedded and does not allocate an SDL desktop
+surface or an auxiliary GPU device. The host is created only at the boundary
+crossing, or when restoring a saved position outside the main window.
+`LFS_NATIVE_FLOATING_WINDOWS=0` disables the feature for one run. Both
+`--safe-mode` and `LFS_SAFE_MODE` always keep panels embedded, even with an
+explicit feature override. Initialization failures also fall back to embedded
+rendering. With no external hosts, the native rendering pass returns before
+reading preferences or parsing geometry; geometry is parsed only when saving
+changed external rectangles.
 
 Desktop rectangles are stored in the user-global `floating_window_geometry`
 object, keyed by RmlUi context name, and never in a project's workspace. Both
 Reset Layout and Reset Window State clear these rectangles and center live
 windows inside the main application window. Panels without saved positions also
 start inside the application, fitting their initial size to its available area.
-Reset Interface also restores the native
-window preference; Reset Appearance preserves it. Preferences stays open.
+Reset Interface disables the experiment; Reset Appearance preserves its
+current setting. Preferences stays open.
 Missing-monitor recovery is applied at creation, reopening, and display topology,
 resolution, usable-area, and scale changes. It uses the remaining monitor's full
 usable bounds, retains the saved size when it fits, and shrinks oversized panels.
@@ -62,6 +69,20 @@ panel. Opt-in Windows regression checks live in
 `tests/python/test_native_floating_windows_runtime.py`; they require an isolated
 running GUI selected by `LFS_NATIVE_WINDOWS_TEST_ENDPOINT` and the matching
 `LFS_NATIVE_WINDOWS_TEST_PROFILE` (the application's `LFS_HOME`).
+
+One-panel cost was measured on Windows with an NVIDIA RTX 5060 Ti, Vulkan,
+Release build, an empty scene, and a fresh isolated preferences profile.
+Windows WDDM GPU Process Memory counters were sampled three times per state:
+opening Preferences embedded left dedicated memory at 222.45 MiB; detaching
+the 780×440 panel raised it to 284.79 MiB (+62.34 MiB). Shared GPU memory
+increased by 26.56 MiB. The first embedded open took 79.8 ms, native host
+initialization took 137.1 ms, and the MCP drag-to-visible measurement took
+507.4 ms including the test's 100 ms press interval and RPC/frame scheduling.
+These are single-run observations, not latency guarantees. Closing the panel
+hides and caches its host for reopening; the added allocation remains until
+host destruction or application exit. No extra desktop host or GPU device is
+created merely by opening embedded Preferences, Plugin Marketplace, or Video
+Extractor.
 
 The panel can be opened from the Edit menu or with the default `Ctrl+,`
 shortcut. The shortcut is a regular keymap action and can be rebound in Input

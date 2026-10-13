@@ -90,6 +90,9 @@ namespace lfs::gui {
         void setForcedHeight(float h) override;
         void setFloating(bool floating) override;
         SDL_Window* nativeWindow() const override;
+        bool detachToDesktop(float x, float y, float w, float h) override;
+        bool restoreDesktopWindow() override;
+        bool detachHost(float x, float y, float w, float h, bool desktop_coordinates);
         [[nodiscard]] bool wantsKeyboard() const override;
         [[nodiscard]] bool needsAnimationFrame() const override;
         void reloadRmlResources() override;
@@ -221,6 +224,7 @@ namespace lfs::gui {
         bool elements_cached_ = false;
         bool controls_dirty_ = true;
         bool floating_ = false;
+        bool desktop_restore_checked_ = false;
 
         Rml::Element* title_el_ = nullptr;
         Rml::Element* close_btn_el_ = nullptr;

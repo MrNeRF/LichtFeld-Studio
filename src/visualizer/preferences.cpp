@@ -291,6 +291,9 @@ namespace lfs::vis {
                 auto merged = lfs::core::persisted_settings::mergeForWrite(
                     paths->preferencesFile(), values, "schema_version", 2,
                     nullptr, {}, paths->backupDir());
+                // This map is authoritative: removed panel positions must stay removed.
+                if (values.contains("floating_window_geometry"))
+                    merged["floating_window_geometry"] = values["floating_window_geometry"];
                 if (reset_project_manager_on_save) {
                     auto saved_pm = merged.find("project_manager");
                     if (saved_pm != merged.end() && saved_pm->is_object()) {
@@ -546,7 +549,7 @@ namespace lfs::vis {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
         const auto it = impl_->values.find("native_floating_windows");
-        return it == impl_->values.end() || !it->is_boolean() || it->get<bool>();
+        return it != impl_->values.end() && it->is_boolean() && it->get<bool>();
     }
     void UserPreferences::setFloatingWindowGeometry(const std::string& value) {
         std::scoped_lock lock(impl_->mutex);

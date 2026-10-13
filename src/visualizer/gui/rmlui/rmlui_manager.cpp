@@ -137,6 +137,7 @@ namespace lfs::vis::gui {
 
     std::unique_ptr<RmlUIManager::NativeWindow> RmlUIManager::createNativeWindow(
         const std::string& name, int width, int height) {
+        const auto start = std::chrono::steady_clock::now();
         auto result = std::make_unique<NativeWindow>();
         result->name = name;
         const bool modal = name == "modal_overlay";
@@ -213,7 +214,37 @@ namespace lfs::vis::gui {
 #endif
         if (!result->renderer->initialize(*result->graphics))
             return {};
+        LOG_INFO("External RmlUi host '{}' initialized in {:.2f} ms", name,
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
         return result;
+    }
+
+    bool RmlUIManager::restoredExternalBounds(const std::string& name, float* bounds) const {
+        if (!native_windows_enabled_)
+            return false;
+        auto state = nlohmann::json::parse(UserPreferences::instance().floatingWindowGeometry(), nullptr, false);
+        if (!state.is_object())
+            return false;
+        const auto saved = state.find(name);
+        if (saved == state.end() || !saved->is_array() || saved->size() != 4 ||
+            !std::ranges::all_of(*saved, [](const auto& v) { return v.is_number_integer() && v >= -100000 && v <= 100000; }))
+            return false;
+        const WindowRectangle requested{(*saved)[0], (*saved)[1], (*saved)[2], (*saved)[3]};
+        const auto rect = recoverFloatingWindowRectangle(requested, nativeDisplays(), nativeParentDisplay(window_));
+        if (rect != requested && automaticWindowStatePersistenceEnabled()) {
+            state[name] = {rect.x, rect.y, rect.width, rect.height};
+            UserPreferences::instance().setFloatingWindowGeometry(state.dump());
+        }
+        WindowRectangle parent;
+        SDL_GetWindowPosition(window_, &parent.x, &parent.y);
+        SDL_GetWindowSize(window_, &parent.width, &parent.height);
+        if (rect.x >= parent.x && rect.y >= parent.y && rect.x + rect.width <= parent.x + parent.width && rect.y + rect.height <= parent.y + parent.height)
+            return false;
+        bounds[0] = static_cast<float>(rect.x);
+        bounds[1] = static_cast<float>(rect.y);
+        bounds[2] = static_cast<float>(rect.width);
+        bounds[3] = static_cast<float>(rect.height);
+        return true;
     }
 
     SDL_Window* RmlUIManager::nativeWindow(const Rml::Context* context) const {
@@ -331,11 +362,23 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::renderNativeWindows() {
-        auto state = nlohmann::json::parse(UserPreferences::instance().floatingWindowGeometry(), nullptr, false);
-        if (!state.is_object())
-            state = nlohmann::json::object();
+        if (native_windows_.empty())
+            return;
+        nlohmann::json state;
         bool changed = false;
         for (auto& [context, native] : native_windows_) {
+            const auto properties = SDL_GetWindowProperties(native->window);
+            if (SDL_GetBooleanProperty(properties, "lfs.drag_handoff", false)) {
+                float mx = 0, my = 0;
+                const auto buttons = SDL_GetGlobalMouseState(&mx, &my);
+                if (buttons & SDL_BUTTON_LMASK) {
+                    SDL_SetWindowPosition(native->window,
+                                          static_cast<int>(mx - SDL_GetFloatProperty(properties, "lfs.drag_offset_x", 0)),
+                                          static_cast<int>(my - SDL_GetFloatProperty(properties, "lfs.drag_offset_y", 0)));
+                } else {
+                    SDL_SetBooleanProperty(properties, "lfs.drag_handoff", false);
+                }
+            }
             const auto fail_capture = [&native]() {
                 if (auto callback = std::move(native->capture_callback))
                     callback(lfs::make_error({.code = lfs::ErrorCode::Unavailable,
@@ -344,6 +387,11 @@ namespace lfs::vis::gui {
                                               .detection = LFS_SOURCE_SITE_CURRENT()}));
             };
             if (native->geometry_dirty && !(SDL_GetWindowFlags(native->window) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_MAXIMIZED))) {
+                if (!changed) {
+                    state = nlohmann::json::parse(UserPreferences::instance().floatingWindowGeometry(), nullptr, false);
+                    if (!state.is_object())
+                        state = nlohmann::json::object();
+                }
                 int x = 0, y = 0, w = 0, h = 0;
                 SDL_GetWindowPosition(native->window, &x, &y);
                 SDL_GetWindowSize(native->window, &w, &h);
@@ -514,7 +562,8 @@ namespace lfs::vis::gui {
     }
 
     bool RmlUIManager::initGraphics(SDL_Window* window, lfs::vis::GraphicsContext& graphics,
-                                    float dp_ratio) {
+                                    float dp_ratio, bool safe_mode) {
+        launch_safe_mode_ = safe_mode;
 #ifdef LFS_GRAPHICS_METAL
         auto render_interface = std::make_unique<TensorRmlUiRenderer>();
 #else
@@ -540,8 +589,11 @@ namespace lfs::vis::gui {
 
         dp_ratio_ = dp_ratio;
         window_ = window;
-        native_windows_enabled_ = ui_renderer && !lfs::core::environment::flag("LFS_SAFE_MODE", false) &&
-                                  lfs::core::environment::flag("LFS_NATIVE_FLOATING_WINDOWS", UserPreferences::instance().nativeFloatingWindows());
+        native_windows_enabled_ = externalFloatingWindowsEnabled(ui_renderer != nullptr, launch_safe_mode_,
+                                                                 lfs::core::environment::flag("LFS_SAFE_MODE", false),
+                                                                 lfs::core::environment::flag("LFS_NATIVE_FLOATING_WINDOWS", UserPreferences::instance().nativeFloatingWindows()));
+        if (launch_safe_mode_ || lfs::core::environment::flag("LFS_SAFE_MODE", false))
+            LOG_INFO("Safe mode: external floating windows disabled");
         debugger_enabled_ = lfs::core::environment::flag("LFS_RML_DEBUGGER");
 
         system_interface_ = std::make_unique<RmlSystemInterface>(window);

@@ -11,6 +11,7 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
@@ -256,8 +257,34 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::ensureContext() {
         if (rml_context_)
             return true;
-        rml_context_ = manager_->createContext(context_name_, 100, 100, floating_);
+        rml_context_ = manager_->createContext(context_name_, 100, 100, desktop_requested_);
+        if (auto* native = nativeWindow()) {
+            SDL_SetWindowPosition(native, static_cast<int>(desktop_bounds_[0]), static_cast<int>(desktop_bounds_[1]));
+            SDL_SetWindowSize(native, static_cast<int>(desktop_bounds_[2]), static_cast<int>(desktop_bounds_[3]));
+            SDL_SetBooleanProperty(SDL_GetWindowProperties(native), "lfs.geometry_initialized", true);
+        }
         return rml_context_ != nullptr;
+    }
+
+    bool RmlPanelHost::configureExternal(float x, float y, float w, float h, bool desktop_coordinates) {
+        if (rml_context_ || !externalAllowed() || w <= 0 || h <= 0)
+            return false;
+        if (!desktop_coordinates) {
+            auto* main = manager_->mainWindow();
+            int px = 0, py = 0;
+            SDL_GetWindowPosition(main, &px, &py);
+            const auto scale = input::windowPixelScale(main);
+            x = px + x / scale.x;
+            y = py + y / scale.y;
+            w /= scale.x;
+            h /= scale.y;
+        }
+        desktop_bounds_[0] = x;
+        desktop_bounds_[1] = y;
+        desktop_bounds_[2] = w;
+        desktop_bounds_[3] = h;
+        desktop_requested_ = true;
+        return true;
     }
 
     bool RmlPanelHost::ensureDocumentLoaded() {
@@ -269,6 +296,11 @@ namespace lfs::vis::gui {
 
     SDL_Window* RmlPanelHost::nativeWindow() const {
         return manager_ ? manager_->nativeWindow(rml_context_) : nullptr;
+    }
+
+    bool RmlPanelHost::nativeDragActive() const {
+        auto* window = nativeWindow();
+        return window && SDL_GetBooleanProperty(SDL_GetWindowProperties(window), "lfs.drag_handoff", false);
     }
 
     // The cached panel texture survives a language switch, so the document has to be

@@ -1717,7 +1717,7 @@ class PreferencesPanel(Panel):
             lf.set_camera_navigation_mode("orbit")
             lf.set_camera_view_snap_enabled(False)
         elif section == "interface":
-            lf.ui.set_native_floating_windows(True)
+            lf.ui.set_native_floating_windows(False)
             if not self._mcp_safe_mode:
                 lf.ui.set_scene_graph_selection_markers(False)
             return lf.ui.reset_layout()

@@ -104,12 +104,15 @@ namespace lfs::vis::gui {
         LFS_VIS_API ~RmlUIManager();
 
         bool initGraphics(SDL_Window* window, lfs::vis::GraphicsContext& graphics,
-                          float dp_ratio = 1.0f);
+                          float dp_ratio = 1.0f, bool safe_mode = false);
         LFS_VIS_API void shutdown();
         [[nodiscard]] bool isInitialized() const { return initialized_; }
 
         float getDpRatio() const { return dp_ratio_; }
         void setDpRatio(float ratio);
+        bool externalWindowsAllowed() const { return native_windows_enabled_; }
+        SDL_Window* mainWindow() const { return window_; }
+        bool restoredExternalBounds(const std::string& name, float* bounds) const;
 
         LFS_VIS_API Rml::Context* createContext(const std::string& name, int width, int height, bool floating = false);
         SDL_Window* nativeWindow(const Rml::Context* context) const;
@@ -220,6 +223,7 @@ namespace lfs::vis::gui {
         SDL_Window* input_window_ = nullptr;
         SDL_Window* render_window_ = nullptr;
         bool native_windows_enabled_ = false;
+        bool launch_safe_mode_ = false;
         std::unique_ptr<NativeWindow> createNativeWindow(const std::string& name, int width, int height);
         SDL_Window* contextWindow(const Rml::Context* context) const;
         friend class lfs::vis::WindowInputDispatchTest;

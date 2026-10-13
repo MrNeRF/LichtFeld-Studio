@@ -4850,7 +4850,7 @@ namespace lfs::vis::gui {
             auto* const graphics = viewer_->getWindowManager()->getGraphicsContext();
             if (!graphics ||
                 !rmlui_manager_.initGraphics(viewer_->getWindow(), *graphics,
-                                             current_ui_scale_)) {
+                                             current_ui_scale_, viewer_->options_.safe_mode)) {
                 throw std::runtime_error("Failed to initialize RmlUI graphics backend");
             }
         }
@@ -5011,6 +5011,11 @@ namespace lfs::vis::gui {
         };
         ops.native_graphics = [](void* host) -> void* {
             return static_cast<RmlPanelHost*>(host)->nativeGraphics();
+        };
+        ops.external_allowed = [](void* host) { return static_cast<RmlPanelHost*>(host)->externalAllowed(); };
+        ops.restored_external_bounds = [](void* host, float* bounds) { return static_cast<RmlPanelHost*>(host)->restoredExternalBounds(bounds); };
+        ops.configure_external = [](void* host, float x, float y, float w, float h, bool desktop) {
+            return static_cast<RmlPanelHost*>(host)->configureExternal(x, y, w, h, desktop);
         };
         ops.mark_content_dirty = [](void* host) {
             static_cast<RmlPanelHost*>(host)->markContentDirty();

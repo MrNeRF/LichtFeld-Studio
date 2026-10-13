@@ -94,10 +94,20 @@ namespace {
             return poll_result;
         }
 
+        bool detachToDesktop(float x, float y, float width, float height) override {
+            ++detach_count;
+            detach_x = x;
+            detach_y = y;
+            return false; // Record the request without allocating desktop/GPU resources.
+        }
+
         int draw_count = 0;
         int preload_count = 0;
         int cached_count = 0;
         int poll_count = 0;
+        int detach_count = 0;
+        float detach_x = 0;
+        float detach_y = 0;
         float height = 24.0f;
         bool cache_hit = true;
         bool poll_result = true;
@@ -663,6 +673,51 @@ TEST_F(PanelRegistryAnimationDemandTest, StandardRenderingUsesSnapshotSpace) {
                                             },
                                             ctx);
     EXPECT_EQ(panel->requests.back().second, PanelSpace::SidePanel);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, DesktopHostIsRequestedOnlyWhenDraggingBeyondMainWindow) {
+    using namespace lfs::vis::gui;
+    auto panel = std::make_shared<RecordingPanel>();
+    panel->height = 200;
+    PanelInfo info;
+    info.id = "test.lazy_external";
+    info.label = info.id;
+    info.space = PanelSpace::Floating;
+    info.is_native = false;
+    info.initial_width = 400;
+    info.initial_height = 200;
+    info.panel = panel;
+    auto& registry = PanelRegistry::instance();
+    ASSERT_TRUE(registry.register_panel(std::move(info)));
+    ViewportLayout viewport;
+    viewport.size = {1280, 720};
+    PanelDrawContext context;
+    context.viewport = &viewport;
+    context.scene_generation = 1;
+    PanelInputState input;
+    input.screen_w = 1280;
+    input.screen_h = 720;
+    auto draw = [&] {
+        registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating), .input = &input}, context);
+    };
+    draw();
+    EXPECT_EQ(panel->detach_count, 0);
+    const auto state = registry.capture_project_state();
+    const auto position = std::ranges::find(state, std::string("test.lazy_external"), &PanelProjectState::id);
+    ASSERT_NE(position, state.end());
+    ASSERT_TRUE(position->float_last_bounds_valid);
+    input.mouse_x = position->float_last_x + 80;
+    input.mouse_y = position->float_last_y + 20;
+    input.mouse_clicked[0] = input.mouse_down[0] = true;
+    draw();
+    input.mouse_clicked[0] = false;
+    input.mouse_x += 20;
+    draw();
+    EXPECT_EQ(panel->detach_count, 0);
+    input.mouse_x = 1400;
+    draw();
+    EXPECT_EQ(panel->detach_count, 1);
+    EXPECT_GT(panel->detach_x, 1280);
 }
 
 TEST_F(PanelRegistryAnimationDemandTest, MeasureReceivesPanelSpace) {

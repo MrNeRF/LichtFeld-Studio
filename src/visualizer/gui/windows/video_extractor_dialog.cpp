@@ -365,6 +365,38 @@ namespace lfs::gui {
         return host_ ? host_->nativeWindow() : nullptr;
     }
 
+    bool VideoExtractorDialog::detachHost(float x, float y, float w, float h, bool desktop_coordinates) {
+        if (!host_ || host_->nativeWindow() || !host_->externalAllowed())
+            return false;
+        auto* manager = host_->manager();
+        preview_texture_.reset();
+        preview_src_.clear();
+        host_.reset();
+        document_ = nullptr;
+        clearElementCache();
+        host_ = std::make_unique<lfs::vis::gui::RmlPanelHost>(manager, "video_extractor", "rmlui/video_extractor.rml");
+        host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
+        host_->setForeground(true);
+        host_->setFloating(floating_);
+        if (!host_->configureExternal(x, y, w, h, desktop_coordinates) || !ensureInitialized(manager))
+            return false;
+        texture_needs_update_ = controls_dirty_ = true;
+        syncPanel();
+        return nativeWindow() != nullptr;
+    }
+
+    bool VideoExtractorDialog::detachToDesktop(float x, float y, float w, float h) {
+        return detachHost(x, y, w, h, false);
+    }
+
+    bool VideoExtractorDialog::restoreDesktopWindow() {
+        if (desktop_restore_checked_ || !host_)
+            return false;
+        desktop_restore_checked_ = true;
+        float bounds[4]{};
+        return host_->restoredExternalBounds(bounds) && detachHost(bounds[0], bounds[1], bounds[2], bounds[3], true);
+    }
+
     bool VideoExtractorDialog::needsAnimationFrame() const {
         const std::string current_language =
             lfs::event::LocalizationManager::getInstance().getCurrentLanguage();

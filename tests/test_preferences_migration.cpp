@@ -308,6 +308,8 @@ TEST(PreferencesMigration, NativeFloatingWindowsPersistAndGeometryResetPreserves
     ASSERT_TRUE(paths);
     ASSERT_TRUE(paths->ensureDirectories());
     auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_FALSE(preferences.nativeFloatingWindows());
+    preferences.setNativeFloatingWindows(true);
     EXPECT_TRUE(preferences.nativeFloatingWindows());
     preferences.setNativeFloatingWindows(false);
     preferences.setThemeName("dark");
@@ -317,8 +319,11 @@ TEST(PreferencesMigration, NativeFloatingWindowsPersistAndGeometryResetPreserves
     EXPECT_EQ(json::parse(preferences.floatingWindowGeometry()).at("preferences")[0], -900);
     preferences.setFloatingWindowGeometry("invalid");
     EXPECT_TRUE(json::parse(preferences.floatingWindowGeometry()).contains("preferences"));
+    preferences.setFloatingWindowGeometry(R"({"video_extractor":[100,50,800,600]})");
+    EXPECT_FALSE(readPreferences(*paths).at("floating_window_geometry").contains("preferences"));
     preferences.setFloatingWindowGeometry("{}");
     EXPECT_EQ(preferences.floatingWindowGeometry(), "{}");
+    EXPECT_TRUE(readPreferences(*paths).at("floating_window_geometry").empty());
     EXPECT_EQ(preferences.themeName(), "dark");
     EXPECT_FALSE(preferences.nativeFloatingWindows());
 }

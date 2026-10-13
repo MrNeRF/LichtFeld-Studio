@@ -132,6 +132,23 @@ class NativeWindowsClient:
 
     def open(self, panel_id):
         panel = self.call("ui_panel_update", panel_id=panel_id, enabled=True)["panel"]
+        if panel.get("desktop_window"):
+            return self.until(lambda: next((window for window in self.windows() if window["title"] == panel["label"]), None))
+        existing = next((window for window in self.windows() if window["title"] == panel["label"]), None)
+        if existing:
+            return existing
+        state = self.until(lambda: self.call("ui_panel_describe", panel_id=panel_id)["panel"].get("floating_bounds"))
+        main = next(window for window in self.windows() if window["title"].startswith("LichtFeld Studio"))
+        rect = wintypes.RECT()
+        assert self.user32.GetClientRect(main["hwnd"], ctypes.byref(rect))
+        start_x, start_y = int(state["x"] + 80), int(state["y"] + 20)
+        self.call("ui_pointer", action="down", button="left", x=start_x, y=start_y)
+        time.sleep(.1)
+        self.call("ui_pointer", action="move", x=rect.right + 100, y=start_y)
+        try:
+            self.until(lambda: any(window["title"] == panel["label"] for window in self.windows()))
+        finally:
+            self.call("ui_pointer", action="up", button="left", x=rect.right + 100, y=start_y)
         return self.until(lambda: next((window for window in self.windows()
                                       if window["title"] == panel["label"]), None))
 
@@ -153,7 +170,16 @@ def native_client():
     return NativeWindowsClient()
 
 
-def test_preloaded_preferences_and_plugins_have_distinct_desktop_windows(native_client):
+def test_opening_embedded_panels_does_not_create_desktop_hosts(native_client):
+    assert len(native_client.windows()) == 1
+    for panel_id in ("lfs.preferences", "lfs.plugin_marketplace", "native.video_extractor"):
+        native_client.call("ui_panel_update", panel_id=panel_id, enabled=True)
+        native_client.until(lambda: native_client.call("ui_panel_describe", panel_id=panel_id)["panel"].get("floating_bounds"))
+        assert len(native_client.windows()) == 1
+        native_client.call("ui_panel_update", panel_id=panel_id, enabled=False)
+
+
+def test_preferences_and_plugins_detach_to_distinct_desktop_windows(native_client):
     preferences = native_client.open("lfs.preferences")
     plugins = native_client.open("lfs.plugin_marketplace")
     assert preferences["hwnd"] != plugins["hwnd"]
@@ -274,9 +300,11 @@ def test_video_extractor_uses_a_separate_window(native_client):
     assert extractor["hwnd"] != preferences["hwnd"]
 
 
-def test_native_window_capture_contains_rendered_controls(native_client):
-    native_client.open("lfs.preferences")
-    capture = native_client.call("render_capture_window", panel_id="lfs.preferences")
+@pytest.mark.parametrize("panel_id", [None, "lfs.preferences", "native.video_extractor"])
+def test_native_window_capture_contains_rendered_controls(native_client, panel_id):
+    if panel_id:
+        native_client.open(panel_id)
+    capture = native_client.call("render_capture_window", **({"panel_id": panel_id} if panel_id else {}))
     assert capture["success"]
     png = base64.b64decode(capture["data"])
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
@@ -288,4 +316,5 @@ def test_native_window_capture_contains_rendered_controls(native_client):
             compressed.extend(png[offset + 8:offset + 8 + length])
         offset += length + 12
     assert len(set(zlib.decompress(compressed))) > 32, "native capture is an empty clear frame"
-    (native_client.profile.parent / "preferences-rendered.png").write_bytes(png)
+    filename = "preferences-rendered.png" if panel_id == "lfs.preferences" else f"capture-{panel_id or 'main'}.png"
+    (native_client.profile.parent / filename).write_bytes(png)

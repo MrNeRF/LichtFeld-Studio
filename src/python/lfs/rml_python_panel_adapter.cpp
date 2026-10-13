@@ -642,6 +642,49 @@ namespace lfs::vis::gui {
         return host_ && ops.native_window ? static_cast<SDL_Window*>(ops.native_window(host_)) : nullptr;
     }
 
+    bool RmlPythonPanelAdapter::detachHost(float x, float y, float w, float h, bool desktop_coordinates) {
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (!host_ || nativeWindow() || !ops.external_allowed || !ops.external_allowed(host_) ||
+            !ops.configure_external || !lfs::python::can_acquire_gil())
+            return false;
+        const lfs::python::GilAcquire gil;
+        auto* document = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
+        float scroll = 0;
+        if (document) {
+            if (auto* focused = document->GetContext()->GetFocusElement())
+                focused->Blur();
+            if (auto* content = document->GetElementById("content-wrap"))
+                scroll = content->GetScrollTop();
+            callOnUnload(document);
+        }
+        lfs::python::RmlDocumentRegistry::instance().unregister_document(context_name_);
+        layout_.release_elements();
+        ops.destroy(host_);
+        host_ = nullptr;
+        resetLifecycle();
+        if (!ensureHost() || !ops.configure_external(host_, x, y, w, h, desktop_coordinates))
+            return false;
+        if (auto* reloaded = prepareForRender(nullptr)) {
+            if (auto* content = reloaded->GetElementById("content-wrap"))
+                content->SetScrollTop(scroll);
+        }
+        return nativeWindow() != nullptr;
+    }
+
+    bool RmlPythonPanelAdapter::detachToDesktop(float x, float y, float w, float h) {
+        return detachHost(x, y, w, h, false);
+    }
+
+    bool RmlPythonPanelAdapter::restoreDesktopWindow() {
+        if (desktop_restore_checked_ || !ensureHost())
+            return false;
+        desktop_restore_checked_ = true;
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        float bounds[4]{};
+        return ops.restored_external_bounds && ops.restored_external_bounds(host_, bounds) &&
+               detachHost(bounds[0], bounds[1], bounds[2], bounds[3], true);
+    }
+
     bool RmlPythonPanelAdapter::poll(const PanelDrawContext& ctx) {
         (void)ctx;
         if (!has_poll_) {
@@ -757,6 +800,8 @@ namespace lfs::vis::gui {
     }
 
     bool RmlPythonPanelAdapter::needsAnimationFrame() const {
+        if (auto* native = nativeWindow(); native && SDL_GetBooleanProperty(SDL_GetWindowProperties(native), "lfs.drag_handoff", false))
+            return true;
         if (content_dirty_)
             return true;
         if (!host_)

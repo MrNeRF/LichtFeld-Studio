@@ -1455,16 +1455,16 @@ def test_navigation_defaults_do_not_modify_current_project(preferences_panel_mod
     assert state.navigation_up_calls == []
     assert state.navigation_up_axis == "legacy_y"
 
-def test_interface_reset_restores_native_windows_without_resetting_input(preferences_panel_module):
+def test_interface_reset_disables_external_windows_without_resetting_input(preferences_panel_module):
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
-    state.native_floating_windows = False
+    state.native_floating_windows = True
     calls = []
     module.lf.ui.reset_layout = lambda: calls.append('layout')
     module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
     module.lf.keymap.reset_to_default = lambda: calls.append('input')
     panel._reset_section('interface')
-    assert state.native_floating_windows is True
+    assert state.native_floating_windows is False
     assert calls == ['layout']
 
 

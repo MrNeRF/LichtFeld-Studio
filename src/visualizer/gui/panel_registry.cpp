@@ -725,6 +725,8 @@ apply_registered_chrome:
                 return;
 
             const bool in_viewport = snap.has_option(PanelOption::FLOAT_IN_VIEWPORT);
+            if (!in_viewport)
+                snap.panel->restoreDesktopWindow();
             if (auto* native = snap.panel->nativeWindow()) {
                 const auto properties = SDL_GetWindowProperties(native);
                 if (!SDL_GetBooleanProperty(properties, "lfs.panel_prepared", false)) {
@@ -753,16 +755,6 @@ apply_registered_chrome:
                                                      },
                                                      ctx)
                                 .height;
-            if (!in_viewport) {
-                snap.panel->renderDirect({.mode = PanelDirectRenderMode::Preload,
-                                          .space = snap.space,
-                                          .width = w,
-                                          .height = max_h,
-                                          .input = input},
-                                         ctx);
-                if (snap.panel->nativeWindow())
-                    return;
-            }
             if (drawn_h <= 0.0f) {
                 float prev_h = -1.0f;
                 for (int pass = 0; pass < 3; ++pass) {
@@ -970,6 +962,8 @@ apply_registered_chrome:
                         float drawn_h = layout.drawn_height;
                         bool has_user_height = layout.has_user_height;
                         bool resize_owns_input = false;
+                        bool request_detach = false;
+                        float detach_x = px, detach_y = py;
 
                         const float kMinPanelWidth = (snap.id == "lfs.asset_manager" ? 260.0f : 320.0f) * dpi;
                         const float kMinPanelHeight = 180.0f * dpi;
@@ -1070,6 +1064,11 @@ apply_registered_chrome:
 
                                 const auto anchor = floatingAnchorRect(
                                     ctx, snap.has_option(PanelOption::FLOAT_IN_VIEWPORT));
+                                request_detach = interaction.dragging && mouse_down_left && input &&
+                                                 !snap.has_option(PanelOption::FLOAT_IN_VIEWPORT) &&
+                                                 (px < 0 || py < 0 || px + w > input->screen_w || py + h > input->screen_h);
+                                detach_x = px;
+                                detach_y = py;
                                 const auto placement = computeFloatingPanelPlacement(
                                     anchor, w, h, px, py, false, kTitleH, kVisibleFrac);
                                 px = placement.x;
@@ -1078,6 +1077,35 @@ apply_registered_chrome:
                                 interaction.x = px;
                                 interaction.y = py;
                             }
+                        }
+
+                        if (request_detach && snap.panel->detachToDesktop(detach_x, detach_y, w, h)) {
+                            auto* native = snap.panel->nativeWindow();
+                            const auto properties = SDL_GetWindowProperties(native);
+                            SDL_SetWindowTitle(native, std::string(snap.label).c_str());
+                            SDL_SetStringProperty(properties, "lfs.panel_id", std::string(snap.id).c_str());
+                            SDL_SetBooleanProperty(properties, "lfs.panel_prepared", true);
+                            float mx = 0, my = 0;
+                            const auto buttons = SDL_GetGlobalMouseState(&mx, &my);
+                            int wx = 0, wy = 0;
+                            SDL_GetWindowPosition(native, &wx, &wy);
+                            SDL_SetFloatProperty(properties, "lfs.drag_offset_x", mx - wx);
+                            SDL_SetFloatProperty(properties, "lfs.drag_offset_y", my - wy);
+                            SDL_SetBooleanProperty(properties, "lfs.drag_handoff", (buttons & SDL_BUTTON_LMASK) != 0);
+                            {
+                                std::lock_guard lock(mutex_);
+                                auto& interaction = floating_interactions_[*snap.id_storage];
+                                interaction.dragging = interaction.resizing = false;
+                                interaction.last_bounds_valid = false;
+                            }
+                            int pw = 0, ph = 0;
+                            SDL_GetWindowSizeInPixels(native, &pw, &ph);
+                            snap.panel->renderDirect({.mode = PanelDirectRenderMode::Draw,
+                                                      .space = snap.space,
+                                                      .width = static_cast<float>(pw),
+                                                      .height = static_cast<float>(ph)},
+                                                     ctx);
+                            break;
                         }
 
                         {
@@ -1539,6 +1567,15 @@ apply_registered_chrome:
                 return panel.panel;
         }
         return nullptr;
+    }
+
+    std::optional<PanelDrawBounds> PanelRegistry::live_floating_bounds(const std::string& id) const {
+        std::lock_guard lock(mutex_);
+        const auto it = floating_interactions_.find(id);
+        if (it == floating_interactions_.end() || !it->second.last_bounds_valid)
+            return std::nullopt;
+        const auto& bounds = it->second;
+        return PanelDrawBounds{bounds.last_x, bounds.last_y, bounds.last_width, bounds.last_height};
     }
 
     std::vector<PanelProjectState>

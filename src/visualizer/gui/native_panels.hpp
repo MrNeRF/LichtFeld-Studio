@@ -29,6 +29,8 @@ namespace lfs::vis::gui::native_panels {
     public:
         explicit VideoExtractorPanel(lfs::gui::IVideoExtractorWidget* widget);
         SDL_Window* nativeWindow() const override;
+        bool detachToDesktop(float x, float y, float w, float h) override;
+        bool restoreDesktopWindow() override;
         void draw(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override;
         PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,

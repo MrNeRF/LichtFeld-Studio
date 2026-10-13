@@ -54,9 +54,13 @@ namespace lfs::vis::gui {
         void applyChromeJson(std::string_view json) override;
         void setForeground(bool fg);
         SDL_Window* nativeWindow() const override;
+        bool detachToDesktop(float x, float y, float w, float h) override;
+        bool restoreDesktopWindow() override;
         [[nodiscard]] nb::object panelInstance() const { return panel_instance_; }
 
     private:
+        bool detachHost(float x, float y, float w, float h, bool desktop_coordinates);
+        bool desktop_restore_checked_ = false;
         enum class LifecycleState : uint8_t {
             AwaitingModelBind,
             ModelBound,
