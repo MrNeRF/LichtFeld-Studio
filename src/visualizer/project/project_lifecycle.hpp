@@ -32,6 +32,7 @@ namespace lfs::training {
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class StoredSessionRestoreTest_CompletionPublishesOnViewerThread_Test;
     class VisualizerImplResetTest_AsyncViewerTrainingStartCanBeCanceledBeforeInitialization_Test;
     class VisualizerImplResetTest_AsyncTrainingBindCancelDoesNotStart_Test;
     class VisualizerImplResetTest_AsyncTrainingBoundProjectPropagatesStartRejection_Test;
@@ -204,6 +205,7 @@ namespace lfs::vis::project {
 
     class LFS_VIS_API ProjectLifecycle {
     public:
+        friend class lfs::vis::StoredSessionRestoreTest_CompletionPublishesOnViewerThread_Test;
         enum class CloseSaveStatus {
             NotDirty,
             NeedsPrompt,
@@ -722,7 +724,9 @@ namespace lfs::vis::project {
             SceneManager& scene_manager,
             lfs::io::project::ProjectDocument& document,
             const lfs::io::project::ProjectDocumentHydrationReport&
-                report);
+                report,
+            const std::function<void(const std::string&)>&
+                on_failure = {});
         // Returns whether a dataset-only session can build its trainer now.
         bool captureStoredTrainingSession(
             const lfs::io::project::ProjectDocumentHydrationReport&

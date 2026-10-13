@@ -946,7 +946,8 @@ namespace {
         const lfs::core::Uuid& checkpoint_uuid,
         const std::filesystem::path& dataset_path = {},
         const int sh_degree = 0,
-        const lfs::training::PPISP* appearance = nullptr) {
+        const lfs::training::PPISP* appearance = nullptr,
+        const std::filesystem::path& background_image = {}) {
         const std::size_t count = sh_degree > 0 ? 8 : 2;
         auto model = sh_degree > 0
                          ? make_degree1_splat(count)
@@ -958,6 +959,11 @@ namespace {
                 mcmc_defaults();
         parameters.optimization.sh_degree = sh_degree;
         parameters.optimization.use_ppisp = appearance != nullptr;
+        if (!background_image.empty()) {
+            parameters.optimization.bg_mode =
+                lfs::core::param::BackgroundMode::Image;
+            parameters.optimization.bg_image_path = background_image;
+        }
         parameters.optimization.max_cap =
             static_cast<int>(count);
         parameters.dataset.data_path = dataset_path;
@@ -1114,7 +1120,8 @@ namespace {
         const int sparsify_steps = 15000,
         const lfs::training::PPISP* appearance = nullptr,
         const bool gut = false,
-        const int max_cap = -1) {
+        const int max_cap = -1,
+        const std::filesystem::path& background_image = {}) {
         auto document = lfs::test::licht::make_empty_document(
             lfs::core::generate_uuid_v4(), 1);
         lfs::core::Scene source;
@@ -1164,7 +1171,8 @@ namespace {
                 checkpoint_uuid,
                 make_training_autosave_checkpoint_payload(
                     checkpoint_uuid, dataset_path,
-                    sh_degree, appearance)));
+                    sh_degree, appearance,
+                    background_image)));
         if (finish_reason !=
             lfs::io::project::TrainingFinishReason::
                 None) {
@@ -18106,6 +18114,93 @@ contract["check_selection_submode_follows_native_mode"](lf)
                   std::optional<int>{11});
         EXPECT_EQ(manager->getCurrentIteration(), 11);
     }
+
+    enum class StoredSessionRestoreCase { Success,
+                                          Failure,
+                                          Cancel,
+                                          Replace };
+    class StoredSessionRestoreTest : public VisualizerImplResetTest,
+                                     public ::testing::WithParamInterface<StoredSessionRestoreCase> {};
+
+    TEST_P(StoredSessionRestoreTest, CompletionPublishesOnViewerThread) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto outcome = GetParam();
+        const bool failure = outcome == StoredSessionRestoreCase::Failure ||
+                             outcome == StoredSessionRestoreCase::Replace;
+        const auto project_path = temporary_.path / "restore.licht";
+        const auto dataset_path = temporary_.path / "restore-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path, lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(), dataset_path,
+            lfs::io::project::TrainingFinishReason::None, 0, -1,
+            false, 15000, nullptr, false, -1,
+            failure ? temporary_.path / "missing-background.png" : std::filesystem::path{});
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        const auto generation = app_store().stored_session_generation.get();
+        ASSERT_TRUE(viewer.restoreProjectTrainingSession());
+        ASSERT_EQ(app_store().stored_session_generation.get(), generation + 1);
+        auto* manager = viewer.getTrainerManager();
+        ASSERT_NE(manager, nullptr);
+        if (outcome == StoredSessionRestoreCase::Cancel) {
+            auto& worker = viewer.project_lifecycle_->hydration_threads_.back();
+            worker.request_stop();
+            worker.join();
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return app_store().stored_session_generation.get() == generation + 2;
+            }));
+            EXPECT_EQ(viewer.projectTrainingSessionState().error,
+                      "Project trainer restore cancelled");
+            EXPECT_FALSE(manager->canResume());
+            return;
+        }
+        if (outcome == StoredSessionRestoreCase::Replace) {
+            ASSERT_TRUE(waitUntil([&] {
+                std::lock_guard lock(viewer.work_queue_mutex_);
+                return !viewer.work_queue_.empty();
+            }));
+            viewer.project_lifecycle_->hydration_threads_.back().join();
+            {
+                std::lock_guard lock(viewer.work_queue_mutex_);
+                EXPECT_EQ(viewer.work_queue_.size(), 1);
+            }
+            const auto replacement = temporary_.path / "replacement.licht";
+            write_empty_project(replacement);
+            ASSERT_TRUE(viewer.projectOpen(replacement, ProjectSwitchDisposition::DiscardChanges));
+            const auto replacement_generation = app_store().stored_session_generation.get();
+            lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
+            EXPECT_EQ(app_store().stored_session_generation.get(), replacement_generation);
+            const auto state = viewer.projectTrainingSessionState();
+            EXPECT_FALSE(state.restoring);
+            EXPECT_TRUE(state.error.empty());
+            EXPECT_FALSE(state.available);
+            return;
+        }
+        ASSERT_TRUE(waitUntil([&] {
+            std::lock_guard lock(viewer.work_queue_mutex_);
+            return !viewer.work_queue_.empty();
+        },
+                              std::chrono::seconds(2)));
+        EXPECT_EQ(app_store().stored_session_generation.get(), generation + 1);
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return app_store().stored_session_generation.get() == generation + 2;
+        }));
+        EXPECT_EQ(manager->canResume(), !failure);
+        EXPECT_EQ(viewer.projectTrainingSessionState().error.empty(), !failure);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Outcomes, StoredSessionRestoreTest,
+                             ::testing::Values(StoredSessionRestoreCase::Success,
+                                               StoredSessionRestoreCase::Failure,
+                                               StoredSessionRestoreCase::Cancel,
+                                               StoredSessionRestoreCase::Replace));
 
     TEST_F(VisualizerImplResetTest,
            ErrorFinishedCheckpointProjectReopensPausedAndResumable) {

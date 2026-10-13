@@ -448,6 +448,9 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_OpeningAnotherProjectAfterHydratedCameraRestoreReplacesTrainer_Test;
         friend class VisualizerImplResetTest_NonDatasetSaveDoesNotBindStaleDatasetPath_Test;
         friend class VisualizerImplResetTest_TrainingCheckpointReopenRestoresPausedResumableState_Test;
+        friend class VisualizerImplResetTest_MissingBackgroundImageRestoreDisablesResume_Test;
+        friend class VisualizerImplResetTest_AvailableBackgroundImageRestoreKeepsResume_Test;
+        friend class StoredSessionRestoreTest_CompletionPublishesOnViewerThread_Test;
         friend class VisualizerImplResetTest_ErrorFinishedCheckpointProjectReopensPausedAndResumable_Test;
         friend class VisualizerImplResetTest_CompletedCheckpointProjectStillReopensFinished_Test;
         friend class VisualizerImplResetTest_EditModeSaveRetainsUnboundCheckpointHistory_Test;

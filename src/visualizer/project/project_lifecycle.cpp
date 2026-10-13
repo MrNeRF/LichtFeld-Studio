@@ -359,6 +359,19 @@ namespace lfs::vis::project {
         void notifyTrainerRestoreFailure(
             VisualizerImpl& viewer,
             const std::string& detail) {
+            if (!viewer.isOnViewerThread()) {
+                if (!viewer.postWork({
+                        .run = [&viewer, detail] {
+                            notifyTrainerRestoreFailure(viewer, detail);
+                        },
+                        .cancel = {},
+                    })) {
+                    LOG_ERROR(
+                        "Project trainer restore failed (display model kept): {}",
+                        detail);
+                }
+                return;
+            }
             LOG_ERROR(
                 "Project trainer restore failed (display model kept): {}",
                 detail);
@@ -650,6 +663,20 @@ namespace lfs::vis::project {
                 missing);
         }
 
+        using RestoreFailureHandler =
+            std::function<void(const std::string&)>;
+
+        void reportTrainerRestoreFailure(
+            VisualizerImpl& viewer,
+            const std::string& detail,
+            const RestoreFailureHandler& on_failure) {
+            if (on_failure) {
+                on_failure(detail);
+                return;
+            }
+            notifyTrainerRestoreFailure(viewer, detail);
+        }
+
         void installCheckpointTrainerWithDatasetRoot(
             VisualizerImpl& viewer,
             SceneManager& scene_manager,
@@ -658,15 +685,17 @@ namespace lfs::vis::project {
             lfs::core::param::TrainingParameters
                 ckpt_params,
             const int expected_iteration,
-            const std::filesystem::path& dataset_root) {
+            const std::filesystem::path& dataset_root,
+            const RestoreFailureHandler& on_failure = {}) {
             const auto& live_scene = scene_manager.getScene();
             const auto bound_model = document.scene_graph().training_model_uuid();
             if (!live_scene.hasTrainingData() || !bound_model ||
                 !bound_model->has_value() ||
                 **bound_model != live_scene.getTrainingModelNodeUuid()) {
-                notifyTrainerRestoreFailure(
+                reportTrainerRestoreFailure(
                     viewer,
-                    "The scene no longer holds the project's training cameras and model");
+                    "The scene no longer holds the project's training cameras and model",
+                    on_failure);
                 return;
             }
 
@@ -716,16 +745,17 @@ namespace lfs::vis::project {
             auto* trainer_manager =
                 viewer.getTrainerManager();
             if (!trainer_manager) {
-                notifyTrainerRestoreFailure(
+                reportTrainerRestoreFailure(
                     viewer,
-                    "No trainer manager available");
+                    "No trainer manager available", on_failure);
                 return;
             }
             if (trainer_manager->hasTrainer()) {
                 if (!trainer_manager->clearTrainer()) {
-                    notifyTrainerRestoreFailure(
+                    reportTrainerRestoreFailure(
                         viewer,
-                        "Previous training worker is still stopping");
+                        "Previous training worker is still stopping",
+                        on_failure);
                     return;
                 }
             }
@@ -747,8 +777,8 @@ namespace lfs::vis::project {
                         std::nullopt,
                         makeViewerSplatTensorAllocator());
             if (!installed) {
-                notifyTrainerRestoreFailure(
-                    viewer, installed.error());
+                reportTrainerRestoreFailure(
+                    viewer, installed.error(), on_failure);
                 return;
             }
             trainer_manager->setScene(
@@ -757,9 +787,10 @@ namespace lfs::vis::project {
                 std::move(installed->trainer),
                 installed->iteration);
             if (!trainer_manager->hasTrainer()) {
-                notifyTrainerRestoreFailure(
+                reportTrainerRestoreFailure(
                     viewer,
-                    "Checkpoint trainer install was rejected");
+                    "Checkpoint trainer install was rejected",
+                    on_failure);
                 return;
             }
             if (auto* trainer =
@@ -790,7 +821,8 @@ namespace lfs::vis::project {
             const std::filesystem::path& dataset_root,
             const std::filesystem::path& output_path,
             const std::filesystem::path& rebase_from =
-                {}) {
+                {},
+            const RestoreFailureHandler& on_failure = {}) {
             if (!rebase_from.empty() &&
                 rebase_from.lexically_normal() !=
                     dataset_root.lexically_normal()) {
@@ -817,29 +849,32 @@ namespace lfs::vis::project {
                 viewer.getDataLoader();
             if (!parameter_manager ||
                 !trainer_manager) {
-                notifyTrainerRestoreFailure(
+                reportTrainerRestoreFailure(
                     viewer,
-                    "Project has no trainer manager or parameter manager");
+                    "Project has no trainer manager or parameter manager",
+                    on_failure);
                 return;
             }
             if (!data_loader) {
-                notifyTrainerRestoreFailure(
+                reportTrainerRestoreFailure(
                     viewer,
-                    "Project dataset loader is unavailable");
+                    "Project dataset loader is unavailable",
+                    on_failure);
                 return;
             }
             if (!scene_manager.getScene()
                      .hasTrainingData()) {
-                notifyTrainerRestoreFailure(
+                reportTrainerRestoreFailure(
                     viewer,
-                    "Hydrated scene has no cameras");
+                    "Hydrated scene has no cameras", on_failure);
                 return;
             }
             if (trainer_manager->hasTrainer()) {
                 if (!trainer_manager->clearTrainer()) {
-                    notifyTrainerRestoreFailure(
+                    reportTrainerRestoreFailure(
                         viewer,
-                        "Previous training worker is still stopping");
+                        "Previous training worker is still stopping",
+                        on_failure);
                     return;
                 }
             }
@@ -863,14 +898,15 @@ namespace lfs::vis::project {
                     std::move(trainer));
             } catch (const std::exception& error) {
                 // LFS-CENSUS-OK(empty-catch): trainer-restore failure is notified; the hydrated display model is kept.
-                notifyTrainerRestoreFailure(
-                    viewer, error.what());
+                reportTrainerRestoreFailure(
+                    viewer, error.what(), on_failure);
                 return;
             }
             if (!trainer_manager->hasTrainer()) {
-                notifyTrainerRestoreFailure(
+                reportTrainerRestoreFailure(
                     viewer,
-                    "Hydrated dataset trainer install was rejected");
+                    "Hydrated dataset trainer install was rejected",
+                    on_failure);
                 return;
             }
             LOG_INFO(
@@ -890,7 +926,9 @@ namespace lfs::vis::project {
         lfs::io::project::ProjectDocument& document,
         const lfs::io::project::
             ProjectDocumentHydrationReport&
-                report) {
+                report,
+        const std::function<void(const std::string&)>&
+            on_failure) {
         if (!report.trainer_state_pending ||
             !report.checkpoint_uuid ||
             !report.checkpoint_header) {
@@ -898,9 +936,10 @@ namespace lfs::vis::project {
                 inspectPersistedDatasetScene(document);
             if (!persisted_dataset.has_dataset_node) {
                 if (persisted_dataset.has_training_model) {
-                    notifyTrainerRestoreFailure(
+                    reportTrainerRestoreFailure(
                         viewer_,
-                        "Project has a training model but no checkpoint to resume");
+                        "Project has a training model but no checkpoint to resume",
+                        on_failure);
                 }
                 return;
             }
@@ -908,9 +947,9 @@ namespace lfs::vis::project {
             const auto dataset =
                 document.project().dataset_reference();
             if (!dataset || !*dataset) {
-                notifyTrainerRestoreFailure(
+                reportTrainerRestoreFailure(
                     viewer_,
-                    "Project dataset reference is missing");
+                    "Project dataset reference is missing", on_failure);
                 return;
             }
 
@@ -919,9 +958,10 @@ namespace lfs::vis::project {
             auto* const trainer_manager =
                 viewer_.getTrainerManager();
             if (!parameter_manager || !trainer_manager) {
-                notifyTrainerRestoreFailure(
+                reportTrainerRestoreFailure(
                     viewer_,
-                    "Project has no trainer manager or parameter manager");
+                    "Project has no trainer manager or parameter manager",
+                    on_failure);
                 return;
             }
 
@@ -936,9 +976,10 @@ namespace lfs::vis::project {
                         report.pending_parameters.dataset
                             .output_path);
                 } else {
-                    notifyTrainerRestoreFailure(
+                    reportTrainerRestoreFailure(
                         viewer_,
-                        "Project dataset reference could not be resolved");
+                        "Project dataset reference could not be resolved",
+                        on_failure);
                 }
                 return;
             }
@@ -946,27 +987,31 @@ namespace lfs::vis::project {
             installTrainerFromHydratedDatasetScene(
                 viewer_, scene_manager, *dataset_root,
                 report.pending_parameters.dataset
-                    .output_path);
+                    .output_path,
+                {}, on_failure);
             return;
         }
         if (report.checkpoint_header->iteration < 0) {
-            notifyTrainerRestoreFailure(
-                viewer_, "Project CKPT iteration is negative");
+            reportTrainerRestoreFailure(
+                viewer_, "Project CKPT iteration is negative",
+                on_failure);
             return;
         }
         const auto* checkpoint =
             document.find_checkpoint(*report.checkpoint_uuid);
         if (!checkpoint) {
-            notifyTrainerRestoreFailure(
-                viewer_, "Project CKPT handle disappeared");
+            reportTrainerRestoreFailure(
+                viewer_, "Project CKPT handle disappeared",
+                on_failure);
             return;
         }
 
         auto parsed_params = checkpointParamsFromReportOrStream(
             report, *checkpoint);
         if (!parsed_params) {
-            notifyTrainerRestoreFailure(
-                viewer_, developerError(parsed_params.error()));
+            reportTrainerRestoreFailure(
+                viewer_, developerError(parsed_params.error()),
+                on_failure);
             return;
         }
         auto ckpt_params = std::move(*parsed_params);
@@ -986,9 +1031,10 @@ namespace lfs::vis::project {
                     ckpt_params,
                     report.checkpoint_header->iteration);
             } else {
-                notifyTrainerRestoreFailure(
+                reportTrainerRestoreFailure(
                     viewer_,
-                    "Project has no resolvable dataset root");
+                    "Project has no resolvable dataset root",
+                    on_failure);
             }
             return;
         }
@@ -999,7 +1045,7 @@ namespace lfs::vis::project {
             *report.checkpoint_uuid,
             std::move(ckpt_params),
             report.checkpoint_header->iteration,
-            *dataset_root);
+            *dataset_root, on_failure);
     }
 
     void ProjectLifecycle::clearStoredTrainingSession() {
@@ -1222,6 +1268,9 @@ namespace lfs::vis::project {
             notifyTrainerRestoreFailure(
                 viewer_,
                 "Project has no trainer manager or document");
+            if (auto* trainer_manager = viewer_.getTrainerManager()) {
+                trainer_manager->publishStoredSessionPresentation();
+            }
             return;
         }
         const auto kind = stored_training_kind_;
@@ -1234,23 +1283,47 @@ namespace lfs::vis::project {
             [this, epoch, document, kind, checkpoint_uuid,
              expected_iteration, output_path](
                 const std::stop_token stop) {
+                const auto complete = [this, epoch, document](
+                                          const bool installed,
+                                          std::string error,
+                                          const bool notify = false) {
+                    viewer_.postWork({
+                        .run = [this, epoch, document, installed, notify,
+                                error = std::move(error)] {
+                            if (epoch_.load(std::memory_order_acquire) != epoch ||
+                                document_ != document)
+                                return;
+                            if (notify)
+                                notifyTrainerRestoreFailure(viewer_, error);
+                            training_session_hydrated_.store(
+                                installed, std::memory_order_release);
+                            training_session_restoring_.store(
+                                false, std::memory_order_release);
+                            {
+                                std::lock_guard lock(training_session_mutex_);
+                                training_session_error_ = installed ? "" : error;
+                                if (!installed && training_session_error_.empty())
+                                    training_session_error_ = "Project trainer restore failed";
+                            }
+                            if (auto* manager = viewer_.getTrainerManager())
+                                manager->publishStoredSessionPresentation();
+                        },
+                        .cancel = {},
+                    });
+                };
                 if (stop.stop_requested() ||
                     epoch_.load(std::memory_order_acquire) !=
-                        epoch ||
-                    document_ != document) {
-                    training_session_restoring_.store(
-                        false, std::memory_order_release);
+                        epoch) {
+                    complete(false, "Project trainer restore cancelled");
                     return;
                 }
                 (void)cudaSetDevice(0);
                 auto* scene_manager =
                     viewer_.getSceneManager();
-                if (!scene_manager || !document_) {
-                    training_session_restoring_.store(
-                        false, std::memory_order_release);
-                    notifyTrainerRestoreFailure(
-                        viewer_,
-                        "The scene manager became unavailable while restoring the training session.");
+                if (!scene_manager || !document) {
+                    const std::string error =
+                        "The scene manager became unavailable while restoring the training session.";
+                    complete(false, error, true);
                     return;
                 }
                 lfs::io::project::ProjectDocumentHydrationReport
@@ -1265,41 +1338,40 @@ namespace lfs::vis::project {
                 }
                 report.pending_parameters.dataset.output_path =
                     output_path;
+                std::string restore_notification;
+                const RestoreFailureHandler capture_failure =
+                    [&](const std::string& detail) {
+                        restore_notification = detail;
+                    };
                 try {
                     tryInstallTrainerFromHydratedProject(
-                        *scene_manager, *document_, report);
+                        *scene_manager, *document, report,
+                        capture_failure);
                 } catch (const std::exception& error) {
                     // LFS-CENSUS-OK(empty-catch): trainer-restore failure is notified; the hydrated display model is kept.
-                    notifyTrainerRestoreFailure(viewer_, error.what());
+                    restore_notification = error.what();
                 }
                 const bool installed =
                     viewer_.getTrainerManager() &&
                     viewer_.getTrainerManager()->hasTrainer();
-                training_session_hydrated_.store(
-                    installed, std::memory_order_release);
-                training_session_restoring_.store(
-                    false, std::memory_order_release);
+                std::string restore_error;
                 {
                     std::lock_guard error_lock(
                         training_session_mutex_);
-                    if (installed) {
-                        training_session_error_.clear();
-                    } else if (training_session_error_.empty()) {
-                        training_session_error_ =
-                            "Project trainer restore failed";
-                    }
+                    restore_error = training_session_error_;
                 }
+                if (restore_error.empty())
+                    restore_error = restore_notification;
+                if (!installed && restore_error.empty())
+                    restore_error = "Project trainer restore failed";
                 const bool then_start =
                     restore_then_start_.exchange(
                         false, std::memory_order_acq_rel);
                 const bool then_reset =
                     restore_then_reset_.exchange(
                         false, std::memory_order_acq_rel);
-                if (auto* trainer_manager =
-                        viewer_.getTrainerManager()) {
-                    trainer_manager
-                        ->publishStoredSessionPresentation();
-                }
+                complete(installed, std::move(restore_error),
+                         !restore_notification.empty());
                 if (!installed) {
                     return;
                 }
@@ -1404,6 +1476,9 @@ namespace lfs::vis::project {
         {
             std::lock_guard lock(training_session_mutex_);
             training_session_error_.clear();
+        }
+        if (auto* trainer_manager = viewer_.getTrainerManager()) {
+            trainer_manager->publishStoredSessionPresentation();
         }
         if (hydration_.load(std::memory_order_acquire) !=
             Hydration::Complete) {

@@ -195,8 +195,6 @@ BG_COLOR_HEX_KEY = "bg_color_hex"
 BG_COLOR_TEXT_KEYS = tuple(key for key, _index in BG_COLOR_CHANNELS) + (
     BG_COLOR_HEX_KEY,
 )
-
-
 class TrainingPanel(Panel):
     id = "lfs.training"
     label = "window.training"
@@ -532,14 +530,23 @@ class TrainingPanel(Panel):
         def _state():
             value = RuntimeState.trainer_state.value
             session = _training_session_state()
+            if session.get("available") and not session.get("hydrated"):
+                if session.get("restoring"):
+                    return "restoring"
+                if session.get("error"):
+                    return "error"
             if (
                 not RuntimeState.has_trainer.value
                 and session.get("available")
                 and not session.get("hydrated")
-                and not session.get("restoring")
-                and value in ("idle", "ready", "", None)
             ):
-                return "completed" if session.get("completed") else "paused"
+                if value in (
+                    "idle",
+                    "ready",
+                    "",
+                    None,
+                ):
+                    return "completed" if session.get("completed") else "paused"
             return value
 
         def _iteration():
@@ -1424,6 +1431,7 @@ class TrainingPanel(Panel):
             RuntimeState.eval_psnr,
             RuntimeState.num_gaussians,
             RuntimeState.scene_generation,
+            RuntimeState.stored_session_generation,
             RuntimeState.language_generation,
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)
@@ -1557,16 +1565,7 @@ class TrainingPanel(Panel):
         )
         if session_key != self._last_session:
             self._last_session = session_key
-            self._handle.dirty("status_mode")
-            self._handle.dirty("status_iteration")
-            self._handle.dirty("progress_text")
-            self._handle.dirty("btn_start")
-            self._handle.dirty("show_no_trainer")
-            self._handle.dirty("show_main")
-            self._handle.dirty("show_ctrl_ready")
-            self._handle.dirty("show_ctrl_paused")
-            self._handle.dirty("show_ctrl_completed")
-            self._handle.dirty("show_training_telemetry")
+            self._handle.dirty_all()
             dirty = True
         state = RuntimeState.trainer_state.value
         if state != self._last_state:

@@ -355,6 +355,8 @@ namespace lfs::python {
                                                      : std::optional<float>{nb::cast<float>(value)});
             else if (field == "scene_generation")
                 store.scene_generation.set(nb::cast<std::uint64_t>(value));
+            else if (field == "stored_session_generation")
+                store.stored_session_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "selection_generation")
                 store.selection_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "mode_text")
@@ -419,6 +421,8 @@ namespace lfs::python {
                 return nb::cast(store.eval_lpips.get());
             if (field == "scene_generation")
                 return nb::cast(store.scene_generation.get());
+            if (field == "stored_session_generation")
+                return nb::cast(store.stored_session_generation.get());
             if (field == "selection_generation")
                 return nb::cast(store.selection_generation.get());
             if (field == "mode_text")
@@ -482,6 +486,8 @@ namespace lfs::python {
                 return subscribe_observable(store.eval_lpips, std::move(callback));
             if (field == "scene_generation")
                 return subscribe_observable(store.scene_generation, std::move(callback));
+            if (field == "stored_session_generation")
+                return subscribe_observable(store.stored_session_generation, std::move(callback));
             if (field == "selection_generation")
                 return subscribe_observable(store.selection_generation, std::move(callback));
             if (field == "mode_text")

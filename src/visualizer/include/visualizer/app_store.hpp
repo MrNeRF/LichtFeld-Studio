@@ -214,6 +214,7 @@ namespace lfs::vis {
             EvalSsim,
             EvalLpips,
             SceneGeneration,
+            StoredSessionGeneration,
             SelectionGeneration,
             ModeText,
             CameraMetricsValue,
@@ -255,6 +256,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::optional<float>> eval_ssim;
         lfs::core::reactive::Observable<std::optional<float>> eval_lpips;
         lfs::core::reactive::Observable<std::uint64_t> scene_generation;
+        lfs::core::reactive::Observable<std::uint64_t> stored_session_generation;
         lfs::core::reactive::Observable<std::uint64_t> selection_generation;
         lfs::core::reactive::Observable<std::string> mode_text;
         lfs::core::reactive::Observable<std::optional<CameraMetrics>> camera_metrics;
