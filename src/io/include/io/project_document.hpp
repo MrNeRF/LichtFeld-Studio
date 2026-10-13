@@ -174,6 +174,9 @@ namespace lfs::io::project {
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         std::optional<WriterLockLease> writer_lock_lease =
             std::nullopt;
+        // Recovered sessions keep their materialized document on a staging
+        // path while autosaves remain bound to the original master.
+        std::optional<std::filesystem::path> recovery_base_path;
         CommitBoundaryObserver boundary_observer;
     };
 
@@ -391,12 +394,17 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
         save_as(const std::filesystem::path& path,
                 const ProjectDocumentSaveOptions& options = {});
-        // Builds one complete overlay relative to the currently opened
-        // master. It never clears dirty state or regenerates THMB.
+        // Builds one complete overlay relative to the opened master. It never
+        // clears dirty state or regenerates THMB.
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
         save_autosave(
             const std::filesystem::path& sidecar_path,
             const ProjectDocumentAutosaveOptions& options);
+        // Carry the selected recovery overlay forward when publishing the
+        // next autosave against its original master.
+        [[nodiscard]] lfs::Result<void>
+        prepare_recovery_autosave(
+            const std::filesystem::path& sidecar_path);
         // Append THMB onto the current source generation without encoding
         // dirty chapters or payloads. Clean proofs are rebound to the new
         // head so a later save can carry the thumbnail forward.

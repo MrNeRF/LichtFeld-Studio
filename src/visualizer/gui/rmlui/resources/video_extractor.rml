@@ -270,14 +270,15 @@
       </div>
     </div>
 
-    <!-- Overwrite confirmation overlay -->
+    <!-- Existing output confirmation overlay -->
     <div id="overwrite-overlay" class="extractor-overlay hidden">
       <div class="confirm-dialog">
         <span id="overwrite-message" class="confirm-message">@tr:video_extractor.overwrite_prompt</span>
         <div class="separator"></div>
         <div class="confirm-buttons">
-          <button id="overwrite-no" class="btn btn--secondary" type="button">@tr:video_extractor.overwrite_cancel</button>
-          <button id="overwrite-yes" class="btn btn--error" type="button">@tr:video_extractor.overwrite_clear</button>
+          <button id="overwrite-cancel" class="btn btn--secondary" type="button">@tr:video_extractor.overwrite_cancel</button>
+          <button id="overwrite-delete" class="btn btn--error" type="button">@tr:video_extractor.overwrite_delete</button>
+          <button id="overwrite-proceed" class="btn btn--primary" type="button">@tr:video_extractor.overwrite_proceed</button>
         </div>
       </div>
     </div>

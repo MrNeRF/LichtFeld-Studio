@@ -37,6 +37,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
     class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
     class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+    class VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
     class VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
@@ -97,6 +98,7 @@ namespace lfs::vis::gui {
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;

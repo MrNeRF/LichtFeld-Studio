@@ -1666,6 +1666,64 @@ def test_paused_stored_session_shows_paused_mode_and_resume(
         runtime.total_iterations._fallback = 0
 
 
+def test_late_restore_failure_notifies_panel_and_keeps_resume_disabled(
+    training_panel_module, monkeypatch
+):
+    session = {
+        "available": True,
+        "iteration": 7000,
+        "max_iterations": 30000,
+        "strategy": "mrnf",
+        "completed": False,
+        "hydrated": False,
+        "restoring": True,
+        "error": "",
+    }
+    monkeypatch.setattr(training_panel_module, "_training_session_state", lambda: session)
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    model = _ModelStub()
+    runtime = training_panel_module.RuntimeState
+    elapsed = [0.0]
+    scheduled = []
+    monkeypatch.setattr(
+        training_panel_module, "time",
+        SimpleNamespace(monotonic=lambda: elapsed[0], time=lambda: elapsed[0]),
+    )
+    monkeypatch.setattr(panel, "_schedule_deferred_update", scheduled.append)
+    for name in "_sync_auto_scale_markers _sync_text_bufs _update_step_repeat " \
+                "_update_progress _update_save_steps _update_color_swatch " \
+                "_update_loss_graph _update_psnr_graph".split():
+        monkeypatch.setattr(panel, name, lambda *_args: False)
+    monkeypatch.setattr(panel._scrub_fields, "sync_all", lambda: False)
+    panel._bind_visibility(model, lambda: _ParamsStub(), lambda: _DatasetStub())
+    panel._subscribe_reactive_state()
+
+    try:
+        runtime.has_trainer.value = True
+        runtime.trainer_state.value = "paused"
+        panel._handle.request_update_count = 0
+        panel.on_update(None)
+        assert scheduled == []
+        assert model.bindings["show_ctrl_paused"][0]() is False
+        generation = runtime.stored_session_generation.value
+
+        # Simulate a restore that finishes well beyond the old 30-second cap.
+        elapsed[0] = 60.0
+        session.update(restoring=False, error="Project trainer restore failed")
+        runtime.stored_session_generation.value = generation + 1
+
+        assert panel._handle.request_update_count == 1
+        assert model.bindings["show_ctrl_paused"][0]() is False
+        assert model.bindings["show_ctrl_error"][0]() is True
+    finally:
+        panel._unsubscribe_reactive_state()
+        runtime.has_trainer._fallback = False
+        runtime.training_state._fallback = "idle"
+        runtime.iteration._fallback = 0
+        runtime.total_iterations._fallback = 0
+
+
 def test_stopped_stored_session_keeps_stopped_mode_and_edit_controls(
     training_panel_module, monkeypatch
 ):
@@ -2089,7 +2147,7 @@ def ready_panel_settings(training_panel_module, monkeypatch):
     # Use the real native-signal facade for subscription lifetime tests.
     native_state = import_module("lfs_plugins.ui").RuntimeState
     for name in ("training_running", "training_state", "trainer_loaded", "total_iterations",
-                 "loss", "eval_psnr", "scene_generation"):
+                 "loss", "eval_psnr", "scene_generation", "stored_session_generation"):
         setattr(module.RuntimeState, name, getattr(native_state, name))
     for name in ("iteration", "num_gaussians", "language_generation"):
         setattr(module.RuntimeState, name, getattr(native_state, name))

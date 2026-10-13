@@ -538,7 +538,8 @@ namespace lfs::gui {
         const bool video_path_changed = path != video_path_;
         video_path_ = path;
         trim_start_ = 0.0f;
-        trim_end_ = static_cast<float>(player_->duration());
+        const double duration = player_->duration();
+        trim_end_ = duration > 0.0 ? static_cast<float>(duration) : -1.0f;
         trim_end_is_auto_ = true;
         custom_width_ = std::max(16, player_->sourceWidth());
         custom_height_ = std::max(16, player_->sourceHeight());
@@ -740,6 +741,11 @@ namespace lfs::gui {
         dismiss_btn_el_ = nullptr;
         hdr_to_sdr_el_ = nullptr;
         hdr_to_sdr_row_el_ = nullptr;
+        overwrite_overlay_el_ = nullptr;
+        overwrite_message_el_ = nullptr;
+        overwrite_cancel_btn_el_ = nullptr;
+        overwrite_delete_btn_el_ = nullptr;
+        overwrite_proceed_btn_el_ = nullptr;
         rotation_cw_btn_el_ = nullptr;
         rotation_ccw_btn_el_ = nullptr;
         rotation_value_el_ = nullptr;
@@ -834,6 +840,10 @@ namespace lfs::gui {
         window_candidates_readout_el_ = document_->GetElementById("window-candidates-readout");
         generate_metadata_el_ = document_->GetElementById("generate-metadata");
         overwrite_overlay_el_ = document_->GetElementById("overwrite-overlay");
+        overwrite_message_el_ = document_->GetElementById("overwrite-message");
+        overwrite_cancel_btn_el_ = document_->GetElementById("overwrite-cancel");
+        overwrite_delete_btn_el_ = document_->GetElementById("overwrite-delete");
+        overwrite_proceed_btn_el_ = document_->GetElementById("overwrite-proceed");
 
         elements_cached_ =
             title_el_ && close_btn_el_ && preview_shell_el_ && preview_image_el_ &&
@@ -907,15 +917,9 @@ namespace lfs::gui {
         listen_click(stopped_ok_btn_el_);
         listen_click(dismiss_btn_el_);
 
-        // Overwrite confirmation buttons
-        {
-            auto* no = document_->GetElementById("overwrite-no");
-            if (no)
-                no->AddEventListener(Rml::EventId::Click, &listener_);
-            auto* yes = document_->GetElementById("overwrite-yes");
-            if (yes)
-                yes->AddEventListener(Rml::EventId::Click, &listener_);
-        }
+        listen_click(overwrite_cancel_btn_el_);
+        listen_click(overwrite_delete_btn_el_);
+        listen_click(overwrite_proceed_btn_el_);
 
         listen_change(mode_select_el_);
         listen_change(fps_slider_el_);
@@ -1021,6 +1025,10 @@ namespace lfs::gui {
                        "video_extractor.candidates_very_high", "video_extractor.candidates_all"});
         changed |= setCachedText(stop_btn_el_, LOC(VideoExtractor::STOP));
         changed |= setCachedText(cancel_btn_el_, LOC(VideoExtractor::CANCEL));
+        changed |= setCachedText(overwrite_message_el_, LOC(VideoExtractor::OVERWRITE_PROMPT));
+        changed |= setCachedText(overwrite_cancel_btn_el_, LOC(VideoExtractor::OVERWRITE_CANCEL));
+        changed |= setCachedText(overwrite_delete_btn_el_, LOC(VideoExtractor::OVERWRITE_DELETE));
+        changed |= setCachedText(overwrite_proceed_btn_el_, LOC(VideoExtractor::OVERWRITE_PROCEED));
         markContentDirty();
         controls_dirty_ |= changed;
     }
@@ -1508,34 +1516,41 @@ namespace lfs::gui {
         } else if (id == "btn-trim-reset" && player_->isOpen()) {
             trim_end_is_auto_ = true;
             trim_start_ = 0.0f;
-            trim_end_ = static_cast<float>(player_->duration());
+            const double duration = player_->duration();
+            trim_end_ = duration > 0.0 ? static_cast<float>(duration) : -1.0f;
             controls_dirty_ = true;
             markContentDirty();
         } else if (id == "btn-start") {
             beginExtractionFromUi();
-        } else if (id == "overwrite-yes") {
+        } else if (id == "overwrite-delete") {
             if (pending_params_set_) {
                 // Remove only what this extraction would write; other files stay.
                 for (const auto& path : generatedExtractionFiles(pending_params_.output_dir,
                                                                  pending_params_.filename_pattern)) {
                     std::error_code ec;
-                    std::filesystem::remove(path, ec);
+                    if (!std::filesystem::remove(path, ec) && ec) {
+                        pending_params_set_ = false;
+                        if (overwrite_overlay_el_)
+                            overwrite_overlay_el_->SetClass("hidden", true);
+                        setExtractionError(std::format("Failed to remove {}: {}",
+                                                       lfs::core::path_to_utf8(path), ec.message()),
+                                           false);
+                        controls_dirty_ = true;
+                        markContentDirty();
+                        return;
+                    }
                 }
-                pending_params_set_ = false;
-                if (overwrite_overlay_el_)
-                    overwrite_overlay_el_->SetClass("hidden", true);
-                stop_extraction_requested_.store(false);
-                extracting_.store(true);
-                current_frame_.store(0);
-                total_frames_.store(0);
-                discarded_frames_.store(0);
-                clearExtractionStatus();
-                startExtraction(pending_params_);
+                launchExtraction(pending_params_);
             }
-        } else if (id == "overwrite-no") {
+        } else if (id == "overwrite-proceed") {
+            if (pending_params_set_)
+                launchExtraction(pending_params_);
+        } else if (id == "overwrite-cancel") {
             pending_params_set_ = false;
             if (overwrite_overlay_el_)
                 overwrite_overlay_el_->SetClass("hidden", true);
+            controls_dirty_ = true;
+            markContentDirty();
         } else if (id == "btn-complete-ok" || id == "btn-stopped-ok") {
             clearStatusMessage();
             current_frame_.store(0);
@@ -1864,10 +1879,18 @@ namespace lfs::gui {
             return;
         }
 
+        launchExtraction(params);
+    }
+
+    void VideoExtractorDialog::launchExtraction(const VideoExtractionParams& params) {
+        pending_params_set_ = false;
+        if (overwrite_overlay_el_)
+            overwrite_overlay_el_->SetClass("hidden", true);
         stop_extraction_requested_.store(false);
         extracting_.store(true);
         current_frame_.store(0);
         total_frames_.store(0);
+        discarded_frames_.store(0);
         clearExtractionStatus();
         startExtraction(params);
         controls_dirty_ = true;
