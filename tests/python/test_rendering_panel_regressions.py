@@ -531,7 +531,19 @@ def test_project_navigation_vertical_does_not_change_global_defaults(rendering_p
     assert calls[-1] == ("data_z", True)
 
 
-def test_render_scale_marks_session_only_when_scrub_commits(rendering_panel_module):
+@pytest.mark.parametrize("prop,value", [
+    ("render_scale", 0.7),
+    ("environment_exposure", 1.5),
+    ("environment_rotation_degrees", 45.0),
+    ("color_exposure", 1.2),
+    ("grid_opacity", 0.3),
+    ("axes_size", 3.0),
+    ("camera_frustum_scale", 0.5),
+    ("lod_render_scale", 0.8),
+    ("lod_pool_vram_fraction", 0.3),
+    ("ppisp_vignette_strength", 0.4),
+])
+def test_moved_rendering_controls_mark_session_only_when_scrub_commits(rendering_panel_module, prop, value):
     module = rendering_panel_module
     commits = []
     writes = []
@@ -541,11 +553,11 @@ def test_render_scale_marks_session_only_when_scrub_commits(rendering_panel_modu
     )
     panel = module.RenderingPanel()
 
-    panel._set_scrub_value("render_scale", 0.7)
-    assert writes == [("render_scale", 0.7)]
+    panel._set_scrub_value(prop, value)
+    assert writes == [(prop, value)]
     assert commits == []
 
-    panel._commit_render_setting("render_scale", 0.7)
+    panel._scrub_fields._commit_value(prop, value)
     assert commits == ["VIEW"]
 
 
