@@ -179,6 +179,12 @@ TEST(PreferencesMigration, OptionalNullContainersUseDefaultsWithoutWarning) {
     ASSERT_TRUE(preference_fixture.at("project_manager").is_object());
     ASSERT_TRUE(preference_fixture.at("project_manager").at("state").is_null());
 
+    auto& logger = lfs::core::Logger::get();
+    const auto previous_level = logger.level();
+    const bool initialized_here = !logger.is_ready();
+    if (initialized_here)
+        logger.init(lfs::core::LogLevel::Warn, "", "", false, home.string());
+
     std::string warnings;
     const auto token = lfs::core::Logger::get().add_log_handler(
         [&warnings](const lfs::core::LogLevel level, const lfs::core::SourceSite&,
@@ -208,6 +214,10 @@ TEST(PreferencesMigration, OptionalNullContainersUseDefaultsWithoutWarning) {
     lfs::vis::gui::LayoutState wrong_type;
     wrong_type.load();
     lfs::core::Logger::get().remove_log_handler(token);
+    if (initialized_here) {
+        logger.reset_for_testing();
+        logger.set_level(previous_level);
+    }
     EXPECT_TRUE(wrong_type.window_visibility.empty());
     EXPECT_NE(warnings.find("Invalid window visibility map in UI settings"), std::string::npos);
 }
