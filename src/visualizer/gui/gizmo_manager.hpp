@@ -56,7 +56,7 @@ namespace lfs::vis {
             void renderNodeGraphGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             LFS_VIS_API void renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             LFS_VIS_API void renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport);
-            void renderViewportGizmo(const ViewportLayout& viewport);
+            LFS_VIS_API void renderViewportGizmo(const ViewportLayout& viewport);
             void updateCropFlash();
             LFS_VIS_API void deactivateAllTools();
             bool cancelActiveNodeTransformDrag();
