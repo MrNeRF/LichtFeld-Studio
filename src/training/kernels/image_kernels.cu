@@ -45,12 +45,24 @@ namespace lfs::training::kernels {
         }
     }
 
-    template <typename InputT>
+    template <typename MaskT>
+    __device__ __forceinline__ bool canny_keeps(const MaskT value, const MaskPhotoMode mode) {
+        if (mode == MaskPhotoMode::BinaryGt0)
+            return value > 0;
+        if constexpr (std::is_same_v<MaskT, uint8_t>)
+            return value > 250;
+        else
+            return value > kMaskKeepMin;
+    }
+
+    template <typename InputT, typename MaskT>
     __global__ void fused_canny_edge_filter_chw_kernel(
         const InputT* __restrict__ input,
+        const MaskT* __restrict__ mask,
         float* __restrict__ output,
         const int height,
-        const int width) {
+        const int width,
+        const MaskPhotoMode mode) {
         constexpr int BLOCK = 32;
         constexpr int HALO = 4;
         constexpr int HALO1 = 2;
@@ -64,6 +76,7 @@ namespace lfs::training::kernels {
         const int plane_size = height * width;
 
         __shared__ float shared_pixels[PIXELS_SHARED][PIXELS_SHARED];
+        __shared__ uint8_t shared_valid[PIXELS_SHARED][PIXELS_SHARED];
 #pragma unroll
         for (int batch = 0; batch < PIXELS_SHARED * PIXELS_SHARED; batch += BLOCK * BLOCK) {
             const int tid = batch + threadIdx.y * BLOCK + threadIdx.x;
@@ -73,10 +86,16 @@ namespace lfs::training::kernels {
                 const int yi = min(max(static_cast<int>(blockIdx.y * BLOCK) + y - HALO, 0), height - 1);
                 const int xi = min(max(static_cast<int>(blockIdx.x * BLOCK) + x - HALO, 0), width - 1);
                 const int idx = yi * width + xi;
-                shared_pixels[y][x] =
-                    0.299f * canny_input_value(input, idx) +
-                    0.587f * canny_input_value(input, idx + plane_size) +
-                    0.114f * canny_input_value(input, idx + 2 * plane_size);
+                bool keep = true;
+                if constexpr (!std::is_void_v<MaskT>) {
+                    keep = canny_keeps(mask[idx], mode);
+                    shared_valid[y][x] = keep;
+                }
+                shared_pixels[y][x] = keep
+                                          ? 0.299f * canny_input_value(input, idx) +
+                                                0.587f * canny_input_value(input, idx + plane_size) +
+                                                0.114f * canny_input_value(input, idx + 2 * plane_size)
+                                          : 0.0f;
             }
         }
         __syncthreads();
@@ -135,6 +154,16 @@ namespace lfs::training::kernels {
         }
         __syncthreads();
 
+        if (yid >= height || xid >= width)
+            return;
+        if constexpr (!std::is_void_v<MaskT>) {
+            for (int dy = -HALO; dy <= HALO; ++dy)
+                for (int dx = -HALO; dx <= HALO; ++dx)
+                    if (!shared_valid[threadIdx.y + HALO + dy][threadIdx.x + HALO + dx]) {
+                        output[yid * width + xid] = 0.0f;
+                        return;
+                    }
+        }
         float2 gradient = shared_filtered[threadIdx.y + HALO2][threadIdx.x + HALO2];
         float mag = hypotf(gradient.x, gradient.y);
         if (mag > 0.0f) {
@@ -147,9 +176,7 @@ namespace lfs::training::kernels {
             }
         }
 
-        if (yid < height && xid < width) {
-            output[yid * width + xid] = mag;
-        }
+        output[yid * width + xid] = mag;
     }
 
     __global__ void normalize_by_device_scalar_kernel(
@@ -233,21 +260,31 @@ namespace lfs::training::kernels {
                                               d_output_chw, height, width, stream);
     }
 
-    template <typename InputT>
+    template <typename InputT, typename MaskT>
     void launch_fused_canny_edge_filter_chw_impl(
         const InputT* d_input_chw,
+        const MaskT* d_mask,
         float* d_output_hw,
         const int height,
         const int width,
+        const MaskPhotoMode mode,
         cudaStream_t stream) {
         stream = resolve_stream(stream);
         dim3 blockDim(32, 32, 1);
         dim3 gridDim((width + blockDim.x - 1) / blockDim.x,
                      (height + blockDim.y - 1) / blockDim.y);
 
-        fused_canny_edge_filter_chw_kernel<InputT><<<gridDim, blockDim, 0, stream>>>(
-            d_input_chw, d_output_hw, height, width);
+        fused_canny_edge_filter_chw_kernel<InputT, MaskT><<<gridDim, blockDim, 0, stream>>>(
+            d_input_chw, d_mask, d_output_hw, height, width, mode);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.image.canny_edge_chw");
+    }
+
+    template <typename InputT>
+    void launch_fused_canny_edge_filter_chw_impl(
+        const InputT* d_input_chw, float* d_output_hw, const int height,
+        const int width, cudaStream_t stream) {
+        launch_fused_canny_edge_filter_chw_impl<InputT, void>(
+            d_input_chw, nullptr, d_output_hw, height, width, MaskPhotoMode::BinaryGt0, stream);
     }
 
     void launch_fused_canny_edge_filter_chw(
@@ -286,20 +323,38 @@ namespace lfs::training::kernels {
                        "edge-weight output must be a Float32 [H,W] map");
         const int h = static_cast<int>(height);
         const int w = static_cast<int>(width);
-
-        if (image.dtype() == lfs::core::DataType::UInt8) {
-            launch_fused_canny_edge_filter_chw(image.ptr<uint8_t>(), edges.ptr<float>(), h, w, stream);
-        } else {
-            LFS_ASSERT_MSG(image.dtype() == lfs::core::DataType::Float32, "edge-weight input must be float32 or uint8");
-            launch_fused_canny_edge_filter_chw(image.ptr<float>(), edges.ptr<float>(), h, w, stream);
-        }
-
-        if (photometric_mask.is_valid() && photometric_mask.numel() > 0) {
-            const lfs::core::Tensor mask = photometric_mask.ndim() == 3 ? photometric_mask.squeeze(0) : photometric_mask;
+        const lfs::core::Tensor mask = photometric_mask.is_valid() && photometric_mask.numel() > 0
+                                           ? (photometric_mask.ndim() == 3 ? photometric_mask.squeeze(0) : photometric_mask)
+                                           : lfs::core::Tensor{};
+        if (mask.is_valid()) {
             LFS_ASSERT_MSG(mask.ndim() == 2 && mask.shape()[0] == height && mask.shape()[1] == width &&
                                mask.device() == lfs::core::Device::CUDA,
                            "edge-weight mask must be a CUDA [H,W] map matching the image");
             mask.sync_to_stream(stream);
+        }
+
+        if (image.dtype() == lfs::core::DataType::UInt8) {
+            if (!mask.is_valid())
+                launch_fused_canny_edge_filter_chw(image.ptr<uint8_t>(), edges.ptr<float>(), h, w, stream);
+            else if (mask.dtype() == lfs::core::DataType::Float32)
+                launch_fused_canny_edge_filter_chw_impl<uint8_t, float>(
+                    image.ptr<uint8_t>(), mask.ptr<float>(), edges.ptr<float>(), h, w, mask_mode, stream);
+            else
+                launch_fused_canny_edge_filter_chw_impl<uint8_t, uint8_t>(
+                    image.ptr<uint8_t>(), mask.ptr<uint8_t>(), edges.ptr<float>(), h, w, mask_mode, stream);
+        } else {
+            LFS_ASSERT_MSG(image.dtype() == lfs::core::DataType::Float32, "edge-weight input must be float32 or uint8");
+            if (!mask.is_valid())
+                launch_fused_canny_edge_filter_chw(image.ptr<float>(), edges.ptr<float>(), h, w, stream);
+            else if (mask.dtype() == lfs::core::DataType::Float32)
+                launch_fused_canny_edge_filter_chw_impl<float, float>(
+                    image.ptr<float>(), mask.ptr<float>(), edges.ptr<float>(), h, w, mask_mode, stream);
+            else
+                launch_fused_canny_edge_filter_chw_impl<float, uint8_t>(
+                    image.ptr<float>(), mask.ptr<uint8_t>(), edges.ptr<float>(), h, w, mask_mode, stream);
+        }
+
+        if (mask.is_valid()) {
             if (mask.dtype() == lfs::core::DataType::Float32) {
                 launch_zero_where_photometric_weight_is_zero_f32(edges.ptr<float>(), mask.ptr<float>(), h, w, mask_mode, stream);
             } else {
