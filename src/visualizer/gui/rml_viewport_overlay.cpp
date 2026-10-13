@@ -1178,6 +1178,11 @@ namespace lfs::vis::gui {
                                                   ? rml_context_->GetElementAtPoint(
                                                         Rml::Vector2f(event_x, event_y))
                                                   : nullptr;
+            if (event.down && event.button == 0 && event_inside &&
+                !rml_input::isSelectRelatedElement(event_element)) {
+                if (rml_input::hideOpenSelectBoxes(*rml_context_))
+                    markRenderNeeded(RenderReason::PointerButton);
+            }
             if (!vram_drag_capture && !toolbar_drag_capture &&
                 viewportOverlayHoverRoot(event_element) == nullptr)
                 continue;
@@ -1189,6 +1194,12 @@ namespace lfs::vis::gui {
             else
                 rml_context_->ProcessMouseButtonUp(event.button, mods);
             replayed_button_events = true;
+        }
+
+        if (!replayed_button_events && input.mouse_clicked[0] && is_inside &&
+            !rml_input::isSelectRelatedElement(point_element)) {
+            if (rml_input::hideOpenSelectBoxes(*rml_context_))
+                markRenderNeeded(RenderReason::PointerButton);
         }
 
         if (over_interactive || vram_drag_capture || toolbar_drag_capture ||

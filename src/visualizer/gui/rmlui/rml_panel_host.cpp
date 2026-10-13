@@ -1332,8 +1332,10 @@ namespace lfs::vis::gui {
                  (event.y >= clip_y_min_ && event.y <= clip_y_max_)) &&
                 hitTestPanelShape(event_x, event_y, logical_w, logical_h);
             if (!event_hovered) {
-                if (event.down && event.button == 0)
+                if (event.down && event.button == 0) {
                     had_input |= blur_focused_element();
+                    had_input |= rml_input::hideOpenSelectBoxes(*rml_context_);
+                }
                 if (!mouse_captured_[event.button])
                     return;
             }
@@ -1392,6 +1394,7 @@ namespace lfs::vis::gui {
                 beginLiveInspectorResize(mouse_y);
         } else if (!replayed_button_events && input.mouse_clicked[0]) {
             had_input |= blur_focused_element();
+            had_input |= rml_input::hideOpenSelectBoxes(*rml_context_);
         }
 
         if (manual_dropdown_mouse_captured_ &&

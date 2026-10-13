@@ -7,6 +7,7 @@
 #include <cstdlib>
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <RmlUi/Core/EventListener.h>
 
 #include <functional>
@@ -62,13 +63,35 @@ namespace lfs::vis::gui::rml_input {
         return element && element->GetTagName() == "input" && isTextEditableElement(element);
     }
 
-    inline bool isSelectRelatedElement(Rml::Element* element) {
-        for (auto* current = element; current; current = current->GetParentNode()) {
+    inline bool isSelectRelatedElement(const Rml::Element* element) {
+        for (const auto* current = element; current; current = current->GetParentNode()) {
             const auto tag = current->GetTagName();
             if (tag == "select" || tag == "selectbox")
                 return true;
         }
         return false;
+    }
+
+    // Blur closes a dropdown only when the select itself is focused. A viewport
+    // click often is not, so hide every open list in the context that was clicked.
+    inline bool hideOpenSelectBoxes(Rml::Context& context) {
+        bool hidden = false;
+        const auto visit = [&](auto&& self, Rml::Element* element) -> void {
+            if (!element)
+                return;
+            if (auto* const select = dynamic_cast<Rml::ElementFormControlSelect*>(element);
+                select && select->IsSelectBoxVisible()) {
+                select->HideSelectBox();
+                hidden = true;
+            }
+            const int child_count = element->GetNumChildren();
+            for (int i = 0; i < child_count; ++i)
+                self(self, element->GetChild(i));
+        };
+        const int document_count = context.GetNumDocuments();
+        for (int i = 0; i < document_count; ++i)
+            visit(visit, context.GetDocument(i));
+        return hidden;
     }
 
     inline bool shouldCancelOnEscape(Rml::Element* element, const bool composing) {

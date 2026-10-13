@@ -1901,6 +1901,83 @@ namespace lfs::vis {
         field->RemoveEventListener("mouseup", &listener);
     }
 
+    TEST_F(WindowInputDispatchTest, ViewportClickDismissesOpenDropdown) {
+        gui::RmlPanelHost panel(&manager(), "test-dropdown-panel", "");
+        attachInputHost(panel, 200, 300,
+                        "<rml><head><style>body { width:200px; height:300px; font-family:Inter; font-size:14px; }"
+                        "select { position:absolute; left:20px; top:20px; width:140px; height:30px; }"
+                        "</style></head><body><select id='tone'><option value='none'>None</option>"
+                        "<option value='aces'>ACES</option></select></body></rml>");
+        auto* panel_select = dynamic_cast<Rml::ElementFormControlSelect*>(
+            panel.getDocument()->GetElementById("tone"));
+        ASSERT_NE(panel_select, nullptr);
+
+        auto& overlay = viewportOverlay();
+        overlay.init(&manager());
+        overlay.setViewportBounds({0, 0}, {400, 300}, {0, 0});
+        auto* overlay_context = Rml::GetContext("viewport_overlay");
+        ASSERT_NE(overlay_context, nullptr);
+        auto* overlay_document = overlay_context->LoadDocumentFromMemory(
+            "<rml><head><style>body { width:400px; height:300px; font-family:Inter; font-size:14px; }"
+            "select { position:absolute; left:10px; top:10px; width:80px; height:24px; }"
+            "</style></head><body><select id='depth'><option value='palette'>Color</option>"
+            "<option value='gray'>Gray</option></select></body></rml>");
+        ASSERT_NE(overlay_document, nullptr);
+        overlay_document->Show();
+        overlay_context->Update();
+        struct DocumentGuard {
+            Rml::Context* context = nullptr;
+            Rml::ElementDocument* document = nullptr;
+            ~DocumentGuard() {
+                if (context && document)
+                    context->UnloadDocument(document);
+            }
+        } guard{overlay_context, overlay_document};
+        auto* overlay_select = dynamic_cast<Rml::ElementFormControlSelect*>(
+            overlay_document->GetElementById("depth"));
+        ASSERT_NE(overlay_select, nullptr);
+
+        const auto pump = [&] {
+            manager().beginFrameCursorTracking();
+            forwardHost(panel, 200, 0);
+            overlay.processInput({});
+        };
+
+        pump();
+        click(230, 35);
+        EXPECT_TRUE(panel_select->IsSelectBoxVisible());
+        panel.getContext()->Update();
+        panel.getContext()->Render();
+        click(230, 35);
+        EXPECT_FALSE(panel_select->IsSelectBoxVisible());
+
+        ASSERT_TRUE(panel.getDocument()->Focus());
+        panel_select->ShowSelectBox();
+        panel.getContext()->Update();
+        panel.getContext()->Render();
+        ASSERT_TRUE(panel_select->IsSelectBoxVisible());
+        EXPECT_NE(panel.getContext()->GetFocusElement(), panel_select);
+        click(60, 180);
+        EXPECT_FALSE(panel_select->IsSelectBoxVisible());
+
+        pump();
+        click(30, 18);
+        EXPECT_TRUE(overlay_select->IsSelectBoxVisible());
+        overlay_context->Update();
+        overlay_context->Render();
+        click(30, 18);
+        EXPECT_FALSE(overlay_select->IsSelectBoxVisible());
+
+        ASSERT_TRUE(overlay_document->Focus());
+        overlay_select->ShowSelectBox();
+        overlay_context->Update();
+        overlay_context->Render();
+        ASSERT_TRUE(overlay_select->IsSelectBoxVisible());
+        EXPECT_NE(overlay_context->GetFocusElement(), overlay_select);
+        click(60, 180);
+        EXPECT_FALSE(overlay_select->IsSelectBoxVisible());
+    }
+
     TEST_F(WindowInputDispatchTest, SequencerEditShortcutsRespectTextFocusAndVisibility) {
         SequencerController controller;
         gui::RmlSequencerOverlay overlay(controller, &manager());
