@@ -27,6 +27,7 @@ namespace lfs::io::project {
     inline constexpr std::uint32_t MESH_ENCODING_SUBMESHES = 2;
     inline constexpr std::uint32_t MESH_ENCODING_MATERIALS = 3;
     inline constexpr std::uint32_t MESH_ENCODING_TEXTURES = 4;
+    inline constexpr std::uint32_t MESH_ENCODING_MATERIAL_ALPHA = 5;
 
     enum class GeometryDtype : std::uint16_t {
         Float32 = 1,

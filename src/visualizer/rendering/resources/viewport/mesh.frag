@@ -124,6 +124,12 @@ void main() {
     if (u_material.vertex_color_flags.x > 0.5) {
         albedo *= inColor;
     }
+    if (u_material.vertex_color_flags.y > 0.5) {
+        if (albedo.a < u_material.vertex_color_flags.z) {
+            discard;
+        }
+        albedo.a = 1.0;
+    }
 
     float metallic = u_material.emissive_metallic.w;
     float roughness = u_material.roughness_flags.x;

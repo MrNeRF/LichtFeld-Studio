@@ -128,6 +128,8 @@ namespace lfs::vis {
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline_cull = VK_NULL_HANDLE;    // backface culling (default)
         VkPipeline pipeline_no_cull = VK_NULL_HANDLE; // double-sided / culling off
+        VkPipeline pipeline_cull_blend = VK_NULL_HANDLE;
+        VkPipeline pipeline_no_cull_blend = VK_NULL_HANDLE;
 
         VkPipelineLayout shadow_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline shadow_pipeline = VK_NULL_HANDLE;
@@ -175,12 +177,24 @@ namespace lfs::vis {
             GpuTexture albedo{};
             GpuTexture normal{};
             GpuTexture metallic_roughness{};
+            lfs::core::AlphaMode alpha_mode = lfs::core::AlphaMode::Opaque;
         };
 
         struct GpuSubmesh {
             std::uint32_t start_index = 0;
             std::uint32_t index_count = 0;
             std::size_t material_index = 0;
+        };
+
+        struct GpuMesh;
+
+        struct TransparentDraw {
+            const GpuMesh* mesh = nullptr;
+            const GpuSubmesh* submesh = nullptr;
+            std::size_t item_index = 0;
+            std::size_t submesh_order = 0;
+            std::size_t draw_index = 0;
+            float view_depth = 0.0f;
         };
 
         struct ShadowTarget {
@@ -209,6 +223,7 @@ namespace lfs::vis {
             std::uint32_t total_index_count = 0;
             std::uint32_t generation = 0;
             std::uint64_t last_used_frame = 0;
+            std::size_t blend_submesh_count = 0;
             std::vector<GpuMaterial> materials;
             std::vector<GpuSubmesh> submeshes;
 
@@ -223,6 +238,7 @@ namespace lfs::vis {
         ShadowTarget shadow_dummy{};
 
         std::unordered_map<std::uint64_t, GpuMesh> mesh_cache;
+        std::vector<TransparentDraw> transparent_draws;
         std::uint64_t frame_counter = 0;
 
         ~Impl() { destroy(); }
@@ -460,7 +476,12 @@ namespace lfs::vis {
                 vkDestroyDescriptorPool(device, pool, nullptr);
             }
             material_descriptor_pools.clear();
-            for (VkPipeline* p : {&pipeline_cull, &pipeline_no_cull, &shadow_pipeline, &wireframe_pipeline}) {
+            for (VkPipeline* p : {&pipeline_cull,
+                                  &pipeline_no_cull,
+                                  &pipeline_cull_blend,
+                                  &pipeline_no_cull_blend,
+                                  &shadow_pipeline,
+                                  &wireframe_pipeline}) {
                 if (*p != VK_NULL_HANDLE) {
                     vkDestroyPipeline(device, *p, nullptr);
                     *p = VK_NULL_HANDLE;
@@ -1432,7 +1453,17 @@ namespace lfs::vis {
             // Mesh vertices use the same GL-convention projection matrices as FastGS,
             // then receive a clip-space Y correction before Vulkan's positive-height
             // viewport. That preserves normal CCW winding for back-face culling.
-            const auto build = [&](VkCullModeFlags cull, VkPipeline& out) -> bool {
+            const auto build = [&](VkCullModeFlags cull,
+                                   const bool alpha_blend,
+                                   VkPipeline& out) -> bool {
+                depth.depthWriteEnable = alpha_blend ? VK_FALSE : VK_TRUE;
+                blend_attachment.blendEnable = alpha_blend ? VK_TRUE : VK_FALSE;
+                blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+                blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+                blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
                 VkPipelineRasterizationStateCreateInfo raster{};
                 raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
                 raster.polygonMode = VK_POLYGON_MODE_FILL;
@@ -1475,8 +1506,10 @@ namespace lfs::vis {
                 return true;
             };
 
-            const bool ok = build(VK_CULL_MODE_BACK_BIT, pipeline_cull) &&
-                            build(VK_CULL_MODE_NONE, pipeline_no_cull);
+            const bool ok = build(VK_CULL_MODE_BACK_BIT, false, pipeline_cull) &&
+                            build(VK_CULL_MODE_NONE, false, pipeline_no_cull) &&
+                            build(VK_CULL_MODE_BACK_BIT, true, pipeline_cull_blend) &&
+                            build(VK_CULL_MODE_NONE, true, pipeline_no_cull_blend);
             vkDestroyShaderModule(device, vert, nullptr);
             vkDestroyShaderModule(device, frag, nullptr);
             if (!ok) {
@@ -1488,6 +1521,12 @@ namespace lfs::vis {
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
                                         pipeline_no_cull,
                                         "mesh.main.pipeline.no_cull");
+            context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
+                                        pipeline_cull_blend,
+                                        "mesh.main.pipeline.cull.blend");
+            context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
+                                        pipeline_no_cull_blend,
+                                        "mesh.main.pipeline.no_cull.blend");
             return true;
         }
 
@@ -1865,6 +1904,7 @@ namespace lfs::vis {
             const bool has_normal = uploadTextureFromMesh(mesh, mat.normal_tex, out.normal, "normal");
             const bool has_mr = uploadTextureFromMesh(mesh, mat.metallic_roughness_tex, out.metallic_roughness, "metallic_roughness");
             const bool has_vc = mesh.has_colors();
+            out.alpha_mode = mat.alpha_mode;
 
             MaterialUbo ubo{};
             ubo.base_color[0] = mat.base_color.r;
@@ -1880,6 +1920,8 @@ namespace lfs::vis {
             ubo.roughness_flags[2] = has_normal ? 1.0f : 0.0f;
             ubo.roughness_flags[3] = has_mr ? 1.0f : 0.0f;
             ubo.vertex_color_flags[0] = has_vc ? 1.0f : 0.0f;
+            ubo.vertex_color_flags[1] = mat.alpha_mode == lfs::core::AlphaMode::Mask ? 1.0f : 0.0f;
+            ubo.vertex_color_flags[2] = mat.alpha_cutoff;
             if (!writeBuffer(out.ubo_alloc, &ubo, sizeof(ubo))) {
                 destroyMaterial(out);
                 return false;
@@ -2222,7 +2264,6 @@ namespace lfs::vis {
                     return false;
                 }
             }
-
             // Submeshes — fall back to single submesh covering all indices
             if (!mesh.submeshes.empty()) {
                 gpu.submeshes.reserve(mesh.submeshes.size());
@@ -2233,6 +2274,17 @@ namespace lfs::vis {
                 }
             } else {
                 gpu.submeshes.push_back({0, gpu.total_index_count, 0});
+            }
+            gpu.blend_submesh_count = 0;
+            for (const auto& submesh : gpu.submeshes) {
+                const auto material_index = std::min(
+                    static_cast<std::size_t>(submesh.material_index),
+                    gpu.materials.size() - 1);
+                if (submesh.index_count != 0 &&
+                    gpu.materials[material_index].alpha_mode ==
+                        lfs::core::AlphaMode::Blend) {
+                    ++gpu.blend_submesh_count;
+                }
             }
 
             gpu.aabb_min = aabb_min;
@@ -2425,23 +2477,39 @@ namespace lfs::vis {
                           required_draw_resources);
                 return;
             }
+            std::size_t transparent_draw_capacity = 0;
             for (const auto& item : params.items) {
                 if (!item.mesh)
                     continue;
                 auto it = mesh_cache.find(item.mesh->id());
+                GpuMesh* prepared_mesh = nullptr;
                 if (it == mesh_cache.end()) {
                     GpuMesh gpu{};
                     if (uploadMesh(*item.mesh, gpu)) {
                         gpu.last_used_frame = frame_counter;
-                        mesh_cache.emplace(item.mesh->id(), std::move(gpu));
+                        const auto inserted = mesh_cache.emplace(item.mesh->id(), std::move(gpu)).first;
+                        prepared_mesh = &inserted->second;
                     }
                 } else if (it->second.generation != item.mesh->generation()) {
                     if (uploadMesh(*item.mesh, it->second)) {
                         it->second.last_used_frame = frame_counter;
                     }
+                    prepared_mesh = &it->second;
                 } else {
                     it->second.last_used_frame = frame_counter;
+                    prepared_mesh = &it->second;
                 }
+                if (prepared_mesh) {
+                    if (prepared_mesh->blend_submesh_count >
+                        std::numeric_limits<std::size_t>::max() - transparent_draw_capacity) {
+                        LOG_ERROR("VulkanMeshPass: transparent draw capacity overflow");
+                        return;
+                    }
+                    transparent_draw_capacity += prepared_mesh->blend_submesh_count;
+                }
+            }
+            if (transparent_draw_capacity > transparent_draws.capacity()) {
+                transparent_draws.reserve(transparent_draw_capacity);
             }
 
             VkCommandBuffer shadow_cb = VK_NULL_HANDLE;
@@ -2585,6 +2653,7 @@ namespace lfs::vis {
             }
             const std::size_t draw_base = params.draw_group * params.items.size();
             auto& frame = lightResourcesForFrame(params.frame_slot);
+            transparent_draws.clear();
             for (std::size_t item_index = 0; item_index < params.items.size(); ++item_index) {
                 const auto& item = params.items[item_index];
                 if (!item.mesh)
@@ -2636,8 +2705,6 @@ namespace lfs::vis {
                 }
                 bindShadowMap(draw, shadow_active ? shadow->target : shadow_dummy);
 
-                VkPipeline main_pipeline = item.backface_culling ? pipeline_cull : pipeline_no_cull;
-                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, main_pipeline);
                 vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
                                         0, 1, &draw.descriptor, 0, nullptr);
 
@@ -2653,12 +2720,38 @@ namespace lfs::vis {
                 vkCmdBindVertexBuffers(cb, 0, 1, &vbuf, &voff);
                 vkCmdBindIndexBuffer(cb, gpu.index_buffer, 0, VK_INDEX_TYPE_UINT32);
 
-                for (const auto& sm : gpu.submeshes) {
+                VkPipeline bound_pipeline = VK_NULL_HANDLE;
+                for (std::size_t submesh_order = 0;
+                     submesh_order < gpu.submeshes.size(); ++submesh_order) {
+                    const auto& sm = gpu.submeshes[submesh_order];
                     if (sm.index_count == 0)
                         continue;
                     const std::size_t mat_idx = std::min(sm.material_index, gpu.materials.size() - 1);
                     const auto& mat = gpu.materials[mat_idx];
                     if (mat.descriptor == VK_NULL_HANDLE) {
+                        continue;
+                    }
+                    const VkPipeline main_pipeline = mat.alpha_mode == lfs::core::AlphaMode::Blend
+                                                         ? (item.backface_culling ? pipeline_cull_blend
+                                                                                  : pipeline_no_cull_blend)
+                                                         : (item.backface_culling ? pipeline_cull
+                                                                                  : pipeline_no_cull);
+                    if (bound_pipeline != main_pipeline) {
+                        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, main_pipeline);
+                        bound_pipeline = main_pipeline;
+                    }
+                    if (mat.alpha_mode == lfs::core::AlphaMode::Blend) {
+                        const glm::vec3 local_center = (gpu.aabb_min + gpu.aabb_max) * 0.5f;
+                        const glm::vec3 world_center = glm::vec3(item.model * glm::vec4(local_center, 1.0f));
+                        transparent_draws.push_back(TransparentDraw{
+                            .mesh = &gpu,
+                            .submesh = &sm,
+                            .item_index = item_index,
+                            .submesh_order = submesh_order,
+                            .draw_index = draw_index,
+                            .view_depth = glm::dot(world_center - params.camera_position,
+                                                   -params.camera_backward),
+                        });
                         continue;
                     }
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
@@ -2686,6 +2779,61 @@ namespace lfs::vis {
                                        0, sizeof(wpush), &wpush);
                     vkCmdDrawIndexed(cb, gpu.total_index_count, 1, 0, 0, 0);
                 }
+            }
+
+            // Mesh-bound sorting is approximate for intersecting or deeply concave surfaces.
+            std::sort(transparent_draws.begin(), transparent_draws.end(),
+                      [](const TransparentDraw& lhs, const TransparentDraw& rhs) {
+                          if (lhs.view_depth != rhs.view_depth) {
+                              return lhs.view_depth > rhs.view_depth;
+                          }
+                          if (lhs.item_index != rhs.item_index) {
+                              return lhs.item_index < rhs.item_index;
+                          }
+                          return lhs.submesh_order < rhs.submesh_order;
+                      });
+            for (const auto& transparent : transparent_draws) {
+                const auto& item = params.items[transparent.item_index];
+                const auto& gpu = *transparent.mesh;
+                const auto& sm = *transparent.submesh;
+                const auto& mat = gpu.materials[std::min(sm.material_index, gpu.materials.size() - 1)];
+                auto& draw = frame.draws[transparent.draw_index];
+                const ShadowState* shadow = params.draw_group < gpu.shadows.size()
+                                                ? &gpu.shadows[params.draw_group]
+                                                : nullptr;
+                const bool shadow_active = item.shadow_enabled && shadow &&
+                                           shadow->target.image != VK_NULL_HANDLE &&
+                                           shadow->target.resolution == item.shadow_map_resolution &&
+                                           shadow->cached_light_vp_valid;
+                if (!writeLightUbo(draw,
+                                   params,
+                                   item,
+                                   shadow_active ? shadow->cached_light_vp : glm::mat4(1.0f),
+                                   shadow_active)) {
+                    LOG_ERROR("VulkanMeshPass: failed to prepare transparent light state for draw {}",
+                              transparent.draw_index);
+                    continue;
+                }
+                bindShadowMap(draw, shadow_active ? shadow->target : shadow_dummy);
+                const VkPipeline main_pipeline = item.backface_culling
+                                                     ? pipeline_cull_blend
+                                                     : pipeline_no_cull_blend;
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, main_pipeline);
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
+                                        0, 1, &draw.descriptor, 0, nullptr);
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
+                                        1, 1, &mat.descriptor, 0, nullptr);
+                MeshPushConstants pc{};
+                const glm::mat4 mvp = view_projection * item.model;
+                std::memcpy(pc.mvp, &mvp[0][0], sizeof(pc.mvp));
+                std::memcpy(pc.model, &item.model[0][0], sizeof(pc.model));
+                vkCmdPushConstants(cb, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT,
+                                   0, sizeof(pc), &pc);
+                VkBuffer vbuf = gpu.vertex_buffer;
+                const VkDeviceSize voff = 0;
+                vkCmdBindVertexBuffers(cb, 0, 1, &vbuf, &voff);
+                vkCmdBindIndexBuffer(cb, gpu.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cb, sm.index_count, 1, sm.start_index, 0, 0);
             }
         }
     };

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -55,7 +56,7 @@ namespace lfs::io::project {
 
         struct PointProperty {
             std::string_view name;
-            lfs::core::Tensor lfs::core::PointCloud::*tensor;
+            lfs::core::Tensor lfs::core::PointCloud::* tensor;
             std::uint16_t components;
         };
 
@@ -73,7 +74,7 @@ namespace lfs::io::project {
 
         struct MeshProperty {
             std::string_view name;
-            lfs::core::Tensor lfs::core::MeshData::*tensor;
+            lfs::core::Tensor lfs::core::MeshData::* tensor;
             std::uint16_t components;
         };
 
@@ -87,6 +88,7 @@ namespace lfs::io::project {
             MeshProperty{"submeshes", nullptr, 0},
             MeshProperty{"materials", nullptr, 0},
             MeshProperty{"textures", nullptr, 0},
+            MeshProperty{"material_alpha", nullptr, 0},
         };
 
         lfs::Error geometry_error(const lfs::ErrorCode code,
@@ -1307,6 +1309,46 @@ namespace lfs::io::project {
             return result;
         }
 
+        lfs::Result<std::vector<std::byte>> encode_material_alpha(
+            const std::span<const lfs::core::Material> materials) {
+            const bool has_alpha_mode = std::ranges::any_of(
+                materials, [](const auto& material) {
+                    return material.alpha_mode != lfs::core::AlphaMode::Opaque ||
+                           material.alpha_cutoff != 0.5f;
+                });
+            if (!has_alpha_mode) {
+                return std::vector<std::byte>{};
+            }
+            if (materials.size() >
+                std::numeric_limits<std::size_t>::max() / 8) {
+                return geometry_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    "The mesh cannot be saved.",
+                    "MESH material alpha table size overflows",
+                    "material_alpha");
+            }
+            std::vector<std::byte> result(materials.size() * 8);
+            for (std::size_t index = 0; index < materials.size(); ++index) {
+                const auto& material = materials[index];
+                if (static_cast<std::uint32_t>(material.alpha_mode) >
+                        static_cast<std::uint32_t>(lfs::core::AlphaMode::Blend) ||
+                    !std::isfinite(material.alpha_cutoff) ||
+                    material.alpha_cutoff < 0.0f || material.alpha_cutoff > 1.0f) {
+                    return geometry_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The mesh cannot be saved.",
+                        "MESH material alpha cutoff must be finite and between 0 and 1",
+                        "material_alpha.cutoff");
+                }
+                write_u32(
+                    result,
+                    index * 8,
+                    static_cast<std::uint32_t>(material.alpha_mode));
+                write_f32(result, index * 8 + 4, material.alpha_cutoff);
+            }
+            return result;
+        }
+
         lfs::Result<std::vector<std::byte>> encode_textures(
             const std::span<const lfs::core::TextureImage> textures) {
             std::uint64_t total = 0;
@@ -1522,6 +1564,13 @@ namespace lfs::io::project {
                         name, 1, GeometryDtype::UInt8,
                         MESH_ENCODING_TEXTURES, [&] {
                             return encode_textures(mesh->texture_images);
+                        });
+                }
+                if (name == "material_alpha") {
+                    return special_plane(
+                        name, 1, GeometryDtype::UInt8,
+                        MESH_ENCODING_MATERIAL_ALPHA, [&] {
+                            return encode_material_alpha(mesh->materials);
                         });
                 }
 
@@ -1763,6 +1812,20 @@ namespace lfs::io::project {
                         }
                         cursor = static_cast<std::size_t>(record_end);
                     }
+                } else if (descriptor.name == "material_alpha") {
+                    if (auto result = require_descriptor_shape(
+                            descriptor,
+                            GeometryDtype::UInt8,
+                            1,
+                            MESH_ENCODING_MATERIAL_ALPHA);
+                        !result) {
+                        return result;
+                    }
+                    if (descriptor.byte_length % 8 != 0) {
+                        return data_loss<void>(
+                            "MESH material alpha plane length is not a multiple of 8",
+                            "material_alpha");
+                    }
                 }
             }
 
@@ -1781,6 +1844,17 @@ namespace lfs::io::project {
                     ++material_count;
                 }
                 assert(cursor == plane.size());
+            }
+            if (const auto* material_alpha =
+                    find_descriptor(descriptors, "material_alpha")) {
+                std::uint64_t expected_bytes = 0;
+                if (!checked_mul<std::uint64_t>(
+                        material_count, 8, expected_bytes) ||
+                    expected_bytes != material_alpha->byte_length) {
+                    return data_loss<void>(
+                        "MESH material alpha count does not match its material table",
+                        "material_alpha");
+                }
             }
             if (const auto* submeshes =
                     find_descriptor(descriptors, "submeshes")) {
@@ -2317,6 +2391,7 @@ namespace lfs::io::project {
         auto mesh = std::make_shared<lfs::core::MeshData>();
         MeshPayload result(mesh);
         result.retained_properties_.reserve(descriptors->size());
+        std::optional<std::span<const std::byte>> material_alpha_plane;
         for (const auto& descriptor : *descriptors) {
             const auto plane = payload.subspan(
                 static_cast<std::size_t>(descriptor.byte_offset),
@@ -2379,6 +2454,8 @@ namespace lfs::io::project {
                     return std::move(materials).error();
                 }
                 mesh->materials = std::move(*materials);
+            } else if (descriptor.name == "material_alpha") {
+                material_alpha_plane = plane;
             } else {
                 const auto spec = std::ranges::find(
                     MESH_PROPERTIES,
@@ -2399,6 +2476,32 @@ namespace lfs::io::project {
                     return std::move(tensor).error();
                 }
                 mesh.get()->*(spec->tensor) = std::move(*tensor);
+            }
+        }
+        if (material_alpha_plane) {
+            if (material_alpha_plane->size() != mesh->materials.size() * 8) {
+                return data_loss<MeshPayload>(
+                    "MESH material alpha count does not match its material table",
+                    "material_alpha");
+            }
+            for (std::size_t index = 0; index < mesh->materials.size(); ++index) {
+                const auto mode = read_u32(*material_alpha_plane, index * 8);
+                if (mode > static_cast<std::uint32_t>(lfs::core::AlphaMode::Blend)) {
+                    return data_loss<MeshPayload>(
+                        "MESH material alpha mode is invalid",
+                        "material_alpha.mode");
+                }
+                const float alpha_cutoff =
+                    read_f32(*material_alpha_plane, index * 8 + 4);
+                if (!std::isfinite(alpha_cutoff) || alpha_cutoff < 0.0f ||
+                    alpha_cutoff > 1.0f) {
+                    return data_loss<MeshPayload>(
+                        "MESH material alpha cutoff is invalid",
+                        "material_alpha.cutoff");
+                }
+                auto& material = mesh->materials[index];
+                material.alpha_mode = static_cast<lfs::core::AlphaMode>(mode);
+                material.alpha_cutoff = alpha_cutoff;
             }
         }
         assert(
