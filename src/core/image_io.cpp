@@ -56,7 +56,7 @@ namespace {
         image_codecs::TiffMetadata tags;
         std::string error;
         if (!image_codecs::read_tiff_metadata(path, tags, error))
-            throw std::runtime_error("TIFF metadata read failed: " + error);
+            return {};
         if (!tags.description)
             return {};
         bool duplicate = false;
