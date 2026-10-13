@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/include/app/mcp_app_utils.hpp"
+#include "core/camera.hpp"
 #include "core/error.hpp"
 #include "core/scene.hpp"
 #include "mcp/mcp_tools.hpp"
@@ -413,4 +414,37 @@ TEST(McpAppUtilsTest, WaitForProjectWritePollsUntilTerminalThenInfosOnce) {
     EXPECT_EQ(info->generation, 2u);
     EXPECT_EQ(viewer.infoCalls(), 1);
     EXPECT_GE(viewer.pollCalls(), 3);
+}
+
+TEST(SceneNodeCountsTest, ReopenedCameraGroupReportsCameraChildren) {
+    // Project restore writes camera-group gaussian_count as 0. The scene tree
+    // counts camera children, and that is the count MCP must report.
+    const auto make_camera = []() {
+        return std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            lfs::core::Tensor(), lfs::core::Tensor(), lfs::core::CameraModelType::PINHOLE,
+            "frame.png", std::filesystem::path{}, std::filesystem::path{}, 64, 64, 0);
+    };
+
+    lfs::core::Scene scene;
+    const auto group_id = scene.addCameraGroup("Training", lfs::core::NULL_NODE, 0);
+    ASSERT_NE(group_id, lfs::core::NULL_NODE);
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_NE(scene.addCamera("frame" + std::to_string(i) + ".png", group_id, make_camera()),
+                  lfs::core::NULL_NODE);
+    }
+
+    const auto* group = scene.getNodeById(group_id);
+    ASSERT_NE(group, nullptr);
+    EXPECT_EQ(group->gaussian_count.load(std::memory_order_acquire), 0u);
+    EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*group), 3u);
+    EXPECT_EQ(group->gaussian_count.load(std::memory_order_acquire), 0u);
+
+    const auto plain = scene.addGroup("notes");
+    ASSERT_NE(plain, lfs::core::NULL_NODE);
+    const auto* plain_node = scene.getNodeById(plain);
+    ASSERT_NE(plain_node, nullptr);
+    EXPECT_EQ(lfs::app::SceneNodeCounts(scene).get(*plain_node), 0u);
 }
