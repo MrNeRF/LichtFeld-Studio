@@ -2605,6 +2605,11 @@ namespace lfs::vis {
         return trainer_->computeCameraMetrics(*cam, include_ssim, appearance);
     }
 
+    bool TrainerManager::hasInitializedTrainer() const {
+        std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
+        return trainer_ && trainer_->isInitialized();
+    }
+
     lfs::core::param::DatasetConfig& TrainerManager::getEditableDatasetParams() {
         if (auto* const param_mgr = services().paramsOrNull())
             return param_mgr->getDatasetConfig();

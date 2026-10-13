@@ -2559,6 +2559,8 @@
     "perf_enable_tracking": "启用",
     "perf_expand": "展开",
     "perf_collapse": "折叠",
+    "gt_metrics_training_required": "相机指标需要已初始化的训练会话。",
+    "gt_metrics_calculation_failed": "无法计算此视图的指标。",
     "perf_hud_tooltip": "显示或隐藏性能 HUD"
   },
   "runtime": {

@@ -2559,6 +2559,8 @@
     "perf_enable_tracking": "Aktivieren",
     "perf_expand": "Ausklappen",
     "perf_collapse": "Einklappen",
+    "gt_metrics_training_required": "Kamerametriken benötigen eine initialisierte Trainingssitzung.",
+    "gt_metrics_calculation_failed": "Metriken für diese Ansicht konnten nicht berechnet werden.",
     "perf_hud_tooltip": "Leistungs-HUD ein- oder ausblenden"
   },
   "runtime": {

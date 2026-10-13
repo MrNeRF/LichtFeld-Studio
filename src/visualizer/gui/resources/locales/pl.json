@@ -2559,6 +2559,8 @@
     "perf_enable_tracking": "Włącz",
     "perf_expand": "Rozwiń",
     "perf_collapse": "Zwiń",
+    "gt_metrics_training_required": "Metryki kamery wymagają zainicjowanej sesji treningowej.",
+    "gt_metrics_calculation_failed": "Nie udało się obliczyć metryk dla tego widoku.",
     "perf_hud_tooltip": "Pokaż lub ukryj HUD wydajności"
   },
   "runtime": {

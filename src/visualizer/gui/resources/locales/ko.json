@@ -2559,6 +2559,8 @@
     "perf_enable_tracking": "활성화",
     "perf_expand": "펼치기",
     "perf_collapse": "접기",
+    "gt_metrics_training_required": "카메라 지표를 사용하려면 학습 세션을 초기화해야 합니다.",
+    "gt_metrics_calculation_failed": "이 보기의 지표를 계산할 수 없습니다.",
     "perf_hud_tooltip": "성능 HUD 표시 또는 숨기기"
   },
   "runtime": {

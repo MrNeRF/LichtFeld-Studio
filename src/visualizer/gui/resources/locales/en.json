@@ -2558,6 +2558,8 @@
     "perf_enable_tracking": "Enable",
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
+    "gt_metrics_training_required": "Camera metrics need an initialized training session.",
+    "gt_metrics_calculation_failed": "Could not calculate metrics for this view.",
     "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {

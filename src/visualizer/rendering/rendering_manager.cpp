@@ -119,7 +119,8 @@ namespace lfs::vis {
                 .iteration = iteration,
                 .psnr = metrics->psnr,
                 .ssim = metrics->ssim,
-                .used_mask = metrics->used_mask};
+                .used_mask = metrics->used_mask,
+                .status = AppStore::CameraMetricsStatus::Available};
         }
 
         [[nodiscard]] AppStore::CameraMetrics toAppCameraMetrics(
@@ -129,7 +130,8 @@ namespace lfs::vis {
                 .iteration = metrics.iteration,
                 .psnr = metrics.psnr,
                 .ssim = metrics.ssim,
-                .used_mask = metrics.used_mask};
+                .used_mask = metrics.used_mask,
+                .status = metrics.status};
         }
     } // namespace
 
@@ -881,9 +883,11 @@ namespace lfs::vis {
         }
 
         auto* const trainer_mgr = scene_manager->getTrainerManager();
-        if (!trainer_mgr || !trainer_mgr->getTrainer()) {
+        if (!trainer_mgr) {
             return;
         }
+        const auto* const trainer = trainer_mgr->getTrainer();
+        const bool training_session_initialized = trainer && trainer->isInitialized();
 
         const auto settings = getSettings();
         if (!splitViewUsesGTComparison(settings.split_view_mode) ||
@@ -897,6 +901,17 @@ namespace lfs::vis {
         }
 
         const int current_iteration = trainer_mgr->getCurrentIteration();
+        if (!training_session_initialized) {
+            const std::optional<AppStore::CameraMetrics> unavailable =
+                AppStore::CameraMetrics::unavailable(current_camera_id, current_iteration, false);
+            if (app_store().camera_metrics.get() != unavailable) {
+                invalidateCameraMetricsRequests(true);
+                app_store().camera_metrics.set(unavailable);
+                markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
+            }
+            return;
+        }
+
         const bool include_ssim =
             settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::PSNRSSIM;
         const auto now = std::chrono::steady_clock::now();
@@ -1048,6 +1063,10 @@ namespace lfs::vis {
                         app_metrics = toAppCameraMetrics(*metrics);
                     } else {
                         latest_camera_metrics_.reset();
+                        app_metrics = AppStore::CameraMetrics::unavailable(
+                            request.camera_id,
+                            request.iteration,
+                            request.trainer_manager->hasInitializedTrainer());
                     }
                     last_camera_metrics_refresh_time_ = std::chrono::steady_clock::now();
                     applied = true;

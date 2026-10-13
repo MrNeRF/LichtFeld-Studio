@@ -33,6 +33,7 @@
 #include "viewport_interaction_context.hpp"
 #include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
+#include "visualizer/app_store.hpp"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -420,6 +421,7 @@ namespace lfs::vis {
             float psnr = 0.0f;
             std::optional<float> ssim;
             bool used_mask = false;
+            AppStore::CameraMetricsStatus status = AppStore::CameraMetricsStatus::Available;
         };
 
         void clearLatestCameraMetrics();

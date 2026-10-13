@@ -1319,6 +1319,13 @@ body {
     font-weight: bold;
 }
 
+.viewport-metrics-reason {
+    max-width: 220dp;
+    font-size: 10dp;
+    line-height: 13dp;
+    white-space: normal;
+}
+
 .vram-hud-overlay {
     position: absolute;
     right: 16dp;

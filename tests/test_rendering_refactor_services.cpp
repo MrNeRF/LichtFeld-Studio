@@ -20,6 +20,7 @@
 #include "project/session_state.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/gt_comparison_cache_utils.hpp"
@@ -55,6 +56,36 @@
 #include <vector>
 
 namespace lfs::vis {
+
+    TEST(CameraMetricsStatusTest, DistinguishesUninitializedSessionFromMetricFailure) {
+        const auto needs_session = AppStore::CameraMetrics::unavailable(17, 7000, false);
+        EXPECT_EQ(needs_session.camera_id, 17);
+        EXPECT_EQ(needs_session.iteration, 7000);
+        EXPECT_EQ(needs_session.status, AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession);
+        EXPECT_FALSE(needs_session.ssim.has_value());
+
+        const auto calculation_failed = AppStore::CameraMetrics::unavailable(17, 7000, true);
+        EXPECT_EQ(calculation_failed.status, AppStore::CameraMetricsStatus::CalculationFailed);
+    }
+
+    TEST(CameraMetricsStatusTest, SuccessfulMetricStateRemainsAvailable) {
+        AppStore::CameraMetrics metrics;
+        metrics.camera_id = 17;
+        metrics.iteration = 7000;
+        metrics.psnr = 28.5f;
+        metrics.ssim = 0.91f;
+        EXPECT_EQ(metrics.status, AppStore::CameraMetricsStatus::Available);
+        EXPECT_FLOAT_EQ(metrics.psnr, 28.5f);
+        ASSERT_TRUE(metrics.ssim.has_value());
+        EXPECT_FLOAT_EQ(*metrics.ssim, 0.91f);
+    }
+
+    TEST(CameraMetricsStatusTest, OverlayConfigTracksUnavailableStatus) {
+        AppStore::GTMetricsOverlayConfig config;
+        EXPECT_EQ(config.metrics_status, AppStore::CameraMetricsStatus::Available);
+        config.metrics_status = AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession;
+        EXPECT_NE(config, AppStore::GTMetricsOverlayConfig{});
+    }
 
     TEST(EnvironmentCompositingTest, EnvironmentIdentityCopyCannotAllocate) {
         // Copying pane metadata into the frame and lazy capture must not need
@@ -467,6 +498,38 @@ namespace lfs::vis {
             EXPECT_EQ(after.image, right.image);
             EXPECT_EQ(after.external_image_generation, right.external_image_generation);
         }
+    }
+
+    TEST_F(GTComparisonAsyncTest, UninitializedTrainingSessionPublishesUnavailableCameraMetrics) {
+        struct TrainerServiceGuard {
+            TrainerManager manager;
+            TrainerServiceGuard() { services().set(&manager); }
+            ~TrainerServiceGuard() {
+                app_store().camera_metrics.set(std::nullopt);
+                services().set(static_cast<TrainerManager*>(nullptr));
+                EXPECT_TRUE(manager.clearTrainer());
+            }
+        } trainer_service;
+
+        trainer_service.manager.setTrainer(std::make_unique<lfs::training::Trainer>(scene->getScene()));
+        ASSERT_NE(trainer_service.manager.getTrainer(), nullptr);
+        EXPECT_FALSE(trainer_service.manager.getTrainer()->isInitialized());
+
+        constexpr int camera_id = 17;
+        manager->setCurrentCameraId(camera_id);
+        settings.camera_metrics_mode = RenderSettings::CameraMetricsMode::PSNRSSIM;
+        manager->updateSettings(settings);
+
+        render();
+
+        ASSERT_TRUE(last.rendered || last.image || last.external_image != VK_NULL_HANDLE);
+        const auto published = app_store().camera_metrics.get();
+        ASSERT_TRUE(published.has_value());
+        EXPECT_EQ(published->camera_id, camera_id);
+        EXPECT_EQ(published->iteration, trainer_service.manager.getCurrentIteration());
+        EXPECT_EQ(published->status, AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession);
+        EXPECT_EQ(published->psnr, 0.0f);
+        EXPECT_FALSE(published->ssim.has_value());
     }
 
     class SceneManagerRenderStateTest : public ::testing::Test {

@@ -449,7 +449,8 @@ namespace lfs::vis::gui {
             std::abs(gt_metrics_overlay_.y - state.y) > 0.5f ||
             gt_metrics_overlay_.psnr_text != state.psnr_text ||
             gt_metrics_overlay_.show_ssim != state.show_ssim ||
-            gt_metrics_overlay_.ssim_text != state.ssim_text;
+            gt_metrics_overlay_.ssim_text != state.ssim_text ||
+            gt_metrics_overlay_.metrics_status != state.metrics_status;
         if (!changed) {
             return;
         }
@@ -548,12 +549,16 @@ namespace lfs::vis::gui {
         state.show_ssim = gt_metrics_config_.show_ssim;
         state.psnr_text = "--";
         state.ssim_text = "--";
+        state.metrics_status = gt_metrics_config_.metrics_status;
 
         if (state.visible && camera_metrics_ &&
             camera_metrics_->camera_id == gt_metrics_config_.current_camera_id) {
-            state.psnr_text = std::format("{:.2f}", camera_metrics_->psnr);
-            if (state.show_ssim && camera_metrics_->ssim.has_value())
-                state.ssim_text = std::format("{:.4f}", *camera_metrics_->ssim);
+            state.metrics_status = camera_metrics_->status;
+            if (state.metrics_status == lfs::vis::AppStore::CameraMetricsStatus::Available) {
+                state.psnr_text = std::format("{:.2f}", camera_metrics_->psnr);
+                if (state.show_ssim && camera_metrics_->ssim.has_value())
+                    state.ssim_text = std::format("{:.4f}", *camera_metrics_->ssim);
+            }
         }
 
         setGTMetricsOverlay(std::move(state));
@@ -942,6 +947,16 @@ namespace lfs::vis::gui {
         }
         if (auto* const ssim = document_->GetElementById("gt-metrics-ssim")) {
             ssim->SetInnerRML(metric_text(gt_metrics_overlay_.ssim_text));
+            touched = true;
+        }
+        if (auto* const reason = document_->GetElementById("gt-metrics-training-required")) {
+            reason->SetClass("hidden", gt_metrics_overlay_.metrics_status !=
+                                           lfs::vis::AppStore::CameraMetricsStatus::NeedsInitializedTrainingSession);
+            touched = true;
+        }
+        if (auto* const reason = document_->GetElementById("gt-metrics-calculation-failed")) {
+            reason->SetClass("hidden", gt_metrics_overlay_.metrics_status !=
+                                           lfs::vis::AppStore::CameraMetricsStatus::CalculationFailed);
             touched = true;
         }
 

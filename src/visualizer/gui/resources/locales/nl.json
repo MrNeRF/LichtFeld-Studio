@@ -2559,6 +2559,8 @@
     "perf_enable_tracking": "Inschakelen",
     "perf_expand": "Uitklappen",
     "perf_collapse": "Inklappen",
+    "gt_metrics_training_required": "Camerametrieken vereisen een geïnitialiseerde trainingssessie.",
+    "gt_metrics_calculation_failed": "Metrieken voor deze weergave konden niet worden berekend.",
     "perf_hud_tooltip": "Prestatie-HUD tonen of verbergen"
   },
   "runtime": {

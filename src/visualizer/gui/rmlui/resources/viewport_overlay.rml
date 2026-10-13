@@ -1053,6 +1053,8 @@
                 <span class="viewport-metrics-label">SSIM</span>
                 <span id="gt-metrics-ssim" class="viewport-metrics-value">--</span>
             </div>
+            <div id="gt-metrics-training-required" class="viewport-metrics-reason hidden">@tr:ui.gt_metrics_training_required</div>
+            <div id="gt-metrics-calculation-failed" class="viewport-metrics-reason hidden">@tr:ui.gt_metrics_calculation_failed</div>
         </div>
     </div>
 

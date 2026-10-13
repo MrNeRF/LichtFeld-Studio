@@ -270,6 +270,10 @@
     color: @{text};
 }
 
+.viewport-metrics-reason {
+    color: @{text_dim};
+}
+
 .vram-hud-card {
     background-color: @{surface};
     border-color: @{viewport.metrics_border};

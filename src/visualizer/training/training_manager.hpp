@@ -219,6 +219,7 @@ namespace lfs::vis {
             int camera_id,
             bool include_ssim,
             const lfs::training::Trainer::CameraMetricsAppearanceConfig& appearance) const;
+        [[nodiscard]] bool hasInitializedTrainer() const;
 
         // Pending parameters (editable in Ready state, applied on start)
         lfs::core::param::OptimizationParameters& getEditableOptParams() { return pending_opt_params_; }
