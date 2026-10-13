@@ -285,6 +285,8 @@ add_executable(lichtfeld_file_dialog_tests test_file_dialog_path.cpp)
 target_compile_features(lichtfeld_file_dialog_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_file_dialog_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/core/include
+    ${CMAKE_SOURCE_DIR}/src/geometry/include
     ${CMAKE_SOURCE_DIR}/src/visualizer
 )
 target_link_libraries(lichtfeld_file_dialog_tests PRIVATE GTest::gtest_main)
