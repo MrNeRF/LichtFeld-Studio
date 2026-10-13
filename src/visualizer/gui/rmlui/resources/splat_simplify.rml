@@ -1,9 +1,9 @@
 <rml>
   <head>
-    <link type="text/template" href="docked_panel.rml" />
+    <link type="text/template" href="floating_window.rml" />
     <link type="text/rcss" href="rendering.rcss" />
   </head>
-  <body template="docked-panel" data-model="splat_simplify">
+  <body template="floating-window" data-model="splat_simplify">
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.simplify_source">
       <span class="setting-row__label-col">{{label_simplify_source}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">

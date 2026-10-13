@@ -7,6 +7,7 @@ from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -235,3 +236,34 @@ def test_rendering_panel_simplify_prefers_native_store_progress(rendering_panel_
     assert panel._simplify_progress_value == "0.875"
     assert panel._simplify_progress_stage == "Native simplify"
     assert panel._simplify_error_text == "native error"
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_simplify_window_close_is_available_without_source(rendering_panel_module, monkeypatch, active):
+    module, state = rendering_panel_module
+    panel = module.SplatSimplifyPanel()
+    state.active = active
+    listeners, enabled_calls = {}, []
+    close = SimpleNamespace(add_event_listener=lambda event, handler: listeners.update({event: handler}))
+    doc = SimpleNamespace(get_element_by_id=lambda element_id: close if element_id == "close-btn" else None)
+    monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *args: enabled_calls.append(args), raising=False)
+    monkeypatch.setattr(panel._scrub_fields, "mount", lambda _doc: None)
+    panel._reactive_binding = SimpleNamespace(
+        set_handle=lambda _handle: panel._reactive_binding,
+        watch=lambda *args, **kwargs: None,
+    )
+    panel.on_mount(doc)
+    assert panel._simplify_source_name == ""
+    assert not panel._can_run_simplify()
+    listeners["click"](None)
+    assert enabled_calls == [("lfs.splat_simplify", False)]
+    assert state.cancel_calls == 0
+
+
+def test_simplify_uses_standard_floating_window_chrome():
+    resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
+    root = ET.parse(resources / "splat_simplify.rml").getroot()
+    assert root.find("body").get("template") == "floating-window"
+    assert root.find("head/link[@type='text/template']").get("href") == "floating_window.rml"
+    template = ET.parse(resources / "floating_window.rml").getroot()
+    assert template.find(".//*[@id='close-btn']") is not None

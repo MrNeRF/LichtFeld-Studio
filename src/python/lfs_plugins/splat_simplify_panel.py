@@ -119,6 +119,7 @@ class SplatSimplifyPanel(Panel):
         self._handle = model.get_handle()
 
     def on_mount(self, doc):
+        super().on_mount(doc)
         self._sync_label()
         self._scrub_fields.mount(doc)
         self._refresh_simplify_source(force=True)
