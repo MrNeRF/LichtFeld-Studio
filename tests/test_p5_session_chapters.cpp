@@ -895,6 +895,54 @@ namespace {
             expected);
     }
 
+    TEST(P5SessionChapterTest,
+         EquirectangularSessionRoundTripRestoresPreviousBackend) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+
+        lfs::vis::RenderSettings settings;
+        settings.equirectangular = true;
+        settings.raster_backend = Backend::ThreeDgut;
+        settings.gut = true;
+        settings.raster_backend_before_equirectangular = Backend::ThreeDgs;
+
+        auto json = renderSettingsToProjectJson(settings);
+        ASSERT_TRUE(json.contains("raster_backend_before_equirectangular"));
+        EXPECT_EQ(json["raster_backend_before_equirectangular"], "3dgs");
+
+        auto restored = renderSettingsFromProjectJson(json);
+        ASSERT_TRUE(restored) << lfs::format_for_developer(restored.error());
+        EXPECT_EQ(restored->raster_backend, Backend::ThreeDgut);
+        EXPECT_EQ(restored->raster_backend_before_equirectangular, Backend::ThreeDgs);
+        restored->equirectangular = false;
+        lfs::vis::enforceProjectionBackend(*restored, true);
+        EXPECT_EQ(restored->raster_backend, Backend::ThreeDgs);
+
+        // An explicit 3DGUT choice and older projects without the additive field
+        // retain the existing behavior when the projection is turned off.
+        settings.raster_backend_before_equirectangular.reset();
+        auto explicit_gut = renderSettingsToProjectJson(settings);
+        ASSERT_TRUE(explicit_gut["raster_backend_before_equirectangular"].is_null());
+        auto old_project = explicit_gut;
+        old_project.erase("raster_backend_before_equirectangular");
+        for (const auto& project : {explicit_gut, old_project}) {
+            auto old_restored = renderSettingsFromProjectJson(project);
+            ASSERT_TRUE(old_restored) << lfs::format_for_developer(old_restored.error());
+            old_restored->equirectangular = false;
+            lfs::vis::enforceProjectionBackend(*old_restored, true);
+            EXPECT_EQ(old_restored->raster_backend, Backend::ThreeDgut);
+        }
+
+        auto invalid_previous_backend = explicit_gut;
+        invalid_previous_backend["raster_backend_before_equirectangular"] =
+            "future-backend";
+        auto invalid_restored =
+            renderSettingsFromProjectJson(invalid_previous_backend);
+        ASSERT_TRUE(invalid_restored)
+            << lfs::format_for_developer(invalid_restored.error());
+        EXPECT_EQ(invalid_restored->raster_backend, Backend::ThreeDgut);
+        EXPECT_FALSE(invalid_restored->raster_backend_before_equirectangular);
+    }
+
     TEST(P5SessionChapterTest, GalleryOrthographicExtentSurvivesViewportSizes) {
         auto state = rolled_panel_camera(7.0f);
         state.ortho_extent_world = 6.25f;
