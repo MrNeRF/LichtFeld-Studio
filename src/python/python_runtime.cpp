@@ -7,6 +7,7 @@
 #include "core/modal_event.hpp"
 #include "core/operator_callbacks.hpp"
 #include "gil.hpp"
+#include "visualizer/visualizer.hpp"
 
 #include <atomic>
 #include <cassert>
@@ -352,6 +353,28 @@ namespace lfs::python {
 
     void set_visualizer(vis::Visualizer* viewer) { g_visualizer.store(viewer); }
     vis::Visualizer* get_visualizer() { return g_visualizer.load(); }
+
+    void markProjectSessionChapterCommitted(
+        const std::string_view chapter) {
+        auto* const viewer = get_visualizer();
+        if (!viewer)
+            return;
+        if (viewer->isOnViewerThread()) {
+            viewer->projectMarkSessionChapterCommitted(chapter);
+            return;
+        }
+        // Panel callbacks can be deferred until after session restore returns.
+        if (viewer->projectSessionRestoreInProgress())
+            return;
+        if (!viewer->acceptsPostedWork())
+            return;
+        const std::string chapter_copy(chapter);
+        viewer->postWork({.run = [viewer, chapter_copy] {
+            if (get_visualizer() == viewer &&
+                !viewer->projectSessionRestoreInProgress())
+                viewer->projectMarkSessionChapterCommitted(chapter_copy);
+        }});
+    }
 
     void set_parameter_manager(vis::ParameterManager* pm) { g_parameter_manager.store(pm); }
     vis::ParameterManager* get_parameter_manager() { return g_parameter_manager.load(); }

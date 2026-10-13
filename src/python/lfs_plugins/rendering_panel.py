@@ -335,11 +335,14 @@ class RenderingPanel(Panel):
         self._last_custom_environment_map_path = ""
         self._last_lod_budget = 0
         self._last_lod_budget_slider_max = 0
+        self._chrom_edit_pending = False
+        self._render_slider_pending = False
         self._escape_revert = w.EscapeRevertController()
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
             self._set_scrub_value,
+            commit_value=self._commit_render_setting,
         )
         self._reactive_binding = PanelStateBinding()
 
@@ -363,6 +366,7 @@ class RenderingPanel(Panel):
         body = doc.get_element_by_id("body")
         if body:
             body.add_event_listener("click", self._on_body_click)
+            body.add_event_listener("mouseup", self._on_body_mouseup)
         for el in doc.query_selector_all("input.color-hex"):
             w.bind_select_all_on_focus(el)
             data_value = el.get_attribute("data-value", "")
@@ -377,9 +381,8 @@ class RenderingPanel(Panel):
                 lambda p=prop_id: self._capture_color_snapshot(p),
                 lambda snapshot, p=prop_id: self._restore_color_snapshot(p, snapshot),
             )
-            if prop_id == BACKGROUND_COLOR_PROP:
-                el.add_event_listener("change", self._on_color_text_change)
-                el.add_event_listener("blur", self._on_color_text_blur)
+            el.add_event_listener("change", self._on_color_text_change)
+            el.add_event_listener("blur", self._on_color_text_blur)
         for el in doc.query_selector_all("input.color-channel"):
             w.bind_select_all_on_focus(el)
             data_value = el.get_attribute("data-value", "")
@@ -442,21 +445,21 @@ class RenderingPanel(Panel):
             elif prop_id == "lod_debug_mode":
                 model.bind(prop_id,
                            lambda: getattr(s(), "lod_debug_colors", False),
-                           lambda v: setattr(s(), "lod_debug_colors", v) if s() else None)
+                           lambda v: self._set_render_property("lod_debug_colors", v))
             elif prop_id == "mesh_wireframe":
                 model.bind(prop_id,
                            lambda: _mesh_wireframe_supported() and getattr(s(), "mesh_wireframe", False),
-                           lambda v: setattr(s(), "mesh_wireframe", bool(v))
-                           if s() and _mesh_wireframe_supported() else None)
+                           lambda v, p=prop_id: self._set_render_property(p, bool(v))
+                           if _mesh_wireframe_supported() else None)
             else:
                 model.bind(prop_id,
                            lambda p=prop_id: getattr(s(), p, False),
-                           lambda v, p=prop_id: setattr(s(), p, v) if s() else None)
+                           lambda v, p=prop_id: self._set_render_property(p, v))
 
         for prop_id in SLIDER_PROPS:
             model.bind(prop_id,
                        lambda p=prop_id: float(getattr(s(), p, 0.0)),
-                       lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None)
+                       lambda v, p=prop_id: self._set_render_slider(p, v))
 
         model.bind("lod_max_splats",
                    lambda: float(self._current_lod_budget()),
@@ -470,7 +473,7 @@ class RenderingPanel(Panel):
             else:
                 model.bind(prop_id,
                            lambda p=prop_id: str(getattr(s(), p, "")),
-                           lambda v, p=prop_id: setattr(s(), p, v) if s() else None)
+                           lambda v, p=prop_id: self._set_render_property(p, v))
 
         model.bind("environment_mode",
                    lambda: str(getattr(s(), "environment_mode", "")),
@@ -546,16 +549,19 @@ class RenderingPanel(Panel):
                 ),
             )
             hex_field = f"{prop_id}_hex"
+            self._color_text_bufs[hex_field] = None
             model.bind(
                 hex_field,
-                lambda p=prop_id: w.color_to_hex(getattr(s(), p, (0, 0, 0))),
-                lambda v, p=prop_id: self._set_color_hex(p, v),
+                lambda f=hex_field, p=prop_id: self._color_text_value(
+                    f, lambda: w.color_to_hex(getattr(s(), p, (0, 0, 0)))
+                ),
+                lambda v, f=hex_field: self._set_color_text_buf(f, v),
             )
 
         for prop_id in CHROM_FLOAT_PROPS:
             model.bind(prop_id,
                        lambda p=prop_id: float(getattr(s(), p, 0.0)),
-                       lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None)
+                       lambda v, p=prop_id: self._set_render_slider(p, v))
 
         model.bind("simplify_target",
                    lambda: f"{self._compute_simplify_target_count():,}",
@@ -688,6 +694,30 @@ class RenderingPanel(Panel):
         if self._handle:
             self._handle.dirty("grid_plane")
 
+    def _commit_render_setting(self, prop, value):
+        if prop in SLIDER_PROPS + ["lod_max_splats"] and prop in SCRUB_FIELD_DEFS:
+            self._mark_view_setting_commit()
+
+    @staticmethod
+    def _mark_view_setting_commit():
+        lf.ui.mark_project_session_chapter_committed("VIEW")
+
+    def _set_render_property(self, prop, value):
+        settings = lf.get_render_settings()
+        if settings is None:
+            return
+        if getattr(settings, prop, object()) == value:
+            return
+        settings._set_without_session_dirty(prop, value)
+        self._mark_view_setting_commit()
+
+    def _set_render_slider(self, prop, value):
+        settings = lf.get_render_settings()
+        if settings is None:
+            return
+        settings._set_without_session_dirty(prop, float(value))
+        self._render_slider_pending = True
+
     def on_update(self, doc):
         s = lf.get_render_settings()
         if not s:
@@ -779,7 +809,8 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if not settings:
             return
-        settings.environment_mode = value
+        settings._set_without_session_dirty("environment_mode", value)
+        self._mark_view_setting_commit()
         self._sync_environment_state()
 
     def _set_raster_backend(self, value):
@@ -787,14 +818,16 @@ class RenderingPanel(Panel):
         if not settings:
             return
         backend = _normalize_raster_backend(value)
-        settings.raster_backend = backend
+        settings._set_without_session_dirty("raster_backend", backend)
+        self._mark_view_setting_commit()
         self._sync_projection_state()
 
     def _set_equirectangular(self, value):
         settings = lf.get_render_settings()
         if not settings:
             return
-        settings.equirectangular = bool(value)
+        settings._set_without_session_dirty("equirectangular", bool(value))
+        self._mark_view_setting_commit()
         self._sync_projection_state()
 
     def _environment_map_is_custom(self):
@@ -864,7 +897,8 @@ class RenderingPanel(Panel):
             self._dirty_environment_bindings()
             return
         self._remember_custom_environment_map(selected_path)
-        settings.environment_map_path = selected_path
+        settings._set_without_session_dirty("environment_map_path", selected_path)
+        self._mark_view_setting_commit()
         self._sync_environment_state()
 
     def _get_environment_map_preset(self):
@@ -889,7 +923,10 @@ class RenderingPanel(Panel):
                 self._dirty_environment_bindings()
                 return
             if self._last_custom_environment_map_path:
-                settings.environment_map_path = self._last_custom_environment_map_path
+                settings._set_without_session_dirty(
+                    "environment_map_path", self._last_custom_environment_map_path
+                )
+                self._mark_view_setting_commit()
                 self._sync_environment_state()
             else:
                 self._dirty_environment_bindings()
@@ -898,7 +935,8 @@ class RenderingPanel(Panel):
             preset_index = int(value)
         except (TypeError, ValueError):
             if value:
-                settings.environment_map_path = value
+                settings._set_without_session_dirty("environment_map_path", value)
+                self._mark_view_setting_commit()
                 self._sync_environment_state()
             else:
                 self._dirty_environment_bindings()
@@ -907,7 +945,8 @@ class RenderingPanel(Panel):
             self._dirty_environment_bindings()
             return
         preset_path = ENVIRONMENT_PRESET_PATHS[preset_index]
-        settings.environment_map_path = preset_path
+        settings._set_without_session_dirty("environment_map_path", preset_path)
+        self._mark_view_setting_commit()
         self._sync_environment_state()
 
     def _on_browse_environment_map(self, handle, event, args):
@@ -991,7 +1030,7 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if not settings:
             return
-        setattr(settings, prop, float(value))
+        settings._set_without_session_dirty(prop, float(value))
         if self._handle:
             self._handle.dirty(prop)
             if prop == "focal_length_mm":
@@ -1006,7 +1045,8 @@ class RenderingPanel(Panel):
         except (TypeError, ValueError):
             return
         budget = max(LOD_BUDGET_MIN, min(self._lod_budget_slider_max(), parsed))
-        settings.lod_max_splats = budget
+        settings._set_without_session_dirty("lod_max_splats", budget)
+        self._render_slider_pending = True
         self._dirty_model("lod_max_splats")
 
     def _color_text_value(self, field, canonical):
@@ -1021,7 +1061,7 @@ class RenderingPanel(Panel):
         if not field.endswith("_hex"):
             return None
         prop_id = field[:-4]
-        return prop_id if prop_id == BACKGROUND_COLOR_PROP else None
+        return prop_id if prop_id in COLOR_PROPS else None
 
     def _canonical_color_text_value(self, field):
         settings = lf.get_render_settings()
@@ -1069,6 +1109,7 @@ class RenderingPanel(Panel):
             return
         self._color_text_bufs[field] = canonical
         if updated:
+            self._mark_view_setting_commit()
             channel = self._split_color_channel_field(field)
             prop_id = (
                 channel[0]
@@ -1086,7 +1127,7 @@ class RenderingPanel(Panel):
             return False
         color = w.hex_to_color(hex_val)
         if color is not None:
-            setattr(s, prop_id, w.normalize_color(color))
+            s._set_without_session_dirty(prop_id, w.normalize_color(color))
             return True
         return False
 
@@ -1099,7 +1140,7 @@ class RenderingPanel(Panel):
             return False
         color = list(w.normalize_color(getattr(s, prop_id, (0.0, 0.0, 0.0))))
         color[channel_index] = parsed
-        setattr(s, prop_id, tuple(color))
+        s._set_without_session_dirty(prop_id, tuple(color))
         return True
 
     def _capture_color_snapshot(self, prop_id):
@@ -1112,7 +1153,9 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if not settings:
             return
-        setattr(settings, prop_id, w.normalize_color(snapshot or (0.0, 0.0, 0.0)))
+        settings._set_without_session_dirty(
+            prop_id, w.normalize_color(snapshot or (0.0, 0.0, 0.0))
+        )
         self._dirty_color_bindings(prop_id)
 
     def _compute_fov(self):
@@ -1243,8 +1286,15 @@ class RenderingPanel(Panel):
         if not s or not self._color_edit_prop:
             return
         prop = self._color_edit_prop
-        setattr(s, prop, w.normalize_color((r, g, b)))
+        s._set_without_session_dirty(prop, w.normalize_color((r, g, b)))
         self._dirty_color_bindings(prop, handle)
+
+    def _on_body_mouseup(self, _event):
+        if (self._color_edit_prop is not None or self._chrom_edit_pending or
+                self._render_slider_pending):
+            self._mark_view_setting_commit()
+            self._chrom_edit_pending = False
+            self._render_slider_pending = False
 
     def _on_color_text_change(self, event):
         if not event.get_bool_parameter("linebreak", False):
@@ -1280,7 +1330,8 @@ class RenderingPanel(Panel):
     def _set_ppisp_mode(self, v):
         s = lf.get_render_settings()
         if s:
-            setattr(s, "ppisp_mode", v)
+            s._set_without_session_dirty("ppisp_mode", v)
+            self._mark_view_setting_commit()
         if self._handle:
             self._handle.dirty("ppisp_auto")
 
@@ -1610,6 +1661,7 @@ class RenderingPanel(Panel):
         s = lf.get_render_settings()
         if not s or not event:
             return
+        self._chrom_edit_pending = True
         mapping = {
             "red_x": "ppisp_color_red_x",
             "red_y": "ppisp_color_red_y",
@@ -1623,6 +1675,6 @@ class RenderingPanel(Panel):
         for param_key, prop_name in mapping.items():
             val = event.get_parameter(param_key, "")
             if val:
-                setattr(s, prop_name, float(val))
+                s._set_without_session_dirty(prop_name, float(val))
         for prop_name in mapping.values():
             handle.dirty(prop_name)

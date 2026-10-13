@@ -1656,12 +1656,17 @@ namespace lfs::vis::gui {
                                point_cloud_changed && enable_point_cloud
                                    ? lfs::vis::DirtyFlag::ALL
                                    : lfs::vis::DirtyFlag::SELECTION);
+            if (auto* const viewer = lfs::python::get_visualizer())
+                viewer->projectMarkSessionChapterCommitted("VIEW");
         } else if (action == "set_camera_navigation_mode") {
             auto* ic = lfs::vis::InputController::instance();
             if (!ic)
                 return;
             if (const auto mode = lfs::vis::InputController::cameraNavigationModeFromName(value)) {
                 ic->setCameraNavigationMode(*mode);
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+                }
                 lfs::vis::saveCameraNavigationPreference(value);
             }
         } else if (action == "toggle_projection") {
@@ -1678,15 +1683,23 @@ namespace lfs::vis::gui {
             }
             rm->setOrthographic(!ortho, viewport_height, distance_to_pivot);
             lfs::vis::apply_set_ortho_scale(std::nullopt);
+            if (auto* const viewer = lfs::python::get_visualizer())
+                viewer->projectMarkSessionChapterCommitted("VIEW");
         } else if (action == "toggle_depth_view") {
             if (!rm)
                 return;
             auto settings = rm->getSettings();
             settings.depth_view = !settings.depth_view;
             rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
+            if (auto* const viewer = lfs::python::get_visualizer())
+                viewer->projectMarkSessionChapterCommitted("VIEW");
         } else if (action == "toggle_camera_view_snap") {
-            if (auto* ic = lfs::vis::InputController::instance())
+            if (auto* ic = lfs::vis::InputController::instance()) {
                 ic->setCameraViewSnapEnabled(!ic->cameraViewSnapEnabled());
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+                }
+            }
             if (const auto* ic = lfs::vis::InputController::instance())
                 lfs::vis::saveCameraViewSnapPreference(ic->cameraViewSnapEnabled());
         } else if (action == "toggle_independent_split_view") {

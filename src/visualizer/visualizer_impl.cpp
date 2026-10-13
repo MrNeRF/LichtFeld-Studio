@@ -4026,8 +4026,13 @@ namespace lfs::vis {
                       gui_manager_->panelLayout()
                           .getLeftDockPreferredWidth())
                 : std::nullopt;
+        const bool was_applying_session_restore =
+            applying_project_session_restore_.exchange(
+                true, std::memory_order_acq_rel);
         project::applyGuiSession(
             *this, *prepared, camera_bookmarks_);
+        applying_project_session_restore_.store(
+            was_applying_session_restore, std::memory_order_release);
         if (keep_asset_manager_open) {
             if (asset_manager_width && gui_manager_) {
                 gui_manager_->panelLayout()
@@ -4068,7 +4073,12 @@ namespace lfs::vis {
         pending_project_tools_restore_.reset();
         editor_context_.update(
             scene_manager_.get(), trainer_manager_.get());
+        const bool was_applying_session_restore =
+            applying_project_session_restore_.exchange(
+                true, std::memory_order_acq_rel);
         project::applyGuiSessionTools(*this, prepared);
+        applying_project_session_restore_.store(
+            was_applying_session_restore, std::memory_order_release);
     }
 
     void VisualizerImpl::noteHydrationTerminalForRestoreTicket(
@@ -4554,6 +4564,15 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->info();
+    }
+
+    void VisualizerImpl::projectMarkSessionChapterCommitted(
+        const std::string_view chapter) {
+        if (project_lifecycle_ &&
+            !applying_project_session_restore_.load(
+                std::memory_order_acquire)) {
+            project_lifecycle_->markSessionChapterCommitted(chapter);
+        }
     }
 
     void VisualizerImpl::recoverDeferredProjectPayloadsAfterUndo(

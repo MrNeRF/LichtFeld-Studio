@@ -4668,11 +4668,17 @@ namespace lfs::vis::gui {
         rml_shell_frame_.init(&rmlui_manager_);
         rml_right_panel_.init(&rmlui_manager_);
         rml_right_panel_.on_tab_changed = [this](const std::string& id) {
+            if (panel_layout_.getActiveTab() != id && viewer_) {
+                viewer_->projectMarkSessionChapterCommitted("GUIL");
+            }
             panel_layout_.setActiveTab(id);
         };
         rml_right_panel_.on_tab_closed = [this](const std::string& id) {
             if (id.empty())
                 return;
+            if (viewer_) {
+                viewer_->projectMarkSessionChapterCommitted("GUIL");
+            }
             PanelRegistry::instance().set_panel_enabled(id, false);
             if (panel_layout_.getActiveTab() == id)
                 panel_layout_.setActiveTab({});
@@ -4685,6 +4691,7 @@ namespace lfs::vis::gui {
         };
         rml_right_panel_.on_splitter_end = [this]() {
             viewer_->getRenderingManager()->setViewportResizeActive(false);
+            viewer_->projectMarkSessionChapterCommitted("GUIL");
         };
         rml_right_panel_.on_resize_width = [this](float width) {
             viewer_->getRenderingManager()->setViewportResizeActive(true);
@@ -4698,12 +4705,19 @@ namespace lfs::vis::gui {
         };
         rml_right_panel_.on_resize_end = [this]() {
             viewer_->getRenderingManager()->setViewportResizeActive(false);
+            viewer_->projectMarkSessionChapterCommitted("GUIL");
         };
         rml_bottom_dock_.init(&rmlui_manager_);
         rml_bottom_dock_.on_tab_changed = [this](const std::string& id) {
+            if (panel_layout_.getBottomDockActiveTab() != id && viewer_) {
+                viewer_->projectMarkSessionChapterCommitted("GUIL");
+            }
             panel_layout_.setBottomDockActiveTab(id);
         };
         rml_bottom_dock_.on_tab_closed = [this](const std::string& id) {
+            if (viewer_) {
+                viewer_->projectMarkSessionChapterCommitted("GUIL");
+            }
             hideBottomDockPanel(id);
         };
         rml_viewport_overlay_.init(&rmlui_manager_);
@@ -5705,6 +5719,7 @@ namespace lfs::vis::gui {
             // preserve, so commit directly and let the normal layout pass resolve it.
             ui_hidden_ = ui_visibility_target_hidden_;
             ui_visibility_layout_committed_ = true;
+            viewer_->projectMarkSessionChapterCommitted("GUIL");
         }
 
         LOG_DEBUG("UI visibility transition prepared: target_hidden={}, committed={}",
@@ -6388,6 +6403,18 @@ namespace lfs::vis::gui {
             panel_layout_.getBottomDockActiveTab() != last_ui_layout_bottom_dock_active_tab_ ||
             reg.visibility_revision() != last_ui_layout_panel_visibility_revision_;
 
+        const bool layout_resize_active =
+            panel_layout_.isResizeInteractionActive();
+        if (ui_layout_changed && layout_resize_active) {
+            ui_layout_changed_during_resize_ = true;
+        } else if (!layout_resize_active &&
+                   ui_layout_changed_during_resize_) {
+            if (viewer_) {
+                viewer_->projectMarkSessionChapterCommitted("GUIL");
+            }
+            ui_layout_changed_during_resize_ = false;
+        }
+
         if (ui_layout_changed) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.layout_state_update", 0.25);
             ui_layout_settle_frames_ = kUiLayoutSettleFrames;
@@ -6733,7 +6760,7 @@ namespace lfs::vis::gui {
             left_dock_layout = panel_layout_.computeLeftDockLayout(show_main_panel_, ui_hidden_, screen);
         }
 
-        const bool dock_resize_interaction_active = panel_layout_.isResizeInteractionActive();
+        const bool dock_resize_interaction_active = layout_resize_active;
         if (dock_resize_interaction_active != dock_resize_interaction_active_) {
             viewer_->getRenderingManager()->setViewportResizeActive(dock_resize_interaction_active);
             dock_resize_interaction_active_ = dock_resize_interaction_active;
@@ -7994,6 +8021,9 @@ namespace lfs::vis::gui {
 
     void GuiManager::commitUiVisibilityTransition(const bool matched_frame) {
         ui_hidden_ = ui_visibility_target_hidden_;
+        if (viewer_) {
+            viewer_->projectMarkSessionChapterCommitted("GUIL");
+        }
         viewport_layout_ = ui_visibility_target_layout_;
         ui_visibility_layout_committed_ = true;
         ui_visibility_target_ready_ = false;
@@ -8562,6 +8592,9 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::showWindow(const std::string& name, bool show) {
+        if (window_states_[name] != show && viewer_) {
+            viewer_->projectMarkSessionChapterCommitted("GUIL");
+        }
         window_states_[name] = show;
     }
 

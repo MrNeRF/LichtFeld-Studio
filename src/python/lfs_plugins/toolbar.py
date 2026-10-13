@@ -481,7 +481,7 @@ class _GizmoToolbarController:
             active_submode = tool_def.submodes[0].id
             set_selection_mode = getattr(lf.ui, "set_selection_mode", None)
             if callable(set_selection_mode):
-                set_selection_mode(active_submode)
+                set_selection_mode(active_submode, mark_session_dirty=False)
 
         mode_buttons = []
         for mode in tool_def.submodes:
@@ -990,7 +990,7 @@ class _GizmoToolbarController:
 
         if not active_submode and not is_transform_tool and not is_mirror_tool:
             active_submode = tool_def.submodes[0].id
-            lf.ui.set_selection_mode(active_submode)
+            lf.ui.set_selection_mode(active_submode, mark_session_dirty=False)
 
         records = []
         for mode in tool_def.submodes:

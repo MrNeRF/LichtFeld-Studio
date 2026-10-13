@@ -53,6 +53,11 @@ class _HandleStub:
         self.dirty_fields.append("__all__")
 
 
+class _RenderSettingsStub(SimpleNamespace):
+    def _set_without_session_dirty(self, prop, value):
+        setattr(self, prop, value)
+
+
 def _install_lf_stub(monkeypatch):
     panel_space = SimpleNamespace(
         SIDE_PANEL="SIDE_PANEL",
@@ -74,6 +79,7 @@ def _install_lf_stub(monkeypatch):
         theme=lambda: None,
         set_theme_vignette_enabled=lambda _value: None,
         set_theme_vignette_intensity=lambda _value: None,
+        mark_project_session_chapter_committed=lambda _chapter: None,
         set_panel_label=lambda _panel_id, _label: True,
         is_windows_platform=lambda: False,
         toggle_system_console=lambda: None,
@@ -171,7 +177,7 @@ def test_rendering_panel_binds_theme_vignette_controls(rendering_panel_module):
 
 def test_rendering_panel_raster_backend_uses_3dgs_ids(rendering_panel_module):
     module = rendering_panel_module
-    settings = SimpleNamespace(raster_backend="3dgut")
+    settings = _RenderSettingsStub(raster_backend="3dgut")
     module.lf.get_render_settings = lambda: settings
 
     model = _BindingModelStub()
@@ -190,9 +196,70 @@ def test_rendering_panel_raster_backend_uses_3dgs_ids(rendering_panel_module):
     assert settings.raster_backend == "3dgut"
 
 
+def test_rendering_panel_slider_marks_view_dirty_on_release(rendering_panel_module):
+    module = rendering_panel_module
+    marks = []
+    settings = SimpleNamespace(
+        render_scale=1.0,
+        _set_without_session_dirty=lambda prop, value: setattr(settings, prop, value),
+    )
+    module.lf.get_render_settings = lambda: settings
+    module.lf.ui.mark_project_session_chapter_committed = marks.append
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+    panel.on_bind_model(_BindingContextStub(model))
+
+    _, set_render_scale = model.bindings["render_scale"]
+    set_render_scale(0.7)
+    set_render_scale(0.6)
+    assert settings.render_scale == pytest.approx(0.6)
+    assert marks == []
+
+    panel._on_body_mouseup(None)
+    assert marks == ["VIEW"]
+    assert panel._render_slider_pending is False
+
+
+def test_rendering_panel_noop_property_binding_does_not_mark_view_dirty(rendering_panel_module):
+    module = rendering_panel_module
+    marks = []
+    settings = SimpleNamespace(
+        show_grid=False,
+        _set_without_session_dirty=lambda prop, value: setattr(settings, prop, value),
+    )
+    module.lf.get_render_settings = lambda: settings
+    module.lf.ui.mark_project_session_chapter_committed = marks.append
+    panel = module.RenderingPanel()
+
+    panel._set_render_property("show_grid", False)
+    assert marks == []
+    panel._set_render_property("show_grid", True)
+    assert settings.show_grid is True
+    assert marks == ["VIEW"]
+
+
+def test_rendering_panel_color_text_marks_view_dirty_on_commit(rendering_panel_module):
+    module = rendering_panel_module
+    marks = []
+    settings = _RenderSettingsStub(mesh_wireframe_color=(0.0, 0.0, 0.0))
+    module.lf.get_render_settings = lambda: settings
+    module.lf.ui.mark_project_session_chapter_committed = marks.append
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+    panel.on_bind_model(_BindingContextStub(model))
+
+    model.bindings["mesh_wireframe_color_hex"][1]("#ff0000")
+    assert settings.mesh_wireframe_color == (0.0, 0.0, 0.0)
+    assert marks == []
+
+    panel._commit_color_text_field("mesh_wireframe_color_hex")
+    assert settings.mesh_wireframe_color == (1.0, 0.0, 0.0)
+    assert marks == ["VIEW"]
+
+
 def test_rendering_panel_equirectangular_delegates_backend_to_native_settings(rendering_panel_module):
     module = rendering_panel_module
-    settings = SimpleNamespace(raster_backend="3dgs", equirectangular=False)
+    settings = _RenderSettingsStub(raster_backend="3dgs", equirectangular=False)
     module.lf.get_render_settings = lambda: settings
 
     model = _BindingModelStub()
@@ -214,7 +281,7 @@ def test_rendering_panel_equirectangular_delegates_backend_to_native_settings(re
 
 def test_rendering_panel_hides_perspective_fov_for_equirectangular(rendering_panel_module):
     module = rendering_panel_module
-    settings = SimpleNamespace(raster_backend="3dgs", equirectangular=False, focal_length_mm=35.0)
+    settings = _RenderSettingsStub(raster_backend="3dgs", equirectangular=False, focal_length_mm=35.0)
     module.lf.get_render_settings = lambda: settings
     model = _BindingModelStub()
     panel = module.RenderingPanel()
@@ -323,7 +390,7 @@ def test_rendering_panel_reacts_to_native_language_generation(rendering_panel_mo
 
 def test_rendering_panel_custom_environment_map_appears_in_dropdown(rendering_panel_module):
     module = rendering_panel_module
-    settings = SimpleNamespace(
+    settings = _RenderSettingsStub(
         environment_mode="EQUIRECTANGULAR",
         environment_map_path="/tmp/custom_hdri_name.hdr",
         prop_info=lambda prop_id: {"name": prop_id},
@@ -455,6 +522,24 @@ def test_project_navigation_vertical_does_not_change_global_defaults(rendering_p
     assert len(calls) == 1
     panel._align_navigation_grid()
     assert calls[-1] == ("data_z", True)
+
+
+def test_render_scale_marks_session_only_when_scrub_commits(rendering_panel_module):
+    module = rendering_panel_module
+    commits = []
+    writes = []
+    module.lf.ui.mark_project_session_chapter_committed = commits.append
+    module.lf.get_render_settings = lambda: SimpleNamespace(
+        _set_without_session_dirty=lambda name, value: writes.append((name, value))
+    )
+    panel = module.RenderingPanel()
+
+    panel._set_scrub_value("render_scale", 0.7)
+    assert writes == [("render_scale", 0.7)]
+    assert commits == []
+
+    panel._commit_render_setting("render_scale", 0.7)
+    assert commits == ["VIEW"]
 
 
 class _PickerEvent:

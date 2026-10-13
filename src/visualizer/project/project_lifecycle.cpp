@@ -1919,26 +1919,40 @@ namespace lfs::vis::project {
                    fourcc == "METR";
         }
 
+        struct DirtyChapterSummary {
+            bool hard = false;
+            bool soft = false;
+        };
+
+        [[nodiscard]] DirtyChapterSummary summarizeDirtyChapters(
+            const lfs::io::project::ProjectDocument&
+                document) {
+            DirtyChapterSummary summary;
+            if (!document.source_path()) {
+                summary.hard = document.dirty();
+                return summary;
+            }
+            const auto dirty_chapters = document.dirty_chapters();
+            for (const auto& chapter : dirty_chapters) {
+                if (isSessionSoftDirtyChapter(chapter)) {
+                    summary.soft = true;
+                } else {
+                    summary.hard = true;
+                }
+            }
+            return summary;
+        }
+
         [[nodiscard]] bool hasHardDirtyChapters(
             const lfs::io::project::ProjectDocument&
                 document) {
-            if (!document.source_path()) {
-                return document.dirty();
-            }
-            for (const auto& chapter :
-                 document.dirty_chapters()) {
-                if (!isSessionSoftDirtyChapter(chapter)) {
-                    return true;
-                }
-            }
-            return false;
+            return summarizeDirtyChapters(document).hard;
         }
 
         [[nodiscard]] bool hasUntitledCrashDirtyChapters(
             const lfs::io::project::ProjectDocument&
                 document) {
-            for (const auto& chapter :
-                 document.dirty_chapters()) {
+            for (const auto& chapter : document.dirty_chapters()) {
                 if (!isSessionSoftDirtyChapter(chapter)) {
                     return true;
                 }
@@ -1994,16 +2008,7 @@ namespace lfs::vis::project {
         [[nodiscard]] bool hasSessionSoftDirtyChapters(
             const lfs::io::project::ProjectDocument&
                 document) {
-            if (!document.source_path()) {
-                return false;
-            }
-            for (const auto& chapter :
-                 document.dirty_chapters()) {
-                if (isSessionSoftDirtyChapter(chapter)) {
-                    return true;
-                }
-            }
-            return false;
+            return summarizeDirtyChapters(document).soft;
         }
 
         [[nodiscard]] std::vector<lfs::core::Uuid>
@@ -4988,8 +4993,8 @@ namespace lfs::vis::project {
              payload_dirty_.load(
                  std::memory_order_acquire));
         if (untitled ? !untitled_crash_dirty
-                     : !hasHardDirtyChapters(
-                           *document_)) {
+                     : document_->dirty_chapters()
+                           .empty()) {
             last_autosave_at_ =
                 std::chrono::steady_clock::now();
             return {};
@@ -5933,6 +5938,8 @@ namespace lfs::vis::project {
         if (isBlankUntitledSession()) {
             return;
         }
+        const auto dirty_chapters =
+            summarizeDirtyChapters(*document_);
         const auto now =
             std::chrono::steady_clock::now();
         const bool training =
@@ -5960,7 +5967,7 @@ namespace lfs::vis::project {
                 std::memory_order_acquire) ||
             (parameter_manager &&
              parameter_manager->isDirty()) ||
-            hasHardDirtyChapters(*document_);
+            dirty_chapters.hard || dirty_chapters.soft;
         if (!plausibly_dirty) {
             return;
         }
@@ -5993,6 +6000,8 @@ namespace lfs::vis::project {
             return;
         }
         if (last_autosaved_parameter_serial_ &&
+            document_->dirty_epoch() ==
+                last_autosaved_dirty_epoch_ &&
             scene_serial ==
                 last_autosaved_scene_serial_ &&
             !scene_dirty_.load(
@@ -6109,6 +6118,26 @@ namespace lfs::vis::project {
             payload_dirty_.store(
                 true, std::memory_order_release);
         }
+    }
+
+    void ProjectLifecycle::markSessionChapterCommitted(
+        const std::string_view chapter) {
+        if (!document_ || !isSessionSoftDirtyChapter(chapter)) {
+            return;
+        }
+        if (chapter == "VIEW") {
+            (void)document_->edit_view();
+        } else if (chapter == "GUIL") {
+            (void)document_->edit_gui_layout();
+        } else if (chapter == "EDTR") {
+            (void)document_->edit_editor();
+        } else if (chapter == "SEQR") {
+            (void)document_->edit_sequencer();
+        } else if (chapter == "METR") {
+            (void)document_->edit_metrics();
+        }
+        cached_project_info_.reset();
+        last_mutation_at_ = std::chrono::steady_clock::now();
     }
 
     lfs::Result<void>

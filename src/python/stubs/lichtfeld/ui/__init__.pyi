@@ -2244,7 +2244,7 @@ def clear_gizmo() -> None:
 def get_active_submode() -> str:
     """Get active selection submode"""
 
-def set_selection_mode(mode: str) -> None:
+def set_selection_mode(mode: str, mark_session_dirty: bool = True) -> None:
     """Set selection mode"""
 
 def execute_mirror(axis: str) -> None:
@@ -2804,6 +2804,9 @@ def clear_project_location() -> None:
 
 def get_embed_dataset_by_default() -> bool:
     """Get whether new projects copy datasets into the project by default."""
+
+def mark_project_session_chapter_committed(chapter: str) -> None:
+    """Mark a committed project session setting change for autosave."""
 
 def set_embed_dataset_by_default(enabled: bool) -> bool:
     """Set whether new projects copy datasets into the project by default."""

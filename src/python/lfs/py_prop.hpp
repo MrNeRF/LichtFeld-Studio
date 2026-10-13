@@ -12,6 +12,11 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <array>
+#include <any>
+#include <string>
+#include <vector>
+
 namespace nb = nanobind;
 
 namespace lfs::python {
@@ -29,6 +34,49 @@ namespace lfs::python {
             }
             auto ref = core::prop::PropertyObjectRef::cpp(const_cast<T*>(obj_));
             return any_to_python(meta->getter(ref), meta->type);
+        }
+
+        std::any get_value(const std::string& name) const {
+            auto meta = core::prop::PropertyRegistry::instance().get_property(group_id_, name);
+            if (!meta) {
+                throw nb::attribute_error(("Unknown property: " + name).c_str());
+            }
+            auto ref = core::prop::PropertyObjectRef::cpp(const_cast<T*>(obj_));
+            return meta->getter(ref);
+        }
+
+        bool values_equal(const std::string& name, const std::any& lhs, const std::any& rhs) const {
+            auto meta = core::prop::PropertyRegistry::instance().get_property(group_id_, name);
+            if (!meta) {
+                throw nb::attribute_error(("Unknown property: " + name).c_str());
+            }
+            const auto equal = [&]<typename Value>() {
+                return lhs.type() == typeid(Value) && rhs.type() == typeid(Value) &&
+                       std::any_cast<const Value&>(lhs) == std::any_cast<const Value&>(rhs);
+            };
+            switch (meta->type) {
+            case core::prop::PropType::Bool: return equal.template operator()<bool>();
+            case core::prop::PropType::Int: return equal.template operator()<int>();
+            case core::prop::PropType::Float: return equal.template operator()<float>();
+            case core::prop::PropType::String: return equal.template operator()<std::string>();
+            case core::prop::PropType::Enum:
+                return equal.template operator()<int>() || equal.template operator()<std::string>();
+            case core::prop::PropType::SizeT: return equal.template operator()<size_t>();
+            case core::prop::PropType::Vec2: return equal.template operator()<std::array<float, 2>>();
+            case core::prop::PropType::Vec3:
+            case core::prop::PropType::Color3: return equal.template operator()<std::array<float, 3>>();
+            case core::prop::PropType::Vec4:
+            case core::prop::PropType::Quat:
+            case core::prop::PropType::Color4: return equal.template operator()<std::array<float, 4>>();
+            case core::prop::PropType::Mat4: return equal.template operator()<std::array<float, 16>>();
+            case core::prop::PropType::Tensor:
+                return lhs.type() == typeid(nb::object) && rhs.type() == typeid(nb::object) &&
+                       std::any_cast<const nb::object&>(lhs).ptr() ==
+                           std::any_cast<const nb::object&>(rhs).ptr();
+            case core::prop::PropType::FloatVector: return equal.template operator()<std::vector<float>>();
+            case core::prop::PropType::IntVector: return equal.template operator()<std::vector<int>>();
+            }
+            return false;
         }
 
         void setattr(const std::string& name, nb::object value) {

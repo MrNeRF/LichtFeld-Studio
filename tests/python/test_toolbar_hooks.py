@@ -457,7 +457,7 @@ def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
 
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: state.active_submode, raising=False)
-    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode: setattr(state, "active_submode", mode), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode, mark_session_dirty=True: setattr(state, "active_submode", mode), raising=False)
     monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [select_tool]), raising=False)
     monkeypatch.setattr(
         module.ToolRegistry,
@@ -538,6 +538,40 @@ def test_histogram_toolbar_entry_is_a_selection_mode_not_a_utility(toolbar_modul
     assert histogram["action"] == "toggle_histogram"
     assert histogram["tooltip_text"] == "Histogram"
     assert "util-histogram" not in utility_source
+
+
+def test_toolbar_default_submodes_do_not_mark_session_dirty(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    calls = []
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "set_selection_mode",
+        lambda mode, mark_session_dirty=True: calls.append((mode, mark_session_dirty)),
+        raising=False,
+    )
+    monkeypatch.setattr(lf_stub.ui, "get_transform_space", lambda: 0, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "", raising=False)
+    select_tool = SimpleNamespace(
+        id="builtin.select",
+        icon="selection",
+        label="Select",
+        can_activate=lambda _context: True,
+        submodes=(SimpleNamespace(id="centers", label="Centers", icon="circle-dot"),),
+    )
+    crop_tool = SimpleNamespace(
+        id="builtin.cropbox",
+        submodes=(SimpleNamespace(id="translate", label="Translate", icon="move"),),
+    )
+
+    module._GizmoToolbarController()._build_selection_records(
+        select_tool, "builtin.select", SimpleNamespace()
+    )
+    module._GizmoToolbarController()._build_submode_records(
+        "builtin.cropbox", crop_tool
+    )
+
+    assert calls == [("centers", False), ("translate", False)]
 
 def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
@@ -1303,7 +1337,7 @@ def test_selection_volume_modes_show_inline_gizmo_controls(toolbar_module, monke
 
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: state.active_submode, raising=False)
-    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode: setattr(state, "active_submode", mode), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode, mark_session_dirty=True: setattr(state, "active_submode", mode), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_crop_tool_operation", lambda: state.crop_operation, raising=False)
     monkeypatch.setattr(
         lf_stub.ui,

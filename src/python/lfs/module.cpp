@@ -163,6 +163,15 @@ namespace {
                 }};
     }
 
+    template <typename Value>
+    bool markViewSettingIfChanged(const Value& before, const Value& after) {
+        if (before == after) {
+            return false;
+        }
+        lfs::python::markProjectSessionChapterCommitted("VIEW");
+        return true;
+    }
+
     void warn_deprecated_python_api(const std::string_view old_name, const std::string_view replacement) {
         const std::string message = std::format(
             "lichtfeld.{}() is deprecated; use lichtfeld.{}() instead",
@@ -2959,9 +2968,12 @@ NB_MODULE(lichtfeld, m) {
                 throw std::invalid_argument(
                     "camera navigation mode must be 'orbit', 'trackball', 'turntable', 'fpv', 'fly', or 'drone'");
             }
+            const auto before = controller->cameraNavigationMode();
             controller->setCameraNavigationMode(*parsed);
-            lfs::vis::saveCameraNavigationPreference(
-                lfs::vis::InputController::cameraNavigationModeName(*parsed));
+            if (markViewSettingIfChanged(before, controller->cameraNavigationMode())) {
+                lfs::vis::saveCameraNavigationPreference(
+                    lfs::vis::InputController::cameraNavigationModeName(*parsed));
+            }
         },
         nb::arg("mode"), "Set the active camera navigation mode");
     m.def("get_new_project_navigation_up_axis", [] { return lfs::vis::UserPreferences::instance().newProjectNavigationUpAxis(); }, "Get the navigation vertical used only for new projects");
@@ -2979,8 +2991,18 @@ NB_MODULE(lichtfeld, m) {
             const auto parsed = lfs::vis::navigationUpAxisFromName(axis);
             if (!parsed)
                 throw std::invalid_argument("navigation up axis must be legacy_y or data_z");
-            if (auto* controller = lfs::vis::InputController::instance())
+            if (auto* controller = lfs::vis::InputController::instance()) {
+                auto* const rendering = lfs::python::get_rendering_manager();
+                const auto grid_planes = [rendering] {
+                    return std::tuple{
+                        rendering ? rendering->getGridPlaneForPanel(lfs::vis::SplitViewPanelId::Left) : -1,
+                        rendering ? rendering->getGridPlaneForPanel(lfs::vis::SplitViewPanelId::Right) : -1};
+                };
+                const auto before = std::tuple{controller->navigationUpAxis(), grid_planes()};
                 controller->setNavigationUpAxis(*parsed, align_grid);
+                const auto after = std::tuple{controller->navigationUpAxis(), grid_planes()};
+                markViewSettingIfChanged(before, after);
+            }
         },
         nb::arg("axis"), nb::arg("align_grid") = false, "Set the project navigation vertical without transforming scene data or camera poses; optionally align both panel grids");
     m.def(
@@ -2994,8 +3016,11 @@ NB_MODULE(lichtfeld, m) {
             auto* controller = lfs::vis::InputController::instance();
             if (!controller)
                 return;
+            const bool before = controller->cameraViewSnapEnabled();
             controller->setCameraViewSnapEnabled(enabled);
-            lfs::vis::saveCameraViewSnapPreference(enabled);
+            if (markViewSettingIfChanged(before, controller->cameraViewSnapEnabled())) {
+                lfs::vis::saveCameraViewSnapPreference(enabled);
+            }
         },
         nb::arg("enabled"), "Enable or disable camera axis-view snapping");
     m.def(
@@ -3059,6 +3084,7 @@ NB_MODULE(lichtfeld, m) {
             if (!controller)
                 return;
             controller->toggleIndependentSplitView();
+            lfs::python::markProjectSessionChapterCommitted("VIEW");
         },
         "Toggle independent split view");
 
@@ -3083,6 +3109,12 @@ NB_MODULE(lichtfeld, m) {
             auto* rm = lfs::python::get_rendering_manager();
             if (!rm)
                 return;
+            const auto render_mode = [rm] {
+                const auto& settings = rm->getSettings();
+                return std::tuple{settings.point_cloud_mode, settings.show_rings,
+                                  settings.show_center_markers};
+            };
+            const auto before = render_mode();
             auto settings = rm->getSettings();
             const bool enable_point_cloud_mode = mode == RenderMode::Points;
             const bool point_cloud_mode_changed = settings.point_cloud_mode != enable_point_cloud_mode;
@@ -3093,6 +3125,7 @@ NB_MODULE(lichtfeld, m) {
                                point_cloud_mode_changed && enable_point_cloud_mode
                                    ? lfs::vis::DirtyFlag::ALL
                                    : lfs::vis::DirtyFlag::SELECTION);
+            markViewSettingIfChanged(before, render_mode());
         },
         nb::arg("mode"), "Set the render mode (Splats, Points, Rings, Centers)");
 
@@ -3115,9 +3148,11 @@ NB_MODULE(lichtfeld, m) {
             auto* rm = lfs::python::get_rendering_manager();
             if (!rm)
                 return;
+            const bool before = rm->getSettings().depth_view;
             auto settings = rm->getSettings();
             settings.depth_view = enabled;
             rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
+            markViewSettingIfChanged(before, rm->getSettings().depth_view);
         },
         nb::arg("enabled"), "Enable or disable depth-map view");
 
@@ -3139,11 +3174,17 @@ NB_MODULE(lichtfeld, m) {
             auto* rm = lfs::python::get_rendering_manager();
             if (!rm)
                 return;
+            const auto depth_range = [rm] {
+                const auto& settings = rm->getSettings();
+                return std::tuple{settings.depth_view_min, settings.depth_view_max};
+            };
+            const auto before = depth_range();
             auto settings = rm->getSettings();
             settings.depth_view_min = depth_min;
             settings.depth_view_max = depth_max;
             lfs::vis::sanitizeDepthViewSettings(settings);
             rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
+            markViewSettingIfChanged(before, depth_range());
         },
         nb::arg("depth_min"), nb::arg("depth_max"), "Set depth-map visualization range");
 
@@ -3164,15 +3205,19 @@ NB_MODULE(lichtfeld, m) {
             auto* rm = lfs::python::get_rendering_manager();
             if (!rm)
                 return;
-            auto settings = rm->getSettings();
+            lfs::rendering::DepthVisualizationMode parsed;
             if (mode == "palette" || mode == "color" || mode == "current") {
-                settings.depth_visualization_mode = lfs::rendering::DepthVisualizationMode::Palette;
+                parsed = lfs::rendering::DepthVisualizationMode::Palette;
             } else if (mode == "gray" || mode == "grayscale") {
-                settings.depth_visualization_mode = lfs::rendering::DepthVisualizationMode::Grayscale;
+                parsed = lfs::rendering::DepthVisualizationMode::Grayscale;
             } else {
                 throw nb::value_error("Depth view mode must be 'palette' or 'gray'");
             }
+            const auto before = rm->getSettings().depth_visualization_mode;
+            auto settings = rm->getSettings();
+            settings.depth_visualization_mode = parsed;
             rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
+            markViewSettingIfChanged(before, rm->getSettings().depth_visualization_mode);
         },
         nb::arg("mode"), "Set depth-map visualization mode");
 
@@ -3193,6 +3238,12 @@ NB_MODULE(lichtfeld, m) {
                 distance_to_pivot = glm::length(pivot - eye);
             }
 
+            const auto orthographic_state = [rm] {
+                const auto& settings = rm->getSettings();
+                return std::tuple{settings.orthographic, settings.equirectangular,
+                                  settings.ortho_scale};
+            };
+            const auto before = orthographic_state();
             if (extent_world) {
                 const float scale = static_cast<float>(viewport_height / *extent_world);
                 if (!std::isfinite(scale) || scale <= 0.0f)
@@ -3207,6 +3258,7 @@ NB_MODULE(lichtfeld, m) {
                 rm->setOrthographic(ortho, viewport_height, distance_to_pivot);
                 lfs::vis::apply_set_ortho_scale(std::nullopt);
             }
+            markViewSettingIfChanged(before, orthographic_state());
         },
         nb::arg("ortho"), nb::arg("extent_world") = nb::none(), "Enable or disable orthographic projection, optionally setting its vertical world extent");
 
