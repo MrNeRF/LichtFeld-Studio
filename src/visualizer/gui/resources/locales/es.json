@@ -3186,7 +3186,7 @@
     "older": "Más antiguas",
     "summary": "{matched} coincidencias · {retained}/{limit} guardadas · Página {page}/{pages}",
     "capture_hint": "La captura cambia el umbral de consola y búfer; los filtros no.",
-    "limit_hint": "Máximo de entradas del búfer, también limitado a 16 MiB. 0 desactiva el búfer. Confirma con Intro o al salir del campo.",
+    "limit_hint": "Máximo de entradas del búfer, también limitado a 64 MiB. 0 desactiva el búfer. Confirma con Intro o al salir del campo.",
     "clear_hint": "Vaciar solo el búfer de memoria; se conservan los archivos de registro.",
     "copied": "{count} entradas copiadas.",
     "exported": "{count} entradas exportadas.",

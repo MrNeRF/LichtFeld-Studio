@@ -3186,7 +3186,7 @@
     "older": "Ältere",
     "summary": "{matched} Treffer · {retained}/{limit} behalten · Seite {page}/{pages}",
     "capture_hint": "Erfassung ändert die Schwelle für Konsole und Puffer; Anzeigefilter nicht.",
-    "limit_hint": "Maximale Einträge im Anzeigepuffer, zusätzlich auf 16 MiB begrenzt. 0 deaktiviert den Puffer. Mit Enter oder beim Verlassen übernehmen.",
+    "limit_hint": "Maximale Einträge im Anzeigepuffer, zusätzlich auf 64 MiB begrenzt. 0 deaktiviert den Puffer. Mit Enter oder beim Verlassen übernehmen.",
     "clear_hint": "Nur den Speicherpuffer leeren; Protokolldateien bleiben erhalten.",
     "copied": "{count} Treffer kopiert.",
     "exported": "{count} Treffer exportiert.",

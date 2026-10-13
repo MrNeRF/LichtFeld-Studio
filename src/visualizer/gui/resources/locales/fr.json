@@ -3186,7 +3186,7 @@
     "older": "Plus anciens",
     "summary": "{matched} résultats · {retained}/{limit} conservés · Page {page}/{pages}",
     "capture_hint": "La capture modifie le seuil de la console et du tampon, pas les filtres.",
-    "limit_hint": "Nombre maximal dans le tampon, limité aussi à 16 Mio. 0 désactive le tampon. Validez avec Entrée ou en quittant le champ.",
+    "limit_hint": "Nombre maximal dans le tampon, limité aussi à 64 Mio. 0 désactive le tampon. Validez avec Entrée ou en quittant le champ.",
     "clear_hint": "Vider uniquement le tampon mémoire ; les fichiers journaux sont conservés.",
     "copied": "{count} entrées copiées.",
     "exported": "{count} entrées exportées.",

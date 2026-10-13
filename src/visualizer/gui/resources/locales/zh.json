@@ -3186,7 +3186,7 @@
     "older": "更早",
     "summary": "匹配 {matched} · 保留 {retained}/{limit} · 第 {page}/{pages} 页",
     "capture_hint": "记录设置会更改控制台和缓冲区的阈值，显示筛选不会。",
-    "limit_hint": "查看缓冲区的最大条目数，同时限制为 16 MiB。0 表示禁用缓冲。按 Enter 或离开输入框时确认。",
+    "limit_hint": "查看缓冲区的最大条目数，同时限制为 64 MiB。0 表示禁用缓冲。按 Enter 或离开输入框时确认。",
     "clear_hint": "仅清空内存缓冲区，保留日志文件。",
     "copied": "已复制 {count} 条匹配日志。",
     "exported": "已导出 {count} 条匹配日志。",

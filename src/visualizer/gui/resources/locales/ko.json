@@ -3186,7 +3186,7 @@
     "older": "이전",
     "summary": "일치 {matched} · 보관 {retained}/{limit} · 페이지 {page}/{pages}",
     "capture_hint": "기록 설정은 콘솔과 버퍼의 임계값을 변경합니다. 표시 필터는 변경하지 않습니다.",
-    "limit_hint": "표시 버퍼의 최대 항목 수이며 16 MiB로도 제한됩니다. 0은 버퍼링을 끕니다. Enter 또는 필드에서 나갈 때 적용합니다.",
+    "limit_hint": "표시 버퍼의 최대 항목 수이며 64 MiB로도 제한됩니다. 0은 버퍼링을 끕니다. Enter 또는 필드에서 나갈 때 적용합니다.",
     "clear_hint": "메모리 버퍼만 지웁니다. 로그 파일은 보존됩니다.",
     "copied": "{count}개 항목을 복사했습니다.",
     "exported": "{count}개 항목을 내보냈습니다.",

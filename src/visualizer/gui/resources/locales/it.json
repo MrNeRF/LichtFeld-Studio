@@ -3186,7 +3186,7 @@
     "older": "Più vecchie",
     "summary": "{matched} risultati · {retained}/{limit} conservati · Pagina {page}/{pages}",
     "capture_hint": "L’acquisizione cambia la soglia di console e buffer; i filtri no.",
-    "limit_hint": "Massimo di voci nel buffer, limitato anche a 16 MiB. 0 disattiva il buffer. Conferma con Invio o uscendo dal campo.",
+    "limit_hint": "Massimo di voci nel buffer, limitato anche a 64 MiB. 0 disattiva il buffer. Conferma con Invio o uscendo dal campo.",
     "clear_hint": "Svuota solo il buffer in memoria; i file di registro vengono conservati.",
     "copied": "{count} voci copiate.",
     "exported": "{count} voci esportate.",

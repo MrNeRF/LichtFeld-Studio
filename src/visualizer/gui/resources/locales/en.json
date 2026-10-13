@@ -3186,7 +3186,7 @@
     "older": "Older",
     "summary": "{matched} matched · {retained}/{limit} retained · Page {page}/{pages}",
     "capture_hint": "Capture changes the console and buffer threshold; display filters do not.",
-    "limit_hint": "Maximum entries in the viewer buffer, also capped at 16 MiB. 0 disables buffering. Commit with Enter or by leaving the field.",
+    "limit_hint": "Maximum entries in the viewer buffer, also capped at 64 MiB. 0 disables buffering. Commit with Enter or by leaving the field.",
     "clear_hint": "Clear only the memory buffer; session log files are preserved.",
     "copied": "Copied {count} matching entries.",
     "exported": "Exported {count} matching entries.",

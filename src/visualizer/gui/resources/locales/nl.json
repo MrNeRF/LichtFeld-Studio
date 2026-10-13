@@ -3186,7 +3186,7 @@
     "older": "Ouder",
     "summary": "{matched} gevonden · {retained}/{limit} bewaard · Pagina {page}/{pages}",
     "capture_hint": "Registratie wijzigt de drempel voor console en buffer; weergavefilters doen dat niet.",
-    "limit_hint": "Maximaal aantal bufferregels, ook begrensd tot 16 MiB. 0 schakelt buffering uit. Bevestig met Enter of door het veld te verlaten.",
+    "limit_hint": "Maximaal aantal bufferregels, ook begrensd tot 64 MiB. 0 schakelt buffering uit. Bevestig met Enter of door het veld te verlaten.",
     "clear_hint": "Wis alleen de geheugenbuffer; logbestanden blijven behouden.",
     "copied": "{count} overeenkomende regels gekopieerd.",
     "exported": "{count} overeenkomende regels geëxporteerd.",

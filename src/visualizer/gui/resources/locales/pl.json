@@ -3186,7 +3186,7 @@
     "older": "Starsze",
     "summary": "Dopasowano {matched} · Zachowano {retained}/{limit} · Strona {page}/{pages}",
     "capture_hint": "Rejestracja zmienia próg konsoli i bufora; filtry wyświetlania go nie zmieniają.",
-    "limit_hint": "Maksymalna liczba wpisów w buforze, także ograniczona do 16 MiB. 0 wyłącza bufor. Zatwierdź Enterem lub opuszczeniem pola.",
+    "limit_hint": "Maksymalna liczba wpisów w buforze, także ograniczona do 64 MiB. 0 wyłącza bufor. Zatwierdź Enterem lub opuszczeniem pola.",
     "clear_hint": "Wyczyść tylko bufor pamięci; pliki dziennika zostają zachowane.",
     "copied": "Skopiowano {count} pasujących wpisów.",
     "exported": "Wyeksportowano {count} pasujących wpisów.",
