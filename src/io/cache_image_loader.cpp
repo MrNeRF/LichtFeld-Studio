@@ -6,11 +6,11 @@
 #if LFS_HAS_CUDA
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/mask_normalization.hpp"
-#include "core/event_bridge/localization_manager.hpp"
 #include "cuda/image_format_kernels.cuh"
 #include "image_execution_cuda.hpp"
-#include <stb_image.h>
 #endif
+#include "core/event_bridge/localization_manager.hpp"
+#include <stb_image.h>
 #include "core/host_metrics.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -380,8 +380,10 @@ namespace lfs::io {
                                                : cpu.to(Device::GPU);
         };
         const auto normalize_bytes = [&](const Tensor& bytes) {
+#if LFS_HAS_CUDA
             if (backend == GpuBackend::CUDA)
                 return lfs::core::cuda::normalize_mask_bytes(bytes);
+#endif
             if (!image_ops || !image_ops->convert)
                 throw std::runtime_error("Mask byte normalization is unavailable for the active tensor backend");
             auto normalized = Tensor::empty(bytes.shape(), Device::GPU, DataType::Float32);
@@ -391,9 +393,11 @@ namespace lfs::io {
         };
         const auto resize_mask = [&](const Tensor& source, const int height, const int width,
                                      const bool normalize_u8) {
+#if LFS_HAS_CUDA
             if (backend == GpuBackend::CUDA)
                 return lanczos_resize_grayscale(source, height, width, 2, stream,
                                                 normalize_u8);
+#endif
             if (!image_ops || !image_ops->resize)
                 throw std::runtime_error("Mask resizing is unavailable for the active tensor backend");
             const Tensor input = normalize_u8 && source.dtype() == DataType::UInt8
@@ -422,8 +426,10 @@ namespace lfs::io {
                     pixels.get(), TensorShape({static_cast<size_t>(height), static_cast<size_t>(width), static_cast<size_t>(channels)}),
                     Device::CPU, DataType::Float32);
                 const auto image = upload(cpu);
+#if LFS_HAS_CUDA
                 if (backend == GpuBackend::CUDA)
                     synchronize_decode_stream(stream);
+#endif
                 const auto first = image.slice(2, 0, 1).squeeze(2);
                 auto source = channels < 3
                                   ? first.contiguous()
@@ -433,10 +439,12 @@ namespace lfs::io {
                 const auto [target_w, target_h] = resized_image_dimensions(width, height, params.resize_factor, params.max_width);
                 if (target_w != width || target_h != height)
                     source = resize_mask(source, target_h, target_w, false);
+#if LFS_HAS_CUDA
                 if (backend == GpuBackend::CUDA) {
                     synchronize_decode_stream(stream);
                     source.set_stream(getCurrentCUDAStream());
                 }
+#endif
                 return source.unsqueeze(0);
             }
             // An unusual TIFF still gets the pre-existing byte-decoder fallback.
@@ -469,10 +477,12 @@ namespace lfs::io {
         auto mask = target_w == width && target_h == height
                         ? normalize_bytes(bytes)
                         : resize_mask(bytes, target_h, target_w, true);
+#if LFS_HAS_CUDA
         if (backend == GpuBackend::CUDA) {
             synchronize_decode_stream(stream);
             mask.set_stream(getCurrentCUDAStream());
         }
+#endif
         return mask.unsqueeze(0);
     }
 

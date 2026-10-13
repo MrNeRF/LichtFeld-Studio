@@ -1111,7 +1111,7 @@ namespace lfs::core {
             return out;
         }
 
-        const auto* const codes = codes_cpu.ptr<__half>();
+        const auto* const codes = codes_cpu.ptr<detail::tensor_half_t>();
         const size_t source_floats = static_cast<size_t>(codes_cpu.numel());
         const size_t active_floats = k * SH_CHANNELS;
         tbb::parallel_for(
