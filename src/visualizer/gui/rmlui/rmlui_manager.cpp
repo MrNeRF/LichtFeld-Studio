@@ -1488,8 +1488,8 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        // The native event was converted to framebuffer pixels at entry.
-        // Reapplying the scale here breaks clicks on high-density monitors.
+        // pointerEventInPixels converted the SDL coordinates at entry. RmlUi
+        // consumes framebuffer pixels, including with an independently scaled UI.
         auto invoke = [&](const uint64_t id) {
             auto* context = contextById(id);
             if (!context || contextWindow(context) != dispatch_window)
