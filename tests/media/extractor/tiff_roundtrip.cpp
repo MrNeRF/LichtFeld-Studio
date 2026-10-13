@@ -197,5 +197,17 @@ int main() {
         if (!lfs::core::image_codecs::write_tiff_u16(path, legacy_bytes, 1, 1, 3, 6, valid, {.overwrite = true}, tags) || rejects())
             return 21;
     }
+    // Metadata inspection must defer unreadable files to the existing decoder,
+    // whose format policy and error remain authoritative.
+    if (!lfs::core::save_png(path, legacy.data(), 1, 1, 3, 16, 6))
+        return 26;
+    try {
+        auto [fallback, fw, fh, fc] = lfs::core::load_image_u16(path);
+        lfs::core::free_image(fallback);
+        return 27;
+    } catch (const std::runtime_error& error) {
+        if (std::string_view(error.what()).find("Load failed:") == std::string_view::npos)
+            return 28;
+    }
     return 0;
 }

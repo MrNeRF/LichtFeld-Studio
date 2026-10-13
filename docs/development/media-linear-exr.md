@@ -24,6 +24,12 @@ transfer, convert BT.2020 to BT.709 in linear light when needed, and encode
 the existing bounded sRGB display/training representation. Alpha is unchanged.
 Conversion runs at 16-bit precision before an optional RGB8 request or resizing;
 wide-gamut colors outside BT.709 are clipped to that display contract.
+The default dataset/training path requests RGB8, so its tensors remain quantized
+in 1/255 steps. TIFF16 export and color-aware reimport do not enable higher
+precision training input. Explicit 16-bit decoding is available to callers;
+a higher precision dataset/training path requires a separate loader followup.
+If libtiff cannot inspect the tags, loading falls back to the existing decoder,
+which remains responsible for deciding whether the file content is readable.
 Raw codec decode, `load_image_float` and high-bitdepth data/normal loaders retain
 the stored samples and do not apply display color management. Untagged TIFFs
 keep their existing behavior. Malformed JSON, non-object descriptions, missing
