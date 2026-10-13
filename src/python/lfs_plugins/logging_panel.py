@@ -14,6 +14,7 @@ import lichtfeld as lf
 from .panels import panel_class
 from . import rml_widgets as w
 from .types import Panel
+from .rml_keys import KI_A, KI_C, KI_ESCAPE
 
 __lfs_panel_classes__ = ["LoggingPanel"]
 __lfs_panel_ids__ = ["lfs.logging"]
@@ -86,7 +87,7 @@ def entry_contents(entry):
 
 
 def entry_markup(entry):
-    return f'<div class="log-row log-row--{LEVELS[entry["level"]]}">{entry_contents(entry)}</div>'
+    return f'<div data-log-sequence="{entry["sequence"]}" class="log-row log-row--{LEVELS[entry["level"]]}">{entry_contents(entry)}</div>'
 
 
 @panel_class("logging")
@@ -116,6 +117,12 @@ class LoggingPanel(Panel):
         self._last_language = ""
         self._row_nodes = []
         self._row_locale = ""
+        self._selected_sequences = set()
+        self._selection_anchor = None
+        self._drag_anchor = None
+        self._drag_base = set()
+        self._drag_last = None
+        self._dragging = False
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("logging_panel")
@@ -138,6 +145,11 @@ class LoggingPanel(Panel):
     def on_mount(self, doc):
         self._doc = doc
         self._row_nodes = []
+        rows = doc.get_element_by_id("log-rows")
+        rows.add_event_listener("mousedown", self._on_selection_down)
+        doc.add_event_listener("mousemove", self._on_selection_move)
+        doc.add_event_listener("mouseup", self._on_selection_up)
+        doc.get_element_by_id("log-scroll").add_event_listener("keydown", self._on_selection_key)
         w.bind_committed_text_input(
             doc.get_element_by_id("log-limit"), "limit", commit=self._commit_limit,
             on_focus=lambda key: setattr(self, "_editing_limit", True),
@@ -152,6 +164,7 @@ class LoggingPanel(Panel):
         self._doc = None
         self._handle = None
         self._row_nodes = []
+        self._dragging = False
 
     def _invalidate(self):
         self._dirty = True
@@ -236,6 +249,10 @@ class LoggingPanel(Panel):
         entries = self._snapshot["entries"] if self._snapshot else []
         self._matched = matching_entries(entries, self._query, self._source, int(self._level))
         self._matches_dirty = False
+        if self._selected_sequences:
+            self._selected_sequences.intersection_update(entry["sequence"] for entry in self._matched)
+        if self._selection_anchor not in self._selected_sequences:
+            self._selection_anchor = None
 
     def _append_matches(self, update):
         """Prune evictions and evaluate filters only against the new snapshot tail."""
@@ -243,6 +260,88 @@ class LoggingPanel(Panel):
         self._matched = self._matched[first:] if update["entry_count"] else []
         if update["entries"]:
             self._matched.extend(matching_entries(update["entries"], self._query, self._source, int(self._level)))
+        self._selected_sequences = {sequence for sequence in self._selected_sequences
+                                    if update["entry_count"] and sequence >= update["first_sequence"]}
+        if self._selection_anchor is not None and self._selection_anchor < update["first_sequence"]:
+            self._selection_anchor = None
+
+    def _selection_sequence(self, event):
+        if self._doc is None:
+            return None
+        row = w.find_ancestor_with_attribute(event.target(), "data-log-sequence", self._doc)
+        return int(row.get_attribute("data-log-sequence", "0")) if row is not None else None
+
+    def _selection_range(self, anchor, sequence):
+        low, high = sorted((anchor, sequence))
+        start = bisect_left(self._matched, low, key=lambda entry: entry["sequence"])
+        selected = set()
+        for entry in islice(self._matched, start, None):
+            if entry["sequence"] > high:
+                break
+            selected.add(entry["sequence"])
+        return selected
+
+    def _sync_selection(self):
+        for sequence, node in self._row_nodes:
+            node.set_class("is-selected", sequence in self._selected_sequences)
+        lf.ui.request_redraw()
+
+    def _on_selection_down(self, event):
+        if int(event.get_parameter("button", "0")) != 0:
+            return
+        sequence = self._selection_sequence(event)
+        if sequence is None:
+            return
+        additive = any(event.get_bool_parameter(key, False) for key in ("ctrl_key", "meta_key", "command_key"))
+        extend = event.get_bool_parameter("shift_key", False) and self._selection_anchor is not None
+        self._drag_base = self._selected_sequences.copy() if additive else set()
+        self._drag_anchor = self._selection_anchor if extend else sequence
+        if extend:
+            self._selected_sequences = self._drag_base | self._selection_range(self._drag_anchor, sequence)
+        elif additive:
+            self._selected_sequences.symmetric_difference_update({sequence})
+        else:
+            self._selected_sequences = {sequence}
+        if not extend:
+            self._selection_anchor = sequence
+        self._dragging = True
+        self._drag_last = sequence
+        self._doc.get_element_by_id("log-scroll").focus()
+        self._sync_selection()
+        event.stop_propagation()
+
+    def _on_selection_move(self, event):
+        if not self._dragging:
+            return
+        sequence = self._selection_sequence(event)
+        if sequence is None or sequence == self._drag_last:
+            return
+        self._drag_last = sequence
+        self._selected_sequences = self._drag_base | self._selection_range(self._drag_anchor, sequence)
+        self._sync_selection()
+
+    def _on_selection_up(self, event):
+        if not self._dragging or int(event.get_parameter("button", "0")) != 0:
+            return
+        self._dragging = False
+        self._invalidate()
+
+    def _on_selection_key(self, event):
+        key = int(event.get_parameter("key_identifier", "0"))
+        control = any(event.get_bool_parameter(name, False) for name in ("ctrl_key", "meta_key", "command_key"))
+        if control and key == KI_C and self._selected_sequences:
+            selected = [entry for entry in reversed(self._matched) if entry["sequence"] in self._selected_sequences]
+            lf.ui.set_clipboard_text(entries_text(selected))
+        elif control and key == KI_A:
+            self._selected_sequences = {entry["sequence"] for entry in self._matched}
+            self._sync_selection()
+        elif key == KI_ESCAPE and self._selected_sequences:
+            self._selected_sequences.clear()
+            self._selection_anchor = None
+            self._sync_selection()
+        else:
+            return
+        event.stop_propagation()
 
     def _on_copy(self, *_):
         self._refresh_matches()
@@ -294,7 +393,7 @@ class LoggingPanel(Panel):
         if capture != self._capture:
             self._capture = capture
             self._dirty = True
-        if not self._paused or self._snapshot is None:
+        if (not self._paused and not self._dragging) or self._snapshot is None:
             previous = self._snapshot["generation"] if self._snapshot else -1
             snapshot = lf.log.snapshot(previous)
             if snapshot is not None:
@@ -320,6 +419,7 @@ class LoggingPanel(Panel):
         rows = doc.get_element_by_id("log-rows")
         if rows:
             self._sync_rows(rows, visible, language)
+            self._sync_selection()
             rows.set_class("log-rows--nowrap", not self._wrap)
         empty = doc.get_element_by_id("log-empty")
         if empty:
@@ -356,6 +456,7 @@ class LoggingPanel(Panel):
             for entry in reversed(visible[:overlap]):
                 node = rows.insert_before("div", reference)
                 node.set_attribute("class", f'log-row log-row--{LEVELS[entry["level"]]}')
+                node.set_attribute("data-log-sequence", str(entry["sequence"]))
                 node.set_inner_rml(entry_contents(entry))
                 reference = node
                 added.insert(0, (entry["sequence"], node))

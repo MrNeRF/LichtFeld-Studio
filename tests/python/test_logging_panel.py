@@ -66,6 +66,7 @@ class Element:
         for child in ET.fromstring("<root>" + value + "</root>"):
             node = Element()
             node.markup = ET.tostring(child, encoding="unicode")
+            node.attrs = dict(child.attrib)
             self.nodes.append(node)
     def children(self): return self.nodes
     def insert_before(self, tag, reference):
@@ -74,6 +75,9 @@ class Element:
         return node
     def remove_child(self, node): self.nodes.remove(node)
     def get_attribute(self, name, default=""): return self.attrs.get(name, default)
+    def has_attribute(self, name): return name in self.attrs
+    def parent(self): return None
+    def focus(self): return True
     def add_event_listener(self, name, callback): self.listeners[name] = callback
     def select(self): return True
     def set_class(self, name, value): pass
@@ -84,7 +88,10 @@ class Element:
 
 
 class Document:
-    def __init__(self): self.elements = {}
+    def __init__(self):
+        self.elements = {}
+        self.listeners = {}
+    def add_event_listener(self, name, callback): self.listeners[name] = callback
     def get_element_by_id(self, name): return self.elements.setdefault(name, Element())
 
 
@@ -247,3 +254,87 @@ def test_match_cache_rebuilds_on_limit_change_and_clear(logging_module, monkeypa
     panel._on_clear()
     assert calls == [[]]
     assert panel._matched == []
+
+
+class SelectionEvent:
+    def __init__(self, node=None, **parameters):
+        self.node = node
+        self.parameters = parameters
+        self.stopped = False
+    def target(self): return self.node
+    def get_parameter(self, name, default=""): return str(self.parameters.get(name, default))
+    def get_bool_parameter(self, name, default=False): return bool(self.parameters.get(name, default))
+    def stop_propagation(self): self.stopped = True
+
+
+def select_row(panel, index, **modifiers):
+    node = panel._row_nodes[index][1]
+    panel._on_selection_down(SelectionEvent(node, button=0, **modifiers))
+    panel._on_selection_up(SelectionEvent(button=0))
+
+
+def test_click_ctrl_shift_and_drag_select_rows_and_copy_in_display_order(logging_module):
+    panel, doc, _ = make_panel(logging_module, count=6)
+    copied = []
+    logging_module.lf.ui.set_clipboard_text = copied.append
+    select_row(panel, 1)
+    assert panel._selected_sequences == {4}
+    select_row(panel, 3, ctrl_key=True)
+    assert panel._selected_sequences == {2, 4}
+    select_row(panel, 1, ctrl_key=True)
+    assert panel._selected_sequences == {2}
+    select_row(panel, 0)
+    select_row(panel, 2, shift_key=True)
+    assert panel._selected_sequences == {3, 4, 5}
+    event = SelectionEvent(key_identifier=logging_module.KI_C, ctrl_key=True)
+    panel._on_selection_key(event)
+    assert event.stopped
+    assert copied[-1] == logging_module.entries_text([panel._matched[i] for i in (5, 4, 3)])
+    # Drag selects the inclusive range and freezes new arrivals until release.
+    panel._on_selection_down(SelectionEvent(panel._row_nodes[4][1], button=0))
+    panel._on_selection_move(SelectionEvent(panel._row_nodes[1][1]))
+    assert panel._selected_sequences == {1, 2, 3, 4}
+    logging_module.lf.log.snapshot = lambda *_: pytest.fail('polled logs during selection drag')
+    panel.on_update(doc)
+    logging_module.lf.log.snapshot = lambda *_: None
+    doc.listeners['mouseup'](SelectionEvent(button=0))
+    assert not panel._dragging
+    panel._on_selection_key(SelectionEvent(key_identifier=logging_module.KI_ESCAPE))
+    assert panel._selected_sequences == set()
+
+
+def test_selection_survives_new_rows_and_prunes_evictions_and_filter_changes(logging_module):
+    panel, doc, _ = make_panel(logging_module, count=6)
+    select_row(panel, 0)
+    select_row(panel, 5, ctrl_key=True)
+    update = dict(generation=2, limit=5000, discarded=1, incremental=True,
+                  first_sequence=1, entry_count=6, entries=[entry(6, 'new')])
+    logging_module.lf.log.snapshot = lambda *_: update
+    panel.on_update(doc)
+    assert panel._selected_sequences == {5}
+    assert panel._row_nodes[0][0] == 6
+    logging_module.lf.log.snapshot = lambda *_: None
+    panel._set_filter('query', 'new')
+    assert panel._selected_sequences == set()
+    select_row(panel, 0)
+    panel._on_selection_key(SelectionEvent(key_identifier=logging_module.KI_A, ctrl_key=True))
+    assert panel._selected_sequences == {6}
+    update = dict(update, generation=3, first_sequence=0, entry_count=0, entries=[])
+    logging_module.lf.log.snapshot = lambda *_: update
+    panel.on_update(doc)
+    assert panel._selected_sequences == set()
+
+
+def test_row_copy_shortcuts_are_scoped_to_log_scroll_and_ignore_other_keys(logging_module):
+    panel, doc, _ = make_panel(logging_module, count=2)
+    assert 'keydown' in doc.elements['log-scroll'].listeners
+    assert 'keydown' not in doc.listeners
+    copied = []
+    logging_module.lf.ui.set_clipboard_text = copied.append
+    select_row(panel, 0)
+    event = SelectionEvent(key_identifier=logging_module.KI_C)
+    panel._on_selection_key(event)
+    assert not copied and not event.stopped
+    right = SelectionEvent(panel._row_nodes[1][1], button=1)
+    panel._on_selection_down(right)
+    assert panel._selected_sequences == {1}

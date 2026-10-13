@@ -22,3 +22,5 @@
 .log-row--error .log-level, .log-row--critical .log-level { color: @{error}; }
 
 .log-settings-bar { border-bottom-color: @{border}; }
+
+.log-row.is-selected, .log-row.is-selected:hover { background-color: @{alpha(primary, 0.18)}; }

@@ -54,7 +54,7 @@
         <span class="log-time">@tr:logging.time</span><span class="log-level">@tr:scene.log_level</span>
         <span class="log-source">@tr:logging.source_label</span><span class="log-message">@tr:logging.message</span>
     </div>
-    <div id="log-scroll">
+    <div id="log-scroll" tabindex="0">
         <div id="log-empty" class="log-empty text-muted">@tr:logging.no_matches</div>
         <div id="log-rows"></div>
     </div>
