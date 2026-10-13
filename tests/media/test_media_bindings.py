@@ -142,6 +142,17 @@ class MediaBindings(unittest.TestCase):
         output.files.tiff16.transfer = media.ColorTransfer.Srgb
         with self.assertRaises(MEDIA_ERROR):
             media.MediaIngest.extract_files(request, output)
+        output.files.tiff16.transfer = media.ColorTransfer.Linear
+        identity_path = output.files.output_directory / ".media-ingest-checkpoint" / "identity.json"
+        identity = json.loads(identity_path.read_text())
+        self.assertEqual(identity["tiff16"][0], "tiff16-sdr-v1")
+        # Older or incompatible encoding identities must not reuse verified files.
+        identity["tiff16"][0] = "tiff16-sdr-v0"
+        identity_path.write_text(json.dumps(identity))
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertEqual([hashlib.sha256(path.read_bytes()).hexdigest() for path in paths], hashes)
+        self.assertEqual([path.stat().st_mtime_ns for path in paths], mtimes)
 
     @classmethod
     def setUpClass(cls):

@@ -141,7 +141,7 @@ namespace lfs::media {
                                                                                 : v);
             }
             nlohmann::json description{{"lfsTransfer", outputOptionName(options.transfer)}, {"lfsPrimaries", outputOptionName(layout.color.primaries)}, {"lfsUnits", "relative"}, {"lfsAlpha", rgba ? "independent" : "none"}, {"lfsProvenance", options.provenance}, {"lfsOrigin", static_cast<int>(frame.info.origin)}, {"lfsQuantization", "clamp-round-half-up-uint16"}};
-            description["lfsEncoding"] = "tiff16-sdr-v1";
+            description["lfsEncoding"] = core::image_codecs::tiff_sdr_encoding;
             if (frame.info.source_timestamp)
                 description["lfsSourceTimestamp"] = timestampText(*frame.info.source_timestamp);
             if (frame.info.output_timestamp)

@@ -30,6 +30,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <queue>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tbb/blocked_range.h>
@@ -52,25 +53,55 @@ namespace {
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
         if (extension != ".tif" && extension != ".tiff")
             return {};
-        std::optional<std::string> description;
+        image_codecs::TiffMetadata tags;
         std::string error;
-        if (!image_codecs::read_tiff_description(path, description, error))
+        if (!image_codecs::read_tiff_metadata(path, tags, error))
             throw std::runtime_error("TIFF metadata read failed: " + error);
-        if (!description)
+        if (!tags.description)
             return {};
-        const auto metadata = nlohmann::json::parse(*description, nullptr, false);
-        if (!metadata.is_object() || !metadata.contains("lfsEncoding"))
+        bool duplicate = false;
+        std::set<std::string> keys;
+        const auto metadata = nlohmann::json::parse(*tags.description, [&](int depth, auto event, auto& parsed) {
+            if (depth == 1 && event == nlohmann::json::parse_event_t::key && !keys.insert(parsed.template get<std::string>()).second)
+                duplicate = true;
+            return true; }, false);
+        if (metadata.is_discarded() && tags.description->find("\"lfs") != std::string::npos)
+            throw std::runtime_error("Malformed LichtFeld TIFF16 metadata");
+        if (!metadata.is_object())
             return {};
+        if (!metadata.contains("lfsEncoding")) {
+            if (metadata.contains("lfsTransfer") || metadata.contains("lfsPrimaries") || metadata.contains("lfsUnits"))
+                throw std::runtime_error("Missing LichtFeld TIFF16 encoding version");
+            return {};
+        }
         const auto text = [&](const char* key) -> std::string {
             const auto field = metadata.find(key);
             return field != metadata.end() && field->is_string() ? field->get<std::string>() : std::string{};
         };
         const auto transfer = text("lfsTransfer");
         const auto primaries = text("lfsPrimaries");
-        if (text("lfsEncoding") != "tiff16-sdr-v1" || text("lfsUnits") != "relative" ||
+        if (duplicate || text("lfsEncoding") != image_codecs::tiff_sdr_encoding || text("lfsUnits") != "relative" ||
             (transfer != "linear" && transfer != "srgb" && transfer != "bt709") ||
             (primaries != "bt709" && primaries != "bt2020"))
             throw std::runtime_error("Unsupported LichtFeld TIFF16 color encoding");
+        if (tags.bits != 16 || !tags.unsigned_integer ||
+            (tags.channels != 3 && tags.channels != 4) || !tags.chromaticities ||
+            !tags.matching_rgb_transfer || tags.transfer_function.size() != 65536 ||
+            (tags.channels == 4 ? text("lfsAlpha") != "independent" || !tags.straight_alpha : text("lfsAlpha") != "none" || tags.straight_alpha))
+            throw std::runtime_error("LichtFeld TIFF16 metadata contradicts TIFF sample or alpha tags");
+        const std::array<float, 8> expected = primaries == "bt709" ? std::array<float, 8>{.64f, .33f, .30f, .60f, .15f, .06f, .3127f, .3290f}
+                                                                   : std::array<float, 8>{.708f, .292f, .170f, .797f, .131f, .046f, .3127f, .3290f};
+        for (size_t i = 0; i < expected.size(); ++i)
+            if (!std::isfinite((*tags.chromaticities)[i]) || std::abs((*tags.chromaticities)[i] - expected[i]) > 1e-5f)
+                throw std::runtime_error("LichtFeld TIFF16 primaries contradict TIFF chromaticities");
+        for (size_t i = 0; i < tags.transfer_function.size(); ++i) {
+            const float value = float(i) / 65535.f;
+            const float linear = transfer == "linear" ? value : transfer == "srgb" ? lfs::core::color::srgbToLinear(value)
+                                                                                   : lfs::core::color::bt709ToLinear(value);
+            const auto expected_value = std::lround(std::clamp(double(linear), 0., 1.) * 65535.);
+            if (std::abs(long(tags.transfer_function[i]) - expected_value) > 1)
+                throw std::runtime_error("LichtFeld TIFF16 transfer contradicts TIFF transfer function");
+        }
         return TiffDisplayEncoding{transfer, primaries == "bt2020"};
     }
 

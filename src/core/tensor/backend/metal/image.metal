@@ -231,7 +231,7 @@ struct SharedImageLanczosParams {
     device const float* coef_x;
     device const float* coef_y;
     int input_h, input_w, output_h, output_w, kernel_size;
-    uint stride_x, stride_y, layout, bytes;
+    uint stride_x, stride_y, layout, bytes, channels;
 };
 
 kernel void shared_image_lanczos_resample(constant SharedImageLanczosParams& p [[buffer(0)]],
@@ -246,10 +246,10 @@ kernel void shared_image_lanczos_resample(constant SharedImageLanczosParams& p [
     const int ly = max(int(cy - float(p.kernel_size) * scale_h + 0.5f), 0);
     const int rx = min(int(cx + float(p.kernel_size) * scale_w + 0.5f), p.input_w);
     const int ry = min(int(cy + float(p.kernel_size) * scale_h + 0.5f), p.input_h);
-    const int channels = p.layout == 1 ? 1 : 3;
+    const int channels = int(p.channels);
     const uint input_plane = uint(p.input_h * p.input_w);
     device const float* f32 = (device const float*)p.input;
-    float acc[3] = {0.0f, 0.0f, 0.0f};
+    float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     for (int y = ly; y < ry; ++y) {
         const float ky = p.coef_y[uint(py) * p.stride_y + uint(y - ly)];
         for (int x = lx; x < rx; ++x) {
@@ -262,7 +262,7 @@ kernel void shared_image_lanczos_resample(constant SharedImageLanczosParams& p [
                 else if (p.layout == 1)
                     v = p.bytes != 0 ? float(p.input[pixel]) * kImageScaleU8 : f32[pixel];
                 else
-                    v = p.bytes != 0 ? float(p.input[pixel * 3 + uint(ch)]) / 255.0f : f32[pixel * 3 + uint(ch)];
+                    v = p.bytes != 0 ? float(p.input[pixel * p.channels + uint(ch)]) / 255.0f : f32[pixel * p.channels + uint(ch)];
                 acc[ch] += v * k;
             }
         }

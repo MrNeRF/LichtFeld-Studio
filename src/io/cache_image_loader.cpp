@@ -181,11 +181,15 @@ namespace lfs::io {
             key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex << hash;
             if (include_output_format)
                 key << (params.output_uint8 ? "_u8" : "_f32");
+            if (include_output_format && params.decode_16bit)
+                key << "_decode16";
             return key.str();
         }
         auto key = std::format("{}:rf{}_mw{}", lfs::core::path_to_utf8(path), params.resize_factor, params.max_width);
         if (include_output_format)
             key += params.output_uint8 ? "_u8" : "_f32";
+        if (include_output_format && params.decode_16bit)
+            key += "_decode16";
         return key;
     }
 
@@ -291,7 +295,7 @@ namespace lfs::io {
             if (!data || channels != 3)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
         };
-        if (decode_16bit) {
+        if (decode_16bit || params.decode_16bit) {
             auto [data, width, height, channels] = lfs::core::load_image_u16(path, 1, 0);
             const std::unique_ptr<uint16_t, decltype(&lfs::core::free_image)> owned(data, &lfs::core::free_image);
             require_rgb(data, channels);

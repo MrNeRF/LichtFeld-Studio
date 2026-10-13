@@ -12,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::core::image_codecs {
@@ -60,8 +61,18 @@ namespace lfs::core::image_codecs {
 
     LFS_IMAGE_CODECS_API bool probe(const std::filesystem::path& path, Probe& result, std::string& error);
     LFS_IMAGE_CODECS_API bool decode(const std::filesystem::path& path, Image& result, std::string& error);
+    inline constexpr std::string_view tiff_sdr_encoding = "tiff16-sdr-v1";
+    struct TiffMetadata {
+        std::optional<std::string> description;
+        std::optional<std::array<float, 8>> chromaticities;
+        std::vector<std::uint16_t> transfer_function;
+        int bits = 0, channels = 0;
+        bool unsigned_integer = false;
+        bool straight_alpha = false;
+        bool matching_rgb_transfer = false;
+    };
     // TIFF metadata only. Pixel decode APIs retain the original file encoding.
-    LFS_IMAGE_CODECS_API bool read_tiff_description(const std::filesystem::path&, std::optional<std::string>&, std::string& error);
+    LFS_IMAGE_CODECS_API bool read_tiff_metadata(const std::filesystem::path&, TiffMetadata&, std::string& error);
     LFS_IMAGE_CODECS_API bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
     LFS_IMAGE_CODECS_API bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
     LFS_IMAGE_CODECS_API bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);

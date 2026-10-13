@@ -27,6 +27,9 @@ wide-gamut colors outside BT.709 are clipped to that display contract.
 Raw codec decode, `load_image_float` and high-bitdepth data/normal loaders retain
 the stored samples and do not apply display color management. Untagged TIFFs
 keep their existing behavior. Unknown versioned LichtFeld encodings fail explicitly.
+Incomplete, malformed or duplicate-key LichtFeld metadata is rejected; its
+sample type, alpha, primaries and complete transfer table must agree with the
+TIFF tags. Oversized external descriptions remain outside this color contract.
 The TIFF tags are not an ICC profile; other software must interpret them itself.
 The transfer table adds approximately 128 KiB per
 image. Conversion and encoding run on the CPU with a packed UINT16 image buffer;
@@ -42,7 +45,14 @@ Writes reuse the existing atomic-file service. Overwrite is opt-in; cancellation
 or failure preserves an existing destination. Resume identity includes transfer
 and provenance and rejects incompatible reuse. As for EXR, replay that would
 replace existing extraction metadata requires explicit overwrite permission;
-verified frame files are retained without rewriting.
+verified frame files are retained without rewriting. The checkpoint includes the
+TIFF encoding version as well as transfer and provenance; incompatible versions
+cannot reuse already published frames.
+
+The shared image loader honors `LoadParams::decode_16bit` and separates cached
+RGB8 and UINT16 decode results, including cold/warm loads and resized requests.
+RGBA resizing uses the existing Lanczos service on CUDA, Vulkan and Metal;
+the Metal path accepts four channels and retains alpha alongside RGB.
 
 `lfs_media` provides `RGBFloat32` and `RGBAFloat32` CPU frame views and immutable
 owning surfaces. `RGB8` remains the default for ingest, preview and PNG/JPEG.

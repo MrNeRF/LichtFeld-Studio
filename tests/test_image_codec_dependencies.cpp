@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <jpeglib.h>
+#include <memory>
 #include <png.h>
 #include <stdexcept>
 #include <tiffio.h>
@@ -173,6 +174,36 @@ namespace {
         EXPECT_EQ(cancelled.error().code(), lfs::ErrorCode::Cancelled);
         EXPECT_EQ(contents(), before);
         EXPECT_EQ(std::distance(std::filesystem::directory_iterator(temporary.path), std::filesystem::directory_iterator{}), 1);
+    }
+
+    TEST(ProductionTiff, OversizedOwnMetadataFailsWhileExternalDescriptionKeepsLegacyDecode) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "description.tif";
+        for (const bool own : {false, true}) {
+            auto* tiff = TIFFOpen(path.string().c_str(), "w");
+            ASSERT_NE(tiff, nullptr);
+            std::unique_ptr<TIFF, decltype(&TIFFClose)> owner(tiff, TIFFClose);
+            std::string description = own ? "{\"lfsEncoding\":\"tiff16-sdr-v1\",\"padding\":\"" : "external description ";
+            description.append(1024 * 1024, 'x');
+            TIFFSetField(tiff, TIFFTAG_IMAGEWIDTH, 1);
+            TIFFSetField(tiff, TIFFTAG_IMAGELENGTH, 1);
+            TIFFSetField(tiff, TIFFTAG_SAMPLESPERPIXEL, 3);
+            TIFFSetField(tiff, TIFFTAG_BITSPERSAMPLE, 16);
+            TIFFSetField(tiff, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT);
+            TIFFSetField(tiff, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+            TIFFSetField(tiff, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB);
+            ASSERT_EQ(TIFFSetField(tiff, TIFFTAG_IMAGEDESCRIPTION, description.c_str()), 1);
+            std::array<uint16_t, 3> pixel{1234, 23456, 54321};
+            ASSERT_GE(TIFFWriteScanline(tiff, pixel.data(), 0), 0);
+            owner.reset();
+            codec::TiffMetadata metadata;
+            std::string error;
+            EXPECT_EQ(codec::read_tiff_metadata(path, metadata, error), !own);
+            EXPECT_FALSE(metadata.description);
+            codec::Image raw;
+            ASSERT_TRUE(codec::decode(path, raw, error));
+            EXPECT_EQ(raw.sample_type, codec::SampleType::UInt16);
+        }
     }
 
     TEST(ProductionTiff, NormalizesUnsignedInteger32WithoutMisreportingSamples) {

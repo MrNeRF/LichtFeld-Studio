@@ -1680,12 +1680,22 @@ namespace lfs::core::image_codecs {
         return write_tiff_stream(path, data, width, height, channels, error, nullptr);
     }
 
-    bool read_tiff_description(const std::filesystem::path& path, std::optional<std::string>& description, std::string& error) {
-        description.reset();
+    bool read_tiff_metadata(const std::filesystem::path& path, TiffMetadata& result, std::string& error) {
+        result = {};
         TIFF* tiff = open_tiff(path, "r", error);
         if (!tiff)
             return false;
         const std::unique_ptr<TIFF, decltype(&TIFFClose)> owner(tiff, TIFFClose);
+        uint16_t bits = 0, channels = 0, format = 0, extra_count = 0;
+        uint16_t* extras = nullptr;
+        TIFFGetFieldDefaulted(tiff, TIFFTAG_BITSPERSAMPLE, &bits);
+        TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLESPERPIXEL, &channels);
+        TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLEFORMAT, &format);
+        result.bits = bits;
+        result.channels = channels;
+        result.unsigned_integer = format == SAMPLEFORMAT_UINT;
+        result.straight_alpha = TIFFGetField(tiff, TIFFTAG_EXTRASAMPLES, &extra_count, &extras) &&
+                                extra_count == 1 && extras && extras[0] == EXTRASAMPLE_UNASSALPHA;
         char* text = nullptr;
         if (TIFFGetField(tiff, TIFFTAG_IMAGEDESCRIPTION, &text) && text) {
             constexpr size_t limit = 1024 * 1024;
@@ -1693,11 +1703,28 @@ namespace lfs::core::image_codecs {
             while (length <= limit && text[length])
                 ++length;
             if (length > limit) {
+                if (std::string_view(text, limit).find("\"lfs") != std::string_view::npos) {
+                    error = "LichtFeld TIFF16 metadata exceeds the supported limit";
+                    return false;
+                }
                 // Oversized external descriptions are not our bounded export
                 // contract. Preserve legacy pixel loading without parsing them.
                 return true;
             }
-            description = std::string(text, length);
+            result.description = std::string(text, length);
+        }
+        // Color tables are needed only for our explicitly versioned exports.
+        // Avoid allocating/parsing arbitrary external TIFF profiles.
+        if (!result.description || result.description->find("\"lfsEncoding\"") == std::string::npos)
+            return true;
+        float *primaries = nullptr, *white = nullptr;
+        if (TIFFGetField(tiff, TIFFTAG_PRIMARYCHROMATICITIES, &primaries) &&
+            TIFFGetField(tiff, TIFFTAG_WHITEPOINT, &white))
+            result.chromaticities = std::array<float, 8>{primaries[0], primaries[1], primaries[2], primaries[3], primaries[4], primaries[5], white[0], white[1]};
+        uint16_t *red = nullptr, *green = nullptr, *blue = nullptr;
+        if (bits == 16 && channels >= 3 && TIFFGetField(tiff, TIFFTAG_TRANSFERFUNCTION, &red, &green, &blue) && red && green && blue) {
+            result.transfer_function.assign(red, red + 65536);
+            result.matching_rgb_transfer = std::equal(red, red + 65536, green) && std::equal(red, red + 65536, blue);
         }
         return true;
     }

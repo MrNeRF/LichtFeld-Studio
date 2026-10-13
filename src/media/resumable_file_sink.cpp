@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "resumable_file_sink.hpp"
 #include "core/atomic_file.hpp"
+#include "core/image_codecs.hpp"
 #include "core/path_utils.hpp"
 #include "git_version.h"
 #include "media/video_frame_extractor.hpp"
@@ -152,7 +153,7 @@ namespace lfs::media::detail {
         identity_["color"] = {static_cast<int>(r.output_format), static_cast<int>(r.input_color.transfer), static_cast<int>(r.input_color.primaries), r.convert_hdr_to_sdr};
         identity_["files"] = {f.filename_pattern, static_cast<int>(f.format), f.jpeg_quality, static_cast<int>(f.exr.precision), static_cast<int>(f.exr.compression), f.exr.provenance};
         if (f.format == FrameFileFormat::TIFF16)
-            identity_["tiff16"] = {static_cast<int>(f.tiff16.transfer), f.tiff16.provenance};
+            identity_["tiff16"] = {core::image_codecs::tiff_sdr_encoding, static_cast<int>(f.tiff16.transfer), f.tiff16.provenance};
         identity_["layout"] = {session.output.width, session.output.height, static_cast<int>(session.output.format), static_cast<int>(session.output.color.transfer), static_cast<int>(session.output.color.primaries)};
         identity_["metadata"] = output_.write_metadata;
         if (r.float_color_profile != FloatColorProfile::Sdr)
