@@ -89,6 +89,7 @@ namespace lfs::gui {
         void setInput(const lfs::vis::gui::PanelInputState* input) override;
         void setForcedHeight(float h) override;
         void setFloating(bool floating) override;
+        SDL_Window* nativeWindow() const override;
         [[nodiscard]] bool wantsKeyboard() const override;
         [[nodiscard]] bool needsAnimationFrame() const override;
         void reloadRmlResources() override;

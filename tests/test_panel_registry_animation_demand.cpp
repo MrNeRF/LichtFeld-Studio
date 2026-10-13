@@ -202,6 +202,29 @@ TEST_F(PanelRegistryAnimationDemandTest, LeftAreaDemandRespectsLeftAreaVisibilit
     }));
 }
 
+TEST_F(PanelRegistryAnimationDemandTest, NativeWindowAnimationSurvivesHiddenMainInterface) {
+    using namespace lfs::vis::gui;
+    class NativePanel final : public IPanel {
+    public:
+        void draw(const PanelDrawContext&) override {}
+        bool needsAnimationFrame() const override { return true; }
+        PanelRenderCapabilities renderCapabilities() const override { return {.direct = true}; }
+        SDL_Window* nativeWindow() const override {
+            // An opaque host identity; animation scheduling must not query SDL.
+            return reinterpret_cast<SDL_Window*>(const_cast<NativePanel*>(this));
+        }
+    };
+    PanelInfo info;
+    info.id = "test.native.animation";
+    info.label = info.id;
+    info.space = PanelSpace::Floating;
+    info.is_native = false;
+    info.panel = std::make_shared<NativePanel>();
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
+    const auto demand = PanelRegistry::instance().animationDemandForVisiblePanels({.ui_visible = false});
+    EXPECT_TRUE(demand.floating);
+}
+
 TEST_F(PanelRegistryAnimationDemandTest, ScheduledDelaySkipsHiddenLeftArea) {
     using namespace lfs::vis::gui;
 

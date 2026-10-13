@@ -10,6 +10,7 @@
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
+#include "gui/panel_registry.hpp"
 #include "gui/rmlui/elements/chromaticity_element.hpp"
 #include "gui/rmlui/elements/color_picker_element.hpp"
 #include "gui/rmlui/elements/colour_offset_element.hpp"
@@ -26,6 +27,7 @@
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
+#include "gui/ui_texture.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "python/python_runtime.hpp"
@@ -37,7 +39,11 @@
 #else
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #endif
+#include "visualizer/preferences.hpp"
 #include "window/graphics_context.hpp"
+#include "window/window_state_utils.hpp"
+#include <SDL3/SDL.h>
+#include <nlohmann/json.hpp>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Context.h>
@@ -64,6 +70,330 @@
 #include <vector>
 
 namespace lfs::vis::gui {
+
+    // Each native panel keeps its original document/model and its own UI-only
+    // graphics device. It never adopts or disconnects the scene tensor backend.
+    struct RmlUIManager::NativeWindow {
+        SDL_Window* window = nullptr;
+        std::unique_ptr<GraphicsContext> graphics;
+        std::unique_ptr<UiRenderer> renderer;
+        std::string name;
+        std::string panel_id;
+        bool drawn = false;
+        bool visible = false;
+        bool failed = false;
+        bool geometry_dirty = false;
+        std::function<void()> on_close;
+        std::function<void(lfs::Result<WindowCapture>)> capture_callback;
+        ~NativeWindow() {
+            if (capture_callback)
+                capture_callback(lfs::make_error({.code = lfs::ErrorCode::Cancelled,
+                                                  .domain = lfs::ErrorDomain::Rendering,
+                                                  .user_message = "Native window was destroyed before capture",
+                                                  .detection = LFS_SOURCE_SITE_CURRENT()}));
+            if (graphics)
+                (void)graphics->waitIdle();
+            if (renderer)
+                renderer->shutdown();
+            renderer.reset();
+            if (graphics)
+                graphics->shutdown();
+            graphics.reset();
+            if (window)
+                SDL_DestroyWindow(window);
+        }
+    };
+
+    namespace {
+        std::vector<WindowRectangle> nativeDisplays() {
+            std::vector<WindowRectangle> result;
+            int count = 0;
+            SDL_DisplayID* displays = SDL_GetDisplays(&count);
+            for (int i = 0; displays && i < count; ++i) {
+                SDL_Rect rect{};
+                if (SDL_GetDisplayUsableBounds(displays[i], &rect))
+                    result.push_back({rect.x, rect.y, rect.w, rect.h});
+            }
+            SDL_free(displays);
+            return result;
+        }
+
+        WindowRectangle nativeParentDisplay(SDL_Window* parent) {
+            SDL_Rect display{0, 0, 1280, 720};
+            auto id = SDL_GetDisplayForWindow(parent);
+            if (!id)
+                id = SDL_GetPrimaryDisplay();
+            (void)SDL_GetDisplayUsableBounds(id, &display);
+            return {display.x, display.y, display.w, display.h};
+        }
+
+        WindowRectangle nativeDefaultRect(SDL_Window* parent, int width, int height) {
+            WindowRectangle bounds;
+            SDL_GetWindowPosition(parent, &bounds.x, &bounds.y);
+            SDL_GetWindowSize(parent, &bounds.width, &bounds.height);
+            return defaultFloatingWindowRectangle({0, 0, width, height}, bounds, nativeParentDisplay(parent));
+        }
+    } // namespace
+
+    std::unique_ptr<RmlUIManager::NativeWindow> RmlUIManager::createNativeWindow(
+        const std::string& name, int width, int height) {
+        auto result = std::make_unique<NativeWindow>();
+        result->name = name;
+        const bool modal = name == "modal_overlay";
+        auto rect = nativeDefaultRect(window_, modal ? 560 : std::max(width, 640), modal ? 360 : std::max(height, 480));
+        bool restored_geometry = false;
+        if (automaticWindowStatePersistenceEnabled()) {
+            const auto state = nlohmann::json::parse(UserPreferences::instance().floatingWindowGeometry(), nullptr, false);
+            if (state.is_object()) {
+                const auto saved = state.find(name);
+                if (saved != state.end() && saved->is_array() && saved->size() == 4 &&
+                    std::ranges::all_of(*saved, [](const auto& v) { return v.is_number_integer() && v >= -100000 && v <= 100000; })) {
+                    const WindowRectangle requested{(*saved)[0], (*saved)[1], (*saved)[2], (*saved)[3]};
+                    rect = recoverFloatingWindowRectangle(requested, nativeDisplays(), nativeParentDisplay(window_));
+                    restored_geometry = true;
+                }
+            }
+        }
+        SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
+                                SDL_WINDOW_HIDDEN | SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT;
+#ifdef LFS_GRAPHICS_METAL
+        flags |= SDL_WINDOW_METAL;
+#else
+        flags |= SDL_WINDOW_VULKAN;
+#endif
+        result->window = SDL_CreateWindow("LichtFeld Studio", rect.width, rect.height, flags);
+        if (!result->window)
+            return {};
+        SDL_SetWindowMinimumSize(result->window, 320, 180);
+        SDL_SetPointerProperty(SDL_GetWindowProperties(result->window), "lfs.parent_window", window_);
+        SDL_SetBooleanProperty(SDL_GetWindowProperties(result->window), "lfs.geometry_initialized", restored_geometry);
+        SDL_SetWindowHitTest(result->window, [](SDL_Window* window, const SDL_Point* point, void*) -> SDL_HitTestResult {
+            if (!point)
+                return SDL_HITTEST_NORMAL;
+            int w = 0, h = 0;
+            SDL_GetWindowSize(window, &w, &h);
+            if (!(SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED)) {
+                const bool left = point->x < 5, right = point->x >= w - 5;
+                const bool top = point->y < 5, bottom = point->y >= h - 5;
+                if (top && left) return SDL_HITTEST_RESIZE_TOPLEFT;
+                if (top && right) return SDL_HITTEST_RESIZE_TOPRIGHT;
+                if (bottom && left) return SDL_HITTEST_RESIZE_BOTTOMLEFT;
+                if (bottom && right) return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+                if (left) return SDL_HITTEST_RESIZE_LEFT;
+                if (right) return SDL_HITTEST_RESIZE_RIGHT;
+                if (top) return SDL_HITTEST_RESIZE_TOP;
+                if (bottom) return SDL_HITTEST_RESIZE_BOTTOM;
+            }
+            auto* context = static_cast<Rml::Context*>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), "lfs.rml_context", nullptr));
+            if (!context)
+                return SDL_HITTEST_NORMAL;
+            const float density = SDL_GetWindowPixelDensity(window);
+            auto* element = context->GetElementAtPoint({point->x * density, point->y * density});
+            for (; element; element = element->GetParentNode()) {
+                if (element->GetId() == "close-btn" || element->GetTagName() == "button" ||
+                    element->GetTagName() == "input" || element->GetTagName() == "select")
+                    return SDL_HITTEST_NORMAL;
+                if (element->GetId() == "title-bar")
+                    return SDL_HITTEST_DRAGGABLE;
+            }
+            return SDL_HITTEST_NORMAL; }, nullptr);
+        (void)SDL_SetWindowPosition(result->window, rect.x, rect.y);
+        int pw = 0, ph = 0;
+        SDL_GetWindowSizeInPixels(result->window, &pw, &ph);
+        result->graphics = createGraphicsContext();
+        result->graphics->setAuxiliaryWindow(true);
+        if (!result->graphics->initialize(result->window, pw, ph)) {
+            LOG_WARN("Native panel '{}' graphics initialization failed; keeping it inside the main window", name);
+            return {};
+        }
+#ifdef LFS_GRAPHICS_METAL
+        result->renderer = std::make_unique<TensorRmlUiRenderer>();
+#else
+        result->renderer = std::make_unique<RenderInterface_VK>();
+#endif
+        if (!result->renderer->initialize(*result->graphics))
+            return {};
+        return result;
+    }
+
+    SDL_Window* RmlUIManager::nativeWindow(const Rml::Context* context) const {
+        const auto it = native_windows_.find(context);
+        return it == native_windows_.end() ? nullptr : it->second->window;
+    }
+
+    SDL_Window* RmlUIManager::contextWindow(const Rml::Context* context) const {
+        const auto it = context_windows_.find(context);
+        return it == context_windows_.end() ? window_ : it->second;
+    }
+
+    GraphicsContext* RmlUIManager::nativeGraphics(const Rml::Context* context) const {
+        const auto it = native_windows_.find(context);
+        return it == native_windows_.end() ? nullptr : it->second->graphics.get();
+    }
+
+    void RmlUIManager::showNativeWindow(Rml::Context* context) {
+        const auto it = native_windows_.find(context);
+        if (it == native_windows_.end())
+            return;
+        auto& native = *it->second;
+        native.drawn = true;
+        if (!native.visible) {
+            WindowRectangle current;
+            SDL_GetWindowPosition(native.window, &current.x, &current.y);
+            SDL_GetWindowSize(native.window, &current.width, &current.height);
+            const auto recovered = recoverFloatingWindowRectangle(current, nativeDisplays(), nativeParentDisplay(window_));
+            if (recovered != current) {
+                SDL_SetWindowSize(native.window, recovered.width, recovered.height);
+                SDL_SetWindowPosition(native.window, recovered.x, recovered.y);
+                native.geometry_dirty = true;
+            }
+            if (SDL_GetWindowFlags(native.window) & SDL_WINDOW_MINIMIZED)
+                SDL_RestoreWindow(native.window);
+            SDL_ShowWindow(native.window);
+            SDL_RaiseWindow(native.window);
+            native.visible = true;
+        }
+    }
+
+    void RmlUIManager::resetNativeWindowGeometry() {
+        UserPreferences::instance().setFloatingWindowGeometry("{}");
+        for (auto& [context, native] : native_windows_) {
+            const auto properties = SDL_GetWindowProperties(native->window);
+            const auto rect = nativeDefaultRect(window_,
+                                                static_cast<int>(SDL_GetNumberProperty(properties, "lfs.default_width", 640)),
+                                                static_cast<int>(SDL_GetNumberProperty(properties, "lfs.default_height", 480)));
+            SDL_RestoreWindow(native->window);
+            SDL_SetWindowSize(native->window, rect.width, rect.height);
+            SDL_SetWindowPosition(native->window, rect.x, rect.y);
+            native->geometry_dirty = false;
+        }
+    }
+
+    bool RmlUIManager::processNativeWindowEvent(const SDL_Event& event) {
+        if (event.type >= SDL_EVENT_DISPLAY_FIRST && event.type <= SDL_EVENT_DISPLAY_LAST) {
+            const auto displays = nativeDisplays();
+            for (auto& [context, native] : native_windows_) {
+                WindowRectangle current;
+                SDL_GetWindowPosition(native->window, &current.x, &current.y);
+                SDL_GetWindowSize(native->window, &current.width, &current.height);
+                const auto recovered = recoverFloatingWindowRectangle(current, displays, nativeParentDisplay(window_));
+                if (recovered != current) {
+                    SDL_SetWindowSize(native->window, recovered.width, recovered.height);
+                    SDL_SetWindowPosition(native->window, recovered.x, recovered.y);
+                    native->geometry_dirty = true;
+                }
+            }
+            return !native_windows_.empty();
+        }
+        auto* target = SDL_GetWindowFromEvent(&event);
+        for (auto& [context, native] : native_windows_) {
+            if (native->window != target)
+                continue;
+            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+                const char* panel_id = SDL_GetStringProperty(SDL_GetWindowProperties(target), "lfs.panel_id", "");
+                if (*panel_id)
+                    PanelRegistry::instance().set_panel_enabled(panel_id, false);
+                SDL_HideWindow(target);
+                native->visible = false;
+                cancelPointerInput(const_cast<Rml::Context*>(context));
+                auto on_close = native->on_close;
+                if (on_close)
+                    on_close();
+                return true;
+            }
+            if (event.type == SDL_EVENT_WINDOW_MOVED || event.type == SDL_EVENT_WINDOW_RESIZED)
+                native->geometry_dirty = true;
+            if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED || event.type == SDL_EVENT_WINDOW_RESIZED) {
+                int w = 0, h = 0;
+                SDL_GetWindowSizeInPixels(target, &w, &h);
+                native->graphics->notifyFramebufferResized(w, h, GraphicsResizeIntent::Interactive);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    void RmlUIManager::setNativeWindowCloseHandler(Rml::Context* context, std::function<void()> handler) {
+        if (const auto it = native_windows_.find(context); it != native_windows_.end())
+            it->second->on_close = std::move(handler);
+    }
+
+    bool RmlUIManager::requestNativeWindowCapture(const std::string& panel_id, std::function<void(lfs::Result<WindowCapture>)> callback) {
+        for (auto& [context, native] : native_windows_) {
+            const char* id = SDL_GetStringProperty(SDL_GetWindowProperties(native->window), "lfs.panel_id", "");
+            if (panel_id != id || !native->visible || native->failed || native->capture_callback ||
+                (SDL_GetWindowFlags(native->window) & SDL_WINDOW_MINIMIZED))
+                continue;
+            native->capture_callback = std::move(callback);
+            return true;
+        }
+        return false;
+    }
+
+    void RmlUIManager::renderNativeWindows() {
+        auto state = nlohmann::json::parse(UserPreferences::instance().floatingWindowGeometry(), nullptr, false);
+        if (!state.is_object())
+            state = nlohmann::json::object();
+        bool changed = false;
+        for (auto& [context, native] : native_windows_) {
+            const auto fail_capture = [&native]() {
+                if (auto callback = std::move(native->capture_callback))
+                    callback(lfs::make_error({.code = lfs::ErrorCode::Unavailable,
+                                              .domain = lfs::ErrorDomain::Rendering,
+                                              .user_message = "Native window is not ready for capture",
+                                              .detection = LFS_SOURCE_SITE_CURRENT()}));
+            };
+            if (native->geometry_dirty && !(SDL_GetWindowFlags(native->window) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_MAXIMIZED))) {
+                int x = 0, y = 0, w = 0, h = 0;
+                SDL_GetWindowPosition(native->window, &x, &y);
+                SDL_GetWindowSize(native->window, &w, &h);
+                state[native->name] = {x, y, w, h};
+                native->geometry_dirty = false;
+                changed = true;
+            }
+            if (!native->drawn) {
+                fail_capture();
+                if (native->visible)
+                    SDL_HideWindow(native->window);
+                native->visible = false;
+                continue;
+            }
+            if (native->failed || (SDL_GetWindowFlags(native->window) & SDL_WINDOW_MINIMIZED)) {
+                fail_capture();
+                continue;
+            }
+            auto frame = native->graphics->beginFrame({0.0f, 0.0f, 0.0f, 0.0f});
+            if (!frame || !*frame) {
+                fail_capture();
+                continue;
+            }
+            auto* main_renderer = ui_renderer_;
+            ui_renderer_ = native->renderer.get();
+            render_window_ = native->window;
+            if (beginFrame(**frame)) {
+                renderQueuedContexts(false);
+                renderQueuedContexts(true);
+                endFrame();
+            } else {
+                fail_capture();
+            }
+            render_window_ = nullptr;
+            ui_renderer_ = main_renderer;
+            if (auto callback = std::move(native->capture_callback))
+                callback(native->graphics->captureFinalFrameRgba());
+            // A synchronous capture submits and consumes the active frame.
+            if (native->graphics->hasActiveFrame()) {
+                if (const auto status = native->graphics->endFrame(); !status) {
+                    LOG_ERROR("Native panel '{}' presentation failed: {}", native->name, native->graphics->lastError());
+                    native->failed = true;
+                }
+            }
+        }
+        // Discard commands for hidden/minimized targets too; they contain borrowed caches.
+        clearQueue();
+        if (changed && automaticWindowStatePersistenceEnabled())
+            UserPreferences::instance().setFloatingWindowGeometry(state.dump());
+    }
 
     namespace {
         struct InputCallbackScope {
@@ -210,6 +540,8 @@ namespace lfs::vis::gui {
 
         dp_ratio_ = dp_ratio;
         window_ = window;
+        native_windows_enabled_ = ui_renderer && !lfs::core::environment::flag("LFS_SAFE_MODE", false) &&
+                                  lfs::core::environment::flag("LFS_NATIVE_FLOATING_WINDOWS", UserPreferences::instance().nativeFloatingWindows());
         debugger_enabled_ = lfs::core::environment::flag("LFS_RML_DEBUGGER");
 
         system_interface_ = std::make_unique<RmlSystemInterface>(window);
@@ -521,7 +853,7 @@ namespace lfs::vis::gui {
         }
     }
 
-    Rml::Context* RmlUIManager::createContext(const std::string& name, int width, int height) {
+    Rml::Context* RmlUIManager::createContext(const std::string& name, int width, int height, bool floating) {
         assert(initialized_);
 
         auto it = contexts_.find(name);
@@ -529,7 +861,8 @@ namespace lfs::vis::gui {
             return getContext(name);
         }
 
-        Rml::Context* ctx = Rml::CreateContext(name, Rml::Vector2i(width, height));
+        auto native = floating && native_windows_enabled_ ? createNativeWindow(name, width, height) : nullptr;
+        Rml::Context* ctx = Rml::CreateContext(name, Rml::Vector2i(width, height), native ? native->renderer.get() : nullptr);
         if (!ctx) {
             LOG_ERROR("RmlUI: failed to create context '{}'", name);
             return nullptr;
@@ -551,6 +884,11 @@ namespace lfs::vis::gui {
         }
 
         contexts_[name] = ctx;
+        if (native) {
+            SDL_SetPointerProperty(SDL_GetWindowProperties(native->window), "lfs.rml_context", ctx);
+            context_windows_[ctx] = native->window;
+            native_windows_[ctx] = std::move(native);
+        }
         context_ids_[ctx] = next_context_id_++;
         context_names_[ctx] = timerSafeContextName(name);
         return ctx;
@@ -599,6 +937,8 @@ namespace lfs::vis::gui {
         if (!context)
             return;
         const std::string name = context->GetName();
+        if (const auto native = native_windows_.find(context); native != native_windows_.end())
+            (void)native->second->graphics->waitIdle();
         // Retire the identity before callbacks can request destruction again.
         context_ids_.erase(context);
         if (current_drag_context_id_ == id)
@@ -628,6 +968,8 @@ namespace lfs::vis::gui {
         if (auto fn = lfs::python::get_rml_context_destroy_handler())
             fn(context);
         Rml::RemoveContext(name);
+        context_windows_.erase(context);
+        native_windows_.erase(context);
     }
 
     void RmlUIManager::activateTheme(const std::string& theme_id) {
@@ -642,6 +984,8 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::beginFrameCursorTracking() {
+        for (auto& [context, native] : native_windows_)
+            native->drawn = false;
         flushInputLifecycle();
         ++input_frame_;
         if (system_interface_)
@@ -733,7 +1077,7 @@ namespace lfs::vis::gui {
         bool any_tooltip_context = false;
         for (const auto& [_, frame] : tracked_context_frames_) {
             auto* const context = frame.context;
-            if (!context)
+            if (!context || contextWindow(context) != window_)
                 continue;
 
             auto* const hover = context->GetHoverElement();
@@ -792,7 +1136,7 @@ namespace lfs::vis::gui {
     bool RmlUIManager::activeOverlayContainsPoint(const float window_x,
                                                   const float window_y) const {
         for (const auto& [_, frame] : tracked_context_frames_) {
-            if (!frame.context || !frame.active_overlay)
+            if (!frame.context || contextWindow(frame.context) != window_ || !frame.active_overlay)
                 continue;
 
             const float local_x = window_x - static_cast<float>(frame.window_x);
@@ -808,7 +1152,7 @@ namespace lfs::vis::gui {
                                                     const float window_y) const {
         const TrackedContextFrame* owner = nullptr;
         for (const auto& [_, frame] : previous_context_frames_) {
-            if (!frame.context || !frame.active_overlay)
+            if (!frame.context || contextWindow(frame.context) != contextWindow(context) || !frame.active_overlay)
                 continue;
 
             const float local_x = window_x - static_cast<float>(frame.window_x);
@@ -830,7 +1174,7 @@ namespace lfs::vis::gui {
         if (identity == context_ids_.end() || !contextById(identity->second))
             return false;
         const auto current = input_handlers_.find(keyboard_context_);
-        if (!activate && context != keyboard_context_ && current != input_handlers_.end() &&
+        if (!activate && context != keyboard_context_ && contextWindow(context) == contextWindow(keyboard_context_) && current != input_handlers_.end() &&
             current->second.enabled && current->second.exclusive &&
             (current->second.persistent || current->second.frame == input_frame_))
             return false;
@@ -1052,19 +1396,33 @@ namespace lfs::vis::gui {
         focus.any_item_active = rml_input::hasFocusedKeyboardTarget(focused);
         focus.want_capture_keyboard = (active && it->second.exclusive) || rml_input::hasFocusedKeyboardTarget(focused);
         const bool collect_text = focus.want_text_input;
-        if (window_ && SDL_TextInputActive(window_) != collect_text) {
+        auto* text_window = active ? contextWindow(keyboard_context_) : window_;
+        if (system_interface_)
+            system_interface_->setWindow(text_window);
+        for (const auto& [context, native] : native_windows_)
+            if (native->window != text_window && SDL_TextInputActive(native->window))
+                SDL_StopTextInput(native->window);
+        if (window_ && window_ != text_window && SDL_TextInputActive(window_))
+            SDL_StopTextInput(window_);
+        if (text_window && SDL_TextInputActive(text_window) != collect_text) {
             if (std::getenv("LFS_TRACE_INPUT"))
                 LOG_INFO("INPUT SDL text state -> {} owner={}", collect_text,
                          active ? keyboard_context_->GetName() : "none");
             if (collect_text)
-                SDL_StartTextInput(window_);
+                SDL_StartTextInput(text_window);
             else
-                SDL_StopTextInput(window_);
+                SDL_StopTextInput(text_window);
         }
     }
 
     RmlUIManager::InputDispatchResult RmlUIManager::dispatchInputEvent(const SDL_Event& native_event) {
-        const SDL_Event event = input::pointerEventInPixels(native_event, window_);
+        auto* dispatch_window = SDL_GetWindowFromEvent(&native_event);
+        if (!dispatch_window)
+            dispatch_window = window_;
+        input_window_ = dispatch_window;
+        if (system_interface_)
+            system_interface_->setWindow(dispatch_window);
+        const SDL_Event event = input::pointerEventInPixels(native_event, dispatch_window);
         flushInputLifecycle();
         input_dispatch_active_ = true;
         struct FinishDispatch {
@@ -1072,6 +1430,9 @@ namespace lfs::vis::gui {
             ~FinishDispatch() {
                 manager.input_dispatch_active_ = false;
                 manager.flushInputLifecycle();
+                manager.input_window_ = nullptr;
+                if (manager.system_interface_)
+                    manager.system_interface_->setWindow(manager.window_);
             }
         } finish{*this};
         InputDispatchResult result;
@@ -1086,11 +1447,17 @@ namespace lfs::vis::gui {
                 std::fill(std::begin(input_mouse_down_), std::end(input_mouse_down_), false);
                 std::vector<uint64_t> contexts;
                 for (const auto& [context, _] : input_handlers_)
-                    contexts.push_back(context_ids_.at(context));
+                    if (contextWindow(context) == dispatch_window)
+                        contexts.push_back(context_ids_.at(context));
                 for (const auto id : contexts)
                     if (auto* context = contextById(id))
                         cancelPointerInput(context);
                 cancelDragPayload();
+                if (keyboard_context_ && contextWindow(keyboard_context_) == dispatch_window) {
+                    if (auto* focused = keyboard_context_->GetFocusElement())
+                        focused->Blur();
+                    keyboard_context_ = nullptr;
+                }
             }
             syncTextInput();
             return result;
@@ -1107,7 +1474,7 @@ namespace lfs::vis::gui {
                 single.mouse_x = event.motion.x;
                 single.mouse_y = event.motion.y;
             } else if (event.type == SDL_EVENT_PINCH_UPDATE) {
-                const auto pointer = input::wheelPointerInPixels(window_);
+                const auto pointer = input::wheelPointerInPixels(dispatch_window);
                 single.mouse_x = pointer.x;
                 single.mouse_y = pointer.y;
             } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
@@ -1121,17 +1488,12 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        if (pointer && window_ && event.type != SDL_EVENT_PINCH_UPDATE) {
-            const auto scale = input::windowPixelScale(window_);
-            single.mouse_x *= scale.x;
-            single.mouse_y *= scale.y;
-            for (auto& button : single.mouse_button_events) {
-                button.x *= scale.x;
-                button.y *= scale.y;
-            }
-        }
+        // The native event was converted to framebuffer pixels at entry.
+        // Reapplying the scale here breaks clicks on high-density monitors.
         auto invoke = [&](const uint64_t id) {
             auto* context = contextById(id);
+            if (!context || contextWindow(context) != dispatch_window)
+                return;
             const auto it = input_handlers_.find(context);
             if (it == input_handlers_.end() || !it->second.enabled)
                 return;
@@ -1184,6 +1546,7 @@ namespace lfs::vis::gui {
             input.key_alt = mods & SDL_KMOD_ALT;
             input.key_super = mods & SDL_KMOD_GUI;
             auto callback = it->second.callback;
+            const ScopedUiTextureGraphics textures(nativeGraphics(context));
             dispatching_input_ = true;
             (*callback)(input);
             dispatching_input_ = false;
@@ -1216,14 +1579,14 @@ namespace lfs::vis::gui {
             // Render-time pointer masking must not suppress a later native press.
             // Each context hit-tests the current event, including outside-click blur.
             for (const auto& [context, handler] : input_handlers_)
-                if (handler.enabled && (handler.persistent || handler.frame == input_frame_))
+                if (contextWindow(context) == dispatch_window && handler.enabled && (handler.persistent || handler.frame == input_frame_))
                     contexts.push_back(context_ids_.at(context));
             // Underlays see an outside click before the target context focuses.
             std::ranges::sort(contexts, [&](const auto a, const auto b) {
                 return tracked_context_frames_[contextById(a)].order < tracked_context_frames_[contextById(b)].order;
             });
             const auto owner = input_handlers_.find(keyboard_context_);
-            if (owner != input_handlers_.end() && owner->second.enabled && owner->second.exclusive &&
+            if (owner != input_handlers_.end() && contextWindow(keyboard_context_) == dispatch_window && owner->second.enabled && owner->second.exclusive &&
                 (owner->second.persistent || owner->second.frame == input_frame_)) {
                 const auto exclusive_context = context_ids_.at(keyboard_context_);
                 for (const auto id : contexts) {
@@ -1254,14 +1617,14 @@ namespace lfs::vis::gui {
         } else {
             auto* context = keyboard_context_;
             auto it = input_handlers_.find(context);
-            if (it == input_handlers_.end() || !it->second.enabled || (!it->second.persistent && it->second.frame != input_frame_) ||
+            if (it == input_handlers_.end() || contextWindow(context) != dispatch_window || !it->second.enabled || (!it->second.persistent && it->second.frame != input_frame_) ||
                 (!it->second.exclusive && !rml_input::hasFocusedKeyboardTarget(context->GetFocusElement())))
                 context = nullptr;
             const auto shortcutContext = [&]() {
                 Rml::Context* target = nullptr;
                 if (event.type == SDL_EVENT_KEY_DOWN) {
                     for (const auto& [candidate, handler] : input_handlers_) {
-                        if (handler.enabled && (handler.persistent || handler.frame == input_frame_) &&
+                        if (contextWindow(candidate) == dispatch_window && handler.enabled && (handler.persistent || handler.frame == input_frame_) &&
                             std::ranges::find(handler.shortcuts, event.key.scancode) != handler.shortcuts.end() &&
                             (!target || tracked_context_frames_[candidate].order > tracked_context_frames_[target].order))
                             target = candidate;
@@ -1419,8 +1782,9 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::releaseCachedContext(CachedUiContextRender& cache) {
-        if (ui_renderer_ && cache.texture != 0)
-            ui_renderer_->ReleaseTexture(cache.texture);
+        auto* renderer = cache.renderer ? cache.renderer : ui_renderer_;
+        if (renderer && cache.texture != 0)
+            renderer->ReleaseTexture(cache.texture);
         cache.texture = {};
         cache.width = 0;
         cache.height = 0;
@@ -1428,9 +1792,14 @@ namespace lfs::vis::gui {
         cache.preview_texture_generation = 0;
     }
 
-    void RmlUIManager::clearQueue() {
-        queue_.clear();
-        foreground_queue_.clear();
+    void RmlUIManager::clearQueue(bool include_native) {
+        const auto clear = [this, include_native](auto& queue) {
+            std::erase_if(queue, [this, include_native](const auto& command) {
+                return include_native || !nativeWindow(command.context);
+            });
+        };
+        clear(queue_);
+        clear(foreground_queue_);
     }
 
     bool RmlUIManager::beginFrame(const lfs::vis::GraphicsFrame& frame) {
@@ -1466,6 +1835,10 @@ namespace lfs::vis::gui {
         for (const auto& command : queue) {
             if (!command.context)
                 continue;
+            if (contextWindow(command.context) != (render_window_ ? render_window_ : window_))
+                continue;
+            if (command.cache)
+                command.cache->renderer = ui_renderer_;
 
             const auto canvas_start = command.context_name == "node_editor"
                                           ? std::optional{std::chrono::steady_clock::now()}
@@ -1705,7 +2078,9 @@ namespace lfs::vis::gui {
                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - *canvas_start).count());
         }
 
-        queue.clear();
+        std::erase_if(queue, [this](const auto& command) {
+            return contextWindow(command.context) == (render_window_ ? render_window_ : window_);
+        });
     }
 
     void RmlUIManager::endFrame() {

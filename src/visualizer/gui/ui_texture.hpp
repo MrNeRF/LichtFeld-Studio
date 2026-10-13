@@ -21,6 +21,25 @@ namespace lfs::vis {
 }
 namespace lfs::vis::gui {
     LFS_VIS_API void connectUiTextureGraphics(GraphicsContext* context);
+    LFS_VIS_API GraphicsContext* uiTextureGraphics();
+
+    class ScopedUiTextureGraphics {
+    public:
+        explicit ScopedUiTextureGraphics(GraphicsContext* target) : previous_(uiTextureGraphics()), changed_(target && target != previous_) {
+            if (changed_)
+                connectUiTextureGraphics(target);
+        }
+        ~ScopedUiTextureGraphics() {
+            if (changed_)
+                connectUiTextureGraphics(previous_);
+        }
+        ScopedUiTextureGraphics(const ScopedUiTextureGraphics&) = delete;
+        ScopedUiTextureGraphics& operator=(const ScopedUiTextureGraphics&) = delete;
+
+    private:
+        GraphicsContext* previous_;
+        bool changed_;
+    };
 
     // Expands `count` gray, gray+alpha, RGB or RGBA pixels to RGBA8.
     inline void expandToRgba8(const std::uint8_t* source, std::uint8_t* target,

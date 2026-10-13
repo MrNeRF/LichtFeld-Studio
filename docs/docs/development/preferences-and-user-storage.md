@@ -23,7 +23,45 @@ The Preferences panel currently exposes:
 - camera navigation mode and axis/view snap;
 - per-setting remember options;
 - MCP server enablement, bind scope, port, and opt-in request logging;
-- interface, layout, and window reset actions.
+- interface, layout, and window reset actions;
+- experimental native floating windows (restart required).
+
+On the `feat/native-floating-windows` experiment, ordinary floating panels use
+separate desktop windows by default. Preferences > Interface can restore the
+embedded mode on the next start. `LFS_NATIVE_FLOATING_WINDOWS=0` overrides this
+for one run; safe mode always keeps panels embedded. Initialization failures
+also fall back to an embedded panel.
+
+Desktop rectangles are stored in the user-global `floating_window_geometry`
+object, keyed by RmlUi context name, and never in a project's workspace. Both
+Reset Layout and Reset Window State clear these rectangles and center live
+windows inside the main application window. Panels without saved positions also
+start inside the application, fitting their initial size to its available area.
+Reset Interface also restores the native
+window preference; Reset Appearance preserves it. Preferences stays open.
+Missing-monitor recovery is applied at creation, reopening, and display topology,
+resolution, usable-area, and scale changes. It uses the remaining monitor's full
+usable bounds, retains the saved size when it fits, and shrinks oversized panels.
+The panel's RmlUi title must remain accessible, including between offset monitors.
+Recovered rectangles replace the unavailable positions in global preferences;
+reconnecting a monitor does not automatically move panels back to it.
+
+The desktop host is borderless and transparent: the panel keeps its RmlUi title,
+close button, theme and original dimensions. Its RmlUi title bar moves the window
+and its edges resize it. Confirmation and input popups remain embedded.
+Closing a panel window disables that panel without exiting the
+application. This experiment covers existing floating panels; docked panels
+are not yet detachable. Native window integration has been validated on Windows;
+the Linux and macOS paths still require platform testing.
+The shared host updates monitor DPI before drawing both Python and C++ panels,
+including Video Extractor. Runtime checks compared its rendered title with
+Preferences on Windows monitors at 96 and 144 DPI.
+
+`render.capture_window` accepts an optional `panel_id` to capture a visible native
+panel. Opt-in Windows regression checks live in
+`tests/python/test_native_floating_windows_runtime.py`; they require an isolated
+running GUI selected by `LFS_NATIVE_WINDOWS_TEST_ENDPOINT` and the matching
+`LFS_NATIVE_WINDOWS_TEST_PROFILE` (the application's `LFS_HOME`).
 
 The panel can be opened from the Edit menu or with the default `Ctrl+,`
 shortcut. The shortcut is a regular keymap action and can be rebound in Input

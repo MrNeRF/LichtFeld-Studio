@@ -413,6 +413,33 @@ namespace lfs::vis {
         impl_->loadLocked();
         return impl_->values.value("theme", std::string{});
     }
+    void UserPreferences::setNativeFloatingWindows(bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["native_floating_windows"] = enabled;
+        impl_->saveLocked();
+    }
+    bool UserPreferences::nativeFloatingWindows() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("native_floating_windows");
+        return it == impl_->values.end() || !it->is_boolean() || it->get<bool>();
+    }
+    void UserPreferences::setFloatingWindowGeometry(const std::string& value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto parsed = json::parse(value, nullptr, false);
+        if (!parsed.is_object())
+            return;
+        impl_->values["floating_window_geometry"] = parsed;
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::floatingWindowGeometry() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("floating_window_geometry");
+        return it != impl_->values.end() && it->is_object() ? it->dump() : "{}";
+    }
     void UserPreferences::setUiScale(const float value) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();

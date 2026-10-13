@@ -30,7 +30,7 @@ namespace lfs::vis {
         std::unique_ptr<Impl> impl_;
     };
 
-    [[nodiscard]] lfs::Result<lfs::core::Tensor> makeGraphicsExternalTensor(
+    [[nodiscard]] LFS_VIS_API lfs::Result<lfs::core::Tensor> makeGraphicsExternalTensor(
         GraphicsContext& context, lfs::core::TensorShape shape,
         lfs::core::DataType dtype, std::size_t capacity, const char* debug_name);
 

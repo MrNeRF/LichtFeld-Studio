@@ -128,6 +128,10 @@ namespace lfs::vis::gui::native_panels {
             widget_->setFloating(space == PanelSpace::Floating);
     }
 
+    SDL_Window* VideoExtractorPanel::nativeWindow() const {
+        return widget_ ? widget_->nativeWindow() : nullptr;
+    }
+
     bool VideoExtractorPanel::needsAnimationFrame() const {
         return widget_ && widget_->needsAnimationFrame();
     }

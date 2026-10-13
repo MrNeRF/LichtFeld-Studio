@@ -14,6 +14,9 @@
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/preferences.hpp"
+#include "window/window_state_utils.hpp"
+#include <SDL3/SDL.h>
 
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 
@@ -253,7 +256,7 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::ensureContext() {
         if (rml_context_)
             return true;
-        rml_context_ = manager_->createContext(context_name_, 100, 100);
+        rml_context_ = manager_->createContext(context_name_, 100, 100, floating_);
         return rml_context_ != nullptr;
     }
 
@@ -262,6 +265,10 @@ namespace lfs::vis::gui {
             return false;
         syncLocalizedContent();
         return true;
+    }
+
+    SDL_Window* RmlPanelHost::nativeWindow() const {
+        return manager_ ? manager_->nativeWindow(rml_context_) : nullptr;
     }
 
     // The cached panel texture survives a language switch, so the document has to be
@@ -358,7 +365,7 @@ namespace lfs::vis::gui {
     }
 
     int RmlPanelHost::renderPadding() const {
-        if (!floating_ || !manager_)
+        if (!floating_ || !manager_ || nativeWindow())
             return 0;
         return static_cast<int>(std::ceil(
             rml_theme::layeredShadowPadding(lfs::vis::theme(), 4) *
@@ -368,6 +375,8 @@ namespace lfs::vis::gui {
     void RmlPanelHost::applyPanelSpaceClass() {
         if (document_)
             document_->SetClass("floating-panel", floating_);
+        if (document_)
+            document_->SetClass("native-panel", nativeWindow() != nullptr);
     }
 
     float RmlPanelHost::computeScrollHeightCap() const {
@@ -443,6 +452,18 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::syncDirectLayout(float w, float h) {
+        if (auto* native = nativeWindow()) {
+            int pw = 0, ph = 0;
+            SDL_GetWindowSizeInPixels(native, &pw, &ph);
+            w = static_cast<float>(pw);
+            h = static_cast<float>(ph);
+            const float preference = UserPreferences::instance().uiScale();
+            const float ratio = preference > 0 ? preference : std::max(1.0f, SDL_GetWindowDisplayScale(native));
+            if (rml_context_->GetDensityIndependentPixelRatio() != ratio) {
+                rml_context_->SetDensityIndependentPixelRatio(ratio);
+                markContentDirty();
+            }
+        }
         if (w <= 0 || h <= 0)
             return;
 
@@ -727,6 +748,11 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::resolveDirectRenderHeight(float requested_h, int& ph, float& display_h) const {
+        if (nativeWindow()) {
+            ph = std::clamp(static_cast<int>(requested_h), 1, kMaxFboSize);
+            display_h = static_cast<float>(ph);
+            return;
+        }
         if (height_mode_ == PanelHeightMode::Content) {
             const float ch = last_content_height_;
             if (ch > 0 && requested_h < ch) {
@@ -766,12 +792,43 @@ namespace lfs::vis::gui {
         if (!ensureDocumentLoaded())
             return;
 
+        auto* native = nativeWindow();
+        const bool initialize_geometry = native &&
+                                         !SDL_GetBooleanProperty(SDL_GetWindowProperties(native), "lfs.geometry_initialized", false);
+        if (native) {
+            const float density = SDL_GetWindowPixelDensity(native);
+            const auto properties = SDL_GetWindowProperties(native);
+            SDL_SetNumberProperty(properties, "lfs.default_width", static_cast<int>(std::ceil(w / density)));
+            SDL_SetNumberProperty(properties, "lfs.default_height", static_cast<int>(std::ceil(h / density)));
+            if (initialize_geometry)
+                SDL_SetWindowSize(native, static_cast<int>(std::ceil(w / density)), static_cast<int>(std::ceil(h / density)));
+            syncDirectLayout(w, h);
+        }
+
         const int pw = static_cast<int>(w);
         int ph = 0;
         float display_h = 0.0f;
         resolveDirectRenderHeight(h, ph, display_h);
 
         renderIfDirty(pw, ph, display_h);
+        if (initialize_geometry) {
+            const float density = SDL_GetWindowPixelDensity(native);
+            const auto properties = SDL_GetWindowProperties(native);
+            const int height = static_cast<int>(std::ceil(display_h / density));
+            WindowRectangle rectangle{0, 0, static_cast<int>(std::ceil(w / density)), height};
+            if (auto* parent = static_cast<SDL_Window*>(SDL_GetPointerProperty(properties, "lfs.parent_window", nullptr))) {
+                WindowRectangle bounds;
+                SDL_GetWindowPosition(parent, &bounds.x, &bounds.y);
+                SDL_GetWindowSize(parent, &bounds.width, &bounds.height);
+                SDL_Rect display{};
+                if (SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(parent), &display))
+                    rectangle = defaultFloatingWindowRectangle(rectangle, bounds, {display.x, display.y, display.w, display.h});
+                SDL_SetWindowPosition(native, rectangle.x, rectangle.y);
+            }
+            SDL_SetWindowSize(native, rectangle.width, rectangle.height);
+            SDL_SetNumberProperty(properties, "lfs.default_height", height);
+            SDL_SetBooleanProperty(properties, "lfs.geometry_initialized", true);
+        }
     }
 
     void RmlPanelHost::drawDirect(float x, float y, float w, float h) {
@@ -780,6 +837,10 @@ namespace lfs::vis::gui {
 
         if (!ensureDocumentLoaded())
             return;
+        if (nativeWindow()) {
+            syncDirectLayout(w, h);
+            manager_->showNativeWindow(rml_context_);
+        }
 
         const int pw = static_cast<int>(w);
         int ph;
@@ -798,6 +859,8 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::drawDirectCached(float x, float y, float w, float h) {
         if (w <= 0 || h <= 0)
             return false;
+        if (nativeWindow())
+            syncDirectLayout(w, h);
         if (!document_ || !rml_context_ || last_fbo_w_ <= 0 || last_fbo_h_ <= 0)
             return false;
         forwardInput(x, y);

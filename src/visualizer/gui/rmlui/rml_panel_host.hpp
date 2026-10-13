@@ -50,6 +50,8 @@ namespace lfs::vis::gui {
         void prepareDirect(float w, float h);
         void syncDirectLayout(float w, float h);
         bool ensureContext();
+        SDL_Window* nativeWindow() const;
+        GraphicsContext* nativeGraphics() const { return manager_->nativeGraphics(rml_context_); }
         bool ensureDocumentLoaded();
         bool reloadDocument();
         void releaseRendererResources();

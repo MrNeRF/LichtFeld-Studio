@@ -25,6 +25,8 @@ namespace lfs::core {
     class Scene;
 }
 
+struct SDL_Window;
+
 namespace lfs::vis::gui {
 
     struct UIContext;
@@ -162,6 +164,7 @@ namespace lfs::vis::gui {
     class IPanel {
     public:
         virtual ~IPanel() = default;
+        [[nodiscard]] virtual SDL_Window* nativeWindow() const { return nullptr; }
         // Called on the GUI thread only after a native viewport drop hit test.
         virtual bool onViewportDrop(const std::string& type, const std::string& data) {
             (void)type;

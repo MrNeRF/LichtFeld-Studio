@@ -1126,6 +1126,8 @@
     "navigation_fpv": "Vol",
     "navigation_drone": "Drone",
     "interface_layout_description": "Cliquez sur « Réinitialiser cette section » ci-dessous pour rétablir la disposition initiale des volets, panneaux, onglets, fenêtres et HUD. Si un projet .licht est ouvert, sa disposition enregistrée sera remplacée lors du prochain enregistrement. Les préférences restent ouvertes.",
+    "native_floating_windows": "Fenêtres flottantes externes (expérimental)",
+    "native_floating_windows_restart": "La modification nécessite un redémarrage. Réinitialisez cette section pour rétablir la position par défaut des fenêtres.",
     "scene_graph": "Graphe de scène",
     "scene_graph_selection_markers": "Repères de sélection du graphe de scène",
     "scene_graph_selection_markers_description": "Affiche des repères radiaux compacts pour sélectionner des lignes et des hiérarchies complètes de nœuds.",

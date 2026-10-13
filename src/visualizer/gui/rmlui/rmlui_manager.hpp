@@ -10,6 +10,7 @@
 #include "gui/gui_input.hpp"
 #include "gui/rmlui/element_observer.hpp"
 #include "gui/ui_renderer.hpp"
+#include "window/graphics_context.hpp"
 #include <RmlUi/Core/EventListener.h>
 #include <RmlUi/Core/Types.h>
 #include <functional>
@@ -48,6 +49,7 @@ namespace lfs::vis::gui {
     enum class RmlCursorRequest : uint8_t;
 
     struct CachedUiContextRender {
+        UiRenderer* renderer = nullptr;
         Rml::TextureHandle texture = {};
         int width = 0;
         int height = 0;
@@ -109,7 +111,16 @@ namespace lfs::vis::gui {
         float getDpRatio() const { return dp_ratio_; }
         void setDpRatio(float ratio);
 
-        LFS_VIS_API Rml::Context* createContext(const std::string& name, int width, int height);
+        LFS_VIS_API Rml::Context* createContext(const std::string& name, int width, int height, bool floating = false);
+        SDL_Window* nativeWindow(const Rml::Context* context) const;
+        GraphicsContext* nativeGraphics(const Rml::Context* context) const;
+        void showNativeWindow(Rml::Context* context);
+        void renderNativeWindows();
+        void resetNativeWindowGeometry();
+        bool processNativeWindowEvent(const SDL_Event& event);
+        bool isDispatchingInput() const { return dispatching_input_; }
+        void setNativeWindowCloseHandler(Rml::Context* context, std::function<void()> handler);
+        bool requestNativeWindowCapture(const std::string& panel_id, std::function<void(lfs::Result<WindowCapture>)> callback);
         LFS_VIS_API Rml::Context* getContext(const std::string& name);
         LFS_VIS_API void destroyContext(const std::string& name);
 
@@ -158,7 +169,7 @@ namespace lfs::vis::gui {
                           float clip_y2 = 0.0f);
         void queueCachedContext(const CachedUiContextDraw& draw);
         void releaseCachedContext(CachedUiContextRender& cache);
-        void clearQueue();
+        void clearQueue(bool include_native = true);
         [[nodiscard]] bool beginFrame(const lfs::vis::GraphicsFrame& frame);
         void renderQueuedContexts(bool foreground);
         void endFrame();
@@ -203,6 +214,14 @@ namespace lfs::vis::gui {
         LFS_VIS_API std::optional<RmlDragPayload> takeReleasedDragPayload();
 
     private:
+        struct NativeWindow;
+        std::unordered_map<const Rml::Context*, std::unique_ptr<NativeWindow>> native_windows_;
+        std::unordered_map<const Rml::Context*, SDL_Window*> context_windows_;
+        SDL_Window* input_window_ = nullptr;
+        SDL_Window* render_window_ = nullptr;
+        bool native_windows_enabled_ = false;
+        std::unique_ptr<NativeWindow> createNativeWindow(const std::string& name, int width, int height);
+        SDL_Window* contextWindow(const Rml::Context* context) const;
         friend class lfs::vis::WindowInputDispatchTest;
         friend class lfs::vis::McpNodeToolsTest;
         struct UiContextCommand {

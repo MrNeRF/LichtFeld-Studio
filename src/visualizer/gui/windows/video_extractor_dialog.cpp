@@ -361,6 +361,10 @@ namespace lfs::gui {
         return host_ && host_->wantsKeyboard();
     }
 
+    SDL_Window* VideoExtractorDialog::nativeWindow() const {
+        return host_ ? host_->nativeWindow() : nullptr;
+    }
+
     bool VideoExtractorDialog::needsAnimationFrame() const {
         const std::string current_language =
             lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
@@ -967,6 +971,7 @@ namespace lfs::gui {
     }
 
     void VideoExtractorDialog::syncPanel() {
+        const lfs::vis::gui::ScopedUiTextureGraphics textures(host_ ? host_->nativeGraphics() : nullptr);
         if (!elements_cached_)
             return;
 

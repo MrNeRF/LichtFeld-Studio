@@ -58,6 +58,7 @@ namespace lfs::vis {
     class LFS_VIS_API GraphicsContext {
     public:
         virtual ~GraphicsContext() = default;
+        virtual void setAuxiliaryWindow(bool auxiliary) { (void)auxiliary; }
 
         virtual bool initialize(SDL_Window* window, int framebuffer_width,
                                 int framebuffer_height) = 0;

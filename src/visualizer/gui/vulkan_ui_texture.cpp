@@ -38,7 +38,14 @@
 #include <vector>
 
 namespace lfs::vis::gui {
-    void connectUiTextureGraphics(GraphicsContext* context) { setUiTextureContext(vulkanContextOrNull(context)); }
+    namespace {
+        GraphicsContext* g_ui_texture_graphics = nullptr;
+    }
+    GraphicsContext* uiTextureGraphics() { return g_ui_texture_graphics; }
+    void connectUiTextureGraphics(GraphicsContext* context) {
+        g_ui_texture_graphics = context;
+        setUiTextureContext(vulkanContextOrNull(context));
+    }
 
     namespace {
         VulkanContext* g_texture_context = nullptr;
@@ -478,9 +485,11 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] bool init(VulkanContext& ctx) {
-            if (device != VK_NULL_HANDLE) {
+            if (device != VK_NULL_HANDLE && context == &ctx) {
                 return true;
             }
+            if (device != VK_NULL_HANDLE && !reset(true))
+                return false;
             this->context = &ctx;
             device = ctx.device();
             allocator = ctx.allocator();

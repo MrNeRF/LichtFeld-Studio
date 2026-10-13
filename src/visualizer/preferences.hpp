@@ -77,6 +77,10 @@ namespace lfs::vis {
         [[nodiscard]] std::string themeName();
         void setUiScale(float value);
         [[nodiscard]] float uiScale();
+        void setNativeFloatingWindows(bool enabled);
+        [[nodiscard]] bool nativeFloatingWindows();
+        void setFloatingWindowGeometry(const std::string& value);
+        [[nodiscard]] std::string floatingWindowGeometry();
         void setZoomSpeed(float value);
         [[nodiscard]] float zoomSpeed();
         void setNavigationSpeed(float value);

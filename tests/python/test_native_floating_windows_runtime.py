@@ -1,0 +1,291 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Opt-in Windows integration checks against a dedicated, already running GUI.
+
+Set LFS_NATIVE_WINDOWS_TEST_ENDPOINT and LFS_NATIVE_WINDOWS_TEST_PROFILE to an
+isolated MCP instance and its exact LFS_HOME. The profile check prevents resets
+against the user's ordinary settings. No dataset, plugin installation or export
+is performed. Standard Python test runs skip this module.
+"""
+
+import ctypes
+from ctypes import wintypes
+import json
+import base64
+import struct
+import zlib
+import os
+from pathlib import Path
+import sys
+import time
+import urllib.request
+
+import pytest
+
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32" or not os.environ.get("LFS_NATIVE_WINDOWS_TEST_ENDPOINT"),
+    reason="requires an explicitly selected isolated Windows GUI instance",
+)
+
+
+class NativeWindowsClient:
+    def __init__(self):
+        self.endpoint = os.environ["LFS_NATIVE_WINDOWS_TEST_ENDPOINT"]
+        self.profile = Path(os.environ["LFS_NATIVE_WINDOWS_TEST_PROFILE"]).resolve()
+        self.user32 = ctypes.WinDLL("user32", use_last_error=True)
+        self.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        self.user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        self.user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+        self.user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        self.user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        self.user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        self.user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        self.user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        self.user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        self.user32.SendMessageW.restype = ctypes.c_ssize_t
+        self.user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                          ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        self.rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
+                                "clientInfo": {"name": "native-window-tests", "version": "1"}})
+        for uri in ("lichtfeld://runtime/catalog", "lichtfeld://runtime/state", "lichtfeld://ui/state",
+                    "lichtfeld://scene/state", "lichtfeld://selection/current"):
+            self.rpc("resources/read", {"uri": uri})
+        manifest = self.rpc("tools/list")["tools"]
+        self.tools = {item["name"]: item for item in manifest}
+        for name in ("editor_run", "ui_panel_describe", "ui_panel_update", "ui_modal_get", "ui_modal_press"):
+            assert name in self.tools
+        identity = self.python("import os\nprint('NATIVE_WINDOWS_TEST:' + __import__('json').dumps({'pid':os.getpid(),'home':os.environ.get('LFS_HOME','')}))")
+        assert Path(identity["home"]).resolve() == self.profile, "refusing to modify a different profile"
+        assert self.profile != (Path.home() / ".lichtfeld").resolve(), "refusing to reset the normal profile"
+        self.pid = identity["pid"]
+        modal = self.call("ui_modal_get")
+        if modal.get("open") and modal.get("title") == "Set as Default Application":
+            self.call("ui_modal_press", label="Not Now")
+
+    def rpc(self, method, params=None):
+        request = urllib.request.Request(self.endpoint, data=json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": method, "params": params,
+        }).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.load(response)
+        assert "error" not in result, result
+        return result["result"]
+
+    def call(self, name, **arguments):
+        result = self.rpc("tools/call", {"name": name, "arguments": arguments})
+        assert not result.get("isError"), result
+        if "structuredContent" in result:
+            return result["structuredContent"]
+        return json.loads(result["content"][0]["text"])
+
+    def python(self, code):
+        result = self.call("editor_run", code=code, show_console=False, timeout_ms=10000)
+        assert result["completed"] and result["success"], result
+        text = result["output"]["text"]
+        marker = "NATIVE_WINDOWS_TEST:"
+        assert marker in text, text
+        # The integrated terminal inserts physical wraps into long output lines.
+        payload = text[text.rfind(marker) + len(marker):].replace("\r", "").replace("\n", "")
+        return json.JSONDecoder().raw_decode(payload)[0]
+
+    def windows(self):
+        windows = []
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def inspect(hwnd, _):
+            pid = wintypes.DWORD()
+            self.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value == self.pid and self.user32.IsWindowVisible(hwnd):
+                title = ctypes.create_unicode_buffer(self.user32.GetWindowTextLengthW(hwnd) + 1)
+                self.user32.GetWindowTextW(hwnd, title, len(title))
+                rect = wintypes.RECT()
+                self.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                windows.append({"hwnd": hwnd, "title": title.value,
+                                "rect": (rect.left, rect.top, rect.right, rect.bottom)})
+            return True
+
+        callback = callback_type(inspect)
+        self.user32.EnumWindows(callback, 0)
+        return windows
+
+    def monitors(self):
+        bounds = []
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC,
+                                          ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+        def inspect(_, __, rect, ___):
+            value = rect.contents
+            bounds.append((value.left, value.top, value.right, value.bottom))
+            return True
+        callback = callback_type(inspect)
+        self.user32.EnumDisplayMonitors(None, None, callback, 0)
+        return bounds
+
+    def until(self, check):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            result = check()
+            if result:
+                return result
+            time.sleep(0.05)
+        raise AssertionError("native window state did not settle within ten seconds")
+
+    def open(self, panel_id):
+        panel = self.call("ui_panel_update", panel_id=panel_id, enabled=True)["panel"]
+        return self.until(lambda: next((window for window in self.windows()
+                                      if window["title"] == panel["label"]), None))
+
+    def panel_elements(self, panel_id, identifiers):
+        return self.python(
+            "import lichtfeld as lf,json\n"
+            f"doc=lf.ui.rml.get_document({panel_id!r})\n"
+            f"ids={identifiers!r}\n"
+            "result={}\n"
+            "for name in ids:\n"
+            " e=doc.get_element_by_id(name)\n"
+            " result[name]=[e.absolute_left,e.absolute_top,e.absolute_width,e.absolute_height]\n"
+            "print('NATIVE_WINDOWS_TEST:'+json.dumps(result))"
+        )
+
+
+@pytest.fixture(scope="module")
+def native_client():
+    return NativeWindowsClient()
+
+
+def test_preloaded_preferences_and_plugins_have_distinct_desktop_windows(native_client):
+    preferences = native_client.open("lfs.preferences")
+    plugins = native_client.open("lfs.plugin_marketplace")
+    assert preferences["hwnd"] != plugins["hwnd"]
+    assert len(native_client.windows()) >= 3
+
+
+def test_preferences_preserves_rml_chrome_without_a_native_container(native_client):
+    preferences = native_client.open("lfs.preferences")
+    client = wintypes.RECT()
+    assert native_client.user32.GetClientRect(preferences["hwnd"], ctypes.byref(client))
+    outer_width = preferences["rect"][2] - preferences["rect"][0]
+    outer_height = preferences["rect"][3] - preferences["rect"][1]
+    # SDL retains Win32 resize style bits but removes all non-client chrome.
+    assert outer_width == client.right and outer_height == client.bottom
+    elements = native_client.panel_elements("lfs.preferences", ["window-frame", "title-bar", "close-btn"])
+    left, top, width, height = elements["window-frame"]
+    assert abs(left) <= 2 and abs(top) <= 2, "Rml frame is inset inside a visible container"
+    assert abs(width - client.right) <= 2 and abs(height - client.bottom) <= 2
+    assert elements["title-bar"][3] > 20, "original Rml title bar is hidden"
+    assert elements["close-btn"][2] > 0, "original close control is hidden"
+
+
+def test_original_rml_close_button_closes_only_its_panel(native_client):
+    preferences = native_client.open("lfs.preferences")
+    x, y, width, height = native_client.panel_elements("lfs.preferences", ["close-btn"])["close-btn"]
+    coordinates = (int(y + height / 2) << 16) | int(x + width / 2)
+    for message, buttons in ((0x0200, 0), (0x0201, 1), (0x0202, 0)):
+        assert native_client.user32.PostMessageW(preferences["hwnd"], message, buttons, coordinates)
+    native_client.until(lambda: not native_client.call("ui_panel_describe", panel_id="lfs.preferences")["panel"]["enabled"])
+    assert native_client.open("lfs.preferences")["hwnd"] == preferences["hwnd"]
+
+
+def test_title_drag_and_resize_use_the_original_rml_window(native_client):
+    preferences = native_client.open("lfs.preferences")
+    hwnd = preferences["hwnd"]
+    left, top, right, bottom = preferences["rect"]
+    assert native_client.user32.SetWindowPos(hwnd, 0, left, top, 800, 500, 0x0014)
+
+    def resized():
+        elements = native_client.panel_elements("lfs.preferences", ["window-frame", "title-bar"])
+        return elements if abs(elements["window-frame"][2] - 800) <= 2 and abs(elements["window-frame"][3] - 500) <= 2 else None
+
+    elements = native_client.until(resized)
+    rect = wintypes.RECT()
+    assert native_client.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    title_y = int(elements["title-bar"][1] + elements["title-bar"][3] / 2)
+
+    def hit(x, y):
+        return native_client.user32.SendMessageW(hwnd, 0x0084, 0, ((y & 0xffff) << 16) | (x & 0xffff))
+
+    assert hit(rect.left + 80, rect.top + title_y) == 2  # HTCAPTION: Rml title drag
+    assert hit(rect.right - 2, rect.bottom - 2) == 17  # HTBOTTOMRIGHT: original resize edge
+
+
+def test_native_close_preserves_application_and_reopens_the_same_panel(native_client):
+    preferences = native_client.open("lfs.preferences")
+    assert native_client.user32.PostMessageW(preferences["hwnd"], 0x0010, 0, 0)  # WM_CLOSE
+    native_client.until(lambda: not native_client.call("ui_panel_describe", panel_id="lfs.preferences")["panel"]["enabled"])
+    reopened = native_client.open("lfs.preferences")
+    assert reopened["hwnd"] == preferences["hwnd"]
+
+
+def test_reopening_an_inaccessible_window_recovers_its_rml_title(native_client):
+    preferences = native_client.open("lfs.preferences")
+    native_client.call("ui_panel_update", panel_id="lfs.preferences", enabled=False)
+    assert native_client.user32.SetWindowPos(preferences["hwnd"], 0, -30000, -30000, 0, 0, 0x0015)
+    reopened = native_client.open("lfs.preferences")
+    def accessible():
+        panel = next(window for window in native_client.windows() if window["hwnd"] == reopened["hwnd"])
+        left, top, right, bottom = panel["rect"]
+        return any(min(right, mr) - max(left, ml) >= 96 and min(top + 30, mb) - max(top, mt) >= 24
+                   for ml, mt, mr, mb in native_client.monitors())
+    native_client.until(accessible)
+    assert reopened["hwnd"] == preferences["hwnd"]
+
+
+def test_window_geometry_persists_and_reset_keeps_preferences_open(native_client):
+    preferences = native_client.open("lfs.preferences")
+    assert native_client.user32.SetWindowPos(preferences["hwnd"], 0, 40, 50, 760, 540, 0x0014)
+    path = native_client.profile / "config/preferences.json"
+
+    def moved():
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (PermissionError, json.JSONDecodeError):
+            return False  # The UI may be saving the geometry in this frame.
+        rect = state.get("floating_window_geometry", {}).get("lfs.preferences", [])
+        return len(rect) == 4 and rect[2] < 850
+
+    native_client.until(moved)
+    moved_rect = next(window["rect"] for window in native_client.windows()
+                      if window["hwnd"] == preferences["hwnd"])
+    result = native_client.python("import lichtfeld as lf, json\nerror=lf.ui.reset_window_state()\nprint('NATIVE_WINDOWS_TEST:'+json.dumps({'error':error,'native':lf.ui.get_native_floating_windows()}))")
+    assert not result["error"]
+    assert result["native"] is True
+    reset = native_client.until(lambda: next((window for window in native_client.windows()
+                                            if window["title"] == preferences["title"]
+                                            and window["rect"] != moved_rect), None))
+    assert reset["hwnd"] == preferences["hwnd"]
+    assert native_client.call("ui_panel_describe", panel_id="lfs.preferences")["panel"]["enabled"]
+
+
+def test_confirmation_stays_a_popup_and_preserves_callback(native_client):
+    native_client.open("lfs.preferences")
+    windows_before = {window["hwnd"] for window in native_client.windows()}
+    result = native_client.python("import lichtfeld as lf, builtins, json\nbuiltins._native_window_confirmation=None\nlf.ui.confirm_dialog('Native windows smoke', 'Confirm callback test', ['Cancel','OK'], lambda button:setattr(builtins,'_native_window_confirmation',button))\nprint('NATIVE_WINDOWS_TEST:'+json.dumps({'queued':True}))")
+    assert result["queued"]
+    native_client.until(lambda: native_client.call("ui_modal_get").get("title") == "Native windows smoke")
+    assert {window["hwnd"] for window in native_client.windows()} == windows_before
+    native_client.call("ui_modal_press", label="OK")
+    result = native_client.python("import builtins,json\nprint('NATIVE_WINDOWS_TEST:'+json.dumps({'button':builtins._native_window_confirmation}))")
+    assert result["button"] == "OK"
+
+
+def test_video_extractor_uses_a_separate_window(native_client):
+    extractor = native_client.open("native.video_extractor")
+    preferences = native_client.open("lfs.preferences")
+    assert extractor["hwnd"] != preferences["hwnd"]
+
+
+def test_native_window_capture_contains_rendered_controls(native_client):
+    native_client.open("lfs.preferences")
+    capture = native_client.call("render_capture_window", panel_id="lfs.preferences")
+    assert capture["success"]
+    png = base64.b64decode(capture["data"])
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+    offset = 8
+    compressed = bytearray()
+    while offset < len(png):
+        length = struct.unpack_from(">I", png, offset)[0]
+        if png[offset + 4:offset + 8] == b"IDAT":
+            compressed.extend(png[offset + 8:offset + 8 + length])
+        offset += length + 12
+    assert len(set(zlib.decompress(compressed))) > 32, "native capture is an empty clear frame"
+    (native_client.profile.parent / "preferences-rendered.png").write_bytes(png)

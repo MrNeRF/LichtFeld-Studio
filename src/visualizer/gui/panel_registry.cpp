@@ -14,6 +14,8 @@
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 
+#include "input/sdl_coordinate_utils.hpp"
+#include <SDL3/SDL.h>
 #include <SDL3/SDL_mouse.h>
 #include <algorithm>
 #include <cassert>
@@ -723,6 +725,19 @@ apply_registered_chrome:
                 return;
 
             const bool in_viewport = snap.has_option(PanelOption::FLOAT_IN_VIEWPORT);
+            if (auto* native = snap.panel->nativeWindow()) {
+                const auto properties = SDL_GetWindowProperties(native);
+                if (!SDL_GetBooleanProperty(properties, "lfs.panel_prepared", false)) {
+                    snap.panel->renderDirect({.mode = PanelDirectRenderMode::Preload,
+                                              .space = snap.space,
+                                              .width = snap.initial_width > 0 ? snap.initial_width : 560.0f * dpi,
+                                              .height = snap.initial_height > 0 ? snap.initial_height : 480.0f * dpi,
+                                              .input = input},
+                                             ctx);
+                    SDL_SetBooleanProperty(properties, "lfs.panel_prepared", true);
+                }
+                return;
+            }
             const auto anchor = floatingAnchorRect(ctx, in_viewport);
             if (anchor.width <= 0.0f || anchor.height <= 0.0f)
                 return;
@@ -738,6 +753,16 @@ apply_registered_chrome:
                                                      },
                                                      ctx)
                                 .height;
+            if (!in_viewport) {
+                snap.panel->renderDirect({.mode = PanelDirectRenderMode::Preload,
+                                          .space = snap.space,
+                                          .width = w,
+                                          .height = max_h,
+                                          .input = input},
+                                         ctx);
+                if (snap.panel->nativeWindow())
+                    return;
+            }
             if (drawn_h <= 0.0f) {
                 float prev_h = -1.0f;
                 for (int pass = 0; pass < 3; ++pass) {
@@ -902,6 +927,30 @@ apply_registered_chrome:
             try {
                 switch (space) {
                 case PanelSpace::Floating: {
+                    if (auto* native = snap.panel->nativeWindow()) {
+                        SDL_SetWindowTitle(native, std::string(snap.label).c_str());
+                        SDL_SetStringProperty(SDL_GetWindowProperties(native), "lfs.panel_id", std::string(snap.id).c_str());
+                        PanelInputState native_input;
+                        SDL_GetWindowSizeInPixels(native, &native_input.screen_w, &native_input.screen_h);
+                        if (SDL_GetMouseFocus() == native) {
+                            const auto buttons = SDL_GetMouseState(&native_input.mouse_x, &native_input.mouse_y);
+                            const auto scale = input::windowPixelScale(native);
+                            native_input.mouse_x *= scale.x;
+                            native_input.mouse_y *= scale.y;
+                            native_input.mouse_down[0] = buttons & SDL_BUTTON_LMASK;
+                            native_input.mouse_down[1] = buttons & SDL_BUTTON_RMASK;
+                            native_input.mouse_down[2] = buttons & SDL_BUTTON_MMASK;
+                        } else {
+                            native_input.mouse_x = native_input.mouse_y = -1.0e9f;
+                        }
+                        snap.panel->renderDirect({.mode = PanelDirectRenderMode::Draw,
+                                                  .space = snap.space,
+                                                  .width = static_cast<float>(native_input.screen_w),
+                                                  .height = static_cast<float>(native_input.screen_h),
+                                                  .input = &native_input},
+                                                 ctx);
+                        break;
+                    }
                     if (snap.has_option(PanelOption::SELF_MANAGED)) {
                         snap.panel->renderDirect({
                                                      .mode = PanelDirectRenderMode::Draw,
@@ -1931,7 +1980,7 @@ apply_registered_chrome:
 
             switch (p.space) {
             case PanelSpace::Floating:
-                return visibility.ui_visible;
+                return visibility.ui_visible || p.panel->nativeWindow() != nullptr;
             case PanelSpace::SidePanel:
                 return visibility.ui_visible;
             case PanelSpace::StatusBar:

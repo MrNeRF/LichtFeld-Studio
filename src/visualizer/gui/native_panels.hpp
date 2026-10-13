@@ -28,6 +28,7 @@ namespace lfs::vis::gui::native_panels {
     class VideoExtractorPanel : public IPanel {
     public:
         explicit VideoExtractorPanel(lfs::gui::IVideoExtractorWidget* widget);
+        SDL_Window* nativeWindow() const override;
         void draw(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override;
         PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,

@@ -579,6 +579,7 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::init(SDL_Window* window, const int framebuffer_width, const int framebuffer_height) {
+        transparent_surface_ = (SDL_GetWindowFlags(window) & SDL_WINDOW_TRANSPARENT) != 0;
         framebuffer_width_ = framebuffer_width;
         framebuffer_height_ = framebuffer_height;
 
@@ -644,8 +645,9 @@ namespace lfs::vis {
         // Optional vendor runtimes retain the Vulkan device passed at lazy
         // initialization. Shut them down after all GPU work is retired and
         // before the allocator/device they reference are destroyed.
-        for (auto* const plugin : sceneUpscalerPlugins())
-            plugin->shutdownRuntime();
+        if (owns_scene_runtimes_)
+            for (auto* const plugin : sceneUpscalerPlugins())
+                plugin->shutdownRuntime();
 
         // #1488: surface leaked External* counts after idle, before device destroy.
         {
@@ -3588,8 +3590,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;
@@ -4526,6 +4528,16 @@ namespace lfs::vis {
         create_info.pQueueFamilyIndices = shared_queues ? queue_indices.data() : nullptr;
         create_info.preTransform = support.capabilities.currentTransform;
         create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        if (transparent_surface_) {
+            for (const auto alpha : {VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+                                     VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+                                     VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR}) {
+                if (support.capabilities.supportedCompositeAlpha & alpha) {
+                    create_info.compositeAlpha = alpha;
+                    break;
+                }
+            }
+        }
         create_info.presentMode = present_mode;
         create_info.clipped = VK_TRUE;
         create_info.oldSwapchain = old_swapchain;

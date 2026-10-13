@@ -12,6 +12,7 @@ namespace lfs::vis {
         VulkanGraphicsContext();
         ~VulkanGraphicsContext() override;
 
+        void setAuxiliaryWindow(bool auxiliary) override { context_.setSceneRuntimeOwnership(!auxiliary); }
         bool initialize(SDL_Window* window, int framebuffer_width,
                         int framebuffer_height) override;
         bool initializeHeadless() override;

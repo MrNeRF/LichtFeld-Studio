@@ -28,7 +28,7 @@ namespace lfs::vis::gui {
         RmlPythonPanelAdapter(void* manager, nb::object panel_instance,
                               const std::string& context_name, const std::string& rml_path,
                               const std::string& style = {}, bool has_poll = false,
-                              int height_mode = 0, bool has_draw = false);
+                              int height_mode = 0, bool has_draw = false, bool floating = false);
         ~RmlPythonPanelAdapter() override;
 
         bool onViewportDrop(const std::string& type, const std::string& data) override;
@@ -53,6 +53,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::string captureChromeJson() const override;
         void applyChromeJson(std::string_view json) override;
         void setForeground(bool fg);
+        SDL_Window* nativeWindow() const override;
         [[nodiscard]] nb::object panelInstance() const { return panel_instance_; }
 
     private:

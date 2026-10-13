@@ -142,4 +142,24 @@ namespace lfs::vis {
         return window;
     }
 
+    [[nodiscard]] inline WindowRectangle defaultFloatingWindowRectangle(
+        const WindowRectangle& window, const WindowRectangle& parent,
+        const WindowRectangle& display) {
+        const auto centered = centerWindowOnDisplay(window, parent, 320, 180);
+        return clampWindowIntoDisplay(centered, display, 320, 180);
+    }
+
+    // Detached RmlUi panels have no OS title bar to recover an inaccessible
+    // window. Require a usable part of their own title bar on a live display.
+    [[nodiscard]] inline WindowRectangle recoverFloatingWindowRectangle(
+        const WindowRectangle& window, const std::vector<WindowRectangle>& displays,
+        const WindowRectangle& fallback_display) {
+        const auto recovered = recoverWindowRectangle(window, displays, fallback_display, 96, 64, 320, 180);
+        const WindowRectangle title{recovered.x, recovered.y, recovered.width, std::min(30, recovered.height)};
+        if (windowRectangleVisible(title, displays, 96, std::min(24, title.height)))
+            return recovered;
+        const auto target = displayWithLargestIntersection(recovered, displays).value_or(fallback_display);
+        return clampWindowIntoDisplay(recovered, target, 320, 180);
+    }
+
 } // namespace lfs::vis

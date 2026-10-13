@@ -584,6 +584,9 @@ namespace lfs::vis {
             gui::guiFocusState().reset();
         }
         gui::RmlUIManager& manager() { return gui_->rmlui_manager_; }
+        void mapContextWindow(Rml::Context* context, SDL_Window* window) {
+            manager().context_windows_[context] = window;
+        }
         void attachInputHost(gui::RmlPanelHost& host, int width, int height, const char* markup) {
             // Input uses the real host and null geometry renderer, without a GPU frame.
             manager().ui_renderer_ = &input_renderer_;
@@ -1043,6 +1046,64 @@ namespace lfs::vis {
         uint64_t timestamp_ = 0;
         gui::rml_input::TextInputEscapeRevertController revert_;
     };
+
+    TEST_F(WindowInputDispatchTest, SecondaryWindowMouseDoesNotReachMainWindowContext) {
+        auto* secondary = SDL_CreateWindow("Secondary input", 400, 300, SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        ASSERT_NE(secondary, nullptr);
+        auto* context = manager().createContext("secondary-input", 400, 300);
+        ASSERT_NE(context, nullptr);
+        mapContextWindow(context, secondary);
+        int main_presses = 0;
+        int secondary_presses = 0;
+        float secondary_x = 0.0f;
+        float press_x = 0.0f;
+        manager().routeInput(context_, {}, [&](const gui::PanelInputState& input) {
+            main_presses += static_cast<int>(input.mouse_button_events.size());
+        });
+        manager().routeInput(context, {}, [&](const gui::PanelInputState& input) {
+            secondary_presses += static_cast<int>(input.mouse_button_events.size());
+            if (!input.mouse_button_events.empty()) {
+                secondary_x = input.mouse_x;
+                press_x = input.mouse_button_events.front().x;
+            }
+        });
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.windowID = SDL_GetWindowID(secondary);
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = event.button.y = 20;
+        manager().dispatchInputEvent(event);
+        EXPECT_EQ(main_presses, 0);
+        EXPECT_EQ(secondary_presses, 1);
+        const auto scale = input::windowPixelScale(secondary);
+        EXPECT_FLOAT_EQ(secondary_x, 20 * scale.x);
+        EXPECT_FLOAT_EQ(press_x, 20 * scale.x);
+        manager().destroyContext("secondary-input");
+        SDL_DestroyWindow(secondary);
+    }
+
+    TEST_F(WindowInputDispatchTest, MainWindowTextCannotReachSecondaryExclusiveContext) {
+        auto* secondary = SDL_CreateWindow("Secondary keyboard", 400, 300, SDL_WINDOW_HIDDEN);
+        ASSERT_NE(secondary, nullptr);
+        auto* context = manager().createContext("secondary-keyboard", 400, 300);
+        ASSERT_NE(context, nullptr);
+        mapContextWindow(context, secondary);
+        int text_events = 0;
+        manager().activateInput(context, [&](const gui::PanelInputState& input) {
+            text_events += static_cast<int>(input.input_events.size());
+        });
+        SDL_Event event{};
+        event.type = SDL_EVENT_TEXT_INPUT;
+        event.text.windowID = SDL_GetWindowID(window_->getWindow());
+        event.text.text = "main only";
+        manager().dispatchInputEvent(event);
+        EXPECT_EQ(text_events, 0);
+        event.text.windowID = SDL_GetWindowID(secondary);
+        manager().dispatchInputEvent(event);
+        EXPECT_EQ(text_events, 1);
+        manager().destroyContext("secondary-keyboard");
+        SDL_DestroyWindow(secondary);
+    }
 
     TEST_F(WindowInputDispatchTest, NodeDeletionPreservesTransformToolThroughReselectionAndHistory) {
         auto& sm = *viewer_->getSceneManager();
