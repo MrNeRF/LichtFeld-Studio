@@ -2,11 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for the plugin system."""
 
-import pytest
-import tempfile
+import hashlib
+import io
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 
 @pytest.fixture(autouse=True)
@@ -1106,6 +1110,74 @@ required_features = []
         assert source_info.transport == "archive"
         assert source_info.github_url == "https://github.com/owner/repo"
 
+    @staticmethod
+    def _plugin_archive_bytes(name="local_archive_plugin"):
+        manifest = f"""[project]
+name = "{name}"
+version = "1.0.0"
+description = "Local archive test"
+dependencies = []
+
+[tool.lichtfeld]
+auto_start = false
+hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
+"""
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr(f"{name}/pyproject.toml", manifest)
+            archive.writestr(f"{name}/__init__.py", "def on_load():\n    pass\n")
+        return stream.getvalue()
+
+    def test_url_install_verifies_digest_and_warns_without_one(self, temp_plugins_dir, tmp_path):
+        from lfs_plugins import PluginManager
+        from lfs_plugins.errors import PluginError
+
+        mgr = PluginManager.instance()
+        archive_bytes = self._plugin_archive_bytes("local_verified_plugin")
+        archive_path = tmp_path / "plugin.zip"
+        archive_path.write_bytes(archive_bytes)
+        url = archive_path.as_uri()
+        digest = hashlib.sha256(archive_bytes).hexdigest()
+
+        with pytest.raises(PluginError, match="SHA-256"):
+            mgr.install(url, auto_load=False, sha256="0" * 64)
+
+        messages = []
+        assert mgr.install(
+            f"{url}#sha256={digest}", auto_load=False, on_progress=messages.append
+        ) == "local_verified_plugin"
+        assert not any("unverified" in message.lower() for message in messages)
+
+        verified = self._plugin_archive_bytes("verified_race_plugin")
+        replaced = self._plugin_archive_bytes("replaced_race_plugin")
+        archive_path.write_bytes(verified)
+        downloaded = []
+        from lfs_plugins.installer import _download_url_to_temp, verify_archive_sha256
+
+        def remember_download(*args, **kwargs):
+            path = _download_url_to_temp(*args, **kwargs)
+            downloaded.append(path)
+            return path
+
+        def replace_after_verify(path, expected):
+            verify_archive_sha256(path, expected)
+            downloaded[0].write_bytes(replaced)
+
+        with patch("lfs_plugins.installer._download_url_to_temp", side_effect=remember_download), \
+             patch("lfs_plugins.manager.verify_archive_sha256", side_effect=replace_after_verify):
+            assert mgr.install(
+                f"{url}#sha256={hashlib.sha256(verified).hexdigest()}", auto_load=False
+            ) == "verified_race_plugin"
+
+        messages.clear()
+        archive_bytes = self._plugin_archive_bytes("local_unverified_plugin")
+        archive_path.write_bytes(archive_bytes)
+        assert mgr.install(url, auto_load=False, on_progress=messages.append) == "local_unverified_plugin"
+        assert sum("unverified" in message.lower() for message in messages) == 1
+
     def test_install_from_registry_prefers_archive_over_git(self, temp_plugins_dir):
         """Registry installs should prefer archive downloads even when git refs exist."""
         from unittest.mock import MagicMock
@@ -1139,6 +1211,40 @@ required_features = []
         assert name == "colmap"
         assert mock_archive.call_count == 1
         mock_clone.assert_not_called()
+
+    def test_registry_github_archive_fallback_verifies_checksum(self, temp_plugins_dir, tmp_path):
+        from unittest.mock import MagicMock
+        from lfs_plugins import PluginManager
+        from lfs_plugins.errors import PluginError
+        from lfs_plugins.registry import RegistryVersionInfo
+
+        mgr = PluginManager.instance()
+        mgr._registry = MagicMock()
+        mgr._registry.resolve_version.return_value = RegistryVersionInfo(
+            version="1.2.0",
+            plugin_api=">=1,<2",
+            lichtfeld_version=">=0.4.2",
+            checksum="sha256:" + ("0" * 64),
+            git_ref="v1.2.0",
+        )
+        mgr._registry.verify_checksum.return_value = False
+        mgr._registry.get_plugin.return_value = {
+            "repository": "https://github.com/local/plugin-checksum",
+        }
+        archive_path = tmp_path / "archive.zip"
+        archive_path.write_bytes(b"archive bytes")
+
+        def fake_prepare(_url, staging_parent, _on_progress=None, **kwargs):
+            validator = kwargs.get("archive_validator")
+            if validator:
+                validator(archive_path.read_bytes())
+            staging = staging_parent / ".registry-fallback-stage"
+            self._write_plugin(staging, name="registry_fallback", version="1.2.0")
+            return staging, None
+
+        with patch("lfs_plugins.manager.prepare_github_archive", side_effect=fake_prepare):
+            with pytest.raises(PluginError, match="Checksum verification failed"):
+                mgr.install_from_registry("community:registry_fallback", auto_load=False)
 
     def test_install_from_registry_git_writes_registry_metadata_once(self, temp_plugins_dir):
         """Registry git installs should record enriched source metadata in a single write."""

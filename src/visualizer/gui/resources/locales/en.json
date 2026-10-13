@@ -2182,6 +2182,12 @@
       "updated": "Updated {name}"
     },
     "title_line": "Browse installable plugins from the plugin registry.",
+    "success_with_warning": "{success} {warning}",
+    "warning.unverified_source": "Warning: this plugin source has no SHA-256 digest; its archive is unverified.",
+    "error.checksum_mismatch": "Plugin archive SHA-256 verification failed.",
+    "error.digest_conflict": "The URL digest and sha256 argument do not match.",
+    "error.invalid_digest": "The SHA-256 digest must contain exactly 64 hexadecimal characters.",
+    "error.digest_requires_archive": "SHA-256 verification requires archive install transport.",
     "warning_body": "WARNING: LFS does not directly endorse or assume responsibility. Use at your own risk.",
     "filter_label": "Filter",
     "sort_label": "Sort By",

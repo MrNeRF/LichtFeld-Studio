@@ -4,6 +4,9 @@
 
 from collections import deque
 from dataclasses import asdict, dataclass
+import hashlib
+import hmac
+import io
 import json
 import logging
 import os
@@ -21,6 +24,7 @@ import tempfile
 import threading
 import time
 from typing import Optional, Callable, Tuple
+from urllib.parse import urldefrag
 import zipfile
 
 logger = logging.getLogger(__name__)
@@ -65,6 +69,44 @@ def _localized_progress(key: str, fallback: str, **values: object) -> str:
     except Exception:
         pass
     return safe_format(fallback, **values)
+
+
+def _install_digest(url: str, sha256: Optional[str]) -> tuple[str, str]:
+    """Return a URL without its digest fragment and a normalized SHA-256."""
+    clean_url, fragment = urldefrag(str(url).strip())
+    fragment_digest = ""
+    if fragment.lower().startswith("sha256="):
+        fragment_digest = fragment.split("=", 1)[1].strip()
+    elif len(fragment) == 64:
+        fragment_digest = fragment
+
+    supplied = str(sha256 or "").strip()
+    if supplied.lower().startswith("sha256:") or supplied.lower().startswith("sha256="):
+        supplied = supplied[7:]
+    if fragment_digest and supplied and not hmac.compare_digest(fragment_digest.lower(), supplied.lower()):
+        message = _localized_progress(
+            "plugin_marketplace.error.digest_conflict",
+            "The URL digest and sha256 argument do not match.",
+        )
+        raise PluginError(message)
+    digest = supplied or fragment_digest
+    if digest and (len(digest) != 64 or any(ch not in "0123456789abcdefABCDEF" for ch in digest)):
+        message = _localized_progress(
+            "plugin_marketplace.error.invalid_digest",
+            "The SHA-256 digest must contain exactly 64 hexadecimal characters.",
+        )
+        raise PluginError(message)
+    return (clean_url if fragment_digest else str(url).strip()), digest.lower()
+
+
+def verify_archive_sha256(archive: Path | bytes, expected: str) -> None:
+    """Reject an archive whose bytes do not match the supplied SHA-256."""
+    archive_bytes = archive if isinstance(archive, bytes) else Path(archive).read_bytes()
+    if not hmac.compare_digest(hashlib.sha256(archive_bytes).hexdigest(), expected.lower()):
+        raise PluginError(_localized_progress(
+            "plugin_marketplace.error.checksum_mismatch",
+            "Plugin archive SHA-256 verification failed.",
+        ))
 
 
 def _is_windows() -> bool:
@@ -369,7 +411,7 @@ def _strip_common_prefix(paths: list[Path]) -> Optional[str]:
 
 
 def _extract_zip_archive(
-    src: Path,
+    src: Path | io.BytesIO,
     dest: Path,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> None:
@@ -399,11 +441,15 @@ def _extract_zip_archive(
 
 
 def _extract_tar_archive(
-    src: Path,
+    src: Path | io.BytesIO,
     dest: Path,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> None:
-    with tarfile.open(src, "r:*") as archive:
+    if isinstance(src, io.BytesIO):
+        archive_file = tarfile.open(fileobj=src, mode="r:*")
+    else:
+        archive_file = tarfile.open(src, "r:*")
+    with archive_file as archive:
         members: list[tuple[tarfile.TarInfo, Path]] = []
         for member in archive.getmembers():
             rel_path = _sanitize_archive_path(member.name)
@@ -436,20 +482,26 @@ def _extract_tar_archive(
 
 
 def extract_archive(
-    src: Path,
+    src: Path | bytes,
     dest: Path,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> None:
     """Extract a plugin archive into dest with path sanitization."""
     if _cancel_requested(should_cancel):
         raise PluginLoadCancelled("Plugin installation cancelled before extraction")
-    if zipfile.is_zipfile(src):
-        _extract_zip_archive(src, dest, should_cancel)
+    source = io.BytesIO(src) if isinstance(src, bytes) else src
+    if zipfile.is_zipfile(source):
+        if isinstance(source, io.BytesIO):
+            source.seek(0)
+        _extract_zip_archive(source, dest, should_cancel)
         return
-    if tarfile.is_tarfile(src):
-        _extract_tar_archive(src, dest, should_cancel)
+    try:
+        if isinstance(source, io.BytesIO):
+            source.seek(0)
+        _extract_tar_archive(source, dest, should_cancel)
         return
-    raise PluginError(f"Unsupported plugin archive format: {src}")
+    except tarfile.ReadError:
+        raise PluginError(f"Unsupported plugin archive format: {src}") from None
 
 
 def prepare_archive_from_download_url(
@@ -459,7 +511,7 @@ def prepare_archive_from_download_url(
     temp_prefix: str,
     on_progress: Optional[Callable[[str], None]] = None,
     request_headers: Optional[dict] = None,
-    archive_validator: Optional[Callable[[Path], None]] = None,
+    archive_validator: Optional[Callable[[bytes], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Path:
     """Download and extract an archive into a staging directory."""
@@ -475,9 +527,10 @@ def prepare_archive_from_download_url(
         if _cancel_requested(should_cancel):
             raise PluginLoadCancelled("Plugin installation cancelled before staging")
         staging_dir = Path(tempfile.mkdtemp(prefix=temp_prefix, dir=staging_parent))
+        archive = archive_path.read_bytes()
         if archive_validator is not None:
-            archive_validator(archive_path)
-        extract_archive(archive_path, staging_dir, should_cancel)
+            archive_validator(archive)
+        extract_archive(archive, staging_dir, should_cancel)
         return staging_dir
     except BaseException:
         if staging_dir is not None:
@@ -493,6 +546,7 @@ def prepare_github_archive(
     staging_parent: Path,
     on_progress: Optional[Callable[[str], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
+    archive_validator: Optional[Callable[[bytes], None]] = None,
 ) -> tuple[Path, PluginSourceInfo]:
     """Download a GitHub repository archive into a staging directory."""
     owner, repo, ref = parse_github_url(url)
@@ -513,6 +567,7 @@ def prepare_github_archive(
         staging_parent,
         temp_prefix=f".{repo}-",
         request_headers={"Accept": "application/vnd.github+json"},
+        archive_validator=archive_validator,
         should_cancel=should_cancel,
     )
     return staging_dir, PluginSourceInfo(

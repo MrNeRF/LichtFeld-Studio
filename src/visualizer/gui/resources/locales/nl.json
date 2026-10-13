@@ -2184,6 +2184,12 @@
       "updated": "{name} bijgewerkt"
     },
     "title_line": "Bekijk installeerbare plug-ins uit het plugin-register.",
+    "success_with_warning": "{success} {warning}",
+    "warning.unverified_source": "Waarschuwing: deze pluginbron heeft geen SHA-256-digest; het archief is niet geverifieerd.",
+    "error.checksum_mismatch": "SHA-256-verificatie van het pluginarchief is mislukt.",
+    "error.digest_conflict": "De URL-digest en het sha256-argument komen niet overeen.",
+    "error.invalid_digest": "De SHA-256-digest moet precies 64 hexadecimale tekens bevatten.",
+    "error.digest_requires_archive": "Voor SHA-256-verificatie is installatie via een archief vereist.",
     "warning_body": "WAARSCHUWING: LFS keurt niet direct goed en neemt geen verantwoordelijkheid. Gebruik op eigen risico.",
     "filter_label": "Filter",
     "sort_label": "Sorteren op",

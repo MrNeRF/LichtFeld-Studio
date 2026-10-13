@@ -2184,6 +2184,12 @@
       "updated": "{name} wurde aktualisiert"
     },
     "title_line": "Durchsuchen Sie installierbare Plugins aus der Plugin-Registry.",
+    "success_with_warning": "{success} {warning}",
+    "warning.unverified_source": "Warnung: Für diese Plugin-Quelle gibt es keinen SHA-256-Prüfwert; das Archiv ist nicht verifiziert.",
+    "error.checksum_mismatch": "Die SHA-256-Prüfung des Plugin-Archivs ist fehlgeschlagen.",
+    "error.digest_conflict": "Der URL-Prüfwert und das sha256-Argument stimmen nicht überein.",
+    "error.invalid_digest": "Der SHA-256-Prüfwert muss genau 64 hexadezimale Zeichen enthalten.",
+    "error.digest_requires_archive": "Die SHA-256-Prüfung erfordert die Archiv-Installationsart.",
     "warning_body": "WARNUNG: LFS spricht keine direkte Empfehlung aus und übernimmt keine Verantwortung. Nutzung auf eigenes Risiko.",
     "filter_label": "Filter",
     "sort_label": "Sortieren nach",

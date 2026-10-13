@@ -2184,6 +2184,12 @@
       "updated": "已更新 {name}"
     },
     "title_line": "浏览可从插件源安装的插件",
+    "success_with_warning": "{success} {warning}",
+    "warning.unverified_source": "警告：此插件来源没有 SHA-256 摘要；其归档文件未经验证。",
+    "error.checksum_mismatch": "插件归档文件的 SHA-256 验证失败。",
+    "error.digest_conflict": "URL 摘要与 sha256 参数不匹配。",
+    "error.invalid_digest": "SHA-256 摘要必须恰好包含 64 个十六进制字符。",
+    "error.digest_requires_archive": "SHA-256 验证需要使用归档安装方式。",
     "warning_body": "警告：LFS 不直接背书也不承担责任。使用风险自负",
     "filter_label": "筛选",
     "sort_label": "排序方式",
