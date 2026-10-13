@@ -279,3 +279,24 @@ def test_integer_scrub_handles_out_of_range_text_without_callback_exception(text
     assert values["speed"] == expected
     assert not state.editing
 
+
+def test_float_scrub_keeps_prior_value_for_non_finite_text():
+    module = import_module("lfs_plugins.scrub_fields")
+    values = {"scale": 0.5}
+    scrub = module.ScrubFieldController(
+        {"scale": module.ScrubFieldSpec(0.25, 1.0, 0.01, "%.2f")},
+        values.__getitem__,
+        values.__setitem__,
+    )
+    attach_fields(scrub)
+    state = scrub._fields["scale"]
+    state.input_el.blur = lambda: scrub._on_input_blur("scale", Event())
+
+    for text in ("nan", "NaN", "inf", "-inf", "abc", ""):
+        values["scale"] = 0.5
+        state.editing = True
+        state.edit_value_before = 0.5
+        state.input_el.set_attribute("value", text)
+        scrub._on_input_change("scale", Event(linebreak=True))
+        assert values["scale"] == 0.5, text
+

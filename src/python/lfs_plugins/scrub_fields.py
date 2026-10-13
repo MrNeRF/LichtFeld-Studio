@@ -369,6 +369,8 @@ class ScrubFieldController:
                     return
                 bounded = max(state.spec.min_value, min(state.spec.max_value, parsed))
                 value = int(bounded)
+            elif not math.isfinite(parsed):
+                return
             else:
                 value = parsed
         except (TypeError, ValueError, OverflowError):
