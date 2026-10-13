@@ -118,6 +118,7 @@ class LoggingPanel(Panel):
         self._row_nodes = []
         self._row_locale = ""
         self._selected_sequences = set()
+        self._rendered_selection = set()
         self._selection_anchor = None
         self._drag_anchor = None
         self._drag_base = set()
@@ -145,6 +146,7 @@ class LoggingPanel(Panel):
     def on_mount(self, doc):
         self._doc = doc
         self._row_nodes = []
+        self._rendered_selection = set()
         rows = doc.get_element_by_id("log-rows")
         rows.add_event_listener("mousedown", self._on_selection_down)
         doc.add_event_listener("mousemove", self._on_selection_move)
@@ -282,8 +284,16 @@ class LoggingPanel(Panel):
         return selected
 
     def _sync_selection(self):
+        if not self._selected_sequences and not self._rendered_selection:
+            return
+        visible = {sequence for sequence, node in self._row_nodes if sequence in self._selected_sequences}
+        changed = visible ^ self._rendered_selection
+        if not changed:
+            return
         for sequence, node in self._row_nodes:
-            node.set_class("is-selected", sequence in self._selected_sequences)
+            if sequence in changed:
+                node.set_class("is-selected", sequence in visible)
+        self._rendered_selection = visible
         lf.ui.request_redraw()
 
     def _on_selection_down(self, event):
@@ -465,5 +475,6 @@ class LoggingPanel(Panel):
                 rows.remove_child(self._row_nodes.pop()[1])
         else:
             rows.set_inner_rml("".join(entry_markup(entry) for entry in visible))
+            self._rendered_selection = set()
             self._row_nodes = list(zip(sequences, rows.children()))
         self._row_locale = language

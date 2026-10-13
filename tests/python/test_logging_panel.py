@@ -338,3 +338,15 @@ def test_row_copy_shortcuts_are_scoped_to_log_scroll_and_ignore_other_keys(loggi
     right = SelectionEvent(panel._row_nodes[1][1], button=1)
     panel._on_selection_down(right)
     assert panel._selected_sequences == {1}
+
+
+def test_unchanged_selection_does_not_restyle_rows(logging_module):
+    panel, doc, _ = make_panel(logging_module, count=4)
+    select_row(panel, 1)
+    for sequence, node in panel._row_nodes:
+        node.set_class = lambda *args: pytest.fail('restyled an unchanged row')
+    panel._sync_selection()
+    # An empty selection also has no DOM work on repeated updates.
+    panel._selected_sequences.clear()
+    panel._rendered_selection.clear()
+    panel._sync_selection()
