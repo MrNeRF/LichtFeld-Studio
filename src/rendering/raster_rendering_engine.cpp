@@ -4,6 +4,7 @@
 
 #include "core/camera.hpp"
 #include "core/executable_path.hpp"
+#include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -19,6 +20,7 @@
 #include "screen_overlay_renderer.hpp"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <filesystem>
@@ -141,6 +143,18 @@ namespace lfs::rendering {
         const auto resolved_path = resolveEnvironmentPath(environment_path);
         if (resolved_path.empty())
             throw std::runtime_error("Environment map path is empty");
+        auto extension = resolved_path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
+        if (extension == ".hdr") {
+            if (!lfs::core::image_codecs::radiance_scanlines_complete(resolved_path)) {
+                const auto path_utf8 = lfs::core::path_to_utf8(resolved_path);
+                throw std::runtime_error(std::filesystem::exists(resolved_path)
+                                             ? std::format("Environment map pixel data is incomplete: {}", path_utf8)
+                                             : std::format("Environment map not found: {}", path_utf8));
+            }
+            return;
+        }
         const auto [width, height, channels] = lfs::core::probe_image_info(resolved_path);
         if (width <= 0 || height <= 0 || channels <= 0)
             throw std::runtime_error("Invalid environment map dimensions");

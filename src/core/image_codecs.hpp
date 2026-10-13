@@ -57,6 +57,9 @@ namespace lfs::core::image_codecs {
 
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error);
     bool probe_bounded_header(const std::filesystem::path& path, std::string& error);
+    // Walk Radiance RLE and flat scanlines. False when the file is missing or ends
+    // before every scanline is present. Does not expand pixels or allocate an image.
+    LFS_CORE_API bool radiance_scanlines_complete(const std::filesystem::path& path);
     bool decode(const std::filesystem::path& path, Image& result, std::string& error);
     bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
     bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
