@@ -268,12 +268,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* REDO_STACK = "scene.redo_stack";
         inline constexpr const char* NOTHING_RECORDED = "scene.nothing_recorded";
         inline constexpr const char* NO_ENTRIES_IN_STACK = "scene.no_entries_in_stack";
-        inline constexpr const char* LOG_MIRROR = "scene.log_mirror";
         inline constexpr const char* LOG_LEVEL = "scene.log_level";
-        inline constexpr const char* LOG_EXPORT = "scene.log_export";
-        inline constexpr const char* LOG_COPY = "scene.log_copy";
-        inline constexpr const char* LOG_NOTE = "scene.log_note";
-        inline constexpr const char* NO_LOGS = "scene.no_logs";
         inline constexpr const char* LOG_TRACE = "scene.log_trace";
         inline constexpr const char* LOG_DEBUG = "scene.log_debug";
         inline constexpr const char* LOG_INFO = "scene.log_info";
