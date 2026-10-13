@@ -2115,16 +2115,25 @@ namespace lfs::io {
                 }
             });
             pack_ms += milliseconds(means_pack_started, std::chrono::steady_clock::now());
-            constexpr int OVERLAPPED_WEBP_METHOD = 4;
-            constexpr float OVERLAPPED_WEBP_QUALITY = 100.0f;
-            constexpr int CRITICAL_WEBP_METHOD = 1;
-            constexpr float CRITICAL_CENTROIDS_WEBP_QUALITY = 100.0f;
-            constexpr float CRITICAL_LABELS_WEBP_QUALITY = 90.0f;
+            constexpr int MEANS_L_WEBP_METHOD = 2;
+            constexpr float MEANS_L_WEBP_QUALITY = 25.0f;
+            constexpr int MEANS_U_WEBP_METHOD = 2;
+            constexpr float MEANS_U_WEBP_QUALITY = 25.0f;
+            constexpr int QUATS_WEBP_METHOD = 4;
+            constexpr float QUATS_WEBP_QUALITY = 75.0f;
+            constexpr int SCALES_WEBP_METHOD = 5;
+            constexpr float SCALES_WEBP_QUALITY = 75.0f;
+            constexpr int SH0_WEBP_METHOD = 4;
+            constexpr float SH0_WEBP_QUALITY = 0.0f;
+            constexpr int CRITICAL_CENTROIDS_WEBP_METHOD = 4;
+            constexpr float CRITICAL_CENTROIDS_WEBP_QUALITY = 50.0f;
+            constexpr int CRITICAL_LABELS_WEBP_METHOD = 1;
+            constexpr float CRITICAL_LABELS_WEBP_QUALITY = 0.0f;
 
             queue_webp("means_l.webp", means_l, width, height,
-                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+                       MEANS_L_WEBP_METHOD, MEANS_L_WEBP_QUALITY);
             queue_webp("means_u.webp", means_u, width, height,
-                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+                       MEANS_U_WEBP_METHOD, MEANS_U_WEBP_QUALITY);
 
             if (!report_progress(0.20f, "Rotations")) {
                 join_sh_kmeans_and_wait_for_webp_encodes();
@@ -2171,7 +2180,7 @@ namespace lfs::io {
             });
             pack_ms += milliseconds(quats_pack_started, std::chrono::steady_clock::now());
             queue_webp("quats.webp", quats, width, height,
-                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+                       QUATS_WEBP_METHOD, QUATS_WEBP_QUALITY);
 
             if (!report_progress(0.30f, "Scales k-means")) {
                 join_sh_kmeans_and_wait_for_webp_encodes();
@@ -2197,7 +2206,7 @@ namespace lfs::io {
             });
             pack_ms += milliseconds(scales_pack_started, std::chrono::steady_clock::now());
             queue_webp("scales.webp", scales_data, width, height,
-                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+                       SCALES_WEBP_METHOD, SCALES_WEBP_QUALITY);
 
             if (!report_progress(0.45f, "Colors k-means")) {
                 join_sh_kmeans_and_wait_for_webp_encodes();
@@ -2225,7 +2234,7 @@ namespace lfs::io {
             });
             pack_ms += milliseconds(sh0_pack_started, std::chrono::steady_clock::now());
             queue_webp("sh0.webp", sh0_data, width, height,
-                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+                       SH0_WEBP_METHOD, SH0_WEBP_QUALITY);
 
             if (auto result = archive_ready_webps(); !result) {
                 return std::unexpected(result.error());
@@ -2304,7 +2313,7 @@ namespace lfs::io {
                 }
 
                 queue_webp("shN_centroids.webp", sh_centroids_buf, centroids_width, centroids_height,
-                           CRITICAL_WEBP_METHOD, CRITICAL_CENTROIDS_WEBP_QUALITY);
+                           CRITICAL_CENTROIDS_WEBP_METHOD, CRITICAL_CENTROIDS_WEBP_QUALITY);
 
                 auto sh_labels_cpu = sh_labels.to_pageable_host();
                 const auto* sh_labels_ptr = static_cast<const int32_t*>(sh_labels_cpu.data_ptr());
@@ -2327,7 +2336,7 @@ namespace lfs::io {
                 pack_ms += milliseconds(sh_labels_pack_started, std::chrono::steady_clock::now());
 
                 queue_webp("shN_labels.webp", sh_labels_buf, width, height,
-                           CRITICAL_WEBP_METHOD, CRITICAL_LABELS_WEBP_QUALITY);
+                           CRITICAL_LABELS_WEBP_METHOD, CRITICAL_LABELS_WEBP_QUALITY);
 
                 sh_n_meta["count"] = actual_palette_size;
                 sh_n_meta["bands"] = sh_degree;
