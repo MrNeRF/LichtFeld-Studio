@@ -145,6 +145,7 @@ namespace lfs::vis {
 
     // RenderingManager Implementation
     RenderingManager::RenderingManager() {
+        (void)applyRenderingDefaults(settings_, UserPreferences::instance().renderingDefaults());
         viewport_interop_ = std::make_unique<ViewportInteropService>();
         frame_demand_ledger_.request(FrameRequest{.reason = FrameReason::Startup,
                                                   .scope = FrameScope::All,

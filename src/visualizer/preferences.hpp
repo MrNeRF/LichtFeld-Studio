@@ -13,6 +13,12 @@
 
 namespace lfs::vis {
 
+    struct RenderSettings;
+
+    // Snapshot defaults seed new projects; restored VIEW state remains authoritative.
+    [[nodiscard]] LFS_VIS_API std::string renderingDefaultsFromSettings(const RenderSettings& settings);
+    [[nodiscard]] LFS_VIS_API lfs::Status applyRenderingDefaults(RenderSettings& settings, std::string_view serialized);
+
     struct McpPreferenceState {
         bool enabled = true;
         bool expose_network = false;
@@ -28,6 +34,11 @@ namespace lfs::vis {
 
         UserPreferences(const UserPreferences&) = delete;
         UserPreferences& operator=(const UserPreferences&) = delete;
+
+        [[nodiscard]] lfs::Status setRenderingDefaults(std::string_view serialized);
+        [[nodiscard]] std::string renderingDefaults();
+        [[nodiscard]] lfs::Status setViewportVignette(std::string_view serialized);
+        [[nodiscard]] std::string viewportVignette();
 
         void setThemeName(const std::string& value);
         [[nodiscard]] std::string themeName();

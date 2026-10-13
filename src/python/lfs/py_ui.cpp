@@ -5262,6 +5262,24 @@ namespace lfs::python {
             []() -> float { return vis::loadNavigationSpeedPreference(); },
             "Get the default WASD navigation speed");
 
+        m.def("get_rendering_defaults_json", [] { return vis::UserPreferences::instance().renderingDefaults(); }, "Get user defaults for new projects; project VIEW values are independent overrides.");
+        m.def("set_rendering_defaults_json", [](const std::string& serialized) {
+            if (auto result = vis::UserPreferences::instance().setRenderingDefaults(serialized); !result)
+                throw nb::value_error(lfs::format_for_developer(result.error()).c_str()); }, nb::arg("serialized"), "Validate and persist rendering defaults without changing the current project.");
+        m.def("capture_rendering_defaults", [] {
+            if (const auto* rendering = get_rendering_manager()) {
+                const auto result = vis::UserPreferences::instance().setRenderingDefaults(vis::renderingDefaultsFromSettings(rendering->getSettings()));
+                if (!result) throw nb::value_error(lfs::format_for_developer(result.error()).c_str());
+            } }, "Save current project overlay style and LOD cache limits as defaults for new projects.");
+        m.def("apply_rendering_defaults", [] {
+            if (auto* rendering = get_rendering_manager()) {
+                auto settings = rendering->getSettings();
+                if (const auto result = vis::applyRenderingDefaults(settings, vis::UserPreferences::instance().renderingDefaults()); !result)
+                    throw nb::value_error(lfs::format_for_developer(result.error()).c_str());
+                if (const auto result = rendering->updateSettingsFromUser(settings); !result)
+                    throw nb::value_error(lfs::format_for_developer(result.error()).c_str());
+            } }, "Explicitly apply user defaults to the current project; other rendering fields are preserved.");
+
         m.def(
             "get_project_manager_preferences",
             [] {

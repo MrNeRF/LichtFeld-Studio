@@ -2976,3 +2976,20 @@ def unregister_property_group(group_id: str) -> None:
 
 def property_group_info(group_id: str) -> dict:
     """Get registered property metadata for a property group"""
+
+
+def get_rendering_defaults_json() -> str:
+    """Validated overlay style and LOD cache defaults for new projects."""
+    ...
+
+def set_rendering_defaults_json(serialized: str) -> None:
+    """Persist a validated patch without modifying the current project."""
+    ...
+
+def capture_rendering_defaults() -> None:
+    """Save the current project's overlay style and LOD cache limits as defaults."""
+    ...
+
+def apply_rendering_defaults() -> None:
+    """Explicitly apply user defaults to the current project's style and cache limits."""
+    ...

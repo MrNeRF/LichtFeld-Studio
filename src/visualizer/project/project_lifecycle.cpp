@@ -8896,6 +8896,11 @@ namespace lfs::vis::project {
         // A new document clears project-owned data, but it is not a workspace
         // preset. Preserve the live panel arrangement and desktop geometry.
         viewer_.resetProjectState(/*reset_panel_registry=*/false);
+        if (auto* rendering = viewer_.getRenderingManager()) {
+            auto settings = rendering->getSettings();
+            if (applyRenderingDefaults(settings, UserPreferences::instance().renderingDefaults()))
+                rendering->updateSettings(settings);
+        }
         if (auto* input = viewer_.getInputController())
             input->applyNewProjectNavigationDefaults();
         active_restore_ticket_ = 0;
