@@ -147,11 +147,28 @@ jobs:
           key: vcpkg-installed-${{ runner.os }}-prebuilt-ort-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
           restore-keys: vcpkg-installed-${{ runner.os }}-prebuilt-ort-v1-
 
+      - name: Restore vcpkg downloads
+        id: cache-vcpkg-downloads
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.VCPKG_ROOT }}/downloads
+          key: vcpkg-downloads-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.build_type }}
+          restore-keys: vcpkg-downloads-${{ runner.os }}-
+
       - name: Configure
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -B %BUILD_DIR% -S . -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DLFS_FAST_COMPILE=ON -DBUILD_FORMAT_TESTS=ON -DBUILD_VISUALIZER_TESTS=ON -DBUILD_UNICODE_TEST_ONLY=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF -DLFS_ENABLE_CUDA_DEVICE_DEBUG=OFF
+          python tools/ci_retry_configure.py -- cmake -B %BUILD_DIR% -S . -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DLFS_FAST_COMPILE=ON -DBUILD_FORMAT_TESTS=ON -DBUILD_VISUALIZER_TESTS=ON -DBUILD_UNICODE_TEST_ONLY=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF -DLFS_ENABLE_CUDA_DEVICE_DEBUG=OFF
+
+      # Save fetched archives even when configure fails later. Unique keys let
+      # later runs retain newly downloaded sources; vcpkg verifies their hashes.
+      - name: Save vcpkg downloads
+        if: always() && !cancelled() && steps.cache-vcpkg-downloads.outcome == 'success'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.VCPKG_ROOT }}/downloads
+          key: vcpkg-downloads-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.build_type }}
 
       - name: Generate shader headers for preflight
         shell: cmd

@@ -18,16 +18,23 @@ if [[ "$current" != "$expected" ]]; then
     exit 0
 fi
 
-if git push origin "HEAD:refs/heads/$branch"; then
+if output=$(LC_ALL=C git push --porcelain origin "HEAD:refs/heads/$branch" 2>&1); then
+    printf '%s\n' "$output"
     exit 0
 fi
+printf '%s\n' "$output" >&2
 
-# Another commit can land between the fetch and push. Never force-push or
-# replay stale formatting over it. Authentication and other failures stay red.
-current=$(remote_head)
-if [[ "$current" != "$expected" ]]; then
-    echo "Branch advanced during push; skipping obsolete formatting commit."
-    exit 0
-fi
-echo "Formatting push failed while the branch was unchanged." >&2
+# Only Git's explicit non-fast-forward rejection can be treated as stale.
+# A coincidental branch advance must not hide authentication/server failures.
+while IFS=$'\t' read -r flag ref reason; do
+    if [[ "$flag" == '!' && "$ref" == "HEAD:refs/heads/$branch" &&
+          ( "$reason" == '[rejected] (fetch first)' || "$reason" == '[rejected] (non-fast-forward)' ) ]]; then
+        current=$(remote_head)
+        if [[ "$current" != "$expected" ]]; then
+            echo "Branch advanced during push; skipping obsolete formatting commit."
+            exit 0
+        fi
+    fi
+done <<< "$output"
+echo "Formatting push failed; no verified non-fast-forward rejection to skip." >&2
 exit 1

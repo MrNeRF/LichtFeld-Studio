@@ -128,9 +128,17 @@ jobs:
           key: vcpkg-pkgs-${{ runner.os }}-linux-gui-prebuilt-ort-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
           restore-keys: vcpkg-pkgs-${{ runner.os }}-linux-gui-prebuilt-ort-
 
+      - name: Restore vcpkg downloads
+        id: cache-vcpkg-downloads
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.VCPKG_ROOT }}/downloads
+          key: vcpkg-downloads-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.build_type }}
+          restore-keys: vcpkg-downloads-${{ runner.os }}-
+
       - name: Configure
         run: |
-          cmake -B build -S . -G Ninja \
+          python3 tools/ci_retry_configure.py -- cmake -B build -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DLFS_HIDDEN_SYMBOLS=${{ matrix.build_type == 'Debug' && 'ON' || 'OFF' }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
@@ -144,10 +152,19 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-Wl,--compress-debug-sections=zlib" \
             -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--compress-debug-sections=zlib"
 
+      # Save fetched archives even when configure fails later. Unique keys let
+      # later runs retain newly downloaded sources; vcpkg verifies their hashes.
+      - name: Save vcpkg downloads
+        if: always() && !cancelled() && steps.cache-vcpkg-downloads.outcome == 'success'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.VCPKG_ROOT }}/downloads
+          key: vcpkg-downloads-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.build_type }}
+
       - name: Clean vcpkg buildtrees
         run: |
           rm -rf build/vcpkg_installed/vcpkg/blds build/vcpkg_installed/vcpkg/pkgs
-          rm -rf "$VCPKG_ROOT"/buildtrees "$VCPKG_ROOT"/downloads "$VCPKG_ROOT"/packages
+          rm -rf "$VCPKG_ROOT"/buildtrees "$VCPKG_ROOT"/packages
           df -h
 
       - name: Build

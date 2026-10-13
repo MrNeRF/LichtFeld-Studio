@@ -44,10 +44,30 @@ class FormatPushTest(unittest.TestCase):
             [GIT, *args], cwd=cwd, env=self.env, text=True, stderr=subprocess.PIPE
         ).strip()
 
-    def run_push(self):
+    def run_push(self, advance=None, push_error=None):
+        env = self.env.copy()
+        command = [BASH, SCRIPT.as_posix(), "master", self.base]
+        if advance:
+            env.update(ADVANCE_REMOTE=self.remote.as_posix(), ADVANCE_SHA=advance,
+                       PUSH_ERROR=push_error or "")
+            # Advance before Git advertises refs, so a real push reports its
+            # explicit non-fast-forward porcelain status. Inject other errors
+            # at the same boundary to ensure an advance cannot hide them.
+            wrapper = '''git() {
+                if [[ "$1" == push ]]; then
+                    command git --git-dir="$ADVANCE_REMOTE" update-ref refs/heads/master "$ADVANCE_SHA"
+                    if [[ -n "$PUSH_ERROR" ]]; then
+                        printf '%s\\n' "$PUSH_ERROR" >&2
+                        return 1
+                    fi
+                fi
+                command git "$@"
+            }
+            export -f git
+            bash "$@"'''
+            command = [BASH, "-c", wrapper, "--", SCRIPT.as_posix(), "master", self.base]
         return subprocess.run(
-            [BASH, SCRIPT.as_posix(), "master", self.base],
-            cwd=self.repo, env=self.env, text=True, capture_output=True,
+            command, cwd=self.repo, env=env, text=True, capture_output=True, timeout=30,
         )
 
     def remote_head(self):
@@ -76,13 +96,7 @@ class FormatPushTest(unittest.TestCase):
 
     def test_skips_when_branch_advances_between_fetch_and_push(self):
         advance = self.advance_commit()
-        hook = self.repo / ".git" / "hooks" / "pre-push"
-        hook.write_text(
-            f'#!/usr/bin/env bash\ngit --git-dir="{self.remote.as_posix()}" '
-            f'update-ref refs/heads/master {advance}\n', encoding="utf-8", newline="\n",
-        )
-        hook.chmod(0o755)
-        result = self.run_push()
+        result = self.run_push(advance=advance)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("advanced during push", result.stdout)
         self.assertEqual(self.remote_head(), advance)
@@ -93,8 +107,24 @@ class FormatPushTest(unittest.TestCase):
         hook.chmod(0o755)
         result = self.run_push()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("branch was unchanged", result.stderr)
+        self.assertIn("no verified non-fast-forward", result.stderr)
         self.assertEqual(self.remote_head(), self.base)
+
+    def test_authentication_failure_stays_red_even_if_branch_advanced(self):
+        advance = self.advance_commit()
+        result = self.run_push(advance=advance, push_error="fatal: Authentication failed")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Authentication failed", result.stderr)
+        self.assertEqual(self.remote_head(), advance)
+
+    def test_server_rejection_stays_red_even_if_branch_advanced(self):
+        advance = self.advance_commit()
+        result = self.run_push(
+            advance=advance, push_error="!\tHEAD:refs/heads/master\t[remote rejected] (server error)"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("server error", result.stderr)
+        self.assertEqual(self.remote_head(), advance)
 
 
 if __name__ == "__main__":
