@@ -1044,7 +1044,13 @@
     "reset_all_settings_confirmation": "Sprache, Theme, UI-Skalierung, Szenenrekonstruktion, Eingabeeinstellungen, MCP-Server, Layout und Fensterstatus auf die Standardwerte zurücksetzen? Dies wird sofort angewendet. Ist ein .licht-Projekt geöffnet, wird dessen gespeichertes Layout beim nächsten Speichern ersetzt; Projektinhalte, Datensätze, Exporte, Plugins und Cache bleiben unverändert.",
     "reset_all_settings_success": "Alle Einstellungen, das Layout und der Fensterstatus wurden sofort zurückgesetzt.",
     "window_manager_unavailable": "Die Fensterverwaltung ist nicht verfügbar.",
-    "window_state_reset_failed": "Die Standardgeometrie des Fensters konnte nicht wiederhergestellt werden."
+    "window_state_reset_failed": "Die Standardgeometrie des Fensters konnte nicht wiederhergestellt werden.",
+    "viewport": "Ansicht",
+    "viewport_defaults": "Vorgaben für neue Projekte",
+    "viewport_defaults_hint": "Diese Vorgaben gelten für neue Projekte. Bestehende Projekte behalten ihre gespeicherten Werte.",
+    "viewport_style_defaults": "Hilfen und Auswahlstil",
+    "viewport_performance_defaults": "LOD-Cache-Grenzen",
+    "viewport_defaults_invalid": "Geben Sie einen gültigen Wert im unterstützten Bereich ein."
   },
   "main_panel": {
     "console": "Konsole",
@@ -2096,17 +2102,17 @@
   },
   "rendering_panel": {
     "fov_format": "Sichtfeld: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_viewport": "Ansichtsfenster",
+    "section_viewport": "Ansicht und Hilfen",
     "section_camera": "Kamera und Projektion",
     "section_selection": "Auswahl und Überlagerungen",
-    "section_post_process": "Nachbearbeitung",
+    "section_post_process": "Farbe und Darstellung",
     "section_lod": "Detailstufe (LOD)",
     "lod_enabled": "Level of Detail aktivieren",
     "lod_max_splats": "Max. Splats",
     "lod_page_pool_splats": "LOD-Cache-Budget",
     "lod_pool_vram_fraction": "LOD-Pool VRAM-Anteil",
     "lod_fade_frames": "LOD-Einblendframes",
-    "lod_render_scale": "Render-Skalierung",
+    "lod_render_scale": "LOD-Renderskalierung",
     "lod_cone_foveation": "Kegel-Foveation",
     "lod_cone_inner_degrees": "Kegel-Innenwinkel",
     "lod_cone_outer_degrees": "Kegel-Außenwinkel",
@@ -2118,7 +2124,16 @@
     "simplify_lod_base": "LOD-Basis",
     "simplify_opacity_prune": "Opazitäts-Pruning",
     "simplify_original": "Original",
-    "simplify_output": "Ausgabe"
+    "simplify_output": "Ausgabe",
+    "section_quality": "Qualität und Leistung",
+    "section_environment": "Umgebung",
+    "advanced": "Erweitert",
+    "project_values_hint": "Projektwerte: Hilfenstil und LOD-Cache-Grenzen werden im Projekt gespeichert.",
+    "save_defaults": "Als Vorgaben speichern",
+    "apply_defaults": "Vorgaben anwenden…",
+    "save_defaults_hint": "Aktuellen Hilfenstil und LOD-Cache-Grenzen für neue Projekte speichern.",
+    "apply_defaults_hint": "Vorgaben nur auf dieses Projekt anwenden. Andere Rendering-Einstellungen bleiben unverändert.",
+    "apply_defaults_confirm": "Hilfenstil und LOD-Cache-Grenzen dieses Projekts durch Ihre Vorgaben ersetzen?"
   },
   "scripts_panel": {
     "title": "Python-Skripte",

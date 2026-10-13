@@ -11,7 +11,8 @@ from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .selection_groups import GROUPS_LIST_ID, SelectionGroupsSection
 from .types import Panel
-from .ui import RuntimeState, PanelStateBinding, native_value as _native_store_value
+from .selected_splat import active_splat_node
+from .ui import RuntimeState, PanelStateBinding
 
 __lfs_panel_classes__ = ["RenderingPanel"]
 __lfs_panel_ids__ = ["lfs.rendering"]
@@ -29,8 +30,6 @@ def _tr_fallback(key: str, fallback: str) -> str:
     return fallback
 
 
-def _theme():
-    return lf.ui.theme()
 
 
 def _vulkan_capabilities():
@@ -51,26 +50,11 @@ def _mesh_wide_lines_supported():
     return bool(_vulkan_capabilities().get("wide_lines", False))
 
 
-def _theme_vignette():
-    theme = _theme()
-    return theme.vignette if theme else None
 
 
-def _set_theme_vignette_style(*, intensity=None, radius=None, softness=None):
-    vignette = _theme_vignette()
-    if vignette is None:
-        return
-    lf.ui.set_theme_vignette_style(
-        float(vignette.intensity if intensity is None else intensity),
-        float(vignette.radius if radius is None else radius),
-        float(vignette.softness if softness is None else softness),
-    )
 
 
 SENSOR_HALF_HEIGHT_MM = 12.0
-DEFAULT_SIMPLIFY_TARGET_RATIO = 0.5
-DEFAULT_SIMPLIFY_LOD_BASE = 2.0
-DEFAULT_SIMPLIFY_OPACITY_PRUNE_THRESHOLD = 0.1
 LOD_BUDGET_MIN = 1
 LOD_BUDGET_FALLBACK_MAX = 5_000_000
 LOD_BUDGET_HARD_MAX = 500_000_000
@@ -116,12 +100,6 @@ SCRUB_FIELD_DEFS = {
     "ppisp_gamma_blue": ScrubFieldSpec(-0.5, 0.5, 0.01, "%.2f"),
     "ppisp_crf_toe": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
     "ppisp_crf_shoulder": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
-    "theme_vignette_intensity": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
-    "theme_vignette_radius": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
-    "theme_vignette_softness": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
-    "simplify_target": ScrubFieldSpec(1.0, 1.0, 1.0, "%d", data_type=int),
-    "simplify_lod_base": ScrubFieldSpec(0.1, 10.0, 0.1, "%.1f"),
-    "simplify_opacity_prune_threshold": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
     "lod_max_splats": ScrubFieldSpec(
         float(LOD_BUDGET_MIN),
         float(LOD_BUDGET_FALLBACK_MAX),
@@ -168,9 +146,12 @@ COLOR_PROPS = [
 
 SECTION_NAMES = (
     "viewport",
+    "quality",
+    "quality_advanced",
+    "environment",
     "camera",
     "lod",
-    "simplify",
+    "lod_advanced",
     "selection",
     "mesh",
     "post_process",
@@ -276,6 +257,7 @@ def _color_channel_field(prop_id, suffix):
 
 
 RENDERING_INITIALLY_COLLAPSED = {
+    "viewport", "environment", "quality_advanced", "lod_advanced",
     "lod",
     "selection",
     "mesh",
@@ -319,17 +301,6 @@ class RenderingPanel(Panel):
         self._picker_click_handled = False
         self._last_swatch_colors = {}
         self._color_text_bufs = {}
-        self._simplify_target_count = 0
-        self._simplify_target_touched = False
-        self._simplify_lod_base = DEFAULT_SIMPLIFY_LOD_BASE
-        self._simplify_lod_base_touched = False
-        self._simplify_opacity_prune_threshold = DEFAULT_SIMPLIFY_OPACITY_PRUNE_THRESHOLD
-        self._simplify_source_name = ""
-        self._simplify_original_count = 0
-        self._simplify_task_active = False
-        self._simplify_progress_value = "0"
-        self._simplify_progress_stage = ""
-        self._simplify_error_text = ""
         self._last_environment_state = None
         self._last_projection_state = None
         self._last_custom_environment_map_path = ""
@@ -347,7 +318,7 @@ class RenderingPanel(Panel):
         self._reactive_binding = PanelStateBinding()
 
     def capture_chrome(self):
-        return {"collapsed": sorted(self._collapsed)}
+        return {"version": 2, "collapsed": sorted(self._collapsed)}
 
     def apply_chrome(self, payload):
         self._collapsed = set(RENDERING_INITIALLY_COLLAPSED)
@@ -355,6 +326,8 @@ class RenderingPanel(Panel):
             collapsed = payload.get("collapsed")
             if isinstance(collapsed, (list, tuple)):
                 self._collapsed = {str(name) for name in collapsed}
+                if payload.get("version", 1) < 2:
+                    self._collapsed.update({"environment", "quality_advanced", "lod_advanced"})
         if self._handle:
             self._handle.dirty_all()
 
@@ -398,7 +371,6 @@ class RenderingPanel(Panel):
             )
             el.add_event_listener("change", self._on_color_text_change)
             el.add_event_listener("blur", self._on_color_text_blur)
-        self._refresh_simplify_source(force=True)
         self._scrub_fields.mount(doc)
         self._selection_groups.mount(doc)
         self._sync_section_states()
@@ -415,7 +387,6 @@ class RenderingPanel(Panel):
             RuntimeState.active_tool,
             RuntimeState.transform_space,
             RuntimeState.pivot_mode,
-            RuntimeState.splat_simplify_state,
             RuntimeState.language_generation,
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)
@@ -563,55 +534,26 @@ class RenderingPanel(Panel):
                        lambda p=prop_id: float(getattr(s(), p, 0.0)),
                        lambda v, p=prop_id: self._set_render_slider(p, v))
 
-        model.bind("simplify_target",
-                   lambda: f"{self._compute_simplify_target_count():,}",
-                   lambda v: self._set_simplify_target_count(v))
-        model.bind("simplify_lod_base",
-                   lambda: f"{self._compute_simplify_lod_base():.1f}",
-                   lambda v: self._set_simplify_lod_base(v))
-        model.bind("simplify_opacity_prune_threshold",
-                   lambda: f"{self._compute_simplify_opacity_prune_threshold():.2f}",
-                   lambda v: self._set_simplify_opacity_prune_threshold(v))
-
         model.bind_func("ppisp_auto",
                          lambda: s() is not None and getattr(s(), "ppisp_mode", "") != "MANUAL")
 
+        model.bind_func("label_hdr_quality", lambda: tr("rendering_panel.section_quality"))
+        model.bind_func("label_hdr_environment", lambda: tr("rendering_panel.section_environment"))
+        model.bind_func("label_hdr_advanced", lambda: tr("rendering_panel.advanced"))
         model.bind_func("label_hdr_viewport",
-                         lambda: _tr_fallback("rendering_panel.section_viewport", "Viewport"))
+                         lambda: _tr_fallback("rendering_panel.section_viewport", "Viewport & Guides"))
         model.bind_func("label_hdr_camera",
                          lambda: _tr_fallback("rendering_panel.section_camera", "Camera & Projection"))
         model.bind_func("label_hdr_lod",
                          lambda: _tr_fallback("rendering_panel.section_lod", "LOD"))
-        model.bind_func("label_hdr_simplify",
-                         lambda: _tr_fallback("rendering_panel.section_simplify", "Splat Simplify"))
         model.bind_func("label_hdr_selection",
                          lambda: _tr_fallback("rendering_panel.section_selection", "Selection & Overlays"))
         model.bind_func("label_hdr_mesh",
                          lambda: lf.ui.tr("main_panel.mesh") or "Mesh")
         model.bind_func("label_hdr_post_process",
-                         lambda: _tr_fallback("rendering_panel.section_post_process", "Post Processing"))
+                         lambda: _tr_fallback("rendering_panel.section_post_process", "Color & Appearance"))
         model.bind_func("label_environment_map_browse",
                          lambda: lf.ui.tr("common.browse") or "Browse...")
-        model.bind_func("label_simplify_source",
-                         lambda: _entry_label(_tr_fallback("rendering_panel.simplify_source", "Source")))
-        model.bind_func("label_simplify_select_source",
-                         lambda: _tr_fallback("rendering_panel.simplify_select_source", "Select a splat node"))
-        model.bind_func("label_simplify_target",
-                         lambda: _entry_label(_tr_fallback("rendering_panel.simplify_target", "Target")))
-        model.bind_func("label_simplify_target_stat",
-                         lambda: _tr_fallback("rendering_panel.simplify_target", "Target"))
-        model.bind_func("label_simplify_lod_base",
-                         lambda: _entry_label(_tr_fallback("rendering_panel.simplify_lod_base", "LOD Base")))
-        model.bind_func("label_simplify_opacity_prune",
-                         lambda: _entry_label(_tr_fallback("rendering_panel.simplify_opacity_prune", "Opacity Prune")))
-        model.bind_func("label_simplify_original",
-                         lambda: _tr_fallback("rendering_panel.simplify_original", "Original"))
-        model.bind_func("label_simplify_output",
-                         lambda: _entry_label(_tr_fallback("rendering_panel.simplify_output", "Output")))
-        model.bind_func("label_simplify_apply",
-                         lambda: _tr_fallback("common.apply", "Apply"))
-        model.bind_func("label_simplify_cancel",
-                         lambda: _tr_fallback("common.cancel", "Cancel"))
         model.bind_func("label_ppisp_color_balance",
                          lambda: _entry_label(
                              lf.ui.tr("main_panel.ppisp_color_balance") or "Color Correction"))
@@ -630,49 +572,12 @@ class RenderingPanel(Panel):
         )
 
         model.bind_func("is_windows", lambda: lf.ui.is_windows_platform())
-        model.bind_func("simplify_has_source", lambda: bool(self._simplify_source_name))
-        model.bind_func("simplify_source_name", lambda: self._simplify_source_name)
-        model.bind_func("simplify_original_count", lambda: f"{self._simplify_original_count:,}")
-        model.bind_func("simplify_target_count", lambda: f"{self._compute_simplify_target_count():,}")
-        model.bind_func("simplify_output_name", self._simplify_output_name)
-        model.bind_func("simplify_can_apply", self._can_run_simplify)
-        model.bind_func("simplify_show_progress", lambda: self._simplify_task_active)
-        model.bind_func("simplify_progress_value", lambda: self._simplify_progress_value)
-        model.bind_func("simplify_progress_pct", self._simplify_progress_pct)
-        model.bind_func("simplify_progress_stage", lambda: self._simplify_progress_stage)
-        model.bind_func("simplify_show_error", lambda: bool(self._simplify_error_text))
-        model.bind_func("simplify_error_text", lambda: self._simplify_error_text)
-
-        model.bind("theme_vignette_enabled",
-                   lambda: bool((vignette := _theme_vignette()) and vignette.enabled),
-                   lambda v: lf.ui.set_theme_vignette_enabled(bool(v)))
-        model.bind("theme_vignette_intensity",
-                   lambda: float(vignette.intensity) if (vignette := _theme_vignette()) else 0.3,
-                   lambda v: lf.ui.set_theme_vignette_intensity(float(v)))
-        model.bind("theme_vignette_radius",
-                   lambda: float(vignette.radius) if (vignette := _theme_vignette()) else 0.75,
-                   lambda v: _set_theme_vignette_style(radius=float(v)))
-        model.bind("theme_vignette_softness",
-                   lambda: float(vignette.softness) if (vignette := _theme_vignette()) else 0.45,
-                   lambda v: _set_theme_vignette_style(softness=float(v)))
-        model.bind_func("label_theme_vignette_enabled",
-                         lambda: _entry_label(lf.ui.tr("main_panel.theme_vignette") or "Vignette"))
-        model.bind_func("label_theme_vignette_intensity",
-                         lambda: _entry_label(
-                             lf.ui.tr("main_panel.theme_vignette_intensity") or "Intensity"))
-        model.bind_func("label_theme_vignette_radius",
-                         lambda: _entry_label(
-                             lf.ui.tr("main_panel.theme_vignette_radius") or "Radius"))
-        model.bind_func("label_theme_vignette_softness",
-                         lambda: _entry_label(
-                             lf.ui.tr("main_panel.theme_vignette_softness") or "Softness"))
-
+        model.bind_event("save_defaults", lambda *_: lf.ui.capture_rendering_defaults())
+        model.bind_event("apply_defaults", self._confirm_apply_defaults)
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_event("color_click", self._on_color_click)
         model.bind_event("chrom_change", self._on_chrom_change)
         model.bind_event("picker_change", self._on_picker_change)
-        model.bind_event("simplify_apply", self._on_simplify_apply)
-        model.bind_event("simplify_cancel", self._on_simplify_cancel)
         model.bind_event("browse_environment_map", self._on_browse_environment_map)
         self._selection_groups.bind(model)
 
@@ -743,8 +648,6 @@ class RenderingPanel(Panel):
                 swatch.set_property("background-color", f"rgb({key[1]},{key[2]},{key[3]})")
                 dirty = True
             self._dirty_color_bindings(prop_id)
-        dirty |= self._refresh_simplify_source(force=False)
-        dirty |= self._sync_simplify_task_state(force=False)
         dirty |= self._scrub_fields.sync_all()
         dirty |= self._selection_groups.sync(visible=self._selection_section_expanded())
         return dirty
@@ -959,8 +862,6 @@ class RenderingPanel(Panel):
             return False
 
         dirty = False
-        dirty |= self._refresh_simplify_source(force=False)
-        dirty |= self._sync_simplify_task_state(force=False)
         self._selection_groups.invalidate()
         dirty |= self._selection_groups.sync(visible=self._selection_section_expanded())
         return dirty
@@ -976,23 +877,8 @@ class RenderingPanel(Panel):
         self._scrub_fields.unmount()
 
     def _get_scrub_value(self, prop):
-        if prop == "simplify_target":
-            return float(self._compute_simplify_target_count())
-        if prop == "simplify_lod_base":
-            return self._compute_simplify_lod_base()
-        if prop == "simplify_opacity_prune_threshold":
-            return self._compute_simplify_opacity_prune_threshold()
         if prop == "lod_max_splats":
             return float(self._current_lod_budget())
-        if prop == "theme_vignette_intensity":
-            theme = _theme()
-            return float(theme.vignette.intensity) if theme else 0.3
-        if prop == "theme_vignette_radius":
-            vignette = _theme_vignette()
-            return float(vignette.radius) if vignette else 0.75
-        if prop == "theme_vignette_softness":
-            vignette = _theme_vignette()
-            return float(vignette.softness) if vignette else 0.45
         settings = lf.get_render_settings()
         if not settings:
             spec = SCRUB_FIELD_DEFS[prop]
@@ -1000,32 +886,8 @@ class RenderingPanel(Panel):
         return float(getattr(settings, prop, 0.0))
 
     def _set_scrub_value(self, prop, value):
-        if prop == "simplify_target":
-            self._set_simplify_target_count(value)
-            return
-        if prop == "simplify_lod_base":
-            self._set_simplify_lod_base(value)
-            return
-        if prop == "simplify_opacity_prune_threshold":
-            self._set_simplify_opacity_prune_threshold(value)
-            return
         if prop == "lod_max_splats":
             self._set_lod_budget(value)
-            return
-        if prop == "theme_vignette_intensity":
-            lf.ui.set_theme_vignette_intensity(float(value))
-            if self._handle:
-                self._handle.dirty(prop)
-            return
-        if prop == "theme_vignette_radius":
-            _set_theme_vignette_style(radius=float(value))
-            if self._handle:
-                self._handle.dirty(prop)
-            return
-        if prop == "theme_vignette_softness":
-            _set_theme_vignette_style(softness=float(value))
-            if self._handle:
-                self._handle.dirty(prop)
             return
         settings = lf.get_render_settings()
         if not settings:
@@ -1403,191 +1265,24 @@ class RenderingPanel(Panel):
         return self._scrub_fields.set_spec("lod_max_splats", spec)
 
     def _active_splat_node(self):
-        scene = getattr(lf, "get_scene", lambda: None)()
-        if scene is None:
-            return None, "", 0
+        return active_splat_node()
 
-        selected_name = str(getattr(lf, "get_selected_node_name", lambda: "")() or "")
-        if not selected_name:
-            return None, "", 0
 
-        node = scene.get_node(selected_name)
-        if node is None:
-            return None, "", 0
 
-        node_type_enum = getattr(getattr(lf, "scene", None), "NodeType", None)
-        if node_type_enum is not None and getattr(node, "type", None) != node_type_enum.SPLAT:
-            return None, "", 0
 
-        try:
-            splat = node.splat_data()
-        except Exception:
-            splat = None
-        if splat is None:
-            return None, "", 0
 
-        try:
-            count = int(splat.visible_count())
-        except Exception:
-            count = int(getattr(node, "gaussian_count", 0))
-        return node, selected_name, count
 
-    def _refresh_simplify_source(self, force: bool) -> bool:
-        _node, source_name, source_count = self._active_splat_node()
-        changed = force or source_name != self._simplify_source_name or source_count != self._simplify_original_count
-        if not changed:
-            return False
 
-        self._simplify_source_name = source_name
-        self._simplify_original_count = source_count
-        if source_count > 0:
-            if self._simplify_target_touched and self._simplify_target_count > 0:
-                self._simplify_target_count = self._clamp_simplify_target_count(self._simplify_target_count, source_count)
-            else:
-                self._simplify_target_count = self._default_simplify_target_count(source_count)
-            if self._simplify_lod_base_touched and self._simplify_lod_base > 0:
-                self._simplify_lod_base = self._clamp_simplify_lod_base(self._simplify_lod_base)
-            else:
-                self._simplify_lod_base = DEFAULT_SIMPLIFY_LOD_BASE
-        elif not self._simplify_target_touched:
-            self._simplify_target_count = 0
-        if source_count <= 0 and not self._simplify_lod_base_touched:
-            self._simplify_lod_base = DEFAULT_SIMPLIFY_LOD_BASE
-        self._sync_simplify_scrub_spec()
-        self._dirty_model(
-            "simplify_has_source",
-            "simplify_source_name",
-            "simplify_original_count",
-            "simplify_target",
-            "simplify_target_count",
-            "simplify_lod_base",
-            "simplify_opacity_prune_threshold",
-            "simplify_output_name",
-            "simplify_can_apply",
-        )
-        return True
 
-    def _sync_simplify_scrub_spec(self):
-        max_value = max(0, int(self._simplify_original_count))
-        target_spec = ScrubFieldSpec(
-            1.0 if max_value > 0 else 0.0,
-            float(max_value),
-            1.0,
-            "%d",
-            data_type=int,
-        )
-        lod_spec = ScrubFieldSpec(0.1, 10.0, 0.1, "%.1f")
-        self._scrub_fields.set_spec("simplify_target", target_spec)
-        self._scrub_fields.set_spec("simplify_lod_base", lod_spec)
 
-    def _default_simplify_target_count(self, original_count=None) -> int:
-        source_count = self._simplify_original_count if original_count is None else int(original_count)
-        if source_count <= 0:
-            return 0
-        return max(1, min(source_count, int(math.ceil(source_count * DEFAULT_SIMPLIFY_TARGET_RATIO))))
 
-    def _clamp_simplify_target_count(self, value, original_count=None):
-        try:
-            parsed = int(round(float(str(value).strip().replace(",", "").replace("_", ""))))
-        except (TypeError, ValueError):
-            return None
-        clamped = max(1, parsed)
-        max_count = self._simplify_original_count if original_count is None else int(original_count)
-        if max_count > 0:
-            clamped = min(clamped, max_count)
-        return clamped
 
-    def _compute_simplify_target_count(self) -> int:
-        if self._simplify_original_count <= 0:
-            return 0
-        if self._simplify_target_count <= 0:
-            return self._default_simplify_target_count()
-        clamped = self._clamp_simplify_target_count(self._simplify_target_count)
-        if clamped is None:
-            return self._default_simplify_target_count()
-        return clamped
 
-    def _compute_simplify_ratio(self) -> float:
-        if self._simplify_original_count <= 0:
-            return 0.0
-        return float(self._compute_simplify_target_count()) / float(self._simplify_original_count)
 
-    def _clamp_simplify_lod_base(self, value):
-        try:
-            parsed = float(str(value).strip().replace(",", "").replace("_", ""))
-        except (TypeError, ValueError):
-            return None
-        return max(0.1, min(parsed, 10.0))
 
-    def _compute_simplify_lod_base(self) -> float:
-        clamped = self._clamp_simplify_lod_base(self._simplify_lod_base)
-        return DEFAULT_SIMPLIFY_LOD_BASE if clamped is None else clamped
 
-    def _set_simplify_lod_base(self, value):
-        next_value = self._clamp_simplify_lod_base(value)
-        if next_value is None or math.isclose(next_value, self._simplify_lod_base, abs_tol=1.0e-9):
-            return
-        self._simplify_lod_base = next_value
-        self._simplify_lod_base_touched = True
-        self._dirty_model("simplify_lod_base")
 
-    def _clamp_simplify_opacity_prune_threshold(self, value):
-        try:
-            parsed = float(str(value).strip().replace(",", "").replace("_", ""))
-        except (TypeError, ValueError):
-            return None
-        return max(0.0, min(parsed, 1.0))
 
-    def _compute_simplify_opacity_prune_threshold(self) -> float:
-        clamped = self._clamp_simplify_opacity_prune_threshold(self._simplify_opacity_prune_threshold)
-        return DEFAULT_SIMPLIFY_OPACITY_PRUNE_THRESHOLD if clamped is None else clamped
-
-    def _set_simplify_opacity_prune_threshold(self, value):
-        next_value = self._clamp_simplify_opacity_prune_threshold(value)
-        if next_value is None or math.isclose(next_value, self._simplify_opacity_prune_threshold, abs_tol=1.0e-9):
-            return
-        self._simplify_opacity_prune_threshold = next_value
-        self._dirty_model("simplify_opacity_prune_threshold")
-
-    def _simplify_output_name(self) -> str:
-        if not self._simplify_source_name:
-            return ""
-        return f"{self._simplify_source_name}_{self._compute_simplify_target_count()}"
-
-    def _can_run_simplify(self) -> bool:
-        return bool(
-            self._simplify_source_name
-            and self._simplify_original_count > 0
-            and self._compute_simplify_target_count() > 0
-            and not self._simplify_task_active
-        )
-
-    def _set_simplify_target_count(self, value):
-        next_value = self._clamp_simplify_target_count(value)
-        if next_value is None:
-            return
-        if next_value == self._simplify_target_count and self._simplify_target_touched:
-            return
-        self._simplify_target_count = next_value
-        self._simplify_target_touched = True
-        self._dirty_model("simplify_target", "simplify_target_count", "simplify_output_name")
-
-    def _simplify_progress_pct(self) -> str:
-        try:
-            return f"{int(round(float(self._simplify_progress_value) * 100.0))}%"
-        except (TypeError, ValueError):
-            return "0%"
-
-    def _simplify_task_state(self) -> dict[str, object]:
-        state = _native_store_value("splat_simplify_state", None)
-        if isinstance(state, dict):
-            return state
-        return {
-            "active": bool(getattr(lf, "is_splat_simplify_active", lambda: False)()),
-            "progress": getattr(lf, "get_splat_simplify_progress", lambda: 0.0)(),
-            "stage": getattr(lf, "get_splat_simplify_stage", lambda: "")() or "",
-            "error": getattr(lf, "get_splat_simplify_error", lambda: "")() or "",
-        }
 
     def _sync_lod_budget(self) -> bool:
         budget = self._current_lod_budget()
@@ -1604,58 +1299,9 @@ class RenderingPanel(Panel):
         self._dirty_model("lod_max_splats")
         return True
 
-    def _sync_simplify_task_state(self, force: bool) -> bool:
-        state = self._simplify_task_state()
-        active = bool(state.get("active", False))
-        progress = max(0.0, min(1.0, float(state.get("progress", 0.0))))
-        progress_value = f"{progress:.4f}".rstrip("0").rstrip(".") or "0"
-        stage = str(state.get("stage", "") or "")
-        error_text = str(state.get("error", "") or "")
 
-        changed = force or (
-            active != self._simplify_task_active or
-            progress_value != self._simplify_progress_value or
-            stage != self._simplify_progress_stage or
-            error_text != self._simplify_error_text
-        )
-        if not changed:
-            return False
 
-        self._simplify_task_active = active
-        self._simplify_progress_value = progress_value
-        self._simplify_progress_stage = stage
-        self._simplify_error_text = error_text
-        self._dirty_model(
-            "simplify_can_apply",
-            "simplify_show_progress",
-            "simplify_progress_value",
-            "simplify_progress_pct",
-            "simplify_progress_stage",
-            "simplify_show_error",
-            "simplify_error_text",
-        )
-        return True
 
-    def _start_simplify(self):
-        if not self._can_run_simplify():
-            return
-        self._simplify_error_text = ""
-        self._dirty_model("simplify_show_error", "simplify_error_text")
-        lf.simplify_splats(
-            self._simplify_source_name,
-            ratio=self._compute_simplify_ratio(),
-            lod_base=self._compute_simplify_lod_base(),
-            opacity_prune_threshold=self._compute_simplify_opacity_prune_threshold(),
-        )
-        self._sync_simplify_task_state(force=True)
-
-    def _on_simplify_apply(self, _handle=None, _ev=None, _args=None):
-        self._start_simplify()
-
-    def _on_simplify_cancel(self, _handle=None, _ev=None, _args=None):
-        cancel = getattr(lf, "cancel_splat_simplify", None)
-        if cancel is not None:
-            cancel()
 
     def _on_chrom_change(self, handle, event, args):
         s = lf.get_render_settings()
@@ -1678,3 +1324,14 @@ class RenderingPanel(Panel):
                 s._set_without_session_dirty(prop_name, float(val))
         for prop_name in mapping.values():
             handle.dirty(prop_name)
+
+    def _confirm_apply_defaults(self, *_):
+        apply_label = tr("common.apply")
+        def apply_if_confirmed(button):
+            if button == apply_label:
+                lf.ui.apply_rendering_defaults()
+                if self._handle:
+                    self._handle.dirty_all()
+        lf.ui.confirm_dialog(tr("rendering_panel.apply_defaults"),
+                             tr("rendering_panel.apply_defaults_confirm"),
+                             [apply_label, tr("common.cancel")], apply_if_confirmed)

@@ -1040,7 +1040,13 @@
     "reset_all_settings_confirmation": "Restore language, theme, UI scale, scene reconstruction, input preferences, MCP server, layout, and window state to their defaults? This applies immediately. If a .licht project is open, its stored layout will be replaced when next saved; project content, datasets, exports, plugins, and cache are not affected.",
     "reset_all_settings_success": "All preferences, layout, and window state reset immediately.",
     "window_manager_unavailable": "Window manager is unavailable.",
-    "window_state_reset_failed": "The window could not be restored to its default geometry."
+    "window_state_reset_failed": "The window could not be restored to its default geometry.",
+    "viewport": "Viewport",
+    "viewport_defaults": "New Project Defaults",
+    "viewport_defaults_hint": "These defaults initialize new projects. Existing projects keep their saved values.",
+    "viewport_style_defaults": "Overlay & Selection Style",
+    "viewport_performance_defaults": "LOD Cache Limits",
+    "viewport_defaults_invalid": "Enter a valid value within the supported range."
   },
   "main_panel": {
     "console": "Console",
@@ -2094,17 +2100,17 @@
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_viewport": "Viewport",
+    "section_viewport": "Viewport & Guides",
     "section_camera": "Camera & Projection",
     "section_selection": "Selection & Overlays",
-    "section_post_process": "Post Processing",
+    "section_post_process": "Color & Appearance",
     "section_lod": "Level of Detail",
     "lod_enabled": "Enable Level of Detail",
     "lod_max_splats": "LOD Budget",
     "lod_page_pool_splats": "LOD Cache Budget",
     "lod_pool_vram_fraction": "LOD Pool VRAM Fraction",
     "lod_fade_frames": "LOD Fade Frames",
-    "lod_render_scale": "Render Scale",
+    "lod_render_scale": "LOD Render Scale",
     "lod_cone_foveation": "Cone Foveation",
     "lod_cone_inner_degrees": "Cone Inner",
     "lod_cone_outer_degrees": "Cone Outer",
@@ -2116,7 +2122,16 @@
     "simplify_lod_base": "LOD Base",
     "simplify_opacity_prune": "Opacity Prune",
     "simplify_original": "Original",
-    "simplify_output": "Output"
+    "simplify_output": "Output",
+    "section_quality": "Quality & Performance",
+    "section_environment": "Environment",
+    "advanced": "Advanced",
+    "project_values_hint": "Project values: overlay style and LOD cache limits are saved with this project.",
+    "save_defaults": "Save as Defaults",
+    "apply_defaults": "Apply Defaults…",
+    "save_defaults_hint": "Save current overlay style and LOD cache limits for new projects.",
+    "apply_defaults_hint": "Apply user defaults to this project only. Other rendering settings stay unchanged.",
+    "apply_defaults_confirm": "Replace this project’s overlay style and LOD cache limits with your defaults?"
   },
   "scripts_panel": {
     "title": "Python Scripts",

@@ -1044,7 +1044,13 @@
     "reset_all_settings_confirmation": "言語、テーマ、UI スケール、シーン再構成、入力設定、MCP サーバー、レイアウト、ウィンドウ状態を既定値に戻しますか？直ちに適用されます。.licht プロジェクトが開いている場合、次回保存時に保存済みレイアウトが置き換えられます。プロジェクト内容、データセット、エクスポート、プラグイン、キャッシュは影響を受けません。",
     "reset_all_settings_success": "すべての設定、レイアウト、ウィンドウ状態を直ちにリセットしました。",
     "window_manager_unavailable": "ウィンドウマネージャーを利用できません。",
-    "window_state_reset_failed": "ウィンドウを既定の配置に戻せませんでした。"
+    "window_state_reset_failed": "ウィンドウを既定の配置に戻せませんでした。",
+    "viewport": "ビュー",
+    "viewport_defaults": "新規プロジェクトの既定値",
+    "viewport_defaults_hint": "新規プロジェクトに適用されます。既存のプロジェクトでは保存済みの値が維持されます。",
+    "viewport_style_defaults": "ガイドと選択のスタイル",
+    "viewport_performance_defaults": "LODキャッシュ上限",
+    "viewport_defaults_invalid": "対応範囲内の有効な値を入力してください。"
   },
   "main_panel": {
     "console": "コンソール",
@@ -2096,17 +2102,17 @@
   },
   "rendering_panel": {
     "fov_format": "視野角: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_viewport": "ビューポート",
+    "section_viewport": "ビューとガイド",
     "section_camera": "カメラと投影",
     "section_selection": "選択とオーバーレイ",
-    "section_post_process": "後処理",
+    "section_post_process": "色と外観",
     "section_lod": "詳細レベル (LOD)",
     "lod_enabled": "Level of Detailを有効化",
     "lod_max_splats": "最大スプラット数",
     "lod_page_pool_splats": "LODキャッシュ容量",
     "lod_pool_vram_fraction": "LODプールVRAM割合",
     "lod_fade_frames": "LODフェードフレーム数",
-    "lod_render_scale": "レンダースケール",
+    "lod_render_scale": "LOD描画スケール",
     "lod_cone_foveation": "コーン中心窩",
     "lod_cone_inner_degrees": "コーン内角",
     "lod_cone_outer_degrees": "コーン外角",
@@ -2118,7 +2124,16 @@
     "simplify_lod_base": "LOD基準",
     "simplify_opacity_prune": "不透明度プルーニング",
     "simplify_original": "元データ",
-    "simplify_output": "出力"
+    "simplify_output": "出力",
+    "section_quality": "品質とパフォーマンス",
+    "section_environment": "環境",
+    "advanced": "詳細設定",
+    "project_values_hint": "ガイドのスタイルとLODキャッシュ上限はプロジェクトに保存されます。",
+    "save_defaults": "既定値として保存",
+    "apply_defaults": "既定値を適用…",
+    "save_defaults_hint": "現在のガイドスタイルとLODキャッシュ上限を新規プロジェクトの既定値として保存します。",
+    "apply_defaults_hint": "このプロジェクトのみに適用します。他の描画設定は変更されません。",
+    "apply_defaults_confirm": "このプロジェクトのガイドスタイルとLODキャッシュ上限を既定値で置き換えますか？"
   },
   "scripts_panel": {
     "title": "Python スクリプト",

@@ -1044,7 +1044,13 @@
     "reset_all_settings_confirmation": "Przywrócić język, motyw, skalę interfejsu, rekonstrukcję sceny, preferencje wejścia, serwer MCP, układ i stan okna do wartości domyślnych? Zostanie to zastosowane natychmiast. Jeśli projekt .licht jest otwarty, jego zapisany układ zostanie zastąpiony przy następnym zapisie; zawartość projektu, zestawy danych, eksporty, wtyczki i pamięć podręczna nie zostaną zmienione.",
     "reset_all_settings_success": "Wszystkie preferencje, układ i stan okna zostały natychmiast zresetowane.",
     "window_manager_unavailable": "Menedżer okien jest niedostępny.",
-    "window_state_reset_failed": "Nie udało się przywrócić domyślnej geometrii okna."
+    "window_state_reset_failed": "Nie udało się przywrócić domyślnej geometrii okna.",
+    "viewport": "Widok",
+    "viewport_defaults": "Domyślne wartości nowych projektów",
+    "viewport_defaults_hint": "Te wartości inicjują nowe projekty. Istniejące projekty zachowują zapisane wartości.",
+    "viewport_style_defaults": "Styl prowadnic i zaznaczenia",
+    "viewport_performance_defaults": "Limity pamięci podręcznej LOD",
+    "viewport_defaults_invalid": "Wprowadź prawidłową wartość z obsługiwanego zakresu."
   },
   "main_panel": {
     "console": "Konsola",
@@ -2096,17 +2102,17 @@
   },
   "rendering_panel": {
     "fov_format": "Pole widzenia: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_viewport": "Widok",
+    "section_viewport": "Widok i prowadnice",
     "section_camera": "Kamera i projekcja",
     "section_selection": "Wybór i nakładki",
-    "section_post_process": "Postprodukcja",
+    "section_post_process": "Kolor i wygląd",
     "section_lod": "Poziom szczegółowości (LOD)",
     "lod_enabled": "Włącz Level of Detail",
     "lod_max_splats": "Maks. splatów",
     "lod_page_pool_splats": "Budżet pamięci LOD",
     "lod_pool_vram_fraction": "Udział VRAM puli LOD",
     "lod_fade_frames": "Klatki wygładzania LOD",
-    "lod_render_scale": "Skala renderowania",
+    "lod_render_scale": "Skala renderowania LOD",
     "lod_cone_foveation": "Foveacja stożkowa",
     "lod_cone_inner_degrees": "Kąt wewnętrzny stożka",
     "lod_cone_outer_degrees": "Kąt zewnętrzny stożka",
@@ -2118,7 +2124,16 @@
     "simplify_lod_base": "Baza LOD",
     "simplify_opacity_prune": "Przycinanie nieprzezroczystości",
     "simplify_original": "Oryginał",
-    "simplify_output": "Wyjście"
+    "simplify_output": "Wyjście",
+    "section_quality": "Jakość i wydajność",
+    "section_environment": "Otoczenie",
+    "advanced": "Zaawansowane",
+    "project_values_hint": "Wartości projektu: styl prowadnic i limity pamięci LOD są zapisywane w projekcie.",
+    "save_defaults": "Zapisz jako domyślne",
+    "apply_defaults": "Zastosuj domyślne…",
+    "save_defaults_hint": "Zapisz bieżący styl prowadnic i limity pamięci LOD dla nowych projektów.",
+    "apply_defaults_hint": "Zastosuj wartości tylko do tego projektu. Pozostałe ustawienia renderowania nie zmienią się.",
+    "apply_defaults_confirm": "Zastąpić styl prowadnic i limity pamięci LOD tego projektu wartościami domyślnymi?"
   },
   "scripts_panel": {
     "title": "Skrypty Python",

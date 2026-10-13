@@ -91,17 +91,17 @@ def rendering_panel_module(monkeypatch):
     if str(source_python) not in sys.path:
         sys.path.insert(0, str(source_python))
 
-    sys.modules.pop("lfs_plugins.rendering_panel", None)
+    sys.modules.pop("lfs_plugins.splat_simplify_panel", None)
     sys.modules.pop("lfs_plugins.scrub_fields", None)
     sys.modules.pop("lfs_plugins", None)
     state = _install_lf_stub(monkeypatch)
-    module = import_module("lfs_plugins.rendering_panel")
+    module = import_module("lfs_plugins.splat_simplify_panel")
     return module, state
 
 
 def test_rendering_panel_simplify_tracks_selected_splat_and_applies(rendering_panel_module):
     module, state = rendering_panel_module
-    panel = module.RenderingPanel()
+    panel = module.SplatSimplifyPanel()
     panel._handle = _HandleStub()
     state.selected_name = "Patio"
     state.nodes["Patio"] = _make_splat_node(module.lf.scene.NodeType.SPLAT, "Patio", 608_640)
@@ -143,7 +143,7 @@ def test_rendering_panel_simplify_tracks_selected_splat_and_applies(rendering_pa
 
 def test_rendering_panel_simplify_target_input_clamps_when_source_changes(rendering_panel_module):
     module, state = rendering_panel_module
-    panel = module.RenderingPanel()
+    panel = module.SplatSimplifyPanel()
     panel._handle = _HandleStub()
 
     state.selected_name = "Large"
@@ -166,7 +166,7 @@ def test_rendering_panel_simplify_target_input_clamps_when_source_changes(render
 
 def test_rendering_panel_simplify_lod_base_defaults_to_2_when_source_appears(rendering_panel_module):
     module, state = rendering_panel_module
-    panel = module.RenderingPanel()
+    panel = module.SplatSimplifyPanel()
     panel._handle = _HandleStub()
 
     assert panel._refresh_simplify_source(force=True) is True
@@ -180,7 +180,7 @@ def test_rendering_panel_simplify_lod_base_defaults_to_2_when_source_appears(ren
 
 def test_rendering_panel_simplify_progress_and_cancel_update_retained_state(rendering_panel_module):
     module, state = rendering_panel_module
-    panel = module.RenderingPanel()
+    panel = module.SplatSimplifyPanel()
     panel._handle = _HandleStub()
 
     state.active = True
@@ -210,7 +210,7 @@ def test_rendering_panel_simplify_progress_and_cancel_update_retained_state(rend
 
 def test_rendering_panel_simplify_prefers_native_store_progress(rendering_panel_module, monkeypatch):
     module, state = rendering_panel_module
-    panel = module.RenderingPanel()
+    panel = module.SplatSimplifyPanel()
     panel._handle = _HandleStub()
     state.active = False
     state.progress = 0.0

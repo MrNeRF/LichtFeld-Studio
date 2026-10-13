@@ -1044,7 +1044,13 @@
     "reset_all_settings_confirmation": "¿Restablecer idioma, tema, escala de interfaz, reconstrucción de la escena, preferencias de entrada, servidor MCP, diseño y estado de la ventana a sus valores predeterminados? Se aplica inmediatamente. Si hay un proyecto .licht abierto, su diseño guardado se sustituirá la próxima vez que se guarde; el contenido del proyecto, los conjuntos de datos, las exportaciones, los plugins y la caché no se verán afectados.",
     "reset_all_settings_success": "Todas las preferencias, el diseño y el estado de la ventana se restablecieron inmediatamente.",
     "window_manager_unavailable": "El gestor de ventanas no está disponible.",
-    "window_state_reset_failed": "No se pudo restaurar la geometría predeterminada de la ventana."
+    "window_state_reset_failed": "No se pudo restaurar la geometría predeterminada de la ventana.",
+    "viewport": "Vista",
+    "viewport_defaults": "Valores para nuevos proyectos",
+    "viewport_defaults_hint": "Estos valores se aplican a nuevos proyectos. Los existentes conservan sus valores guardados.",
+    "viewport_style_defaults": "Estilo de guías y selección",
+    "viewport_performance_defaults": "Límites de caché LOD",
+    "viewport_defaults_invalid": "Introduce un valor válido dentro del rango admitido."
   },
   "main_panel": {
     "console": "Consola",
@@ -2096,17 +2102,17 @@
   },
   "rendering_panel": {
     "fov_format": "Campo de visión: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_viewport": "Vista",
+    "section_viewport": "Vista y guías",
     "section_camera": "Cámara y proyección",
     "section_selection": "Selección y superposiciones",
-    "section_post_process": "Posprocesamiento",
+    "section_post_process": "Color y apariencia",
     "section_lod": "Nivel de detalle (LOD)",
     "lod_enabled": "Habilitar Level of Detail",
     "lod_max_splats": "Splats máximos",
     "lod_page_pool_splats": "Presupuesto de caché LOD",
     "lod_pool_vram_fraction": "Fracción de VRAM del pool LOD",
     "lod_fade_frames": "Fotogramas de fundido LOD",
-    "lod_render_scale": "Escala de render",
+    "lod_render_scale": "Escala de renderizado LOD",
     "lod_cone_foveation": "Foveación en cono",
     "lod_cone_inner_degrees": "Ángulo interior del cono",
     "lod_cone_outer_degrees": "Ángulo exterior del cono",
@@ -2118,7 +2124,16 @@
     "simplify_lod_base": "Base LOD",
     "simplify_opacity_prune": "Poda de opacidad",
     "simplify_original": "Original",
-    "simplify_output": "Salida"
+    "simplify_output": "Salida",
+    "section_quality": "Calidad y rendimiento",
+    "section_environment": "Entorno",
+    "advanced": "Avanzado",
+    "project_values_hint": "Valores del proyecto: el estilo de guías y los límites de caché LOD se guardan en el proyecto.",
+    "save_defaults": "Guardar valores",
+    "apply_defaults": "Aplicar valores…",
+    "save_defaults_hint": "Guardar el estilo de guías y los límites de caché LOD para nuevos proyectos.",
+    "apply_defaults_hint": "Aplicar valores solo a este proyecto. Los demás ajustes de renderizado no cambian.",
+    "apply_defaults_confirm": "¿Reemplazar el estilo de guías y los límites de caché LOD del proyecto por tus valores?"
   },
   "scripts_panel": {
     "title": "Scripts de Python",

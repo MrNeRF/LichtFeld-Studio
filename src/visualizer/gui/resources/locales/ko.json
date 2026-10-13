@@ -1044,7 +1044,13 @@
     "reset_all_settings_confirmation": "언어, 테마, UI 배율, 장면 재구성, 입력 기본 설정, MCP 서버, 레이아웃 및 창 상태를 기본값으로 복원할까요? 즉시 적용됩니다. .licht 프로젝트가 열려 있으면 다음 저장 시 저장된 레이아웃이 교체됩니다. 프로젝트 내용, 데이터 세트, 내보내기, 플러그인 및 캐시는 영향을 받지 않습니다.",
     "reset_all_settings_success": "모든 기본 설정, 레이아웃 및 창 상태를 즉시 재설정했습니다.",
     "window_manager_unavailable": "창 관리자를 사용할 수 없습니다.",
-    "window_state_reset_failed": "창을 기본 위치와 크기로 복원할 수 없습니다."
+    "window_state_reset_failed": "창을 기본 위치와 크기로 복원할 수 없습니다.",
+    "viewport": "뷰",
+    "viewport_defaults": "새 프로젝트 기본값",
+    "viewport_defaults_hint": "새 프로젝트에 적용됩니다. 기존 프로젝트는 저장된 값을 유지합니다.",
+    "viewport_style_defaults": "가이드 및 선택 스타일",
+    "viewport_performance_defaults": "LOD 캐시 제한",
+    "viewport_defaults_invalid": "지원 범위 내의 올바른 값을 입력하세요."
   },
   "main_panel": {
     "console": "콘솔",
@@ -2096,17 +2102,17 @@
   },
   "rendering_panel": {
     "fov_format": "시야각: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_viewport": "뷰포트",
+    "section_viewport": "뷰 및 가이드",
     "section_camera": "카메라 및 투영",
     "section_selection": "선택 및 오버레이",
-    "section_post_process": "후처리",
+    "section_post_process": "색상 및 모양",
     "section_lod": "세부 수준 (LOD)",
     "lod_enabled": "Level of Detail 사용",
     "lod_max_splats": "최대 스플랫",
     "lod_page_pool_splats": "LOD 캐시 예산",
     "lod_pool_vram_fraction": "LOD 풀 VRAM 비율",
     "lod_fade_frames": "LOD 페이드 프레임",
-    "lod_render_scale": "렌더 스케일",
+    "lod_render_scale": "LOD 렌더링 배율",
     "lod_cone_foveation": "원추 중심부",
     "lod_cone_inner_degrees": "원추 내각",
     "lod_cone_outer_degrees": "원추 외각",
@@ -2118,7 +2124,16 @@
     "simplify_lod_base": "LOD 기준",
     "simplify_opacity_prune": "불투명도 가지치기",
     "simplify_original": "원본",
-    "simplify_output": "출력"
+    "simplify_output": "출력",
+    "section_quality": "품질 및 성능",
+    "section_environment": "환경",
+    "advanced": "고급",
+    "project_values_hint": "가이드 스타일과 LOD 캐시 제한은 프로젝트에 저장됩니다.",
+    "save_defaults": "기본값으로 저장",
+    "apply_defaults": "기본값 적용…",
+    "save_defaults_hint": "현재 가이드 스타일과 LOD 캐시 제한을 새 프로젝트의 기본값으로 저장합니다.",
+    "apply_defaults_hint": "이 프로젝트에만 기본값을 적용합니다. 다른 렌더링 설정은 유지됩니다.",
+    "apply_defaults_confirm": "이 프로젝트의 가이드 스타일과 LOD 캐시 제한을 기본값으로 바꾸시겠습니까?"
   },
   "scripts_panel": {
     "title": "Python 스크립트",

@@ -1044,7 +1044,13 @@
     "reset_all_settings_confirmation": "将语言、主题、界面缩放、场景重建、输入偏好、MCP 服务器、布局和窗口状态恢复为默认值？将立即应用。如果当前打开了 .licht 项目，下次保存时将替换其已存储的布局；项目内容、数据集、导出、插件和缓存不会受到影响。",
     "reset_all_settings_success": "所有偏好、布局和窗口状态已立即重置。",
     "window_manager_unavailable": "窗口管理器不可用。",
-    "window_state_reset_failed": "无法将窗口恢复为默认位置和大小。"
+    "window_state_reset_failed": "无法将窗口恢复为默认位置和大小。",
+    "viewport": "视图",
+    "viewport_defaults": "新项目默认值",
+    "viewport_defaults_hint": "这些默认值用于新项目。现有项目保留已保存的值。",
+    "viewport_style_defaults": "辅助线与选择样式",
+    "viewport_performance_defaults": "LOD缓存限制",
+    "viewport_defaults_invalid": "请输入支持范围内的有效值。"
   },
   "main_panel": {
     "console": "控制台",
@@ -2096,17 +2102,17 @@
   },
   "rendering_panel": {
     "fov_format": "视场角：{hfov:.1f}° H / {vfov:.1f}° V",
-    "section_viewport": "视口",
+    "section_viewport": "视图与辅助线",
     "section_camera": "相机和投影",
     "section_selection": "选择和叠加层",
-    "section_post_process": "后处理",
+    "section_post_process": "颜色与外观",
     "section_lod": "细节层级 (LOD)",
     "lod_enabled": "启用Level of Detail",
     "lod_max_splats": "最大Splat数",
     "lod_page_pool_splats": "LOD缓存预算",
     "lod_pool_vram_fraction": "LOD 池显存占比",
     "lod_fade_frames": "LOD 淡入帧数",
-    "lod_render_scale": "渲染尺度",
+    "lod_render_scale": "LOD渲染比例",
     "lod_cone_foveation": "锥形注视",
     "lod_cone_inner_degrees": "锥形内角",
     "lod_cone_outer_degrees": "锥形外角",
@@ -2118,7 +2124,16 @@
     "simplify_lod_base": "LOD 基数",
     "simplify_opacity_prune": "不透明度修剪",
     "simplify_original": "原始",
-    "simplify_output": "输出"
+    "simplify_output": "输出",
+    "section_quality": "质量与性能",
+    "section_environment": "环境",
+    "advanced": "高级",
+    "project_values_hint": "项目值：辅助线样式和LOD缓存限制保存在项目中。",
+    "save_defaults": "保存为默认值",
+    "apply_defaults": "应用默认值…",
+    "save_defaults_hint": "将当前辅助线样式和LOD缓存限制保存为新项目默认值。",
+    "apply_defaults_hint": "仅应用到当前项目。其他渲染设置保持不变。",
+    "apply_defaults_confirm": "是否将此项目的辅助线样式和LOD缓存限制替换为默认值？"
   },
   "scripts_panel": {
     "title": "Python 脚本",

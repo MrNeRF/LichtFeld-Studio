@@ -1044,7 +1044,13 @@
     "reset_all_settings_confirmation": "Ripristinare lingua, tema, scala dell'interfaccia, ricostruzione della scena, preferenze di input, server MCP, layout e stato della finestra ai valori predefiniti? L'azione viene applicata subito. Se è aperto un progetto .licht, il layout salvato verrà sostituito al prossimo salvataggio; contenuti del progetto, dataset, esportazioni, plugin e cache non vengono modificati.",
     "reset_all_settings_success": "Tutte le preferenze, il layout e lo stato della finestra sono stati reimpostati immediatamente.",
     "window_manager_unavailable": "Il gestore della finestra non è disponibile.",
-    "window_state_reset_failed": "Non è stato possibile ripristinare la geometria predefinita della finestra."
+    "window_state_reset_failed": "Non è stato possibile ripristinare la geometria predefinita della finestra.",
+    "viewport": "Vista",
+    "viewport_defaults": "Default nuovi progetti",
+    "viewport_defaults_hint": "Questi valori inizializzano i nuovi progetti. I progetti esistenti conservano i valori salvati.",
+    "viewport_style_defaults": "Stile guide e selezione",
+    "viewport_performance_defaults": "Limiti cache LOD",
+    "viewport_defaults_invalid": "Inserisci un valore valido nell’intervallo supportato."
   },
   "main_panel": {
     "console": "Console",
@@ -2096,17 +2102,17 @@
   },
   "rendering_panel": {
     "fov_format": "Campo visivo: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_viewport": "Viewport",
+    "section_viewport": "Vista e guide",
     "section_camera": "Fotocamera e proiezione",
     "section_selection": "Selezione e sovrapposizioni",
-    "section_post_process": "Post-elaborazione",
+    "section_post_process": "Colore e aspetto",
     "section_lod": "Livello di dettaglio (LOD)",
     "lod_enabled": "Abilita Level of Detail",
     "lod_max_splats": "Splat massimi",
     "lod_page_pool_splats": "Budget cache LOD",
     "lod_pool_vram_fraction": "Frazione VRAM del pool LOD",
     "lod_fade_frames": "Fotogrammi di dissolvenza LOD",
-    "lod_render_scale": "Scala di rendering",
+    "lod_render_scale": "Scala di rendering LOD",
     "lod_cone_foveation": "Foveazione a cono",
     "lod_cone_inner_degrees": "Angolo interno cono",
     "lod_cone_outer_degrees": "Angolo esterno cono",
@@ -2118,7 +2124,16 @@
     "simplify_lod_base": "Base LOD",
     "simplify_opacity_prune": "Potatura opacità",
     "simplify_original": "Originale",
-    "simplify_output": "Output"
+    "simplify_output": "Output",
+    "section_quality": "Qualità e prestazioni",
+    "section_environment": "Ambiente",
+    "advanced": "Avanzate",
+    "project_values_hint": "Valori del progetto: stile delle guide e limiti cache LOD sono salvati nel progetto.",
+    "save_defaults": "Salva come default",
+    "apply_defaults": "Applica default…",
+    "save_defaults_hint": "Salva lo stile delle guide e i limiti cache LOD per i nuovi progetti.",
+    "apply_defaults_hint": "Applica i default solo a questo progetto. Le altre impostazioni di rendering restano invariate.",
+    "apply_defaults_confirm": "Sostituire lo stile delle guide e i limiti cache LOD del progetto con i tuoi default?"
   },
   "scripts_panel": {
     "title": "Script Python",

@@ -226,6 +226,9 @@ def preferences_panel_module(monkeypatch):
         remember_camera_view_snap=lambda: False,
         set_remember_camera_view_snap=lambda _enabled: None,
     )
+    state.rendering_defaults = {}
+    lf_stub.ui.get_rendering_defaults_json = lambda: json.dumps(state.rendering_defaults)
+    lf_stub.ui.set_rendering_defaults_json = lambda value: state.rendering_defaults.update(json.loads(value))
     state.auto_save_on_close = False
     lf_stub.project_auto_save_on_close_enabled = lambda: state.auto_save_on_close
     lf_stub.project_set_auto_save_on_close = lambda enabled: setattr(state, "auto_save_on_close", bool(enabled))
@@ -408,6 +411,7 @@ def preferences_panel_module(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     sys.modules.pop("lfs_plugins.preferences_panel", None)
+    sys.modules.pop("lfs_plugins.rendering_defaults", None)
     sys.modules.pop("lfs_plugins.keymap_bindings", None)
     sys.modules.pop("lfs_plugins", None)
     module = import_module("lfs_plugins.preferences_panel")
