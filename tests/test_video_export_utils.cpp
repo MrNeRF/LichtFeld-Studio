@@ -375,6 +375,26 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
         for (size_t marker = 0; marker < points.size(); ++marker)
             if (panorama || marker == 1)
                 check_marker(marker, panorama);
+
+    for (const auto id : ids)
+        scene.setNodeVisibility(id, true);
+    lfs::vis::VksplatViewportRenderer::SelectionMaskRequest selection;
+    selection.frame_view.rotation = glm::mat3(-1.0f, 0.0f, 0.0f,
+                                              0.0f, 1.0f, 0.0f,
+                                              0.0f, 0.0f, -1.0f);
+    selection.frame_view.size = {1024, 512};
+    selection.frame_view.focal_length_mm = 50.0f;
+    selection.scene.model_transforms = &transforms;
+    selection.scene.transform_indices = indices;
+    selection.scene.node_visibility_mask = scene.getNodeVisibilityMask();
+    selection.gut = true;
+    selection.equirectangular = true;
+    for (const int x : {0, 1023}) {
+        selection.primitives = {{static_cast<float>(x), 256.0f, 64.0f, 0.0f}};
+        auto mask = renderer.buildSelectionMask(context, *model, selection, false);
+        ASSERT_TRUE(mask) << mask.error();
+        EXPECT_EQ(mask->cpu().ptr<uint8_t>()[0], 1u) << "seam click x=" << x;
+    }
 }
 
 TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {
