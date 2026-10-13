@@ -1985,6 +1985,9 @@ def save_laz_file_dialog(default_name: str = 'export') -> str:
     Open a save file dialog for LAZ compressed files. Returns empty string if cancelled.
     """
 
+def save_text_file_dialog(default_name: str = 'lichtfeld_logs') -> str:
+    """Choose a text log export path. Returns empty string if cancelled."""
+
 def save_json_file_dialog(default_name: str = 'config.json') -> str:
     """
     Open a save file dialog for JSON files. Returns empty string if cancelled.

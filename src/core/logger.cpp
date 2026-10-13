@@ -6,6 +6,7 @@
 #include "core/environment.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -71,6 +72,8 @@ namespace lfs::core {
         constexpr const char* ANSI_RESET = "\033[0m";
         constexpr const char* ANSI_PERF = "\033[95m";
         constexpr size_t MAX_BUFFERED_LOG_ENTRIES = 5000;
+        constexpr size_t MAX_BUFFERED_LOG_BYTES = 16 * 1024 * 1024;
+        constexpr size_t MAX_BUFFERED_MESSAGE_BYTES = 64 * 1024;
         constexpr size_t DEFAULT_LOG_ROTATION_MAX_BYTES = 10 * 1024 * 1024;
         constexpr size_t DEFAULT_LOG_ROTATION_MAX_FILES = 4;
         constexpr const char* DEFAULT_LOG_FILE_PATTERN = "[%Y-%m-%d %H:%M:%S.%e] [%l] %s:%# %v";
@@ -364,6 +367,26 @@ namespace lfs::core {
                 return entries_.size();
             }
 
+            [[nodiscard]] LogBufferSnapshot snapshot() const {
+                std::lock_guard lock(entries_mutex_);
+                return {generation_.load(std::memory_order_relaxed), max_entries_, MAX_BUFFERED_LOG_BYTES, bytes_, discarded_, {entries_.begin(), entries_.end()}};
+            }
+
+            void set_limit(const size_t max_entries) {
+                std::lock_guard lock(entries_mutex_);
+                max_entries_ = std::clamp(max_entries, size_t{100}, size_t{50000});
+                trim();
+                generation_.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            void clear() {
+                std::lock_guard lock(entries_mutex_);
+                entries_.clear();
+                bytes_ = 0;
+                discarded_ = 0;
+                generation_.fetch_add(1, std::memory_order_relaxed);
+            }
+
             void set_display_level(const LogLevel level) {
                 display_level_.store(static_cast<uint8_t>(level), std::memory_order_relaxed);
             }
@@ -428,18 +451,41 @@ namespace lfs::core {
                 entry.file = std::string(base_filename(msg.source.filename));
                 entry.line = msg.source.line;
                 entry.message = is_perf ? strip_perf_prefix(msg_view) : std::string(msg_view);
+                if (entry.message.size() > MAX_BUFFERED_MESSAGE_BYTES) {
+                    entry.message.resize(MAX_BUFFERED_MESSAGE_BYTES);
+                    // Avoid cutting a UTF-8 code point in the middle.
+                    while (!entry.message.empty() &&
+                           (static_cast<unsigned char>(entry.message.back()) & 0xc0) == 0x80)
+                        entry.message.pop_back();
+                    if (!entry.message.empty() &&
+                        static_cast<unsigned char>(entry.message.back()) >= 0xc0)
+                        entry.message.pop_back();
+                    entry.message += " [truncated]";
+                }
 
                 std::lock_guard lock(entries_mutex_);
-                if (entries_.size() >= max_entries_)
-                    entries_.pop_front();
                 entry.sequence = generation_.fetch_add(1, std::memory_order_relaxed) + 1;
+                bytes_ += entry.message.size() + entry.file.size() + sizeof(LogEntrySnapshot);
                 entries_.push_back(std::move(entry));
+                trim();
             }
 
             void flush_() override {}
 
         private:
+            void trim() {
+                while (!entries_.empty() &&
+                       (entries_.size() > max_entries_ || bytes_ > MAX_BUFFERED_LOG_BYTES)) {
+                    const auto& entry = entries_.front();
+                    bytes_ -= entry.message.size() + entry.file.size() + sizeof(LogEntrySnapshot);
+                    entries_.pop_front();
+                    ++discarded_;
+                }
+            }
+
             size_t max_entries_ = MAX_BUFFERED_LOG_ENTRIES;
+            size_t bytes_ = 0;
+            size_t discarded_ = 0;
             mutable std::mutex entries_mutex_;
             std::deque<LogEntrySnapshot> entries_;
             std::atomic<uint8_t> display_level_{static_cast<uint8_t>(LogLevel::Info)};
@@ -771,6 +817,35 @@ namespace lfs::core {
             memory_sink = impl_->memory_sink;
         }
         return memory_sink ? memory_sink->text() : std::string{};
+    }
+
+    LogBufferSnapshot Logger::log_buffer_snapshot() const {
+        std::shared_ptr<MemorySink> sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            sink = impl_->memory_sink;
+        }
+        return sink ? sink->snapshot() : LogBufferSnapshot{};
+    }
+
+    void Logger::set_log_buffer_limit(const size_t max_entries) {
+        std::shared_ptr<MemorySink> sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            sink = impl_->memory_sink;
+        }
+        if (sink)
+            sink->set_limit(max_entries);
+    }
+
+    void Logger::clear_log_buffer() {
+        std::shared_ptr<MemorySink> sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            sink = impl_->memory_sink;
+        }
+        if (sink)
+            sink->clear();
     }
 
     ScopedTimer::ScopedTimer(const std::string_view name, const LogLevel level,

@@ -384,7 +384,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -3348,6 +3348,40 @@ NB_MODULE(lichtfeld, m) {
 
     // Logging submodule
     auto log_module = m.def_submodule("log", "Logging utilities");
+    log_module.def("snapshot", [](const int64_t previous_generation) -> nb::object {
+        auto& logger = lfs::core::Logger::get();
+        if (previous_generation >= 0 && logger.buffered_log_generation() == static_cast<uint64_t>(previous_generation))
+            return nb::none();
+        const auto snapshot = logger.log_buffer_snapshot();
+        nb::dict result;
+        result["generation"] = snapshot.generation;
+        result["limit"] = snapshot.max_entries;
+        result["max_bytes"] = snapshot.max_bytes;
+        result["bytes"] = snapshot.bytes;
+        result["discarded"] = snapshot.discarded;
+        nb::list entries;
+        for (const auto& entry : snapshot.entries) {
+            nb::dict row;
+            row["sequence"] = entry.sequence;
+            row["timestamp"] = std::chrono::duration<double>(entry.timestamp.time_since_epoch()).count();
+            row["level"] = static_cast<int>(entry.level);
+            row["file"] = entry.file;
+            row["line"] = entry.line;
+            row["message"] = entry.message;
+            entries.append(row);
+        }
+        result["entries"] = entries;
+        return result; }, nb::arg("previous_generation") = -1, "Return a consistent bounded log snapshot, or None if unchanged.");
+    log_module.def("clear_buffer", [] { lfs::core::Logger::get().clear_log_buffer(); }, "Clear the in-memory log buffer without modifying log files.");
+    log_module.def("set_buffer_limit", [](int64_t limit) {
+        if (limit < 100 || limit > 50000)
+            throw std::invalid_argument("limit must be between 100 and 50000 entries");
+        lfs::core::Logger::get().set_log_buffer_limit(static_cast<size_t>(limit)); }, nb::arg("limit"));
+    log_module.def("capture_level", [] { return static_cast<int>(lfs::core::Logger::get().level()); });
+    log_module.def("set_capture_level", [](int level) {
+        if (level < 0 || level > 7)
+            throw std::invalid_argument("level must be between 0 and 7");
+        lfs::core::Logger::get().set_level(static_cast<lfs::core::LogLevel>(level)); }, nb::arg("level"));
     log_module.def(
         "info",
         [](const std::string& msg) { LOG_INFO("[Python] {}", msg); },

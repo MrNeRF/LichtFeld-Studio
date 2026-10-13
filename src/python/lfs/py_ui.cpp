@@ -3470,6 +3470,15 @@ namespace lfs::python {
             "Open a save file dialog for LAZ compressed files. Returns empty string if cancelled.");
 
         m.def(
+            "save_text_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                const auto result = lfs::vis::gui::SaveTextFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "lichtfeld_logs",
+            "Choose a text log export path. Returns empty string if cancelled.");
+
+        m.def(
             "save_json_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveJsonFileDialog(default_name);
