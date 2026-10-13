@@ -69,7 +69,7 @@ namespace lfs::vis::input::test {
     inline nlohmann::json historicalSavedProfile(const std::string_view name) {
         const auto& history = historicalKeymapDefaults();
         for (const auto& snapshot : history.at("profiles")) {
-            if (snapshot.at("name") != name)
+            if (snapshot.at("name").get_ref<const std::string&>() != name)
                 continue;
             const auto& data = history.at("data").at(snapshot.at("data").get<size_t>());
             auto bindings = data.at("bindings");
