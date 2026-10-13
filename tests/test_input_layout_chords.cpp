@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/editor_context.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
@@ -246,6 +247,19 @@ namespace lfs::vis {
             const auto down_before = bindings.getTriggerDescription(input::Action::CAMERA_MOVE_DOWN, input::ToolMode::GLOBAL);
             const int mode = input::sdlModsToAppMods(SDL_KMOD_MODE);
             const int ctrl_right_alt = input::sdlModsToAppMods(static_cast<SDL_Keymod>(SDL_KMOD_RALT | SDL_KMOD_CTRL));
+
+            // German AltGr+4 types U+00BC. The number row still resolves to 4, and that chord must not select Scale.
+            const int quarter = input::sdlShortcutKeyToAppKey(SDL_SCANCODE_4, static_cast<SDL_Keycode>(0x00BC));
+            EXPECT_EQ(quarter, input::KEY_4);
+            EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL, quarter, mode), input::Action::NONE);
+            lfs::event::ScopedHandler tools;
+            int tool = -1;
+            tools.subscribe<core::events::tools::SetToolbarTool>([&](const auto& event) { tool = event.tool_mode; });
+            const int digit = input::sdlScancodeToAppKey(SDL_SCANCODE_4);
+            controller_.handleKey(digit, quarter, static_cast<int>(SDL_SCANCODE_4), input::ACTION_PRESS, mode);
+            EXPECT_EQ(tool, -1);
+            controller_.handleKey(digit, input::KEY_4, static_cast<int>(SDL_SCANCODE_4), input::ACTION_PRESS, input::KEYMOD_NONE);
+            EXPECT_EQ(tool, static_cast<int>(ToolType::Scale));
 
             bindings.startCapture(input::ToolMode::GLOBAL, input::Action::TOOL_SCALE);
             bindings.captureKey(input::KEY_E, input::KEY_E, mode);

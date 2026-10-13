@@ -695,6 +695,11 @@ namespace lfs::vis::input {
     }
 
     Action InputBindings::getActionForKey(ToolMode mode, int key, int modifiers) const {
+        // AltGr is event-only and never stored on a shortcut. Masking it off would
+        // match the bare digit or letter (German AltGr+4 is U+00BC, still key 4).
+        if ((modifiers & KEYMOD_ALTGR) != 0)
+            return Action::NONE;
+
         const int mods = modifiers & MODIFIER_MASK;
         const auto find_in_mode = [&](ToolMode query_mode) -> Action {
             if (auto it = key_map_.find({query_mode, key, mods}); it != key_map_.end()) {
