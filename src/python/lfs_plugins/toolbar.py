@@ -1204,7 +1204,6 @@ class _GizmoToolbarController:
 
 class _UtilityToolbarController:
     _ASSET_MANAGER_PANEL_ID = "lfs.asset_manager"
-    _PREFERENCES_PANEL_ID = "lfs.preferences"
     _PLUGIN_MARKETPLACE_PANEL_ID = "lfs.plugin_marketplace"
     _CAMERA_MODE_SPECS = (
         ("camera-orbit", "orbit", "toolbar.orbit_camera", "Orbit Camera"),
@@ -1276,14 +1275,13 @@ class _UtilityToolbarController:
 
         utility_extra_buttons = [
             _button_record(
-                "util-preferences",
+                "util-asset-manager",
                 "toggle_panel",
-                self._PREFERENCES_PANEL_ID,
-                _icon_src("settings"),
-                tooltip_key="window.preferences",
-                tooltip_text="Preferences",
-                action_id="OPEN_PREFERENCES",
-                selected=_panel_enabled(self._PREFERENCES_PANEL_ID),
+                self._ASSET_MANAGER_PANEL_ID,
+                _icon_src("archive"),
+                tooltip_key="toolbar.asset_manager",
+                tooltip_text="Projects",
+                selected=_panel_enabled(self._ASSET_MANAGER_PANEL_ID),
             ),
             _button_record(
                 "util-viewport-export",
@@ -1294,24 +1292,6 @@ class _UtilityToolbarController:
                 tooltip_text="Viewport Export",
                 selected=self._is_viewport_export_visible(),
             ),
-            _button_record(
-                "util-asset-manager",
-                "toggle_panel",
-                self._ASSET_MANAGER_PANEL_ID,
-                _icon_src("archive"),
-                tooltip_key="toolbar.asset_manager",
-                tooltip_text="Asset Manager",
-                selected=_panel_enabled(self._ASSET_MANAGER_PANEL_ID),
-            ),
-            _button_record(
-                "util-plugin-marketplace",
-                "toggle_panel",
-                self._PLUGIN_MARKETPLACE_PANEL_ID,
-                _icon_src("puzzle"),
-                tooltip_key="menu.tools.plugin_marketplace",
-                tooltip_text="Plugin Marketplace",
-                selected=_panel_enabled(self._PLUGIN_MARKETPLACE_PANEL_ID),
-            )
         ]
         utility_bottom_buttons = []
         if has_render_manager:
@@ -1333,6 +1313,18 @@ class _UtilityToolbarController:
                     enabled=seq_enabled,
                 )
             )
+
+        utility_extra_buttons.append(
+            _button_record(
+                "util-plugin-marketplace",
+                "toggle_panel",
+                self._PLUGIN_MARKETPLACE_PANEL_ID,
+                _icon_src("puzzle"),
+                tooltip_key="menu.tools.plugin_marketplace",
+                tooltip_text="Plugin Marketplace",
+                selected=_panel_enabled(self._PLUGIN_MARKETPLACE_PANEL_ID),
+            )
+        )
 
         return {
             "camera_mode_buttons": camera_mode_buttons,
@@ -1851,13 +1843,6 @@ class _ViewportToolbarController:
         can_transform_selection = bool(
             call(False, getattr(lf, "can_transform_selection", None))
         )
-        preferences_enabled = bool(
-            call(
-                False,
-                getattr(lf.ui, "is_panel_enabled", None),
-                _UtilityToolbarController._PREFERENCES_PANEL_ID,
-            )
-        )
         asset_manager_enabled = bool(
             call(
                 False,
@@ -1908,7 +1893,6 @@ class _ViewportToolbarController:
             _bottom_dock_panel_space(_SEQUENCER_PANEL_ID),
             call("", getattr(lf.ui, "get_bottom_dock_active_tab", None)),
             bool(histogram_mode_available(ui_context)) if ui_context is not None else False,
-            preferences_enabled,
             asset_manager_enabled,
             plugin_marketplace_enabled,
             bool(call(False, getattr(lf.ui, "is_panel_enabled", None), "lfs.histogram")),

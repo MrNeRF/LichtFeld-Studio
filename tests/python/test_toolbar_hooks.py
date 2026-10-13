@@ -1947,7 +1947,6 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     lf_stub = sys.modules["lichtfeld"]
     panel_enabled = {
         "lfs.asset_manager": True,
-        "lfs.preferences": True,
         "lfs.plugin_marketplace": True,
     }
 
@@ -1976,9 +1975,8 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
         "tr",
         lambda key: {
             "toolbar.focus_selection": "Focus Selection",
-            "toolbar.asset_manager": "Assets",
+            "toolbar.asset_manager": "Projects",
             "menu.tools.plugin_marketplace": "Plugins",
-            "window.preferences": "Preferences",
             "toolbar.viewport_export": "Export",
         }.get(key, key),
         raising=False,
@@ -2022,20 +2020,12 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert primary_buttons[1]["icon_src"] == "../icon/focus-selection.png"
     assert primary_buttons[1]["tooltip_text"] == "Focus Selection"
     assert [button["button_id"] for button in extra_buttons] == [
-        "util-preferences",
-        "util-viewport-export",
         "util-asset-manager",
-        "util-plugin-marketplace",
+        "util-viewport-export",
         "util-sequencer",
+        "util-plugin-marketplace",
     ]
     extra_by_id = {button["button_id"]: button for button in extra_buttons}
-    preferences = extra_by_id["util-preferences"]
-    assert preferences["action"] == "toggle_panel"
-    assert preferences["value"] == "lfs.preferences"
-    assert preferences["icon_src"] == "../icon/settings.png"
-    assert preferences["tooltip_text"] == "Preferences"
-    assert preferences["action_id"] == "OPEN_PREFERENCES"
-    assert preferences["selected"] is True
     assert extra_by_id["util-viewport-export"]["action"] == "toggle_viewport_export"
     assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/viewport-export.png"
     assert extra_by_id["util-viewport-export"]["tooltip_text"] == "Export"
@@ -2043,7 +2033,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert extra_by_id["util-asset-manager"]["action"] == "toggle_panel"
     assert extra_by_id["util-asset-manager"]["value"] == "lfs.asset_manager"
     assert extra_by_id["util-asset-manager"]["icon_src"] == "../icon/archive.png"
-    assert extra_by_id["util-asset-manager"]["tooltip_text"] == "Assets"
+    assert extra_by_id["util-asset-manager"]["tooltip_text"] == "Projects"
     assert extra_by_id["util-asset-manager"]["selected"] is True
     assert extra_by_id["util-plugin-marketplace"]["action"] == "toggle_panel"
     assert extra_by_id["util-plugin-marketplace"]["value"] == "lfs.plugin_marketplace"
