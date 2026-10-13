@@ -40,8 +40,6 @@
 .log-column-header, .log-row { display: flex; align-items: flex-start; min-width: 0; }
 .log-column-header { padding: 6dp 12dp; flex-shrink: 0; font-size: 11dp; border-bottom-width: 1dp; }
 #log-scroll { tab-index: auto; flex: 1; min-height: 0; min-width: 0; overflow: auto; }
-#log-scroll scrollbarvertical { width: 14dp; }
-#log-scroll scrollbarhorizontal { height: 14dp; }
 .log-row { padding: 5dp 12dp; border-bottom-width: 1dp; font-size: 12dp; line-height: 17dp; }
 .log-time { width: 98dp; min-width: 98dp; font-size: 11dp; }
 .log-level { width: 82dp; min-width: 82dp; font-size: 11dp; }
