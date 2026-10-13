@@ -209,7 +209,19 @@
     "help.about": "关于LichtFeld Studio",
     "view.performance_hud": "性能 HUD",
     "edit.preferences": "偏好设置...",
-    "view.debug_info": "调试信息..."
+    "view.debug_info": "调试信息...",
+    "file.browse_projects": "浏览项目…",
+    "file.export_menu": "导出",
+    "file.export_scene": "场景…",
+    "file.open_gallery": "打开图库",
+    "file.project_maintenance": "项目维护",
+    "view.split_view": "分屏视图",
+    "file.splat_file": "Splat 文件…",
+    "file.ssog_folder": "SSOG 文件夹…",
+    "file.configuration": "配置…",
+    "file.dataset": "数据集…",
+    "file.mesh": "网格…",
+    "file.checkpoint": "检查点…"
   },
   "window": {
     "export": "导出",
@@ -814,7 +826,8 @@
     "cannot_delete_training": "训练进行中无法删除",
     "background": "背景",
     "training_enabled_tooltip": "已包含在训练中",
-    "training_disabled_tooltip": "已从训练中排除"
+    "training_disabled_tooltip": "已从训练中排除",
+    "show_system_console": "显示系统控制台"
   },
   "export": {
     "overwrite": "覆盖",

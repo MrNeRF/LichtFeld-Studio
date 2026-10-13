@@ -152,25 +152,53 @@
                                     <span class="submenu-arrow">&gt;</span>
                                 </div>
                                 <div class="submenu-popup dropdown-popup">
-                                    <div data-for="leaf : child.children">
-                                        <div class="menu-separator" data-if="leaf.separator_before"></div>
-                                        <div class="menu-item menu-item-label"
-                                             data-if="leaf.is_label"
-                                             data-class-disabled="true"
-                                             data-attr-title="leaf.tooltip">
-                                            <span class="label">{{ leaf.label }}</span>
+                                    <div data-for="grandchild : child.children">
+                                        <div class="menu-separator" data-if="grandchild.separator_before"></div>
+                                        <div class="submenu-container" data-if="grandchild.has_children"
+                                             data-class-open="grandchild.submenu_open"
+                                             data-attr-data-root-index="item.index"
+                                             data-attr-data-child-index="child.index"
+                                             data-attr-data-grandchild-index="grandchild.index">
+                                            <div class="menu-item" data-class-active="grandchild.submenu_open"
+                                                 data-attr-title="grandchild.tooltip">
+                                                <span class="label">{{ grandchild.label }}</span>
+                                                <span class="submenu-arrow">&gt;</span>
+                                            </div>
+                                            <div class="submenu-popup dropdown-popup">
+                                                <div data-for="leaf : grandchild.children">
+                                                    <div class="menu-separator" data-if="leaf.separator_before"></div>
+                                                    <div class="menu-item menu-item-label"
+                                                         data-if="leaf.is_label"
+                                                         data-class-disabled="true"
+                                                         data-attr-title="leaf.tooltip">
+                                                        <span class="label">{{ leaf.label }}</span>
+                                                    </div>
+                                                    <div class="menu-item"
+                                                         data-if="!leaf.is_label"
+                                                         data-class-disabled="!leaf.enabled"
+                                                         data-attr-data-action="leaf.action"
+                                                         data-attr-data-operator-id="leaf.operator_id"
+                                                         data-attr-data-callback-index="leaf.callback_index"
+                                                         data-attr-title="leaf.tooltip"
+                                                         data-attrif-disabled="!leaf.enabled">
+                                                        <span class="label">{{ leaf.label }}</span>
+                                                        <span class="shortcut" data-if="leaf.has_shortcut">{{ leaf.shortcut }}</span>
+                                                        <span class="checkmark" data-if="leaf.show_checkmark">{{ leaf.checkmark }}</span>
+                                            </div>
+                                        </div>
+                                            </div>
                                         </div>
                                         <div class="menu-item"
-                                             data-if="!leaf.is_label"
-                                             data-class-disabled="!leaf.enabled"
-                                             data-attr-data-action="leaf.action"
-                                             data-attr-data-operator-id="leaf.operator_id"
-                                             data-attr-data-callback-index="leaf.callback_index"
-                                             data-attr-title="leaf.tooltip"
-                                             data-attrif-disabled="!leaf.enabled">
-                                            <span class="label">{{ leaf.label }}</span>
-                                            <span class="shortcut" data-if="leaf.has_shortcut">{{ leaf.shortcut }}</span>
-                                            <span class="checkmark" data-if="leaf.show_checkmark">{{ leaf.checkmark }}</span>
+                                             data-if="!grandchild.has_children"
+                                             data-class-disabled="!grandchild.enabled"
+                                             data-attr-data-action="grandchild.action"
+                                             data-attr-data-operator-id="grandchild.operator_id"
+                                             data-attr-data-callback-index="grandchild.callback_index"
+                                             data-attr-title="grandchild.tooltip"
+                                             data-attrif-disabled="!grandchild.enabled">
+                                            <span class="label">{{ grandchild.label }}</span>
+                                            <span class="shortcut" data-if="grandchild.has_shortcut">{{ grandchild.shortcut }}</span>
+                                            <span class="checkmark" data-if="grandchild.show_checkmark">{{ grandchild.checkmark }}</span>
                                         </div>
                                     </div>
                                 </div>

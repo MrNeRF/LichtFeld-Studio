@@ -42,4 +42,19 @@ namespace lfs::vis::gui::panels {
 #endif
     }
 
+    void ShowSystemConsole([[maybe_unused]] const UIContext& ctx) {
+#ifdef WIN32
+        if (!ctx.window_states)
+            return;
+        const HWND hwnd = GetConsoleWindow();
+        if (!hwnd)
+            return;
+        const HWND owner = GetWindow(hwnd, GW_OWNER);
+        const HWND target = owner ? owner : hwnd;
+        ShowWindow(target, IsIconic(target) ? SW_RESTORE : SW_SHOW);
+        SetForegroundWindow(target);
+        (*ctx.window_states)["system_console"] = true;
+#endif
+    }
+
 } // namespace lfs::vis::gui::panels

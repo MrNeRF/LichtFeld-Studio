@@ -48,6 +48,12 @@
           <span class="preferences-description preferences-setting-hint">{{ project_location_hint }}</span>
           </div>
           <div class="preferences-setting">
+            <div class="preferences-row preferences-checkbox-row">
+              <span class="preferences-label">@tr:menu.file.auto_save_on_close</span>
+              <input type="checkbox" data-checked="auto_save_on_close" />
+            </div>
+          </div>
+          <div class="preferences-setting">
           <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.embed_dataset_by_default_description">
             <span class="preferences-label">@tr:preferences.embed_dataset_by_default</span>
             <input type="checkbox" data-checked="embed_dataset_by_default" />
@@ -346,6 +352,7 @@
         </div>
         <div class="section-content" data-if="file_associations_expanded">
           <span class="preferences-description">@tr:preferences.file_associations_description</span>
+          <button class="btn btn--secondary" data-event-click="open_default_app_settings">@tr:file_association.menu_register</button>
           <div data-for="row : file_associations">
             <div class="preferences-row preferences-checkbox-row">
               <span class="preferences-label">{{ row.label }}</span>

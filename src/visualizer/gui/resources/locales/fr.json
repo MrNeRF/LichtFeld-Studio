@@ -209,7 +209,19 @@
     "help.about": "À propos de LichtFeld Studio",
     "view.performance_hud": "HUD de performances",
     "edit.preferences": "Préférences...",
-    "view.debug_info": "Infos de Débogage..."
+    "view.debug_info": "Infos de Débogage...",
+    "file.browse_projects": "Parcourir les projets…",
+    "file.export_menu": "Exporter",
+    "file.export_scene": "Scène…",
+    "file.open_gallery": "Ouvrir la galerie",
+    "file.project_maintenance": "Maintenance du projet",
+    "view.split_view": "Vue divisée",
+    "file.splat_file": "Fichier splat…",
+    "file.ssog_folder": "Dossier SSOG…",
+    "file.configuration": "Configuration…",
+    "file.dataset": "Jeu de données…",
+    "file.mesh": "Maillage…",
+    "file.checkpoint": "Point de contrôle…"
   },
   "window": {
     "export": "Exporter",
@@ -814,7 +826,8 @@
     "cannot_delete_training": "Suppression impossible pendant l'entraînement",
     "background": "Arrière-plan",
     "training_enabled_tooltip": "Inclus dans l'entraînement",
-    "training_disabled_tooltip": "Exclu de l'entraînement"
+    "training_disabled_tooltip": "Exclu de l'entraînement",
+    "show_system_console": "Afficher la console système"
   },
   "export": {
     "overwrite": "Écraser",

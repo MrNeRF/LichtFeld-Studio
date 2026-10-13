@@ -209,7 +209,19 @@
     "help.about": "LichtFeld Studioについて",
     "view.performance_hud": "パフォーマンス HUD",
     "edit.preferences": "環境設定...",
-    "view.debug_info": "デバッグ情報..."
+    "view.debug_info": "デバッグ情報...",
+    "file.browse_projects": "プロジェクトを参照…",
+    "file.export_menu": "エクスポート",
+    "file.export_scene": "シーン…",
+    "file.open_gallery": "ギャラリーを開く",
+    "file.project_maintenance": "プロジェクトのメンテナンス",
+    "view.split_view": "分割表示",
+    "file.splat_file": "スプラットファイル…",
+    "file.ssog_folder": "SSOGフォルダー…",
+    "file.configuration": "設定…",
+    "file.dataset": "データセット…",
+    "file.mesh": "メッシュ…",
+    "file.checkpoint": "チェックポイント…"
   },
   "window": {
     "export": "エクスポート",
@@ -814,7 +826,8 @@
     "cannot_delete_training": "トレーニング中は削除できません",
     "background": "背景",
     "training_enabled_tooltip": "トレーニングに含まれています",
-    "training_disabled_tooltip": "トレーニングから除外されています"
+    "training_disabled_tooltip": "トレーニングから除外されています",
+    "show_system_console": "システムコンソールを表示"
   },
   "export": {
     "overwrite": "上書き",

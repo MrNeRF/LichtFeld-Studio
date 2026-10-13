@@ -32,20 +32,11 @@ class ToolsMenu:
 
     label = "menu.tools"
     location = "MENU_BAR"
-    order = 25
+    order = 40
 
     def menu_items(self):
         tr = lf.ui.tr
         return [
-            menu_action(
-                tr("menu.tools.asset_manager"),
-                _open_projects_scope,
-            ),
-            menu_action(
-                tr("menu.tools.gallery"),
-                _open_gallery_scope,
-            ),
-            menu_separator(),
             menu_operator(
                 "lfs_plugins.file_menu.Mesh2SplatOperator",
                 label=tr("menu.file.mesh_to_splat"),

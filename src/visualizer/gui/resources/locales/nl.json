@@ -209,7 +209,19 @@
     "help.about": "Over LichtFeld Studio",
     "view.performance_hud": "Prestatie-HUD",
     "edit.preferences": "Voorkeuren...",
-    "view.debug_info": "Debug-info..."
+    "view.debug_info": "Debug-info...",
+    "file.browse_projects": "Projecten bladeren…",
+    "file.export_menu": "Exporteren",
+    "file.export_scene": "Scène…",
+    "file.open_gallery": "Galerij openen",
+    "file.project_maintenance": "Projectonderhoud",
+    "view.split_view": "Gesplitste weergave",
+    "file.splat_file": "Splat-bestand…",
+    "file.ssog_folder": "SSOG-map…",
+    "file.configuration": "Configuratie…",
+    "file.dataset": "Dataset…",
+    "file.mesh": "Mesh…",
+    "file.checkpoint": "Checkpoint…"
   },
   "window": {
     "export": "Exporteren",
@@ -814,7 +826,8 @@
     "cannot_delete_training": "Kan niet verwijderen tijdens training",
     "background": "Achtergrond",
     "training_enabled_tooltip": "Opgenomen in training",
-    "training_disabled_tooltip": "Uitgesloten van training"
+    "training_disabled_tooltip": "Uitgesloten van training",
+    "show_system_console": "Systeemconsole tonen"
   },
   "export": {
     "overwrite": "Overschrijven",

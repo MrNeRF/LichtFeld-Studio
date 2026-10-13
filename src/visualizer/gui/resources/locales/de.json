@@ -209,7 +209,19 @@
     "help.about": "Über LichtFeld Studio",
     "view.performance_hud": "Leistungs-HUD",
     "edit.preferences": "Einstellungen...",
-    "view.debug_info": "Debug-Info..."
+    "view.debug_info": "Debug-Info...",
+    "file.browse_projects": "Projekte durchsuchen…",
+    "file.export_menu": "Exportieren",
+    "file.export_scene": "Szene…",
+    "file.open_gallery": "Galerie öffnen",
+    "file.project_maintenance": "Projektwartung",
+    "view.split_view": "Geteilte Ansicht",
+    "file.splat_file": "Splat-Datei…",
+    "file.ssog_folder": "SSOG-Ordner…",
+    "file.configuration": "Konfiguration…",
+    "file.dataset": "Datensatz…",
+    "file.mesh": "Mesh…",
+    "file.checkpoint": "Checkpoint…"
   },
   "window": {
     "export": "Exportieren",
@@ -814,7 +826,8 @@
     "cannot_delete_training": "Löschen während des Trainings nicht möglich",
     "background": "Hintergrund",
     "training_enabled_tooltip": "Im Training enthalten",
-    "training_disabled_tooltip": "Vom Training ausgeschlossen"
+    "training_disabled_tooltip": "Vom Training ausgeschlossen",
+    "show_system_console": "Systemkonsole anzeigen"
   },
   "export": {
     "overwrite": "Überschreiben",

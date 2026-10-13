@@ -209,7 +209,19 @@
     "help.about": "LichtFeld Studio 정보",
     "view.performance_hud": "성능 HUD",
     "edit.preferences": "환경설정...",
-    "view.debug_info": "디버그 정보..."
+    "view.debug_info": "디버그 정보...",
+    "file.browse_projects": "프로젝트 찾아보기…",
+    "file.export_menu": "내보내기",
+    "file.export_scene": "장면…",
+    "file.open_gallery": "갤러리 열기",
+    "file.project_maintenance": "프로젝트 유지 관리",
+    "view.split_view": "분할 보기",
+    "file.splat_file": "스플랫 파일…",
+    "file.ssog_folder": "SSOG 폴더…",
+    "file.configuration": "설정…",
+    "file.dataset": "데이터셋…",
+    "file.mesh": "메시…",
+    "file.checkpoint": "체크포인트…"
   },
   "window": {
     "export": "내보내기",
@@ -814,7 +826,8 @@
     "cannot_delete_training": "훈련 중에는 삭제할 수 없습니다",
     "background": "배경",
     "training_enabled_tooltip": "훈련에 포함됨",
-    "training_disabled_tooltip": "훈련에서 제외됨"
+    "training_disabled_tooltip": "훈련에서 제외됨",
+    "show_system_console": "시스템 콘솔 표시"
   },
   "export": {
     "overwrite": "덮어쓰기",
