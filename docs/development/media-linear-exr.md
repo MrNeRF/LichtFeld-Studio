@@ -298,7 +298,7 @@ it is not inferred from mastering metadata or silently assigned a 1000-nit peak.
 Only declared HLG with BT.709 or BT.2020 primaries is accepted. Primaries are
 retained, not converted; BT.709-tagged input support is not a claim of full
 BT.2100 production conformance. Input transfer/primaries overrides are rejected.
-Integer RGB/YUV 8–16-bit layout/range/matrix/siting validation is shared with PQ;
+Integer RGB/YUV 8â€“16-bit layout/range/matrix/siting validation is shared with PQ;
 RGB requires explicit full range. Reconstructed encoded RGB is clamped to [0,1]
 before inverse OETF. Missing declarations, PQ under HLG, HLG under PQ, LOG,
 Dolby Vision and BT.2020 CL fail rather than being relabeled.
@@ -354,3 +354,8 @@ sample types and both byte orders, and AV1 8/10-bit extraction plus CPU preview
 against an independently decoded RGB reference. These checks do not add new
 image writers, new sequence formats, or new video encoders. TIFF16 export,
 HEIF/AVIF/JPEG XL support and HEVC export remain separate increments.
+
+The native Mac Release-only dependency profile keeps its macOS 26 deployment
+target when using SDK 27. For curl, the profile disables `pipe2` detection below
+macOS 27 and uses curl's existing compatible fallback. This setting is limited
+to curl; an additional private curl overlay is not required.

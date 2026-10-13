@@ -414,7 +414,8 @@ namespace {
         return in;
     }
 
-    void check_photo(const lfs::training::TrainingOps& table, const PhotoCase& pc, const std::string& name) {
+    void check_photo(const lfs::training::TrainingOps& table, const PhotoCase& pc, const std::string& name,
+                     const double map_tolerance = 2e-6) {
         SCOPED_TRACE(name);
         const PhotoInputs in = photo_inputs(pc, 11);
         const bool decoupled = pc.path == ops::PhotoPath::Decoupled || pc.path == ops::PhotoPath::MaskedDecoupled;
@@ -432,8 +433,8 @@ namespace {
         else
             EXPECT_FALSE(grad_raw.is_valid());
         if (pc.path != ops::PhotoPath::L1) {
-            expect_field(download(saved.ssim_map), ref.ssim_map, 2e-6, 0.0, name + " ssim_map");
-            expect_field(download(saved.cs_map), ref.cs_map, 2e-6, 0.0, name + " cs_map");
+            expect_field(download(saved.ssim_map), ref.ssim_map, map_tolerance, 0.0, name + " ssim_map");
+            expect_field(download(saved.cs_map), ref.cs_map, map_tolerance, 0.0, name + " cs_map");
         }
     }
 
@@ -450,6 +451,11 @@ namespace {
         check_photo(*table_, {ops::PhotoPath::MaskedFused, fixture}, "masked_fused");
         check_photo(*table_, {ops::PhotoPath::MaskedFused, odd, true, true}, "masked_fused_u8");
         check_photo(*table_, {ops::PhotoPath::MaskedDecoupled, fixture, false, true}, "masked_decoupled");
+        // Soft normalized moments add float32 rounding before covariance
+        // subtraction. Keep the original cases and all gradient/loss bounds;
+        // this new map comparison allows 3 ppm against the double reference.
+        check_photo(*table_, {ops::PhotoPath::MaskedDecoupled, fixture}, "masked_decoupled_soft", 3e-6);
+        check_photo(*table_, {ops::PhotoPath::MaskedDecoupled, odd, true, true}, "masked_decoupled_batch_u8");
     }
 
     // Central differences of the GPU loss 1 - SSIM against the GPU gradient.
