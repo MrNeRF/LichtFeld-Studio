@@ -369,9 +369,11 @@ namespace lfs::core {
 
             [[nodiscard]] LogBufferSnapshot snapshot(const uint64_t since_generation) const {
                 std::lock_guard lock(entries_mutex_);
-                auto first = entries_.begin();
-                while (first != entries_.end() && first->sequence <= since_generation)
-                    ++first;
+                const auto first = std::upper_bound(
+                    entries_.begin(), entries_.end(), since_generation,
+                    [](const uint64_t sequence, const LogEntrySnapshot& entry) {
+                        return sequence < entry.sequence;
+                    });
                 return {generation_.load(std::memory_order_relaxed), max_entries_, MAX_BUFFERED_LOG_BYTES, bytes_, discarded_, entries_.size(), entries_.empty() ? 0 : entries_.front().sequence, {first, entries_.end()}};
             }
 
