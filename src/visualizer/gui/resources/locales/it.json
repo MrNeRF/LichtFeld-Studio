@@ -2025,6 +2025,8 @@
     "naming_custom": "Personalizzato",
     "naming_help": "{video}: nome video senza estensione. %d: numero frame sorgente. %05d: almeno 5 cifre. %%: carattere % letterale. L’estensione viene aggiunta automaticamente. {{ / }}: graffe letterali.",
     "naming_number_help": "I frame sorgente partono da 1 e possono avere salti. Senza un segnaposto numerico, il numero viene aggiunto in fondo.",
+    "first_source_frame_number": "Numero del primo frame sorgente:",
+    "first_source_frame_number_help": "Il numero assegnato al frame sorgente 1; gli intervalli tra frame sorgente vengono mantenuti.",
     "naming_example_pending": "Esempio illustrativo (nessun video caricato): {}{}",
     "naming_error_placeholder": "Segnaposto sconosciuto o incompleto. Usa {video} per il nome del video.",
     "naming_error_filename": "Nome file non valido per questa piattaforma. Usa un nome senza cartelle.",

@@ -262,18 +262,31 @@ namespace lfs::gui {
             return static_cast<int>(std::clamp<long>(parsed, 1, 65535));
         }
 
-        // Frames and metadata an extraction with `pattern` writes into `dir`. Other files,
+        [[nodiscard]] int readNonNegativeIntValue(const Rml::Element* const el, const int fallback) {
+            if (!el)
+                return fallback;
+            const std::string value = controlValue(el);
+            int parsed = 0;
+            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+            if (error != std::errc{} || end != value.data() + value.size())
+                return fallback;
+            return std::max(0, parsed);
+        }
+
+        // Frames and metadata an extraction writes into its output directory. Other files,
         // such as photos already in the folder, are never part of the list.
-        std::vector<std::filesystem::path> generatedExtractionFiles(const std::filesystem::path& dir,
-                                                                    const std::string& pattern) {
+        std::vector<std::filesystem::path> generatedExtractionFiles(const VideoExtractionParams& params) {
             std::vector<std::filesystem::path> files;
             std::error_code ec;
-            for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            for (std::filesystem::directory_iterator it(params.output_dir, ec), end;
+                 !ec && it != end; it.increment(ec)) {
                 std::error_code type_ec;
                 if (!it->is_regular_file(type_ec))
                     continue;
                 const std::string name = lfs::core::path_to_utf8(it->path().filename());
-                if (name == "extraction_metadata.json" || io::isGeneratedFrameFilename(pattern, name))
+                if (name == "extraction_metadata.json" ||
+                    io::isGeneratedFrameFilename(
+                        params.filename_pattern, name, params.first_source_frame_number == 0))
                     files.push_back(it->path());
             }
             return files;
@@ -414,6 +427,7 @@ namespace lfs::gui {
             extract_params.custom_width = params.custom_width;
             extract_params.custom_height = params.custom_height;
             extract_params.filename_pattern = params.filename_pattern;
+            extract_params.first_source_frame_number = params.first_source_frame_number;
             extract_params.sharpness.enabled = params.sharpness_enabled;
             extract_params.sharpness.algorithm = params.sharpness_algorithm;
             extract_params.sharpness.threshold = params.sharpness_threshold;
@@ -722,6 +736,7 @@ namespace lfs::gui {
         naming_help_el_ = nullptr;
         naming_error_el_ = nullptr;
         pattern_input_el_ = nullptr;
+        first_source_frame_number_input_el_ = nullptr;
         pattern_example_el_ = nullptr;
         start_btn_el_ = nullptr;
         stop_btn_el_ = nullptr;
@@ -808,6 +823,8 @@ namespace lfs::gui {
         naming_help_el_ = document_->GetElementById("naming-help");
         naming_error_el_ = document_->GetElementById("naming-error");
         pattern_input_el_ = document_->GetElementById("pattern-input");
+        first_source_frame_number_input_el_ =
+            document_->GetElementById("first-source-frame-number-input");
         pattern_example_el_ = document_->GetElementById("pattern-example");
         start_btn_el_ = document_->GetElementById("btn-start");
         stop_btn_el_ = document_->GetElementById("btn-stop");
@@ -859,7 +876,8 @@ namespace lfs::gui {
             resolution_select_el_ && scale_row_el_ && scale_select_el_ &&
             custom_resolution_row_el_ && custom_width_input_el_ && custom_height_input_el_ &&
             output_resolution_el_ && naming_select_el_ && custom_pattern_row_el_ &&
-            naming_help_el_ && naming_error_el_ && pattern_input_el_ && pattern_example_el_ &&
+            naming_help_el_ && naming_error_el_ && pattern_input_el_ && first_source_frame_number_input_el_ &&
+            pattern_example_el_ &&
             start_btn_el_ && stop_btn_el_ && cancel_btn_el_ && select_hint_el_ && progress_section_el_ &&
             progress_text_el_ && progress_bar_el_ && complete_section_el_ &&
             complete_text_el_ && ok_btn_el_ && stopped_section_el_ && stopped_text_el_ &&
@@ -935,6 +953,7 @@ namespace lfs::gui {
         listen_change(custom_height_input_el_);
         listen_change(naming_select_el_);
         listen_change(pattern_input_el_);
+        listen_change(first_source_frame_number_input_el_);
         listen_change(trim_start_input_el_);
         listen_change(trim_end_input_el_);
         listen_change(sharpness_toggle_el_);
@@ -1236,6 +1255,7 @@ namespace lfs::gui {
         changed |= setCachedSelect(naming_select_el_, naming_selection_);
         changed |= setCachedDisabled(naming_select_el_, extracting);
         changed |= setCachedDisabled(pattern_input_el_, extracting);
+        changed |= setCachedDisabled(first_source_frame_number_input_el_, extracting);
         changed |= setCachedProperty(custom_pattern_row_el_, "display", naming_selection_ == 4 ? "flex" : "none");
         changed |= setCachedProperty(naming_help_el_, "display", naming_selection_ == 4 ? "block" : "none");
         changed |= setCachedText(naming_error_el_, naming_error);
@@ -1320,6 +1340,8 @@ namespace lfs::gui {
         changed |= setCachedControlValue(custom_width_input_el_, std::to_string(custom_width_));
         changed |= setCachedControlValue(custom_height_input_el_, std::to_string(custom_height_));
         changed |= setCachedControlValue(pattern_input_el_, filename_pattern_);
+        changed |= setCachedControlValue(first_source_frame_number_input_el_,
+                                         std::to_string(first_source_frame_number_));
 
         const std::string video_display = video_path_.empty()
                                               ? LOC(VideoExtractor::NO_FILE)
@@ -1419,7 +1441,9 @@ namespace lfs::gui {
         const char* const ext = format_selection_ == 0 ? ".png" : ".jpg";
         std::string resolved_pattern, naming_error;
         const bool valid = resolveFilenamePattern(resolved_pattern, naming_error);
-        const std::string preview = valid ? io::formatFrameFilenameStem(resolved_pattern, 1) : "";
+        const std::string preview = valid
+                                        ? io::formatFrameFilenameStem(resolved_pattern, first_source_frame_number_)
+                                        : "";
         changed |= setCachedText(pattern_example_el_, valid
                                                           ? LOCF(player_->isOpen() ? VideoExtractor::EXAMPLE : "video_extractor.naming_example_pending", preview.c_str(), ext)
                                                           : "");
@@ -1525,8 +1549,7 @@ namespace lfs::gui {
         } else if (id == "overwrite-delete") {
             if (pending_params_set_) {
                 // Remove only what this extraction would write; other files stay.
-                for (const auto& path : generatedExtractionFiles(pending_params_.output_dir,
-                                                                 pending_params_.filename_pattern)) {
+                for (const auto& path : generatedExtractionFiles(pending_params_)) {
                     std::error_code ec;
                     if (!std::filesystem::remove(path, ec) && ec) {
                         pending_params_set_ = false;
@@ -1659,6 +1682,8 @@ namespace lfs::gui {
                 changed_control = custom_height_input_el_;
             else if (id == "pattern-input")
                 changed_control = pattern_input_el_;
+            else if (id == "first-source-frame-number-input")
+                changed_control = first_source_frame_number_input_el_;
         }
 
         invalidateCachedControlValue(changed_control);
@@ -1756,6 +1781,9 @@ namespace lfs::gui {
             custom_height_ = std::max(16, readIntValue(custom_height_input_el_, custom_height_));
         } else if (id == "pattern-input" && pattern_input_el_ && naming_selection_ == 4) {
             filename_pattern_ = controlValue(pattern_input_el_);
+        } else if (id == "first-source-frame-number-input") {
+            first_source_frame_number_ = readNonNegativeIntValue(
+                first_source_frame_number_input_el_, first_source_frame_number_);
         }
     }
 
@@ -1824,6 +1852,7 @@ namespace lfs::gui {
         applyTextInput("custom-width-input");
         applyTextInput("custom-height-input");
         applyTextInput("pattern-input");
+        applyTextInput("first-source-frame-number-input");
 
         if (!player_->isOpen() || output_dir_.empty() || extracting_.load())
             return;
@@ -1845,6 +1874,7 @@ namespace lfs::gui {
         params.scale = SCALE_VALUES[std::clamp(scale_selection_, 0, static_cast<int>(SCALE_VALUES.size() - 1))];
         params.custom_width = custom_width_;
         params.custom_height = custom_height_;
+        params.first_source_frame_number = first_source_frame_number_;
         std::string naming_error;
         if (!resolveFilenamePattern(params.filename_pattern, naming_error)) {
             controls_dirty_ = true;
@@ -1871,7 +1901,7 @@ namespace lfs::gui {
         params.rotation = rotation_deg_;
 
         // Ask before replacing frames or metadata that an extraction with this naming wrote.
-        if (!generatedExtractionFiles(output_dir_, params.filename_pattern).empty()) {
+        if (!generatedExtractionFiles(params).empty()) {
             pending_params_ = params;
             pending_params_set_ = true;
             if (overwrite_overlay_el_)

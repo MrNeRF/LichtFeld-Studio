@@ -54,6 +54,7 @@ namespace lfs::gui {
         int custom_height = 0;
 
         std::string filename_pattern = "frame_%d";
+        int first_source_frame_number = 1;
 
         io::SharpnessAlgorithm sharpness_algorithm = io::SharpnessAlgorithm::COMBINED;
         double sharpness_threshold = 10.0;
@@ -177,6 +178,7 @@ namespace lfs::gui {
 
         int naming_selection_ = 2;
         std::string filename_pattern_ = "frame_%05d";
+        int first_source_frame_number_ = 1;
 
         float trim_start_ = 0.0f;
         float trim_end_ = -1.0f;
@@ -261,6 +263,7 @@ namespace lfs::gui {
         Rml::Element* naming_help_el_ = nullptr;
         Rml::Element* naming_error_el_ = nullptr;
         Rml::Element* pattern_input_el_ = nullptr;
+        Rml::Element* first_source_frame_number_input_el_ = nullptr;
         Rml::Element* pattern_example_el_ = nullptr;
         Rml::Element* start_btn_el_ = nullptr;
         Rml::Element* stop_btn_el_ = nullptr;

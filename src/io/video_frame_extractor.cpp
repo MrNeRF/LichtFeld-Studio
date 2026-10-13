@@ -614,6 +614,10 @@ namespace lfs::io {
             error = "JPEG quality must be between 1 and 100";
             return false;
         }
+        if (params.first_source_frame_number < 0) {
+            error = "First source frame number must not be negative";
+            return false;
+        }
         if (!std::isfinite(params.sharpness.threshold) ||
             params.sharpness.threshold < 0.0 ||
             params.sharpness.window_candidates_target < -1) {
@@ -819,19 +823,22 @@ namespace lfs::io {
         // Number fields accept any digit run that is not all zeros: earlier
         // extractions may have used another padding width.
         bool matchFrameNameSegments(const std::vector<FrameNameSegment>& segments, const size_t index,
-                                    const std::string_view name, const size_t pos) {
+                                    const std::string_view name, const size_t pos,
+                                    const bool allow_zero) {
             if (index == segments.size())
                 return pos == name.size();
             const auto& segment = segments[index];
             if (!segment.number) {
                 return name.substr(pos, segment.literal.size()) == segment.literal &&
-                       matchFrameNameSegments(segments, index + 1, name, pos + segment.literal.size());
+                       matchFrameNameSegments(segments, index + 1, name,
+                                              pos + segment.literal.size(), allow_zero);
             }
             bool nonzero = false;
             for (size_t end = pos; end < name.size() && std::isdigit(static_cast<unsigned char>(name[end]));) {
                 nonzero |= name[end] != '0';
                 ++end;
-                if (nonzero && matchFrameNameSegments(segments, index + 1, name, end))
+                if ((nonzero || allow_zero) &&
+                    matchFrameNameSegments(segments, index + 1, name, end, allow_zero))
                     return true;
             }
             return false;
@@ -850,13 +857,14 @@ namespace lfs::io {
         return out;
     }
 
-    bool isGeneratedFrameFilename(const std::string_view pattern, const std::string_view filename) {
+    bool isGeneratedFrameFilename(const std::string_view pattern, const std::string_view filename,
+                                  const bool allow_zero) {
         constexpr std::string_view png = ".png";
         constexpr std::string_view jpg = ".jpg";
         if (!filename.ends_with(png) && !filename.ends_with(jpg))
             return false;
         return matchFrameNameSegments(parseFrameFilenamePattern(pattern), 0,
-                                      filename.substr(0, filename.size() - png.size()), 0);
+                                      filename.substr(0, filename.size() - png.size()), 0, allow_zero);
     }
 
     class VideoFrameExtractor::Impl {
@@ -1565,9 +1573,14 @@ namespace lfs::io {
                     throw_if_cancelled();
                 };
 
-                auto generate_filename = [&](int frame_num) {
+                auto generate_filename = [&](const int source_frame) {
+                    const int64_t output_frame = static_cast<int64_t>(source_frame) - 1 +
+                                                 params.first_source_frame_number;
+                    if (output_frame > std::numeric_limits<int>::max())
+                        throw std::runtime_error("Output frame number exceeds supported limits");
                     std::string ext = params.format == ImageFormat::PNG ? ".png" : ".jpg";
-                    return params.output_dir / (formatFrameFilenameStem(params.filename_pattern, frame_num) + ext);
+                    return params.output_dir / (formatFrameFilenameStem(
+                                                   params.filename_pattern, static_cast<int>(output_frame)) + ext);
                 };
 
                 const auto source_frame_for_time = [&](const double frame_time) {
@@ -2419,6 +2432,7 @@ namespace lfs::io {
                         root["output_format"] = params.format == ImageFormat::PNG ? "png" : "jpg";
                         root["output_quality"] = params.jpg_quality;
                         root["filename_pattern"] = params.filename_pattern;
+                        root["first_source_frame_number"] = params.first_source_frame_number;
                         if (params.mode == ExtractionMode::FPS) {
                             root["extraction"]["mode"] = "fps";
                             root["extraction"]["fps"] = params.fps;

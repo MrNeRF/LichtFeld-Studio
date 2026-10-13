@@ -2025,6 +2025,8 @@
     "naming_custom": "Aangepast",
     "naming_help": "{video}: videonaam zonder extensie. %d: bronframenummer. %05d: minstens 5 cijfers. %%: letterlijk %. De extensie wordt automatisch toegevoegd. {{ / }}: letterlijke accolades.",
     "naming_number_help": "Bronframenummers beginnen bij 1 en kunnen gaten bevatten. Zonder numerieke aanduiding wordt het framenummer achteraan toegevoegd.",
+    "first_source_frame_number": "Nummer eerste bronframe:",
+    "first_source_frame_number_help": "Het nummer voor bronframe 1; gaten tussen bronframes blijven behouden.",
     "naming_example_pending": "Voorbeeld (geen video geladen): {}{}",
     "naming_error_placeholder": "Onbekende of onvolledige aanduiding. Gebruik {video} voor de videonaam.",
     "naming_error_filename": "Ongeldige bestandsnaam voor dit platform. Gebruik een naam zonder mappen.",

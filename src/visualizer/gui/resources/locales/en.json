@@ -2023,6 +2023,8 @@
     "naming_custom": "Custom",
     "naming_help": "{video}: video name without extension. %d: source frame number. %05d: at least 5 digits. %%: literal %. Extension is added automatically. {{ / }}: literal braces.",
     "naming_number_help": "Source frame numbers start at 1 and may have gaps. Without a number placeholder, the frame number is appended.",
+    "first_source_frame_number": "First source frame number:",
+    "first_source_frame_number_help": "The number assigned to source frame 1; source frame gaps are preserved.",
     "naming_example_pending": "Illustrative example (no video loaded): {}{}",
     "naming_error_placeholder": "Unknown or incomplete placeholder. Use {video} for the video name.",
     "naming_error_filename": "Invalid filename for this platform. Use a filename without folders.",

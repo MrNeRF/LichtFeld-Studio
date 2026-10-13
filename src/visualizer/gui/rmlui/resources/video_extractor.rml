@@ -234,6 +234,11 @@
             <span class="field-label">@tr:video_extractor.pattern</span>
             <input id="pattern-input" class="pattern-input" type="text" value="frame_%05d" />
           </div>
+          <div class="settings-row">
+            <span class="field-label">@tr:video_extractor.first_source_frame_number</span>
+            <input id="first-source-frame-number-input" class="interval-input" type="text" value="1" />
+            <span class="inline-note">@tr:video_extractor.first_source_frame_number_help</span>
+          </div>
           <div id="naming-help" class="naming-note">@tr:video_extractor.naming_help</div>
           <div class="naming-note">@tr:video_extractor.naming_number_help</div>
           <div id="pattern-example" class="naming-note inline-note"></div>

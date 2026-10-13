@@ -17,8 +17,10 @@ namespace lfs::io {
     // Supports %d, %0Nd zero-padding, %% escaping, and legacy %000 zero-padding.
     [[nodiscard]] std::string formatFrameFilenameStem(std::string_view pattern, int frame_number);
     // True when the extractor writes `filename` (name only) for `pattern`: a frame stem with any
-    // positive frame number and padding width, followed by .png or .jpg.
-    [[nodiscard]] bool isGeneratedFrameFilename(std::string_view pattern, std::string_view filename);
+    // positive frame number and padding width, followed by .png or .jpg. Set `allow_zero` when
+    // the extraction labels source frame 1 as frame 0.
+    [[nodiscard]] bool isGeneratedFrameFilename(std::string_view pattern, std::string_view filename,
+                                                bool allow_zero = false);
     [[nodiscard]] std::size_t calculateFpsSampleCount(double start_time, double end_time,
                                                       double target_fps);
     [[nodiscard]] double fpsSampleTime(double start_time, double end_time,
@@ -100,7 +102,9 @@ namespace lfs::io {
             int custom_height = 0;
 
             // Output naming
-            std::string filename_pattern = "frame_%d"; // %d = 1-based source video frame number
+            std::string filename_pattern = "frame_%d";
+            // The output number assigned to source frame 1. Source frame gaps remain unchanged.
+            int first_source_frame_number = 1;
             bool generate_metadata = false;
             int rotation = 0; // 0, 90, 180, 270
             bool convert_hdr_to_sdr = false;

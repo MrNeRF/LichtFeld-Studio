@@ -2025,6 +2025,8 @@
     "naming_custom": "Personnalisé",
     "naming_help": "{video} : nom vidéo sans extension. %d : numéro d’image source. %05d : au moins 5 chiffres. %% : caractère % littéral. L’extension est ajoutée automatiquement. {{ / }} : accolades littérales.",
     "naming_number_help": "Les numéros source commencent à 1 et peuvent avoir des sauts. Sans marqueur numérique, le numéro est ajouté à la fin.",
+    "first_source_frame_number": "Numéro de la première image source :",
+    "first_source_frame_number_help": "Le numéro attribué à l’image source 1 ; les écarts entre images source sont conservés.",
     "naming_example_pending": "Exemple illustratif (aucune vidéo chargée) : {}{}",
     "naming_error_placeholder": "Marqueur inconnu ou incomplet. Utilisez {video} pour le nom vidéo.",
     "naming_error_filename": "Nom de fichier invalide pour cette plateforme. Utilisez un nom sans dossier.",

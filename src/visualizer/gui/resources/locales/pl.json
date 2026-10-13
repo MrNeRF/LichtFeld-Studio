@@ -2025,6 +2025,8 @@
     "naming_custom": "Własny",
     "naming_help": "{video}: nazwa wideo bez rozszerzenia. %d: numer klatki źródłowej. %05d: co najmniej 5 cyfr. %%: dosłowny znak %. Rozszerzenie jest dodawane automatycznie. {{ / }}: dosłowne nawiasy klamrowe.",
     "naming_number_help": "Numery klatek źródłowych zaczynają się od 1 i mogą mieć luki. Bez znacznika liczbowego numer jest dopisywany na końcu.",
+    "first_source_frame_number": "Numer pierwszej klatki źródłowej:",
+    "first_source_frame_number_help": "Numer przypisany do klatki źródłowej 1; odstępy między klatkami źródłowymi są zachowane.",
     "naming_example_pending": "Przykład poglądowy (nie wczytano wideo): {}{}",
     "naming_error_placeholder": "Nieznany lub niepełny znacznik. Użyj {video} jako nazwy wideo.",
     "naming_error_filename": "Nazwa pliku nieprawidłowa dla tej platformy. Użyj nazwy bez folderów.",
