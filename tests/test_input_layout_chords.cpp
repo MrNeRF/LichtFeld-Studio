@@ -126,6 +126,23 @@ namespace lfs::vis {
             }
         };
 
+        void expectWheel(InputController& controller, Viewport& viewport, bool rolls) {
+            const auto rotation = viewport.camera.R;
+            const auto translation = viewport.camera.t;
+            controller.handleScroll(0.0, 1.0);
+            float rolled = 0.0f;
+            for (int column = 0; column < 3; ++column)
+                rolled = std::max(rolled, glm::distance(rotation[column], viewport.camera.R[column]));
+            const float moved = glm::distance(translation, viewport.camera.t);
+            if (rolls) {
+                EXPECT_GT(rolled, 1e-3f);
+                EXPECT_LT(moved, 1e-4f);
+            } else {
+                EXPECT_LT(rolled, 1e-4f);
+                EXPECT_GT(moved, 1e-3f);
+            }
+        }
+
         // Colemak physical E prints F (focus). The rebound row prints G (GT compare).
         TEST_F(InputLayoutChordTest, DivergentMovementPressRepeatRelease) {
             struct Row {
@@ -158,6 +175,26 @@ namespace lfs::vis {
                 EXPECT_LT(glm::distance(translation, viewport_.camera.t), 1e-4f);
                 key(row.letter, input::ACTION_RELEASE);
                 EXPECT_FALSE(controller_.isContinuousInputActive()) << row.letter.logical;
+            }
+        }
+
+        TEST_F(InputLayoutChordTest, PhysicalMovementDoesNotArmScrollChord) {
+            struct Row {
+                const char* layout;
+                Letter letter;
+                bool zooms;
+            };
+            const Row rows[] = {
+                {"colemak", kColemakS, true},
+                {"us", kUsR, false},
+                {"azerty", kUsR, false},
+                {"dvorak", kDvorakR, false},
+            };
+            for (const auto& row : rows) {
+                key(row.letter, input::ACTION_PRESS);
+                expectWheel(controller_, viewport_, !row.zooms);
+                EXPECT_EQ(controller_.isContinuousInputActive(), row.zooms) << row.layout;
+                key(row.letter, input::ACTION_RELEASE);
             }
         }
 

@@ -1731,10 +1731,14 @@ namespace lfs::vis {
             physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL ||
             physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT ||
             physical_key == input::KEY_LEFT_SUPER || physical_key == input::KEY_RIGHT_SUPER;
+        // The same press is movement, so its printed character must not arm a
+        // scroll chord. Release drops nothing that this press did not insert.
+        const bool movement_owns_logical_key =
+            physicalMovementConsumesLogicalKey(physical_key, logical_key, mods);
         if (wants_text_input && !bindings_.isCapturing()) {
             // Text keys must not become viewport mouse/scroll chords either.
             held_keys_.clear();
-        } else if (!is_modifier_key && logical_key != input::KEY_UNKNOWN) {
+        } else if (!movement_owns_logical_key && !is_modifier_key && logical_key != input::KEY_UNKNOWN) {
             if (action == input::ACTION_RELEASE) {
                 std::erase(held_keys_, logical_key);
             } else if (!std::ranges::contains(held_keys_, logical_key)) {
