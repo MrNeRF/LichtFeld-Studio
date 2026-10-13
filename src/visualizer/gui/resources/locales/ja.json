@@ -3181,5 +3181,7 @@
   "runtime.import_render_failed": "このファイルを描画する準備ができませんでした",
   "training.iterations_must_exceed_current": "最大反復回数は現在の学習ステップより大きくする必要があります。",
   "runtime.camera_fov_out_of_range": "fov_degrees は有限値で、0 度より大きく 180 度より小さい値にしてください",
-  "runtime.camera_fov_clamped": "指定された fov_degrees は {:.2f} 度に制限されました"
+  "runtime.camera_fov_clamped": "指定された fov_degrees は {:.2f} 度に制限されました",
+  "project.session.newer_settings.title": "新しいバージョンのプロジェクト設定",
+  "project.session.newer_settings.message": "このプロジェクトにはこのバージョンで認識できない設定があります。次の項目には既定値を使用しました: {}"
 }

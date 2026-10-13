@@ -3181,5 +3181,7 @@
   "runtime.import_render_failed": "Could not prepare this file for rendering",
   "training.iterations_must_exceed_current": "Maximum iterations must be greater than the current training step.",
   "runtime.camera_fov_out_of_range": "fov_degrees must be finite, greater than 0, and less than 180 degrees",
-  "runtime.camera_fov_clamped": "Requested fov_degrees was clamped to {:.2f} degrees"
+  "runtime.camera_fov_clamped": "Requested fov_degrees was clamped to {:.2f} degrees",
+  "project.session.newer_settings.title": "Project settings from a newer version",
+  "project.session.newer_settings.message": "This project contains settings this version does not recognize. Default values were used for: {}"
 }

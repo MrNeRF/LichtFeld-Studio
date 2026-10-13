@@ -3181,5 +3181,7 @@
   "runtime.import_render_failed": "Impossibile preparare questo file per la visualizzazione",
   "training.iterations_must_exceed_current": "Il numero massimo di iterazioni deve superare il passo di addestramento corrente.",
   "runtime.camera_fov_out_of_range": "fov_degrees deve essere finito, maggiore di 0 e minore di 180 gradi",
-  "runtime.camera_fov_clamped": "Il fov_degrees richiesto è stato limitato a {:.2f} gradi"
+  "runtime.camera_fov_clamped": "Il fov_degrees richiesto è stato limitato a {:.2f} gradi",
+  "project.session.newer_settings.title": "Impostazioni del progetto da una versione più recente",
+  "project.session.newer_settings.message": "Questo progetto contiene impostazioni non riconosciute da questa versione. Valori predefiniti usati per: {}"
 }

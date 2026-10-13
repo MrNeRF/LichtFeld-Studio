@@ -3181,5 +3181,7 @@
   "runtime.import_render_failed": "Dit bestand kon niet worden voorbereid voor weergave",
   "training.iterations_must_exceed_current": "Het maximale aantal iteraties moet hoger zijn dan de huidige trainingsstap.",
   "runtime.camera_fov_out_of_range": "fov_degrees moet eindig zijn, groter dan 0 en kleiner dan 180 graden",
-  "runtime.camera_fov_clamped": "De aangevraagde fov_degrees is begrensd op {:.2f} graden"
+  "runtime.camera_fov_clamped": "De aangevraagde fov_degrees is begrensd op {:.2f} graden",
+  "project.session.newer_settings.title": "Projectinstellingen van een nieuwere versie",
+  "project.session.newer_settings.message": "Dit project bevat instellingen die deze versie niet herkent. Standaardwaarden gebruikt voor: {}"
 }

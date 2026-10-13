@@ -3181,5 +3181,7 @@
   "runtime.import_render_failed": "이 파일을 렌더링할 준비를 하지 못했습니다",
   "training.iterations_must_exceed_current": "최대 반복 횟수는 현재 훈련 단계보다 커야 합니다.",
   "runtime.camera_fov_out_of_range": "fov_degrees는 유한한 값이어야 하며 0도보다 크고 180도보다 작아야 합니다",
-  "runtime.camera_fov_clamped": "요청한 fov_degrees 값이 {:.2f}도로 제한되었습니다"
+  "runtime.camera_fov_clamped": "요청한 fov_degrees 값이 {:.2f}도로 제한되었습니다",
+  "project.session.newer_settings.title": "최신 버전의 프로젝트 설정",
+  "project.session.newer_settings.message": "이 프로젝트에 현재 버전에서 인식할 수 없는 설정이 있습니다. 다음 항목에 기본값을 사용했습니다: {}"
 }
