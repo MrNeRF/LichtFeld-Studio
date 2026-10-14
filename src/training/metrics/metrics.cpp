@@ -314,7 +314,8 @@ namespace lfs::training {
     }
 
     float SSIM::compute_impl(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
-                             const lfs::core::Tensor& mask, const bool normalize_windows) {
+                             const lfs::core::Tensor& mask, const bool normalize_windows,
+                             lfs::core::Tensor* const shared_map) {
         if (pred.shape() != target.shape()) {
             throw std::runtime_error("SSIM: prediction and target must have the same shape");
         }
@@ -329,9 +330,16 @@ namespace lfs::training {
             validate_mask_shape_or_throw(mask_f, layout, "SSIM");
             const float mask_sum = get_non_empty_mask_sum_or_throw(mask_f, "SSIM");
 
-            auto ssim_map = normalize_windows
-                                ? kernels::masked_ssim_map_forward(pred, target, mask)
-                                : kernels::ssim_forward_map(pred, target, false).ssim_map;
+            lfs::core::Tensor ssim_map;
+            if (normalize_windows) {
+                ssim_map = kernels::masked_ssim_map_forward(pred, target, mask);
+            } else if (shared_map && shared_map->is_valid()) {
+                ssim_map = *shared_map;
+            } else {
+                ssim_map = kernels::ssim_forward_map(pred, target, false).ssim_map;
+                if (shared_map)
+                    *shared_map = ssim_map;
+            }
             assert(ssim_map.ndim() == 4);
             assert(static_cast<int>(ssim_map.shape()[2]) == layout.h);
             assert(static_cast<int>(ssim_map.shape()[3]) == layout.w);
@@ -470,11 +478,11 @@ namespace lfs::training {
 
     float SSIM::compute_evaluation(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
                                    const lfs::core::Tensor& mask, const bool complete_windows_only,
-                                   const std::string_view camera_name) {
+                                   const std::string_view camera_name, lfs::core::Tensor* const shared_map) {
         const auto [centers, complete] = select_ssim_evaluation_mask(mask, complete_windows_only, camera_name, pred.stream());
         // Erosion selects centers, not sample support. These windows already
         // exclude ignored input, so retain their original statistics exactly.
-        return compute_impl(pred, target, centers, !complete);
+        return compute_impl(pred, target, centers, !complete, shared_map);
     }
 
     lfs::Error evaluation_error(std::string detail, const lfs::core::SourceSite site) {
@@ -1263,6 +1271,20 @@ namespace lfs::training {
             entry["flip"] = json_metric(view.flip);
         if (!view.skipped_reason.empty())
             entry["skipped_reason"] = view.skipped_reason;
+        for (const auto& [name, set] : {std::pair{"unmasked", &view.unmasked}, std::pair{"inverted", &view.inverted}}) {
+            if (!*set)
+                continue;
+            auto& scores = entry[name] = {
+                {"psnr", json_metric((*set)->psnr)},
+                {"ssim", json_metric((*set)->ssim)},
+                {"lpips", json_metric((*set)->lpips)},
+                {"evaluated_pixel_fraction", (*set)->evaluated_pixel_fraction},
+            };
+            if (view.flip || (*set)->flip)
+                scores["flip"] = json_metric((*set)->flip);
+            if (!(*set)->skipped_reason.empty())
+                scores["skipped_reason"] = (*set)->skipped_reason;
+        }
 
         std::vector<nlohmann::json> evaluations;
         if (const auto existing = record.find("evaluations");
@@ -1379,6 +1401,8 @@ namespace lfs::training {
             if (final.depth_absrel && std::isfinite(*final.depth_absrel)) {
                 report_file << "Depth AbsRel: " << *final.depth_absrel << "\n";
             }
+            for (const auto& line : final.mask_set_summaries())
+                report_file << line << "\n";
         }
 
         // Detailed results
@@ -1586,6 +1610,13 @@ namespace lfs::training {
         cudaEvent_t lpips_stop_event = nullptr;
         double lpips_elapsed_ms = 0.0;
         std::size_t lpips_timed_images = 0;
+        const bool report_unmasked = _params.optimization.eval_mask_report_unmasked;
+        const bool report_inverted = _params.optimization.eval_mask_report_inverted;
+        struct MaskSetScores {
+            std::vector<float> psnr, ssim, lpips, flip, fraction;
+        };
+        MaskSetScores unmasked_scores, inverted_scores;
+        bool mask_sets_scored = false;
 
         if (!_lpips_load_attempted && _lpips_weights_path) {
             _lpips_load_attempted = true;
@@ -1670,12 +1701,14 @@ namespace lfs::training {
                                                 ? mask.to(lfs::core::DataType::Float32).mean().item<float>()
                                                 : 1.0f;
 
+            const bool score_mask_sets = user_mask_applied && (report_unmasked || report_inverted);
+            lfs::core::Tensor ssim_map;
             float psnr = 0.0f;
             float ssim = 0.0f;
             try {
                 psnr = _psnr_metric->compute(r_output.image, gt_image, mask);
-                ssim = _ssim_metric->compute_evaluation(
-                    r_output.image, gt_image, mask, erode_ssim_mask, cam->image_name());
+                ssim = _ssim_metric->compute_evaluation(r_output.image, gt_image, mask, erode_ssim_mask,
+                                                        cam->image_name(), score_mask_sets ? &ssim_map : nullptr);
             } catch (const std::exception& e) {
                 LOG_WARN("Eval: skipping camera '{}' (metric computation failed: {})", cam->image_name(), e.what());
                 view.skipped_reason = std::string("metric computation failed: ") + e.what();
@@ -1698,20 +1731,73 @@ namespace lfs::training {
             view.masked = mask.is_valid();
             evaluated_images++;
 
-            const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f);
-            std::optional<float> lpips;
-            if (_lpips_metric) {
+            // Extra pixel sets share the render, the reference and the unmasked SSIM map with the mask.
+            struct MaskSet {
+                std::string_view name;
+                MaskSetMetrics& metrics;
+                lfs::core::Tensor pixels;
+                bool erode_ssim_mask;
+                MaskSetScores& scores;
+            };
+            std::vector<MaskSet> mask_sets;
+            if (score_mask_sets) {
+                mask_sets_scored = true;
+                if (report_unmasked)
+                    mask_sets.push_back({"unmasked", view.unmasked.emplace(), prepared_validity, prepared_validity.is_valid(),
+                                         unmasked_scores});
+                if (report_inverted) {
+                    const auto valid = prepared_validity.is_valid()
+                                           ? mask_as_float01(prepared_validity)
+                                           : lfs::core::Tensor::full(mask.shape(), 1.0f, mask.device());
+                    mask_sets.push_back({"inverted", view.inverted.emplace(),
+                                         ((mask_as_float01(mask) * -1.0f + 1.0f) * valid)
+                                             .gt(0.5f)
+                                             .to(lfs::core::DataType::UInt8)
+                                             .contiguous(),
+                                         erode_ssim_mask, inverted_scores});
+                }
+            }
+            for (auto& set : mask_sets) {
+                set.metrics.evaluated_pixel_fraction =
+                    set.pixels.is_valid() ? set.pixels.to(lfs::core::DataType::Float32).mean().item<float>() : 1.0f;
+                set.scores.fraction.push_back(set.metrics.evaluated_pixel_fraction);
+                if (set.metrics.evaluated_pixel_fraction <= 0.0f) {
+                    set.metrics.skipped_reason = "no pixel in this set";
+                    continue;
+                }
                 try {
-                    const auto pred_lpips = mask_image(r_output.image, mask);
+                    const float set_psnr = _psnr_metric->compute(r_output.image, gt_image, set.pixels);
+                    const float set_ssim = _ssim_metric->compute_evaluation(
+                        r_output.image, gt_image, set.pixels, set.erode_ssim_mask, cam->image_name(), &ssim_map);
+                    if (!std::isfinite(set_psnr) || !std::isfinite(set_ssim)) {
+                        set.metrics.skipped_reason = "non-finite metric values";
+                        continue;
+                    }
+                    set.metrics.psnr = set_psnr;
+                    set.metrics.ssim = set_ssim;
+                    set.scores.psnr.push_back(set_psnr);
+                    set.scores.ssim.push_back(set_ssim);
+                } catch (const std::exception& e) {
+                    LOG_WARN("Eval: {} pixels of camera '{}' not scored (metric computation failed: {})", set.name,
+                             cam->image_name(), e.what());
+                    set.metrics.skipped_reason = std::string("metric computation failed: ") + e.what();
+                }
+            }
+            ssim_map = {};
+
+            const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f);
+            const auto score_lpips = [&](const lfs::core::Tensor& pixels, const bool timed) -> std::optional<float> {
+                try {
+                    const auto pred_lpips = mask_image(r_output.image, pixels);
                     const auto target_lpips = mask_image(
-                        gt_float.to(lfs::core::Device::CUDA), mask);
+                        gt_float.to(lfs::core::Device::CUDA), pixels);
                     const int image_height = static_cast<int>(gt_image.shape()[1]);
                     const int image_width = static_cast<int>(gt_image.shape()[2]);
                     const std::pair<int, int> image_size{image_height, image_width};
                     const bool size_changed = !lpips_preflight_size || *lpips_preflight_size != image_size;
                     lpips_preflight_size = image_size;
                     const auto required =
-                        _lpips_metric->estimated_peak_bytes(image_height, image_width, mask.is_valid());
+                        _lpips_metric->estimated_peak_bytes(image_height, image_width, pixels.is_valid());
                     std::size_t free_bytes = 0;
                     std::size_t total_bytes = 0;
                     const auto status = cudaMemGetInfo(&free_bytes, &total_bytes);
@@ -1725,63 +1811,88 @@ namespace lfs::training {
                         LOG_DEBUG("Eval: LPIPS preflight passed; tile={} required={} free={} bytes",
                                   _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
                     }
-                    if (lpips_preflight_ok) {
-                        const cudaStream_t lpips_stream = pred_lpips.stream();
-                        const bool timed_lpips = lpips_start_event != nullptr &&
-                                                 cudaEventRecord(lpips_start_event, lpips_stream) == cudaSuccess;
-                        auto value = mask.is_valid()
-                                         ? _lpips_metric->forward(
-                                               pred_lpips, target_lpips, mask,
-                                               lfs::core::nn::models::InputScaling::Identity)
-                                         : _lpips_metric->forward(
-                                               pred_lpips, target_lpips,
-                                               lfs::core::nn::models::InputScaling::Identity);
-                        const bool lpips_event_complete =
-                            timed_lpips && cudaEventRecord(lpips_stop_event, lpips_stream) == cudaSuccess &&
-                            cudaEventSynchronize(lpips_stop_event) == cudaSuccess;
-                        if (value && std::isfinite(*value)) {
-                            if (lpips_event_complete) {
-                                float elapsed_ms = 0.0f;
-                                if (cudaEventElapsedTime(&elapsed_ms, lpips_start_event, lpips_stop_event) ==
-                                        cudaSuccess &&
-                                    std::isfinite(elapsed_ms)) {
-                                    lpips_elapsed_ms += elapsed_ms;
-                                    lpips_timed_images++;
-                                }
+                    if (!lpips_preflight_ok)
+                        return std::nullopt;
+                    const cudaStream_t lpips_stream = pred_lpips.stream();
+                    const bool timed_lpips = timed && lpips_start_event != nullptr &&
+                                             cudaEventRecord(lpips_start_event, lpips_stream) == cudaSuccess;
+                    auto value = pixels.is_valid()
+                                     ? _lpips_metric->forward(
+                                           pred_lpips, target_lpips, pixels,
+                                           lfs::core::nn::models::InputScaling::Identity)
+                                     : _lpips_metric->forward(
+                                           pred_lpips, target_lpips,
+                                           lfs::core::nn::models::InputScaling::Identity);
+                    const bool lpips_event_complete =
+                        timed_lpips && cudaEventRecord(lpips_stop_event, lpips_stream) == cudaSuccess &&
+                        cudaEventSynchronize(lpips_stop_event) == cudaSuccess;
+                    if (value && std::isfinite(*value)) {
+                        if (lpips_event_complete) {
+                            float elapsed_ms = 0.0f;
+                            if (cudaEventElapsedTime(&elapsed_ms, lpips_start_event, lpips_stop_event) ==
+                                    cudaSuccess &&
+                                std::isfinite(elapsed_ms)) {
+                                lpips_elapsed_ms += elapsed_ms;
+                                lpips_timed_images++;
                             }
-                            lpips = *value;
-                            lpips_values.push_back(*value);
-                        } else if (!value) {
-                            LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(),
-                                     value.error().detail());
-                        } else {
-                            LOG_WARN("Eval: LPIPS produced a non-finite value for camera '{}'",
-                                     cam->image_name());
                         }
+                        return *value;
+                    }
+                    if (!value) {
+                        LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(),
+                                 value.error().detail());
+                    } else {
+                        LOG_WARN("Eval: LPIPS produced a non-finite value for camera '{}'",
+                                 cam->image_name());
                     }
                 } catch (const std::exception& e) {
                     LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(), e.what());
                 }
+                return std::nullopt;
+            };
+            if (_lpips_metric) {
+                view.lpips = score_lpips(mask, true);
+                if (view.lpips)
+                    lpips_values.push_back(*view.lpips);
+                for (auto& set : mask_sets) {
+                    if (!set.metrics.skipped_reason.empty())
+                        continue;
+                    set.metrics.lpips = score_lpips(set.pixels, false);
+                    if (set.metrics.lpips)
+                        set.scores.lpips.push_back(*set.metrics.lpips);
+                }
             }
-            view.lpips = lpips;
-            lfs::core::Tensor flip_map;
-            if (_params.optimization.eval_flip) {
+
+            const auto score_flip = [&](const lfs::core::Tensor& pixels, lfs::core::Tensor& map) -> std::optional<float> {
                 try {
                     // Pixels outside the mask are blanked in both images first, so the filters cannot carry
                     // differences from there into the scored area.
-                    flip_map = mask.is_valid()
-                                   ? flip_error_map(mask_image(gt_float, mask), mask_image(r_output.image, mask)) *
-                                         mask_as_float01(mask)
-                                   : flip_error_map(gt_float, r_output.image);
-                    const float flip = mask.is_valid()
-                                           ? flip_map.sum().item<float>() / mask_as_float01(mask).sum().item<float>()
-                                           : flip_map.mean().item<float>();
-                    if (std::isfinite(flip)) {
-                        view.flip = flip;
-                        flip_values.push_back(flip);
-                    }
+                    map = pixels.is_valid()
+                              ? flip_error_map(mask_image(gt_float, pixels), mask_image(r_output.image, pixels)) *
+                                    mask_as_float01(pixels)
+                              : flip_error_map(gt_float, r_output.image);
+                    const float flip = pixels.is_valid()
+                                           ? map.sum().item<float>() / mask_as_float01(pixels).sum().item<float>()
+                                           : map.mean().item<float>();
+                    if (std::isfinite(flip))
+                        return flip;
                 } catch (const std::exception& e) {
                     LOG_WARN("Eval: FLIP failed for camera '{}' ({})", cam->image_name(), e.what());
+                }
+                return std::nullopt;
+            };
+            lfs::core::Tensor flip_map;
+            if (_params.optimization.eval_flip) {
+                view.flip = score_flip(mask, flip_map);
+                if (view.flip)
+                    flip_values.push_back(*view.flip);
+                for (auto& set : mask_sets) {
+                    if (!set.metrics.skipped_reason.empty())
+                        continue;
+                    lfs::core::Tensor set_map;
+                    set.metrics.flip = score_flip(set.pixels, set_map);
+                    if (set.metrics.flip)
+                        set.scores.flip.push_back(*set.metrics.flip);
                 }
             }
             auto accumulate_bias = [&](const lfs::core::Tensor& image,
@@ -2027,6 +2138,25 @@ namespace lfs::training {
         }
         result.normal_angle_deg = mean_of_finite(normal_values);
         result.depth_absrel = mean_of_finite(depth_values);
+        const auto summarize = [](const MaskSetScores& scores) {
+            MaskSetMetrics summary;
+            if (!scores.psnr.empty()) {
+                summary.psnr = std::accumulate(scores.psnr.begin(), scores.psnr.end(), 0.0f) / scores.psnr.size();
+                summary.ssim = std::accumulate(scores.ssim.begin(), scores.ssim.end(), 0.0f) / scores.ssim.size();
+            }
+            summary.lpips = mean_of_finite(scores.lpips);
+            summary.flip = mean_of_finite(scores.flip);
+            summary.evaluated_pixel_fraction = mean_of_finite(scores.fraction).value_or(0.0f);
+            return summary;
+        };
+        if (mask_sets_scored) {
+            if (report_unmasked)
+                result.unmasked = summarize(unmasked_scores);
+            if (report_inverted)
+                result.inverted = summarize(inverted_scores);
+        } else if (report_unmasked || report_inverted) {
+            LOG_WARN("Eval: no evaluation mask was applied, so the unmasked and inverted sets were not scored");
+        }
         const size_t elapsed_denom = evaluated_images > 0 ? evaluated_images : std::max<size_t>(val_dataset_size, 1);
         result.elapsed_time = elapsed / static_cast<float>(elapsed_denom);
 

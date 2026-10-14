@@ -94,6 +94,8 @@ BOOL_PROPS = (
     "eval_all",
     "eval_flip",
     "eval_mask_invert",
+    "eval_mask_report_unmasked",
+    "eval_mask_report_inverted",
 )
 
 SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space", "eval_bit_depth")
@@ -227,6 +229,16 @@ DATASET_RUNS = (
     _run(
         "dataset_eval_mask_invert",
         "eval_mask_invert",
+        visibility_condition_id="dep_eval_mask",
+    ),
+    _run(
+        "dataset_eval_mask_report_unmasked",
+        "eval_mask_report_unmasked",
+        visibility_condition_id="dep_eval_mask",
+    ),
+    _run(
+        "dataset_eval_mask_report_inverted",
+        "eval_mask_report_inverted",
         visibility_condition_id="dep_eval_mask",
     ),
     _run(

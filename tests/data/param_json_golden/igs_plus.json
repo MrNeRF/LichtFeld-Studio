@@ -29,6 +29,8 @@
   "eval_mask": "",
   "eval_mask_invert": false,
   "eval_mask_opacity": 0.8500000238418579,
+  "eval_mask_report_inverted": false,
+  "eval_mask_report_unmasked": false,
   "eval_space": "distorted",
   "eval_steps": [
     7000,

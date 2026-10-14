@@ -74,6 +74,8 @@ Images are named after their input image. When two input images share a name, th
 
 `split` is `test` for held-out images and `train` with `--eval-all`. An image that could not be scored keeps its entry with a `skipped_reason`.
 
+With `--eval-mask-report`, each evaluation also holds an `unmasked` and/or `inverted` object with that set's `psnr`, `ssim`, `lpips`, `flip` and `evaluated_pixel_fraction` (see [Several pixel sets in one run](#several-pixel-sets-in-one-run)). The values outside these objects stay the mask's, and so does `metrics.csv`.
+
 ## Metrics
 
 - **PSNR** and **SSIM** measure pixel and structural agreement. Higher is better.
@@ -97,6 +99,36 @@ A mask restricts all metrics to a part of each image, for example the object wit
 | `none` | No mask; clears a mask stored in a resumed project. |
 
 `--eval-mask-invert` scores the pixels outside the mask instead. Mesh, box, crop box and point masks follow each camera's lens, including distortion when evaluating distorted images.
+
+### Several pixel sets in one run
+
+`--eval-mask-report=mask,unmasked,inverted` scores every view against up to three pixel sets in the same evaluation. List the sets you want; `mask` is always scored.
+
+| Set | Pixels | Same scores as |
+|---|---|---|
+| `mask` | The mask, as above. | the evaluation with the mask |
+| `unmasked` | Every valid pixel of the view. | `--eval-mask none` |
+| `inverted` | The valid pixels outside the mask. | `--eval-mask-invert` |
+
+Valid pixels are all pixels of the view, except when distorted images are evaluated with `--undistort`: the pixels the undistorted render cannot reach are then left out of every set. `inverted` is the exact complement of the scored mask; for a mask folder with grey edges, `--eval-mask-invert` flips the grey values before they are thresholded and can differ from it along those edges.
+
+Each view is rendered and its reference decoded once for all sets, and SSIM reuses its full-image map. LPIPS and FLIP run once per set, because they blank the pixels outside the set before comparing, so each extra set adds one LPIPS pass (and one FLIP pass with `--eval-flip`) per view.
+
+The extra scores are written next to the mask's: in `per_image_metrics.json` (example below), as extra lines in the log and in `metrics_report.txt`, and in `compare.json` and `compare_report.txt`. In the GUI the sets are the **Also Score Unmasked** and **Also Score Inverted** options under the evaluation mask. Without an applied mask the extra sets are not scored and a warning says so.
+
+```json
+{
+  "step": 30000,
+  "split": "test",
+  "psnr": 25.41,
+  "ssim": 0.812,
+  "lpips": 0.184,
+  "masked": true,
+  "evaluated_pixel_fraction": 0.62,
+  "unmasked": {"psnr": 23.87, "ssim": 0.781, "lpips": 0.203, "evaluated_pixel_fraction": 1.0},
+  "inverted": {"psnr": 22.95, "ssim": 0.764, "lpips": 0.215, "evaluated_pixel_fraction": 0.38}
+}
+```
 
 `points` uses the points the model was initialized from, either the dataset's sparse points or the file given with `--init`. A resumed project reads them again from there, so that file or dataset must still be in place.
 
@@ -189,7 +221,7 @@ Any other lens difference stops the comparison. Test cameras placed elsewhere th
 | Flag | Meaning |
 |---|---|
 | `-o <folder>` | Where the reports go; default `<test>_compare` next to the test images. |
-| `--eval-mask`, `--eval-mask-invert`, `--eval-mask-opacity` | `masks:<folder>`, `mesh:<file>`, `bbox:...`, `points:<file>` or `splat:<file>`, as in training. The crop box, depth and initial point masks need a trained model. |
+| `--eval-mask`, `--eval-mask-invert`, `--eval-mask-opacity`, `--eval-mask-report` | `masks:<folder>`, `mesh:<file>`, `bbox:...`, `points:<file>` or `splat:<file>`, as in training. The crop box, depth and initial point masks need a trained model. |
 | `--colmap <sparse>` | COLMAP model with the cameras of a reference folder that is not a dataset, matched by image name. |
 | `--eval-space` | `distorted` or `undistorted`, see above. |
 | `--undistort` | The test folder was rendered with the undistorted reference cameras. |

@@ -236,6 +236,56 @@ namespace {
         return steps;
     }
 
+    struct EvalMaskReport {
+        bool unmasked = false;
+        bool inverted = false;
+    };
+
+    constexpr std::string_view EVAL_MASK_REPORT_HELP =
+        "Pixel sets scored with an evaluation mask, as a comma list: mask (the mask itself, always scored), "
+        "unmasked (every valid pixel, as without the mask) and inverted (the valid pixels outside the mask). "
+        "Each view is rendered and its reference decoded once and SSIM reuses its full-image map; LPIPS and FLIP run "
+        "once per set. The extra sets are written next to the mask scores (default: mask)";
+
+    lfs::Result<EvalMaskReport> parse_eval_mask_report(const std::string_view value) {
+        const auto invalid = [value](const std::string_view reason) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Core,
+                .user_message = std::format("Invalid --eval-mask-report '{}': {}. Use a comma list of mask, "
+                                            "unmasked and inverted that includes mask, e.g. mask,unmasked,inverted",
+                                            value, reason),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        };
+        EvalMaskReport report;
+        bool mask = false;
+        std::string_view rest = value;
+        while (true) {
+            const auto comma = rest.find(',');
+            auto entry = rest.substr(0, comma);
+            while (!entry.empty() && std::isspace(static_cast<unsigned char>(entry.front())))
+                entry.remove_prefix(1);
+            while (!entry.empty() && std::isspace(static_cast<unsigned char>(entry.back())))
+                entry.remove_suffix(1);
+            bool* const selected = entry == "mask"       ? &mask
+                                   : entry == "unmasked" ? &report.unmasked
+                                   : entry == "inverted" ? &report.inverted
+                                                         : nullptr;
+            if (!selected)
+                return invalid(entry.empty() ? std::string("empty entry") : std::format("unknown set '{}'", entry));
+            if (*selected)
+                return invalid(std::format("'{}' is listed twice", entry));
+            *selected = true;
+            if (comma == std::string_view::npos)
+                break;
+            rest.remove_prefix(comma + 1);
+        }
+        if (!mask)
+            return invalid("mask is missing");
+        return report;
+    }
+
     const std::unordered_map<std::string, lfs::core::param::EvalSpace> EVAL_SPACES{
         {"distorted", lfs::core::param::EvalSpace::Distorted},
         {"undistorted", lfs::core::param::EvalSpace::Undistorted}};
@@ -904,6 +954,7 @@ namespace {
             ::args::ValueFlag<std::string> eval_mask(output_group, "source", lfs::core::args::optimization_cli_help("--eval-mask"), {"eval-mask"});
             ::args::Flag eval_mask_invert(output_group, "eval_mask_invert", lfs::core::args::optimization_cli_help("--eval-mask-invert"), {"eval-mask-invert"});
             ::args::ValueFlag<float> eval_mask_opacity(output_group, "opacity", lfs::core::args::optimization_cli_help("--eval-mask-opacity"), {"eval-mask-opacity"});
+            ::args::ValueFlag<std::string> eval_mask_report(output_group, "sets", std::string(EVAL_MASK_REPORT_HELP), {"eval-mask-report"});
             ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
             ::args::ValueFlagList<std::string> eval_steps(output_group, "eval_steps", "Evaluation iterations as a comma list, e.g. 1000,7000,30000 (replaces the default 7000,30000; the final iteration is always evaluated)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
@@ -1474,6 +1525,14 @@ namespace {
                 eval_mask_val = std::move(*parsed);
             }
 
+            std::optional<EvalMaskReport> eval_mask_report_val;
+            if (cli_option_present({"--eval-mask-report"})) {
+                auto parsed = parse_eval_mask_report(::args::get(eval_mask_report));
+                if (!parsed)
+                    return std::unexpected(std::string(parsed.error().user_message()));
+                eval_mask_report_val = *parsed;
+            }
+
             std::optional<lfs::core::param::NormalLossSpace> parsed_normal_loss_space;
             if (cli_option_present({"--normal-loss-space"})) {
                 const auto value = ::args::get(normal_loss_space);
@@ -1560,6 +1619,7 @@ namespace {
                                         eval_space_val = cli_option_present({"--eval-space"}) ? std::optional<lfs::core::param::EvalSpace>(::args::get(eval_space)) : std::optional<lfs::core::param::EvalSpace>(),
                                         eval_bit_depth_val = cli_option_present({"--eval-bit-depth"}) ? std::optional<lfs::core::param::EvalBitDepth>(::args::get(eval_bit_depth)) : std::optional<lfs::core::param::EvalBitDepth>(),
                                         eval_mask_val = std::move(eval_mask_val),
+                                        eval_mask_report_val,
                                         eval_mask_invert_flag = bool(eval_mask_invert),
                                         no_download_flag = bool(no_download),
                                         headless_flag = bool(headless),
@@ -1738,6 +1798,10 @@ namespace {
                 setFlag(eval_mask_invert_flag, opt.eval_mask_invert);
                 if (eval_mask_val && eval_mask_val->empty())
                     opt.eval_mask_invert = false;
+                if (eval_mask_report_val) {
+                    opt.eval_mask_report_unmasked = eval_mask_report_val->unmasked;
+                    opt.eval_mask_report_inverted = eval_mask_report_val->inverted;
+                }
                 setFlag(no_download_flag, params.no_download);
                 setFlag(headless_flag, opt.headless);
                 setFlag(auto_train_flag, opt.auto_train);
@@ -1862,6 +1926,8 @@ namespace {
                 note_opt("eval_mask", eval_mask_val.has_value());
                 note_opt("eval_mask_opacity", eval_mask_opacity_val.has_value());
                 note_opt("eval_mask_invert", eval_mask_invert_flag || (eval_mask_val && eval_mask_val->empty()));
+                note_opt("eval_mask_report_unmasked", eval_mask_report_val.has_value());
+                note_opt("eval_mask_report_inverted", eval_mask_report_val.has_value());
                 note_opt("headless", headless_flag);
                 note_opt("auto_train", auto_train_flag);
                 note_opt("no_splash", no_splash_flag);
@@ -2073,6 +2139,8 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     if (flag_given("--eval-flip") && !params->optimization.enable_eval && !params->resume_project &&
         !params->resume_checkpoint)
         return std::unexpected("--eval-flip needs --eval or --eval-all; without them no evaluation runs");
+    if (flag_given("--eval-mask-report") && !params->optimization.enable_eval && !resuming)
+        return std::unexpected("--eval-mask-report needs --eval or --eval-all; without them no evaluation runs");
     if (flag_given("--eval-mask-invert") && !flag_given("--eval-mask"))
         return std::unexpected("--eval-mask-invert needs --eval-mask");
     if (params->optimization.eval_all && flag_given("--test-every"))
@@ -2484,6 +2552,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         ::args::ValueFlag<std::string> eval_mask(parser, "masks:<folder>|mesh:<file>|bbox:x0,y0,z0,x1,y1,z1|points:<file>|splat:<file>", "Score only the selected pixels; all but masks: need cameras", {"eval-mask"});
         ::args::Flag eval_mask_invert(parser, "eval_mask_invert", lfs::core::args::optimization_cli_help("--eval-mask-invert"), {"eval-mask-invert"});
         ::args::ValueFlag<float> eval_mask_opacity(parser, "opacity", lfs::core::args::optimization_cli_help("--eval-mask-opacity"), {"eval-mask-opacity"});
+        ::args::ValueFlag<std::string> eval_mask_report(parser, "sets", std::string(EVAL_MASK_REPORT_HELP), {"eval-mask-report"});
         ::args::Flag undistort(parser, "undistort", "Test images without cameras of their own were rendered with the undistorted reference cameras", {"undistort"});
         ::args::MapFlag<std::string, param::EvalSpace> eval_space(parser, "eval_space", "Compare in the reference lens (distorted, default) or on its undistorted pinhole grid (undistorted)", {"eval-space"}, EVAL_SPACES);
         ::args::MapFlag<std::string, param::EvalBitDepth> eval_bit_depth(parser, "eval_bit_depth", lfs::core::args::optimization_cli_help("--eval-bit-depth"), {"eval-bit-depth"}, EVAL_BIT_DEPTHS);
@@ -2544,6 +2613,13 @@ dataset options work as in training; see the Evaluation page of the docs.
         evaluation.eval_mask_invert = eval_mask_invert;
         if (eval_mask_opacity)
             evaluation.eval_mask_opacity = ::args::get(eval_mask_opacity);
+        if (eval_mask_report) {
+            const auto report = parse_eval_mask_report(::args::get(eval_mask_report));
+            if (!report)
+                return report.error();
+            evaluation.eval_mask_report_unmasked = report->unmasked;
+            evaluation.eval_mask_report_inverted = report->inverted;
+        }
         evaluation.undistort = undistort;
         if (eval_space)
             evaluation.eval_space = ::args::get(eval_space);

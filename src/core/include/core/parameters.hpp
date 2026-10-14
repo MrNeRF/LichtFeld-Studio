@@ -264,6 +264,8 @@ namespace lfs::core {
             EvalBitDepth eval_bit_depth = EvalBitDepth::Auto;  // Grid the render is quantized to for evaluation
             std::string eval_mask = "";                        // Mesh path, bbox:..., cropbox, masks:<folder>, depth:near,far, points:radius,close or points:<file>; empty disables
             bool eval_mask_invert = false;                     // Score the pixels outside the evaluation mask instead
+            bool eval_mask_report_unmasked = false;            // With a mask, also score every valid pixel
+            bool eval_mask_report_inverted = false;            // With a mask, also score the valid pixels outside it
             float eval_mask_opacity = 0.85f;                   // Rendered opacity a pixel needs to count as covered by a splat mask
             bool enable_save_eval_images = true;               // Save during evaluation images
             bool headless = false;                             // Disable visualization during training

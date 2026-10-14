@@ -503,6 +503,18 @@
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
           </div>
+          <div class="setting-row" data-for="row : pv_dataset_eval_mask_report_unmasked_rows" data-if="dep_eval_mask"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+          <div class="setting-row" data-for="row : pv_dataset_eval_mask_report_inverted_rows" data-if="dep_eval_mask"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_mask_opacity_rows" data-if="dep_eval_mask_splat"
                data-attr-data-tooltip="row.tooltip_key">
             <span class="prop-label">{{row.label}}</span>

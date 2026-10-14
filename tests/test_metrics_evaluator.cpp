@@ -580,6 +580,97 @@ TEST(MetricsEvaluator, MaskedEvaluationSavesGridNamedAfterTheCamera) {
     std::filesystem::remove_all(tmp);
 }
 
+// Catches extra pixel sets that score anything but the evaluations they stand for: an unmasked set that keeps the mask
+// or drops the valid view, an inverted set that is not the complement inside the valid view, or an SSIM map shared
+// across sets that belongs to another set. Scored once with every set, a box mask must give the same scores as
+// separate evaluations with the mask, without it and with it inverted, on a pinhole and on a distorted camera.
+TEST(MetricsEvaluator, MaskReportSetsMatchSeparateEvaluations) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_mask_report";
+    std::filesystem::remove_all(tmp);
+    const auto image_path = std::filesystem::path(TEST_DATA_DIR) / "bicycle" / "images_8" / "_DSC8679.JPG";
+    const auto [width, height, channels] = lfs::core::get_image_info(image_path);
+    ASSERT_GT(width, 0);
+    const auto lpips_weights = [] {
+        if (const char* env = std::getenv("LFS_LPIPS_WEIGHTS"); env && env[0])
+            return std::filesystem::path(env);
+        if (const char* home = std::getenv("HOME"); home && home[0])
+            return std::filesystem::path(home) / ".lichtfeld/onnx/lpips-vgg16-v0.1.lfw";
+        return std::filesystem::path{};
+    }();
+    auto splat = make_front_facing_splat();
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    const auto box = lfs::training::axis_aligned_box_corners({-1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f});
+
+    for (const bool distorted : {false, true}) {
+        SCOPED_TRACE(distorted ? "distorted" : "pinhole");
+        auto camera = distorted ? make_distorted_eval_camera(image_path, {}, width, height)
+                                : make_eval_camera(image_path, {}, width, height);
+        auto dataset = std::make_shared<CameraDataset>(std::vector<std::shared_ptr<Camera>>{camera}, DatasetConfig{},
+                                                       CameraDataset::Split::ALL);
+        const auto evaluate = [&](const std::optional<bool> invert, const bool report) {
+            auto params = make_eval_params(tmp / "out");
+            params.optimization.undistort = distorted;
+            params.optimization.eval_flip = true;
+            params.optimization.eval_mask_report_unmasked = report;
+            params.optimization.eval_mask_report_inverted = report;
+            MetricsEvaluator evaluator(params);
+            if (std::filesystem::is_regular_file(lpips_weights))
+                evaluator.set_lpips_weights_path(lpips_weights);
+            if (invert)
+                evaluator.set_eval_mesh(lfs::training::make_evaluation_box(box, *invert));
+            auto metrics = evaluator.evaluate(1, splat, dataset, background);
+            EXPECT_TRUE(metrics.valid);
+            EXPECT_EQ(metrics.views.size(), 1u);
+            return metrics;
+        };
+        const auto reported = evaluate(false, true);
+        const auto masked = evaluate(false, false);
+        const auto plain = evaluate(std::nullopt, false);
+        const auto inverted = evaluate(true, false);
+        ASSERT_TRUE(reported.valid && masked.valid && plain.valid && inverted.valid);
+
+        const auto& view = reported.views[0];
+        ASSERT_TRUE(view.unmasked && view.inverted);
+        EXPECT_FALSE(masked.views[0].unmasked || masked.views[0].inverted || masked.unmasked || masked.inverted);
+        const auto expect_same = [](const char* name, const auto& set, const lfs::training::ViewMetrics& separate) {
+            SCOPED_TRACE(name);
+            EXPECT_TRUE(set.skipped_reason.empty()) << set.skipped_reason;
+            EXPECT_EQ(set.psnr, separate.psnr);
+            EXPECT_EQ(set.ssim, separate.ssim);
+            // LPIPS convolutions are not bitwise reproducible between runs, even for the same inputs.
+            ASSERT_EQ(set.lpips.has_value(), separate.lpips.has_value());
+            if (set.lpips)
+                EXPECT_NEAR(*set.lpips, *separate.lpips, 1.0e-5f);
+            EXPECT_EQ(set.flip, separate.flip);
+            EXPECT_EQ(set.evaluated_pixel_fraction, separate.evaluated_pixel_fraction);
+        };
+        expect_same("mask", view, masked.views[0]);
+        expect_same("unmasked", *view.unmasked, plain.views[0]);
+        expect_same("inverted", *view.inverted, inverted.views[0]);
+        ASSERT_TRUE(view.flip);
+
+        EXPECT_GT(view.evaluated_pixel_fraction, 0.0f);
+        EXPECT_GT(view.inverted->evaluated_pixel_fraction, 0.0f);
+        EXPECT_NEAR(view.evaluated_pixel_fraction + view.inverted->evaluated_pixel_fraction,
+                    view.unmasked->evaluated_pixel_fraction, 1.0e-6f);
+        EXPECT_EQ(view.unmasked->evaluated_pixel_fraction < 1.0f, distorted);
+
+        ASSERT_TRUE(reported.unmasked && reported.inverted);
+        EXPECT_EQ(reported.unmasked->psnr, plain.psnr);
+        EXPECT_EQ(reported.unmasked->ssim, plain.ssim);
+        EXPECT_EQ(reported.inverted->psnr, inverted.psnr);
+        EXPECT_EQ(reported.inverted->ssim, inverted.ssim);
+        EXPECT_EQ(reported.psnr, masked.psnr);
+        EXPECT_EQ(reported.mask_set_summaries().size(), 2u);
+    }
+    std::filesystem::remove_all(tmp);
+}
+
 // The warped render is zero outside the undistorted frame; a bias averaged over the whole
 // image would be pulled toward -GT by those pixels instead of reporting the 2/255 offset.
 TEST(MetricsEvaluatorUndistort, BiasCountsOnlyEvaluatedPixels) {
@@ -1852,6 +1943,26 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
     EXPECT_TRUE(record.at("evaluations")[1].at("psnr").is_null());
     EXPECT_FLOAT_EQ(record.at("evaluations")[1].at("evaluated_pixel_fraction"), 0.0f);
     EXPECT_FALSE(record.at("evaluations")[1].at("validity_mask_applied"));
+}
+
+// Catches extra pixel sets written flat into the evaluation, where they would overwrite the mask's scores.
+TEST(ViewEvaluationJson, MaskSetsAreNestedUnderTheirNames) {
+    lfs::training::ViewMetrics view{.image_name = "frame.png", .psnr = 24.0f, .ssim = 0.8f, .flip = 0.1f};
+    view.unmasked = lfs::training::MaskSetMetrics{.psnr = 21.0f, .ssim = 0.7f, .flip = 0.2f, .evaluated_pixel_fraction = 1.0f};
+    view.inverted = lfs::training::MaskSetMetrics{.evaluated_pixel_fraction = 0.0f,
+                                                  .skipped_reason = "no pixel in this set"};
+    const auto document = lfs::training::add_view_evaluation({}, view, 7000, "test");
+    const auto& evaluation = document.at("frame.png").at("evaluations")[0];
+    EXPECT_FLOAT_EQ(evaluation.at("psnr"), 24.0f);
+    const auto& unmasked = evaluation.at("unmasked");
+    EXPECT_FLOAT_EQ(unmasked.at("psnr"), 21.0f);
+    EXPECT_FLOAT_EQ(unmasked.at("flip"), 0.2f);
+    EXPECT_TRUE(unmasked.at("lpips").is_null());
+    EXPECT_FLOAT_EQ(unmasked.at("evaluated_pixel_fraction"), 1.0f);
+    EXPECT_FALSE(unmasked.contains("skipped_reason"));
+    const auto& inverted = evaluation.at("inverted");
+    EXPECT_TRUE(inverted.at("psnr").is_null());
+    EXPECT_EQ(inverted.at("skipped_reason"), "no pixel in this set");
 }
 
 // Catches a depth mask that compares accumulated instead of expected depth, keeps faint pixels,
