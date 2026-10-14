@@ -18,6 +18,11 @@ namespace {
     class TestPanel final : public lfs::vis::gui::IPanel {
     public:
         void draw(const lfs::vis::gui::PanelDrawContext&) override {}
+        void resetDesktopRestoreState() override {
+            ++resets;
+            (void)lfs::vis::gui::PanelRegistry::instance().get_panel("test.reset.closed");
+        }
+        int resets = 0;
 
         lfs::vis::gui::PanelRenderCapabilities renderCapabilities() const override {
             return {.direct = true};
@@ -131,4 +136,19 @@ TEST_F(PanelRegistryDefaultClosedTest, KeyLabelsFollowTheLanguage) {
     PanelRegistry::instance().refresh_localized_labels();
     EXPECT_EQ(label("test.keyed"), translated);
     EXPECT_TRUE(locale.setLanguage("en"));
+}
+
+TEST_F(PanelRegistryDefaultClosedTest, ResetClearsDesktopRestoreStateForClosedPanels) {
+    auto panel = std::make_shared<TestPanel>();
+    lfs::vis::gui::PanelInfo info;
+    info.id = "test.reset.closed";
+    info.label = "Closed external panel";
+    info.space = lfs::vis::gui::PanelSpace::Floating;
+    info.enabled = false;
+    info.panel = panel;
+    auto& registry = lfs::vis::gui::PanelRegistry::instance();
+    registry.register_panel(std::move(info));
+    registry.resetDesktopRestoreState();
+    EXPECT_EQ(panel->resets, 1);
+    EXPECT_FALSE(registry.get_panel("test.reset.closed")->enabled);
 }

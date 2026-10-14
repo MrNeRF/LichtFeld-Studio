@@ -91,6 +91,10 @@ namespace lfs::gui {
         bool detachToDesktop(float x, float y, float w, float h) override;
         bool restoreDesktopWindow() override;
         void releaseDesktopWindow() override;
+        void resetDesktopRestoreState() override {
+            desktop_reopen_bounds_.reset();
+            desktop_restore_checked_ = false;
+        }
         bool detachHost(float x, float y, float w, float h, bool desktop_coordinates);
         [[nodiscard]] bool wantsKeyboard() const override;
         [[nodiscard]] bool needsAnimationFrame() const override;

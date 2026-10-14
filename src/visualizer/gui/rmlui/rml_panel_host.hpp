@@ -52,7 +52,7 @@ namespace lfs::vis::gui {
         bool ensureContext();
         SDL_Window* nativeWindow() const;
         RmlUIManager* manager() const { return manager_; }
-        bool externalAllowed() const { return floating_ && manager_->externalWindowsAllowed(); }
+        bool externalAllowed() const { return floating_ && manager_->externalWindowsAllowed(context_name_); }
         bool restoredExternalBounds(float* bounds) const { return externalAllowed() && manager_->restoredExternalBounds(context_name_, bounds); }
         bool configureExternal(float x, float y, float w, float h, bool desktop_coordinates);
         VulkanContext* nativeGraphics() const { return manager_->nativeGraphics(rml_context_); }

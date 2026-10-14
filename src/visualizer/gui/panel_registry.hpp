@@ -168,6 +168,7 @@ namespace lfs::vis::gui {
         virtual bool detachToDesktop(float, float, float, float) { return false; }
         virtual bool restoreDesktopWindow() { return false; }
         virtual void releaseDesktopWindow() {}
+        virtual void resetDesktopRestoreState() {}
         // Called on the GUI thread only after a native viewport drop hit test.
         virtual bool onViewportDrop(const std::string& type, const std::string& data) {
             (void)type;
@@ -411,6 +412,7 @@ namespace lfs::vis::gui {
         // placement and registration are unchanged.
         void clear_project_state_retention();
         void reset_project_state();
+        void resetDesktopRestoreState();
         [[nodiscard]] std::unordered_map<std::string, std::string>
         capture_panel_payloads() const;
         // Replaces the pending payload map. Registered panels receive their

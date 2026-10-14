@@ -459,3 +459,16 @@ def test_repeated_close_reopen_keeps_rendering_valid(native_client):
         assert_rendered_capture(native_client, "lfs.preferences")
         native_client.call("ui_panel_update", panel_id="lfs.preferences", enabled=False)
         native_client.until(lambda: not native_client.user32.IsWindow(window["hwnd"]))
+
+
+@pytest.mark.parametrize("panel_id", ["lfs.preferences", "lfs.plugin_marketplace", "native.video_extractor"])
+def test_reset_discards_closed_external_panel_reopen_position(native_client, panel_id):
+    native = native_client.open(panel_id)
+    native_client.call("ui_panel_update", panel_id=panel_id, enabled=False)
+    native_client.until(lambda: not native_client.user32.IsWindow(native["hwnd"]))
+    result = native_client.python("import lichtfeld as lf,json\nerror=lf.ui.reset_window_state()\nprint('NATIVE_WINDOWS_TEST:'+json.dumps({'error':error}))")
+    assert not result["error"]
+    native_client.call("ui_panel_update", panel_id=panel_id, enabled=True)
+    native_client.until(lambda: native_client.call("ui_panel_describe", panel_id=panel_id)["panel"].get("floating_bounds"))
+    time.sleep(.2)
+    assert not any(window["title"] == native["title"] for window in native_client.windows())

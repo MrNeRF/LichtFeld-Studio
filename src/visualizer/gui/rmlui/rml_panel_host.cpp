@@ -488,7 +488,7 @@ namespace lfs::vis::gui {
             SDL_GetWindowSizeInPixels(native, &pw, &ph);
             w = static_cast<float>(pw);
             h = static_cast<float>(ph);
-            const float preference = UserPreferences::instance().uiScale();
+            const float preference = SDL_GetFloatProperty(SDL_GetWindowProperties(native), "lfs.ui_scale", 0.0f);
             const float ratio = preference > 0 ? preference : std::max(1.0f, SDL_GetWindowDisplayScale(native));
             if (rml_context_->GetDensityIndependentPixelRatio() != ratio) {
                 rml_context_->SetDensityIndependentPixelRatio(ratio);

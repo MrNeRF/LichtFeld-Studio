@@ -23,6 +23,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -111,6 +112,12 @@ namespace lfs::vis::gui {
         float getDpRatio() const { return dp_ratio_; }
         void setDpRatio(float ratio);
         bool externalWindowsAllowed() const { return native_windows_enabled_; }
+        static bool validatedExternalPanel(std::string_view name) {
+            return name == "lfs.preferences" || name == "lfs.plugin_marketplace" || name == "video_extractor";
+        }
+        bool externalWindowsAllowed(std::string_view name) const {
+            return native_windows_enabled_ && validatedExternalPanel(name);
+        }
         SDL_Window* mainWindow() const { return window_; }
         bool restoredExternalBounds(const std::string& name, float* bounds);
 

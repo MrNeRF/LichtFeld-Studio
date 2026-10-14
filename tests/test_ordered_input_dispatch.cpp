@@ -636,6 +636,10 @@ namespace lfs::vis {
                 return nullptr;
             };
         }
+        void setKeyboardContext(Rml::Context* context, bool external_enabled) {
+            manager().keyboard_context_ = context;
+            manager().native_windows_enabled_ = external_enabled;
+        }
         void mapContextWindow(Rml::Context* context, SDL_Window* window) {
             manager().context_windows_[context] = window;
         }
@@ -1244,15 +1248,46 @@ namespace lfs::vis {
         gui::rml_input::TextInputEscapeRevertController revert_;
     };
 
+    TEST_F(WindowInputDispatchTest, MainWindowFocusLossPreservesFocusedFieldWithExternalWindowsOnOrOff) {
+        for (const bool enabled : {false, true}) {
+            SCOPED_TRACE(enabled);
+            ASSERT_TRUE(field_->Focus());
+            field_->SetValue("half-typed");
+            setKeyboardContext(context_, enabled);
+            SDL_Event event{};
+            event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+            event.window.windowID = SDL_GetWindowID(window_->getWindow());
+            manager().dispatchInputEvent(event);
+            EXPECT_EQ(context_->GetFocusElement(), field_);
+            EXPECT_EQ(field_->GetValue(), "half-typed");
+        }
+    }
+
+    TEST_F(WindowInputDispatchTest, UnvalidatedPanelsCannotCreateExternalHosts) {
+        int attempts = 0;
+        failExternalGraphics(attempts);
+        for (const auto* name : {"lfs.asset_manager", "lfs.histogram", "plugin.custom", "modal"}) {
+            auto* context = manager().createContext(name, 400, 300, true);
+            ASSERT_NE(context, nullptr);
+            EXPECT_FALSE(hasDesktopHost(context));
+            EXPECT_TRUE(manager().externalWindowsAllowed());
+            manager().destroyContext(name);
+        }
+        EXPECT_EQ(attempts, 0);
+        EXPECT_TRUE(gui::RmlUIManager::validatedExternalPanel("lfs.preferences"));
+        EXPECT_TRUE(gui::RmlUIManager::validatedExternalPanel("lfs.plugin_marketplace"));
+        EXPECT_TRUE(gui::RmlUIManager::validatedExternalPanel("video_extractor"));
+    }
+
     TEST_F(WindowInputDispatchTest, FailedExternalHostDisablesFurtherAttemptsForTheSession) {
         int attempts = 0;
         failExternalGraphics(attempts);
-        auto* first = manager().createContext("failed-external-first", 400, 300, true);
+        auto* first = manager().createContext("video_extractor", 400, 300, true);
         ASSERT_NE(first, nullptr);
         EXPECT_FALSE(hasDesktopHost(first));
         EXPECT_FALSE(manager().externalWindowsAllowed());
         for (int frame = 0; frame < 10; ++frame) {
-            const auto name = "failed-external-retry-" + std::to_string(frame);
+            const std::string name = "lfs.preferences";
             auto* fallback = manager().createContext(name, 400, 300, true);
             ASSERT_NE(fallback, nullptr);
             EXPECT_FALSE(hasDesktopHost(fallback));
@@ -1260,7 +1295,7 @@ namespace lfs::vis {
             manager().destroyContext(name);
         }
         EXPECT_EQ(attempts, 1);
-        manager().destroyContext("failed-external-first");
+        manager().destroyContext("video_extractor");
     }
 
     TEST_F(WindowInputDispatchTest, SecondaryWindowMouseDoesNotReachMainWindowContext) {
