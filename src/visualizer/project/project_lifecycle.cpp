@@ -8910,9 +8910,16 @@ namespace lfs::vis::project {
         // preset. Preserve the live panel arrangement and desktop geometry.
         viewer_.resetProjectState(/*reset_panel_registry=*/false);
         if (auto* rendering = viewer_.getRenderingManager()) {
-            auto settings = rendering->getSettings();
-            if (applyRenderingDefaults(settings, UserPreferences::instance().renderingDefaults()))
-                rendering->updateSettings(settings);
+            const auto live = rendering->getSettings();
+            // Per-project fields are those VIEW.render_settings replaces on open.
+            // A default document resets them; fields the chapter does not store stay.
+            auto settings = live;
+            if (auto reset = renderSettingsFromProjectJson(
+                    renderSettingsToProjectJson(RenderSettings{}), live)) {
+                settings = std::move(*reset);
+            }
+            (void)applyRenderingDefaults(settings, UserPreferences::instance().renderingDefaults());
+            rendering->updateSettings(settings);
         }
         if (auto* input = viewer_.getInputController())
             input->applyNewProjectNavigationDefaults();
