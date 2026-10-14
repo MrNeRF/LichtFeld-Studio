@@ -127,13 +127,6 @@ body.floating-panel {
     margin-left: auto;
 }
 
-/* A select's popup is inside its stacking context. Raise the focused control
-   above following flex rows, including their slider value text. */
-.preferences-row.dropdown-focused {
-    position: relative;
-    z-index: 10001;
-}
-
 .preferences-theme-variant-row {
     align-items: center;
 }

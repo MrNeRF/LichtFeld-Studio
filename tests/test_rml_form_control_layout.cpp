@@ -109,7 +109,7 @@ namespace {
                          "<option>Fly</option><option>Drone</option></select></div>"
                          "<div class='setting-row setting-row--aligned'><span class='setting-row__label-col'>Zoom speed</span>"
                          "<div class='setting-row__control-col setting-row__control-col--slider'>"
-                         "<input type='range' class='setting-slider'/><span id='number' class='slider-value'>11</span></div></div>");
+                         "<div class='scrub-field'><div class='scrub-field-fill'></div><span id='number' class='scrub-field-display'>11</span></div></div></div>");
         ASSERT_NE(doc, nullptr);
         std::string css = "body { font-family: Inter; width: 600dp; }";
         for (const char* name : {"components.rcss", "preferences.rcss"}) {
@@ -133,7 +133,6 @@ namespace {
                 popup = select->GetChild(i);
         ASSERT_NE(popup, nullptr);
         ASSERT_TRUE(popup->IsPseudoClassSet("checked"));
-        ASSERT_TRUE(select->GetParentNode()->IsClassSet("dropdown-focused"));
         const auto number = doc->GetElementById("number")->GetAbsoluteOffset();
         auto* top = context->GetElementAtPoint({number.x + 5 * GetParam(), number.y + 5 * GetParam()});
         ASSERT_NE(top, nullptr);
