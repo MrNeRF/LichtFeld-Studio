@@ -226,14 +226,15 @@ namespace lfs::vis::gui {
         if (rml_manager_)
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
+        if (vram_hud_)
+            vram_hud_->onDocumentDestroyed();
+
         if (document_) {
             resetToolbarDragListeners();
             rml_context_->UnloadDocument(document_);
             rml_context_->Update();
         }
 
-        if (vram_hud_)
-            vram_hud_->onDocumentDestroyed();
         document_ = nullptr;
         body_el_ = nullptr;
         base_rcss_.clear();
