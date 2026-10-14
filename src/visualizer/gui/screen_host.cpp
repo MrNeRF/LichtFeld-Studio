@@ -17,6 +17,7 @@
 #include "screen/view3d_space.hpp"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <SDL3/SDL_scancode.h>
 #include <algorithm>
 #include <cassert>
@@ -72,28 +73,10 @@ namespace lfs::vis::gui {
     ScreenHost::ScreenHost() = default;
     ScreenHost::~ScreenHost() = default;
 
-    void ScreenHost::init(Services services) {
-        services_ = std::move(services);
-        assert(services_.screens && services_.rml);
-
-        view3d_ = std::make_unique<View3DEditor>(
-            [this](const screen::AreaId id, const std::string_view action) {
-                if (services_.view_command)
-                    services_.view_command(id, action);
-                chrome_dirty_ = true;
-            });
-        assert(services_.scene_manager);
-        node_editor_ = std::make_unique<NodeEditor>(*services_.rml, *services_.scene_manager,
-                                                    services_.context_menu);
-        installPanelEditorTypes(services_.screens->editorTypes());
-
-        chrome_context_ = services_.rml->createContext("screen_chrome", 800, 600);
-        overlay_context_ = services_.rml->createContext("screen_overlay", 800, 600);
-        if (!chrome_context_ || !overlay_context_) {
-            LOG_ERROR("ScreenHost: failed to create RmlUi contexts");
+    void ScreenHost::bindChromeModel(Rml::Context* const context) {
+        chrome_context_ = context;
+        if (!chrome_context_)
             return;
-        }
-
         auto ctor = chrome_context_->CreateDataModel("screen_chrome");
         assert(ctor);
         if (auto h = ctor.RegisterStruct<ChromeItem>()) {
@@ -101,6 +84,7 @@ namespace lfs::vis::gui {
             h.RegisterMember("label", &ChromeItem::label);
             h.RegisterMember("icon", &ChromeItem::icon);
             h.RegisterMember("tooltip", &ChromeItem::tooltip);
+            h.RegisterMember("dom_id", &ChromeItem::dom_id);
             h.RegisterMember("kind", &ChromeItem::kind);
             h.RegisterMember("active", &ChromeItem::active);
             h.RegisterMember("closeable", &ChromeItem::closeable);
@@ -118,10 +102,16 @@ namespace lfs::vis::gui {
             h.RegisterMember("items", &ChromeArea::items);
             h.RegisterMember("right_items", &ChromeArea::right_items);
             h.RegisterMember("is_view", &ChromeArea::is_view);
+            h.RegisterMember("is_properties", &ChromeArea::is_properties);
             h.RegisterMember("hovered", &ChromeArea::hovered);
             h.RegisterMember("active", &ChromeArea::active);
             h.RegisterMember("maximized", &ChromeArea::maximized);
+            h.RegisterMember("show_tab_picker", &ChromeArea::show_tab_picker);
             h.RegisterMember("view_label", &ChromeArea::view_label);
+            h.RegisterMember("active_tab", &ChromeArea::active_tab);
+            h.RegisterMember("items_dom_id", &ChromeArea::items_dom_id);
+            h.RegisterMember("picker_dom_id", &ChromeArea::picker_dom_id);
+            h.RegisterMember("tabs", &ChromeArea::tabs);
         }
         ctor.RegisterArray<std::vector<ChromeArea>>();
         ctor.Bind("areas", &chrome_areas_);
@@ -152,7 +142,53 @@ namespace lfs::vis::gui {
                 queue(event, args[0].Get<int>(), "close:" + id);
             }
         });
+        ctor.BindEventCallback("pick_tab", [this](Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&) {
+            if (syncing_tab_picker_)
+                return;
+            const auto id = event.GetParameter<Rml::String>("value", "");
+            if (id.empty())
+                return;
+            Rml::ElementFormControlSelect* select = nullptr;
+            for (auto* element = event.GetCurrentElement(); element; element = element->GetParentNode()) {
+                if (element->GetTagName() != "select")
+                    continue;
+                select = dynamic_cast<Rml::ElementFormControlSelect*>(element);
+                break;
+            }
+            if (!select || !select->IsSelectBoxVisible())
+                return;
+            properties_tab_selected_ = id;
+            properties_.setActiveTab(std::string(id));
+            if (on_tab_picked_)
+                on_tab_picked_(std::string(id));
+            chrome_dirty_ = true;
+        });
         chrome_model_ = ctor.GetModelHandle();
+    }
+
+    void ScreenHost::init(Services services) {
+        services_ = std::move(services);
+        assert(services_.screens && services_.rml);
+
+        view3d_ = std::make_unique<View3DEditor>(
+            [this](const screen::AreaId id, const std::string_view action) {
+                if (services_.view_command)
+                    services_.view_command(id, action);
+                chrome_dirty_ = true;
+            });
+        assert(services_.scene_manager);
+        node_editor_ = std::make_unique<NodeEditor>(*services_.rml, *services_.scene_manager,
+                                                    services_.context_menu);
+        installPanelEditorTypes(services_.screens->editorTypes());
+
+        chrome_context_ = services_.rml->createContext("screen_chrome", 800, 600);
+        overlay_context_ = services_.rml->createContext("screen_overlay", 800, 600);
+        if (!chrome_context_ || !overlay_context_) {
+            LOG_ERROR("ScreenHost: failed to create RmlUi contexts");
+            return;
+        }
+
+        bindChromeModel(chrome_context_);
         reloadResources();
     }
 
@@ -335,7 +371,7 @@ namespace lfs::vis::gui {
     }
 
     bool ScreenHost::blocksPointer(const float x, const float y) const {
-        return gestures_.active() || pointerOverHeader(x, y) ||
+        return gestures_.active() || pointerOverHeader(x, y) || tabPickerPopupContains(x, y) ||
                screen_host_detail::cornerGestureZone(geometry_, geometry_.maximized.valid(),
                                                      gestures_.metrics().corner_size, x, y);
     }
@@ -554,9 +590,11 @@ namespace lfs::vis::gui {
         const bool over_corner = screen_host_detail::cornerGestureZone(
             geometry_, geometry_.maximized.valid(), gestures_.metrics().corner_size, x, y);
         const bool over_header = pointer_free && !gestures_.active() && !over_corner && pointerOverHeader(x, y);
+        const bool over_popup = pointer_free && !gestures_.active() && tabPickerPopupContains(x, y);
+        const bool over_chrome = over_header || over_popup;
         if (chrome_context_) {
             const int mods = sdlModsToRml(input.key_ctrl, input.key_shift, input.key_alt, input.key_super);
-            if (over_header) {
+            if (over_chrome) {
                 if (moved || !chrome_pointer_inside_) {
                     chrome_context_->ProcessMouseMove(static_cast<int>(x - work_.x), static_cast<int>(y - work_.y),
                                                       mods);
@@ -571,8 +609,13 @@ namespace lfs::vis::gui {
                     chrome_context_->ProcessMouseButtonUp(0, mods);
                     chrome_dirty_ = true;
                 }
+                if (input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f) {
+                    chrome_context_->ProcessMouseWheel(
+                        Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
+                    chrome_dirty_ = true;
+                }
                 guiFocusState().want_capture_mouse = true;
-                if (input.mouse_clicked[1]) {
+                if (over_header && input.mouse_clicked[1]) {
                     if (const auto id = areaAt(x, y); id.valid())
                         openAreaMenu(id, x, y);
                 }
@@ -581,9 +624,16 @@ namespace lfs::vis::gui {
                 chrome_pointer_inside_ = false;
                 chrome_dirty_ = true;
             }
+            if (rml_input::wantsKeyboardCapture(chrome_context_->GetFocusElement(), chrome_context_)) {
+                auto* const handler = services_.rml ? services_.rml->getTextInputHandler() : nullptr;
+                for (const auto& event : input.input_events) {
+                    if (rml_input::processKeyboardEvent(*chrome_context_, event, handler))
+                        chrome_dirty_ = true;
+                }
+            }
         }
 
-        if (chrome_context_ && over_header) {
+        if (chrome_context_ && over_chrome) {
             auto* hover = chrome_context_->GetHoverElement();
             chrome_tooltip_.setHover(hover ? resolveRmlTooltip(hover) : std::string{}, hover);
         } else {
@@ -601,7 +651,9 @@ namespace lfs::vis::gui {
             const bool press_over_divider = !geometry_.maximized.valid() &&
                                             geometry_.dividerAt(press->x, press->y,
                                                                 gestures_.metrics().divider_slop) != nullptr;
-            const bool press_over_header = !press_over_corner && pointerOverHeader(press->x, press->y);
+            const bool press_over_header = !press_over_corner &&
+                                           (pointerOverHeader(press->x, press->y) ||
+                                            tabPickerPopupContains(press->x, press->y));
             const bool screen_gesture_press = press_over_corner || press_over_divider;
             if ((pointer_free || screen_gesture_press) &&
                 (screen_gesture_press || (!press->gui_owned && !press_over_header))) {
@@ -703,11 +755,19 @@ namespace lfs::vis::gui {
             const int w = static_cast<int>(work_.w);
             const int h = static_cast<int>(work_.h);
             const bool dims_changed = chrome_cache_.width != w || chrome_cache_.height != h;
-            const bool refresh = chrome_dirty_ || dims_changed || chrome_cache_.texture == 0 ||
-                                 chrome_tooltip_.revealDue();
+            bool refresh = chrome_dirty_ || dims_changed || chrome_cache_.texture == 0 ||
+                           chrome_tooltip_.revealDue();
             if (refresh) {
                 chrome_context_->SetDimensions(Rml::Vector2i(w, h));
-                chrome_context_->Update();
+                reconcileTabPickerSelection();
+                if (updateTabPickerOverflow()) {
+                    chrome_model_.DirtyVariable("areas");
+                    reconcileTabPickerSelection();
+                    if (updateTabPickerOverflow()) {
+                        chrome_model_.DirtyVariable("areas");
+                        reconcileTabPickerSelection();
+                    }
+                }
                 chrome_dirty_ = false;
             }
             if (chrome_tooltip_.apply(chrome_document_->GetElementById("screen-chrome"),
@@ -715,10 +775,18 @@ namespace lfs::vis::gui {
                                       static_cast<int>(input.mouse_y - work_.y), w, h)) {
                 chrome_context_->Update();
                 chrome_dirty_ = false;
+                refresh = true;
+            }
+            tab_picker_popup_.reset();
+            std::optional<RmlRect> popup_overlay;
+            if (const auto local = tabPickerPopupLocal()) {
+                tab_picker_popup_ = screen::Rect{work_.x + local->x, work_.y + local->y, local->w, local->h};
+                popup_overlay = RmlRect{local->x, local->y, local->x + local->w, local->y + local->h};
             }
             services_.rml->setContextNeedsPassiveMouseMoveFrames(chrome_context_, chrome_tooltip_.hasActiveState());
             services_.rml->setContextTooltipRevealDeadline(chrome_context_, chrome_tooltip_.revealDeadline());
-            services_.rml->trackContextFrame(chrome_context_, static_cast<int>(work_.x), static_cast<int>(work_.y));
+            services_.rml->trackContextFrame(chrome_context_, static_cast<int>(work_.x), static_cast<int>(work_.y),
+                                             popup_overlay);
             services_.rml->queueCachedContext({
                 .context = chrome_context_,
                 .cache = &chrome_cache_,
@@ -733,6 +801,27 @@ namespace lfs::vis::gui {
                 .clip_enabled = true,
                 .clip = {.x1 = work_.x, .y1 = work_.y, .x2 = work_.x + w, .y2 = work_.y + h},
             });
+            // The area body is opaque, so a full foreground chrome blit would
+            // cover panel content. Blit only the open picker from the same cache.
+            if (tab_picker_popup_) {
+                services_.rml->queueCachedContext({
+                    .context = chrome_context_,
+                    .cache = &chrome_cache_,
+                    .cache_width = w,
+                    .cache_height = h,
+                    .offset_x = work_.x,
+                    .offset_y = work_.y,
+                    .draw_width = static_cast<float>(w),
+                    .draw_height = static_cast<float>(h),
+                    .refresh = false,
+                    .foreground = true,
+                    .clip_enabled = true,
+                    .clip = {.x1 = tab_picker_popup_->x,
+                             .y1 = tab_picker_popup_->y,
+                             .x2 = tab_picker_popup_->right(),
+                             .y2 = tab_picker_popup_->bottom()},
+                });
+            }
         }
 
         const auto frames = frames_;
@@ -752,8 +841,10 @@ namespace lfs::vis::gui {
             const bool live = force_live || layout_changed_ || pointer_here || live_capture_area_ == frame.id ||
                               keyboard_activity || space_demand || editor.needsAnimationFrame();
             // Panels see the pointer only over their own area (or while a
-            // press that started there is held).
-            const bool owns_pointer = pointer_here || live_capture_area_ == frame.id;
+            // press that started there is held). An open tab picker covers
+            // the content underneath it.
+            const bool over_picker = tabPickerPopupContains(input.mouse_x, input.mouse_y);
+            const bool owns_pointer = (pointer_here || live_capture_area_ == frame.id) && !over_picker;
             PanelInputState area_input = input;
             if (!owns_pointer || gestures_.active()) {
                 area_input.mouse_x = -1.0e9f;
@@ -774,6 +865,133 @@ namespace lfs::vis::gui {
         layout_changed_ = false;
     }
 
+    void ScreenHost::reconcileTabPickerSelection() {
+        if (!chrome_context_)
+            return;
+        syncing_tab_picker_ = true;
+        chrome_context_->Update();
+        bool corrected = false;
+        for (auto& area : chrome_areas_) {
+            if (!area.is_properties)
+                continue;
+            if (area.active_tab != properties_tab_selected_) {
+                area.active_tab = properties_tab_selected_;
+                corrected = true;
+            }
+            if (!chrome_document_ || area.picker_dom_id.empty())
+                continue;
+            auto* const picker = dynamic_cast<Rml::ElementFormControlSelect*>(
+                chrome_document_->GetElementById(area.picker_dom_id));
+            if (!picker)
+                continue;
+            const auto* const option = picker->GetOption(picker->GetSelection());
+            if (picker->GetValue() != properties_tab_selected_ || !option ||
+                option->GetAttribute<Rml::String>("value", "") != properties_tab_selected_) {
+                picker->SetValue(properties_tab_selected_);
+                corrected = true;
+            }
+        }
+        if (corrected) {
+            if (chrome_model_)
+                chrome_model_.DirtyVariable("areas");
+            chrome_context_->Update();
+        }
+        syncing_tab_picker_ = false;
+    }
+
+    bool ScreenHost::updateTabPickerOverflow() {
+        if (!chrome_document_)
+            return false;
+        bool changed = false;
+        for (auto& area : chrome_areas_) {
+            if (!area.is_properties) {
+                if (area.show_tab_picker) {
+                    area.show_tab_picker = false;
+                    changed = true;
+                }
+                continue;
+            }
+            auto* const items = chrome_document_->GetElementById(area.items_dom_id);
+            if (!items)
+                continue;
+            float content = 0.0f;
+            int visible = 0;
+            for (int i = 0; i < items->GetNumChildren(); ++i) {
+                auto* const child = items->GetChild(i);
+                if (!child || child->GetDisplay() == Rml::Style::Display::None)
+                    continue;
+                content += child->GetBox().GetSize(Rml::BoxArea::Border).x;
+                ++visible;
+            }
+            if (visible > 1)
+                content += 2.0f * ui_scale_ * static_cast<float>(visible - 1);
+            const float scroll = std::max(items->GetScrollWidth(), content);
+            const float client = items->GetClientWidth();
+            float picker_width = 0.0f;
+            if (area.show_tab_picker) {
+                if (auto* const picker = chrome_document_->GetElementById(area.picker_dom_id))
+                    picker_width = picker->GetBox().GetSize(Rml::BoxArea::Border).x;
+                if (picker_width <= 0.0f)
+                    picker_width = 28.0f * ui_scale_;
+            }
+            const bool overflow = scroll > client + picker_width + 0.5f;
+            if (area.show_tab_picker != overflow) {
+                area.show_tab_picker = overflow;
+                changed = true;
+            }
+            if (overflow)
+                revealActivePropertiesTab(items);
+        }
+        return changed;
+    }
+
+    void ScreenHost::revealActivePropertiesTab(Rml::Element* const items) const {
+        if (!items)
+            return;
+        for (int i = 0; i < items->GetNumChildren(); ++i) {
+            auto* const child = items->GetChild(i);
+            if (!child || !child->IsClassSet("active"))
+                continue;
+            const float view = items->GetClientWidth();
+            const float child_width = child->GetBox().GetSize(Rml::BoxArea::Border).x;
+            const float visual = child->GetAbsoluteOffset(Rml::BoxArea::Border).x -
+                                 items->GetAbsoluteOffset(Rml::BoxArea::Border).x;
+            const float scroll = items->GetScrollLeft();
+            if (visual < 0.0f)
+                items->SetScrollLeft(std::max(0.0f, scroll + visual));
+            else if (visual + child_width > view)
+                items->SetScrollLeft(scroll + visual + child_width - view);
+            return;
+        }
+    }
+
+    std::optional<screen::Rect> ScreenHost::tabPickerPopupLocal() const {
+        if (!chrome_document_)
+            return std::nullopt;
+        for (const auto& area : chrome_areas_) {
+            if (!area.is_properties || area.picker_dom_id.empty())
+                continue;
+            auto* const picker = dynamic_cast<Rml::ElementFormControlSelect*>(
+                chrome_document_->GetElementById(area.picker_dom_id));
+            if (!picker || !picker->IsSelectBoxVisible())
+                continue;
+            for (int i = 0; i < picker->GetNumChildren(true); ++i) {
+                auto* const child = picker->GetChild(i);
+                if (!child || child->GetTagName() != "selectbox")
+                    continue;
+                const auto position = child->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto size = child->GetBox().GetSize(Rml::BoxArea::Border);
+                if (size.x > 0.0f && size.y > 0.0f)
+                    return screen::Rect{position.x, position.y, size.x, size.y};
+            }
+        }
+        return std::nullopt;
+    }
+
+    bool ScreenHost::tabPickerPopupContains(const float x, const float y) const {
+        return tab_picker_popup_ && tab_picker_popup_->contains(x, y);
+    }
+
     void ScreenHost::rebuildChrome() {
         if (!chrome_model_)
             return;
@@ -791,6 +1009,13 @@ namespace lfs::vis::gui {
             a.height = px(frame.rect.h);
             a.header_height = px(frame.header.h);
             a.is_view = frame.editor == screen::editors::kView3D;
+            a.is_properties = frame.editor == screen::editors::kProperties;
+            a.items_dom_id = "prop-tabs-" + std::to_string(a.id);
+            a.picker_dom_id = "prop-picker-" + std::to_string(a.id);
+            if (const auto previous = std::find_if(chrome_areas_.begin(), chrome_areas_.end(),
+                                                   [&](const ChromeArea& old) { return old.id == a.id; });
+                previous != chrome_areas_.end())
+                a.show_tab_picker = previous->show_tab_picker && a.is_properties;
             a.hovered = hovered_area_ == frame.id;
             a.active = a.is_view && several_views && screen.activeView() == frame.id;
             a.maximized = screen.maximized() == frame.id;
@@ -835,8 +1060,19 @@ namespace lfs::vis::gui {
                 c.kind = static_cast<int>(item.kind);
                 c.active = item.active;
                 c.closeable = item.closeable;
+                if (a.is_properties && item.kind == HeaderItem::Kind::Tab) {
+                    ChromeItem tab;
+                    tab.id = item.id.starts_with("tab:") ? item.id.substr(4) : item.id;
+                    tab.label = item.label;
+                    tab.dom_id = "tab-" + tab.id;
+                    a.tabs.push_back(std::move(tab));
+                    if (item.active)
+                        a.active_tab = a.tabs.back().id;
+                }
                 (right ? a.right_items : a.items).push_back(std::move(c));
             }
+            if (a.is_properties)
+                properties_tab_selected_ = a.active_tab;
             a.right_items.push_back({.id = "area:maximize",
                                      .icon = iconPath(a.maximized ? "arrows-minimize" : "arrows-maximize"),
                                      .tooltip = std::format("{} (Ctrl Space)", a.maximized ? LOC("screen.restore_area")
@@ -845,6 +1081,8 @@ namespace lfs::vis::gui {
                                      .active = a.maximized});
             areas.push_back(std::move(a));
         }
+        if (std::none_of(areas.begin(), areas.end(), [](const ChromeArea& area) { return area.is_properties; }))
+            properties_tab_selected_.clear();
         if (areas != chrome_areas_) {
             chrome_areas_ = std::move(areas);
             chrome_model_.DirtyVariable("areas");

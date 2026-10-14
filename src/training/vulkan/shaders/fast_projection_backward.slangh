@@ -440,7 +440,7 @@ void projectionBackward(BackPush back, uint primitive_idx) {
                                                                          : 0;
             if (allowed)
                 dcGradient[c] += (2.0f * back.dcWeight / 3.0f) * delta;
-            dcLoss += (back.dcWeight / 3.0f) * delta * delta;
+            dcLoss += (back.dcWeight / (3.0f * float(p.count))) * delta * delta;
             if (back.shWeight > 0 && p.activeBases > 1) {
                 float coef = back.shWeight / (float(p.count) * float((p.activeBases - 1) * 3));
                 for (uint k = 0; k < p.activeBases - 1; ++k) {

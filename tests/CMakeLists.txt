@@ -329,6 +329,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_point_cloud_updates.cpp
 
         test_viewport_depth_layout.cpp
+        test_right_panel_tab_picker.cpp
         test_preferences_migration.cpp
         test_scene_upscaler_registry.cpp
         test_screen_layout.cpp
@@ -393,6 +394,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
+        lfs_io
         lfs_visualizer
         lfs_core
         lfs_python_runtime
@@ -1387,6 +1389,7 @@ set(TEST_FILES
     test_ui_visibility_transition.cpp
     test_menu_bar_title.cpp
     test_status_bar_mining.cpp
+    test_right_panel_tab_picker.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
     test_tensor_stream.cpp

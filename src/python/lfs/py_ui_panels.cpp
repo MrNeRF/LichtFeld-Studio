@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "preferences.hpp"
 #include "py_rml.hpp"
 #include "py_ui.hpp"
 #include "py_viewer_dispatch.hpp"
@@ -13,6 +14,7 @@
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui/rmlui/rml_theme.hpp"
+#include "visualizer/post_work_utils.hpp"
 
 #include <algorithm>
 #include <array>
@@ -634,6 +636,8 @@ namespace lfs::python {
                 });
             },
             nb::arg("panel_id"), nb::arg("enabled"), "Enable or disable a panel by id");
+
+        m.def("clear_startup_sidebar", [] { lfs::vis::UserPreferences::instance().clearSidebarDefaults(); }, "Clear startup sidebar defaults without changing the current project workspace.");
 
         m.def(
             "reset_layout", []() -> std::string {

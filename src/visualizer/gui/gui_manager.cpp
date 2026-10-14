@@ -137,6 +137,17 @@
 #endif
 
 namespace lfs::vis::gui {
+    RmlUIManager::InputDispatchResult GuiManager::dispatchInputEvent(const SDL_Event& event) {
+        if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST)
+            screen_host_.cancelInput();
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_ESCAPE && screen_host_.gestureActive()) {
+            screen_host_.cancelInput();
+            return {.consumed = true};
+        }
+        if (auto* window = rmlui_manager_.mainWindow())
+            rml_menu_bar_.onWindowPointerEvent(event, SDL_GetWindowID(window));
+        return rmlui_manager_.dispatchInputEvent(event);
+    }
 
     namespace {
         std::mutex g_preferences_section_mutex;

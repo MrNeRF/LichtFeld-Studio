@@ -233,6 +233,9 @@ body {
 }
 
 .menu-window-btn {
+    /* This bar is cached between input events: a transition cannot finish
+       painting after the pointer leaves. */
+    transition: none;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -246,7 +249,6 @@ body {
     box-sizing: border-box;
     flex-shrink: 0;
     cursor: pointer;
-    transition: background-color 0.12s quadratic-out;
 }
 
 .menu-window-btn img {
@@ -302,6 +304,9 @@ body {
 }
 
 .window-restore-back {
+    width: 11dp;
+    height: 11dp;
+    border-width: 1dp 1dp 0 0;
     left: 5dp;
     top: 3dp;
 }

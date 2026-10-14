@@ -145,6 +145,11 @@ id when available. Request parameters, tool names, payloads, free-form messages,
 and error details are deliberately not recorded. Because network addresses can
 identify devices and interfaces, request logging remains an explicit opt-in.
 
+When the properties editor's tabs overflow its header, inactive tabs keep
+their labels and a dropdown at the end of the strip lists every panel.
+Choosing one activates that panel. The open list supports arrow keys, and
+plugins do not change their registration.
+
 Application preferences are stored in `config/preferences.json`. User-global
 UI details that are not project layout, such as HUD state, are written to
 `config/ui_preferences.json`. Preferences, UI state, window state, lifecycle
@@ -256,6 +261,13 @@ strategy, max cap, init path, and the rest of the LoadFile fields) are kept.
 Adding a splat or mesh onto an existing SplatFiles scene does not start a new
 session. Machine paths (`scene.load_dataset`, `lf.load_dataset`, CLI `-d`)
 do not take this reset.
+
+`sidebar_defaults` in `preferences.json` is the settings object an older
+build used for a fixed right sidebar. Preferences > Interface still clears
+that object on reset, without null tombstones and without dropping unknown
+children. The editor-area layout does not read or save those three numbers,
+and Preferences does not show a control for them. The Project Manager retains
+its own independent preferences.
 
 `config/layout.json` is a legacy, import-only layout source. New project
 workspace state is not written there.

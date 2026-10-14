@@ -117,6 +117,7 @@ namespace lfs::vis::gui {
         static void enableLeafLabel(RmlMenuBar& bar, int root, int child, int grandchild, int leaf) {
             bar.dropdown_items_[root].children[child].children[grandchild].children[leaf].enabled = true;
         }
+        static void keepContextHeight(RmlMenuBar& bar) { bar.last_ctx_h_ = bar.rml_context_->GetDimensions().y; }
         static void windowFocusLost(RmlMenuBar& bar) { bar.onWindowFocusLost(); }
         static bool renderNeeded(const RmlMenuBar& bar) { return bar.render_needed_; }
         static void setRenderNeeded(RmlMenuBar& bar, bool needed) { bar.render_needed_ = needed; }
@@ -808,11 +809,10 @@ namespace {
             expectImmediateSelection(button);
     }
 
-    TEST_F(MenuBarToolbarTest, WindowControlsKeepTheirHoverTransition) {
+    TEST_F(MenuBarToolbarTest, WindowControlsUseImmediateHoverFeedback) {
         for (const auto* id : {"menu-window-minimize", "menu-window-maximize", "menu-window-close"}) {
             const auto transition = el(id)->GetProperty("transition")->ToString();
-            EXPECT_NE(transition.find("background-color"), std::string::npos);
-            EXPECT_NE(transition.find("0.12s"), std::string::npos);
+            EXPECT_EQ(transition, "none");
         }
     }
 
@@ -1125,6 +1125,32 @@ namespace {
         }
     }
 
+    TEST_F(MenuBarTitleTest, SettingHelpOnlyAppearsOverItsLabel) {
+        auto* row = document_->CreateElement("div").release();
+        row->SetClass("setting-row", true);
+        row->SetAttribute("title", "Setting help");
+        row->SetInnerRML("<span class=\"setting-row__label-col\"><span>Label</span></span>"
+                         "<div class=\"setting-row__control-col\"><input type=\"text\" /></div>");
+        document_->AppendChild(Rml::ElementPtr(row));
+        auto* label = row->GetChild(0);
+        auto* control = row->GetChild(1)->GetChild(0);
+        EXPECT_EQ(resolveRmlTooltip(label->GetChild(0)), "Setting help");
+        EXPECT_TRUE(resolveRmlTooltip(control).empty());
+        EXPECT_TRUE(resolveRmlTooltip(row).empty());
+        control->SetAttribute("title", "Control help");
+        EXPECT_EQ(resolveRmlTooltip(control), "Control help");
+        label->SetClass("setting-row__label-col", false);
+        label->SetClass("prop-label", true);
+        EXPECT_EQ(lfs::vis::gui::propertyTooltipTarget(row), label);
+        EXPECT_EQ(lfs::vis::gui::propertyTooltipTarget(control), control);
+        EXPECT_EQ(resolveRmlTooltip(label->GetChild(0)), "Setting help");
+        EXPECT_TRUE(resolveRmlTooltip(row).empty());
+        control->RemoveAttribute("title");
+        EXPECT_TRUE(resolveRmlTooltip(control).empty());
+        label->SetClass("prop-label", false);
+        EXPECT_EQ(lfs::vis::gui::propertyTooltipTarget(row), nullptr);
+    }
+
     TEST_F(MenuBarTitleTest, ShortcutTooltipTracksBindingAndUnbinding) {
         using namespace lfs::vis::input;
         EXPECT_EQ(toolModeFromName("global"), ToolMode::GLOBAL);
@@ -1200,6 +1226,91 @@ namespace {
         manager.setContextNeedsPassiveMouseMoveFrames(context_, false);
         EXPECT_FALSE(manager.passiveMouseMoveNeedsRender(800.0f, 200.0f));
         ASSERT_TRUE(Rml::RemoveContext("menu_bar_title_viewport"));
+    }
+
+    TEST_F(MenuBarTitleTest, PointerEventsAreScopedToTheMainWindowAndPressResumesInput) {
+        RmlMenuBarTestAccess::keepContextHeight(bar_);
+        auto* button = el("menu-items")->GetChild(0);
+        ASSERT_NE(button, nullptr);
+        auto rect = bounds(button);
+        lfs::vis::gui::PanelInputState input{};
+        input.screen_w = 1600;
+        input.screen_h = 300;
+        input.mouse_x = (rect.left + rect.right) / 2;
+        input.mouse_y = (rect.top + rect.bottom) / 2;
+        bar_.processInput(input);
+        context_->Update();
+        ASSERT_TRUE(button->IsPseudoClassSet("hover"));
+        SDL_Event event{};
+        event.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
+        event.window.windowID = 2;
+        bar_.onWindowPointerEvent(event, 1);
+        bar_.processInput(input);
+        context_->Update();
+        EXPECT_TRUE(button->IsPseudoClassSet("hover"));
+        RmlMenuBarTestAccess::windowFocusLost(bar_);
+        event.type = SDL_EVENT_MOUSE_MOTION;
+        event.motion.windowID = 2;
+        bar_.onWindowPointerEvent(event, 1);
+        bar_.processInput(input);
+        context_->Update();
+        EXPECT_FALSE(button->IsPseudoClassSet("hover"));
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.windowID = 1;
+        bar_.onWindowPointerEvent(event, 1);
+        rect = bounds(button);
+        input.mouse_x = (rect.left + rect.right) / 2;
+        input.mouse_y = (rect.top + rect.bottom) / 2;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.down = true;
+        event.button.x = input.mouse_x;
+        event.button.y = input.mouse_y;
+        manager_.dispatchInputEvent(event);
+        context_->Update();
+        EXPECT_TRUE(bar_.isOpen());
+    }
+
+    TEST_F(MenuBarTitleTest, RestoreBackKeepsItsOriginalOuterExtent) {
+        auto* back = document_->QuerySelector(".window-restore-back");
+        ASSERT_NE(back, nullptr);
+        EXPECT_EQ(back->GetProperty("width")->ToString(), "11dp");
+        EXPECT_EQ(back->GetProperty("height")->ToString(), "11dp");
+    }
+
+    TEST_F(MenuBarTitleTest, LosingWindowFocusClearsPointerFeedback) {
+        RmlMenuBarTestAccess::keepContextHeight(bar_);
+        auto* button = el("menu-window-close");
+        ASSERT_NE(button, nullptr);
+        const auto rect = bounds(button);
+        context_->ProcessMouseMove(static_cast<int>((rect.left + rect.right) / 2),
+                                   static_cast<int>((rect.top + rect.bottom) / 2), 0);
+        context_->Update();
+        ASSERT_TRUE(button->IsPseudoClassSet("hover"));
+        RmlMenuBarTestAccess::setRenderNeeded(bar_, false);
+        RmlMenuBarTestAccess::windowFocusLost(bar_);
+        context_->Update();
+        EXPECT_FALSE(button->IsPseudoClassSet("hover"));
+        EXPECT_TRUE(RmlMenuBarTestAccess::renderNeeded(bar_));
+        EXPECT_FALSE(RmlMenuBarTestAccess::tooltip(bar_).needsFrame());
+        const lfs::vis::gui::PanelInputState input{.mouse_x = (rect.left + rect.right) / 2,
+                                                   .mouse_y = (rect.top + rect.bottom) / 2,
+                                                   .screen_w = 1600,
+                                                   .screen_h = 300};
+        bar_.processInput(input);
+        context_->Update();
+        EXPECT_FALSE(button->IsPseudoClassSet("hover"));
+        const auto resumed_rect = bounds(button);
+        auto moved_input = input;
+        moved_input.mouse_x = (resumed_rect.left + resumed_rect.right) / 2;
+        moved_input.mouse_y = (resumed_rect.top + resumed_rect.bottom) / 2;
+        bar_.onPointerMotion();
+        bar_.processInput(moved_input);
+        context_->Update();
+        EXPECT_TRUE(button->IsPseudoClassSet("hover"));
+        bar_.onPointerLeave();
+        bar_.processInput(input);
+        context_->Update();
+        EXPECT_FALSE(button->IsPseudoClassSet("hover"));
     }
 
     TEST_F(MenuBarTitleTest, TooltipPreservesFullPathAsTextIncludingMarkupCharacters) {

@@ -1113,7 +1113,10 @@
     "viewport_defaults_hint": "Deze waarden gelden voor nieuwe projecten. Bestaande projecten behouden hun opgeslagen waarden.",
     "viewport_style_defaults": "Hulplijnen en selectiestijl",
     "viewport_performance_defaults": "LOD-cachelimieten",
-    "viewport_defaults_invalid": "Voer een geldige waarde binnen het ondersteunde bereik in."
+    "viewport_defaults_invalid": "Voer een geldige waarde binnen het ondersteunde bereik in.",
+    "sidebar_defaults_description": "Sla de huidige breedte van de rechterzijbalk, de scèneverdeling en het actieve tabblad op voor het starten van de toepassing. Bestaande .licht-projecten herstellen hun eigen werkruimte. Een nieuw project behoudt de huidige werkruimte.",
+    "save_startup_sidebar": "Zijbalk opslaan voor opstarten",
+    "clear_startup_sidebar": "Opstartinstellingen van zijbalk wissen"
   },
   "main_panel": {
     "console": "Console",
@@ -2777,7 +2780,8 @@
     "input_trackpad_tooltip": "Trackpadnavigatie: vegen met twee vingers draait rond, Shift+vegen verschuift, knijpen of Ctrl+vegen zoomt. Klik om te wisselen",
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
-    "selection_depth_size": "Grootte"
+    "selection_depth_size": "Grootte",
+    "all_panel_tabs": "Alle panelen"
   },
   "runtime": {
     "environment_map_failed": "Omgevingskaart ‘{}’ kon niet worden gelezen. De vorige omgeving is behouden.",

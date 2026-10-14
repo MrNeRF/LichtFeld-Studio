@@ -101,6 +101,21 @@
     border-radius: @{num(size.frame_rounding)}dp;
 }
 
+.tab-picker {
+    background-color: @{blend(surface,background,0.35)};
+    border-radius: 4dp;
+}
+
+.tab-picker selectbox {
+    background-color: @{background};
+    border-width: 1dp;
+    border-color: @{border};
+}
+
+.tab-picker option {
+    color: @{text};
+}
+
 .tab-close {
     background-color: transparent;
     color: @{text_dim};

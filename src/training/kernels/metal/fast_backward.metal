@@ -757,7 +757,7 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
                 const float delta = dc[c] > limit ? dc[c] - limit : (dc[c] < -limit ? dc[c] + limit : 0.0f);
                 if (regularizer_allowed[c])
                     sh0_grads[c] += (2.0f * p.dc_weight / 3.0f) * delta;
-                loss += (p.dc_weight / 3.0f) * delta * delta;
+                loss += (p.dc_weight / (3.0f * float(p.n))) * delta * delta;
             }
             if (p.dc_loss != nullptr && loss != 0.0f)
                 atomic_fetch_add_explicit(p.dc_loss, loss, memory_order_relaxed);

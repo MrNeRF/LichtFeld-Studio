@@ -1113,7 +1113,10 @@
     "viewport_defaults_hint": "Diese Vorgaben gelten für neue Projekte. Bestehende Projekte behalten ihre gespeicherten Werte.",
     "viewport_style_defaults": "Hilfen und Auswahlstil",
     "viewport_performance_defaults": "LOD-Cache-Grenzen",
-    "viewport_defaults_invalid": "Geben Sie einen gültigen Wert im unterstützten Bereich ein."
+    "viewport_defaults_invalid": "Geben Sie einen gültigen Wert im unterstützten Bereich ein.",
+    "sidebar_defaults_description": "Die aktuelle Breite der rechten Seitenleiste, die Szenenaufteilung und den aktiven Tab für den Programmstart speichern. Bestehende .licht-Projekte stellen ihren eigenen Arbeitsbereich wieder her. Ein neues Projekt behält den aktuellen Arbeitsbereich bei.",
+    "save_startup_sidebar": "Seitenleiste für den Start speichern",
+    "clear_startup_sidebar": "Startlayout der Seitenleiste löschen"
   },
   "main_panel": {
     "console": "Konsole",
@@ -2777,7 +2780,8 @@
     "input_trackpad_tooltip": "Trackpad-Navigation: Wischen mit zwei Fingern dreht die Ansicht, Umschalt+Wischen verschiebt, Aufziehen/Zuziehen oder Strg+Wischen zoomt. Klicken zum Wechseln",
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
-    "selection_depth_size": "Größe"
+    "selection_depth_size": "Größe",
+    "all_panel_tabs": "Alle Panels"
   },
   "runtime": {
     "environment_map_failed": "Die Umgebungskarte „{}“ konnte nicht gelesen werden. Die bisherige Umgebung wurde beibehalten.",

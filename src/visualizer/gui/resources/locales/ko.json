@@ -1113,7 +1113,10 @@
     "viewport_defaults_hint": "새 프로젝트에 적용됩니다. 기존 프로젝트는 저장된 값을 유지합니다.",
     "viewport_style_defaults": "가이드 및 선택 스타일",
     "viewport_performance_defaults": "LOD 캐시 제한",
-    "viewport_defaults_invalid": "지원 범위 내의 올바른 값을 입력하세요."
+    "viewport_defaults_invalid": "지원 범위 내의 올바른 값을 입력하세요.",
+    "sidebar_defaults_description": "현재 오른쪽 사이드바 너비, 장면 분할 위치 및 활성 탭을 앱 시작 설정으로 저장합니다. 기존 .licht 프로젝트는 자체 작업 공간을 복원합니다. 새 프로젝트는 현재 작업 공간을 유지합니다.",
+    "save_startup_sidebar": "시작 시 사이드바 저장",
+    "clear_startup_sidebar": "시작 사이드바 설정 지우기"
   },
   "main_panel": {
     "console": "콘솔",
@@ -2777,7 +2780,8 @@
     "input_trackpad_tooltip": "트랙패드 탐색: 두 손가락 스와이프로 궤도 회전, Shift+스와이프로 이동, 핀치 또는 Ctrl+스와이프로 확대/축소. 클릭하여 전환",
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
-    "selection_depth_size": "크기"
+    "selection_depth_size": "크기",
+    "all_panel_tabs": "모든 패널"
   },
   "runtime": {
     "environment_map_failed": "환경 맵 \"{}\"을(를) 읽을 수 없습니다. 이전 환경이 유지되었습니다.",

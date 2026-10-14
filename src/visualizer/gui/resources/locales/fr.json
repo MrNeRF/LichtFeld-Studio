@@ -1113,7 +1113,10 @@
     "viewport_defaults_hint": "Ces valeurs initialisent les nouveaux projets. Les projets existants conservent leurs valeurs enregistrées.",
     "viewport_style_defaults": "Style des guides et de sélection",
     "viewport_performance_defaults": "Limites du cache LOD",
-    "viewport_defaults_invalid": "Saisissez une valeur valide dans la plage autorisée."
+    "viewport_defaults_invalid": "Saisissez une valeur valide dans la plage autorisée.",
+    "sidebar_defaults_description": "Enregistrer la largeur de la barre latérale droite, la répartition de la scène et l’onglet actif pour le démarrage de l’application. Les projets .licht existants restaurent leur propre espace de travail. Un nouveau projet conserve l’espace de travail actuel.",
+    "save_startup_sidebar": "Enregistrer la barre latérale au démarrage",
+    "clear_startup_sidebar": "Effacer la barre latérale de démarrage"
   },
   "main_panel": {
     "console": "Console",
@@ -2777,7 +2780,8 @@
     "input_trackpad_tooltip": "Navigation au trackpad : balayer à deux doigts pour orbiter, Maj+balayer pour déplacer, pincer ou Ctrl+balayer pour zoomer. Cliquer pour changer",
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
-    "selection_depth_size": "Taille"
+    "selection_depth_size": "Taille",
+    "all_panel_tabs": "Tous les panneaux"
   },
   "runtime": {
     "environment_map_failed": "Impossible de lire la carte d’environnement « {} ». L’environnement précédent a été conservé.",

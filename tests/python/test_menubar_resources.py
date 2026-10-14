@@ -100,9 +100,9 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     assert "#dropdown-container" in rcss
     assert "#dropdown-popup" in rcss
     assert ".submenu-popup" in rcss
-    assert "z-index: 1;" in rcss
-    assert "z-index: 2;" in rcss
-    assert "z-index: 3;" in rcss
+    assert "z-index: 1;" in _rule_body(rcss, "#dropdown-overlay")
+    assert "z-index: 2;" in _rule_body(rcss, "#dropdown-container")
+    assert "z-index: 3;" in _rule_body(rcss, ".submenu-popup")
     assert "#dropdown-container {\n    display: none;\n    position: absolute;\n    top: 0;" in rcss
     assert "width: 100%;" in rcss and "height: 100%;" in rcss
     dropdown_rule = _rule_body(rcss, ".dropdown-popup")

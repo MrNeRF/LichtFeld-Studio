@@ -1113,7 +1113,10 @@
     "viewport_defaults_hint": "Estos valores se aplican a nuevos proyectos. Los existentes conservan sus valores guardados.",
     "viewport_style_defaults": "Estilo de guías y selección",
     "viewport_performance_defaults": "Límites de caché LOD",
-    "viewport_defaults_invalid": "Introduce un valor válido dentro del rango admitido."
+    "viewport_defaults_invalid": "Introduce un valor válido dentro del rango admitido.",
+    "sidebar_defaults_description": "Guarda el ancho de la barra lateral derecha, la división de la escena y la pestaña activa para iniciar la aplicación. Los proyectos .licht existentes restauran su propio espacio de trabajo. Un proyecto nuevo conserva el espacio de trabajo actual.",
+    "save_startup_sidebar": "Guardar barra lateral para el inicio",
+    "clear_startup_sidebar": "Borrar barra lateral de inicio"
   },
   "main_panel": {
     "console": "Consola",
@@ -2777,7 +2780,8 @@
     "input_trackpad_tooltip": "Navegación con trackpad: deslizar con dos dedos orbita, Mayús+deslizar desplaza, pellizcar o Ctrl+deslizar hace zoom. Haz clic para cambiar",
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
-    "selection_depth_size": "Tamaño"
+    "selection_depth_size": "Tamaño",
+    "all_panel_tabs": "Todos los paneles"
   },
   "runtime": {
     "environment_map_failed": "No se pudo leer el mapa de entorno «{}». Se ha conservado el entorno anterior.",

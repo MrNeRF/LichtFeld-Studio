@@ -122,6 +122,8 @@ namespace lfs::vis::gui {
         void schedulePersistSave();
         void persistNow();
         void applyPersistedGeometry();
+        void applyDisplayedGeometry();
+        [[nodiscard]] Rml::Vector2f displayExtent() const;
         [[nodiscard]] bool sanitizeGeometry();
         void onHeaderDrag(Rml::Event& event);
         void onResizeDrag(Rml::Event& event);
@@ -357,6 +359,8 @@ namespace lfs::vis::gui {
         bool header_drag_moved_ = false;
         bool dragging_resize_ = false;
         bool pointer_captured_ = false;
+        Rml::Vector2f displayed_extent_{};
+        bool geometry_dirty_ = false;
         bool persistence_dirty_ = false;
         int window_seconds_ = 300;
         std::uint16_t visible_categories_ = 0x3ff;

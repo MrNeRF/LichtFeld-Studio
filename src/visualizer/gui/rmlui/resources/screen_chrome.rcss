@@ -132,14 +132,17 @@ body {
     line-height: 20dp;
 }
 
-/* Inactive tabs give up width, ellipsizing their labels, before the header
-   scrolls; the active tab keeps its full label. */
-.hitem.tab:not(.active) {
+/* Inactive tabs outside the properties area give up width, ellipsizing their
+   labels, before the header scrolls; the active tab keeps its full label.
+   Properties tabs stay at their text width and overflow into the tab picker.
+   RmlUi min-width only accepts a length, so the shrink is omitted there
+   instead of being overridden with an unsupported keyword. */
+.area:not(.properties) .hitem.tab:not(.active) {
     flex: 0 1 auto;
     min-width: 0;
 }
 
-.hitem.tab:not(.active) .hitem-label {
+.area:not(.properties) .hitem.tab:not(.active) .hitem-label {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -154,6 +157,38 @@ body {
     pointer-events: none;
     z-index: 1;
     padding: 1dp 4dp;
+}
+
+/* Properties tabs keep their labels. A picker lists the ones that no longer
+   fit, instead of shrinking every inactive tab to an ellipsis. The dropdown
+   paints past the area so a short properties area does not clip it. */
+.area.properties {
+    overflow: visible;
+}
+
+.area.properties .header-items {
+    overflow-x: hidden;
+}
+
+.tab-picker {
+    display: block;
+    position: relative;
+    flex: 0 0 auto;
+    width: 28dp;
+    min-width: 28dp;
+    height: 28dp;
+    z-index: 3;
+}
+
+.tab-picker selectvalue { visibility: hidden; }
+.tab-picker selectarrow { width: 26dp; height: 26dp; }
+
+.tab-picker selectbox {
+    right: 0;
+    min-width: 200dp;
+    max-height: 400dp;
+    overflow-y: auto;
+    z-index: 4;
 }
 
 .tab-close {

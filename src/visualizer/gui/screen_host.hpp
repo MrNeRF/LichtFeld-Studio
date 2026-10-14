@@ -35,6 +35,7 @@ namespace lfs::vis {
 namespace lfs::vis::gui {
 
     class GlobalContextMenu;
+    class PropertiesTabPickerTestAccess;
 
     // Chrome data bound to the screen documents.
     struct ChromeItem {
@@ -42,6 +43,7 @@ namespace lfs::vis::gui {
         Rml::String label{};
         Rml::String icon{};
         Rml::String tooltip{};
+        Rml::String dom_id{};
         int kind = 0;
         bool active = false;
         bool closeable = false;
@@ -57,10 +59,16 @@ namespace lfs::vis::gui {
         std::vector<ChromeItem> items;
         std::vector<ChromeItem> right_items;
         bool is_view = false;
+        bool is_properties = false;
         bool hovered = false;
         bool active = false;
         bool maximized = false;
+        bool show_tab_picker = false;
         Rml::String view_label;
+        Rml::String active_tab;
+        Rml::String items_dom_id;
+        Rml::String picker_dom_id;
+        std::vector<ChromeItem> tabs;
 
         bool operator==(const ChromeArea&) const = default;
     };
@@ -151,8 +159,15 @@ namespace lfs::vis::gui {
 
     private:
         friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
+        friend class PropertiesTabPickerTestAccess;
 
         AreaEditor& editorFor(std::string_view editor);
+        void bindChromeModel(Rml::Context* context);
+        void reconcileTabPickerSelection();
+        bool updateTabPickerOverflow();
+        void revealActivePropertiesTab(Rml::Element* items) const;
+        [[nodiscard]] std::optional<screen::Rect> tabPickerPopupLocal() const;
+        [[nodiscard]] bool tabPickerPopupContains(float x, float y) const;
         void syncPanelEditors();
         void rebuildChrome();
         void updateOverlay();
@@ -200,6 +215,10 @@ namespace lfs::vis::gui {
         CachedUiContextRender chrome_cache_;
         bool chrome_dirty_ = true;
         bool chrome_pointer_inside_ = false;
+        bool syncing_tab_picker_ = false;
+        Rml::String properties_tab_selected_;
+        std::optional<screen::Rect> tab_picker_popup_;
+        std::function<void(const std::string&)> on_tab_picked_;
         struct PendingAction {
             int area = 0;
             std::string action;

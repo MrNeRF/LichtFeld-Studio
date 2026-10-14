@@ -1113,7 +1113,10 @@
     "viewport_defaults_hint": "这些默认值用于新项目。现有项目保留已保存的值。",
     "viewport_style_defaults": "辅助线与选择样式",
     "viewport_performance_defaults": "LOD缓存限制",
-    "viewport_defaults_invalid": "请输入支持范围内的有效值。"
+    "viewport_defaults_invalid": "请输入支持范围内的有效值。",
+    "sidebar_defaults_description": "保存当前右侧边栏宽度、场景分区和活动选项卡，供应用启动时使用。现有 .licht 项目会恢复各自的工作区。新建项目保留当前工作区。",
+    "save_startup_sidebar": "保存启动侧边栏布局",
+    "clear_startup_sidebar": "清除启动侧边栏布局"
   },
   "main_panel": {
     "console": "控制台",
@@ -2777,7 +2780,8 @@
     "input_trackpad_tooltip": "触控板导航：双指滑动环绕，Shift+滑动平移，双指捏合或 Ctrl+滑动缩放。点击切换",
     "selection_depth_offset_x": "X",
     "selection_depth_offset_y": "Y",
-    "selection_depth_size": "大小"
+    "selection_depth_size": "大小",
+    "all_panel_tabs": "所有面板"
   },
   "runtime": {
     "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",

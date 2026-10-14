@@ -4,7 +4,6 @@
 #include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
 #include "gui/layout_state.hpp"
-#include "project/project_lifecycle.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering_types.hpp"
 #include "visualizer/preferences.hpp"
@@ -81,6 +80,43 @@ namespace {
         return false;
     }
 } // namespace
+
+TEST(PreferencesMigration, ClearingAfterAnotherInstanceRemovesTheParentDoesNotWriteNulls) {
+    const auto home = makeHome("lfs_sidebar_missing_parent");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    preferences.setSidebarDefaults(510, 0.35f, "lfs.rendering");
+    writePreferences(*paths, {{"schema_version", 1}});
+    preferences.clearSidebarDefaults();
+    EXPECT_EQ(readPreferences(*paths)["sidebar_defaults"], json::object());
+    preferences.setSidebarDefaults(610, 0.45f, "lfs.training");
+    EXPECT_EQ(readPreferences(*paths)["sidebar_defaults"]["right_panel_width"], 610);
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(paths->backupDir()))
+        EXPECT_NE(entry.path().filename(), paths->preferencesFile().filename());
+}
+
+TEST(PreferencesMigration, SidebarSaveClearSaveDoesNotBackupHealthyPreferences) {
+    const auto home = makeHome("lfs_sidebar_clear_no_backup");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"schema_version", 1}, {"sidebar_defaults", {{"future_child", "keep"}}}});
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    preferences.setSidebarDefaults(510, 0.35f, "lfs.rendering");
+    const auto before = readPreferences(*paths).dump(2) + "\n";
+    preferences.clearSidebarDefaults();
+    EXPECT_EQ(preferences.sidebarDefaults(), "{}");
+    EXPECT_EQ(readPreferences(*paths)["sidebar_defaults"], json({{"future_child", "keep"}}));
+    preferences.setSidebarDefaults(610, 0.45f, "lfs.training");
+    EXPECT_EQ(readPreferences(*paths)["sidebar_defaults"]["future_child"], "keep");
+    EXPECT_FALSE(hasBackup(paths->backupDir(), paths->preferencesFile(), before));
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(paths->backupDir()))
+        EXPECT_NE(entry.path().filename(), paths->preferencesFile().filename());
+}
 
 TEST(PreferencesMigration, AssetDirectoryWinsOverWorkingDirectoryAndErasesLegacyKeys) {
     const auto home = makeHome("lfs_preferences_migration_asset_wins");

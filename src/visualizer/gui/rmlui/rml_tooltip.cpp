@@ -65,11 +65,31 @@ namespace lfs::vis::gui {
         return false;
     }
 
+    Rml::Element* propertyTooltipTarget(Rml::Element* item) {
+        if (!item || !item->IsClassSet("setting-row"))
+            return item;
+        for (int i = 0; i < item->GetNumChildren(); ++i) {
+            auto* child = item->GetChild(i);
+            if (child->IsClassSet("prop-label"))
+                return child;
+        }
+        return nullptr;
+    }
+
     std::string resolveRmlTooltip(Rml::Element* hover) {
         if (rmlHoverInsideOpenDropdown(hover))
             return {};
         auto& loc = lfs::event::LocalizationManager::getInstance();
+        bool over_label = false;
         for (auto* el = hover; el; el = el->GetParentNode()) {
+            over_label = over_label || el->IsClassSet("setting-row__label-col") ||
+                         el->IsClassSet("setting-label") || el->IsClassSet("prop-label");
+            // Row help describes its label. Skip the row's own tooltip while
+            // the pointer is on a control, but keep walking: the control can
+            // carry its own tooltip, and an ancestor title (a node field
+            // description) is not the row's help.
+            if (el->IsClassSet("setting-row") && !over_label)
+                continue;
             const auto title = el->GetAttribute<Rml::String>("title", "");
             if (auto key = trimmedTooltipKey(el->GetAttribute<Rml::String>("data-tooltip", ""));
                 !key.empty()) {
