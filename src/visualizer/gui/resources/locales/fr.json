@@ -2,16 +2,12 @@
   "history": {
     "batch_transform": "Transformation par lot",
     "details": "Détails de l’opération",
-    "show_more": "Afficher plus de détails",
     "no_details": "Aucun détail supplémentaire n’a été enregistré.",
     "before": "Avant",
     "after": "Après",
     "rotation_degrees": "Rotation (°)",
     "matrix": "Matrice de transformation",
     "more_targets": "{count} autres nœuds concernés",
-    "identifier": "Identifiant de l’opération",
-    "source": "Source",
-    "category": "Catégorie",
     "more_fields": "{count} détails supplémentaires",
     "operation": {
       "translate": "Déplacer",
@@ -87,31 +83,6 @@
       "crop_remove_duplicate": "Supprimer le volume de recadrage en double",
       "transform_bake": "Intégrer les transformations",
       "selection_reset": "Réinitialiser l’état de sélection"
-    },
-    "source_values": {
-      "core": "Opération intégrée",
-      "ui": "Interface utilisateur",
-      "python": "Python",
-      "property": "Modification de propriété",
-      "history": "Opération groupée",
-      "system": "Système",
-      "mcp": "MCP"
-    },
-    "scope_values": {
-      "general": "Général",
-      "transforms": "Transformations",
-      "selection": "Sélection",
-      "topology": "Édition des gaussiennes",
-      "scene_graph": "Graphe de scène",
-      "grouped": "Modifications groupées",
-      "property": "Propriétés",
-      "cropbox": "Boîte de recadrage",
-      "ellipsoid": "Ellipsoïde",
-      "custom": "Opération personnalisée",
-      "sequencer": "Séquenceur",
-      "tensor": "Données gaussiennes",
-      "sh": "Harmoniques sphériques",
-      "transform": "Transformation"
     },
     "field": {
       "operation_count": "Nombre d’opérations",

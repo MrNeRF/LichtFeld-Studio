@@ -240,10 +240,12 @@ def details_markup(description, limit=DETAIL_LIMIT):
         else:
             for row in range(4):
                 result += _detail_line("history.matrix", before[row::4], after[row::4])
-    if len(fields) > limit * 2:
-        result += f'<div class="text-muted">{escape(tr("history.more_fields").format(count=len(fields) - limit * 2))}</div>'
-    if len(transforms) > limit:
-        result += f'<div class="text-muted">{escape(tr("history.more_targets").format(count=len(transforms) - limit))}</div>'
+    field_count = description.get("field_count", len(fields))
+    transform_count = description.get("transform_count", len(transforms))
+    if field_count > limit * 2:
+        result += f'<div class="text-muted">{escape(tr("history.more_fields").format(count=field_count - limit * 2))}</div>'
+    if transform_count > limit:
+        result += f'<div class="text-muted">{escape(tr("history.more_targets").format(count=transform_count - limit))}</div>'
     return result
 
 
@@ -292,6 +294,7 @@ class HistoryPanel(Panel):
         self._generation = None
         self._names = {"undo": [], "redo": []}
         self._items = {"undo": [], "redo": []}
+        self._expanded.clear()
 
     def _disabled(self, name, disabled):
         element = self._doc.get_element_by_id("history-" + name)
@@ -375,6 +378,7 @@ class HistoryPanel(Panel):
             self._page = 0
             self._expanded.clear()
         elif action in ("older", "newer"):
+            self._expanded.clear()
             self._page = max(0, self._page + (1 if action == "older" else -1))
         elif action == "clear":
             if not lf.undo.has_active_transaction():
@@ -404,8 +408,17 @@ class HistoryPanel(Panel):
             if description is None:
                 self._refresh()
                 return
-            self._expanded[steps] = description
-            self._show_details(steps, description)
+            # Keep only the summary the panel can display, rather than retaining
+            # full descriptions for large compound edits or scenes.
+            fields = description.get("fields", [])
+            transforms = description.get("transforms", [])
+            summary = {
+                "source": description.get("source", ""),
+                "fields": fields[:DETAIL_LIMIT * 2], "field_count": len(fields),
+                "transforms": transforms[:DETAIL_LIMIT], "transform_count": len(transforms),
+            }
+            self._expanded[steps] = summary
+            self._show_details(steps, summary)
         lf.ui.request_redraw()
 
     def _row_target(self, event):

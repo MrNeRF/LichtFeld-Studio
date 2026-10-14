@@ -2,16 +2,12 @@
   "history": {
     "batch_transform": "Batch transform",
     "details": "Operation details",
-    "show_more": "Show more details",
     "no_details": "No additional details were recorded.",
     "before": "Before",
     "after": "After",
     "rotation_degrees": "Rotation (°)",
     "matrix": "Transform matrix",
     "more_targets": "{count} more affected nodes",
-    "identifier": "Operation identifier",
-    "source": "Source",
-    "category": "Category",
     "more_fields": "{count} more details",
     "operation": {
       "translate": "Move",
@@ -87,31 +83,6 @@
       "crop_remove_duplicate": "Remove duplicate crop volume",
       "transform_bake": "Bake transforms",
       "selection_reset": "Reset selection state"
-    },
-    "source_values": {
-      "core": "Built-in operation",
-      "ui": "User interface",
-      "python": "Python",
-      "property": "Property edit",
-      "history": "Grouped operation",
-      "system": "System",
-      "mcp": "MCP"
-    },
-    "scope_values": {
-      "general": "General",
-      "transforms": "Transforms",
-      "selection": "Selection",
-      "topology": "Gaussian editing",
-      "scene_graph": "Scene graph",
-      "grouped": "Grouped changes",
-      "property": "Properties",
-      "cropbox": "Crop box",
-      "ellipsoid": "Ellipsoid",
-      "custom": "Custom operation",
-      "sequencer": "Sequencer",
-      "tensor": "Gaussian data",
-      "sh": "Spherical harmonics",
-      "transform": "Transform"
     },
     "field": {
       "operation_count": "Operation count",

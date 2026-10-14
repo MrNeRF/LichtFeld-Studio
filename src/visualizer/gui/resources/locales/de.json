@@ -2,16 +2,12 @@
   "history": {
     "batch_transform": "Stapeltransformation",
     "details": "Details zur Operation",
-    "show_more": "Weitere Details anzeigen",
     "no_details": "Es wurden keine weiteren Details aufgezeichnet.",
     "before": "Vorher",
     "after": "Nachher",
     "rotation_degrees": "Rotation (°)",
     "matrix": "Transformationsmatrix",
     "more_targets": "{count} weitere betroffene Knoten",
-    "identifier": "Operationskennung",
-    "source": "Quelle",
-    "category": "Kategorie",
     "more_fields": "{count} weitere Details",
     "operation": {
       "translate": "Verschieben",
@@ -87,31 +83,6 @@
       "crop_remove_duplicate": "Doppeltes Zuschnittvolumen entfernen",
       "transform_bake": "Transformationen festschreiben",
       "selection_reset": "Auswahlzustand zurücksetzen"
-    },
-    "source_values": {
-      "core": "Integrierte Operation",
-      "ui": "Benutzeroberfläche",
-      "python": "Python",
-      "property": "Eigenschaftsänderung",
-      "history": "Gruppierte Operation",
-      "system": "System",
-      "mcp": "MCP"
-    },
-    "scope_values": {
-      "general": "Allgemein",
-      "transforms": "Transformationen",
-      "selection": "Auswahl",
-      "topology": "Gaussian-Bearbeitung",
-      "scene_graph": "Szenengraph",
-      "grouped": "Gruppierte Änderungen",
-      "property": "Eigenschaften",
-      "cropbox": "Zuschnittquader",
-      "ellipsoid": "Ellipsoid",
-      "custom": "Benutzerdefinierte Operation",
-      "sequencer": "Sequencer",
-      "tensor": "Gaussian-Daten",
-      "sh": "Kugelflächenfunktionen",
-      "transform": "Transformation"
     },
     "field": {
       "operation_count": "Anzahl der Operationen",

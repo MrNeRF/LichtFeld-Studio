@@ -4111,9 +4111,11 @@ namespace lfs::vis::op {
                 }
             }
         }
+        const bool has_affected_count = std::any_of(context_details_.begin(), context_details_.end(),
+                                                  [](const auto& field) { return field.property == "history.field.affected_gaussians"; });
+        if (has_affected_count)
+            return result;
         for (const auto& [uuid, storage] : deleted_mask_storage_) {
-            if (std::any_of(context_details_.begin(), context_details_.end(), [](const auto& field) { return field.property == "history.field.affected_gaussians"; }))
-                continue;
             const auto name = deleted_names_.find(uuid);
             const auto target = name == deleted_names_.end() ? uuid.to_string() : name->second;
             result.push_back(historyDetailField(target, storage.mode == TensorSwapStorageMode::SPARSE ? "history.field.affected_elements" : "history.field.stored_elements", {}, storage.mode == TensorSwapStorageMode::SPARSE ? storage.indices.numel() : storage.total_size));

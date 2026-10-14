@@ -2,16 +2,12 @@
   "history": {
     "batch_transform": "批量变换",
     "details": "操作详情",
-    "show_more": "显示更多详情",
     "no_details": "未记录更多详情。",
     "before": "之前",
     "after": "之后",
     "rotation_degrees": "旋转 (°)",
     "matrix": "变换矩阵",
     "more_targets": "还有 {count} 个受影响的节点",
-    "identifier": "操作标识符",
-    "source": "来源",
-    "category": "类别",
     "more_fields": "还有 {count} 项详情",
     "operation": {
       "translate": "移动",
@@ -87,31 +83,6 @@
       "crop_remove_duplicate": "移除重复裁剪体积",
       "transform_bake": "烘焙变换",
       "selection_reset": "重置选择状态"
-    },
-    "source_values": {
-      "core": "内置操作",
-      "ui": "用户界面",
-      "python": "Python",
-      "property": "属性编辑",
-      "history": "分组操作",
-      "system": "系统",
-      "mcp": "MCP"
-    },
-    "scope_values": {
-      "general": "常规",
-      "transforms": "变换",
-      "selection": "选择",
-      "topology": "高斯编辑",
-      "scene_graph": "场景图",
-      "grouped": "分组更改",
-      "property": "属性",
-      "cropbox": "裁剪框",
-      "ellipsoid": "椭球体",
-      "custom": "自定义操作",
-      "sequencer": "序列编辑器",
-      "tensor": "高斯数据",
-      "sh": "球谐函数",
-      "transform": "变换"
     },
     "field": {
       "operation_count": "操作数量",

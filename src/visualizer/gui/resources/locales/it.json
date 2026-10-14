@@ -2,16 +2,12 @@
   "history": {
     "batch_transform": "Trasformazione in gruppo",
     "details": "Dettagli dell’operazione",
-    "show_more": "Mostra altri dettagli",
     "no_details": "Non sono stati registrati ulteriori dettagli.",
     "before": "Prima",
     "after": "Dopo",
     "rotation_degrees": "Rotazione (°)",
     "matrix": "Matrice di trasformazione",
     "more_targets": "Altri {count} nodi interessati",
-    "identifier": "Identificatore operazione",
-    "source": "Origine",
-    "category": "Categoria",
     "more_fields": "Altri {count} dettagli",
     "operation": {
       "translate": "Sposta",
@@ -87,31 +83,6 @@
       "crop_remove_duplicate": "Rimuovi volume di ritaglio duplicato",
       "transform_bake": "Consolida trasformazioni",
       "selection_reset": "Reimposta stato di selezione"
-    },
-    "source_values": {
-      "core": "Operazione integrata",
-      "ui": "Interfaccia utente",
-      "python": "Python",
-      "property": "Modifica proprietà",
-      "history": "Operazione raggruppata",
-      "system": "Sistema",
-      "mcp": "MCP"
-    },
-    "scope_values": {
-      "general": "Generale",
-      "transforms": "Trasformazioni",
-      "selection": "Selezione",
-      "topology": "Modifica gaussiane",
-      "scene_graph": "Grafo della scena",
-      "grouped": "Modifiche raggruppate",
-      "property": "Proprietà",
-      "cropbox": "Riquadro di ritaglio",
-      "ellipsoid": "Ellissoide",
-      "custom": "Operazione personalizzata",
-      "sequencer": "Sequenziatore",
-      "tensor": "Dati gaussiani",
-      "sh": "Armoniche sferiche",
-      "transform": "Trasformazione"
     },
     "field": {
       "operation_count": "Numero di operazioni",

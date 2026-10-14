@@ -2,16 +2,12 @@
   "history": {
     "batch_transform": "一括変換",
     "details": "操作の詳細",
-    "show_more": "詳細をさらに表示",
     "no_details": "追加の詳細は記録されていません。",
     "before": "変更前",
     "after": "変更後",
     "rotation_degrees": "回転 (°)",
     "matrix": "変換行列",
     "more_targets": "他に {count} 個のノード",
-    "identifier": "操作識別子",
-    "source": "実行元",
-    "category": "カテゴリ",
     "more_fields": "他に {count} 件の詳細",
     "operation": {
       "translate": "移動",
@@ -87,31 +83,6 @@
       "crop_remove_duplicate": "重複したクロップ領域を削除",
       "transform_bake": "変換を焼き込み",
       "selection_reset": "選択状態をリセット"
-    },
-    "source_values": {
-      "core": "組み込み操作",
-      "ui": "ユーザーインターフェース",
-      "python": "Python",
-      "property": "プロパティ編集",
-      "history": "グループ化された操作",
-      "system": "システム",
-      "mcp": "MCP"
-    },
-    "scope_values": {
-      "general": "一般",
-      "transforms": "変換",
-      "selection": "選択",
-      "topology": "ガウシアン編集",
-      "scene_graph": "シーングラフ",
-      "grouped": "グループ化された変更",
-      "property": "プロパティ",
-      "cropbox": "クロップボックス",
-      "ellipsoid": "楕円体",
-      "custom": "カスタム操作",
-      "sequencer": "シーケンサー",
-      "tensor": "ガウシアンデータ",
-      "sh": "球面調和関数",
-      "transform": "変換"
     },
     "field": {
       "operation_count": "操作数",

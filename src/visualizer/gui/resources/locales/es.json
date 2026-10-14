@@ -2,16 +2,12 @@
   "history": {
     "batch_transform": "Transformación por lotes",
     "details": "Detalles de la operación",
-    "show_more": "Mostrar más detalles",
     "no_details": "No se registraron detalles adicionales.",
     "before": "Antes",
     "after": "Después",
     "rotation_degrees": "Rotación (°)",
     "matrix": "Matriz de transformación",
     "more_targets": "{count} nodos afectados más",
-    "identifier": "Identificador de operación",
-    "source": "Origen",
-    "category": "Categoría",
     "more_fields": "{count} detalles más",
     "operation": {
       "translate": "Mover",
@@ -87,31 +83,6 @@
       "crop_remove_duplicate": "Eliminar volumen de recorte duplicado",
       "transform_bake": "Consolidar transformaciones",
       "selection_reset": "Restablecer estado de selección"
-    },
-    "source_values": {
-      "core": "Operación integrada",
-      "ui": "Interfaz de usuario",
-      "python": "Python",
-      "property": "Edición de propiedad",
-      "history": "Operación agrupada",
-      "system": "Sistema",
-      "mcp": "MCP"
-    },
-    "scope_values": {
-      "general": "General",
-      "transforms": "Transformaciones",
-      "selection": "Selección",
-      "topology": "Edición de gaussianas",
-      "scene_graph": "Grafo de escena",
-      "grouped": "Cambios agrupados",
-      "property": "Propiedades",
-      "cropbox": "Caja de recorte",
-      "ellipsoid": "Elipsoide",
-      "custom": "Operación personalizada",
-      "sequencer": "Secuenciador",
-      "tensor": "Datos gaussianos",
-      "sh": "Armónicos esféricos",
-      "transform": "Transformación"
     },
     "field": {
       "operation_count": "Número de operaciones",

@@ -367,6 +367,26 @@ def test_large_edits_show_bounded_summary_and_rows_have_no_visible_numbers(histo
     assert "history-index" not in row and ">101<" not in row
 
 
+def test_detail_cache_retains_only_visible_summary_and_releases_on_navigation(history, monkeypatch):
+    mod, panel, doc, state = history
+    fields = [{"property": "history.field.property", "after": str(i)} for i in range(1000)]
+    transforms = [{"target": str(i), "before": [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],
+                   "after": [1,0,0,0,0,1,0,0,0,0,1,0,1,0,0,1]} for i in range(100)]
+    monkeypatch.setattr(mod.lf.undo, "details", lambda *args: {"fields": fields, "transforms": transforms})
+    mod.lf.decompose_transform = lambda matrix: {"translation": matrix[12:15], "rotation_euler_deg": [0,0,0], "scale": [1,1,1]}
+    panel._toggle_details(1, state.generation)
+    cached = panel._expanded[1]
+    assert len(cached["fields"]) == 6 and cached["field_count"] == 1000
+    assert len(cached["transforms"]) == 3 and cached["transform_count"] == 100
+    assert "history.more_fields" in doc.get_element_by_id("history-detail-1").markup
+    panel._action("older")
+    assert not panel._expanded
+    panel._toggle_details(26, state.generation)
+    panel.on_unmount(doc)
+    assert not panel._expanded and not panel._items["undo"]
+    assert not state.calls
+
+
 def test_large_unbroken_field_values_are_bounded_and_escaped(history):
     mod, _, _, _ = history
     markup = mod.details_markup({"label": "test", "fields": [

@@ -2,16 +2,12 @@
   "history": {
     "batch_transform": "일괄 변환",
     "details": "작업 세부 정보",
-    "show_more": "세부 정보 더 보기",
     "no_details": "추가 세부 정보가 기록되지 않았습니다.",
     "before": "이전",
     "after": "이후",
     "rotation_degrees": "회전 (°)",
     "matrix": "변환 행렬",
     "more_targets": "영향을 받은 노드 {count}개 더",
-    "identifier": "작업 식별자",
-    "source": "출처",
-    "category": "범주",
     "more_fields": "세부 정보 {count}개 더",
     "operation": {
       "translate": "이동",
@@ -87,31 +83,6 @@
       "crop_remove_duplicate": "중복 자르기 영역 제거",
       "transform_bake": "변환 굽기",
       "selection_reset": "선택 상태 초기화"
-    },
-    "source_values": {
-      "core": "내장 작업",
-      "ui": "사용자 인터페이스",
-      "python": "Python",
-      "property": "속성 편집",
-      "history": "그룹화된 작업",
-      "system": "시스템",
-      "mcp": "MCP"
-    },
-    "scope_values": {
-      "general": "일반",
-      "transforms": "변환",
-      "selection": "선택",
-      "topology": "가우시안 편집",
-      "scene_graph": "장면 그래프",
-      "grouped": "그룹화된 변경",
-      "property": "속성",
-      "cropbox": "자르기 상자",
-      "ellipsoid": "타원체",
-      "custom": "사용자 지정 작업",
-      "sequencer": "시퀀서",
-      "tensor": "가우시안 데이터",
-      "sh": "구면 조화 함수",
-      "transform": "변환"
     },
     "field": {
       "operation_count": "작업 수",

@@ -2,16 +2,12 @@
   "history": {
     "batch_transform": "Batchtransformatie",
     "details": "Bewerkingsdetails",
-    "show_more": "Meer details tonen",
     "no_details": "Er zijn geen aanvullende details vastgelegd.",
     "before": "Voor",
     "after": "Na",
     "rotation_degrees": "Rotatie (°)",
     "matrix": "Transformatiematrix",
     "more_targets": "Nog {count} betrokken knooppunten",
-    "identifier": "Bewerkingsidentificatie",
-    "source": "Bron",
-    "category": "Categorie",
     "more_fields": "Nog {count} details",
     "operation": {
       "translate": "Verplaatsen",
@@ -87,31 +83,6 @@
       "crop_remove_duplicate": "Dubbel uitsnijvolume verwijderen",
       "transform_bake": "Transformaties vastleggen",
       "selection_reset": "Selectiestatus herstellen"
-    },
-    "source_values": {
-      "core": "Ingebouwde bewerking",
-      "ui": "Gebruikersinterface",
-      "python": "Python",
-      "property": "Eigenschapsbewerking",
-      "history": "Gegroepeerde bewerking",
-      "system": "Systeem",
-      "mcp": "MCP"
-    },
-    "scope_values": {
-      "general": "Algemeen",
-      "transforms": "Transformaties",
-      "selection": "Selectie",
-      "topology": "Gaussiaanse bewerking",
-      "scene_graph": "Scènegraaf",
-      "grouped": "Gegroepeerde wijzigingen",
-      "property": "Eigenschappen",
-      "cropbox": "Uitsnijbox",
-      "ellipsoid": "Ellipsoïde",
-      "custom": "Aangepaste bewerking",
-      "sequencer": "Sequencer",
-      "tensor": "Gaussiaanse gegevens",
-      "sh": "Sferische harmonischen",
-      "transform": "Transformatie"
     },
     "field": {
       "operation_count": "Aantal bewerkingen",
