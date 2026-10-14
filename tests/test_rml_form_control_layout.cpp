@@ -105,7 +105,7 @@ namespace {
     }
     TEST_P(RmlFormControlLayoutTest, PreferencesPopupCoversValuesInFollowingRows) {
         auto* doc = load("<div class='preferences-row'><span class='preferences-label'>Navigation Mode</span>"
-                         "<select id='navigation' class='preferences-select'><option>Orbit</option><option>Free Orbit</option>"
+                         "<select id='navigation' class='preferences-select' style='margin-left:0'><option>Orbit</option><option>Free Orbit</option>"
                          "<option>Fly</option><option>Drone</option></select></div>"
                          "<div class='setting-row setting-row--aligned'><span class='setting-row__label-col'>Zoom speed</span>"
                          "<div class='setting-row__control-col setting-row__control-col--slider'>"
@@ -134,7 +134,14 @@ namespace {
         ASSERT_NE(popup, nullptr);
         ASSERT_TRUE(popup->IsPseudoClassSet("checked"));
         const auto number = doc->GetElementById("number")->GetAbsoluteOffset();
-        auto* top = context->GetElementAtPoint({number.x + 5 * GetParam(), number.y + 5 * GetParam()});
+        const auto popup_position = popup->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto popup_size = popup->GetBox().GetSize(Rml::BoxArea::Border);
+        const Rml::Vector2f probe{number.x + 5 * GetParam(), number.y + 5 * GetParam()};
+        ASSERT_GE(probe.x, popup_position.x);
+        ASSERT_GE(probe.y, popup_position.y);
+        ASSERT_LT(probe.x, popup_position.x + popup_size.x);
+        ASSERT_LT(probe.y, popup_position.y + popup_size.y);
+        auto* top = context->GetElementAtPoint(probe);
         ASSERT_NE(top, nullptr);
         SCOPED_TRACE(top->GetTagName() + " " + top->GetId());
         while (top && top != popup)
