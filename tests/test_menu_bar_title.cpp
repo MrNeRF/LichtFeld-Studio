@@ -1120,6 +1120,22 @@ namespace {
         }
     }
 
+    TEST_F(MenuBarTitleTest, SettingHelpOnlyAppearsOverItsLabel) {
+        auto* row = document_->CreateElement("div").release();
+        row->SetClass("setting-row", true);
+        row->SetAttribute("title", "Setting help");
+        row->SetInnerRML("<span class=\"setting-row__label-col\"><span>Label</span></span>"
+                         "<div class=\"setting-row__control-col\"><input type=\"text\" /></div>");
+        document_->AppendChild(Rml::ElementPtr(row));
+        auto* label = row->GetChild(0);
+        auto* control = row->GetChild(1)->GetChild(0);
+        EXPECT_EQ(resolveRmlTooltip(label->GetChild(0)), "Setting help");
+        EXPECT_TRUE(resolveRmlTooltip(control).empty());
+        EXPECT_TRUE(resolveRmlTooltip(row).empty());
+        control->SetAttribute("title", "Control help");
+        EXPECT_EQ(resolveRmlTooltip(control), "Control help");
+    }
+
     TEST_F(MenuBarTitleTest, ShortcutTooltipTracksBindingAndUnbinding) {
         using namespace lfs::vis::input;
         EXPECT_EQ(toolModeFromName("global"), ToolMode::GLOBAL);
