@@ -270,6 +270,15 @@ namespace lfs::vis::gui {
         int keyboard_focus_menu_index_ = -1;
         bool alt_pressed_ = false;
         bool alt_chord_ = false;
+        // Keys this bar already handled through SDL dispatch since the last frame pass.
+        struct DispatchKeyReceipt {
+            uint64_t timestamp = 0;
+            SDL_Scancode scancode = SDL_SCANCODE_UNKNOWN;
+            FrameInputEventKind kind = FrameInputEventKind::KeyDown;
+            bool repeat = false;
+            bool matched = false;
+        };
+        std::vector<DispatchKeyReceipt> dispatch_key_receipts_;
         std::size_t window_focus_lost_handler_id_ = 0;
         std::string open_menu_idname_;
         bool wants_input_ = false;

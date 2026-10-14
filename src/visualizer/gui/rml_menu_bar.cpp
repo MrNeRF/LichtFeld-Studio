@@ -36,7 +36,6 @@
 #include <cmath>
 #include <format>
 #include <glm/glm.hpp>
-#include <span>
 #include <string_view>
 
 namespace lfs::vis::gui {
@@ -809,11 +808,46 @@ namespace lfs::vis::gui {
                                          input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
         if (alt_pressed_ && mouse_button_active)
             alt_chord_ = true;
-        // While the menu owns the keyboard, SDL dispatch also delivers each key here,
-        // and the frame pass sees the same key again. Handle keys once, in the frame pass.
-        const std::span<const FrameInputEvent> key_events =
-            rml_manager_->isDispatchingInput() ? std::span<const FrameInputEvent>{} : std::span{input.input_events};
-        for (const auto& event : key_events) {
+        // SDL dispatch and the following frame pass both carry the same key. Handle it
+        // at dispatch so Escape takes effect before the next event, and skip that same
+        // key in the frame pass. A receipt is one delivered event: a key that never
+        // reached dispatch (the bar is closed and not the keyboard owner) is still
+        // handled here, including when the menu opens or closes mid-batch.
+        const bool dispatching = rml_manager_->isDispatchingInput();
+        struct ClearDispatchReceipts {
+            std::vector<DispatchKeyReceipt>& receipts;
+            bool armed = false;
+            ~ClearDispatchReceipts() {
+                if (armed && !receipts.empty())
+                    receipts.clear();
+            }
+        } clear_receipts{dispatch_key_receipts_, !dispatching};
+        const auto already_dispatched = [&](const FrameInputEvent& event) {
+            if (event.kind != FrameInputEventKind::KeyDown && event.kind != FrameInputEventKind::KeyUp)
+                return false;
+            for (auto& receipt : dispatch_key_receipts_) {
+                if (receipt.matched || receipt.timestamp != event.timestamp || receipt.kind != event.kind ||
+                    receipt.scancode != event.scancode || receipt.repeat != event.repeat)
+                    continue;
+                receipt.matched = true;
+                return true;
+            }
+            return false;
+        };
+        for (const auto& event : input.input_events) {
+            if (!dispatching && !dispatch_key_receipts_.empty() && already_dispatched(event))
+                continue;
+            if (dispatching && event.dispatch != nullptr &&
+                (event.kind == FrameInputEventKind::KeyDown || event.kind == FrameInputEventKind::KeyUp)) {
+                if (dispatch_key_receipts_.capacity() == 0)
+                    dispatch_key_receipts_.reserve(8);
+                dispatch_key_receipts_.push_back(DispatchKeyReceipt{
+                    .timestamp = event.timestamp,
+                    .scancode = event.scancode,
+                    .kind = event.kind,
+                    .repeat = event.repeat,
+                });
+            }
             const bool alt_key = event.scancode == SDL_SCANCODE_LALT || event.scancode == SDL_SCANCODE_RALT;
             bool window_has_keyboard_focus = true;
             const bool check_window_focus = alt_pressed_ || keyboard_focus_menu_index_ >= 0 || alt_key;
