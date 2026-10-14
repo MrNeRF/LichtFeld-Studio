@@ -10,15 +10,16 @@
 #include <type_traits>
 
 namespace lfs::vis::input::detail {
-    inline thread_local const Profile* default_profile_override = nullptr;
+    // Keep one override per thread across the application/DLL boundary.
+    LFS_VIS_API const Profile*& defaultProfileOverride();
 
     class ScopedDefaultProfileOverride {
     public:
         explicit ScopedDefaultProfileOverride(const Profile& profile)
-            : previous_(default_profile_override) {
-            default_profile_override = &profile;
+            : previous_(defaultProfileOverride()) {
+            defaultProfileOverride() = &profile;
         }
-        ~ScopedDefaultProfileOverride() { default_profile_override = previous_; }
+        ~ScopedDefaultProfileOverride() { defaultProfileOverride() = previous_; }
         ScopedDefaultProfileOverride(const ScopedDefaultProfileOverride&) = delete;
         ScopedDefaultProfileOverride& operator=(const ScopedDefaultProfileOverride&) = delete;
 
@@ -27,8 +28,8 @@ namespace lfs::vis::input::detail {
     };
 
     inline Profile defaultProfile() {
-        return default_profile_override ? *default_profile_override
-                                        : InputBindings::createDefaultProfile();
+        const auto* profile = defaultProfileOverride();
+        return profile ? *profile : InputBindings::createDefaultProfile();
     }
 
     inline nlohmann::json profileBindingJson(const Binding& binding) {
