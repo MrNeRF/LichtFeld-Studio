@@ -423,8 +423,8 @@ namespace lfs::sequencer {
                     throw std::runtime_error(
                         "Timeline clip_duration is outside the supported range");
                 }
-                if (loaded_duration == 0.0f)
-                    loaded_duration = DEFAULT_CLIP_DURATION_SECONDS;
+                // An explicit 0 is a duration. The clamp below matches setClipDuration.
+                // Only a missing key keeps DEFAULT_CLIP_DURATION_SECONDS.
             }
             float real_end_time = 0.0f;
             for (auto it = loaded_keyframes.rbegin();

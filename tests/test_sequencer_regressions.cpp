@@ -1362,6 +1362,43 @@ namespace {
         EXPECT_FLOAT_EQ(timeline.getKeyframe(0)->time, 9.0f);
     }
 
+    TEST(SequencerTimelineRegressionTest, ExplicitZeroClipDurationClampsLikeTheSetter) {
+        const nlohmann::json keyframes = nlohmann::json::array({
+            {{"time", 0.0f},
+             {"position", {0.0f, 0.0f, 4.0f}},
+             {"rotation", {1.0f, 0.0f, 0.0f, 0.0f}},
+             {"focal_length_mm", 35.0f},
+             {"easing", static_cast<int>(EasingType::LINEAR)}},
+            {{"time", 0.0f},
+             {"position", {0.4f, 0.0f, 4.0f}},
+             {"rotation", {1.0f, 0.0f, 0.0f, 0.0f}},
+             {"focal_length_mm", 35.0f},
+             {"easing", static_cast<int>(EasingType::LINEAR)}},
+        });
+
+        Timeline reference;
+        reference.addKeyframe(makeKeyframe(0.0f, {0.0f, 0.0f, 4.0f}));
+        reference.addKeyframe(makeKeyframe(0.0f, {0.4f, 0.0f, 4.0f}));
+        reference.setClipDuration(0.0f);
+
+        Timeline explicit_zero;
+        ASSERT_TRUE(explicit_zero.loadFromJson({
+            {"version", 4},
+            {"clip_duration", 0.0f},
+            {"keyframes", keyframes},
+        }));
+        EXPECT_FLOAT_EQ(explicit_zero.clipDuration(), lfs::sequencer::MIN_CLIP_DURATION_SECONDS);
+        EXPECT_FLOAT_EQ(explicit_zero.clipDuration(), reference.clipDuration());
+        EXPECT_EQ(explicit_zero.realKeyframeCount(), 2u);
+
+        Timeline missing_duration;
+        ASSERT_TRUE(missing_duration.loadFromJson({
+            {"version", 4},
+            {"keyframes", keyframes},
+        }));
+        EXPECT_FLOAT_EQ(missing_duration.clipDuration(), lfs::sequencer::DEFAULT_CLIP_DURATION_SECONDS);
+    }
+
     TEST(SequencerTimelineRegressionTest, LoadNormalizesCameraAndAnimationQuaternions) {
         nlohmann::json json = {
             {"version", 4},
