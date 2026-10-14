@@ -314,6 +314,8 @@ class PreferencesPanel(Panel):
                 "click", lambda _ev: self._on_close(None, None, None)
             )
         self._document = doc
+        if doc:
+            self._rendering_defaults.mount(doc)
         self._portal_state_binding.close()
         self._portal_state_binding.watch(
             RuntimeState.account_state,
