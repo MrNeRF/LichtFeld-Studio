@@ -277,6 +277,26 @@ def test_escape_then_mouse_click_away_keeps_numeric_edit_cancelled():
     assert values["scale"] == 1.0
     assert not state.editing
 
+def test_escapecancel_in_focused_numeric_text_restores_the_value():
+    module = import_module("lfs_plugins.scrub_fields")
+    values = {"scale": 1.0}
+    scrub = module.ScrubFieldController(
+        {"scale": module.ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")},
+        values.__getitem__, values.__setitem__)
+    attach_fields(scrub)
+    state = scrub._fields["scale"]
+    state.editing = True
+    state.edit_value_before = 1.0
+    state.input_el.set_attribute("value", "0.5")
+
+    # The host sends escapecancel to the focused field, then blurs it.
+    scrub._on_input_escape("scale", Event())
+    scrub._on_input_blur("scale", Event())
+
+    assert values["scale"] == 1.0
+    assert not state.editing
+
+
 @pytest.mark.parametrize("text,expected", [
     ("1e309", 100),
     ("inf", 100),

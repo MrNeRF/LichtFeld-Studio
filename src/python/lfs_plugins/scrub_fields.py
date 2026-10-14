@@ -175,6 +175,7 @@ class ScrubFieldController:
         field.add_event_listener("mousedown", lambda ev, p=prop: self._on_field_mousedown(p, ev))
         input_el.add_event_listener("change", lambda ev, p=prop: self._on_input_change(p, ev))
         input_el.add_event_listener("blur", lambda ev, p=prop: self._on_input_blur(p, ev))
+        input_el.add_event_listener("escapecancel", lambda ev, p=prop: self._on_input_escape(p, ev))
 
         self._sync_field(state)
         return state
@@ -258,6 +259,16 @@ class ScrubFieldController:
             state.input_el.blur()
             event.stop_propagation()
             return
+
+    def _on_input_escape(self, prop: str, event) -> None:
+        # Escape in a focused text field reaches the field as escapecancel, followed
+        # by a blur; the document keydown handler never sees it.
+        state = self._fields.get(prop)
+        if state is None or not state.editing:
+            return
+        self._restore_edit_value(state)
+        state.cancel_on_blur = True
+        event.stop_propagation()
 
     def _on_input_change(self, prop: str, event) -> None:
         state = self._fields.get(prop)
