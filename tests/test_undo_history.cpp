@@ -2258,6 +2258,29 @@ TEST_F(UndoHistoryTest, SceneSnapshotEstimatedBytesIncludeTransformMaps) {
     EXPECT_GE(snapshot->estimatedBytes(), minimum_expected);
 }
 
+TEST_F(UndoHistoryTest, TransformDetailsRetainRecordedTargetAndValues) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    scene_manager->getScene().addGroup("Detail target");
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "transform.batch");
+    snapshot->captureTransforms({"Detail target"});
+    glm::mat4 after(1.0f);
+    after[3].x = 3.0f;
+    scene_manager->setNodeTransform("Detail target", after);
+    snapshot->captureAfter();
+    auto& history = lfs::vis::op::undoHistory();
+    history.push(std::move(snapshot));
+    const auto generation = history.generation();
+    const auto details = history.describeItem(true, 1, generation);
+    ASSERT_TRUE(details);
+    ASSERT_EQ(details->transforms.size(), 1u);
+    EXPECT_EQ(details->transforms.front().target, "Detail target");
+    EXPECT_EQ(details->transforms.front().before[12], 0.0f);
+    EXPECT_EQ(details->transforms.front().after[12], 3.0f);
+    EXPECT_FALSE(history.describeItem(true, 1, generation - 1));
+    EXPECT_FALSE(history.describeItem(true, 0, generation));
+    EXPECT_FALSE(history.describeItem(true, 2, generation));
+}
+
 TEST_F(UndoHistoryTest, TransformSnapshotInvalidatesRenderWithoutPayloadUpload) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     scene_manager->getScene().addSplat("model", make_linear_test_splat(2));

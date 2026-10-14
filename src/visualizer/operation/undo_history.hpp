@@ -13,6 +13,7 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -26,6 +27,11 @@ namespace lfs::vis::op {
         size_t estimated_bytes = 0;
         size_t cpu_bytes = 0;
         size_t gpu_bytes = 0;
+    };
+
+    struct LFS_VIS_API UndoEntryDescription {
+        UndoMetadata metadata;
+        std::vector<UndoTransformDetail> transforms;
     };
 
     struct LFS_VIS_API HistoryResult {
@@ -100,6 +106,7 @@ namespace lfs::vis::op {
         [[nodiscard]] std::vector<UndoStackItem> undoItems() const;
         [[nodiscard]] std::vector<UndoStackItem> redoItems() const;
         [[nodiscard]] uint64_t generation() const;
+        [[nodiscard]] std::optional<UndoEntryDescription> describeItem(bool undo_direction, size_t steps, uint64_t generation) const;
 
         void setMaxBytes(size_t max_bytes);
         void shrinkToFit(size_t target_gpu_bytes);

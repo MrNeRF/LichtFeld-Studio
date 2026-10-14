@@ -1,4 +1,14 @@
 {
+  "history": {
+    "batch_transform": "일괄 변환",
+    "details": "작업 세부 정보",
+    "no_details": "추가 세부 정보가 기록되지 않았습니다.",
+    "before": "이전",
+    "after": "이후",
+    "rotation_degrees": "회전 (°)",
+    "matrix": "변환 행렬",
+    "more_targets": "영향을 받은 노드 {count}개 더"
+  },
   "io.mask_decode_failed": "마스크를 디코딩하지 못했습니다",
   "io.dataset_image_unreadable_one": "데이터셋 이미지 '{}'을(를) 읽을 수 없습니다. 카메라는 장면에 남지만 이 이미지를 사용하면 학습이 실패할 수 있습니다.",
   "io.dataset_image_unreadable_many": "데이터셋 이미지 {}개를 읽을 수 없습니다(예: {}). 카메라는 장면에 남지만 이 이미지를 사용하면 학습이 실패할 수 있습니다.",

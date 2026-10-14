@@ -1,4 +1,14 @@
 {
+  "history": {
+    "batch_transform": "Batchtransformatie",
+    "details": "Bewerkingsdetails",
+    "no_details": "Er zijn geen aanvullende details vastgelegd.",
+    "before": "Voor",
+    "after": "Na",
+    "rotation_degrees": "Rotatie (°)",
+    "matrix": "Transformatiematrix",
+    "more_targets": "Nog {count} betrokken knooppunten"
+  },
   "io.mask_decode_failed": "Masker kon niet worden gedecodeerd",
   "io.dataset_image_unreadable_one": "Datasetafbeelding '{}' kan niet worden gelezen. De camera blijft in de scène, maar de training kan mislukken wanneer deze afbeelding wordt gebruikt.",
   "io.dataset_image_unreadable_many": "{} datasetafbeeldingen kunnen niet worden gelezen (voorbeelden: {}). Hun camera's blijven in de scène, maar de training kan mislukken wanneer ze worden gebruikt.",

@@ -3,6 +3,7 @@
 """Compact navigation for the shared undo history."""
 
 from html import escape
+import math
 
 import lichtfeld as lf
 
@@ -17,17 +18,78 @@ PAGE_SIZE = 25
 LABEL_CHARS = 256
 
 
+def operation_label(name):
+    return lf.ui.tr("history.batch_transform") if name == "transform.batch" else name
+
+
 def row_markup(name, steps, generation, stack="undo"):
     # Bound text before RmlUi layout, including tooltips. Retained names stay intact.
-    name = name or lf.ui.tr("runtime.untitled_change")
+    name = operation_label(name) or lf.ui.tr("runtime.untitled_change")
     name = name.replace("\n", " ").replace("\r", " ")
     name = name if len(name) <= LABEL_CHARS else name[:LABEL_CHARS] + "…"
-    classes = "btn btn--ghost history-row" + (" is-next" if steps == 1 else "")
-    return (f'<button type="button" class="{classes}" '
+    classes = "history-entry" + (" is-next" if steps == 1 else "")
+    return (f'<div class="{classes}" data-steps="{steps}" data-generation="{generation}">'
+            f'<div class="history-entry-header">'
+            f'<button type="button" class="history-disclosure" data-details="{steps}" '
+            f'data-generation="{generation}" title="{escape(lf.ui.tr("history.details"), quote=True)}">'
+            f'<img class="history-chevron" src="../icon/dropdown-arrow.png"/></button>'
+            f'<button type="button" class="btn btn--ghost history-jump" '
             f'data-steps="{steps}" data-generation="{generation}" data-tooltip="scene.history_note">'
             f'<span class="history-index text-muted">{steps}</span>'
             f'<span class="history-label">{escape(name)}</span>'
-            f'<img class="history-icon" src="../icon/{stack}.png"/></button>')
+            f'<img class="history-icon" src="../icon/{stack}.png"/></button></div>'
+            f'<div id="history-detail-{steps}" class="history-details" style="display: none;"></div></div>')
+
+
+def _vector_text(values):
+    return ", ".join(format(float(value), ".6g") for value in values)
+
+
+def _detail_line(key, before, after):
+    caption = lf.ui.tr(key).rstrip(":")
+    return (f'<div class="history-detail-line"><span class="history-detail-property">{escape(caption)}</span>'
+            f'<span class="history-detail-value">{escape(_vector_text(before))}</span>'
+            f'<span class="history-detail-value">{escape(_vector_text(after))}</span></div>')
+
+
+def _orthogonal(matrix):
+    columns = [matrix[i:i + 3] for i in (0, 4, 8)]
+    lengths = [math.sqrt(sum(value * value for value in column)) for column in columns]
+    if not all(math.isfinite(length) and length > 1e-8 for length in lengths):
+        return False
+    return all(abs(sum(a * b for a, b in zip(columns[i], columns[j])))
+               <= 1e-5 * lengths[i] * lengths[j] for i, j in ((0, 1), (0, 2), (1, 2)))
+
+
+def details_markup(description):
+    tr = lf.ui.tr
+    title = operation_label(description.get("label", ""))[:LABEL_CHARS]
+    result = f'<div class="history-detail-title">{escape(title)}</div>'
+    transforms = description.get("transforms", [])
+    if not transforms:
+        return result + f'<div class="text-muted">{escape(tr("history.no_details"))}</div>'
+    result += (f'<div class="history-detail-line text-muted"><span class="history-detail-property"></span>'
+               f'<span class="history-detail-value">{escape(tr("history.before"))}</span>'
+               f'<span class="history-detail-value">{escape(tr("history.after"))}</span></div>')
+    for transform in transforms[:25]:
+        target = transform["target"][:LABEL_CHARS]
+        result += f'<div class="history-detail-target">{escape(target)}</div>'
+        before, after = transform["before"], transform["after"]
+        if _orthogonal(before) and _orthogonal(after):
+            before_trs = lf.decompose_transform(before)
+            after_trs = lf.decompose_transform(after)
+            for name, key in (("translation", "transform.position"),
+                              ("rotation_euler_deg", "history.rotation_degrees"),
+                              ("scale", "transform.scale")):
+                if before_trs[name] != after_trs[name]:
+                    result += _detail_line(key, before_trs[name], after_trs[name])
+        else:
+            for row in range(4):
+                result += _detail_line("history.matrix", before[row::4], after[row::4])
+    if len(transforms) > 25:
+        more_text = tr("history.more_targets").format(count=len(transforms) - 25)
+        result += f'<div class="text-muted">{escape(more_text)}</div>'
+    return result
 
 
 @panel_class("history")
@@ -43,6 +105,7 @@ class HistoryPanel(Panel):
         self._stack = "undo"
         self._page = 0
         self._feedback = ""
+        self._expanded = {}
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("history_panel")
@@ -91,6 +154,7 @@ class HistoryPanel(Panel):
             self._names = {"undo": lf.undo.undo_names(), "redo": lf.undo.redo_names()}
             self._generation = generation
             self._page = 0
+            self._expanded.clear()
         names = self._names[self._stack]
         pages = max(1, (len(names) + PAGE_SIZE - 1) // PAGE_SIZE)
         self._page = min(self._page, pages - 1)
@@ -114,6 +178,8 @@ class HistoryPanel(Panel):
                 for i, name in enumerate(names[first:first + PAGE_SIZE])))
             doc.get_element_by_id("history-scroll").scroll_top = 0
             self._rows_stamp = rows_stamp
+            for steps, description in self._expanded.items():
+                self._show_details(steps, description)
         empty = doc.get_element_by_id("history-empty")
         empty.set_inner_rml(escape(tr("scene.no_entries_in_stack")))
         empty.set_property("display", "none" if names else "block")
@@ -122,7 +188,7 @@ class HistoryPanel(Panel):
         feedback = doc.get_element_by_id("history-feedback")
         feedback.set_inner_rml(escape(self._feedback))
         feedback.set_property("display", "block" if self._feedback else "none")
-        for row in doc.get_element_by_id("history-rows").children():
+        for row in doc.get_element_by_id("history-rows").query_selector_all(".history-jump"):
             if active:
                 row.set_attribute("disabled", "disabled")
             else:
@@ -146,6 +212,7 @@ class HistoryPanel(Panel):
         if action.endswith("-tab"):
             self._stack = action[:-4]
             self._page = 0
+            self._expanded.clear()
         elif action in ("older", "newer"):
             self._page = max(0, self._page + (1 if action == "older" else -1))
         elif action == "clear":
@@ -154,6 +221,31 @@ class HistoryPanel(Panel):
         elif action in ("undo", "redo"):
             self._jump(action, 1)
         self._refresh()
+
+    def _show_details(self, steps, description):
+        detail = self._doc.get_element_by_id(f"history-detail-{steps}")
+        if detail:
+            detail.set_inner_rml(details_markup(description))
+            detail.set_property("display", "block")
+            detail.parent().set_class("is-expanded", True)
+
+    def _toggle_details(self, steps, generation):
+        if generation != lf.undo.generation():
+            self._refresh()
+            return
+        if steps in self._expanded:
+            del self._expanded[steps]
+            detail = self._doc.get_element_by_id(f"history-detail-{steps}")
+            detail.set_property("display", "none")
+            detail.parent().set_class("is-expanded", False)
+        else:
+            description = lf.undo.details(self._stack, steps, generation)
+            if description is None:
+                self._refresh()
+                return
+            self._expanded[steps] = description
+            self._show_details(steps, description)
+        lf.ui.request_redraw()
 
     def _row_target(self, event):
         target = event.target()
@@ -164,6 +256,17 @@ class HistoryPanel(Panel):
         return None
 
     def _on_row(self, event):
+        target = event.target()
+        while target and target.id != "history-rows":
+            if "history-details" in target.get_attribute("class", "").split():
+                event.stop_propagation()
+                return
+            steps = target.get_attribute("data-details", "")
+            if steps:
+                self._toggle_details(int(steps), int(target.get_attribute("data-generation", "-1")))
+                event.stop_propagation()
+                return
+            target = target.parent()
         row = self._row_target(event)
         if row is None:
             return
@@ -184,7 +287,7 @@ class HistoryPanel(Panel):
         row = self._row_target(event)
         if row is None:
             return
-        rows = self._doc.get_element_by_id("history-rows").children()
+        rows = self._doc.get_element_by_id("history-rows").query_selector_all(".history-jump")
         index = int(row.get_attribute("data-steps", "1")) - 1 - self._page * PAGE_SIZE
         index = (0 if key == KI_HOME else len(rows) - 1 if key == KI_END
                  else max(0, min(len(rows) - 1, index + (1 if key == KI_DOWN else -1))))

@@ -2296,6 +2296,7 @@ namespace lfs::vis::op {
                 LOG_WARN("Cannot capture transform snapshot: node '{}' does not resolve", node_name);
                 continue;
             }
+            transform_names_[node->uuid] = node_name;
             transforms_before_[node->uuid] = scene_.getScene().getNodeTransform(node->id);
         }
         captured_ = captured_ | ModifiesFlag::TRANSFORMS;
@@ -2319,6 +2320,7 @@ namespace lfs::vis::op {
             uuids.push_back(node->uuid);
         }
         for (size_t i = 0; i < uuids.size(); ++i) {
+            transform_names_[uuids[i]] = nodes[i];
             transforms_before_[uuids[i]] = transforms[i];
         }
         captured_ = captured_ | ModifiesFlag::TRANSFORMS;
@@ -2700,6 +2702,8 @@ namespace lfs::vis::op {
 
     size_t SceneSnapshot::estimatedBytes() const {
         size_t total = selection_mask_storage_.estimatedBytes();
+        for (const auto& [uuid, name] : transform_names_)
+            total += sizeof(uuid) + sizeof(name) + name.size() + 48;
         for (const auto& [_, storage] : deleted_mask_storage_) {
             total += storage.estimatedBytes();
         }
@@ -2725,6 +2729,8 @@ namespace lfs::vis::op {
 
     UndoMemoryBreakdown SceneSnapshot::memoryBreakdown() const {
         UndoMemoryBreakdown total = selection_mask_storage_.memoryBreakdown();
+        for (const auto& [uuid, name] : transform_names_)
+            total.cpu_bytes += sizeof(uuid) + sizeof(name) + name.size() + 48;
         for (const auto& [_, storage] : deleted_mask_storage_) {
             total += storage.memoryBreakdown();
         }
@@ -2752,6 +2758,25 @@ namespace lfs::vis::op {
             storage.restoreToDevice();
         }
         combined_deleted_storage_.restoreToDevice();
+    }
+
+    std::vector<UndoTransformDetail> SceneSnapshot::transformDetails() const {
+        std::vector<UndoTransformDetail> result;
+        for (const auto& [uuid, before] : transforms_before_) {
+            const auto after = transforms_after_.find(uuid);
+            if (after == transforms_after_.end() || before == after->second)
+                continue;
+            UndoTransformDetail detail;
+            const auto name = transform_names_.find(uuid);
+            detail.target = name == transform_names_.end() ? uuid.to_string() : name->second;
+            std::copy_n(&before[0][0], 16, detail.before.begin());
+            std::copy_n(&after->second[0][0], 16, detail.after.begin());
+            result.push_back(std::move(detail));
+        }
+        std::sort(result.begin(), result.end(), [](const auto& lhs, const auto& rhs) {
+            return lhs.target < rhs.target;
+        });
+        return result;
     }
 
     UndoMetadata SceneSnapshot::metadata() const {

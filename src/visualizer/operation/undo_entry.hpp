@@ -9,6 +9,7 @@
 #include "core/tensor.hpp"
 #include "rendering/dirty_flags.hpp"
 #include <any>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -40,6 +41,12 @@ namespace lfs::vis::op {
             gpu_bytes += other.gpu_bytes;
             return *this;
         }
+    };
+
+    struct LFS_VIS_API UndoTransformDetail {
+        std::string target;
+        std::array<float, 16> before;
+        std::array<float, 16> after;
     };
 
     struct LFS_VIS_API UndoMetadata {
@@ -101,6 +108,7 @@ namespace lfs::vis::op {
                 .label = entry_name,
             };
         }
+        [[nodiscard]] virtual std::vector<UndoTransformDetail> transformDetails() const { return {}; }
         [[nodiscard]] virtual size_t estimatedBytes() const { return 0; }
         [[nodiscard]] virtual UndoMemoryBreakdown memoryBreakdown() const {
             return UndoMemoryBreakdown{
@@ -209,6 +217,7 @@ namespace lfs::vis::op {
         void redo() override;
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] UndoMetadata metadata() const override;
+        [[nodiscard]] std::vector<UndoTransformDetail> transformDetails() const override;
         [[nodiscard]] bool hasChanges() const;
         [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override;
         void offloadToCPU() override;
@@ -226,6 +235,7 @@ namespace lfs::vis::op {
         bool selection_changed_ = false;
         bool prefer_dense_selection_storage_ = false;
 
+        std::unordered_map<lfs::core::Uuid, std::string> transform_names_;
         std::unordered_map<lfs::core::Uuid, glm::mat4> transforms_before_;
         std::unordered_map<lfs::core::Uuid, glm::mat4> transforms_after_;
 

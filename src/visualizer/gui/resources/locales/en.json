@@ -1,4 +1,14 @@
 {
+  "history": {
+    "batch_transform": "Batch transform",
+    "details": "Operation details",
+    "no_details": "No additional details were recorded.",
+    "before": "Before",
+    "after": "After",
+    "rotation_degrees": "Rotation (°)",
+    "matrix": "Transform matrix",
+    "more_targets": "{count} more affected nodes"
+  },
   "io.mask_decode_failed": "Failed to decode mask",
   "io.dataset_image_unreadable_one": "Dataset image '{}' cannot be read. Its camera remains in the scene, but training may fail when it is used.",
   "io.dataset_image_unreadable_many": "{} dataset images cannot be read (examples: {}). Their cameras remain in the scene, but training may fail when they are used.",

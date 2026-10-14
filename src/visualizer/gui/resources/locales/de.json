@@ -1,4 +1,14 @@
 {
+  "history": {
+    "batch_transform": "Stapeltransformation",
+    "details": "Details zur Operation",
+    "no_details": "Es wurden keine weiteren Details aufgezeichnet.",
+    "before": "Vorher",
+    "after": "Nachher",
+    "rotation_degrees": "Rotation (°)",
+    "matrix": "Transformationsmatrix",
+    "more_targets": "{count} weitere betroffene Knoten"
+  },
   "io.mask_decode_failed": "Maske konnte nicht dekodiert werden",
   "io.dataset_image_unreadable_one": "Das Datensatzbild '{}' kann nicht gelesen werden. Die Kamera bleibt in der Szene, aber das Training kann bei seiner Verwendung fehlschlagen.",
   "io.dataset_image_unreadable_many": "{} Datensatzbilder können nicht gelesen werden (Beispiele: {}). Ihre Kameras bleiben in der Szene, aber das Training kann bei ihrer Verwendung fehlschlagen.",

@@ -20,8 +20,20 @@ class Element:
     def set_inner_rml(self, value):
         self.markup = value
         self.writes += 1
-        self.nodes = [Element(attrs=dict(node.attrib), parent=self)
-                      for node in ET.fromstring("<root>" + value + "</root>")]
+        def build(node, parent):
+            element = Element(node.attrib.get("id", ""), dict(node.attrib), parent)
+            element.nodes = [build(child, element) for child in node]
+            return element
+        self.nodes = [build(node, self) for node in ET.fromstring("<root>" + value + "</root>")]
+
+    def query_selector_all(self, selector):
+        result = []
+        for node in self.nodes:
+            if selector[1:] in node.attrs.get("class", "").split():
+                result.append(node)
+            result.extend(node.query_selector_all(selector))
+        return result
+
 
     def set_attribute(self, key, value): self.attrs[key] = value
     def get_attribute(self, key, default=""): return self.attrs.get(key, default)
@@ -37,7 +49,17 @@ class Element:
 
 class Document:
     def __init__(self): self.elements = {}
-    def get_element_by_id(self, name): return self.elements.setdefault(name, Element(name))
+    def get_element_by_id(self, name):
+        def find(element):
+            if element.id == name: return element
+            for child in element.nodes:
+                match = find(child)
+                if match: return match
+            return None
+        for element in self.elements.values():
+            match = find(element)
+            if match: return match
+        return self.elements.setdefault(name, Element(name))
     def remove_data_model(self, name): pass
 
 
@@ -45,10 +67,13 @@ class Document:
 def history(monkeypatch):
     state = SimpleNamespace(generation=1, undo=[f"edit {i}" for i in range(205)],
                             redo=["undone edit"], active=False, calls=[], reads=0,
-                            result={"success": True, "error": ""}, enabled=[])
+                            result={"success": True, "error": ""}, enabled=[], detail_reads=[])
     def names(stack):
         state.reads += 1
         return list(getattr(state, stack))
+    def details(stack, steps, generation):
+        state.detail_reads.append((stack, steps, generation))
+        return {"label": getattr(state, stack)[steps - 1], "transforms": []}
     def jump(stack, count):
         state.calls.append((stack, count))
         state.generation += 1
@@ -66,7 +91,7 @@ def history(monkeypatch):
     )
     undo = SimpleNamespace(generation=lambda: state.generation,
                            undo_names=lambda: names("undo"), redo_names=lambda: names("redo"),
-                           has_active_transaction=lambda: state.active, jump=jump, clear=clear)
+                           has_active_transaction=lambda: state.active, jump=jump, clear=clear, details=details)
     monkeypatch.setitem(sys.modules, "lichtfeld", SimpleNamespace(ui=ui, undo=undo))
     # Match the existing panel-test isolation convention.
     monkeypatch.delitem(sys.modules, "lfs_plugins.history_panel", raising=False)
@@ -138,7 +163,7 @@ def test_long_labels_are_bounded_escaped_and_single_line(history):
     mod, _, _, _ = history
     markup = mod.row_markup('<script>\n' + 'x' * 70000, 1, 1)
     assert '<script>' not in markup and '&lt;script&gt;' in markup
-    assert len(markup) < 600
+    assert len(markup) < 1100
     assert '<br' not in markup
 
 
@@ -159,9 +184,9 @@ def test_arrow_navigation_moves_focus_without_playback(history):
     mod, panel, doc, state = history
     rows = doc.elements["history-rows"].nodes
     panel._on_key(event(rows[0], str(mod.KI_DOWN)))
-    assert rows[1].focused and not state.calls
+    assert doc.elements["history-rows"].query_selector_all(".history-jump")[1].focused and not state.calls
     panel._on_key(event(rows[1], str(mod.KI_END)))
-    assert rows[-1].focused
+    assert doc.elements["history-rows"].query_selector_all(".history-jump")[-1].focused
 
 
 def test_keyboard_activates_the_focused_row(history):
@@ -200,3 +225,56 @@ def test_new_page_appears_at_26_and_past_100_entries(history):
     assert doc.elements["history-rows"].nodes[0].attrs["data-steps"] == "101"
     panel._action("newer")
     assert doc.elements["history-page"].markup == "4 / 5"
+
+
+def test_disclosure_reads_details_without_playback_and_closes(history):
+    _, panel, doc, state = history
+    disclosure = doc.elements["history-rows"].nodes[1].query_selector_all(".history-disclosure")[0]
+    panel._on_row(event(disclosure))
+    assert state.calls == []
+    assert state.detail_reads == [("undo", 2, 1)]
+    detail = doc.get_element_by_id("history-detail-2")
+    assert detail.props["display"] == "block"
+    panel._on_row(event(detail.nodes[0]))
+    assert not state.calls
+    panel._on_row(event(disclosure))
+    assert detail.props["display"] == "none"
+    assert len(state.detail_reads) == 1
+
+
+def test_expanded_details_are_discarded_when_history_changes(history):
+    _, panel, doc, state = history
+    panel._toggle_details(1, state.generation)
+    assert panel._expanded
+    state.generation += 1
+    panel.on_update(doc)
+    assert not panel._expanded
+    reads = list(state.detail_reads)
+    panel._toggle_details(1, state.generation - 1)
+    assert state.detail_reads == reads
+
+
+def test_transform_details_show_affected_node_and_before_after_values(history):
+    mod, _, _, _ = history
+    identity = [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]
+    moved = identity[:]
+    moved[12] = 3
+    mod.lf.decompose_transform = lambda matrix: {
+        "translation": matrix[12:15], "rotation_euler_deg": [0,0,0], "scale": [1,1,1]}
+    markup = mod.details_markup({"label": "Apply batch transform", "transforms": [
+        {"target": "<model>", "before": identity, "after": moved}]})
+    assert '&lt;model&gt;' in markup
+    assert '0, 0, 0' in markup and '3, 0, 0' in markup
+    assert 'history.before' in markup and 'history.after' in markup
+    assert 'transform.position' in markup
+    assert 'transform.scale' not in markup
+
+
+def test_shear_details_keep_exact_matrix_values(history):
+    mod, _, _, _ = history
+    identity = [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]
+    sheared = identity[:]
+    sheared[4] = .25
+    markup = mod.details_markup({"label": "Shear", "transforms": [
+        {"target": "model", "before": identity, "after": sheared}]})
+    assert 'history.matrix' in markup and '0.25' in markup

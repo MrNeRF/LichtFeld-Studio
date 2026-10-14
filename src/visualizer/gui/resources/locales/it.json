@@ -1,4 +1,14 @@
 {
+  "history": {
+    "batch_transform": "Trasformazione in gruppo",
+    "details": "Dettagli dell’operazione",
+    "no_details": "Non sono stati registrati ulteriori dettagli.",
+    "before": "Prima",
+    "after": "Dopo",
+    "rotation_degrees": "Rotazione (°)",
+    "matrix": "Matrice di trasformazione",
+    "more_targets": "Altri {count} nodi interessati"
+  },
   "io.mask_decode_failed": "Impossibile decodificare la maschera",
   "io.dataset_image_unreadable_one": "Impossibile leggere l’immagine '{}' del set di dati. La sua fotocamera resta nella scena, ma il suo utilizzo può interrompere l’addestramento.",
   "io.dataset_image_unreadable_many": "Impossibile leggere {} immagini del set di dati (esempi: {}). Le loro fotocamere restano nella scena, ma il loro utilizzo può interrompere l’addestramento.",

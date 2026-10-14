@@ -1,4 +1,14 @@
 {
+  "history": {
+    "batch_transform": "Transformación por lotes",
+    "details": "Detalles de la operación",
+    "no_details": "No se registraron detalles adicionales.",
+    "before": "Antes",
+    "after": "Después",
+    "rotation_degrees": "Rotación (°)",
+    "matrix": "Matriz de transformación",
+    "more_targets": "{count} nodos afectados más"
+  },
   "io.mask_decode_failed": "No se pudo decodificar la máscara",
   "io.dataset_image_unreadable_one": "No se puede leer la imagen '{}' del conjunto de datos. Su cámara permanece en la escena, pero el entrenamiento puede fallar al usarla.",
   "io.dataset_image_unreadable_many": "No se pueden leer {} imágenes del conjunto de datos (ejemplos: {}). Sus cámaras permanecen en la escena, pero el entrenamiento puede fallar al usarlas.",

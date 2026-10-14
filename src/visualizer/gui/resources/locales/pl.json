@@ -1,4 +1,14 @@
 {
+  "history": {
+    "batch_transform": "Transformacja zbiorcza",
+    "details": "Szczegóły operacji",
+    "no_details": "Nie zapisano dodatkowych szczegółów.",
+    "before": "Przed",
+    "after": "Po",
+    "rotation_degrees": "Obrót (°)",
+    "matrix": "Macierz transformacji",
+    "more_targets": "Jeszcze {count} zmienionych węzłów"
+  },
   "io.mask_decode_failed": "Nie udało się zdekodować maski",
   "io.dataset_image_unreadable_one": "Nie można odczytać obrazu zestawu danych '{}'. Jego kamera pozostaje w scenie, ale użycie obrazu może spowodować niepowodzenie treningu.",
   "io.dataset_image_unreadable_many": "Nie można odczytać {} obrazów zestawu danych (przykłady: {}). Ich kamery pozostają w scenie, ale użycie tych obrazów może spowodować niepowodzenie treningu.",

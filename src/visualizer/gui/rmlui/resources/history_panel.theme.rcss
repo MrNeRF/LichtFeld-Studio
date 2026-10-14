@@ -4,10 +4,16 @@
 .history-tab.is-active { color: @{primary}; border-bottom-color: @{primary}; }
 .history-tab-count { color: @{text_dim}; background-color: @{surface_bright}; }
 .history-tab.is-active .history-tab-count { color: @{primary}; background-color: @{alpha(primary, 0.12)}; }
-.btn.history-row { background-color: @{surface}; border-color: @{alpha(border, 0.4)}; border-left-color: transparent; }
-.btn.history-row:hover { background-color: @{surface_bright}; }
-.btn.history-row:focus, .btn.history-row:focus-visible { background-color: @{alpha(primary, 0.18)}; color: @{text}; }
+.history-entry { border-bottom-color: @{alpha(border, 0.4)}; border-left-color: transparent; }
+.btn.history-jump { background-color: transparent; }
+.btn.history-jump:hover { background-color: @{surface_bright}; }
+.btn.history-jump:focus, .btn.history-jump:focus-visible { background-color: @{alpha(primary, 0.18)}; color: @{text}; }
 
 .history-icon { image-color: @{text}; }
 
-.btn.history-row.is-next { border-left-color: @{primary}; background-color: @{alpha(primary, 0.08)}; }
+.history-entry.is-next { border-left-color: @{primary}; background-color: @{alpha(primary, 0.08)}; }
+
+.history-disclosure { background-color: transparent; color: @{text_dim}; }
+.history-disclosure:hover, .history-disclosure:focus-visible { background-color: @{surface_bright}; }
+.history-chevron { image-color: @{text_dim}; }
+.history-details { background-color: @{alpha(surface_bright, 0.5)}; }

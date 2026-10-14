@@ -1,4 +1,14 @@
 {
+  "history": {
+    "batch_transform": "一括変換",
+    "details": "操作の詳細",
+    "no_details": "追加の詳細は記録されていません。",
+    "before": "変更前",
+    "after": "変更後",
+    "rotation_degrees": "回転 (°)",
+    "matrix": "変換行列",
+    "more_targets": "他に {count} 個のノード"
+  },
   "io.mask_decode_failed": "マスクをデコードできませんでした",
   "io.dataset_image_unreadable_one": "データセット画像「{}」を読み取れません。カメラはシーンに残りますが、この画像を使用すると学習が失敗する可能性があります。",
   "io.dataset_image_unreadable_many": "{} 枚のデータセット画像を読み取れません（例: {}）。カメラはシーンに残りますが、これらの画像を使用すると学習が失敗する可能性があります。",

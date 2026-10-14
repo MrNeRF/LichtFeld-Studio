@@ -426,6 +426,32 @@ namespace lfs::python {
             "Offload history to CPU and evict cold entries until GPU usage fits the requested budget");
 
         undo.def(
+            "details",
+            [](const std::string& stack, const size_t steps, const uint64_t generation) -> nb::object {
+                if (stack != "undo" && stack != "redo")
+                    throw std::runtime_error("stack must be 'undo' or 'redo'");
+                const auto description = vis::op::undoHistory().describeItem(stack == "undo", steps, generation);
+                if (!description)
+                    return nb::none();
+                nb::dict result;
+                result["label"] = description->metadata.label;
+                result["source"] = description->metadata.source;
+                result["scope"] = description->metadata.scope;
+                nb::list transforms;
+                for (const auto& detail : description->transforms) {
+                    nb::dict transform;
+                    transform["target"] = detail.target;
+                    transform["before"] = std::vector<float>(detail.before.begin(), detail.before.end());
+                    transform["after"] = std::vector<float>(detail.after.begin(), detail.after.end());
+                    transforms.append(transform);
+                }
+                result["transforms"] = transforms;
+                return result;
+            },
+            nb::arg("stack"), nb::arg("steps"), nb::arg("generation"),
+            "Read operation details for one displayed entry; return None if the history changed");
+
+        undo.def(
             "stack",
             [stack_item_to_dict]() {
                 nb::dict payload;

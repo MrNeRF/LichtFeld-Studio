@@ -144,6 +144,14 @@ namespace lfs::vis::op {
                     .scope = "grouped",
                 };
             }
+            [[nodiscard]] std::vector<UndoTransformDetail> transformDetails() const override {
+                std::vector<UndoTransformDetail> result;
+                for (const auto& entry : entries_) {
+                    auto details = entry->transformDetails();
+                    result.insert(result.end(), std::make_move_iterator(details.begin()), std::make_move_iterator(details.end()));
+                }
+                return result;
+            }
             [[nodiscard]] size_t estimatedBytes() const override { return estimated_bytes_; }
             [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override {
                 UndoMemoryBreakdown total;
@@ -1058,6 +1066,15 @@ namespace lfs::vis::op {
             result.push_back((*it)->metadata().label);
         }
         return result;
+    }
+
+    std::optional<UndoEntryDescription> UndoHistory::describeItem(const bool undo_direction, const size_t steps, const uint64_t generation) const {
+        std::lock_guard lock(mutex_);
+        const auto& stack = undo_direction ? undo_stack_ : redo_stack_;
+        if (generation != generation_.load(std::memory_order_acquire) || steps == 0 || steps > stack.size())
+            return std::nullopt;
+        const auto& entry = stack[stack.size() - steps];
+        return UndoEntryDescription{entry->metadata(), entry->transformDetails()};
     }
 
     size_t UndoHistory::undoCount() const {

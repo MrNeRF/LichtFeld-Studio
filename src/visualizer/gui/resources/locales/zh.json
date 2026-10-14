@@ -1,4 +1,14 @@
 {
+  "history": {
+    "batch_transform": "批量变换",
+    "details": "操作详情",
+    "no_details": "未记录更多详情。",
+    "before": "之前",
+    "after": "之后",
+    "rotation_degrees": "旋转 (°)",
+    "matrix": "变换矩阵",
+    "more_targets": "还有 {count} 个受影响的节点"
+  },
   "io.mask_decode_failed": "无法解码遮罩",
   "io.dataset_image_unreadable_one": "无法读取数据集图像“{}”。对应的相机仍保留在场景中，但使用该图像时训练可能失败。",
   "io.dataset_image_unreadable_many": "无法读取 {} 张数据集图像（例如：{}）。对应的相机仍保留在场景中，但使用这些图像时训练可能失败。",

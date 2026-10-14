@@ -92,6 +92,11 @@ def shrink_to_fit(target_gpu_bytes: int) -> None:
     Offload history to CPU and evict cold entries until GPU usage fits the requested budget
     """
 
+def details(stack: str, steps: int, generation: int) -> object:
+    """
+    Read operation details for one displayed entry; return None if the history changed
+    """
+
 def stack() -> dict:
     """Get the structured undo/redo stack state"""
 
