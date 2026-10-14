@@ -803,6 +803,25 @@ namespace lfs::vis::gui {
             root_->SetProperty("width", std::format("{:.1f}px", size_w_));
         if (size_h_ > 0.0f)
             root_->SetProperty("height", std::format("{:.1f}px", size_h_));
+        applyDisplayedGeometry();
+    }
+
+    void VramHudOverlay::applyDisplayedGeometry() {
+        if (!root_)
+            return;
+        const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
+        if (compact && perf_strip_) {
+            const auto extent = perf_strip_->GetBox().GetSize(Rml::BoxArea::Border);
+            if (extent.x > 0.0f && extent.y > 0.0f) {
+                root_->SetProperty("width", std::format("{:.1f}px", extent.x));
+                root_->SetProperty("height", std::format("{:.1f}px", extent.y));
+            }
+        } else {
+            if (size_w_ > 0.0f)
+                root_->SetProperty("width", std::format("{:.1f}px", size_w_));
+            if (size_h_ > 0.0f)
+                root_->SetProperty("height", std::format("{:.1f}px", size_h_));
+        }
     }
 
     bool VramHudOverlay::initializeGeometryAfterLayout() {
@@ -834,16 +853,18 @@ namespace lfs::vis::gui {
 
         const auto bounds = viewportSize(
             root_, document_, viewport_size_, has_viewport_geometry_);
+        const bool compact = state_.perf_hud.visible && !state_.perf_hud.expanded;
+        const auto strip_size = perf_strip_ ? perf_strip_->GetBox().GetSize(Rml::BoxArea::Border) : Rml::Vector2f{};
         if (size_w_ > 0.0f || !std::isfinite(size_w_))
             size_w_ = vram_hud_geometry::clampExtent(
-                size_w_, kMinHudWidthPx, bounds.x, pos_x_);
+                size_w_, kMinHudWidthPx, bounds.x, 0.0f);
         if (size_h_ > 0.0f || !std::isfinite(size_h_))
             size_h_ = vram_hud_geometry::clampExtent(
-                size_h_, kMinHudHeightPx, bounds.y, pos_y_);
+                size_h_, kMinHudHeightPx, bounds.y, 0.0f);
         pos_x_ = vram_hud_geometry::clampPosition(
-            pos_x_, size_w_ > 0.0f ? size_w_ : kMinHudWidthPx, bounds.x);
+            pos_x_, compact && strip_size.x > 0 ? strip_size.x : (size_w_ > 0.0f ? size_w_ : kMinHudWidthPx), bounds.x);
         pos_y_ = vram_hud_geometry::clampPosition(
-            pos_y_, size_h_ > 0.0f ? size_h_ : kMinHudHeightPx, bounds.y);
+            pos_y_, compact && strip_size.y > 0 ? strip_size.y : (size_h_ > 0.0f ? size_h_ : kMinHudHeightPx), bounds.y);
 
         return old_pos_x != pos_x_ || old_pos_y != pos_y_ ||
                old_size_w != size_w_ || old_size_h != size_h_;
@@ -938,6 +959,8 @@ namespace lfs::vis::gui {
             perf_card_->SetClass("hidden", compact);
             perf_card_->SetProperty("display", compact ? "none" : "flex");
         }
+        if (geometry_initialized_)
+            applyPersistedGeometry();
 
         if (!state_.visible) {
             if (!compact && state_.perf_hud.visible) {

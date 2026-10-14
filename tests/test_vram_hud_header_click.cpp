@@ -8,11 +8,14 @@
 #include "gui/vram_hud_overlay.hpp"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Factory.h>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -242,6 +245,24 @@ namespace lfs::vis::gui {
         Rml::ElementDocument* document_ = nullptr;
         std::unique_ptr<VramHudOverlay> overlay_;
     };
+
+    TEST_F(VramHudHeaderClickTest, CompactStripUsesItsContainersLeftEdge) {
+        std::ifstream file(std::filesystem::path(PROJECT_ROOT_PATH) /
+                           "src/visualizer/gui/rmlui/resources/viewport_overlay.rcss");
+        ASSERT_TRUE(file);
+        const std::string css{std::istreambuf_iterator<char>(file), {}};
+        document_->SetStyleSheetContainer(Rml::Factory::InstanceStyleSheetString(css));
+        auto* root = document_->GetElementById("vram-hud-overlay");
+        auto* strip = document_->GetElementById("perf-hud-strip");
+        root->SetClass("vram-hud-overlay", true);
+        strip->SetClass("perf-hud-strip", true);
+        root->SetProperty("width", "620px");
+        root->SetProperty("left", "0px");
+        root->SetProperty("top", "0px");
+        context_->Update();
+        EXPECT_NEAR(strip->GetAbsoluteOffset().x, root->GetAbsoluteOffset().x, 0.1f);
+        EXPECT_NEAR(strip->GetAbsoluteOffset().y, root->GetAbsoluteOffset().y, 0.1f);
+    }
 
     TEST_F(VramHudHeaderClickTest, DraggingCompactStripMovesItWithoutExpanding) {
         auto* const root = document_->GetElementById("vram-hud-overlay");

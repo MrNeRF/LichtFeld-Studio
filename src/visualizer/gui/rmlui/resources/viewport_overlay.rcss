@@ -2041,9 +2041,9 @@ body {
 }
 
 .perf-hud-strip {
-    position: absolute;
-    right: 18dp;
-    top: 18dp;
+    position: relative;
+    left: 0;
+    top: 0;
     width: 300dp;
     min-height: 142dp;
     padding: 10dp 12dp;
