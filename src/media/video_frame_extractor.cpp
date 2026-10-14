@@ -1541,6 +1541,8 @@ namespace lfs::io {
                 int gpu_color_frames = 0, host_color_frames = 0, hardware_readback_frames = 0, rgb_readback_frames = 0;
                 double jpeg_write_seconds = 0.0;
                 const auto convert_frame_to_output = [&](AVFrame* source) {
+                    // Host dispatch can still invoke a Vulkan/tensor renderer;
+                    // these counts distinguish it from direct CUDA JPEG handoff.
                     ++host_color_frames;
                     if (float_output) {
                         const auto converted = linear_converter->convert(*source, out_width, out_height, cpu_contiguous_buffer);

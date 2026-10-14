@@ -23,13 +23,14 @@ namespace lfs::media::detail {
             return ColorMatrix::Bt709;
         if (matrix == AVCOL_SPC_BT2020_NCL)
             return ColorMatrix::Bt2020Ncl;
-        if (matrix == AVCOL_SPC_UNSPECIFIED || matrix == AVCOL_SPC_BT470BG || matrix == AVCOL_SPC_SMPTE170M)
-            return ColorMatrix::Smpte170M;
-        return std::nullopt;
+        if (matrix == AVCOL_SPC_BT2020_CL)
+            return std::nullopt;
+        // Match configureVideoToRgbColorimetry's SWS_CS_DEFAULT fallback.
+        // NV12 retains its original integer BT.601 kernel for these matrices.
+        return ColorMatrix::Smpte170M;
     }
     inline bool cudaFrameColorSupported(const AVFrame* frame, AVColorSpace fallback) {
         return frame && cudaFrameColorMatrix(frame, fallback).has_value() &&
-               (frame->chroma_location == AVCHROMA_LOC_UNSPECIFIED || frame->chroma_location == AVCHROMA_LOC_LEFT) &&
                (frame->color_range == AVCOL_RANGE_UNSPECIFIED || frame->color_range == AVCOL_RANGE_MPEG || frame->color_range == AVCOL_RANGE_JPEG);
     }
     // Only the provider interprets the decoder's native frame/device structures.
@@ -57,8 +58,10 @@ namespace lfs::media::detail {
             return unavailable(std::format("CUDA video frame has invalid decoder plane storage (format={}, width={}, height={}, pitches=[{}, {}], planes_present=[{}, {}], context_present={})", frame->format, frame->width, frame->height, frame->linesize[0], frame->linesize[1], frame->data[0] != nullptr, frame->data[1] != nullptr, decoder->cuda_ctx != nullptr));
         const auto resolved = cudaFrameColorMatrix(frame, fallback_matrix);
         if (!cudaFrameColorSupported(frame, fallback_matrix))
-            return unavailable(std::format("CUDA JPEG color conversion does not support matrix/chroma [{}, {}]", static_cast<int>(frame->colorspace), static_cast<int>(frame->chroma_location)));
+            return unavailable(std::format("CUDA JPEG color conversion does not support matrix/range [{}, {}]", static_cast<int>(frame->colorspace), static_cast<int>(frame->color_range)));
         CudaVideoFrame view{{decoder->cuda_ctx, decoder->stream}, {frame->data[0], frame->data[1]}, {frame->linesize[0], frame->linesize[1]}, frame->color_range == AVCOL_RANGE_JPEG || (frame->color_range == AVCOL_RANGE_UNSPECIFIED && source_full_range)};
+        // The host swscale path does not configure chroma position either.
+        // Preserve its sampling policy regardless of the signalled location.
         const auto chroma = chromaMapping(ChromaLocation::Left, 1, 1);
         view.color.chroma_y_scale = chroma[2];
         view.color.chroma_y_offset = chroma[3];

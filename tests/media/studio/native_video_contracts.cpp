@@ -34,14 +34,14 @@ namespace {
     };
     nlohmann::json semiplanarColorContracts() {
         using namespace lfs::core;
-        constexpr int width = 32, height = 8, pitch = width * 2 + 16;
+        constexpr int width = 33, height = 9, pitch = width * 2 + 16;
         CudaStream stream;
-        std::vector<uint16_t> y(pitch / 2 * height, 0xffff), uv(pitch / 2 * height / 2, 0xffff);
+        std::vector<uint16_t> y(pitch / 2 * height, 0xffff), uv(pitch / 2 * ((height + 1) / 2), 0xffff);
         const std::array<int, 9> codes{0, 64, 65, 66, 67, 128, 512, 940, 1023};
         for (int row = 0; row < height; ++row)
             for (int col = 0; col < width; ++col)
                 y[row * pitch / 2 + col] = static_cast<uint16_t>((codes[col % codes.size()] << 6) | 63);
-        for (int row = 0; row < height / 2; ++row)
+        for (int row = 0; row < (height + 1) / 2; ++row)
             for (int col = 0; col < width; col += 2) {
                 uv[row * pitch / 2 + col] = static_cast<uint16_t>(((row == 0 ? 512 : 64 + col * 20) << 6) | 63);
                 uv[row * pitch / 2 + col + 1] = static_cast<uint16_t>(((row == 0 ? 512 : 940 - col * 20) << 6) | 63);
@@ -94,7 +94,7 @@ namespace {
                         const int first = static_cast<int>(std::floor(sy));
                         const double weight = sy - first;
                         const auto chroma = [&](int channel) {
-                            const auto at = [&](int r) { return uv[std::clamp(r, 0, height / 2 - 1) * pitch / 2 + (col / 2) * 2 + channel] >> 6; };
+                            const auto at = [&](int r) { return uv[std::clamp(r, 0, (height + 1) / 2 - 1) * pitch / 2 + (col / 2) * 2 + channel] >> 6; };
                             return (at(first) * (1 - weight) + at(first + 1) * weight - 512.0) / (full ? 1023.0 : 896.0);
                         };
                         const double u = chroma(0), v = chroma(1);
@@ -120,13 +120,41 @@ namespace {
         frame.linesize[0] = pitch;
         frame.colorspace = AVCOL_SPC_BT2020_CL;
         require(!lfs::media::detail::cudaFrameColorSupported(&frame, AVCOL_SPC_BT709), "constant-luminance matrix uses fallback");
-        frame.colorspace = AVCOL_SPC_BT709;
-        frame.chroma_location = AVCHROMA_LOC_CENTER;
-        require(!lfs::media::detail::cudaFrameView(&frame), "unsupported chroma location uses fallback");
+        int chroma_checks = 0, legacy_matrices = 0;
+        for (const auto layout : {AV_PIX_FMT_P010LE, AV_PIX_FMT_NV12}) {
+            frames.sw_format = layout;
+            for (int matrix = 0; matrix < AVCOL_SPC_NB; ++matrix) {
+                frame.colorspace = static_cast<AVColorSpace>(matrix);
+                const auto view = lfs::media::detail::cudaFrameView(&frame);
+                if (matrix == AVCOL_SPC_BT2020_CL) {
+                    require(!view, "constant-luminance matrix retains host fallback for both layouts");
+                    continue;
+                }
+                require(view.has_value(), "host-default matrices retain GPU conversion");
+                const bool legacy = layout == AV_PIX_FMT_NV12 && matrix != AVCOL_SPC_BT709 && matrix != AVCOL_SPC_BT2020_NCL;
+                require(view->legacy_bt601 == legacy, "NV12 default matrices must use the original integer kernel");
+                legacy_matrices += legacy;
+            }
+            frame.colorspace = AVCOL_SPC_BT709;
+            frame.chroma_location = AVCHROMA_LOC_LEFT;
+            const auto reference = lfs::media::detail::cudaFrameView(&frame);
+            require(reference.has_value(), "left chroma reference descriptor");
+            for (const auto location : {AVCHROMA_LOC_UNSPECIFIED, AVCHROMA_LOC_LEFT, AVCHROMA_LOC_CENTER,
+                                        AVCHROMA_LOC_TOPLEFT, AVCHROMA_LOC_TOP, AVCHROMA_LOC_BOTTOMLEFT, AVCHROMA_LOC_BOTTOM}) {
+                frame.chroma_location = location;
+                const auto view = lfs::media::detail::cudaFrameView(&frame);
+                require(view.has_value(), "all signalled chroma locations retain GPU conversion");
+                require(std::equal(std::begin(view->color.decode), std::end(view->color.decode), std::begin(reference->color.decode)) &&
+                            view->color.chroma_y_scale == reference->color.chroma_y_scale &&
+                            view->color.chroma_y_offset == reference->color.chroma_y_offset,
+                        "GPU chroma sampling must match the host's metadata-independent policy");
+                ++chroma_checks;
+            }
+        }
         frame.chroma_location = AVCHROMA_LOC_LEFT;
         frames.sw_format = AV_PIX_FMT_YUV420P10LE;
         require(!lfs::media::detail::cudaFrameView(&frame), "planar ten-bit storage must not be read as P010");
-        return {{"success", true}, {"checked_components", checked}, {"nondefault_stream", true}};
+        return {{"success", true}, {"checked_components", checked}, {"checked_chroma_locations", chroma_checks}, {"legacy_matrix_fallbacks", legacy_matrices}, {"nondefault_stream", true}};
     }
     nlohmann::json conversionContracts() {
         using namespace lfs::core;
