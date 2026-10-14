@@ -765,7 +765,7 @@
     "fit_to_scene": "适应场景",
     "fit_to_scene_trimmed": "适应场景（已修剪）",
     "reset_crop": "重置",
-    "merge_to_single_ply": "合并为单个PLY",
+    "merge_to_single_ply": "合并为单个模型",
     "move_to": "移动到",
     "move_to_root": "根目录",
     "models": "模型 ({})",

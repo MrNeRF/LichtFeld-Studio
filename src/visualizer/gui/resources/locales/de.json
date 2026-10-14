@@ -765,7 +765,7 @@
     "fit_to_scene": "An Szene anpassen",
     "fit_to_scene_trimmed": "An Szene anpassen (beschnitten)",
     "reset_crop": "Zurücksetzen",
-    "merge_to_single_ply": "Zu einzelner PLY zusammenführen",
+    "merge_to_single_ply": "In ein einzelnes Modell zusammenführen",
     "move_to": "Verschieben nach",
     "move_to_root": "Wurzel",
     "models": "Modelle ({})",

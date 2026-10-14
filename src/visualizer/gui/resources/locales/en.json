@@ -761,7 +761,7 @@
     "fit_to_scene": "Fit to Scene",
     "fit_to_scene_trimmed": "Fit to Scene (Trimmed)",
     "reset_crop": "Reset",
-    "merge_to_single_ply": "Merge to Single PLY",
+    "merge_to_single_ply": "Merge into Single Model",
     "move_to": "Move To",
     "move_to_root": "Root",
     "models": "Models ({})",

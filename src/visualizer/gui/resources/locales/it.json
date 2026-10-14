@@ -765,7 +765,7 @@
     "fit_to_scene": "Adatta alla Scena",
     "fit_to_scene_trimmed": "Adatta alla Scena (Ritagliato)",
     "reset_crop": "Reimposta",
-    "merge_to_single_ply": "Unisci in Singolo PLY",
+    "merge_to_single_ply": "Unisci in Singolo Modello",
     "move_to": "Sposta in",
     "move_to_root": "Radice",
     "models": "Modelli ({})",

@@ -765,7 +765,7 @@
     "fit_to_scene": "Ajustar a la Escena",
     "fit_to_scene_trimmed": "Ajustar a la escena (recortado)",
     "reset_crop": "Restablecer",
-    "merge_to_single_ply": "Combinar en un Solo PLY",
+    "merge_to_single_ply": "Combinar en un Solo Modelo",
     "move_to": "Mover A",
     "move_to_root": "Raíz",
     "models": "Modelos ({})",

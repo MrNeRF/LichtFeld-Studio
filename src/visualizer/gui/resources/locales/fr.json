@@ -765,7 +765,7 @@
     "fit_to_scene": "Ajuster à la Scène",
     "fit_to_scene_trimmed": "Ajuster à la Scène (Rogné)",
     "reset_crop": "Réinitialiser",
-    "merge_to_single_ply": "Fusionner en un Seul PLY",
+    "merge_to_single_ply": "Fusionner en un Seul Modèle",
     "move_to": "Déplacer Vers",
     "move_to_root": "Racine",
     "models": "Modèles ({})",

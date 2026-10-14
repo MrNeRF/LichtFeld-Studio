@@ -765,7 +765,7 @@
     "fit_to_scene": "Aanpassen aan Scène",
     "fit_to_scene_trimmed": "Aanpassen aan Scène (Bijgesneden)",
     "reset_crop": "Resetten",
-    "merge_to_single_ply": "Samenvoegen tot Enkele PLY",
+    "merge_to_single_ply": "Samenvoegen tot Enkel Model",
     "move_to": "Verplaats Naar",
     "move_to_root": "Root",
     "models": "Modellen ({})",

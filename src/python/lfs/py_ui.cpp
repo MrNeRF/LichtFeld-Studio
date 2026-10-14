@@ -4569,7 +4569,7 @@ namespace lfs::python {
         m.def(
             "merge_group",
             [](const std::string& name) { lfs::core::events::cmd::MergeGroup{.name = name}.emit(); },
-            nb::arg("name"), "Merge group children into a single PLY");
+            nb::arg("name"), "Merge group children into a single model");
 
         m.def(
             "save_node_to_disk",

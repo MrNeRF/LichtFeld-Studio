@@ -765,7 +765,7 @@
     "fit_to_scene": "씬에 맞추기",
     "fit_to_scene_trimmed": "씬에 맞추기 (트림됨)",
     "reset_crop": "초기화",
-    "merge_to_single_ply": "단일 PLY로 병합",
+    "merge_to_single_ply": "단일 모델로 병합",
     "move_to": "이동 위치",
     "move_to_root": "루트",
     "models": "모델 ({})",

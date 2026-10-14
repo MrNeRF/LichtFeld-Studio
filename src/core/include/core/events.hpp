@@ -127,8 +127,8 @@ namespace lfs::core {
             EVENT(AddGroupByParentId, std::string name; int32_t parent_id;); // -1 parent = root
             EVENT(DuplicateNode, std::string name;);                         // Duplicate node (and children if group)
             EVENT(DuplicateNodeById, int32_t node_id;);                      // Duplicate node (and children if group)
-            EVENT(MergeGroup, std::string name;);                            // Merge group children into single PLY
-            EVENT(MergeGroupById, int32_t node_id;);                         // Merge group children into single PLY
+            EVENT(MergeGroup, std::string name;);                            // Merge group children into a single model
+            EVENT(MergeGroupById, int32_t node_id;);                         // Merge group children into a single model
             EVENT(SetNodeLocked, std::string name; bool locked;);            // Lock/unlock node for editing
             EVENT(CropPLY, lfs::geometry::BoundingBox crop_box; bool inverse; int32_t target_node_id = -1;);
             EVENT(CropPLYEllipsoid, glm::mat4 world_transform; glm::vec3 radii; bool inverse; int32_t target_node_id = -1;);

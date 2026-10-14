@@ -765,7 +765,7 @@
     "fit_to_scene": "シーンにフィット",
     "fit_to_scene_trimmed": "シーンにフィット(トリム済み)",
     "reset_crop": "リセット",
-    "merge_to_single_ply": "単一のPLYにマージ",
+    "merge_to_single_ply": "単一のモデルにマージ",
     "move_to": "移動先",
     "move_to_root": "ルート",
     "models": "モデル ({})",

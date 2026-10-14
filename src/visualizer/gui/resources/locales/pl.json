@@ -765,7 +765,7 @@
     "fit_to_scene": "Dopasuj do Sceny",
     "fit_to_scene_trimmed": "Dopasuj do Sceny (Przycięty)",
     "reset_crop": "Resetuj",
-    "merge_to_single_ply": "Połącz w Pojedynczy PLY",
+    "merge_to_single_ply": "Połącz w Pojedynczy Model",
     "move_to": "Przenieś do",
     "move_to_root": "Katalog Główny",
     "models": "Modele ({})",
