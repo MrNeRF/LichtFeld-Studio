@@ -450,6 +450,9 @@ def preferences_panel_module(monkeypatch):
     lf_stub.set_camera_navigation_mode = lambda _mode: None
     lf_stub.get_camera_view_snap_enabled = lambda: False
     lf_stub.set_camera_view_snap_enabled = lambda _enabled: None
+    state.zoom_toward_cursor = False
+    lf_stub.get_zoom_toward_cursor_enabled = lambda: state.zoom_toward_cursor
+    lf_stub.set_zoom_toward_cursor_enabled = lambda enabled: setattr(state, "zoom_toward_cursor", enabled)
     lf_stub.file_associations_status = file_associations_status
     lf_stub.file_association_set = file_association_set
 
@@ -669,6 +672,21 @@ def test_navigation_speed_preferences_reset_with_input_section(preferences_panel
 
     assert state.zoom_speed == 11
     assert state.navigation_speed == 10
+
+
+def test_zoom_toward_cursor_round_trip_and_reset_with_input_section(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "input"
+    panel._refresh_selection = lambda: None
+    assert state.zoom_toward_cursor is False
+
+    panel._set_zoom_toward_cursor(1)
+    assert state.zoom_toward_cursor is True
+
+    panel._reset_section()
+
+    assert state.zoom_toward_cursor is False
 
 
 def test_trackpad_preferences_round_trip_and_reset_with_input_section(preferences_panel_module):

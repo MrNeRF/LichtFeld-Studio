@@ -322,6 +322,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_align_transform.cpp
         test_orthographic_zoom.cpp
+        test_zoom_toward_cursor.cpp
         test_ui_visibility_transition.cpp
         test_summary_labels.cpp
         test_menu_bar_title.cpp

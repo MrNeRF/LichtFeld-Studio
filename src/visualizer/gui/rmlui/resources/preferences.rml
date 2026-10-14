@@ -380,6 +380,10 @@
               <span class="slider-value">{{ navigation_speed | format_int }}</span>
             </div>
           </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.zoom_toward_cursor_tooltip">
+            <span class="preferences-label">@tr:preferences.zoom_toward_cursor</span>
+            <input type="checkbox" data-checked="zoom_toward_cursor" />
+          </div>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.remember_camera_navigation</span>
             <input type="checkbox" data-checked="remember_navigation" />

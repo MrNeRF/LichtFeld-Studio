@@ -187,6 +187,10 @@ class Viewport {
             dolly(lfs::vis::input::wheelZoomFraction(delta, zoomSpeed), carry_pivot);
         }
 
+        void zoomToward(const glm::vec3& anchor, float delta, bool carry_pivot = false) {
+            dollyToward(anchor, lfs::vis::input::wheelZoomFraction(delta, zoomSpeed), carry_pivot);
+        }
+
         // Moves toward the pivot by `fraction` of the camera-to-pivot distance;
         // a negative fraction moves away.
         void dolly(float fraction, bool carry_pivot = false) {
@@ -213,6 +217,52 @@ class Viewport {
             if (fraction > 0.0f && glm::dot(pivot - t, forward) < kMinDistance) {
                 pivot = t + forward * kMinDistance;
             }
+        }
+
+        // Moves toward a world-space anchor (the surface under the cursor) by
+        // `fraction` of the camera-to-anchor distance. Camera and pivot scale
+        // about the anchor, so it stays fixed on screen while the orbit
+        // distance shrinks by the same fraction as a centered dolly.
+        void dollyToward(const glm::vec3& anchor, float fraction, bool carry_pivot = false) {
+            // Never step onto or past the anchor; close to it, fall back to the
+            // centered dolly so zooming in can still push through the surface.
+            // "Close" scales with the scene: camera and pivot shrink toward the
+            // anchor together, so a fraction of the pivot distance never changes
+            // while zooming in and cannot serve as the threshold.
+            constexpr float kMaxAnchorFraction = 0.9f;
+            constexpr float kMinDistanceSceneFraction = 1.0e-3f;
+            constexpr float kMinDistanceUnknownScene = 0.1f;
+            const float min_distance = scene_extent_ > 0.0f ? kMinDistanceSceneFraction * scene_extent_
+                                                            : kMinDistanceUnknownScene;
+            // Measured along the view direction and applied in both directions:
+            // once the camera has passed an anchor (cached for the rest of a
+            // gesture), moving toward or away from it would reverse the zoom.
+            const float ahead = glm::dot(anchor - t, lfs::rendering::cameraForward(R));
+            if (ahead < min_distance) {
+                dolly(fraction, carry_pivot);
+                return;
+            }
+            fraction = std::min(fraction, kMaxAnchorFraction);
+            if (fraction < 0.0f) {
+                // Zooming out multiplies the distances by 1 - fraction; keep them
+                // within the far plane like dolly() does, so a long scroll-out
+                // stays bounded and can zoom back in. A carried pivot keeps its
+                // offset, so only the anchor distance grows then.
+                constexpr float kMaxDistance = lfs::rendering::DEFAULT_FAR_PLANE;
+                const float anchor_distance = glm::length(anchor - t);
+                const float distance = carry_pivot ? anchor_distance
+                                                   : std::max(anchor_distance, glm::length(pivot - t));
+                if (distance > 0.0f)
+                    fraction = std::max(fraction, 1.0f - std::max(kMaxDistance, distance) / distance);
+            }
+
+            const glm::vec3 movement = fraction * (anchor - t);
+            t += movement;
+            if (carry_pivot) {
+                pivot += movement;
+                return;
+            }
+            pivot += fraction * (anchor - pivot);
         }
 
         // WASD movement carried by an exponentially-damped velocity: holding a
@@ -290,7 +340,8 @@ class Viewport {
             constexpr float kMinDistance = lfs::rendering::DEFAULT_NEAR_PLANE;
             const float distance = std::max(distance_to_pivot, 0.01f);
             const float next_distance = std::max(kMinDistance, distance - forward_speed * deltaTime);
-            const float next_scale = std::clamp(ortho_scale * distance / next_distance, 1.0f, 10000.0f);
+            const float next_scale = std::clamp(ortho_scale * distance / next_distance,
+                                                lfs::rendering::MIN_ORTHO_SCALE, lfs::rendering::MAX_ORTHO_SCALE);
             const float applied_distance = distance * (1.0f - ortho_scale / next_scale);
             const glm::vec3 lateral_velocity = wasd_velocity - f * forward_speed;
             const glm::vec3 lateral_movement = lateral_velocity * deltaTime;

@@ -74,6 +74,10 @@ namespace lfs::rendering {
     constexpr float MAX_FOCAL_LENGTH_MM = 200.0f;
     constexpr float DEFAULT_FOCAL_LENGTH_MM = 35.0f;
 
+    // Orthographic scale is screen pixels per world unit. The minimum must let
+    // kilometre-scale scenes fit a viewport, so it sits well below 1.
+    constexpr float MIN_ORTHO_SCALE = 1.0e-3f;
+    constexpr float MAX_ORTHO_SCALE = 10000.0f;
     constexpr float DEFAULT_ORTHO_SCALE = 100.0f;
 
     struct CameraIntrinsics {

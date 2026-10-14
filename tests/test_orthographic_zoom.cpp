@@ -134,12 +134,16 @@ namespace lfs::vis {
         screen::ScreenService screens;
         RenderingManager rendering(screens);
         configure(rendering);
-        rendering.editViewSettings(screens.activeView(), [](ViewSettings& settings) { settings.ortho_scale = 10000.0f; });
+        rendering.editViewSettings(screens.activeView(), [](ViewSettings& settings) { settings.ortho_scale = lfs::rendering::MAX_ORTHO_SCALE; });
         controller.handleScroll(0.0, 1.0);
-        EXPECT_FLOAT_EQ(renderedScale(viewport, rendering), 10000.0f);
+        EXPECT_FLOAT_EQ(renderedScale(viewport, rendering), lfs::rendering::MAX_ORTHO_SCALE);
+        // Zoom-out reaches below one pixel per world unit, so kilometre-scale scenes fit.
         rendering.editViewSettings(screens.activeView(), [](ViewSettings& settings) { settings.ortho_scale = 1.0f; });
         controller.handleScroll(0.0, -1.0);
-        EXPECT_FLOAT_EQ(renderedScale(viewport, rendering), 1.0f);
+        EXPECT_NEAR(renderedScale(viewport, rendering), 0.9f, 1e-6f);
+        rendering.editViewSettings(screens.activeView(), [](ViewSettings& settings) { settings.ortho_scale = lfs::rendering::MIN_ORTHO_SCALE; });
+        controller.handleScroll(0.0, -1.0);
+        EXPECT_FLOAT_EQ(renderedScale(viewport, rendering), lfs::rendering::MIN_ORTHO_SCALE);
     }
 
     TEST_F(OrthographicZoomTest, HomeKeyRestoresOrthographicScaleForHomePose) {

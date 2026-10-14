@@ -1005,6 +1005,8 @@
     "new_project_navigation_up": "Vertikale für neue Projekte",
     "new_project_navigation_help": "Gilt nur für neue Projekte. Bestehende Projekte behalten ihre gespeicherten Einstellungen.",
     "new_project_align_grid": "Raster in neuen Projekten ausrichten",
+    "zoom_toward_cursor": "Zum Mauszeiger zoomen",
+    "zoom_toward_cursor_tooltip": "Zum Punkt unter dem Mauszeiger statt zur Ansichtsmitte zoomen.",
     "navigation_project_hint": "Projekt speichern, um die Auswahl zu behalten. Datenkoordinaten bleiben unverändert.",
     "navigation_up_axis": "Vertikalachse",
     "navigation_up_legacy_y": "Y-up (Standard)",

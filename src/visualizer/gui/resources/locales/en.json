@@ -1001,6 +1001,8 @@
     "new_project_navigation_up": "Vertical for new projects",
     "new_project_navigation_help": "Applies only to new projects. Existing projects keep their saved settings.",
     "new_project_align_grid": "Align grid in new projects",
+    "zoom_toward_cursor": "Zoom toward cursor",
+    "zoom_toward_cursor_tooltip": "Zoom toward the point under the cursor instead of the view center.",
     "navigation_project_hint": "Save the project to keep this choice. Data coordinates stay unchanged.",
     "navigation_up_axis": "Up axis",
     "navigation_up_legacy_y": "Y-up (default)",

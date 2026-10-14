@@ -1005,6 +1005,8 @@
     "new_project_navigation_up": "Verticaal voor nieuwe projecten",
     "new_project_navigation_help": "Geldt alleen voor nieuwe projecten. Bestaande projecten behouden hun opgeslagen instellingen.",
     "new_project_align_grid": "Raster in nieuwe projecten uitlijnen",
+    "zoom_toward_cursor": "Zoomen naar cursor",
+    "zoom_toward_cursor_tooltip": "Zoom naar het punt onder de cursor in plaats van naar het midden van de weergave.",
     "navigation_project_hint": "Sla het project op om deze keuze te bewaren. De gegevenscoördinaten blijven gelijk.",
     "navigation_up_axis": "Verticale as",
     "navigation_up_legacy_y": "Y-up (standaard)",

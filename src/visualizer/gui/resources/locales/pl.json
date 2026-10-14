@@ -1005,6 +1005,8 @@
     "new_project_navigation_up": "Pion dla nowych projektów",
     "new_project_navigation_help": "Dotyczy tylko nowych projektów. Istniejące projekty zachowują zapisane ustawienia.",
     "new_project_align_grid": "Wyrównaj siatkę w nowych projektach",
+    "zoom_toward_cursor": "Przybliżaj w stronę kursora",
+    "zoom_toward_cursor_tooltip": "Przybliżaj w stronę punktu pod kursorem zamiast do środka widoku.",
     "navigation_project_hint": "Zapisz projekt, aby zachować wybór. Współrzędne danych pozostają bez zmian.",
     "navigation_up_axis": "Oś pionowa",
     "navigation_up_legacy_y": "Y-up (domyślnie)",

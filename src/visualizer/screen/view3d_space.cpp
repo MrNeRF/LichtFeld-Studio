@@ -268,12 +268,11 @@ namespace lfs::vis::screen {
             return;
         }
         if (enabled) {
-            constexpr float kMinScale = 1.0f;
-            constexpr float kMaxScale = 10000.0f;
             const float distance = glm::length(view.camera.camera.pivot - view.camera.camera.t);
             const float half_tan = std::tan(lfs::rendering::focalLengthToVFovRad(s.focal_length_mm) * 0.5f);
             if (viewport_height > 0.0f && std::isfinite(distance) && distance > 0.01f && half_tan > 0.0f)
-                s.ortho_scale = std::clamp(viewport_height / (2.0f * distance * half_tan), kMinScale, kMaxScale);
+                s.ortho_scale = std::clamp(viewport_height / (2.0f * distance * half_tan),
+                                           lfs::rendering::MIN_ORTHO_SCALE, lfs::rendering::MAX_ORTHO_SCALE);
             else
                 s.ortho_scale = 100.0f;
         }

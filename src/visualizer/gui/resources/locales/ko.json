@@ -1005,6 +1005,8 @@
     "new_project_navigation_up": "새 프로젝트의 위쪽 축",
     "new_project_navigation_help": "새 프로젝트에만 적용됩니다. 기존 프로젝트는 저장된 설정을 유지합니다.",
     "new_project_align_grid": "새 프로젝트의 그리드 정렬",
+    "zoom_toward_cursor": "커서 방향으로 확대/축소",
+    "zoom_toward_cursor_tooltip": "뷰 중심 대신 커서 아래 지점을 향해 확대/축소합니다.",
     "navigation_project_hint": "선택을 유지하려면 프로젝트를 저장하세요. 데이터 좌표는 변경되지 않습니다.",
     "navigation_up_axis": "수직 축",
     "navigation_up_legacy_y": "Y-up (기본값)",

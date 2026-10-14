@@ -1005,6 +1005,8 @@
     "new_project_navigation_up": "新規プロジェクトの上方向",
     "new_project_navigation_help": "新規プロジェクトにのみ適用されます。既存のプロジェクトは保存済みの設定を維持します。",
     "new_project_align_grid": "新規プロジェクトのグリッドを整列",
+    "zoom_toward_cursor": "カーソル位置へズーム",
+    "zoom_toward_cursor_tooltip": "ビューの中心ではなく、カーソル下の点に向かってズームします。",
     "navigation_project_hint": "この選択を保持するにはプロジェクトを保存してください。データ座標は変更されません。",
     "navigation_up_axis": "上方向の軸",
     "navigation_up_legacy_y": "Y-up（既定）",

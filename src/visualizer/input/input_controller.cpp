@@ -420,8 +420,6 @@ namespace lfs::vis {
                 return;
 
             constexpr float kMinDistance = 0.01f;
-            constexpr float kMinScale = 1.0f;
-            constexpr float kMaxScale = 10000.0f;
             constexpr float kDefaultScale = 100.0f;
             const float distance = glm::length(target_viewport.camera.home_pivot - target_viewport.camera.home_t);
             float scale = kDefaultScale;
@@ -430,7 +428,7 @@ namespace lfs::vis {
                 const float half_tan_fov = std::tan(glm::radians(vfov) * 0.5f);
                 scale = std::clamp(static_cast<float>(target_viewport.windowSize.y) /
                                        (2.0f * distance * half_tan_fov),
-                                   kMinScale, kMaxScale);
+                                   lfs::rendering::MIN_ORTHO_SCALE, lfs::rendering::MAX_ORTHO_SCALE);
             }
 
             rendering->editViewSettings(view, [&](ViewSettings& settings) { settings.ortho_scale = scale; });
@@ -552,6 +550,7 @@ namespace lfs::vis {
             setCameraNavigationMode(*mode);
         }
         setCameraViewSnapEnabled(loadCameraViewSnapPreference());
+        setZoomTowardCursorEnabled(loadZoomTowardCursorPreference());
 
         // Get initial mouse position
         float fx, fy;
@@ -1954,9 +1953,10 @@ namespace lfs::vis {
             target_viewport.camera.rotate_roll(delta);
         } else if (swipe == Swipe::Zoom) {
             zoomViewportBy(target_viewport,
-                           input::swipeZoomFactor(delta, trackpad_.zoom_speed));
+                           input::swipeZoomFactor(delta, trackpad_.zoom_speed),
+                           glm::dvec2(mouse_x, mouse_y));
         } else if (scroll_action == input::Action::CAMERA_ZOOM) {
-            zoomViewport(target_viewport, delta);
+            zoomViewport(target_viewport, delta, glm::dvec2(mouse_x, mouse_y));
         } else {
             return;
         }
@@ -1990,7 +1990,8 @@ namespace lfs::vis {
         target_viewport.camera.finishGlide();
 
         zoomViewportBy(target_viewport,
-                       input::pinchZoomFactor(scale, trackpad_.zoom_speed));
+                       input::pinchZoomFactor(scale, trackpad_.zoom_speed),
+                       glm::dvec2(mouse_x, mouse_y));
         onCameraMovementStart();
         publishCameraMove(&target_viewport);
     }
@@ -1999,27 +2000,133 @@ namespace lfs::vis {
         trackpad_touches_ = down ? trackpad_touches_ + 1 : std::max(trackpad_touches_ - 1, 0);
     }
 
-    void InputController::zoomViewport(Viewport& target_viewport, const float delta) {
+    void InputController::zoomViewport(Viewport& target_viewport, const float delta,
+                                       std::optional<glm::dvec2> cursor) {
+        const auto view = views_.viewId(target_viewport);
+        if (!zoom_toward_cursor_enabled_ || !zoomTowardCursorApplies(view))
+            cursor.reset();
         constexpr float ORTHO_ZOOM_FACTOR = 0.1f;
-        if (!scaleOrthographicView(target_viewport, 1.0f + delta * ORTHO_ZOOM_FACTOR))
-            target_viewport.camera.zoom(delta, zoomCarriesPivot(camera_navigation_mode_));
+        if (scaleOrthographicView(target_viewport, 1.0f + delta * ORTHO_ZOOM_FACTOR, cursor))
+            return;
+        const bool carry_pivot = zoomCarriesPivot(camera_navigation_mode_);
+        const auto anchor = cursor ? zoomAnchor(target_viewport, view, *cursor) : std::nullopt;
+        if (anchor) {
+            target_viewport.camera.setSceneExtent(sceneExtent());
+            target_viewport.camera.zoomToward(*anchor, delta, carry_pivot);
+        } else {
+            target_viewport.camera.zoom(delta, carry_pivot);
+        }
+        if (cursor)
+            zoom_anchor_cache_.settle(target_viewport.camera.R, target_viewport.camera.t);
     }
 
-    void InputController::zoomViewportBy(Viewport& target_viewport, const float factor) {
-        if (!scaleOrthographicView(target_viewport, factor))
-            target_viewport.camera.dolly(1.0f - 1.0f / factor, zoomCarriesPivot(camera_navigation_mode_));
+    void InputController::zoomViewportBy(Viewport& target_viewport, const float factor,
+                                         std::optional<glm::dvec2> cursor) {
+        const auto view = views_.viewId(target_viewport);
+        if (!zoom_toward_cursor_enabled_ || !zoomTowardCursorApplies(view))
+            cursor.reset();
+        if (scaleOrthographicView(target_viewport, factor, cursor))
+            return;
+        const float fraction = 1.0f - 1.0f / factor;
+        const bool carry_pivot = zoomCarriesPivot(camera_navigation_mode_);
+        const auto anchor = cursor ? zoomAnchor(target_viewport, view, *cursor) : std::nullopt;
+        if (anchor) {
+            target_viewport.camera.setSceneExtent(sceneExtent());
+            target_viewport.camera.dollyToward(*anchor, fraction, carry_pivot);
+        } else {
+            target_viewport.camera.dolly(fraction, carry_pivot);
+        }
+        if (cursor)
+            zoom_anchor_cache_.settle(target_viewport.camera.R, target_viewport.camera.t);
     }
 
-    bool InputController::scaleOrthographicView(Viewport& target_viewport, float factor) {
+    bool InputController::zoomTowardCursorApplies(const ViewId view) const {
+        const auto* const rendering = services().renderingOrNull();
+        if (!rendering)
+            return false;
+        const auto settings = rendering->settingsForView(view);
+        return !settings.equirectangular && !splitViewEnabled(settings.split_view_mode);
+    }
+
+    std::optional<glm::vec3> InputController::zoomAnchor(const Viewport& target_viewport, const ViewId view,
+                                                         const glm::dvec2& cursor) {
+        const auto now = input::ZoomAnchorCache::Clock::now();
+        if (zoom_anchor_cache_.matches(view, cursor, now, target_viewport.camera.R, target_viewport.camera.t))
+            return zoom_anchor_cache_.reuse(now);
+        const auto anchor = surfacePointUnderCursor(cursor.x, cursor.y);
+        zoom_anchor_cache_.store(view, cursor, anchor, now);
+        return anchor;
+    }
+
+    std::optional<glm::vec3> InputController::surfacePointUnderCursor(const double x, const double y) const {
+        auto* const rendering = services().renderingOrNull();
+        const auto target = views_.viewAt(static_cast<float>(x), static_cast<float>(y));
+        if (!rendering || !target.valid())
+            return std::nullopt;
+        const auto panel = rendering->resolveViewerPanel(target.id,
+                                                         *target.viewport, target.pos, target.size,
+                                                         glm::vec2(static_cast<float>(x), static_cast<float>(y)));
+        if (!panel || !panel->valid())
+            return std::nullopt;
+
+        // Depth lives at render resolution, which may differ from the panel's
+        // on-screen size.
+        const float render_x = (static_cast<float>(x) - panel->x) *
+                               static_cast<float>(panel->render_width) / panel->width;
+        const float render_y = (static_cast<float>(y) - panel->y) *
+                               static_cast<float>(panel->render_height) / panel->height;
+        const float depth = rendering->getDepthAtPixel(target.id, static_cast<int>(render_x),
+                                                       static_cast<int>(render_y), panel->panel);
+        if (!std::isfinite(depth) || depth <= 0.0f)
+            return std::nullopt;
+
+        const auto render_settings = rendering->settingsForView(target.id);
+        Viewport projection_viewport = *panel->viewport;
+        projection_viewport.windowSize = {panel->render_width, panel->render_height};
+        const glm::vec3 world = projection_viewport.unprojectPixel(
+            render_x, render_y, depth, render_settings.focal_length_mm,
+            render_settings.orthographic, render_settings.ortho_scale);
+        if (!Viewport::isValidWorldPosition(world))
+            return std::nullopt;
+        return world;
+    }
+
+    bool InputController::scaleOrthographicView(Viewport& target_viewport, float factor,
+                                                const std::optional<glm::dvec2>& cursor) {
         auto* rendering = services().renderingOrNull();
         if (!rendering)
             return false;
         const auto id = views_.viewId(target_viewport);
         if (!rendering->settingsForView(id).orthographic)
             return false;
+        float old_scale = 0.0f;
+        float new_scale = 0.0f;
         rendering->editViewSettings(id, [&](ViewSettings& settings) {
-            settings.ortho_scale = std::clamp(settings.ortho_scale * factor, 1.0f, 10000.0f);
+            old_scale = settings.ortho_scale;
+            settings.ortho_scale = std::clamp(settings.ortho_scale * factor,
+                                              lfs::rendering::MIN_ORTHO_SCALE,
+                                              lfs::rendering::MAX_ORTHO_SCALE);
+            new_scale = settings.ortho_scale;
         });
+        if (!cursor || !(old_scale > 0.0f) || !(new_scale > 0.0f) || old_scale == new_scale)
+            return true;
+
+        // The world point under the cursor sits at its render-pixel offset /
+        // ortho_scale in the camera plane; shift camera and pivot by the change
+        // so that point stays put.
+        const auto target = views_.viewAt(static_cast<float>(cursor->x), static_cast<float>(cursor->y));
+        if (!target.valid() || target.viewport != &target_viewport)
+            return true;
+        const glm::vec2 cursor_px(static_cast<float>(cursor->x), static_cast<float>(cursor->y));
+        const auto panel = rendering->resolveViewerPanel(id, *target.viewport, target.pos, target.size, cursor_px);
+        if (!panel || !panel->valid())
+            return true;
+        const glm::vec2 offset = input::orthoCursorOffset(cursor_px - glm::vec2(panel->x, panel->y),
+                                                          glm::vec2(panel->width, panel->height),
+                                                          {panel->render_width, panel->render_height});
+        const glm::vec3 movement = input::orthoZoomShift(target_viewport.camera.R, offset, old_scale, new_scale);
+        target_viewport.camera.t += movement;
+        target_viewport.camera.pivot += movement;
         return true;
     }
 
@@ -3296,11 +3403,9 @@ namespace lfs::vis {
                 const float distance_to_pivot = glm::length(target_viewport.camera.pivot - target_viewport.camera.t);
                 const float half_tan_fov = std::tan(glm::radians(fov_y_deg) * 0.5f);
                 const float viewport_height = static_cast<float>(viewport().windowSize.y);
-                constexpr float MIN_SCALE = 1.0f;
-                constexpr float MAX_SCALE = 10000.0f;
                 settings.ortho_scale = std::clamp(
                     viewport_height / (2.0f * distance_to_pivot * half_tan_fov),
-                    MIN_SCALE, MAX_SCALE);
+                    lfs::rendering::MIN_ORTHO_SCALE, lfs::rendering::MAX_ORTHO_SCALE);
                 rm->updateSettings(settings);
             }
         }

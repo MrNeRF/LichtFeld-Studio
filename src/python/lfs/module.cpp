@@ -3148,6 +3148,19 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("enabled"), "Enable or disable camera axis-view snapping");
     m.def(
+        "get_zoom_toward_cursor_enabled", []() -> bool {
+            const auto* controller = lfs::vis::InputController::instance();
+            return controller ? controller->zoomTowardCursorEnabled() : lfs::vis::loadZoomTowardCursorPreference();
+        },
+        "Check whether camera zoom moves toward the point under the cursor");
+    m.def(
+        "set_zoom_toward_cursor_enabled", [](bool enabled) {
+            if (auto* controller = lfs::vis::InputController::instance())
+                controller->setZoomTowardCursorEnabled(enabled);
+            lfs::vis::saveZoomTowardCursorPreference(enabled);
+        },
+        nb::arg("enabled"), "Enable or disable zooming toward the point under the cursor instead of the view center");
+    m.def(
         "file_associations_status", []() {
             nb::list rows;
             for (const auto& entry : lfs::vis::gui::fileAssociationsStatus()) {

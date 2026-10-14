@@ -1005,6 +1005,8 @@
     "new_project_navigation_up": "Verticale des nouveaux projets",
     "new_project_navigation_help": "S’applique uniquement aux nouveaux projets. Les projets existants conservent leurs réglages enregistrés.",
     "new_project_align_grid": "Aligner la grille des nouveaux projets",
+    "zoom_toward_cursor": "Zoomer vers le curseur",
+    "zoom_toward_cursor_tooltip": "Zoomer vers le point sous le curseur plutôt que vers le centre de la vue.",
     "navigation_project_hint": "Enregistrez le projet pour conserver ce choix. Les coordonnées des données restent inchangées.",
     "navigation_up_axis": "Axe vertical",
     "navigation_up_legacy_y": "Y-up (par défaut)",

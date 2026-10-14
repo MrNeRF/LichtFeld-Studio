@@ -1005,6 +1005,8 @@
     "new_project_navigation_up": "Vertical para proyectos nuevos",
     "new_project_navigation_help": "Solo se aplica a proyectos nuevos. Los proyectos existentes conservan sus ajustes guardados.",
     "new_project_align_grid": "Alinear cuadrícula en proyectos nuevos",
+    "zoom_toward_cursor": "Zoom hacia el cursor",
+    "zoom_toward_cursor_tooltip": "Acercar hacia el punto bajo el cursor en lugar del centro de la vista.",
     "navigation_project_hint": "Guarda el proyecto para conservar la selección. Las coordenadas de los datos no cambian.",
     "navigation_up_axis": "Eje vertical",
     "navigation_up_legacy_y": "Y-up (predeterminado)",

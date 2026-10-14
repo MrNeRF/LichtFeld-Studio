@@ -660,6 +660,12 @@ def get_camera_view_snap_enabled() -> bool:
 def set_camera_view_snap_enabled(enabled: bool) -> None:
     """Enable or disable camera axis-view snapping"""
 
+def get_zoom_toward_cursor_enabled() -> bool:
+    """Check whether camera zoom moves toward the point under the cursor"""
+
+def set_zoom_toward_cursor_enabled(enabled: bool) -> None:
+    """Enable or disable zooming toward the point under the cursor instead of the view center"""
+
 def file_associations_status() -> list:
     """
     Return whether LichtFeld Studio is registered as a handler for each known file extension (Windows only)

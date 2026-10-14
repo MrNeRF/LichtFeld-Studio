@@ -113,6 +113,8 @@ namespace lfs::vis {
         [[nodiscard]] bool cameraViewSnap();
         void setRememberCameraViewSnap(bool enabled);
         [[nodiscard]] bool rememberCameraViewSnap();
+        void setZoomTowardCursor(bool enabled);
+        [[nodiscard]] bool zoomTowardCursor();
         void setSceneGraphSelectionMarkers(bool enabled);
         [[nodiscard]] bool sceneGraphSelectionMarkers();
         void setTrackpad(const TrackpadPreferenceState& state, bool persist = true);
@@ -177,6 +179,8 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API bool loadCameraViewSnapPreference();
     LFS_VIS_API void setRememberCameraViewSnapPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool rememberCameraViewSnapPreference();
+    LFS_VIS_API void saveZoomTowardCursorPreference(bool enabled);
+    [[nodiscard]] LFS_VIS_API bool loadZoomTowardCursorPreference();
     LFS_VIS_API void saveSceneGraphSelectionMarkersPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool loadSceneGraphSelectionMarkersPreference();
     LFS_VIS_API void saveTrackpadPreferences(const TrackpadPreferenceState& state, bool persist = true);

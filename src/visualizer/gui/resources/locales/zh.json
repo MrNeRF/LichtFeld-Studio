@@ -1005,6 +1005,8 @@
     "new_project_navigation_up": "新项目的向上轴",
     "new_project_navigation_help": "仅适用于新项目。现有项目保留已保存的设置。",
     "new_project_align_grid": "对齐新项目的网格",
+    "zoom_toward_cursor": "向光标处缩放",
+    "zoom_toward_cursor_tooltip": "朝光标下方的点缩放，而不是朝视图中心缩放。",
     "navigation_project_hint": "保存项目以保留此选择。数据坐标保持不变。",
     "navigation_up_axis": "向上轴",
     "navigation_up_legacy_y": "Y-up（默认）",
