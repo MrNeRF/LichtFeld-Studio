@@ -17,3 +17,5 @@
 .history-disclosure:hover, .history-disclosure:focus-visible { background-color: @{surface_bright}; }
 .history-chevron { image-color: @{text_dim}; }
 .history-details { background-color: @{alpha(surface_bright, 0.5)}; }
+
+.history-operation-icon { image-color: @{text_dim}; }

@@ -68,6 +68,10 @@ def history(monkeypatch):
     state = SimpleNamespace(generation=1, undo=[f"edit {i}" for i in range(205)],
                             redo=["undone edit"], active=False, calls=[], reads=0,
                             result={"success": True, "error": ""}, enabled=[], detail_reads=[])
+    def stack():
+        state.reads += 1
+        return {direction: [{"id": name, "label": name, "source": "python", "scope": "custom"}
+                            for name in getattr(state, direction)] for direction in ("undo", "redo")}
     def names(stack):
         state.reads += 1
         return list(getattr(state, stack))
@@ -89,7 +93,7 @@ def history(monkeypatch):
         tr=lambda key: key, get_current_language=lambda: "en", request_redraw=lambda: None,
         set_panel_enabled=lambda *args: state.enabled.append(args),
     )
-    undo = SimpleNamespace(generation=lambda: state.generation,
+    undo = SimpleNamespace(generation=lambda: state.generation, stack=stack,
                            undo_names=lambda: names("undo"), redo_names=lambda: names("redo"),
                            has_active_transaction=lambda: state.active, jump=jump, clear=clear, details=details)
     monkeypatch.setitem(sys.modules, "lichtfeld", SimpleNamespace(ui=ui, undo=undo))
@@ -163,7 +167,7 @@ def test_long_labels_are_bounded_escaped_and_single_line(history):
     mod, _, _, _ = history
     markup = mod.row_markup('<script>\n' + 'x' * 70000, 1, 1)
     assert '<script>' not in markup and '&lt;script&gt;' in markup
-    assert len(markup) < 1100
+    assert len(markup) < 1800
     assert '<br' not in markup
 
 
@@ -278,3 +282,67 @@ def test_shear_details_keep_exact_matrix_values(history):
     markup = mod.details_markup({"label": "Shear", "transforms": [
         {"target": "model", "before": identity, "after": sheared}]})
     assert 'history.matrix' in markup and '0.25' in markup
+
+
+def test_operation_icons_reuse_assets_and_distinguish_edit_families(history):
+    mod, _, _, _ = history
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2] / "src/visualizer/gui/assets/icon"
+    for key, icon in mod._OPERATION_PRESENTATION.values():
+        assert (root / icon).is_file(), icon
+    for icon in mod._SCOPE_ICONS.values():
+        assert (root / icon).is_file(), icon
+    assert mod.operation_icon("select.stroke") == "selection.png"
+    assert mod.operation_icon("edit.delete") == "scene/trash.png"
+    assert mod.operation_icon("transform.rotate") == "rotation.png"
+    assert mod.operation_icon("Rename Node") == "scene/group.png"
+    assert mod.operation_icon("Custom action", {"source": "python"}) == "puzzle.png"
+    assert mod.operation_label("select.stroke") == "history.operation.selection_stroke"
+
+
+def test_non_transform_details_show_recorded_fields_and_localized_values(history):
+    mod, _, _, _ = history
+    markup = mod.details_markup({"id": "select.stroke", "label": "select.stroke", "source": "ui",
+                                "scope": "selection", "fields": [
+        {"target": "<Group 1>", "property": "history.field.selected_count", "before": "2", "after": "8"},
+        {"property": "history.field.selection_mode", "after": "@tr:history.value.replace"}], "transforms": []})
+    assert "history.operation.selection_stroke" in markup
+    assert "&lt;Group 1&gt;" in markup
+    assert "history.field.selected_count" in markup and ">2<" in markup and ">8<" in markup
+    assert "history.value.replace" in markup and "@tr:" not in markup
+    assert "history.no_details" not in markup
+
+
+def test_python_metadata_is_available_without_introspecting_callbacks(history):
+    mod, _, _, _ = history
+    markup = mod.details_markup({"id": "plugin.custom", "label": "User label", "source": "python", "scope": "custom"})
+    assert "plugin.custom" in markup and "User label" in markup
+    assert "history.source_values.python" in markup and "history.scope_values.custom" in markup
+    assert "history.no_details" not in markup
+
+
+def test_more_details_reveals_recorded_data_without_playback_or_refetch(history):
+    _, panel, doc, state = history
+    panel._expanded[1] = {"label": "Large edit", "fields": [
+        {"property": "history.field.property", "after": f"field {i}"} for i in range(125)]}
+    panel._show_details(1, panel._expanded[1])
+    detail = doc.get_element_by_id("history-detail-1")
+    assert "field 124" not in detail.markup
+    more = detail.query_selector_all(".history-more-details")[0]
+    panel._on_row(event(more))
+    assert "field 124" in detail.markup
+    assert not state.calls and not state.detail_reads
+
+
+def test_large_unbroken_field_values_are_bounded_and_escaped(history):
+    mod, _, _, _ = history
+    markup = mod.details_markup({"label": "test", "fields": [
+        {"property": "<caption>", "after": "<script>" + "X" * 70000}]})
+    assert "&lt;caption&gt;" in markup and "&lt;script&gt;" in markup
+    assert len(markup) < 2000
+
+
+def test_presentation_keeps_unknown_user_labels_and_localizes_composed_operations(history):
+    mod, _, _, _ = history
+    assert mod.operation_label("My custom task") == "My custom task"
+    assert mod.operation_label("Translate | Delete") == "history.operation.translate | history.operation.delete"

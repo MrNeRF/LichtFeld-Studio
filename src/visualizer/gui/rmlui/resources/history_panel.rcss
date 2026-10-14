@@ -50,5 +50,10 @@
 .history-detail-title { white-space: pre-wrap; word-break: break-all; margin-bottom: 8dp; }
 .history-detail-target { font-weight: bold; margin-top: 8dp; margin-bottom: 4dp; word-break: break-all; }
 .history-detail-line { display: flex; gap: 8dp; padding: 4dp 0; min-width: 0; }
-.history-detail-property { width: 80dp; flex-shrink: 0; }
+.history-detail-property { width: 110dp; flex-shrink: 0; }
 .history-detail-value { flex: 1; min-width: 0; word-break: break-all; }
+
+.history-operation-icon { width: 16dp; height: 16dp; flex-shrink: 0; }
+.history-detail-meta { display: flex; gap: 8dp; padding: 3dp 0; min-width: 0; }
+.history-detail-meta-value { flex: 1; min-width: 0; word-break: break-all; }
+.history-more-details { display: inline-flex; padding: 4dp 8dp; margin-top: 8dp; }

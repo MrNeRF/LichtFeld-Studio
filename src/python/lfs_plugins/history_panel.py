@@ -18,13 +18,120 @@ PAGE_SIZE = 25
 LABEL_CHARS = 256
 
 
-def operation_label(name):
-    return lf.ui.tr("history.batch_transform") if name == "transform.batch" else name
+# Match identifiers and existing native labels; display strings come from locales.
+_OPERATION_PRESENTATION = {}
 
 
-def row_markup(name, steps, generation, stack="undo"):
+def _operation_aliases(aliases, key, icon):
+    for alias in aliases:
+        _OPERATION_PRESENTATION[alias.casefold()] = (key, icon)
+
+
+_operation_aliases(("transform.translate", "Translate", "Move"), "translate", "translation.png")
+_operation_aliases(("transform.rotate", "Rotate"), "rotate", "rotation.png")
+_operation_aliases(("transform.scale", "Scale"), "scale", "scaling.png")
+_operation_aliases(("transform.set", "Set Transform", "python.set_selected_node_transform",
+                    "python.set_node_transform", "python.scene.set_node_transform",
+                    "python.set_node_visualizer_world_transform"), "set_transform", "translation.png")
+_operation_aliases(("transform.batch", "Apply Batch Transform"), "batch_transform", "translation.png")
+_operation_aliases(("transform.align", "Align"), "align", "focus-selection.png")
+_operation_aliases(("Mirror", "transform.mirror"), "mirror", "mirror.png")
+_operation_aliases(("edit.delete", "Delete", "Delete Selected"), "delete", "scene/trash.png")
+_operation_aliases(("select.stroke", "selection.stroke"), "selection_stroke", "selection.png")
+_operation_aliases(("selection.box",), "selection_box", "rectangle.png")
+_operation_aliases(("selection.sphere",), "selection_sphere", "sphere.png")
+_operation_aliases(("selection.rect", "selection.rectangle"), "selection_rectangle", "rectangle.png")
+_operation_aliases(("selection.polygon",), "selection_polygon", "polygon.png")
+_operation_aliases(("selection.lasso",), "selection_lasso", "lasso.png")
+_operation_aliases(("selection.brush",), "selection_brush", "selection.png")
+_operation_aliases(("selection.ring",), "selection_ring", "ring.png")
+_operation_aliases(("select.all", "selection.all", "selection.all.filtered", "Select All"), "selection_all", "select-all.png")
+_operation_aliases(("select.none", "selection.none", "Deselect All"), "selection_none", "deselect.png")
+_operation_aliases(("select.invert", "selection.invert", "selection.invert.filtered", "Invert Selection"), "selection_invert", "select-invert.png")
+_operation_aliases(("select.grow", "selection.grow", "Grow Selection"), "selection_grow", "selection.png")
+_operation_aliases(("select.shrink", "selection.shrink", "Shrink Selection"), "selection_shrink", "selection.png")
+_operation_aliases(("select.by_opacity", "selection.by_opacity", "Select by Opacity"), "selection_opacity", "histogram.png")
+_operation_aliases(("select.by_scale", "selection.by_scale", "Select by Scale"), "selection_scale", "histogram.png")
+_operation_aliases(("selection.by_color", "Select by Color"), "selection_color", "selection.png")
+_operation_aliases(("selection.mask",), "selection_mask", "scene/mask.png")
+_operation_aliases(("selection.preview",), "selection_preview", "selection.png")
+_operation_aliases(("cropbox.transform", "Crop Box Transform"), "crop", "scene/cropbox.png")
+_operation_aliases(("ellipsoid.transform", "Ellipsoid Transform"), "ellipsoid", "scene/ellipsoid.png")
+_operation_aliases(("Set Property",), "property", "settings.png")
+_operation_aliases(("Rename Node",), "node_rename", "scene/group.png")
+_operation_aliases(("Set Visibility",), "node_visibility", "scene/visible.png")
+_operation_aliases(("Set Lock State",), "node_lock", "scene/locked.png")
+_operation_aliases(("Set Training State", "Set Training Enabled", "Set Camera Training State"), "node_training", "scene/splat.png")
+_operation_aliases(("Add Group", "Add Node"), "node_add", "scene/group.png")
+_operation_aliases(("Delete Node", "Remove Node"), "node_delete", "scene/trash.png")
+_operation_aliases(("Delete Nodes",), "delete_nodes", "scene/trash.png")
+_operation_aliases(("Reparent Node", "Reparent Nodes"), "node_reparent", "scene/group.png")
+_operation_aliases(("Group Selected", "Group Selected Nodes", "Group Nodes"), "node_group", "scene/group.png")
+_operation_aliases(("Ungroup", "Ungroup Nodes"), "node_ungroup", "scene/group.png")
+_operation_aliases(("Duplicate Node", "Duplicate", "edit.duplicate"), "node_duplicate", "scene/group.png")
+_operation_aliases(("Merge Group", "Merge Nodes", "Merge into Single Model"), "node_merge", "scene/splat.png")
+_operation_aliases(("Paste", "Paste Nodes"), "node_paste", "scene/group.png")
+_operation_aliases(("Add Simplified Splat",), "node_simplify", "scene/splat.png")
+_operation_aliases(("Replace Node",), "node_replace", "scene/group.png")
+_operation_aliases(("Set Camera Split",), "camera_split", "scene/camera.png")
+_operation_aliases(("Add Keyframe", "sequencer.add_keyframe"), "keyframe_add", "video.png")
+_operation_aliases(("Delete Keyframe", "Remove Keyframe", "sequencer.delete_keyframe"), "keyframe_delete", "video.png")
+_operation_aliases(("Update Keyframe", "Edit Keyframe", "sequencer.update_keyframe"), "keyframe_update", "video.png")
+_operation_aliases(("Edit Keyframe Time", "sequencer.keyframe_time"), "keyframe_time", "video.png")
+_operation_aliases(("Set Keyframe Easing", "sequencer.keyframe_easing"), "keyframe_easing", "video.png")
+_operation_aliases(("Edit Clip Duration", "sequencer.clip_duration"), "clip_duration", "video.png")
+
+_SCOPE_ICONS = {
+    "selection": "selection.png", "transforms": "translation.png", "transform": "translation.png",
+    "topology": "scene/splat.png", "scene_graph": "scene/group.png", "grouped": "scene/group.png",
+    "cropbox": "scene/cropbox.png", "ellipsoid": "scene/ellipsoid.png", "sequencer": "video.png",
+    "property": "settings.png", "custom": "puzzle.png", "tensor": "histogram.png", "sh": "histogram.png",
+}
+
+
+def _presentation(name, metadata=None):
+    metadata = metadata or {}
+    # A human label distinguishes graph operations sharing one metadata id.
+    found = _OPERATION_PRESENTATION.get(name.casefold())
+    if found is None:
+        found = _OPERATION_PRESENTATION.get(str(metadata.get("id", "")).casefold())
+    if found is not None:
+        return found
+    identifier = str(metadata.get("id", name)).casefold()
+    if identifier.endswith(".visible"):
+        return "node_visibility", "scene/visible.png"
+    if identifier.endswith(".locked"):
+        return "node_lock", "scene/locked.png"
+    if identifier.startswith(("selection.group", "selection_group")):
+        return "selection_group", "scene/selection-group.png"
+    if identifier.startswith(("tensor.", "histogram.", "splat.")):
+        return "tensor", "histogram.png"
+    if identifier.startswith("sh."):
+        return "sh", "histogram.png"
+    return None, _SCOPE_ICONS.get(metadata.get("scope"), "puzzle.png" if metadata.get("source") == "python" else "settings.png")
+
+
+def operation_label(name, metadata=None):
+    if " | " in name:
+        return " | ".join(operation_label(part) for part in name.split(" | "))
+    key, _ = _presentation(name, metadata)
+    if key == "batch_transform":
+        return lf.ui.tr("history.batch_transform")
+    if key:
+        label_key = "history.operation." + key
+        return lf.ui.tr(label_key)
+    return name
+
+
+def operation_icon(name, metadata=None):
+    if " | " in name:
+        return "scene/group.png"
+    return _presentation(name, metadata)[1]
+
+def row_markup(name, steps, generation, stack="undo", metadata=None):
     # Bound text before RmlUi layout, including tooltips. Retained names stay intact.
-    name = operation_label(name) or lf.ui.tr("runtime.untitled_change")
+    icon = operation_icon(name, metadata)
+    name = operation_label(name, metadata) or lf.ui.tr("runtime.untitled_change")
     name = name.replace("\n", " ").replace("\r", " ")
     name = name if len(name) <= LABEL_CHARS else name[:LABEL_CHARS] + "…"
     classes = "history-entry" + (" is-next" if steps == 1 else "")
@@ -36,6 +143,7 @@ def row_markup(name, steps, generation, stack="undo"):
             f'<button type="button" class="btn btn--ghost history-jump" '
             f'data-steps="{steps}" data-generation="{generation}" data-tooltip="scene.history_note">'
             f'<span class="history-index text-muted">{steps}</span>'
+            f'<img class="history-operation-icon" src="../icon/{icon}" title="{escape(name, quote=True)}"/>'
             f'<span class="history-label">{escape(name)}</span>'
             f'<img class="history-icon" src="../icon/{stack}.png"/></button></div>'
             f'<div id="history-detail-{steps}" class="history-details" style="display: none;"></div></div>')
@@ -53,6 +161,8 @@ def _detail_line(key, before, after):
 
 
 def _orthogonal(matrix):
+    if any(matrix[i] != 0 for i in (3, 7, 11)) or matrix[15] != 1:
+        return False
     columns = [matrix[i:i + 3] for i in (0, 4, 8)]
     lengths = [math.sqrt(sum(value * value for value in column)) for column in columns]
     if not all(math.isfinite(length) and length > 1e-8 for length in lengths):
@@ -61,17 +171,67 @@ def _orthogonal(matrix):
                <= 1e-5 * lengths[i] * lengths[j] for i, j in ((0, 1), (0, 2), (1, 2)))
 
 
-def details_markup(description):
+def _detail_value_text(value):
+    value = str(value or "")
+    if value.startswith("@tr:"):
+        value = lf.ui.tr(value[4:])
+    return value[:1024] + ("…" if len(value) > 1024 else "")
+
+
+def _metadata_value(value, namespace, known):
+    return lf.ui.tr(namespace + value) if value in known else value
+
+
+def _field_caption(key, description):
+    if key.startswith(("history.", "transform.", "common.")):
+        return lf.ui.tr(key)
+    if description.get("source") == "property":
+        suffix = key.rsplit(".", 1)[-1]
+        field = suffix if suffix in {"name", "visible", "locked", "training_enabled", "source_path",
+                                    "transform", "enabled", "inverse", "color", "line_width"} else "property"
+        label_key = "history.field." + field
+        return lf.ui.tr(label_key)
+    return key
+
+
+def details_markup(description, limit=25, steps=None, generation=None):
     tr = lf.ui.tr
-    title = operation_label(description.get("label", ""))[:LABEL_CHARS]
+    title = operation_label(description.get("label", ""), description)[:LABEL_CHARS]
     result = f'<div class="history-detail-title">{escape(title)}</div>'
+    metadata = (
+        ("history.identifier", description.get("id", "")),
+        ("history.source", _metadata_value(description.get("source", ""), "history.source_values.",
+             {"core", "ui", "python", "property", "history", "system"})),
+        ("history.category", _metadata_value(description.get("scope", ""), "history.scope_values.",
+             {"general", "transforms", "selection", "topology", "scene_graph", "grouped", "property", "cropbox", "ellipsoid", "custom", "sequencer"})),
+    )
+    for key, value in metadata:
+        if value:
+            result += (f'<div class="history-detail-meta"><span class="history-detail-property">{escape(tr(key))}</span>'
+                       f'<span class="history-detail-meta-value">{escape(_detail_value_text(value))}</span></div>')
     transforms = description.get("transforms", [])
-    if not transforms:
-        return result + f'<div class="text-muted">{escape(tr("history.no_details"))}</div>'
+    fields = description.get("fields", [])
+    if not transforms and not fields:
+        return result
     result += (f'<div class="history-detail-line text-muted"><span class="history-detail-property"></span>'
                f'<span class="history-detail-value">{escape(tr("history.before"))}</span>'
                f'<span class="history-detail-value">{escape(tr("history.after"))}</span></div>')
-    for transform in transforms[:25]:
+    last_target = None
+    for field in fields[:limit * 4]:
+        key = field.get("property", "")
+        target = field.get("target", "")
+        before, after = field.get("before", ""), field.get("after", "")
+        if key == "history.field.operation":
+            target = operation_label(target)
+            before, after = operation_label(before), operation_label(after)
+        if target and target != last_target:
+            result += f'<div class="history-detail-target">{escape(target[:LABEL_CHARS])}</div>'
+        last_target = target
+        caption = _field_caption(key, description)[:LABEL_CHARS]
+        result += (f'<div class="history-detail-line"><span class="history-detail-property">{escape(caption)}</span>'
+                   f'<span class="history-detail-value">{escape(_detail_value_text(before)) or "—"}</span>'
+                   f'<span class="history-detail-value">{escape(_detail_value_text(after)) or "—"}</span></div>')
+    for transform in transforms[:limit]:
         target = transform["target"][:LABEL_CHARS]
         result += f'<div class="history-detail-target">{escape(target)}</div>'
         before, after = transform["before"], transform["after"]
@@ -86,9 +246,15 @@ def details_markup(description):
         else:
             for row in range(4):
                 result += _detail_line("history.matrix", before[row::4], after[row::4])
-    if len(transforms) > 25:
-        more_text = tr("history.more_targets").format(count=len(transforms) - 25)
+    if len(fields) > limit * 4:
+        more_text = tr("history.more_fields").format(count=len(fields) - limit * 4)
         result += f'<div class="text-muted">{escape(more_text)}</div>'
+    if len(transforms) > limit:
+        more_text = tr("history.more_targets").format(count=len(transforms) - limit)
+        result += f'<div class="text-muted">{escape(more_text)}</div>'
+    if steps is not None and (len(fields) > limit * 4 or len(transforms) > limit):
+        result += (f'<button type="button" class="btn btn--ghost history-more-details" '
+                   f'data-more-details="{steps}" data-generation="{generation}"><span>{escape(tr("history.show_more"))}</span></button>')
     return result
 
 
@@ -102,10 +268,12 @@ class HistoryPanel(Panel):
         self._rows_stamp = None
         self._generation = None
         self._names = {"undo": [], "redo": []}
+        self._items = {"undo": [], "redo": []}
         self._stack = "undo"
         self._page = 0
         self._feedback = ""
         self._expanded = {}
+        self._detail_limits = {}
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("history_panel")
@@ -135,6 +303,7 @@ class HistoryPanel(Panel):
         self._rows_stamp = None
         self._generation = None
         self._names = {"undo": [], "redo": []}
+        self._items = {"undo": [], "redo": []}
 
     def _disabled(self, name, disabled):
         element = self._doc.get_element_by_id("history-" + name)
@@ -151,10 +320,13 @@ class HistoryPanel(Panel):
         if stamp == self._stamp:
             return
         if generation != self._generation:
-            self._names = {"undo": lf.undo.undo_names(), "redo": lf.undo.redo_names()}
+            snapshot = lf.undo.stack()
+            self._items = {stack: snapshot[stack] for stack in ("undo", "redo")}
+            self._names = {stack: [item["label"] for item in items] for stack, items in self._items.items()}
             self._generation = generation
             self._page = 0
             self._expanded.clear()
+            self._detail_limits.clear()
         names = self._names[self._stack]
         pages = max(1, (len(names) + PAGE_SIZE - 1) // PAGE_SIZE)
         self._page = min(self._page, pages - 1)
@@ -174,7 +346,7 @@ class HistoryPanel(Panel):
         rows_stamp = (generation, language, self._stack, self._page)
         if rows_stamp != self._rows_stamp:
             doc.get_element_by_id("history-rows").set_inner_rml("".join(
-                row_markup(name, first + i + 1, generation, self._stack)
+                row_markup(name, first + i + 1, generation, self._stack, self._items[self._stack][first + i])
                 for i, name in enumerate(names[first:first + PAGE_SIZE])))
             doc.get_element_by_id("history-scroll").scroll_top = 0
             self._rows_stamp = rows_stamp
@@ -213,6 +385,7 @@ class HistoryPanel(Panel):
             self._stack = action[:-4]
             self._page = 0
             self._expanded.clear()
+            self._detail_limits.clear()
         elif action in ("older", "newer"):
             self._page = max(0, self._page + (1 if action == "older" else -1))
         elif action == "clear":
@@ -225,7 +398,7 @@ class HistoryPanel(Panel):
     def _show_details(self, steps, description):
         detail = self._doc.get_element_by_id(f"history-detail-{steps}")
         if detail:
-            detail.set_inner_rml(details_markup(description))
+            detail.set_inner_rml(details_markup(description, self._detail_limits.get(steps, 25), steps, self._generation))
             detail.set_property("display", "block")
             detail.parent().set_class("is-expanded", True)
 
@@ -235,6 +408,7 @@ class HistoryPanel(Panel):
             return
         if steps in self._expanded:
             del self._expanded[steps]
+            self._detail_limits.pop(steps, None)
             detail = self._doc.get_element_by_id(f"history-detail-{steps}")
             detail.set_property("display", "none")
             detail.parent().set_class("is-expanded", False)
@@ -245,6 +419,14 @@ class HistoryPanel(Panel):
                 return
             self._expanded[steps] = description
             self._show_details(steps, description)
+        lf.ui.request_redraw()
+
+    def _show_more_details(self, steps, generation):
+        if generation != lf.undo.generation() or steps not in self._expanded:
+            self._refresh()
+            return
+        self._detail_limits[steps] = self._detail_limits.get(steps, 25) + 25
+        self._show_details(steps, self._expanded[steps])
         lf.ui.request_redraw()
 
     def _row_target(self, event):
@@ -258,6 +440,11 @@ class HistoryPanel(Panel):
     def _on_row(self, event):
         target = event.target()
         while target and target.id != "history-rows":
+            more_steps = target.get_attribute("data-more-details", "")
+            if more_steps:
+                self._show_more_details(int(more_steps), int(target.get_attribute("data-generation", "-1")))
+                event.stop_propagation()
+                return
             if "history-details" in target.get_attribute("class", "").split():
                 event.stop_propagation()
                 return
