@@ -201,6 +201,9 @@ namespace lfs::vis::gui {
         // Per-button capture so scrollbar drags continue when the cursor
         // leaves the panel and the matching Up always reaches RmlUI.
         bool mouse_captured_[3] = {false, false, false};
+        // Element that received the button press. RmlUi sends mouseup only to
+        // the current hover, which is empty once the cursor leaves the panel.
+        Rml::ObserverPtr<Rml::Element> pointer_press_target_[3];
         std::string resize_cursor_override_;
         Rml::Element* live_inspector_resize_target_ = nullptr;
         CloseButtonListener close_listener_{this};

@@ -3878,6 +3878,53 @@ namespace {
         require_status(reader.verify_all());
     }
 
+#ifndef _WIN32
+    TEST(ProjectContainerWriter, RenameBackupReplacementCanRollbackAndFinish) {
+        TemporaryDirectory temporary;
+        const auto destination = temporary.path / "project.licht";
+        const auto replacement = temporary.path / "replacement.licht";
+        create_single_chunk_fixture(destination, 1251, 1252, 1253, fixed_key("PROJ", 1254), R"({"version":"original"})");
+        create_single_chunk_fixture(replacement, 1261, 1262, 1263, fixed_key("PROJ", 1264), R"({"version":"replacement"})");
+        auto replaced = require_result(detail::replace_with_rename_backup(
+            replacement, destination, detail::make_sibling_temp_path(destination, "replace-backup")));
+        ASSERT_TRUE(replaced.backup_path);
+        EXPECT_FALSE(detail::project_fs::exists(replacement));
+        {
+            auto reader = require_result(ProjectReader::open(destination));
+            EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1262));
+        }
+        require_status(detail::rollback_atomic_replace(replaced, destination));
+        {
+            auto reader = require_result(ProjectReader::open(destination));
+            EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1252));
+            require_status(reader.verify_all());
+        }
+        create_single_chunk_fixture(replacement, 1271, 1272, 1273, fixed_key("PROJ", 1274), R"({"version":"final"})");
+        auto final = require_result(detail::replace_with_rename_backup(
+            replacement, destination, detail::make_sibling_temp_path(destination, "replace-backup")));
+        const auto backup = *final.backup_path;
+        require_status(detail::finish_atomic_replace(final, destination));
+        EXPECT_FALSE(detail::project_fs::exists(backup));
+        auto reader = require_result(ProjectReader::open(destination));
+        EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1272));
+        require_status(reader.verify_all());
+    }
+
+    // Fails if a rejected publish leaves the prior project only at the backup path.
+    TEST(ProjectContainerWriter, RenameBackupReplacementRestoresPriorProjectWhenPublishFails) {
+        TemporaryDirectory temporary;
+        const auto destination = temporary.path / "project.licht";
+        create_single_chunk_fixture(destination, 1281, 1282, 1283, fixed_key("PROJ", 1284), R"({"version":"original"})");
+        const auto backup = detail::make_sibling_temp_path(destination, "replace-backup");
+        auto replaced = detail::replace_with_rename_backup(temporary.path / "missing.licht", destination, backup);
+        ASSERT_FALSE(replaced);
+        EXPECT_FALSE(detail::project_fs::exists(backup));
+        auto reader = require_result(ProjectReader::open(destination));
+        EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(1282));
+        require_status(reader.verify_all());
+    }
+#endif
+
     TEST(ProjectContainerWriter, ShortenedTempsAreSweptOnlyUnderTheirMastersLock) {
         LongPathTemporaryDirectory temporary;
         const auto master = temporary.path / (std::string(234, 'x') + ".licht");

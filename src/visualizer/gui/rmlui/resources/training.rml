@@ -752,8 +752,8 @@
       </div>
       <div class="section-content collapsed" id="sec-save-steps">
         <div data-if="save_edit_mode">
-          <div class="setting-row" data-tooltip="training.tooltip.save_step_input">
-            <input type="text" id="num-new_step" class="number-input" data-value="new_step_str" />
+          <div class="setting-row">
+            <input data-tooltip="training.tooltip.save_step_input" type="text" id="num-new_step" class="number-input" data-value="new_step_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('new_step', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('new_step', 1)">+</button>
             <button class="btn btn--secondary" data-tooltip="training.tooltip.save_step_add" data-event-click="action('add_step')">{{label_add}}</button>

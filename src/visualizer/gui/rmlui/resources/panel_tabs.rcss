@@ -20,15 +20,15 @@
 }
 
 #tab-bar.with-scroll #tab-strip-viewport {
-    left: 16dp;
-    right: 16dp;
+    left: 30dp;
+    right: 30dp;
 }
 
 .tab-nav {
     position: absolute;
-    top: 4dp;
-    width: 14dp;
-    height: 20dp;
+    top: 0;
+    width: 28dp;
+    height: 28dp;
     padding: 0;
     margin: 0;
     border-width: 0;
@@ -37,7 +37,7 @@
     cursor: pointer;
     tab-index: auto;
     nav: auto;
-    line-height: 20dp;
+    line-height: 28dp;
     text-align: center;
     font-size: 12dp;
     font-weight: bold;

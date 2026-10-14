@@ -291,8 +291,9 @@ namespace lfs::training {
                                     "drop --undistort",
                                     LFS_SOURCE_SITE_CURRENT());
 
-        const auto pairing =
-            pair_images_by_name(reference_set.images, test_set.images, reference_set.recursive || test_set.recursive);
+        // COLMAP image names can include folders, such as one folder per camera.
+        const auto pairing = pair_images_by_name(reference_set.images, test_set.images,
+                                                 reference_set.recursive || test_set.recursive || !reference_sparse.empty());
         CompareResult result{.unmatched = pairing.unmatched};
         for (const auto& path : pairing.unmatched)
             LOG_WARN("compare: no counterpart for {}", lfs::core::path_to_utf8(path));
@@ -411,8 +412,15 @@ namespace lfs::training {
             long_sides.emplace(expected, std::max(test_width, test_height));
         }
         const auto [expected_side, test_side] = *long_sides.begin();
+        // Renders made at one --max-width share their long side even when the undistorted grids of their references
+        // differ in size; that side caps every reference, like it capped the training images.
+        const bool capped_renders = std::ranges::all_of(long_sides, [test_side](const auto& sides) {
+            return sides.second == test_side && sides.second < sides.first;
+        });
         if (long_sides.size() == 1 && expected_side != test_side)
             evaluation.dataset.max_width = std::min(expected_side, test_side);
+        else if (capped_renders)
+            evaluation.dataset.max_width = test_side;
         else if (long_sides.size() > 1)
             LOG_WARN("compare: the test images differ in size from their references in more than one way; each is "
                      "resized to its reference");
@@ -465,7 +473,8 @@ namespace lfs::training {
                 return loaded;
             },
             .warp_supersample = 1,
-            .image_dir = image_dir};
+            .image_dir = image_dir,
+            .image_labels = {"Ground Truth", "Test"}};
         result.metrics = evaluator.evaluate_views(0, dataset, source, background, loader.get());
         for (const auto& [path, text] : {std::pair{report_path, format_compare_report(params, result)},
                                          std::pair{json_path, compare_json(params, result).dump(2)}}) {

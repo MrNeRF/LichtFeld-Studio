@@ -145,6 +145,12 @@ id when available. Request parameters, tool names, payloads, free-form messages,
 and error details are deliberately not recorded. Because network addresses can
 identify devices and interfaces, request logging remains an explicit opt-in.
 
+When right-panel tabs overflow, the larger arrow buttons scroll the strip and
+the final dropdown lists every available panel vertically. Selecting a panel
+uses the same active-tab callback as its tab; the choice continues to be saved
+in the project's GUIL chapter. The open picker supports arrow-key navigation
+and does not require plugins to change their panel registration.
+
 Application preferences are stored in `config/preferences.json`. User-global
 UI details that are not project layout, such as HUD state, are written to
 `config/ui_preferences.json`. Preferences, UI state, window state, lifecycle
@@ -256,6 +262,14 @@ strategy, max cap, init path, and the rest of the LoadFile fields) are kept.
 Adding a splat or mesh onto an existing SplatFiles scene does not start a new
 session. Machine paths (`scene.load_dataset`, `lf.load_dataset`, CLI `-d`)
 do not take this reset.
+
+Preferences > Interface can explicitly save the current right sidebar width,
+scene split and active tab as startup defaults (`sidebar_defaults` in
+`preferences.json`). Clearing these defaults does not change the live workspace.
+They are applied once at application startup. Loading a `.licht` then restores
+its GUIL layout, and never writes back to the startup defaults. New Project keeps
+the current workspace, as before. The Project Manager retains its own independent
+preferences.
 
 `config/layout.json` is a legacy, import-only layout source. New project
 workspace state is not written there.

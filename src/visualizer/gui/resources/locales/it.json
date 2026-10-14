@@ -1055,7 +1055,10 @@
     "viewport_defaults_hint": "Questi valori inizializzano i nuovi progetti. I progetti esistenti conservano i valori salvati.",
     "viewport_style_defaults": "Stile guide e selezione",
     "viewport_performance_defaults": "Limiti cache LOD",
-    "viewport_defaults_invalid": "Inserisci un valore valido nell’intervallo supportato."
+    "viewport_defaults_invalid": "Inserisci un valore valido nell’intervallo supportato.",
+    "sidebar_defaults_description": "Salva larghezza, divisione Scene e scheda attiva della sidebar destra per l’avvio. I progetti .licht esistenti ripristinano il proprio workspace. Nuovo progetto mantiene il workspace corrente.",
+    "save_startup_sidebar": "Salva sidebar per l’avvio",
+    "clear_startup_sidebar": "Rimuovi sidebar di avvio"
   },
   "main_panel": {
     "console": "Console",
@@ -2626,7 +2629,8 @@
     "perf_collapse": "Comprimi",
     "gt_metrics_training_required": "Le metriche della camera richiedono una sessione di addestramento inizializzata.",
     "gt_metrics_calculation_failed": "Impossibile calcolare le metriche di questa vista.",
-    "perf_hud_tooltip": "Mostra o nascondi l'HUD delle prestazioni"
+    "perf_hud_tooltip": "Mostra o nascondi l'HUD delle prestazioni",
+    "all_panel_tabs": "Tutti i pannelli"
   },
   "runtime": {
     "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",

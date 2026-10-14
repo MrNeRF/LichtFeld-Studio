@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_player.hpp"
-#include "video/video_metadata.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "hdr_libplacebo.hpp"
@@ -11,6 +10,7 @@
 #include "video/frame_color_range.hpp"
 #include "video/probed_stream_rewind.hpp"
 #include "video/sws_packed_rgb.hpp"
+#include "video/video_metadata.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>

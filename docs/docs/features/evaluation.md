@@ -37,13 +37,15 @@ Everything is written to the output directory:
 ├── metrics_report.txt       best and final scores in plain text
 ├── per_image_metrics.json   every image at every evaluated iteration
 └── eval_step_30000
-    ├── IMG_0001.png               reference | render, unscored pixels black; with a mask three rows:
-    │                              as rendered, mask applied, inverted mask applied
+    ├── IMG_0001.png               ground truth | render, unscored pixels black; with a mask three rows:
+    │                              unmasked, mask applied, inverted mask applied
     ├── IMG_0001_flip.png          FLIP error map, with --eval-flip
     └── ...
 ```
 
 Images are named after their input image. When two input images share a name, the later ones get their evaluation index appended.
+
+A caption band above each row names its two images, for example `Ground Truth, Mask` and `Render, Mask`; the image pixels themselves are not drawn over.
 
 `metrics.csv` has the columns `iteration, psnr, ssim, lpips, time_per_image, num_gaussians, normal_angle_deg, depth_absrel, bias_r, bias_g, bias_b, bias_corr_r, bias_corr_g, bias_corr_b, flip`. Columns without a value are left empty.
 
@@ -226,6 +228,6 @@ Any other lens difference stops the comparison. Test cameras placed elsewhere th
 | `--eval-space` | `distorted` or `undistorted`, see above. |
 | `--undistort` | The test folder was rendered with the undistorted reference cameras. |
 | `--eval-bit-depth`, `--eval-flip` | As in training. |
-| `--save-images` | Save reference and test side by side to `compare_images/` (three rows with a mask), and FLIP error maps with `--eval-flip`. |
+| `--save-images` | Save reference and test side by side to `compare_images/` (captioned `Ground Truth` and `Test`, three rows with a mask), and FLIP error maps with `--eval-flip`. |
 
 The scores go to `compare.json` (the settings, the mean scores and each image's PSNR, SSIM, LPIPS, FLIP, size, bit depth and scored pixel fraction) and `compare_report.txt` (the table the command prints); a rerun into the same folder replaces them and `compare_images/`. Both image sets are read with the same decoder, so identical files score PSNR 100 and SSIM 1. Values are compared as stored: a linear EXR and an sRGB PNG of the same image do not match.

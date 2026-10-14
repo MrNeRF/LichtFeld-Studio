@@ -1055,7 +1055,10 @@
     "viewport_defaults_hint": "这些默认值用于新项目。现有项目保留已保存的值。",
     "viewport_style_defaults": "辅助线与选择样式",
     "viewport_performance_defaults": "LOD缓存限制",
-    "viewport_defaults_invalid": "请输入支持范围内的有效值。"
+    "viewport_defaults_invalid": "请输入支持范围内的有效值。",
+    "sidebar_defaults_description": "保存当前右侧边栏宽度、场景分区和活动选项卡，供应用启动时使用。现有 .licht 项目会恢复各自的工作区。新建项目保留当前工作区。",
+    "save_startup_sidebar": "保存启动侧边栏布局",
+    "clear_startup_sidebar": "清除启动侧边栏布局"
   },
   "main_panel": {
     "console": "控制台",
@@ -2626,7 +2629,8 @@
     "perf_collapse": "折叠",
     "gt_metrics_training_required": "相机指标需要已初始化的训练会话。",
     "gt_metrics_calculation_failed": "无法计算此视图的指标。",
-    "perf_hud_tooltip": "显示或隐藏性能 HUD"
+    "perf_hud_tooltip": "显示或隐藏性能 HUD",
+    "all_panel_tabs": "所有面板"
   },
   "runtime": {
     "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",

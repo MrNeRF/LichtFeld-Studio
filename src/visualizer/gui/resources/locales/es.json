@@ -1055,7 +1055,10 @@
     "viewport_defaults_hint": "Estos valores se aplican a nuevos proyectos. Los existentes conservan sus valores guardados.",
     "viewport_style_defaults": "Estilo de guías y selección",
     "viewport_performance_defaults": "Límites de caché LOD",
-    "viewport_defaults_invalid": "Introduce un valor válido dentro del rango admitido."
+    "viewport_defaults_invalid": "Introduce un valor válido dentro del rango admitido.",
+    "sidebar_defaults_description": "Guarda el ancho de la barra lateral derecha, la división de la escena y la pestaña activa para iniciar la aplicación. Los proyectos .licht existentes restauran su propio espacio de trabajo. Un proyecto nuevo conserva el espacio de trabajo actual.",
+    "save_startup_sidebar": "Guardar barra lateral para el inicio",
+    "clear_startup_sidebar": "Borrar barra lateral de inicio"
   },
   "main_panel": {
     "console": "Consola",
@@ -2626,7 +2629,8 @@
     "perf_collapse": "Contraer",
     "gt_metrics_training_required": "Las métricas de cámara necesitan una sesión de entrenamiento inicializada.",
     "gt_metrics_calculation_failed": "No se pudieron calcular las métricas de esta vista.",
-    "perf_hud_tooltip": "Mostrar u ocultar el HUD de rendimiento"
+    "perf_hud_tooltip": "Mostrar u ocultar el HUD de rendimiento",
+    "all_panel_tabs": "Todos los paneles"
   },
   "runtime": {
     "environment_map_failed": "No se pudo leer el mapa de entorno «{}». Se ha conservado el entorno anterior.",

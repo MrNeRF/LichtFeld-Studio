@@ -294,7 +294,8 @@ namespace lfs::training {
         int num_gaussians = 0;
         // Images that exist at one size, like files, are warped at that size.
         int warp_supersample = kEvaluationWarpSupersample;
-        std::filesystem::path image_dir; // Where images are saved; empty = <output>/eval_step_<iteration>
+        std::filesystem::path image_dir;                                   // Where images are saved; empty = <output>/eval_step_<iteration>
+        std::array<std::string, 2> image_labels{"Ground Truth", "Render"}; // Captions in saved images, left first
     };
 
     [[nodiscard]] lfs::Error evaluation_error(std::string detail, lfs::core::SourceSite site);

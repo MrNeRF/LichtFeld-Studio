@@ -39,6 +39,9 @@ namespace lfs::vis {
         [[nodiscard]] std::string renderingDefaults();
         [[nodiscard]] lfs::Status setViewportVignette(std::string_view serialized);
         [[nodiscard]] std::string viewportVignette();
+        void setSidebarDefaults(float width, float scene_ratio, const std::string& active_tab);
+        [[nodiscard]] std::string sidebarDefaults();
+        void clearSidebarDefaults();
 
         void setThemeName(const std::string& value);
         [[nodiscard]] std::string themeName();

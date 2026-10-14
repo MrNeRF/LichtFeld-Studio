@@ -8,9 +8,11 @@
 #include "gui/rml_viewport_overlay.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/preferences.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
 #include <cmath>
+#include <nlohmann/json.hpp>
 
 namespace lfs::vis::gui {
     namespace {
@@ -62,6 +64,14 @@ namespace lfs::vis::gui {
         } else {
             setShowSequencer(false);
         }
+        // Startup defaults seed an empty workspace only. Loading a .licht
+        // subsequently applies its GUIL state through applyProjectState().
+        const auto defaults = nlohmann::json::parse(UserPreferences::instance().sidebarDefaults());
+        auto initial = captureProjectState();
+        initial.right_panel_width = defaults.value("right_panel_width", initial.right_panel_width);
+        initial.scene_panel_ratio = defaults.value("scene_panel_ratio", initial.scene_panel_ratio);
+        initial.active_tab_id = defaults.value("active_tab", initial.active_tab_id);
+        applyProjectState(initial);
         previous_bottom_docked_ids_.clear();
         bottom_dock_sync_seeded_ = false;
     }

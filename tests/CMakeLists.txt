@@ -78,8 +78,14 @@ target_compile_features(lichtfeld_file_dialog_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_file_dialog_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/visualizer
+    ${CMAKE_SOURCE_DIR}/src/core/include
+    ${CMAKE_SOURCE_DIR}/src/geometry/include
 )
-target_link_libraries(lichtfeld_file_dialog_tests PRIVATE GTest::gtest_main)
+# scene_export_path.hpp includes the core event declarations and geometry headers.
+# Declare their header dependencies here, independently of the Linux GTK adapter.
+target_link_libraries(lichtfeld_file_dialog_tests PRIVATE
+    GTest::gtest_main glm::glm nlohmann_json::nlohmann_json
+)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET lfs_visualizer AND TARGET PkgConfig::LFS_GTK3)
     target_sources(lichtfeld_file_dialog_tests PRIVATE
         test_native_save_dialog.cpp
@@ -117,8 +123,10 @@ if(BUILD_VISUALIZER_TESTS)
         test_ui_visibility_transition.cpp
         test_summary_labels.cpp
         test_menu_bar_title.cpp
+        test_guide_segment_clipping.cpp
         test_viewport_depth_layout.cpp
         test_panel_layout_render_demand.cpp
+        test_right_panel_tab_picker.cpp
         test_preferences_migration.cpp
         test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
@@ -159,6 +167,7 @@ if(BUILD_VISUALIZER_TESTS)
         PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
+        lfs_io
         lfs_visualizer
         lfs_core
         lfs_python_runtime
@@ -703,6 +712,7 @@ set(TEST_FILES
     test_scene_upscaler_registry.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
+    test_higs_exact_depth.cpp
     test_point_cloud_raster_orientation.cpp
     test_point_cloud_vulkan_projection.cpp
     test_theme_registry.cpp
@@ -816,7 +826,9 @@ set(TEST_FILES
     test_vram_hud_header_click.cpp
     test_ui_visibility_transition.cpp
     test_menu_bar_title.cpp
+    test_guide_segment_clipping.cpp
     test_status_bar_mining.cpp
+    test_right_panel_tab_picker.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
     test_tensor_stream.cpp

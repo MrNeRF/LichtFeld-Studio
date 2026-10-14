@@ -10,8 +10,8 @@
 
 extern "C" {
 #include <libavformat/avformat.h>
-#include <libavutil/display.h>
 #include <libavutil/dict.h>
+#include <libavutil/display.h>
 #include <libavutil/dovi_meta.h>
 #include <libavutil/error.h>
 #include <libavutil/pixdesc.h>

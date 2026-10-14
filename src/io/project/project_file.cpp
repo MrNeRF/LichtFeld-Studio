@@ -1117,6 +1117,36 @@ namespace lfs::io::project::detail {
 #endif
     }
 
+#ifndef _WIN32
+    lfs::Result<AtomicReplaceState>
+    replace_with_rename_backup(const std::filesystem::path& replacement,
+                               const std::filesystem::path& destination,
+                               const std::filesystem::path& backup) {
+        if (::rename(destination.c_str(), backup.c_str()) != 0) {
+            const int error = errno;
+            return project_error(
+                native_error_code(error, true),
+                "A recoverable project replacement backup could not be created.",
+                std::format("rename backup failed: {}", std::strerror(error)), backup,
+                std::nullopt, "atomic_replace_backup", error, std::strerror(error));
+        }
+        if (::rename(replacement.c_str(), destination.c_str()) != 0) {
+            const int error = errno;
+            const bool restored = ::rename(backup.c_str(), destination.c_str()) == 0;
+            return project_error(native_error_code(error, true),
+                                 "The project could not be atomically published.",
+                                 std::format("rename failed: {}{}", std::strerror(error),
+                                             restored ? "" : "; prior project kept at the backup path"),
+                                 destination, std::nullopt, "atomic_replace", error,
+                                 std::strerror(error));
+        }
+        if (auto sync = sync_parent_directory(destination); !sync) {
+            return std::move(sync).error();
+        }
+        return AtomicReplaceState{.backup_path = backup};
+    }
+#endif
+
     lfs::Result<AtomicReplaceState>
     atomic_replace(const std::filesystem::path& replacement,
                    const std::filesystem::path& destination) {
@@ -1161,6 +1191,11 @@ namespace lfs::io::project::detail {
             const auto backup = make_sibling_temp_path(destination, "replace-backup");
             if (::link(destination.c_str(), backup.c_str()) != 0) {
                 const int error = errno;
+                const bool filesystem_without_hard_links =
+                    error == EPERM || error == EOPNOTSUPP || error == ENOSYS;
+                if (filesystem_without_hard_links) {
+                    return replace_with_rename_backup(replacement, destination, backup);
+                }
                 return project_error(
                     native_error_code(error, true),
                     "A recoverable project replacement backup could not be created.",

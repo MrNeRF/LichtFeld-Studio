@@ -34,10 +34,14 @@
           <span class="ep-no-models" data-if="show_no_models">@tr:export_dialog.no_models</span>
           <div class="ep-model-row"
                data-for="model : models"
-               data-attr-data-node-name="model.name">
+               data-attr-data-node-name="model.name"
+               data-class-is-group="model.is_group"
+               data-style-padding-left="model.indent">
             <label class="setting-label">
               <input type="checkbox"
                      data-attr-data-node-name="model.name"
+                     data-attr-data-group-id="model.group_id"
+                     data-class-is-partial="model.partial"
                      data-attrif-checked="model.selected" />
               <span class="ep-model-name">{{ model.name }}</span>
             </label>

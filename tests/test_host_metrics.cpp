@@ -9,7 +9,11 @@
 #include <thread>
 
 TEST(HostMetrics, FirstSampleHasNoCpuDelta) {
-    const auto sample = lfs::core::host_metrics::sample();
+    // CPU deltas live in thread-local sampler state. A new thread is a first
+    // sample even when this process already sampled on the test thread.
+    lfs::core::host_metrics::Sample sample;
+    std::thread worker([&] { sample = lfs::core::host_metrics::sample(); });
+    worker.join();
     EXPECT_TRUE(sample.ram_valid);
     EXPECT_LT(sample.process_cpu_percent, 0.f);
 }

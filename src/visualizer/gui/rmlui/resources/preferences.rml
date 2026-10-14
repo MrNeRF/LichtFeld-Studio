@@ -423,6 +423,11 @@
         </div>
         <div class="section-content" data-if="interface_expanded">
           <span class="preferences-description">@tr:preferences.interface_layout_description</span>
+          <span class="preferences-description">@tr:preferences.sidebar_defaults_description</span>
+          <div class="preferences-inline-actions">
+            <button class="btn btn--secondary" data-event-click="save_startup_sidebar">@tr:preferences.save_startup_sidebar</button>
+            <button class="btn btn--secondary" data-event-click="clear_startup_sidebar">@tr:preferences.clear_startup_sidebar</button>
+          </div>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.native_floating_windows</span>
             <input type="checkbox" data-checked="native_floating_windows"/>

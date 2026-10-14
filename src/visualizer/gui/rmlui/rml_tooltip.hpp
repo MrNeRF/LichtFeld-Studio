@@ -27,6 +27,8 @@ namespace lfs::vis::gui {
     inline constexpr auto kRmlTooltipReshowDelay = std::chrono::milliseconds(90);
     inline constexpr auto kRmlTooltipReshowGrace = std::chrono::milliseconds(600);
 
+    LFS_VIS_API Rml::Element* propertyTooltipTarget(Rml::Element* item);
+
     LFS_VIS_API std::string resolveRmlTooltip(Rml::Element* hover);
 
     // True while the hovered element is (inside) a native <select> whose popup

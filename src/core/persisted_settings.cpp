@@ -22,6 +22,8 @@ namespace lfs::core::persisted_settings {
         }
 
         bool replacesInvalidField(const Json& old, const Json& updates) {
+            if (updates.is_null())
+                return false;
             if (!compatibleType(old, updates))
                 return true;
             if (old.is_object() && updates.is_object())
@@ -109,10 +111,16 @@ namespace lfs::core::persisted_settings {
     void mergeKnown(Json& destination, const Json& updates, bool preserve_unrecognized,
                     const ArrayIdentity& array_identity) {
         for (const auto& [key, value] : updates.items()) {
+            if (value.is_null()) {
+                destination.erase(key);
+                continue;
+            }
             if (preserve_unrecognized && destination.contains(key) &&
                 !compatibleType(destination[key], value))
                 continue;
-            if (destination.contains(key) && destination[key].is_object() && value.is_object()) {
+            if (value.is_object()) {
+                if (!destination.contains(key) || !destination[key].is_object())
+                    destination[key] = Json::object();
                 mergeKnown(destination[key], value, preserve_unrecognized, array_identity);
             } else if (destination.contains(key) && destination[key].is_array() && value.is_array()) {
                 const auto identity_it = array_identity.find(key);

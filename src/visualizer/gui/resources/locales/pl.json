@@ -1055,7 +1055,10 @@
     "viewport_defaults_hint": "Te wartości inicjują nowe projekty. Istniejące projekty zachowują zapisane wartości.",
     "viewport_style_defaults": "Styl prowadnic i zaznaczenia",
     "viewport_performance_defaults": "Limity pamięci podręcznej LOD",
-    "viewport_defaults_invalid": "Wprowadź prawidłową wartość z obsługiwanego zakresu."
+    "viewport_defaults_invalid": "Wprowadź prawidłową wartość z obsługiwanego zakresu.",
+    "sidebar_defaults_description": "Zapisz bieżącą szerokość prawego paska bocznego, podział sceny i aktywną kartę na potrzeby uruchamiania aplikacji. Istniejące projekty .licht przywracają własną przestrzeń roboczą. Nowy projekt zachowuje bieżącą przestrzeń roboczą.",
+    "save_startup_sidebar": "Zapisz pasek boczny na start",
+    "clear_startup_sidebar": "Wyczyść ustawienia startowe paska bocznego"
   },
   "main_panel": {
     "console": "Konsola",
@@ -2626,7 +2629,8 @@
     "perf_collapse": "Zwiń",
     "gt_metrics_training_required": "Metryki kamery wymagają zainicjowanej sesji treningowej.",
     "gt_metrics_calculation_failed": "Nie udało się obliczyć metryk dla tego widoku.",
-    "perf_hud_tooltip": "Pokaż lub ukryj HUD wydajności"
+    "perf_hud_tooltip": "Pokaż lub ukryj HUD wydajności",
+    "all_panel_tabs": "Wszystkie panele"
   },
   "runtime": {
     "environment_map_failed": "Nie można odczytać mapy środowiska „{}”. Zachowano poprzednie środowisko.",

@@ -430,7 +430,8 @@ namespace lfs::vis::gui {
             const std::string default_directory_utf8 =
                 default_directory.empty() ? std::string{} : lfs::core::path_to_utf8(default_directory);
             const nfdopendialogu8args_t args{
-                filters.data(), filters.size(),
+                filters.data(),
+                filters.size(),
                 default_directory_utf8.empty() ? nullptr : default_directory_utf8.c_str(),
                 currentParentWindowHandle(),
             };

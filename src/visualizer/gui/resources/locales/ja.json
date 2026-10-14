@@ -1055,7 +1055,10 @@
     "viewport_defaults_hint": "新規プロジェクトに適用されます。既存のプロジェクトでは保存済みの値が維持されます。",
     "viewport_style_defaults": "ガイドと選択のスタイル",
     "viewport_performance_defaults": "LODキャッシュ上限",
-    "viewport_defaults_invalid": "対応範囲内の有効な値を入力してください。"
+    "viewport_defaults_invalid": "対応範囲内の有効な値を入力してください。",
+    "sidebar_defaults_description": "現在の右サイドバーの幅、シーンの分割位置、アクティブなタブをアプリ起動時の設定として保存します。既存の .licht プロジェクトでは、そのプロジェクトのワークスペースが復元されます。新規プロジェクトでは現在のワークスペースが維持されます。",
+    "save_startup_sidebar": "起動時のサイドバーを保存",
+    "clear_startup_sidebar": "起動時のサイドバー設定をクリア"
   },
   "main_panel": {
     "console": "コンソール",
@@ -2626,7 +2629,8 @@
     "perf_collapse": "折りたたむ",
     "gt_metrics_training_required": "カメラ指標には初期化済みのトレーニングセッションが必要です。",
     "gt_metrics_calculation_failed": "このビューの指標を計算できませんでした。",
-    "perf_hud_tooltip": "パフォーマンス HUD の表示/非表示"
+    "perf_hud_tooltip": "パフォーマンス HUD の表示/非表示",
+    "all_panel_tabs": "すべてのパネル"
   },
   "runtime": {
     "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",

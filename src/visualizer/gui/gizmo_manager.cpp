@@ -1342,8 +1342,12 @@ namespace lfs::vis::gui {
         stamp.selection_mode = selection_mode_;
         if (stamp == last_tool_state_stamp_)
             return;
+        const bool exact_depth_changed = (last_tool_state_stamp_.active_tool_id == "builtin.align") !=
+                                         (active_tool_id == "builtin.align");
         last_tool_state_stamp_ = stamp;
         resetIdleGizmoHover();
+        if (rendering_manager && exact_depth_changed)
+            rendering_manager->markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
 
         if (rendering_manager)
             rendering_manager->setGaussianSelectionVisible(is_selection_mode);
