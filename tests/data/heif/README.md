@@ -2,7 +2,7 @@
 
 Procedural RGB/RGBA/monochrome images, licensed GPL-3.0-or-later with this repo.
 No photographs or third-party image samples are included. `rgb8.heic` is an
-original earlier HEVC grid retained only to assert unsupported-codec behavior;
+original earlier HEVC grid retained for OS-provider and unsupported-codec tests;
 no HEVC decoder or encoder is needed to execute the tests.
 
 Regenerate the positive fixtures with:
@@ -33,3 +33,17 @@ container construction runs only during generation; no image encoder is used
 by the test executable. The other fixtures are ordinary single images except
 the primary-selection case. PQ/HLG without ICC is raw-readable but rejected by
 implicit SDR display loading.
+
+`system-*.heic` and their independent `system-*.reference` buffers are original
+procedural HEVC fixtures recovered from the earlier fixture generator at
+`e506c66c4549b8512d0627f73a0cccf30d295883`. They qualify only OS-provided decoding;
+they do not add an HEVC codec dependency. Native 10/12-bit references are
+left-aligned, as for the AV1 fixtures. `system-grid.reference` belongs to the
+retained `rgb8.heic`, not to the newer AV1 grid.
+
+The two system ICC fixtures also use the existing `add_fixture_property` helper
+to append a real second NCLX declaration without re-encoding. Tests read it back
+and exercise ICC precedence over sRGB/PQ/HLG. The AV1 regeneration command above
+does not regenerate these historical HEVC files. No encoder is needed to run
+either set of tests. Native availability, precision, alpha and RGB-grid limits
+are explicit; see the system-provider qualification document.

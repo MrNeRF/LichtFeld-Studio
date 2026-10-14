@@ -1,8 +1,10 @@
 # AVIF / AV1-based HEIF image import
 
 This provider imports AV1-coded still images through libheif and dav1d.
-HEVC-coded HEIC is unsupported with an explicit diagnostic, including when its
-extension is changed. HEIF is a container family, not a guarantee of support
+Explicit HEVC input now selects a limited OS adapter on Windows/macOS in the
+local integration branch; Linux has no configured native provider. Unqualified
+precision/alpha/layout returns an explicit error, including renamed files.
+HEIF is a container family, not a guarantee of support
 for every codec, auxiliary image or sequence inside it.
 
 The distribution policy excludes libde265 and every HEVC path from this
@@ -49,8 +51,9 @@ Original AV1 fixtures and independent AOM-decoded references cover native
 adjacent 10/12-bit codes, RGBA12, monochrome, limited-range lossy YUV420,
 nonidentity matrices, SDR transfers, explicit ICC/NCLX precedence, invalid ICC,
 PQ/HLG, primary selection, rotation/mirroring and a partial-tile AV1 grid.
-One original HEVC grid is kept only for rejection tests. Runtime tests require
-dav1d and verify that HEVC decoding and AV1/HEVC encoding are unavailable.
+Original HEVC fixtures qualify limited OS decoding and its explicit rejections.
+Runtime tests require dav1d and verify that libheif HEVC decoding and AV1/HEVC
+encoding remain unavailable.
 Test execution requires no encoder. See `tests/data/heif/README.md`.
 
 Cache/queue tests preserve original samples exactly. The existing CUDA derived
@@ -63,10 +66,13 @@ and timings concern the retired provider and do not qualify AVIF or promise
 equivalence with ImageIO. Targeted tests do not establish hosted CI, complete
 installer qualification or a full root-suite run.
 
-Future HEIC import requires separately qualified OS-provided decoders (Apple
-ImageIO/Core Image or Windows WIC with the HEIF extension), availability checks
-and explicit unsupported behavior elsewhere. No such provider, image writer or
-implicit HDR display conversion is added here.
+The local HEIC integration uses OS-provided ImageIO or Microsoft WIC. Dataset
+discovery recognizes `.heic` on Windows/macOS; unavailable providers and
+unqualified precision/layouts fail explicitly. Linux remains unsupported.
+Windows supports qualified RGB8; Apple also supports packed RGB10. Windows RGB
+grids and Apple ICC plus contradictory HDR NCLX are explicitly unsupported.
+It does not introduce a bundled HEVC decoder, image writer or implicit HDR
+display conversion.
 
 System-provider qualification and its measured limitations are tracked in
 [`media-heic-system-providers.md`](media-heic-system-providers.md). The diagnostic

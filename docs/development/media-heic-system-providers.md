@@ -1,8 +1,10 @@
 # HEIC system-provider investigation
 
-Status: local qualification only, 14 October 2026. No HEIC support is enabled in
-the application by this branch. The integrated AVIF/libheif/dav1d provider and
-its HEVC rejection remain unchanged. No bundled HEVC fallback is introduced.
+Status: local integration in progress, 14 October 2026. Existing explicit codec
+entry points now select an OS adapter for a qualified HEVC subset. Dataset
+discovery is not expanded. The libheif decoder remains AV1/dav1d only, with no
+bundled HEVC fallback. Mac production integration still awaits its own tests;
+the ImageIO probe results below do not substitute for them.
 
 The maintainer's distribution decision concerns HEVC decoders, not simply the
 choice of libde265. An external/system provider proposal needs agreement before
@@ -83,6 +85,69 @@ FFmpeg describes the general canvas/offset contract in
 7. Only then advertise HEIC dataset discovery. Reuse existing raw/display,
    quantization, resize and cache contracts; test cold/warm GPU consumers and
    confirm packages/notices include no new HEVC decoder.
+
+## Local integration progress
+
+`image_heif.cpp` retains primary/derived-item validation, source precision,
+ICC/NCLX handling and the bounded per-thread LCMS cache. AV1 uses dav1d as before.
+HEVC selects `image_heic_system.cpp`; no alternate image service is introduced.
+Both file and memory entry points share the adapter and existing target copying.
+Metadata probing checks capabilities without copying all pixels. Encoded HEVC
+leaf precision must agree across tiles and with the primary declaration.
+
+Windows currently accepts RGB8 only, without silently reducing higher precision
+or dropping auxiliary alpha. It selects the Microsoft WIC vendor. COM is local
+to the call and respects existing STA/MTA initialization. The Linux adapter is
+explicitly unavailable; the FFmpeg investigation does not enable a new fallback.
+
+A stronger pixel comparison exposed a Windows limitation beyond successful
+copying: the original planar-RGB tile grid returns incorrect RGB pixels despite
+successful WIC calls. The adapter therefore rejects RGB grids on Windows. The
+earlier matrix's successful grid copy describes only API success, not pixel
+correctness. A real YUV iPhone grid decodes through the public display entry
+point; compared with the previous independent-provider display reference, mean
+absolute RGB8 difference is 1.00684, maximum 66, and 99.6948% of samples differ by
+at most eight. This is one sample, not a relaxed acceptance threshold or an
+ImageIO/independent-decoder equivalence claim.
+
+Apple's local implementation accepts RGB8 and the qualified packed RGB101010
+layout, normalizes native codes to full-range UINT16 and applies libheif's ordered
+container rotations/mirrors once. A separate EXIF orientation is not applied a
+second time. A single clean aperture before rotations/mirrors is handled by
+ImageIO; repeated apertures or apertures after those transforms are rejected.
+It rejects unqualified precision/alpha/layout and inconsistent
+geometry instead of interpreting unknown storage. Production codec tests pass
+on the Mac for this subset. A valid ICC combined with contradictory PQ/HLG NCLX
+passes shared ICC validation, but ImageIO cannot provide the native pixels:
+that combination returns an explicit unsupported error. Windows supports the
+qualified combination; AVIF retains its existing ICC precedence. Native HDR
+without a usable ICC remains unsupported rather than receiving implicit SDR
+conversion.
+
+Windows standalone codec/export groups pass, including original sample pixels,
+file/memory equivalence, targets, ICC over PQ/HLG, malformed ICC, allocation
+failure, Unicode aliases, concurrent calls and a caller already in STA. Linux
+standalone groups pass with declared native-provider-unavailable skips;
+existing AVIF tests execute. Formatting, I/O/backend checks and error baseline
+have passed during development. Existing Windows CUDA/Vulkan and discovery
+profiles also pass against the updated app library. Native RGB8 is exercised
+through cold/warm cache and queue consumers on Windows CUDA/Vulkan and Mac
+Metal/Vulkan; Mac also exercises packed RGB10. An isolated consumer with a system-only PATH
+decodes the real photo without bundled libde265. Its observed working-set peaks
+are roughly 500–580 MiB. Two versus twelve repeated decodes do not show growth
+proportional to the decode count; this short diagnostic is not a general leak or
+memory-budget guarantee. CMake stub regeneration fixes only a docstring wrapping
+drift inherited from dev, and the subsequent stub check passes.
+
+The approved integration transfer and Mac validation are complete. Standalone
+codec/export groups pass on Windows, Mac and Linux. Mac has only the existing
+unavailable `/dev/full` PNG/JPEG cases skipped; Linux explicitly lacks a native
+HEVC provider. Dataset discovery recognizes `.heic` on Windows/macOS, while
+preserving same-stem legacy companion counts and preview preference. Recognition
+does not promise that every HEIC precision/layout or Windows extension is
+available. Linux discovery remains disabled. Full installer qualification,
+hosted CI and older OS versions remain outside these local results. No HEVC
+decoder is added to the bundled libheif configuration.
 
 Sources for API behavior:
 [Microsoft HEIF extension codec](https://learn.microsoft.com/en-us/windows/win32/wic/heif-codec),

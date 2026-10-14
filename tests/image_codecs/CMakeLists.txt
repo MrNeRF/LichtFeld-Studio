@@ -59,6 +59,7 @@ target_link_libraries(lichtfeld_image_codec_tests PRIVATE
     GTest::gtest_main Threads::Threads OpenEXR::OpenEXRCore OpenEXR::OpenEXR
     JPEG::JPEG PNG::PNG TIFF::TIFF WebP::webp ZLIB::ZLIB)
 if(MSVC)
+    target_link_libraries(lichtfeld_image_codec_tests PRIVATE ole32)
     target_compile_options(lichtfeld_image_codec_tests PRIVATE /utf-8 /W4)
     target_compile_definitions(lichtfeld_image_codec_tests PRIVATE NOMINMAX)
 endif()

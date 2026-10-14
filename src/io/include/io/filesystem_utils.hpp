@@ -349,7 +349,20 @@ namespace lfs::io {
     // Check if a file has an image extension
     inline bool is_image_file(const fs::path& path) {
         static const std::vector<std::string> image_extensions = {
-            ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".exr", ".webp", ".avif", ".heif"};
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".bmp",
+            ".tif",
+            ".tiff",
+            ".exr",
+            ".webp",
+            ".avif",
+            ".heif",
+#if defined(_WIN32) || defined(__APPLE__)
+            ".heic",
+#endif
+        };
 
         std::string ext = path.extension().string();
         detail::ascii_lower_inplace(ext);
@@ -360,7 +373,7 @@ namespace lfs::io {
     inline bool is_legacy_image_file(const fs::path& path) {
         auto ext = path.extension().string();
         detail::ascii_lower_inplace(ext);
-        return ext != ".exr" && ext != ".webp" && ext != ".avif" && ext != ".heif" && is_image_file(path);
+        return ext != ".exr" && ext != ".webp" && ext != ".avif" && ext != ".heif" && ext != ".heic" && is_image_file(path);
     }
 
     inline std::string strip_extension(const std::string& filename) {
