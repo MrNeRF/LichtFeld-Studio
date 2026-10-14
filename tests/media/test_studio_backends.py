@@ -41,12 +41,87 @@ class StudioBackends(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr.decode("utf-8",errors="replace") + result.stdout.decode("utf-8",errors="replace"))
         actual = json.loads(result.stdout)
         self.assertTrue(actual["success"],actual)
-        if options.get("operation") in ("native-preview", "native-encode", "native-encode-session", "native-conversion"):
+        if options.get("operation") in ("native-preview", "native-encode", "native-encode-session", "native-conversion", "native-yuv-color"):
             return actual, output
         self.assertTrue(actual["hardware"])
         self.assertTrue(actual["hdr"])
         self.assertTrue(actual["cuda_diagnostics"])
         return actual,output
+
+    def test_p010_raw_precision_pitch_range_matrix_and_stream(self):
+        result, _ = self.invoke(operation="native-yuv-color")
+        self.assertEqual(result["checked_components"], 32 * 8 * 3 * 6)
+        self.assertTrue(result["nondefault_stream"])
+
+    def test_semiplanar_extraction_matches_host_color_without_frame_transfer(self):
+        for bits, matrix, range_name in ((10, "smpte170m", "tv"), (10, "smpte170m", "pc"),
+                                        (10, "bt709", "tv"), (10, "bt709", "pc"),
+                                        (10, "bt2020nc", "tv"), (10, "bt2020nc", "pc"),
+                                        (8, "bt709", "tv"), (8, "bt2020nc", "pc")):
+            with self.subTest(bits=bits, matrix=matrix, range=range_name):
+                source = self.root / f"sdr-{bits}-{matrix}-{range_name}.mp4"
+                command = [FFMPEG, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=256x144:rate=10:duration=0.5",
+                           "-pix_fmt", "yuv420p10le" if bits == 10 else "yuv420p", "-colorspace", matrix,
+                           "-color_range", range_name, "-color_trc", "bt709", "-color_primaries", "bt709",
+                           "-c:v", "libx265" if bits == 10 else "libx264"]
+                if bits == 10:
+                    command += ["-x265-params", "pools=1:frame-threads=1"]
+                subprocess.run(command + [str(source)], check=True, timeout=30, capture_output=True)
+                _, actual = self.invoke(input=str(source), jpeg=True)
+                _, reference = self.invoke(input=str(source), jpeg=True, cpu_color=True)
+                metadata = json.loads((actual / "extraction_metadata.json").read_text(encoding="utf-8"))
+                baseline = json.loads((reference / "extraction_metadata.json").read_text(encoding="utf-8"))
+                color = metadata["processing"]["color_conversion"]
+                self.assertEqual(color["p010_frames" if bits == 10 else "nv12_frames"], metadata["performance"]["selected_frames"])
+                self.assertEqual(color["backend"], "cuda")
+                self.assertEqual(color["gpu_frames"], metadata["performance"]["selected_frames"])
+                self.assertEqual(color["hardware_readback_frames"], 0)
+                self.assertEqual(color["rgb_readback_frames"], 0)
+                self.assertEqual(metadata["performance"]["timing_seconds"]["cuda_upload"], 0)
+                self.assertEqual(baseline["processing"]["color_conversion"]["backend"], "host")
+                self.assertEqual(metadata["processing"]["decoder"]["backend"], "nvdec")
+                self.assertEqual(metadata["processing"]["image_encoder"]["backend"], "nvimagecodec_cuda")
+                files = sorted(actual.glob("*.jpg"))
+                self.assertEqual([p.name for p in files], [p.name for p in sorted(reference.glob("*.jpg"))])
+                for image in files:
+                    def pixels(path):
+                        return subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path),
+                                                        "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])
+                    a, b = pixels(image), pixels(reference / image.name)
+                    self.assertEqual(len(a), len(b))
+                    errors = [abs(x-y) for x, y in zip(a, b)]
+                    # P010 swscale dithers during RGB8 conversion; subsequent JPEG
+                    # quantization can amplify local differences near sharp edges.
+                    self.assertLess(sum(errors) / len(errors), 3)
+                    self.assertLessEqual(max(errors), 40)
+
+    def test_p010_rotation_scoring_and_resize_preserve_output(self):
+        source = self.root / "p010-geometry.mp4"
+        subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+                        "testsrc2=size=256x144:rate=10:duration=0.5", "-pix_fmt", "yuv420p10le",
+                        "-colorspace", "bt709", "-color_range", "tv", "-c:v", "libx265",
+                        "-x265-params", "pools=1:frame-threads=1", str(source)],
+                       check=True, timeout=30, capture_output=True)
+        for options in ({}, {"rotation": 90}, {"rotation": 180}, {"rotation": 270},
+                        {"sharpness": True}, {"sharpness": True, "window": True}, {"scale": .5}):
+            with self.subTest(options=options):
+                _, output = self.invoke(input=str(source), jpeg=True, **options)
+                metadata = json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))
+                size = [144, 256] if options.get("rotation") in (90, 270) else [256, 144]
+                if options.get("scale"):
+                    size = [128, 72]
+                self.assertEqual(metadata["output_size"], size)
+                self.assertGreater(len(metadata["frames"]), 0)
+                color = metadata["processing"]["color_conversion"]
+                if not options.get("scale") and not options.get("window"):
+                    self.assertEqual(color["backend"], "cuda")
+                    self.assertGreater(color["p010_frames"], 0)
+                    self.assertEqual(color["hardware_readback_frames"], 0)
+                for image in output.glob("*.jpg"):
+                    pixels = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(image),
+                                                      "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])
+                    self.assertEqual(len(pixels), size[0] * size[1] * 3)
+                    self.assertGreater(max(pixels) - min(pixels), 20)
 
     def test_native_manifest_preserves_offset_reordered_pts(self):
         source = self.root / "offset-reordered.mkv"

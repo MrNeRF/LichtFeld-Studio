@@ -356,6 +356,27 @@ runtime reports it alongside configuration flags. There is no separate manifest
 or copied SDK license inventory in this revision. A replacement codec build or
 future dependency must undergo its own version/transitive/license review.
 
+## CUDA extraction color conversion
+
+Studio's JPEG extraction pipeline can consume decoded CUDA NV12 and P010
+frames directly when resizing and HDR tone mapping are not requested. P010
+samples retain their ten meaningful bits through color conversion before the
+final RGB8/JPEG quantization. Supported matrices are BT.601, BT.709 and
+BT.2020 nonconstant luminance, with limited or full range and left/unspecified
+chroma location. Other layouts or color descriptions retain the host path.
+The existing NV12 BT.601 conversion keeps its original integer rounding.
+
+This path uses the existing decoder context, stream handoff and JPEG encoder;
+it does not install another codec. Rotation remains on the GPU. Sharpness
+may require an RGB readback; window selection, resizing, resumable extraction
+and requested HDR processing retain their existing routing contracts.
+
+Extraction metadata records `processing.color_conversion.backend` and counts
+for GPU/host conversion, actual NV12/P010 frames, hardware-frame readbacks
+and RGB readbacks. These describe work performed, rather than claiming a
+fully GPU pipeline merely because hardware decoding was requested. The input
+probe's pixel format can differ from the decoder's actual CUDA surface layout.
+
 ## MCP integration
 
 `media.capabilities` exposes the registered backends and codec build. `media.probe` is a synchronous read-only tool using the same inventory JSON as the CLI. `media.extract` accepts the facade's selection, geometry, sharpness, time range and backend options and starts the `media.extract` runtime job. It returns promptly; decoding and file writing run in a guarded worker. Only one extraction can run at a time.

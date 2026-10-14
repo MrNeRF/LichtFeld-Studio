@@ -90,7 +90,7 @@ class ExtractionContracts(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(result.stdout)
         self.assertFalse(report["success"])
-        self.assertIn("No video stream found", report["error"])
+        self.assertIn("No usable video stream found", report["error"])
 
     def test_av1_cpu_extraction_and_preview_without_hardware(self):
         work = Path(tempfile.mkdtemp(prefix="av1-cpu-", dir=self.root))
