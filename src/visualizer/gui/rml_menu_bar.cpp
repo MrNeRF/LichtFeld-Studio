@@ -1445,6 +1445,14 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    void RmlMenuBar::onWindowPointerEvent(const SDL_Event& event, const std::uint32_t main_window_id) {
+        if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE && event.window.windowID == main_window_id)
+            onPointerLeave();
+        else if ((event.type == SDL_EVENT_MOUSE_MOTION && event.motion.windowID == main_window_id) ||
+                 (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.windowID == main_window_id))
+            onPointerMotion();
+    }
+
     void RmlMenuBar::onPointerMotion() {
         if (pointer_suspended_) {
             pointer_suspended_ = false;

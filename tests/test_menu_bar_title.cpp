@@ -1197,6 +1197,55 @@ namespace {
         ASSERT_TRUE(Rml::RemoveContext("menu_bar_title_viewport"));
     }
 
+    TEST_F(MenuBarTitleTest, PointerEventsAreScopedToTheMainWindowAndPressResumesInput) {
+        RmlMenuBarTestAccess::keepContextHeight(bar_);
+        auto* button = el("menu-items")->GetChild(0);
+        ASSERT_NE(button, nullptr);
+        auto rect = bounds(button);
+        lfs::vis::gui::PanelInputState input{};
+        input.screen_w = 1600;
+        input.screen_h = 300;
+        input.mouse_x = (rect.left + rect.right) / 2;
+        input.mouse_y = (rect.top + rect.bottom) / 2;
+        bar_.processInput(input);
+        context_->Update();
+        ASSERT_TRUE(button->IsPseudoClassSet("hover"));
+        SDL_Event event{};
+        event.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
+        event.window.windowID = 2;
+        bar_.onWindowPointerEvent(event, 1);
+        bar_.processInput(input);
+        context_->Update();
+        EXPECT_TRUE(button->IsPseudoClassSet("hover"));
+        RmlMenuBarTestAccess::windowFocusLost(bar_);
+        event.type = SDL_EVENT_MOUSE_MOTION;
+        event.motion.windowID = 2;
+        bar_.onWindowPointerEvent(event, 1);
+        bar_.processInput(input);
+        context_->Update();
+        EXPECT_FALSE(button->IsPseudoClassSet("hover"));
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.windowID = 1;
+        bar_.onWindowPointerEvent(event, 1);
+        rect = bounds(button);
+        input.mouse_x = (rect.left + rect.right) / 2;
+        input.mouse_y = (rect.top + rect.bottom) / 2;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.down = true;
+        event.button.x = input.mouse_x;
+        event.button.y = input.mouse_y;
+        manager_.dispatchInputEvent(event);
+        context_->Update();
+        EXPECT_TRUE(bar_.isOpen());
+    }
+
+    TEST_F(MenuBarTitleTest, RestoreBackKeepsItsOriginalOuterExtent) {
+        auto* back = document_->QuerySelector(".window-restore-back");
+        ASSERT_NE(back, nullptr);
+        EXPECT_EQ(back->GetProperty("width")->ToString(), "11dp");
+        EXPECT_EQ(back->GetProperty("height")->ToString(), "11dp");
+    }
+
     TEST_F(MenuBarTitleTest, LosingWindowFocusClearsPointerFeedback) {
         RmlMenuBarTestAccess::keepContextHeight(bar_);
         auto* button = el("menu-window-close");
