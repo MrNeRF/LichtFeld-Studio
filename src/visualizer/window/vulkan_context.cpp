@@ -4660,7 +4660,8 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateSwapchainKHR failed: {} (extent={}x{}, transparent={}, present_scaling={}, old_swapchain={:#x})",
                                             vkResultToString(result), extent.width, extent.height,
-                                            transparent_surface_, use_present_scaling, vkHandleValue(old_swapchain)), result);
+                                            transparent_surface_, use_present_scaling, vkHandleValue(old_swapchain)),
+                                result);
         }
         setDebugObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, swapchain_, "swapchain.main");
 
