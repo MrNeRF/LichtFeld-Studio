@@ -1054,9 +1054,9 @@
     "viewport_style_defaults": "辅助线与选择样式",
     "viewport_performance_defaults": "LOD缓存限制",
     "viewport_defaults_invalid": "请输入支持范围内的有效值。",
-    "sidebar_defaults_description": "Save the current right sidebar width, scene split and active tab for application startup. Existing .licht projects restore their own workspace. New Project keeps the current workspace.",
-    "save_startup_sidebar": "Save sidebar for startup",
-    "clear_startup_sidebar": "Clear startup sidebar"
+    "sidebar_defaults_description": "保存当前右侧边栏宽度、场景分区和活动选项卡，供应用启动时使用。现有 .licht 项目会恢复各自的工作区。新建项目保留当前工作区。",
+    "save_startup_sidebar": "保存启动侧边栏布局",
+    "clear_startup_sidebar": "清除启动侧边栏布局"
   },
   "main_panel": {
     "console": "控制台",

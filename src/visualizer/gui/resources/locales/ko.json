@@ -1054,9 +1054,9 @@
     "viewport_style_defaults": "가이드 및 선택 스타일",
     "viewport_performance_defaults": "LOD 캐시 제한",
     "viewport_defaults_invalid": "지원 범위 내의 올바른 값을 입력하세요.",
-    "sidebar_defaults_description": "Save the current right sidebar width, scene split and active tab for application startup. Existing .licht projects restore their own workspace. New Project keeps the current workspace.",
-    "save_startup_sidebar": "Save sidebar for startup",
-    "clear_startup_sidebar": "Clear startup sidebar"
+    "sidebar_defaults_description": "현재 오른쪽 사이드바 너비, 장면 분할 위치 및 활성 탭을 앱 시작 설정으로 저장합니다. 기존 .licht 프로젝트는 자체 작업 공간을 복원합니다. 새 프로젝트는 현재 작업 공간을 유지합니다.",
+    "save_startup_sidebar": "시작 시 사이드바 저장",
+    "clear_startup_sidebar": "시작 사이드바 설정 지우기"
   },
   "main_panel": {
     "console": "콘솔",

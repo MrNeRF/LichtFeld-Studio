@@ -1054,9 +1054,9 @@
     "viewport_style_defaults": "Styl prowadnic i zaznaczenia",
     "viewport_performance_defaults": "Limity pamięci podręcznej LOD",
     "viewport_defaults_invalid": "Wprowadź prawidłową wartość z obsługiwanego zakresu.",
-    "sidebar_defaults_description": "Save the current right sidebar width, scene split and active tab for application startup. Existing .licht projects restore their own workspace. New Project keeps the current workspace.",
-    "save_startup_sidebar": "Save sidebar for startup",
-    "clear_startup_sidebar": "Clear startup sidebar"
+    "sidebar_defaults_description": "Zapisz bieżącą szerokość prawego paska bocznego, podział sceny i aktywną kartę na potrzeby uruchamiania aplikacji. Istniejące projekty .licht przywracają własną przestrzeń roboczą. Nowy projekt zachowuje bieżącą przestrzeń roboczą.",
+    "save_startup_sidebar": "Zapisz pasek boczny na start",
+    "clear_startup_sidebar": "Wyczyść ustawienia startowe paska bocznego"
   },
   "main_panel": {
     "console": "Konsola",

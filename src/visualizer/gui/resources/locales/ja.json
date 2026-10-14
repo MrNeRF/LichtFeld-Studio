@@ -1054,9 +1054,9 @@
     "viewport_style_defaults": "ガイドと選択のスタイル",
     "viewport_performance_defaults": "LODキャッシュ上限",
     "viewport_defaults_invalid": "対応範囲内の有効な値を入力してください。",
-    "sidebar_defaults_description": "Save the current right sidebar width, scene split and active tab for application startup. Existing .licht projects restore their own workspace. New Project keeps the current workspace.",
-    "save_startup_sidebar": "Save sidebar for startup",
-    "clear_startup_sidebar": "Clear startup sidebar"
+    "sidebar_defaults_description": "現在の右サイドバーの幅、シーンの分割位置、アクティブなタブをアプリ起動時の設定として保存します。既存の .licht プロジェクトでは、そのプロジェクトのワークスペースが復元されます。新規プロジェクトでは現在のワークスペースが維持されます。",
+    "save_startup_sidebar": "起動時のサイドバーを保存",
+    "clear_startup_sidebar": "起動時のサイドバー設定をクリア"
   },
   "main_panel": {
     "console": "コンソール",

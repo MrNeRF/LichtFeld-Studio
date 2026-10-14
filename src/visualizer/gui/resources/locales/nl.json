@@ -1054,9 +1054,9 @@
     "viewport_style_defaults": "Hulplijnen en selectiestijl",
     "viewport_performance_defaults": "LOD-cachelimieten",
     "viewport_defaults_invalid": "Voer een geldige waarde binnen het ondersteunde bereik in.",
-    "sidebar_defaults_description": "Save the current right sidebar width, scene split and active tab for application startup. Existing .licht projects restore their own workspace. New Project keeps the current workspace.",
-    "save_startup_sidebar": "Save sidebar for startup",
-    "clear_startup_sidebar": "Clear startup sidebar"
+    "sidebar_defaults_description": "Sla de huidige breedte van de rechterzijbalk, de scèneverdeling en het actieve tabblad op voor het starten van de toepassing. Bestaande .licht-projecten herstellen hun eigen werkruimte. Een nieuw project behoudt de huidige werkruimte.",
+    "save_startup_sidebar": "Zijbalk opslaan voor opstarten",
+    "clear_startup_sidebar": "Opstartinstellingen van zijbalk wissen"
   },
   "main_panel": {
     "console": "Console",

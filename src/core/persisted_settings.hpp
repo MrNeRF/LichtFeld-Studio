@@ -73,6 +73,7 @@ namespace lfs::core::persisted_settings {
     LFS_CORE_API Json readObject(const std::filesystem::path& path);
     LFS_CORE_API void backupDamaged(const std::filesystem::path& path,
                                     const std::filesystem::path& backup_root = {});
+    // Null updates explicitly remove their keys; omitted keys are preserved.
     LFS_CORE_API void mergeKnown(Json& destination, const Json& updates,
                                  bool preserve_unrecognized = false,
                                  const ArrayIdentity& array_identity = {});

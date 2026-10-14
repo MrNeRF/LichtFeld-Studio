@@ -1054,9 +1054,9 @@
     "viewport_style_defaults": "Hilfen und Auswahlstil",
     "viewport_performance_defaults": "LOD-Cache-Grenzen",
     "viewport_defaults_invalid": "Geben Sie einen gültigen Wert im unterstützten Bereich ein.",
-    "sidebar_defaults_description": "Save the current right sidebar width, scene split and active tab for application startup. Existing .licht projects restore their own workspace. New Project keeps the current workspace.",
-    "save_startup_sidebar": "Save sidebar for startup",
-    "clear_startup_sidebar": "Clear startup sidebar"
+    "sidebar_defaults_description": "Die aktuelle Breite der rechten Seitenleiste, die Szenenaufteilung und den aktiven Tab für den Programmstart speichern. Bestehende .licht-Projekte stellen ihren eigenen Arbeitsbereich wieder her. Ein neues Projekt behält den aktuellen Arbeitsbereich bei.",
+    "save_startup_sidebar": "Seitenleiste für den Start speichern",
+    "clear_startup_sidebar": "Startlayout der Seitenleiste löschen"
   },
   "main_panel": {
     "console": "Konsole",

@@ -4,12 +4,14 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
+#include "gui/gui_manager.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/panel_layout.hpp"
 #include "project/project_lifecycle.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering_types.hpp"
 #include "visualizer/preferences.hpp"
+#include "visualizer_impl.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -102,6 +104,58 @@ TEST(PreferencesMigration, StartupSidebarNeverOverridesAnAppliedProjectLayout) {
     preferences.clearSidebarDefaults();
     EXPECT_EQ(preferences.sidebarDefaults(), "{}");
     EXPECT_FLOAT_EQ(manager.captureProjectState().right_panel_width, 720);
+}
+
+TEST(PreferencesMigration, GuilRestoreOverridesStartupSidebarThroughTheCoordinator) {
+    const auto home = makeHome("lfs_sidebar_guil_restore");
+    const ScopedLfsHome scoped_home(home);
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    preferences.setSidebarDefaults(510, 0.35f, "lfs.rendering");
+    lfs::vis::ViewerOptions options;
+    options.show_startup_overlay = false;
+    lfs::vis::VisualizerImpl viewer(options);
+    auto& manager = viewer.getGuiManager()->panelLayout();
+    EXPECT_FLOAT_EQ(manager.captureProjectState().right_panel_width, 510);
+    lfs::io::project::ProjectSessionChapters chapters;
+    auto gui = json::parse(chapters.gui_layout.dom().dump());
+    auto& fixed = gui["layouts"][0]["areas"][0]["spaces"][0]["opaque_payload"];
+    fixed["right_panel_width"] = 720;
+    fixed["scene_panel_ratio"] = 0.65f;
+    auto parsed = lfs::io::project::GuiLayoutChapter::parse(gui.dump());
+    ASSERT_TRUE(parsed);
+    chapters.gui_layout = std::move(*parsed);
+    lfs::vis::project::GuiSessionRestoreCoordinator coordinator;
+    ASSERT_TRUE(coordinator.stage(std::move(chapters)));
+    EXPECT_FALSE(coordinator.takeReady());
+    coordinator.onFirstGuiFrame();
+    coordinator.onPanelsReady(1);
+    auto ready = coordinator.takeReady();
+    ASSERT_TRUE(ready);
+    std::vector<lfs::vis::project::CameraBookmarkProjectState> bookmarks;
+    lfs::vis::project::applyGuiSession(viewer, *ready, bookmarks);
+    EXPECT_FLOAT_EQ(manager.captureProjectState().right_panel_width, 720);
+    EXPECT_FLOAT_EQ(manager.captureProjectState().scene_panel_ratio, 0.65f);
+    EXPECT_EQ(json::parse(preferences.sidebarDefaults())["right_panel_width"], 510);
+}
+
+TEST(PreferencesMigration, SidebarSaveClearSaveDoesNotBackupHealthyPreferences) {
+    const auto home = makeHome("lfs_sidebar_clear_no_backup");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"schema_version", 1}, {"sidebar_defaults", {{"future_child", "keep"}}}});
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    preferences.setSidebarDefaults(510, 0.35f, "lfs.rendering");
+    const auto before = readPreferences(*paths).dump(2) + "\n";
+    preferences.clearSidebarDefaults();
+    EXPECT_EQ(preferences.sidebarDefaults(), "{}");
+    EXPECT_EQ(readPreferences(*paths)["sidebar_defaults"], json({{"future_child", "keep"}}));
+    preferences.setSidebarDefaults(610, 0.45f, "lfs.training");
+    EXPECT_EQ(readPreferences(*paths)["sidebar_defaults"]["future_child"], "keep");
+    EXPECT_FALSE(hasBackup(paths->backupDir(), paths->preferencesFile(), before));
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(paths->backupDir()))
+        EXPECT_NE(entry.path().filename(), paths->preferencesFile().filename());
 }
 
 TEST(PreferencesMigration, AssetDirectoryWinsOverWorkingDirectoryAndErasesLegacyKeys) {
