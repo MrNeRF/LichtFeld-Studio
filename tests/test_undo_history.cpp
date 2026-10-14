@@ -2364,7 +2364,7 @@ TEST_F(UndoHistoryTest, SceneSnapshotCompactsSparseDeletedMasksAndRestoresPresen
     node->model->soft_delete(make_uint8_mask({0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}).to(DataType::Bool));
     snapshot->captureAfter();
 
-    EXPECT_LE(snapshot->estimatedBytes(),
+    EXPECT_LE(snapshot->memoryBreakdown().gpu_bytes,
               16u + sizeof(bool) +
                   2u * (sizeof(lfs::core::Uuid) + sizeof(bool)));
 
@@ -4304,4 +4304,101 @@ TEST_F(UndoHistoryTest, MetadataDetailsRetainRecordedRenameAfterLiveSceneChanges
     EXPECT_EQ(fields[0].after, "Recorded after");
     EXPECT_EQ(fields[1].before, "@tr:history.value.true");
     EXPECT_EQ(fields[1].after, "@tr:history.value.false");
+}
+
+TEST_F(UndoHistoryTest, PointCloudVolumeCropsRestoreAllAttributesAndCropState) {
+    for (const bool ellipsoid : {false, true}) {
+        for (const bool inverse : {false, true}) {
+            lfs::vis::op::undoHistory().clear();
+            auto manager = std::make_unique<lfs::vis::SceneManager>();
+            lfs::vis::services().set(manager.get());
+            auto cloud = std::make_shared<lfs::core::PointCloud>();
+            cloud->means = Tensor::from_vector({0.f, 0.f, 0.f, 2.f, 0.f, 0.f, 3.f, 0.f, 0.f}, {3, 3}, Device::CUDA);
+            cloud->colors = Tensor::ones({3, 3}, Device::CUDA);
+            cloud->normals = Tensor::ones({3, 3}, Device::CUDA) * 2.f;
+            cloud->opacity = Tensor::from_vector({.1f, .2f, .3f}, {3, 1}, Device::CUDA);
+            cloud->sh0 = Tensor::ones({3, 3, 1}, Device::CUDA);
+            cloud->shN = Tensor::ones({3, 3, 3}, Device::CUDA);
+            cloud->scaling = Tensor::ones({3, 3}, Device::CUDA);
+            cloud->rotation = Tensor::ones({3, 4}, Device::CUDA);
+            cloud->emit_zero_normals = true;
+            cloud->attribute_names = {"custom"};
+            const auto id = manager->getScene().addPointCloud("cloud", cloud);
+            const auto box_id = manager->getScene().getOrCreateCropBoxForSplat(id);
+            manager->getScene().getCropBoxData(box_id)->enabled = true;
+            lfs::vis::op::undoHistory().clear();
+            if (ellipsoid) {
+                lfs::core::events::cmd::CropPLYEllipsoid{.world_transform = glm::mat4(1.f), .radii = glm::vec3(.5f), .inverse = inverse, .target_node_id = id}.emit();
+            } else {
+                lfs::geometry::BoundingBox box;
+                box.setBounds(glm::vec3(-.5f), glm::vec3(.5f));
+                lfs::core::events::cmd::CropPLY{.crop_box = box, .inverse = inverse, .target_node_id = id}.emit();
+            }
+            auto* node = manager->getScene().getNodeById(id);
+            const auto expected = inverse ? 2u : 1u;
+            ASSERT_EQ(node->point_cloud->size(), expected);
+            ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+            EXPECT_EQ(node->point_cloud->opacity.size(0), expected);
+            EXPECT_EQ(node->point_cloud->normals.size(0), expected);
+            EXPECT_EQ(node->point_cloud->shN.size(0), expected);
+            EXPECT_EQ(node->point_cloud->rotation.size(0), expected);
+            EXPECT_TRUE(node->point_cloud->emit_zero_normals);
+            EXPECT_EQ(node->point_cloud->attribute_names, cloud->attribute_names);
+            EXPECT_TRUE(node->payload_diverged);
+            if (!ellipsoid)
+                EXPECT_FALSE(manager->getScene().getCropBoxData(box_id)->enabled);
+            auto result = lfs::vis::op::undoHistory().undo();
+            ASSERT_TRUE(result.success) << result.error;
+            node = manager->getScene().getNodeById(id);
+            ASSERT_EQ(node->point_cloud->size(), 3);
+            EXPECT_FALSE(node->payload_diverged);
+            EXPECT_EQ(node->point_cloud->opacity.to_vector(), cloud->opacity.to_vector());
+            EXPECT_TRUE(manager->getScene().getCropBoxData(box_id)->enabled);
+            result = lfs::vis::op::undoHistory().redo();
+            ASSERT_TRUE(result.success) << result.error;
+            EXPECT_EQ(manager->getScene().getNodeById(id)->point_cloud->size(), expected);
+        }
+    }
+}
+
+TEST_F(UndoHistoryTest, PointCloudCropHandlesEmptyNoopLockedAndMixedTargets) {
+    auto manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(manager.get());
+    auto cloud = std::make_shared<lfs::core::PointCloud>(
+        Tensor::from_vector({0.f, 0.f, 0.f, 2.f, 0.f, 0.f}, {2, 3}, Device::CUDA),
+        Tensor::ones({2, 3}, Device::CUDA));
+    const auto id = manager->getScene().addPointCloud("cloud", cloud);
+    lfs::geometry::BoundingBox box;
+    box.setBounds(glm::vec3(-10.f), glm::vec3(10.f));
+    lfs::core::events::cmd::CropPLY{.crop_box = box, .inverse = false, .target_node_id = id}.emit();
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+    manager->getScene().getNodeById(id)->locked = true;
+    lfs::vis::op::undoHistory().clear();
+    box.setBounds(glm::vec3(-.5f), glm::vec3(.5f));
+    lfs::core::events::cmd::CropPLY{.crop_box = box, .inverse = false, .target_node_id = id}.emit();
+    EXPECT_EQ(manager->getScene().getNodeById(id)->point_cloud->size(), 2);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+    manager->getScene().getNodeById(id)->locked = false;
+    lfs::vis::op::undoHistory().clear();
+    box.setBounds(glm::vec3(10.f), glm::vec3(11.f));
+    lfs::core::events::cmd::CropPLY{.crop_box = box, .inverse = false, .target_node_id = id}.emit();
+    EXPECT_EQ(manager->getScene().getNodeById(id)->point_cloud->size(), 0);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(manager->getScene().getNodeById(id)->point_cloud->size(), 2);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    EXPECT_EQ(manager->getScene().getNodeById(id)->point_cloud->size(), 0);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    lfs::vis::op::undoHistory().clear();
+    manager->getScene().addSplat("splat", make_linear_test_splat(3));
+    manager->clearSelection();
+    box.setBounds(glm::vec3(-.5f), glm::vec3(.5f));
+    lfs::core::events::cmd::CropPLY{.crop_box = box, .inverse = false}.emit();
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+    EXPECT_EQ(manager->getScene().getNode("cloud")->point_cloud->size(), 1);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(manager->getScene().getNode("cloud")->point_cloud->size(), 2);
+    EXPECT_EQ(manager->getScene().getNode("splat")->model->visible_count(), 3u);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    EXPECT_EQ(manager->getScene().getNode("cloud")->point_cloud->size(), 1);
+    EXPECT_EQ(manager->getScene().getNode("splat")->model->visible_count(), 1u);
 }

@@ -4208,7 +4208,7 @@ namespace lfs::vis::op {
                                                         next == after.end() ? value : std::any{},
                                                         next == after.end() ? std::any{} : value));
                 };
-                append_state("gaussian_count", node.gaussian_count);
+                append_state(node.type == lfs::core::NodeType::POINTCLOUD ? "point_count" : "gaussian_count", node.gaussian_count);
                 append_state("parent", node.parent_name);
                 append_state("visible", node.visible);
                 append_state("locked", node.locked);
@@ -4230,7 +4230,7 @@ namespace lfs::vis::op {
                 if (std::none_of(next_payload.begin(), next_payload.end(), [&](const auto& field) { return field.first == key; }))
                     result.push_back({old->second->name, key, value, {}});
             appendNodeDiff(result, *old->second, *next->second);
-            appendChanged(result, next->second->name, "gaussian_count", old->second->gaussian_count, next->second->gaussian_count);
+            appendChanged(result, next->second->name, next->second->type == lfs::core::NodeType::POINTCLOUD ? "point_count" : "gaussian_count", old->second->gaussian_count, next->second->gaussian_count);
             if (old->second->local_transform != next->second->local_transform)
                 result.push_back(historyDetailField(next->second->name, "history.field.transform", old->second->local_transform, next->second->local_transform));
         }

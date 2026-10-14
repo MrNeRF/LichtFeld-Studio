@@ -219,6 +219,27 @@ namespace lfs::vis {
                                                            std::move(before), std::move(after)));
         }
 
+        // Filter every per-point attribute together; optional PLY attributes must
+        // survive cropping and subsequent undo/redo, including an empty result.
+        std::shared_ptr<core::PointCloud> filterPointCloud(const core::PointCloud& source,
+                                                         const core::Tensor& indices) {
+            auto result = std::make_shared<core::PointCloud>();
+            const auto filter = [&](const core::Tensor& tensor) {
+                return tensor.is_valid() && tensor.numel() > 0 ? tensor.index_select(0, indices) : tensor;
+            };
+            result->means = filter(source.means);
+            result->colors = filter(source.colors);
+            result->normals = filter(source.normals);
+            result->sh0 = filter(source.sh0);
+            result->shN = filter(source.shN);
+            result->opacity = filter(source.opacity);
+            result->scaling = filter(source.scaling);
+            result->rotation = filter(source.rotation);
+            result->emit_zero_normals = source.emit_zero_normals;
+            result->attribute_names = source.attribute_names;
+            return result;
+        }
+
         // Keep exact resident values on the CPU: reflecting again is not an
         // inverse in floating point, and quantized SH must retain its codes/bounds.
         class MirrorUndoEntry final : public op::UndoEntry {
@@ -3929,7 +3950,7 @@ namespace lfs::vis {
 
     bool SceneManager::canApplyCropToNode(const core::NodeId id) const {
         const auto* node = scene_.getNodeById(id);
-        if (node && node->type == core::NodeType::SPLAT && scene_.isNodeEffectivelyLocked(id)) {
+        if (node && (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) && scene_.isNodeEffectivelyLocked(id)) {
             LOG_WARN("Cannot crop '{}': node is locked", node->name);
             return false;
         }
@@ -3974,7 +3995,9 @@ namespace lfs::vis {
         }
         // Fall back to visible nodes if no selection
         if (splat_node_names.empty() && pointcloud_node_names.empty() && !had_selection) {
-            for (const auto* node : scene_.getVisibleNodes()) {
+            for (const auto* node : scene_.getNodes()) {
+                if (!scene_.isNodeEffectivelyVisible(node->id))
+                    continue;
                 if (node->type == core::NodeType::SPLAT) {
                     splat_node_names.push_back(node->name);
                 } else if (node->type == core::NodeType::POINTCLOUD) {
@@ -3983,10 +4006,16 @@ namespace lfs::vis {
             }
         }
 
+        for (const auto& name : pointcloud_node_names) {
+            if (!canApplyCropToNode(scene_.getNodeIdByName(name)))
+                return;
+        }
         for (const auto& name : splat_node_names) {
             if (!canApplyCropToNode(scene_.getNodeIdByName(name)))
                 return;
         }
+
+        op::TransactionGuard transaction("Crop Box");
 
         const auto crop_box_for_node = [this, &crop_box](const core::NodeId node_id) {
             lfs::geometry::BoundingBox local_crop_box = crop_box;
@@ -4028,8 +4057,9 @@ namespace lfs::vis {
             const glm::vec3 bounds_min = local_crop_box.getMinBounds();
             const glm::vec3 bounds_max = local_crop_box.getMaxBounds();
             const auto& means = node->point_cloud->means;
-            const auto& colors = node->point_cloud->colors;
             const size_t num_points = node->point_cloud->size();
+            if (num_points == 0)
+                continue;
             const auto device = means.device();
 
             // GLM column-major -> row-major for tensor matmul
@@ -4056,15 +4086,24 @@ namespace lfs::vis {
             const auto indices = mask.nonzero().squeeze(1);
             const size_t filtered_count = indices.size(0);
 
-            if (filtered_count > 0 && filtered_count < num_points) {
-                node->point_cloud = std::make_shared<lfs::core::PointCloud>(
-                    means.index_select(0, indices), colors.index_select(0, indices));
+            if (filtered_count < num_points) {
+                auto filtered = filterPointCloud(*node->point_cloud, indices);
+                auto history_options = sceneGraphCaptureOptions(false, false);
+                history_options.scoped_topology = true;
+                std::vector<core::Uuid> payload_uuids{node->uuid};
+                if (const auto* volume = scene_.getNodeById(scene_.getCropBoxForSplat(node->id)))
+                    payload_uuids.push_back(volume->uuid);
+                history_options.payload_uuids = payload_uuids;
+                auto history_before = op::SceneGraphPatchEntry::captureStateByIds(*this, {node->id}, history_options);
+                node->point_cloud = std::move(filtered);
                 node->gaussian_count.store(filtered_count, std::memory_order_release);
                 scene_.markPayloadDiverged(node->id);
 
                 LOG_INFO("Cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
 
                 disable_crop_box_for_node(node->id);
+                pushSceneGraphHistoryEntryByIds(*this, "Crop Box", std::move(history_before),
+                                                {node->id}, history_options, payload_uuids);
             }
         }
 
@@ -4075,6 +4114,7 @@ namespace lfs::vis {
                     services().renderingOrNull()->markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
                 }
             }
+            transaction.commit();
             return;
         }
 
@@ -4128,6 +4168,7 @@ namespace lfs::vis {
 
         snapshot->captureAfter();
         op::pushSceneSnapshotIfChanged(std::move(snapshot));
+        transaction.commit();
 
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
     }
@@ -4169,7 +4210,9 @@ namespace lfs::vis {
             }
         }
         if (splat_node_names.empty() && pointcloud_node_names.empty() && !had_selection) {
-            for (const auto* node : scene_.getVisibleNodes()) {
+            for (const auto* node : scene_.getNodes()) {
+                if (!scene_.isNodeEffectivelyVisible(node->id))
+                    continue;
                 if (node->type == core::NodeType::SPLAT) {
                     splat_node_names.push_back(node->name);
                 } else if (node->type == core::NodeType::POINTCLOUD) {
@@ -4178,10 +4221,16 @@ namespace lfs::vis {
             }
         }
 
+        for (const auto& name : pointcloud_node_names) {
+            if (!canApplyCropToNode(scene_.getNodeIdByName(name)))
+                return;
+        }
         for (const auto& name : splat_node_names) {
             if (!canApplyCropToNode(scene_.getNodeIdByName(name)))
                 return;
         }
+
+        op::TransactionGuard transaction("Crop Ellipsoid");
 
         const glm::mat4 inv_world = glm::inverse(world_transform);
 
@@ -4192,8 +4241,9 @@ namespace lfs::vis {
                 continue;
 
             const auto& means = node->point_cloud->means;
-            const auto& colors = node->point_cloud->colors;
             const size_t num_points = node->point_cloud->size();
+            if (num_points == 0)
+                continue;
             const auto device = means.device();
 
             // Compose with node's world transform
@@ -4222,11 +4272,20 @@ namespace lfs::vis {
             const auto indices = mask.nonzero().squeeze(1);
             const size_t filtered_count = indices.size(0);
 
-            if (filtered_count > 0 && filtered_count < num_points) {
-                node->point_cloud = std::make_shared<lfs::core::PointCloud>(
-                    means.index_select(0, indices), colors.index_select(0, indices));
+            if (filtered_count < num_points) {
+                auto filtered = filterPointCloud(*node->point_cloud, indices);
+                auto history_options = sceneGraphCaptureOptions(false, false);
+                history_options.scoped_topology = true;
+                std::vector<core::Uuid> payload_uuids{node->uuid};
+                if (const auto* volume = scene_.getNodeById(scene_.getCropBoxForSplat(node->id)))
+                    payload_uuids.push_back(volume->uuid);
+                history_options.payload_uuids = payload_uuids;
+                auto history_before = op::SceneGraphPatchEntry::captureStateByIds(*this, {node->id}, history_options);
+                node->point_cloud = std::move(filtered);
                 node->gaussian_count.store(filtered_count, std::memory_order_release);
                 scene_.markPayloadDiverged(node->id);
+                pushSceneGraphHistoryEntryByIds(*this, "Crop Ellipsoid", std::move(history_before),
+                                                {node->id}, history_options, payload_uuids);
                 LOG_INFO("Ellipsoid cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
             }
         }
@@ -4238,6 +4297,7 @@ namespace lfs::vis {
                     services().renderingOrNull()->markDirty(DirtyFlag::SPLATS, lfs::vis::FrameReason::SceneChange);
                 }
             }
+            transaction.commit();
             return;
         }
 
@@ -4287,6 +4347,7 @@ namespace lfs::vis {
 
         snapshot->captureAfter();
         op::pushSceneSnapshotIfChanged(std::move(snapshot));
+        transaction.commit();
 
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
     }
