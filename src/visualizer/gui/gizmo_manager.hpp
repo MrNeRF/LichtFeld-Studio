@@ -47,10 +47,10 @@ namespace lfs::vis {
 
         class GizmoManager {
         public:
-            explicit GizmoManager(VisualizerImpl* viewer);
+            LFS_VIS_API explicit GizmoManager(VisualizerImpl* viewer);
 
             void setupEvents();
-            void updateToolState(const UIContext& ctx, bool ui_hidden);
+            LFS_VIS_API void updateToolState(const UIContext& ctx, bool ui_hidden);
 
             void renderNodeTransformGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport);

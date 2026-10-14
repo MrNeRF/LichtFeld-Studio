@@ -20,6 +20,102 @@
 #include <gtest/gtest.h>
 #include <limits>
 
+#include "gui/gizmo_manager.hpp"
+#include "gui/ui_context.hpp"
+#include "licht_test_support.hpp"
+#include "tools/align_tool.hpp"
+#include "tools/unified_tool_registry.hpp"
+#include "visualizer/visualizer_impl.hpp"
+#include <cstdlib>
+
+namespace lfs::vis {
+    class AlignDepthIntegrationTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            if (const auto* home = std::getenv("LFS_HOME"))
+                old_home_ = home;
+            setHome(temporary_.path.string());
+        }
+        void TearDown() override {
+            setHome(old_home_.value_or(""));
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::core::event::bus().clear_all();
+        }
+        static void setHome(const std::string& home) {
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", home.c_str());
+#else
+            if (home.empty())
+                (void)unsetenv("LFS_HOME");
+            else
+                (void)setenv("LFS_HOME", home.c_str(), 1);
+#endif
+        }
+        void initialize(VisualizerImpl& viewer) { viewer.initializeTools(); }
+        static void clearDirty(RenderingManager& manager) { manager.dirty_mask_.store(0); }
+        lfs::test::licht::TemporaryDirectory temporary_{"lfs-align-enabled-depth"};
+        std::optional<std::string> old_home_;
+    };
+
+    TEST_F(AlignDepthIntegrationTest, EnabledToolPublishesPickingAndInvalidatesViewport) {
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path = temporary_.path / "lifecycle.json";
+        VisualizerImpl viewer(options);
+        initialize(viewer);
+        auto* rm = viewer.getRenderingManager();
+        auto* sm = viewer.getSceneManager();
+        ASSERT_TRUE(viewer.getAlignTool());
+        gui::GizmoManager gizmos(&viewer);
+        gui::UIContext ui{.viewer = &viewer};
+        Viewport viewport(640, 480);
+        const ViewportRegion region{0, 0, 640, 480};
+        FrameContext frame{.viewport = viewport, .viewport_region = &region, .scene_manager = sm, .settings = {}, .render_size = {640, 480}};
+        int wakes = 0;
+        rm->setWakeCallback([&] { ++wakes; });
+        auto check = [&](const bool enabled, const bool hidden = false) {
+            SCOPED_TRACE(::testing::Message() << "tool=" << UnifiedToolRegistry::instance().getActiveTool()
+                                              << " selected=" << sm->getSelectedNodeName() << " hidden=" << hidden);
+            gizmos.updateToolState(ui, hidden);
+            EXPECT_EQ(viewer.getAlignTool()->isEnabled(), enabled);
+            rm->configureSurfacePicking(frame);
+            EXPECT_EQ(frame.exact_surface_picking, enabled);
+            EXPECT_EQ(buildViewportRenderRequest(frame, {640, 480}).require_exact_depth, enabled);
+        };
+        auto& registry = UnifiedToolRegistry::instance();
+        registry.setActiveTool("builtin.align");
+        check(false); // Active tool, but no selected node.
+        const auto group = sm->addGroupNode("align-target");
+        sm->selectNode(group);
+        clearDirty(*rm);
+        const int before_enable = wakes;
+        check(true);
+        EXPECT_GT(wakes, before_enable);
+        EXPECT_NE(rm->pendingDirtyMask() & DirtyFlag::VIEWPORT, 0u);
+        clearDirty(*rm);
+        const int settled = wakes;
+        check(true);
+        EXPECT_EQ(wakes, settled); // An unchanged tool does not request work.
+        EXPECT_EQ(rm->pendingDirtyMask(), 0u);
+        const auto crop = sm->getScene().addCropBox("crop", sm->getScene().getNode(group)->id);
+        sm->selectNode(crop);
+        registry.setActiveTool("builtin.align");
+        check(false);
+        sm->selectNode(group);
+        registry.setActiveTool("builtin.align");
+        check(true);
+        check(false, true); // Hidden UI disables picking as well.
+        check(true);
+        registry.setActiveTool("builtin.select");
+        check(false);
+        registry.setActiveTool("builtin.align");
+        check(true);
+        sm->clearSelection();
+        check(false);
+        rm->setWakeCallback({});
+    }
+} // namespace lfs::vis
+
 namespace {
 
     [[nodiscard]] glm::vec3 applyRot(const glm::mat4& m, const glm::vec3& v) {

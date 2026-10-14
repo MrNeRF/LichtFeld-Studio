@@ -298,6 +298,7 @@ namespace lfs::vis {
         // GUI manager
         std::unique_ptr<gui::GuiManager> gui_manager_;
         JobRegistry job_registry_;
+        friend class AlignDepthIntegrationTest;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
         friend void installSessionTestInputController(VisualizerImpl& viewer);

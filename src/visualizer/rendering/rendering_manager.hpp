@@ -84,6 +84,7 @@ namespace lfs::vis {
 
     class SceneManager;
     struct SceneRenderState;
+    struct FrameContext;
     class TrainerManager;
 
     class LFS_VIS_API RenderingManager {
@@ -633,6 +634,14 @@ namespace lfs::vis {
         [[nodiscard]] SelectionPreviewMode getSelectionPreviewMode() const {
             return viewport_overlay_service_.selectionPreviewMode();
         }
+        void setExactSurfacePicking(const bool enabled) {
+            if (exact_surface_picking_ == enabled)
+                return;
+            exact_surface_picking_ = enabled;
+            markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
+        }
+        void configureSurfacePicking(FrameContext& frame) const;
+
         void setGaussianSelectionVisible(const bool visible) {
             if (gaussian_selection_visible_ == visible)
                 return;
@@ -1052,11 +1061,13 @@ namespace lfs::vis {
 
         ViewportOverlayService viewport_overlay_service_;
         bool gaussian_selection_visible_ = true;
+        bool exact_surface_picking_ = false;
 
         lfs::event::ScopedHandler event_handlers_;
 
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class SceneManager;
+        friend class AlignDepthIntegrationTest;
         friend struct SplitOutputLifetimeTestAccess;
     };
 
