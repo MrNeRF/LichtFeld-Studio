@@ -11,8 +11,8 @@
         <button id="history-clear" type="button" class="btn btn--ghost"><img class="history-icon" src="../icon/scene/trash.png"/><span>@tr:debug_info.clear_history</span></button>
     </div>
     <div class="history-tabs">
-        <button id="history-undo-tab" type="button" class="btn btn--ghost"></button>
-        <button id="history-redo-tab" type="button" class="btn btn--ghost"></button>
+        <button id="history-undo-tab" type="button" class="history-tab"></button>
+        <button id="history-redo-tab" type="button" class="history-tab"></button>
     </div>
     <div id="history-scroll">
         <div id="history-empty" class="text-muted"></div>

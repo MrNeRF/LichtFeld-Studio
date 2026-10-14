@@ -799,7 +799,7 @@
     "keyframe_node_label": "キーフレーム {}  ({:.2f}s)",
     "search": "検索",
     "show_in_file_manager": "ファイルマネージャーで表示",
-    "history": "履歴",
+    "history": "編集履歴",
     "logging": "ログ",
     "history_shared": "共有履歴",
     "history_empty": "履歴はまだありません",

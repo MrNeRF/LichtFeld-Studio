@@ -799,7 +799,7 @@
     "keyframe_node_label": "Fotograma clave {}  ({:.2f}s)",
     "search": "Buscar",
     "show_in_file_manager": "Mostrar en el gestor de archivos",
-    "history": "Historial",
+    "history": "Historial de edición",
     "logging": "Registro",
     "history_shared": "Historial compartido",
     "history_empty": "Aún no hay historial",

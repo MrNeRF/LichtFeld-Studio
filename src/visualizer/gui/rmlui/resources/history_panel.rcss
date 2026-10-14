@@ -5,9 +5,19 @@
     padding: 10dp 12dp; flex-shrink: 0; min-width: 0;
 }
 .history-toolbar { padding-bottom: 0; }
-.history-tabs { border-bottom-width: 1dp; }
+.history-tabs {
+    flex-wrap: nowrap; gap: 0; padding: 6dp 12dp 0; border-bottom-width: 1dp;
+}
+.history-tab {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: 1; min-width: 0; gap: 8dp; box-sizing: border-box;
+    height: 38dp; padding: 0 12dp; border-width: 0 0 2dp;
+    border-radius: 0; font-size: 12dp; cursor: pointer;
+}
+.history-tab-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-tab-count { padding: 2dp 6dp; border-radius: 4dp; font-size: 11dp; flex-shrink: 0; }
 .history-spacer { flex: 1; }
-.history-toolbar .btn, .history-tabs .btn, .history-footer .btn {
+.history-toolbar .btn, .history-footer .btn {
     display: inline-flex; align-items: center; justify-content: center;
     height: 30dp; min-height: 30dp; box-sizing: border-box;
     padding: 0 10dp; gap: 7dp; font-size: 12dp;
@@ -26,5 +36,4 @@
 
 .history-icon { width: 14dp; height: 14dp; flex-shrink: 0; }
 .history-toolbar .btn { min-width: 86dp; }
-.history-tabs .btn { min-width: 100dp; }
 .history-footer .btn { min-width: 70dp; }

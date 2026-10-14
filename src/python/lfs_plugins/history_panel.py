@@ -97,8 +97,10 @@ class HistoryPanel(Panel):
         tr = lf.ui.tr
         for stack in ("undo", "redo"):
             tab = doc.get_element_by_id("history-" + stack + "-tab")
-            tab_text = f"{tr('common.' + stack)} ({len(self._names[stack]):n})"
-            tab.set_inner_rml(f'<span>{escape(tab_text)}</span>')
+            tab_text = tr('scene.' + stack + '_stack')
+            count_text = format(len(self._names[stack]), 'n')
+            tab.set_inner_rml(f'<span class="history-tab-label">{escape(tab_text)}</span>'
+                              f'<span class="history-tab-count">{count_text}</span>')
             tab.set_class("is-active", stack == self._stack)
             self._disabled(stack, active or not self._names[stack])
         self._disabled("clear", active or not any(self._names.values()))

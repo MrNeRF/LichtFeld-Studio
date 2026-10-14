@@ -799,7 +799,7 @@
     "keyframe_node_label": "Keyframe {}  ({:.2f}s)",
     "search": "Suchen",
     "show_in_file_manager": "Im Dateimanager anzeigen",
-    "history": "Verlauf",
+    "history": "Bearbeitungsverlauf",
     "logging": "Protokollierung",
     "history_shared": "Gemeinsamer Verlauf",
     "history_empty": "Noch kein Verlauf",

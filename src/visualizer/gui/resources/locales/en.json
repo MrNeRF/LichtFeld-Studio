@@ -795,7 +795,7 @@
     "keyframe_node_label": "Keyframe {}  ({:.2f}s)",
     "search": "Search",
     "show_in_file_manager": "Show in File Manager",
-    "history": "History",
+    "history": "Edit History",
     "logging": "Logging",
     "history_shared": "Shared History",
     "history_empty": "No history yet",

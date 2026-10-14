@@ -799,7 +799,7 @@
     "keyframe_node_label": "Image clé {}  ({:.2f}s)",
     "search": "Rechercher",
     "show_in_file_manager": "Afficher dans le gestionnaire de fichiers",
-    "history": "Historique",
+    "history": "Historique des modifications",
     "logging": "Journalisation",
     "history_shared": "Historique partagé",
     "history_empty": "Aucun historique pour l'instant",

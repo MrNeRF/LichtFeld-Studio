@@ -799,7 +799,7 @@
     "keyframe_node_label": "키프레임 {}  ({:.2f}s)",
     "search": "검색",
     "show_in_file_manager": "파일 관리자에서 표시",
-    "history": "기록",
+    "history": "편집 기록",
     "logging": "로그",
     "history_shared": "공유 기록",
     "history_empty": "아직 기록이 없습니다",

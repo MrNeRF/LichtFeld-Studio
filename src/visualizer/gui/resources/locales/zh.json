@@ -799,7 +799,7 @@
     "keyframe_node_label": "关键帧 {}（{:.2f}秒）",
     "search": "搜索",
     "show_in_file_manager": "在文件管理器中显示",
-    "history": "历史记录",
+    "history": "编辑历史",
     "logging": "日志",
     "history_shared": "共享历史记录",
     "history_empty": "暂无历史记录",
