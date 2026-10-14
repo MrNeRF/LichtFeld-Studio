@@ -692,6 +692,25 @@ apply_registered_chrome:
             }
         }
 
+        if (space == PanelSpace::Floating) {
+            std::lock_guard lock(mutex_);
+            for (auto& [id, interaction] : floating_interactions_) {
+                const bool drawable = std::ranges::any_of(
+                    snapshots, [&](const PanelSnapshot& snap) {
+                        const auto index = static_cast<size_t>(&snap - snapshots.data());
+                        return snap.id == id && should_draw[index];
+                    });
+                // A hidden/poll-suppressed panel will not receive the release
+                // below. Do not let its abandoned interaction lock every panel.
+                if (!drawable || (input && !input->mouse_down[0])) {
+                    interaction.dragging = false;
+                    interaction.resizing = false;
+                    interaction.resize_direction_x = 0;
+                    interaction.resize_direction_y = 0;
+                }
+            }
+        }
+
         struct FloatingDirectLayout {
             bool valid = false;
             float width = 0.0f;
@@ -1872,6 +1891,10 @@ apply_registered_chrome:
                         if (auto interaction = floating_interactions_.find(id);
                             interaction != floating_interactions_.end()) {
                             interaction->second.last_bounds_valid = false;
+                            interaction->second.dragging = false;
+                            interaction->second.resizing = false;
+                            interaction->second.resize_direction_x = 0;
+                            interaction->second.resize_direction_y = 0;
                         }
                         guiFocusState().want_capture_mouse = false;
                         guiFocusState().want_capture_keyboard = false;
