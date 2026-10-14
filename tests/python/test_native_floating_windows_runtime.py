@@ -48,6 +48,8 @@ class NativeWindowsClient:
         self.user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
                                           ctypes.c_int, ctypes.c_int, wintypes.UINT]
         self.user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+        self.user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        self.user32.GetForegroundWindow.restype = wintypes.HWND
         self.original_cursor = wintypes.POINT()
         assert self.user32.GetCursorPos(ctypes.byref(self.original_cursor))
         self.rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
@@ -98,7 +100,40 @@ class NativeWindowsClient:
                 _fields_ = [("type", wintypes.DWORD), ("value", InputValue)]
             self.user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int]
             if action == "down":
+                foreground = self.user32.GetForegroundWindow()
+                assert foreground, "Master pointer tests require an unlocked interactive Windows desktop"
+                foreground_pid = wintypes.DWORD()
+                self.user32.GetWindowThreadProcessId(foreground, ctypes.byref(foreground_pid))
+                kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+                kernel.OpenProcess.restype = wintypes.HANDLE
+                kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                                              wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+                kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+                process = kernel.OpenProcess(0x1000, False, foreground_pid.value)
+                if process:
+                    try:
+                        executable = ctypes.create_unicode_buffer(1024)
+                        length = wintypes.DWORD(len(executable))
+                        if kernel.QueryFullProcessImageNameW(process, 0, executable, ctypes.byref(length)):
+                            assert Path(executable.value).name.lower() not in {"lockapp.exe", "logonui.exe"}, \
+                                "Master pointer tests require an unlocked Windows session; no mouse input was sent"
+                    finally:
+                        kernel.CloseHandle(process)
                 self.user32.SetForegroundWindow(main["hwnd"])
+                time.sleep(.1)
+                if self.user32.GetForegroundWindow() != main["hwnd"]:
+                    # Windows can deny a background process's activation request.
+                    # Activate with a normal click in the main window's empty corner
+                    # before issuing the title press used by the drag assertion.
+                    corner = wintypes.POINT(4, 4)
+                    assert self.user32.ClientToScreen(main["hwnd"], ctypes.byref(corner))
+                    assert self.user32.SetCursorPos(corner.x, corner.y)
+                    activation = (Input * 2)(Input(0, InputValue(mouse=MouseInput(flags=2))),
+                                             Input(0, InputValue(mouse=MouseInput(flags=4))))
+                    assert self.user32.SendInput(2, activation, ctypes.sizeof(Input)) == 2
+                    self.until(lambda: self.user32.GetForegroundWindow() == main["hwnd"])
+                    time.sleep(.1)
             assert self.user32.SetCursorPos(point.x, point.y)
             if action == "down":
                 flags = 0x0002  # MOUSEEVENTF_LEFTDOWN
