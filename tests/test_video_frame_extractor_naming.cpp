@@ -19,6 +19,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/display.h>
 #include <libavutil/dict.h>
 #include <libavutil/error.h>
 #include <libswscale/swscale.h>
@@ -1888,9 +1889,14 @@ namespace {
                 encoder->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             ok = avcodec_open2(encoder, codec, nullptr) >= 0 &&
                  avcodec_parameters_from_context(stream->codecpar, encoder) >= 0;
-            if (ok && rotation_degrees != 0)
-                ok = av_dict_set(&stream->metadata, "rotate",
-                                 std::to_string(rotation_degrees).c_str(), 0) >= 0;
+            if (ok && rotation_degrees != 0) {
+                AVPacketSideData* const display_matrix = av_packet_side_data_new(
+                    &stream->codecpar->coded_side_data, &stream->codecpar->nb_coded_side_data,
+                    AV_PKT_DATA_DISPLAYMATRIX, 9 * sizeof(int32_t), 0);
+                ok = display_matrix != nullptr;
+                if (ok)
+                    av_display_rotation_set(reinterpret_cast<int32_t*>(display_matrix->data), rotation_degrees);
+            }
         }
         if (ok) {
             stream->time_base = encoder->time_base;
