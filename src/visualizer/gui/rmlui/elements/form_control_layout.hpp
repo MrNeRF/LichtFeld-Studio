@@ -6,6 +6,7 @@
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <RmlUi/Core/Elements/ElementFormControlTextArea.h>
+#include <RmlUi/Core/Event.h>
 #include <RmlUi/Core/Math.h>
 #include <type_traits>
 
@@ -19,6 +20,20 @@ namespace lfs::vis::gui {
     class FormControlLayout : public Control {
     public:
         using Control::Control;
+
+        void ProcessDefaultAction(Rml::Event& event) override {
+            Control::ProcessDefaultAction(event);
+            if constexpr (std::is_same_v<Control, Rml::ElementFormControlSelect>) {
+                if (event.GetId() == Rml::EventId::Focus || event.GetId() == Rml::EventId::Blur) {
+                    for (auto* row = this->GetParentNode(); row; row = row->GetParentNode()) {
+                        if (row->IsClassSet("preferences-row")) {
+                            row->SetClass("dropdown-focused", event.GetId() == Rml::EventId::Focus);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
 
         bool GetIntrinsicDimensions(Rml::Vector2f& dimensions, float& ratio) override {
             const bool intrinsic = Control::GetIntrinsicDimensions(dimensions, ratio);
