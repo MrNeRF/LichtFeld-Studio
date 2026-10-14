@@ -36,6 +36,10 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#ifdef __linux__
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 #include <glm/gtc/constants.hpp>
 #include <gtest/gtest.h>
 #include <iterator>
@@ -2017,10 +2021,44 @@ namespace lfs::vis {
 })";
         }
 
-        input::InputBindings::setPersistenceEnabled(true);
+        // Construct before persistence is on so this load is the migration
+        // that replaces Default.json. The callback runs after that save and
+        // before load returns. An unclosed source stream still owns the
+        // original inode there; Windows then refuses the atomic replace.
+        input::InputBindings::setPersistenceEnabled(false);
         input::InputBindings loaded;
+        bool published = false;
+        bool source_open_at_publish = false;
+#ifdef __linux__
+        struct stat source_identity{};
+        ASSERT_EQ(::stat(profile_path.c_str(), &source_identity), 0);
+#endif
+        loaded.setOnBindingsChanged([&] {
+            published = true;
+#ifdef __linux__
+            std::error_code scan_error;
+            const std::filesystem::directory_iterator end;
+            for (std::filesystem::directory_iterator entry("/proc/self/fd", scan_error);
+                 !scan_error && entry != end; entry.increment(scan_error)) {
+                const auto fd_text = entry->path().filename().string();
+                char* parsed_end = nullptr;
+                const auto fd = std::strtol(fd_text.c_str(), &parsed_end, 10);
+                if (parsed_end == fd_text.c_str() || fd < 0)
+                    continue;
+                struct stat open_identity{};
+                if (::fstat(static_cast<int>(fd), &open_identity) != 0)
+                    continue;
+                if (open_identity.st_dev == source_identity.st_dev &&
+                    open_identity.st_ino == source_identity.st_ino)
+                    source_open_at_publish = true;
+            }
+#endif
+        });
+        input::InputBindings::setPersistenceEnabled(true);
         ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
         input::InputBindings::setPersistenceEnabled(false);
+        EXPECT_TRUE(published);
+        EXPECT_FALSE(source_open_at_publish);
 
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
