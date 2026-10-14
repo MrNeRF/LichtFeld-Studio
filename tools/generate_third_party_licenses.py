@@ -237,8 +237,18 @@ def ffmpeg_details(args: argparse.Namespace) -> str:
         if isinstance(dependency, dict) and dependency.get("name") == "ffmpeg":
             requested_features = dependency.get("features", [])
     status_note = ""
-    if requested_features and set(requested_features) != set(features):
-        status_note = f"; manifest requests {', '.join(requested_features)}, installed status differs"
+    unconditional = [feature if isinstance(feature, str) else feature["name"]
+                     for feature in requested_features
+                     if isinstance(feature, str) or not feature.get("platform")]
+    conditional = [f"{feature['name']} ({feature['platform']})"
+                   for feature in requested_features
+                   if isinstance(feature, dict) and feature.get("platform")]
+    # Platform expressions belong to vcpkg. Report them without evaluating a
+    # second, incomplete expression language or treating them as installed.
+    if conditional:
+        status_note = f"; platform-conditional manifest requests: {', '.join(conditional)}; installed status is authoritative"
+    if requested_features and (not set(unconditional).issubset(features) if conditional else set(unconditional) != set(features)):
+        status_note += f"; manifest requests {', '.join(unconditional)}, installed status differs"
     gpl = "x264" in features or "gpl" in features
     return "\n".join([
         "### FFmpeg build configuration",

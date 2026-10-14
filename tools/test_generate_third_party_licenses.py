@@ -2,11 +2,35 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
-from generate_third_party_licenses import license_id_from_text, validate_coverage
+from generate_third_party_licenses import ffmpeg_details, license_id_from_text, validate_coverage
 
 
 class ThirdPartyNoticeCoverageTest(unittest.TestCase):
+    def test_conditional_ffmpeg_features_use_installed_status_for_license(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            triplet = root / "arm64-osx"
+            triplet.mkdir()
+            (root / "vcpkg.json").write_text(json.dumps({"dependencies": [{
+                "name": "ffmpeg", "features": ["avcodec", {"name": "nvcodec", "platform": "!osx"},
+                                                {"name": "x264", "platform": "windows"}]
+            }]}))
+            details = ffmpeg_details(SimpleNamespace(source=root, triplet_dir=triplet, vcpkg_root=None))
+            self.assertIn("nvcodec (!osx)", details)
+            self.assertIn("x264 (windows)", details)
+            self.assertIn("installed status is authoritative", details)
+            self.assertIn("x264 is not installed", details)
+            self.assertNotIn("GPL (x264 feature is installed)", details)
+            status = root / "vcpkg" / "status"
+            status.parent.mkdir()
+            status.write_text("Package: ffmpeg\nFeature: avcodec\nStatus: install ok installed\n\n"
+                              "Package: ffmpeg\nFeature: x264\nStatus: install ok installed\n")
+            details = ffmpeg_details(SimpleNamespace(source=root, triplet_dir=triplet, vcpkg_root=None))
+            self.assertIn("GPL (x264 feature is installed)", details)
+            self.assertNotIn("installed status differs", details)
+
     def test_readme_license_labels_use_spdx_ids(self):
         self.assertEqual(license_id_from_text("License: MIT", "LicenseRef-example"), "MIT")
 
