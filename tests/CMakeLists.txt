@@ -708,6 +708,7 @@ set(TEST_FILES
     test_masked_ssim_metrics.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
+    test_nvcodec_jpeg2k_chw_layout.cpp
     test_nvcodec_sentinel_validation.cpp
     test_compressed_blob_tier.cpp
     test_pipelined_loader.cpp

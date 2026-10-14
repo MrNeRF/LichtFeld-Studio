@@ -27,6 +27,13 @@ namespace lfs::io {
         Mask       // Grayscale with correctly rounded byte mask normalization
     };
 
+    // Channel order of a 3-channel RGB tensor. Callers state this. A CHW image
+    // whose width is 3 has the same shape pattern as HWC, so the shape cannot decide.
+    enum class RgbLayout {
+        HWC, // interleaved [H, W, 3]
+        CHW  // planar [3, H, W]
+    };
+
     /**
      * @brief GPU-accelerated image loader using NVIDIA nvImageCodec
      *
@@ -121,9 +128,12 @@ namespace lfs::io {
             int quality = 100,
             void* cuda_stream = nullptr);
 
-        // Encode GPU tensor to JPEG2k bytes (RGB 16bits)
+        // Encode Float32 CUDA RGB to lossless 16-bit JPEG2000.
+        // layout is HWC [H,W,3] or CHW [3,H,W] and is not inferred from the shape.
+        // CHW is permuted once to interleaved RGB. Contiguous HWC is not copied.
         std::vector<uint8_t> encode_to_jpeg2k(
             const lfs::core::Tensor& image,
+            RgbLayout layout,
             void* cuda_stream = nullptr,
             bool high_throughput = true);
 

@@ -816,7 +816,7 @@ namespace lfs::io {
                                                                ? tensor.to(DataType::Float32) / 255.0f
                                                                : tensor;
                                 cache_bytes = nvcodec.encode_to_jpeg2k(
-                                    encode_tensor, params.cuda_stream);
+                                    encode_tensor, RgbLayout::CHW, params.cuda_stream);
                             } catch (const std::exception& enc_err) {
                                 LOG_DEBUG("[CacheLoader] JPEG 2000 encode failed: {}", enc_err.what());
                             } catch (...) {
