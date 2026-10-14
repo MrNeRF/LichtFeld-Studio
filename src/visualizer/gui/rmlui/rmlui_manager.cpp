@@ -195,6 +195,7 @@ namespace lfs::vis::gui {
         result->graphics = create_native_graphics_();
         if (!result->graphics)
             return {};
+        result->graphics->setSceneRuntimeOwnership(false);
         const auto rect = nativeDefaultRect(window_, std::max(width, 640), std::max(height, 480));
         SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
                                 SDL_WINDOW_HIDDEN | SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT;
@@ -236,7 +237,6 @@ namespace lfs::vis::gui {
         (void)SDL_SetWindowPosition(result->window, rect.x, rect.y);
         int pw = 0, ph = 0;
         SDL_GetWindowSizeInPixels(result->window, &pw, &ph);
-        result->graphics->setSceneRuntimeOwnership(false);
         if (!result->graphics->init(result->window, pw, ph)) {
             return {};
         }
