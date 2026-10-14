@@ -602,8 +602,10 @@ void RenderInterface_VK::RenderToClipMask(Rml::ClipMaskOperation operation, Rml:
 
     // The mask is the stencil shape. RmlUi does not reapply an unchanged mask, so this clear
     // uses the context clip. A 20px row scissor would otherwise hide every later row.
-    // The row scissor is restored for the caller's own draw.
-    const VkRect2D content_scissor = m_scissor;
+    // The effective content scissor (as in ResetDynamicRenderState) is restored for the
+    // caller's own draw. m_scissor alone is stale while no scissor region is specified.
+    const VkRect2D content_scissor = ClampToCacheCaptureArea(
+        IntersectContextClip(m_is_use_scissor_specified ? m_scissor : ContextClipScissor()));
     const VkRect2D mask_scissor = ClampToCacheCaptureArea(ContextClipScissor());
     vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &mask_scissor);
 

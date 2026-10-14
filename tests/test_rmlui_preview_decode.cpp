@@ -610,6 +610,42 @@ namespace {
         EXPECT_EQ(outside[2], 0);
     }
 
+    // A previous context left a 20px row scissor behind. The next context renders without a
+    // scissor region, so after its clip mask the content must use the context clip, not that row.
+    TEST_F(RmlUiLayerFrameTest, ClipMaskRestoresContextClipWithoutScissorRegion) {
+        const VkExtent2D extent{160, 120};
+        const auto color = CreateImage(kColorFormat,
+                                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                       VK_IMAGE_ASPECT_COLOR_BIT, extent);
+        const auto depth = CreateImage(kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                       VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, extent);
+        RenderInterface_VK backend;
+        ASSERT_TRUE(BeginFrame(backend, extent, color, depth));
+
+        backend.SetContextClipRect(8.0f, 8.0f, 152.0f, 112.0f);
+        backend.EnableScissorRegion(true);
+        backend.SetScissorRegion(Rml::Rectanglei::FromPositionSize({12, 16}, {120, 20}));
+        backend.ResetContextRenderState();
+
+        backend.SetContextClipRect(8.0f, 8.0f, 152.0f, 112.0f);
+        const Rml::CompiledGeometryHandle mask = CompileSolid(backend, 8.0f, 8.0f, 144.0f, 104.0f, {255, 255, 255, 255});
+        ASSERT_NE(mask, 0u);
+        backend.RenderToClipMask(Rml::ClipMaskOperation::Set, mask, {});
+        const Rml::CompiledGeometryHandle panel = CompileSolid(backend, 8.0f, 8.0f, 144.0f, 104.0f, {0, 255, 0, 255});
+        ASSERT_NE(panel, 0u);
+        backend.RenderGeometry(panel, {}, {});
+        backend.ReleaseGeometry(mask);
+        backend.ReleaseGeometry(panel);
+
+        const std::vector<unsigned char> pixels = FinishAndReadColor(backend, color, extent);
+        ASSERT_EQ(pixels.size(), static_cast<std::size_t>(extent.width) * extent.height * 4);
+        const unsigned char* below_old_row = pixels.data() + (static_cast<std::size_t>(90) * extent.width + 70) * 4;
+        EXPECT_EQ(below_old_row[0], 0);
+        EXPECT_EQ(below_old_row[1], 255);
+        EXPECT_EQ(below_old_row[2], 0);
+    }
+
 } // namespace
 
 namespace {
