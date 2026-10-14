@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "image_heif.hpp"
+#include "image_heic_system.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -11,6 +12,7 @@
 #include <lcms2.h>
 #include <libheif/heif.h>
 #include <libheif/heif_items.h>
+#include <libheif/heif_properties.h>
 #include <limits>
 #include <memory>
 #include <unordered_set>
@@ -27,9 +29,15 @@ namespace lfs::core::image_codecs {
             // Keep the reader alive until the context and primary handle have been released.
             std::ifstream file;
             int64_t size = 0;
+            const std::filesystem::path* input_path = nullptr;
+            std::span<const uint8_t> input_bytes;
+            bool hevc = false;
+            bool hdr = false;
+            int orientation = 1;
             std::unique_ptr<heif_context, decltype(&heif_context_free)> context{nullptr, heif_context_free};
             std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> handle{nullptr, heif_image_handle_release};
             bool open(const std::filesystem::path& path, std::string& error) {
+                input_path = &path;
                 file.open(path, std::ios::binary | std::ios::ate);
                 if (!file || file.tellg() < 0) {
                     error = "HEIF: cannot open source";
@@ -70,6 +78,7 @@ namespace lfs::core::image_codecs {
                 return primary_image(error);
             }
             bool open(std::span<const uint8_t> bytes, std::string& error) {
+                input_bytes = bytes;
                 if (bytes.empty()) {
                     error = "HEIF: empty input";
                     return false;
@@ -94,6 +103,8 @@ namespace lfs::core::image_codecs {
                 std::vector<heif_item_id> pending{id};
                 std::unordered_set<heif_item_id> visited;
                 bool av1 = false;
+                bool grid = false;
+                int hevc_bits = 0;
                 while (!pending.empty()) {
                     const auto item = pending.back();
                     pending.pop_back();
@@ -105,13 +116,24 @@ namespace lfs::core::image_codecs {
                         continue;
                     }
                     if (type == heif_fourcc('h', 'v', 'c', '1') || type == heif_fourcc('h', 'e', 'v', '1')) {
-                        error = "HEIF: HEVC-coded HEIC is unsupported in this build; use AV1-based AVIF/HEIF";
-                        return false;
+                        heif_image_handle* raw = nullptr;
+                        if (!checked(heif_context_get_image_handle(context.get(), item, &raw), error))
+                            return false;
+                        std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> leaf(raw, heif_image_handle_release);
+                        const int bits = heif_image_handle_get_luma_bits_per_pixel(leaf.get());
+                        if (bits < 1 || bits > 16 || (hevc_bits && bits != hevc_bits)) {
+                            error = "HEIF: inconsistent HEVC tile precision";
+                            return false;
+                        }
+                        hevc_bits = bits;
+                        hevc = true;
+                        continue;
                     }
                     if (type != heif_fourcc('g', 'r', 'i', 'd') && type != heif_fourcc('i', 'd', 'e', 'n')) {
-                        error = "HEIF: only AV1-coded primary images are supported";
+                        error = "HEIF: unsupported primary image codec";
                         return false;
                     }
+                    grid = grid || type == heif_fourcc('g', 'r', 'i', 'd');
                     for (int index = 0;; ++index) {
                         uint32_t reference_type = 0;
                         heif_item_id* raw = nullptr;
@@ -124,10 +146,118 @@ namespace lfs::core::image_codecs {
                             pending.insert(pending.end(), raw, raw + count);
                     }
                 }
-                if (!av1) {
-                    error = "HEIF: AV1-coded primary image data is required";
+                if (av1 == hevc) {
+                    error = "HEIF: a consistent AV1 or HEVC primary image is required";
                     return false;
                 }
+                if (hevc && hevc_bits != heif_image_handle_get_luma_bits_per_pixel(handle.get())) {
+                    error = "HEIF: inconsistent HEVC primary precision";
+                    return false;
+                }
+                if (hevc && !heic_system_available(error))
+                    return false;
+                if (hevc) {
+                    heif_color_profile_nclx* declared = nullptr;
+                    const auto status = heif_image_handle_get_nclx_color_profile(handle.get(), &declared);
+                    std::unique_ptr<heif_color_profile_nclx, decltype(&heif_nclx_color_profile_free)> owner(declared, heif_nclx_color_profile_free);
+                    hdr = status.code == heif_error_Ok && declared &&
+                          (declared->transfer_characteristics == 16 || declared->transfer_characteristics == 18);
+                }
+#ifdef _WIN32
+                if (hevc) {
+                    bool rotation = false, mirror = false;
+                    std::array<heif_property_id, 32> properties{};
+                    const int count = heif_item_get_transformation_properties(context.get(), id, nullptr, 0);
+                    if (count < 0 || count > static_cast<int>(properties.size()) ||
+                        heif_item_get_transformation_properties(context.get(), id, properties.data(), count) != count) {
+                        error = "HEIF: unsupported HEVC transformation list";
+                        return false;
+                    }
+                    for (int i = 0; i < count; ++i) {
+                        const auto type = heif_item_get_property_type(context.get(), id, properties[i]);
+                        rotation |= type == heif_item_property_type_transform_rotation;
+                        mirror |= type == heif_item_property_type_transform_mirror;
+                    }
+                    if (rotation && mirror) {
+                        error = "HEIF: Windows HEVC system provider unsupported for combined rotation and mirroring";
+                        return false;
+                    }
+                }
+                if (hevc && grid) {
+                    heif_colorspace colorspace;
+                    heif_chroma chroma;
+                    if (!checked(heif_image_handle_get_preferred_decoding_colorspace(handle.get(), &colorspace, &chroma), error))
+                        return false;
+                    // WIC reports successful copying for the qualified planar-RGB
+                    // grid but produces incorrect pixels. Never accept that silently.
+                    if (colorspace == heif_colorspace_RGB) {
+                        error = "HEIF: Windows HEVC system provider unsupported for RGB grid images";
+                        return false;
+                    }
+                }
+#else
+                (void)grid;
+#endif
+#ifdef __APPLE__
+                if (hevc) {
+                    // Use container transforms in libheif's specified order.
+                    // ImageIO's generic Orientation may also describe EXIF,
+                    // which is not an extra transform in the raw codec contract.
+                    constexpr std::array<std::array<int, 4>, 8> matrices{{{1, 0, 0, 1}, {-1, 0, 0, 1}, {-1, 0, 0, -1}, {1, 0, 0, -1}, {0, 1, 1, 0}, {0, -1, 1, 0}, {0, -1, -1, 0}, {0, 1, -1, 0}}};
+                    auto matrix = matrices[0];
+                    bool cropped = false, transformed = false;
+                    std::array<heif_property_id, 32> properties{};
+                    const int count = heif_item_get_transformation_properties(context.get(), id, nullptr, 0);
+                    if (count < 0 || count > static_cast<int>(properties.size()) ||
+                        heif_item_get_transformation_properties(context.get(), id, properties.data(), count) != count) {
+                        error = "HEIF: unsupported HEVC transformation list";
+                        return false;
+                    }
+                    for (int i = 0; i < count; ++i) {
+                        const auto property = properties[i];
+                        const auto type = heif_item_get_property_type(context.get(), id, property);
+                        if (type == heif_item_property_type_transform_crop) {
+                            // ImageIO already applies the aperture before exposing
+                            // unrotated pixels. Validate final dimensions in the adapter.
+                            if (cropped || transformed) {
+                                error = "HEIF: Apple HEVC system provider unsupported for this clean-aperture ordering";
+                                return false;
+                            }
+                            cropped = true;
+                            continue;
+                        }
+                        transformed = true;
+                        int operation = 1;
+                        if (type == heif_item_property_type_transform_rotation) {
+                            const auto angle = heif_item_get_property_transform_rotation_ccw(context.get(), id, property);
+                            operation = angle == 0 ? 1 : angle == 90 ? 8
+                                                     : angle == 180  ? 3
+                                                     : angle == 270  ? 6
+                                                                     : 0;
+                        } else if (type == heif_item_property_type_transform_mirror) {
+                            const auto direction = heif_item_get_property_transform_mirror(context.get(), id, property);
+                            operation = direction == heif_transform_mirror_direction_horizontal ? 2 : direction == heif_transform_mirror_direction_vertical ? 4
+                                                                                                                                                            : 0;
+                        } else {
+                            error = "HEIF: unsupported HEVC container transform";
+                            return false;
+                        }
+                        if (!operation) {
+                            error = "HEIF: invalid HEVC container transform";
+                            return false;
+                        }
+                        const auto& op = matrices[operation - 1];
+                        matrix = {op[0] * matrix[0] + op[1] * matrix[2], op[0] * matrix[1] + op[1] * matrix[3],
+                                  op[2] * matrix[0] + op[3] * matrix[2], op[2] * matrix[1] + op[3] * matrix[3]};
+                    }
+                    const auto found = std::find(matrices.begin(), matrices.end(), matrix);
+                    if (found == matrices.end()) {
+                        error = "HEIF: invalid HEVC composed transform";
+                        return false;
+                    }
+                    orientation = static_cast<int>(found - matrices.begin()) + 1;
+                }
+#endif
                 return true;
             }
         };
@@ -157,7 +287,7 @@ namespace lfs::core::image_codecs {
             DisplayKey key;
             Transform transform{nullptr, cmsDeleteTransform};
         };
-        bool to_display(const heif_image_handle* handle, Image& image, std::string& error) {
+        bool to_display(const heif_image_handle* handle, Image& image, std::string& error, bool apply = true, bool raw_available = true) {
             const bool wide = image.sample_type == SampleType::UInt16;
             DisplayKey key;
             key.format = image.channels == 4 ? (wide ? TYPE_RGBA_16 : TYPE_RGBA_8) : (wide ? TYPE_RGB_16 : TYPE_RGB_8);
@@ -183,11 +313,15 @@ namespace lfs::core::image_codecs {
                 const int transfer = nclx->transfer_characteristics;
                 // PQ and HLG have different physical units; never label their samples SDR.
                 if (transfer == 16 || transfer == 18) {
-                    error = "HEIF: HDR display import requires an explicit conversion to SDR; raw decoding remains available";
+                    error = "HEIF: HDR display import requires an explicit conversion to SDR";
+                    if (raw_available)
+                        error += "; raw decoding remains available";
                     return false;
                 }
                 if (transfer != 1 && transfer != 6 && transfer != 13 && transfer != 8) {
-                    error = "HEIF: display import requires a supported SDR transfer; raw decoding remains available";
+                    error = "HEIF: display import requires a supported SDR transfer";
+                    if (raw_available)
+                        error += "; raw decoding remains available";
                     return false;
                 }
                 key.transfer = transfer;
@@ -204,7 +338,8 @@ namespace lfs::core::image_codecs {
             // transform state across threads. Layout/precision are part of the key.
             thread_local DisplayTransform cached;
             if (cached.transform && cached.key == key) {
-                cmsDoTransform(cached.transform.get(), image.data.data(), image.data.data(), static_cast<cmsUInt32Number>(image.width * image.height));
+                if (apply)
+                    cmsDoTransform(cached.transform.get(), image.data.data(), image.data.data(), static_cast<cmsUInt32Number>(image.width * image.height));
                 return true;
             }
             Profile source{nullptr, cmsCloseProfile};
@@ -242,20 +377,50 @@ namespace lfs::core::image_codecs {
             }
             cached.key = std::move(key);
             cached.transform = std::move(transform);
-            cmsDoTransform(cached.transform.get(), image.data.data(), image.data.data(), static_cast<cmsUInt32Number>(image.width * image.height));
+            if (apply)
+                cmsDoTransform(cached.transform.get(), image.data.data(), image.data.data(), static_cast<cmsUInt32Number>(image.width * image.height));
             return true;
         }
     } // namespace
     bool probe_heif(const std::filesystem::path& path, Probe& result, std::string& error) {
         result = {};
         Source source;
-        return source.open(path, error) && layout(source.handle.get(), result, error);
+        Probe info;
+        if (!source.open(path, error) || !layout(source.handle.get(), info, error))
+            return false;
+        if (source.hevc) {
+            if (!heic_system_available(error))
+                return false;
+            Image metadata{info.width, info.height, info.channels, info.sample_type, {}};
+            if (source.hdr && !to_display(source.handle.get(), metadata, error, false, false))
+                return false;
+            if (!read_heic_system(source.input_path, source.input_bytes, info,
+                                  heif_image_handle_get_luma_bits_per_pixel(source.handle.get()), source.orientation, source.hdr, nullptr, error))
+                return false;
+        }
+        result = info;
+        return true;
     }
     namespace {
         bool decode_source(Source& source, Image& result, std::string& error, bool display) {
             Probe info;
             if (!layout(source.handle.get(), info, error))
                 return false;
+            if (source.hevc) {
+                if (!heic_system_available(error))
+                    return false;
+                Image image{info.width, info.height, info.channels, info.sample_type, {}};
+                // Validate shared ICC/HDR policy before an OS decoder can select
+                // an HDR layout or obscure an invalid ICC with its own failure.
+                if ((display || source.hdr) && !to_display(source.handle.get(), image, error, false, false))
+                    return false;
+                if (!read_heic_system(source.input_path, source.input_bytes, info,
+                                      heif_image_handle_get_luma_bits_per_pixel(source.handle.get()), source.orientation, source.hdr, &image, error) ||
+                    (display && !to_display(source.handle.get(), image, error, true, false)))
+                    return false;
+                result = std::move(image);
+                return true;
+            }
             const bool wide = info.sample_type == SampleType::UInt16;
             const bool alpha = info.channels == 4;
             const auto chroma = wide ? (std::endian::native == std::endian::little ? (alpha ? heif_chroma_interleaved_RRGGBBAA_LE : heif_chroma_interleaved_RRGGBB_LE)

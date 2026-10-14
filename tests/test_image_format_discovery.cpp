@@ -195,6 +195,41 @@ namespace {
         EXPECT_EQ(rc, 3);
     }
 
+    TEST_F(ImageFormatDiscoveryTest, NativeHeicDiscoveryPreservesLegacyCompanions) {
+#if defined(_WIN32) || defined(__APPLE__)
+        EXPECT_TRUE(lfs::io::is_image_file("frame.HEIC"));
+        EXPECT_FALSE(lfs::io::is_legacy_image_file("frame.HEIC"));
+        const auto path = temp_dir_ / "frame.HEIC";
+        fs::copy_file(fs::path(LFS_HEIF_FIXTURES) / "system-p3icc.heic", path);
+        EXPECT_EQ(lfs::io::count_image_files(temp_dir_, false), 1);
+        write_text_file(temp_dir_ / "frame.jpg", "legacy companion");
+        EXPECT_EQ(lfs::io::count_image_files(temp_dir_, false), 1);
+        lfs::core::param::DatasetConfig config;
+        config.data_path = temp_dir_;
+        config.images = ".";
+        ASSERT_TRUE(lfs::io::project::first_dataset_image(config).has_value());
+        EXPECT_EQ(lfs::io::project::first_dataset_image(config)->lexically_normal(), temp_dir_ / "frame.jpg");
+        std::string error;
+        lfs::core::image_codecs::Probe info;
+        if (!lfs::core::image_codecs::probe(path, info, error)) {
+#ifdef _WIN32
+            ASSERT_TRUE(error.find("provider unavailable") != std::string::npos) << error;
+            GTEST_SKIP() << "Microsoft HEIF/HEVC extension unavailable: " << error;
+#else
+            FAIL() << "Apple system provider failed its qualified RGB8 input: " << error;
+#endif
+        }
+        EXPECT_TRUE(lfs::core::probe_image_header_bounded(path, error)) << error;
+        auto [pixels, w, h, c] = lfs::core::load_image(path);
+        std::unique_ptr<uint8_t, decltype(&lfs::core::free_image)> owner(pixels, lfs::core::free_image);
+        ASSERT_NE(pixels, nullptr);
+        EXPECT_GT(w, 0);
+        EXPECT_GT(h, 0);
+        EXPECT_EQ(c, 3);
+#else
+        EXPECT_FALSE(lfs::io::is_image_file("frame.HEIC"));
+#endif
+    }
     TEST_F(ImageFormatDiscoveryTest, HeifBoundedHeaderAndMemoryAreReadable) {
         const auto path = temp_dir_ / "frame.avif";
         fs::copy_file(fs::path(LFS_HEIF_FIXTURES) / "p3.avif", path);

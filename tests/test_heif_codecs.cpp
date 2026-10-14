@@ -12,6 +12,9 @@
 #include <iterator>
 #include <libheif/heif.h>
 #include <libheif/heif_properties.h>
+#ifdef _WIN32
+#include <objbase.h>
+#endif
 namespace {
     namespace codec = lfs::core::image_codecs;
     const std::filesystem::path fixtures = LFS_HEIF_FIXTURES;
@@ -23,19 +26,256 @@ namespace {
         const heif_decoder_descriptor* decoder = nullptr;
         ASSERT_EQ(heif_get_decoder_descriptors(heif_compression_AV1, &decoder, 1), 1);
         EXPECT_STREQ(heif_decoder_descriptor_get_id_name(decoder), "dav1d");
-        const auto path = fixtures / "rgb8.heic";
+    }
+    TEST(ProductionHeif, NativeYuvFixtureReallyUses420) {
+        auto* context = heif_context_alloc();
+        ASSERT_NE(context, nullptr);
+        std::unique_ptr<heif_context, decltype(&heif_context_free)> owner(context, heif_context_free);
+        ASSERT_EQ(heif_context_read_from_file(context, (fixtures / "system-yuv420.heic").string().c_str(), nullptr).code, heif_error_Ok);
+        heif_image_handle* raw = nullptr;
+        ASSERT_EQ(heif_context_get_primary_image_handle(context, &raw).code, heif_error_Ok);
+        std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> handle(raw, heif_image_handle_release);
+        heif_colorspace colorspace;
+        heif_chroma chroma;
+        ASSERT_EQ(heif_image_handle_get_preferred_decoding_colorspace(raw, &colorspace, &chroma).code, heif_error_Ok);
+        EXPECT_EQ(colorspace, heif_colorspace_YCbCr);
+        EXPECT_EQ(chroma, heif_chroma_420);
+    }
+    TEST(ProductionHeif, SystemProviderPreservesQualifiedSamplesAndMemoryTargets) {
+        const auto path = fixtures / "system-p3icc.heic";
         codec::Image image;
-        codec::Probe info;
         std::string error;
-        EXPECT_FALSE(codec::probe(path, info, error));
-        EXPECT_NE(error.find("HEVC"), std::string::npos) << error;
-        EXPECT_FALSE(codec::decode(path, image, error));
-        EXPECT_NE(error.find("unsupported"), std::string::npos) << error;
-        EXPECT_TRUE(image.data.empty());
-        std::ifstream file(path, std::ios::binary);
-        const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), {});
-        EXPECT_FALSE(codec::decode_heif(bytes, image, error));
-        EXPECT_NE(error.find("HEVC"), std::string::npos) << error;
+        if (!codec::decode(path, image, error)) {
+            EXPECT_TRUE(image.data.empty());
+            EXPECT_NE(error.find("HEVC"), std::string::npos) << error;
+            codec::Probe unavailable;
+            EXPECT_FALSE(codec::probe(path, unavailable, error));
+            EXPECT_EQ(unavailable.width, 0);
+#ifdef _WIN32
+            for (const auto name : {"system-combined.heic", "rgb8.heic"}) {
+                EXPECT_FALSE(codec::probe(fixtures / name, unavailable, error));
+                EXPECT_NE(error.find("provider unavailable"), std::string::npos) << error;
+            }
+#endif
+#ifdef __APPLE__
+            FAIL() << "Apple system provider failed its qualified RGB8 input: " << error;
+#elif defined(_WIN32)
+            ASSERT_TRUE(error.find("provider unavailable") != std::string::npos) << error;
+            GTEST_SKIP() << "Microsoft HEIF/HEVC extension unavailable: " << error;
+#else
+            GTEST_SKIP() << "No configured system HEIC provider: " << error;
+#endif
+        }
+        const auto check = [&](const std::filesystem::path& input, const char* reference, int bits, int tolerance = 0) {
+            codec::Image raw, memory, display;
+            codec::Probe info;
+            ASSERT_TRUE(codec::probe(input, info, error)) << error;
+            ASSERT_TRUE(codec::decode(input, raw, error)) << error;
+            std::ifstream source(input, std::ios::binary), ref(fixtures / reference, std::ios::binary);
+            const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(source)), {});
+            const std::vector<uint8_t> expected((std::istreambuf_iterator<char>(ref)), {});
+            ASSERT_EQ(raw.data.size(), expected.size());
+            if (bits == 8) {
+                if (!tolerance)
+                    EXPECT_EQ(raw.data, expected);
+                else {
+                    int maximum = 0;
+                    uint64_t total = 0;
+                    for (size_t i = 0; i < expected.size(); ++i) {
+                        const int difference = std::abs(int(raw.data[i]) - int(expected[i]));
+                        maximum = std::max(maximum, difference);
+                        total += difference;
+                    }
+                    const double mean = double(total) / expected.size();
+                    EXPECT_LE(maximum, tolerance) << "mean RGB8 difference: " << mean;
+                    EXPECT_LE(mean, 2.0);
+                }
+            } else {
+                const uint32_t maximum = (1u << bits) - 1;
+                for (size_t i = 0; i < expected.size(); i += 2) {
+                    uint16_t code, actual;
+                    std::memcpy(&code, expected.data() + i, 2);
+                    std::memcpy(&actual, raw.data.data() + i, 2);
+                    code >>= 16 - bits;
+                    EXPECT_EQ(actual, (uint32_t(code) * 65535 + maximum / 2) / maximum) << i;
+                }
+            }
+            EXPECT_EQ(raw.width, info.width);
+            EXPECT_EQ(raw.height, info.height);
+            EXPECT_EQ(raw.sample_type, info.sample_type);
+            ASSERT_TRUE(codec::decode_heif(bytes, memory, error)) << error;
+            EXPECT_EQ(memory.data, raw.data);
+            ASSERT_TRUE(codec::decode_heif(input, display, error, true)) << error;
+            codec::DecodeTarget target;
+            target.channels = 3;
+            target.sample_type = raw.sample_type;
+            std::vector<uint8_t> output(raw.data.size());
+            target.data = output.data();
+            ASSERT_TRUE(codec::decode_heif_to_buffer(bytes, target, info, error)) << error;
+            EXPECT_EQ(output, raw.data);
+        };
+#ifdef __APPLE__
+        check(fixtures / "rgb8.heic", "system-grid.reference", 8);
+        check(fixtures / "system-combined.heic", "system-combined.reference", 8);
+#endif
+        // Native YUV reconstruction differs from the independent wheel decoder:
+        // measured Apple maximum 5 / mean 1.392 RGB8 levels. Bound both tails
+        // and average; all file/memory/target comparisons above remain exact.
+        check(fixtures / "system-yuv420.heic", "system-yuv420.reference", 8, 6);
+        for (const auto name : {"rotated", "mirrored", "multi", "p3icc"}) {
+            SCOPED_TRACE(name);
+            check(fixtures / (std::string("system-") + name + ".heic"), (std::string("system-") + name + ".reference").c_str(), 8);
+        }
+#ifdef __APPLE__
+        check(fixtures / "system-rgb10.heic", "system-rgb10.reference", 10);
+#endif
+        std::array<std::future<bool>, 4> workers;
+        for (auto& worker : workers)
+            worker = std::async(std::launch::async, [&] {
+                codec::Image concurrent;
+                std::string failure;
+                return codec::decode(path, concurrent, failure) && concurrent.data == image.data;
+            });
+        for (auto& worker : workers)
+            EXPECT_TRUE(worker.get());
+#ifdef _WIN32
+        EXPECT_TRUE(std::async(std::launch::async, [&] {
+                        const auto status = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+                        if (FAILED(status))
+                            return false;
+                        struct Apartment {
+                            ~Apartment() { CoUninitialize(); }
+                        } apartment;
+                        codec::Image sta;
+                        std::string failure;
+                        return codec::decode(path, sta, failure) && sta.data == image.data;
+                    }).get());
+#endif
+        codec::Image invalid;
+        EXPECT_FALSE(codec::decode_heif(fixtures / "system-badicc.heic", invalid, error, true));
+        EXPECT_NE(error.find("profile"), std::string::npos) << error;
+        codec::DecodeTarget failed;
+        failed.channels = 3;
+        failed.sample_type = codec::SampleType::UInt8;
+        failed.allocate = [](size_t, void*) -> void* { return nullptr; };
+        codec::Probe info;
+        EXPECT_FALSE(codec::decode_heif_to_buffer(path, failed, info, error));
+        EXPECT_EQ(failed.data, nullptr);
+        EXPECT_NE(error.find("allocate"), std::string::npos) << error;
+    }
+    TEST(ProductionHeif, SystemProviderNeverInventsPrecisionOrAlpha) {
+        for (const auto name : {"system-rgb12.heic", "system-rgba8.heic"
+#ifndef __APPLE__
+                                ,
+                                "system-rgb10.heic", "rgb8.heic", "system-combined.heic"
+#endif
+             }) {
+            SCOPED_TRACE(name);
+            codec::Image image;
+            codec::Probe info;
+            std::string error;
+            EXPECT_FALSE(codec::probe(fixtures / name, info, error));
+            EXPECT_EQ(info.width, 0);
+            EXPECT_FALSE(codec::decode_heif(fixtures / name, image, error));
+            EXPECT_TRUE(image.data.empty());
+            EXPECT_NE(error.find("HEVC"), std::string::npos) << error;
+            std::array<uint8_t, 16> unchanged;
+            unchanged.fill(0xa5);
+            codec::DecodeTarget target;
+            target.channels = 3;
+            target.sample_type = codec::SampleType::UInt8;
+            target.data = unchanged.data();
+            EXPECT_FALSE(codec::decode_heif_to_buffer(fixtures / name, target, info, error));
+            EXPECT_TRUE(std::all_of(unchanged.begin(), unchanged.end(), [](auto value) { return value == 0xa5; }));
+        }
+    }
+    TEST(ProductionHeif, NativeHdrErrorsDoNotPromiseRawDecoding) {
+        const auto path = std::filesystem::temp_directory_path() / ("lfs-heic-hdr-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".heic");
+        struct Cleanup {
+            std::filesystem::path path;
+            ~Cleanup() {
+                std::error_code error;
+                std::filesystem::remove(path, error);
+            }
+        } cleanup{path};
+        std::ifstream file(fixtures / "system-yuv420.heic", std::ios::binary);
+        const std::vector<uint8_t> original((std::istreambuf_iterator<char>(file)), {});
+        const std::array<uint8_t, 8> marker{'c', 'o', 'l', 'r', 'n', 'c', 'l', 'x'};
+        const auto tag = std::search(original.begin(), original.end(), marker.begin(), marker.end());
+        ASSERT_NE(tag, original.end());
+        const auto offset = static_cast<size_t>(tag - original.begin());
+        ASSERT_GE(original.size() - offset, 15u);
+        for (const auto transfer : {16, 18}) {
+            auto bytes = original;
+            bytes[offset + 10] = 0;
+            bytes[offset + 11] = static_cast<uint8_t>(transfer);
+            codec::Image image;
+            std::string error;
+            {
+                std::ofstream output(path, std::ios::binary);
+                output.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                ASSERT_TRUE(output.good());
+            }
+            codec::Probe info;
+            EXPECT_FALSE(codec::probe(path, info, error));
+            EXPECT_EQ(info.width, 0);
+            EXPECT_EQ(error.find("raw decoding remains available"), std::string::npos) << error;
+#if !defined(_WIN32) && !defined(__APPLE__)
+            EXPECT_NE(error.find("unsupported in this build"), std::string::npos) << error;
+#endif
+            for (const bool display : {false, true}) {
+                EXPECT_FALSE(codec::decode_heif(bytes, image, error, display));
+                EXPECT_TRUE(image.data.empty());
+                EXPECT_EQ(error.find("raw decoding remains available"), std::string::npos) << error;
+#if !defined(_WIN32) && !defined(__APPLE__)
+                EXPECT_NE(error.find("unsupported in this build"), std::string::npos) << error;
+#endif
+            }
+        }
+    }
+    TEST(ProductionHeif, SystemProviderUsesContainerRotationInsteadOfExifTwice) {
+        codec::Image available;
+        std::string error;
+        if (!codec::decode(fixtures / "system-p3icc.heic", available, error)) {
+#ifdef __APPLE__
+            FAIL() << "Apple system provider failed its qualified RGB8 input: " << error;
+#elif defined(_WIN32)
+            ASSERT_TRUE(error.find("provider unavailable") != std::string::npos) << error;
+#endif
+            GTEST_SKIP() << "OS provider unavailable: " << error;
+        }
+        std::ifstream input(fixtures / "system-rotated.heic", std::ios::binary);
+        const std::vector<uint8_t> original((std::istreambuf_iterator<char>(input)), {});
+        std::ifstream reference(fixtures / "system-p3icc.reference", std::ios::binary);
+        const std::vector<uint8_t> rgb((std::istreambuf_iterator<char>(reference)), {});
+        ASSERT_EQ(rgb.size(), 32u * 24 * 3);
+        const std::array<uint8_t, 4> marker{'i', 'r', 'o', 't'};
+        const auto property = std::search(original.begin(), original.end(), marker.begin(), marker.end());
+        ASSERT_NE(property, original.end());
+        const auto offset = static_cast<size_t>(property - original.begin());
+        ASSERT_LT(offset + 4, original.size());
+        for (uint8_t angle = 0; angle < 4; ++angle) {
+            SCOPED_TRACE(angle);
+            auto bytes = original;
+            bytes[offset + 4] = angle; // Leave EXIF orientation 6 unchanged deliberately.
+            codec::Image image;
+            ASSERT_TRUE(codec::decode_heif(bytes, image, error)) << error;
+            const int width = angle % 2 ? 24 : 32, height = angle % 2 ? 32 : 24;
+            ASSERT_EQ(image.width, width);
+            ASSERT_EQ(image.height, height);
+            std::vector<uint8_t> expected(rgb.size());
+            for (int y = 0; y < 24; ++y)
+                for (int x = 0; x < 32; ++x) {
+                    const int dx = angle == 0 ? x : angle == 1 ? y
+                                                : angle == 2   ? 31 - x
+                                                               : 23 - y;
+                    const int dy = angle == 0 ? y : angle == 1 ? 31 - x
+                                                : angle == 2   ? 23 - y
+                                                               : x;
+                    std::memcpy(expected.data() + (dy * width + dx) * 3, rgb.data() + (y * 32 + x) * 3, 3);
+                }
+            EXPECT_EQ(image.data, expected);
+        }
     }
     TEST(ProductionHeif, PrimaryRgbAlphaRotationAndPrecisionMatchIndependentDecode) {
         for (const auto name : {"rgb8", "rgba8", "rotated", "mirrored", "rgb10", "rgb12", "pq", "yuv420", "bt709", "linear", "untagged", "hlg", "rgba12"}) {
@@ -127,14 +367,19 @@ namespace {
         EXPECT_NEAR(image.data[2], 30, 1);
     }
     TEST(ProductionHeif, IccPrecedesHdrNclxAndInvalidIccDoesNotBypassValidation) {
-        for (const auto name : {"p3icc.avif", "badicc.avif"}) {
+        for (const auto name : {"p3icc.avif", "badicc.avif", "system-p3icc.heic", "system-badicc.heic"}) {
             SCOPED_TRACE(name);
             std::ifstream file(fixtures / name, std::ios::binary);
             const std::vector<uint8_t> original((std::istreambuf_iterator<char>(file)), {});
             codec::Image reference_raw, reference_display;
             std::string error;
-            ASSERT_TRUE(codec::decode_heif(original, reference_raw, error)) << error;
-            const bool valid = std::string_view(name) == "p3icc.avif";
+            const bool decoded = codec::decode_heif(original, reference_raw, error);
+            if (!decoded && std::string_view(name).ends_with(".heic")) {
+                EXPECT_NE(error.find("HEVC"), std::string::npos) << error;
+                continue; // An absent OS provider does not skip the AV1 precedence tests.
+            }
+            ASSERT_TRUE(decoded) << error;
+            const bool valid = std::string_view(name).find("p3icc") != std::string_view::npos;
             if (valid)
                 ASSERT_TRUE(codec::decode_heif(original, reference_display, error, true)) << error;
             for (const auto transfer : {13, 16, 18}) {
@@ -163,8 +408,29 @@ namespace {
                 std::unique_ptr<heif_color_profile_nclx, decltype(&heif_nclx_color_profile_free)> declaration_owner(declaration, heif_nclx_color_profile_free);
                 EXPECT_EQ(declaration->transfer_characteristics, transfer);
                 codec::Image raw, display;
-                ASSERT_TRUE(codec::decode_heif(bytes, raw, error)) << error;
-                EXPECT_EQ(raw.data, reference_raw.data);
+#ifdef __APPLE__
+                if (valid && std::string_view(name).ends_with(".heic") && transfer != 13) {
+                    // Shared ICC policy wins, but the OS decoder cannot produce
+                    // pixels for this conflict. Keep its capability error explicit.
+                    EXPECT_FALSE(codec::decode_heif(bytes, raw, error));
+                    EXPECT_NE(error.find("HEVC Apple system provider unsupported"), std::string::npos) << error;
+                    EXPECT_FALSE(codec::decode_heif(bytes, display, error, true));
+                    EXPECT_NE(error.find("ICC policy was validated"), std::string::npos) << error;
+                    EXPECT_TRUE(raw.data.empty());
+                    EXPECT_TRUE(display.data.empty());
+                    continue;
+                }
+#endif
+                const bool raw_supported = codec::decode_heif(bytes, raw, error);
+                if (!raw_supported && !valid && std::string_view(name).ends_with(".heic")) {
+                    // Invalid ICC may let the OS select an unqualified HDR layout.
+                    // Raw decoding must reject it, not quantize it back to RGB8.
+                    EXPECT_FALSE(error.empty());
+                    EXPECT_TRUE(raw.data.empty());
+                } else {
+                    ASSERT_TRUE(raw_supported) << error;
+                    EXPECT_EQ(raw.data, reference_raw.data);
+                }
                 if (valid) {
                     ASSERT_TRUE(codec::decode_heif(bytes, display, error, true)) << error;
                     EXPECT_EQ(display.data, reference_display.data);
@@ -309,8 +575,19 @@ namespace {
         ASSERT_TRUE(codec::decode(path, image, error)) << error;
         const auto renamed = root / "renamed.avif";
         std::filesystem::copy_file(fixtures / "rgb8.heic", renamed);
-        EXPECT_FALSE(codec::decode(renamed, image, error));
-        EXPECT_NE(error.find("HEVC"), std::string::npos) << error;
+        codec::Image original;
+        const bool supported = codec::decode(fixtures / "rgb8.heic", original, error);
+        EXPECT_EQ(codec::decode(renamed, image, error), supported);
+        if (supported)
+            EXPECT_EQ(image.data, original.data);
+        else
+            EXPECT_NE(error.find("HEVC"), std::string::npos) << error;
+        const auto native_alias = root / std::filesystem::path(u8"é-日本語.heic");
+        std::filesystem::copy_file(fixtures / "system-p3icc.heic", native_alias);
+        const bool native_supported = codec::decode(fixtures / "system-p3icc.heic", original, error);
+        EXPECT_EQ(codec::decode(native_alias, image, error), native_supported);
+        if (native_supported)
+            EXPECT_EQ(image.data, original.data);
         std::filesystem::resize_file(path, 32);
         codec::Probe info;
         EXPECT_FALSE(codec::probe(path, info, error));

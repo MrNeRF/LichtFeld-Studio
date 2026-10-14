@@ -314,7 +314,24 @@ void heifCacheAndQueueContracts() {
         io::CacheLoader& cache;
         ~Reset() { cache.reset_cache(); }
     } reset{cache};
-    for (const auto name : {"rgb12.avif", "p3.avif"}) {
+    std::vector<const char*> images{"rgb12.avif", "p3.avif"};
+    for (const auto name : {"system-p3icc.heic", "system-rgb10.heic"}) {
+        core::image_codecs::Image native;
+        std::string error;
+        if (core::image_codecs::decode(std::filesystem::path(LFS_HEIF_FIXTURES) / name, native, error))
+            images.push_back(name);
+        else {
+#ifdef __APPLE__
+            throw std::runtime_error(std::string("Qualified Apple HEIC consumer failed: ") + error);
+#elif defined(_WIN32)
+            if (std::string_view(name) == "system-p3icc.heic" &&
+                error.find("provider unavailable") == std::string::npos)
+                throw std::runtime_error(std::string("Qualified Windows HEIC consumer failed: ") + error);
+#endif
+            std::cout << "Native HEIC consumer unavailable for " << name << ": " << error << '\n';
+        }
+    }
+    for (const auto name : images) {
         const auto path = std::filesystem::path(LFS_HEIF_FIXTURES) / name;
         cache.reset_cache();
         cache.update_cache_params(true, 2, 0.f, 0.f, false, 1);
