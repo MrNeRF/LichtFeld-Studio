@@ -4257,6 +4257,8 @@ TEST_F(UndoHistoryTest, CropCommandsRespectTargetLocks) {
                 }
                 lfs::vis::op::undoHistory().clear();
                 lfs::vis::services().clear();
+                lfs::core::event::bus().clear_all();
+                lfs::event::EventBridge::instance().clear_all();
             }
         }
     }
@@ -4357,6 +4359,10 @@ TEST_F(UndoHistoryTest, PointCloudVolumeCropsRestoreAllAttributesAndCropState) {
             result = lfs::vis::op::undoHistory().redo();
             ASSERT_TRUE(result.success) << result.error;
             EXPECT_EQ(manager->getScene().getNodeById(id)->point_cloud->size(), expected);
+            lfs::vis::op::undoHistory().clear();
+            lfs::vis::services().clear();
+            lfs::core::event::bus().clear_all();
+            lfs::event::EventBridge::instance().clear_all();
         }
     }
 }
