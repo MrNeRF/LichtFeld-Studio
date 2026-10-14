@@ -148,6 +148,12 @@
   "projects.gallery.error.download_size": "El archivo descargado está incompleto o es más grande de lo indicado por la Galería.",
   "_language_name": "Español",
   "menu": {
+    "access_key.file": "A",
+    "access_key.edit": "E",
+    "access_key.select": "S",
+    "access_key.tools": "H",
+    "access_key.view": "V",
+    "access_key.help": "U",
     "file": "Archivo",
     "file.new_project": "Nuevo Proyecto",
     "file.open_project": "Abrir proyecto...",

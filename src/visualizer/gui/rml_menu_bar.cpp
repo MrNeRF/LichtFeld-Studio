@@ -15,6 +15,7 @@
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "input/input_controller.hpp"
+#include "input/sdl_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
 #include "ipc/view_context.hpp"
 #include "operator/operator_registry.hpp"
@@ -30,6 +31,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <SDL3/SDL_keycode.h>
 #include <SDL3/SDL_video.h>
 #include <algorithm>
 #include <cassert>
@@ -409,6 +411,205 @@ namespace lfs::vis::gui {
 
             return result;
         }
+
+        bool isAccessWordChar(char32_t codepoint) {
+            if (codepoint < 128)
+                return (codepoint >= '0' && codepoint <= '9') || (codepoint >= 'A' && codepoint <= 'Z') ||
+                       (codepoint >= 'a' && codepoint <= 'z');
+            return codepoint != 0;
+        }
+
+        char normalizeAsciiKey(char32_t codepoint) {
+            if (codepoint >= 'A' && codepoint <= 'Z')
+                return static_cast<char>(codepoint);
+            if (codepoint >= 'a' && codepoint <= 'z')
+                return static_cast<char>(codepoint - 'a' + 'A');
+            if (codepoint >= '0' && codepoint <= '9')
+                return static_cast<char>(codepoint);
+            return 0;
+        }
+
+        struct AccessCandidate {
+            std::size_t offset = 0;
+            std::size_t length = 0;
+            char key = 0;
+            bool word_start = false;
+        };
+
+        struct AccessChoice {
+            bool present = false;
+            std::size_t offset = 0;
+            std::size_t length = 0;
+            char key = 0;
+        };
+
+        std::vector<AccessCandidate> accessCandidates(std::string_view label) {
+            std::vector<AccessCandidate> result;
+            const Rml::String text(label.data(), label.size());
+            char32_t previous = 0;
+            bool have_previous = false;
+            for (Rml::StringIteratorU8 it(text); it; ++it) {
+                const std::size_t start = static_cast<std::size_t>(it.offset());
+                const char32_t codepoint = static_cast<char32_t>(*it);
+                Rml::StringIteratorU8 next = it;
+                ++next;
+                const std::size_t end = next ? static_cast<std::size_t>(next.offset()) : text.size();
+                const char key = normalizeAsciiKey(codepoint);
+                if (key != 0) {
+                    const bool word_start = !have_previous || !isAccessWordChar(previous);
+                    result.push_back({start, end - start, key, word_start});
+                }
+                previous = codepoint;
+                have_previous = true;
+            }
+            return result;
+        }
+
+        AccessChoice explicitAccessChoice(std::string_view label, char key) {
+            for (const auto& candidate : accessCandidates(label)) {
+                if (candidate.key == key)
+                    return {true, candidate.offset, candidate.length, key};
+            }
+            return {};
+        }
+
+        AccessChoice automaticAccessChoice(std::string_view label, std::array<bool, 128>& used) {
+            const auto candidates = accessCandidates(label);
+            const auto free = [&](char key) { return !used[static_cast<unsigned char>(key)]; };
+            for (const auto& candidate : candidates) {
+                if (candidate.word_start && free(candidate.key)) {
+                    used[static_cast<unsigned char>(candidate.key)] = true;
+                    return {true, candidate.offset, candidate.length, candidate.key};
+                }
+            }
+            for (const auto& candidate : candidates) {
+                if (free(candidate.key)) {
+                    used[static_cast<unsigned char>(candidate.key)] = true;
+                    return {true, candidate.offset, candidate.length, candidate.key};
+                }
+            }
+            // Every ASCII letter and digit is taken. Share the preferred word-start so a
+            // repeated label cycles instead of growing a second unique key.
+            for (const auto& candidate : candidates) {
+                if (candidate.word_start)
+                    return {true, candidate.offset, candidate.length, candidate.key};
+            }
+            return {};
+        }
+
+        template <typename View>
+        void clearAccessKey(View& view) {
+            view.access.label_before = view.label;
+            view.access.access_mark.clear();
+            view.access.label_after.clear();
+            view.access.access_key = 0;
+        }
+
+        template <typename View>
+        void applyAccessChoice(View& view, const AccessChoice& choice, bool parentheses_if_missing, char fallback_key) {
+            if (choice.present) {
+                view.access.label_before.assign(view.label, 0, choice.offset);
+                view.access.access_mark.assign(view.label, choice.offset, choice.length);
+                view.access.label_after.assign(view.label, choice.offset + choice.length, std::string::npos);
+                view.access.access_key = choice.key;
+                return;
+            }
+            if (parentheses_if_missing && fallback_key != 0) {
+                view.access.label_before = view.label + "(";
+                view.access.access_mark.assign(1, fallback_key);
+                view.access.label_after = ")";
+                view.access.access_key = fallback_key;
+                return;
+            }
+            clearAccessKey(view);
+        }
+
+        template <typename View>
+        void assignSiblingAccessKeys(std::vector<View>& items) {
+            std::array<bool, 128> used{};
+            for (auto& item : items) {
+                if constexpr (requires { item.is_label; }) {
+                    if (item.is_label) {
+                        clearAccessKey(item);
+                        if constexpr (requires { item.children; })
+                            assignSiblingAccessKeys(item.children);
+                        continue;
+                    }
+                }
+                applyAccessChoice(item, automaticAccessChoice(item.label, used), false, 0);
+                if constexpr (requires { item.children; })
+                    assignSiblingAccessKeys(item.children);
+            }
+        }
+
+        const char* builtinMenuToken(std::string_view idname) {
+            if (idname == "lfs_plugins.file_menu.FileMenu")
+                return "file";
+            if (idname == "lfs_plugins.edit_menu.EditMenu")
+                return "edit";
+            if (idname == "lfs_plugins.select_menu.SelectMenu")
+                return "select";
+            if (idname == "lfs_plugins.tools_menu.ToolsMenu")
+                return "tools";
+            if (idname == "lfs_plugins.view_menu.ViewMenu")
+                return "view";
+            if (idname == "lfs_plugins.help_menu.HelpMenu")
+                return "help";
+            return nullptr;
+        }
+
+        char explicitMenuLetter(const char* token) {
+            const std::string key = std::string("menu.access_key.") + token;
+            auto& locales = lfs::event::LocalizationManager::getInstance();
+            if (!locales.hasKey(key))
+                return 0;
+            const char* value = locales.get(key);
+            if (value == nullptr || value[0] == '\0' || value[1] != '\0')
+                return 0;
+            return normalizeAsciiKey(static_cast<unsigned char>(value[0]));
+        }
+
+        void assignTopLevelAccessKeys(std::vector<MenuLabelView>& labels, const std::vector<std::string>& idnames) {
+            std::array<bool, 128> used{};
+            std::vector<char> reserved(labels.size(), 0);
+            for (std::size_t i = 0; i < labels.size(); ++i) {
+                const char* token = builtinMenuToken(i < idnames.size() ? std::string_view{idnames[i]} : std::string_view{});
+                if (token == nullptr)
+                    continue;
+                const char key = explicitMenuLetter(token);
+                if (key == 0 || used[static_cast<unsigned char>(key)])
+                    continue;
+                reserved[i] = key;
+                used[static_cast<unsigned char>(key)] = true;
+            }
+            for (std::size_t i = 0; i < labels.size(); ++i) {
+                if (reserved[i] != 0) {
+                    applyAccessChoice(labels[i], explicitAccessChoice(labels[i].label, reserved[i]), true, reserved[i]);
+                    continue;
+                }
+                applyAccessChoice(labels[i], automaticAccessChoice(labels[i].label, used), false, 0);
+            }
+        }
+
+        bool altLetterBoundInActiveMap(int app_key) {
+            using lfs::vis::input::Action;
+            using lfs::vis::input::kAllToolModes;
+            using lfs::vis::input::KEYMOD_ALT;
+            const auto* controller = lfs::vis::InputController::instance();
+            if (controller == nullptr)
+                return false;
+            const auto& bindings = controller->getBindings();
+            for (const auto mode : kAllToolModes) {
+                if (bindings.getActionForKey(mode, app_key, KEYMOD_ALT) != Action::NONE)
+                    return true;
+            }
+            return false;
+        }
+
+        bool eventHasAltGr(const FrameInputEvent& event) {
+            const int mods = lfs::vis::input::sdlModsToAppMods(static_cast<SDL_Keymod>(event.modifiers));
+            return (mods & lfs::vis::input::KEYMOD_ALTGR) != 0;
+        }
     } // namespace
 
     float RmlMenuBar::barHeight() const {
@@ -420,14 +621,21 @@ namespace lfs::vis::gui {
         auto ctor = rml_context_->CreateDataModel("menu_bar");
         assert(ctor);
 
+        if (auto handle = ctor.RegisterStruct<AccessKeyLabel>()) {
+            handle.RegisterMember("label_before", &AccessKeyLabel::label_before);
+            handle.RegisterMember("access_mark", &AccessKeyLabel::access_mark);
+            handle.RegisterMember("label_after", &AccessKeyLabel::label_after);
+        }
         if (auto handle = ctor.RegisterStruct<MenuLabelView>()) {
             handle.RegisterMember("index", &MenuLabelView::index);
             handle.RegisterMember("label", &MenuLabelView::label);
+            handle.RegisterMember("access", &MenuLabelView::access);
             handle.RegisterMember("active", &MenuLabelView::active);
         }
         if (auto handle = ctor.RegisterStruct<MenuDropdownLeafView>()) {
             handle.RegisterMember("index", &MenuDropdownLeafView::index);
             handle.RegisterMember("label", &MenuDropdownLeafView::label);
+            handle.RegisterMember("access", &MenuDropdownLeafView::access);
             handle.RegisterMember("action", &MenuDropdownLeafView::action);
             handle.RegisterMember("operator_id", &MenuDropdownLeafView::operator_id);
             handle.RegisterMember("shortcut", &MenuDropdownLeafView::shortcut);
@@ -446,6 +654,7 @@ namespace lfs::vis::gui {
         if (auto handle = ctor.RegisterStruct<MenuDropdownGrandchildView>()) {
             handle.RegisterMember("index", &MenuDropdownGrandchildView::index);
             handle.RegisterMember("label", &MenuDropdownGrandchildView::label);
+            handle.RegisterMember("access", &MenuDropdownGrandchildView::access);
             handle.RegisterMember("action", &MenuDropdownGrandchildView::action);
             handle.RegisterMember("operator_id", &MenuDropdownGrandchildView::operator_id);
             handle.RegisterMember("shortcut", &MenuDropdownGrandchildView::shortcut);
@@ -465,6 +674,7 @@ namespace lfs::vis::gui {
         if (auto handle = ctor.RegisterStruct<MenuDropdownChildView>()) {
             handle.RegisterMember("index", &MenuDropdownChildView::index);
             handle.RegisterMember("label", &MenuDropdownChildView::label);
+            handle.RegisterMember("access", &MenuDropdownChildView::access);
             handle.RegisterMember("action", &MenuDropdownChildView::action);
             handle.RegisterMember("operator_id", &MenuDropdownChildView::operator_id);
             handle.RegisterMember("shortcut", &MenuDropdownChildView::shortcut);
@@ -483,6 +693,7 @@ namespace lfs::vis::gui {
         ctor.RegisterArray<std::vector<MenuDropdownChildView>>();
         if (auto handle = ctor.RegisterStruct<MenuDropdownRootView>()) {
             handle.RegisterMember("label", &MenuDropdownRootView::label);
+            handle.RegisterMember("access", &MenuDropdownRootView::access);
             handle.RegisterMember("index", &MenuDropdownRootView::index);
             handle.RegisterMember("action", &MenuDropdownRootView::action);
             handle.RegisterMember("operator_id", &MenuDropdownRootView::operator_id);
@@ -773,6 +984,7 @@ namespace lfs::vis::gui {
                 .active = static_cast<int>(i) == active_index_,
             });
         }
+        assignTopLevelAccessKeys(menu_labels_, current_idnames_);
         menu_model_.DirtyVariable("menu_labels");
         render_needed_ = true;
     }
@@ -946,13 +1158,14 @@ namespace lfs::vis::gui {
             (my < 0.0f || my >= bar_height_ * dp_ratio)) {
             keyboard_focus_menu_index_ = -1;
             syncActiveLabelState();
+            syncAccessKeyVisibility();
         }
 
         if (is_open) {
             wants_input_ = true;
 
             if (hovered_label >= 0 && hovered_label != open_menu_index_) {
-                openDropdown(hovered_label);
+                openDropdown(hovered_label, keyboard_opened_menu_);
                 return;
             }
 
@@ -1048,7 +1261,7 @@ namespace lfs::vis::gui {
             } else if (hovered_label >= 0) {
                 wants_input_ = true;
                 if (input.mouse_clicked[0]) {
-                    openDropdown(hovered_label);
+                    openDropdown(hovered_label, false);
                     return;
                 }
             }
@@ -1061,29 +1274,38 @@ namespace lfs::vis::gui {
     bool RmlMenuBar::handleMenuKey(const FrameInputEvent& event, const bool mouse_button_active,
                                    const bool window_has_keyboard_focus) {
         const bool alt = event.scancode == SDL_SCANCODE_LALT || event.scancode == SDL_SCANCODE_RALT;
-        if (!isOpen() && keyboard_focus_menu_index_ < 0 && !alt && !alt_pressed_)
+        const bool access_alt = access_alt_held_ ||
+                                ((event.modifiers & SDL_KMOD_ALT) != 0 && !eventHasAltGr(event));
+        if (!isOpen() && keyboard_focus_menu_index_ < 0 && !alt && !alt_pressed_ && !access_alt)
             return false;
         if (rml_manager_ && rml_manager_->wantsTextInput())
             return false;
         if (event.kind == FrameInputEventKind::KeyDown && alt && !event.repeat) {
             alt_pressed_ = true;
             alt_chord_ = mouse_button_active || !window_has_keyboard_focus;
+            if (!eventHasAltGr(event)) {
+                access_alt_held_ = true;
+                syncAccessKeyVisibility();
+            }
             return false;
         }
         if (event.kind == FrameInputEventKind::KeyDown && alt_pressed_ && !alt)
             alt_chord_ = true;
         if (event.kind == FrameInputEventKind::KeyUp && alt) {
             alt_pressed_ = false;
+            access_alt_held_ = false;
             const bool focus_menu = !alt_chord_ && window_has_keyboard_focus;
             alt_chord_ = false;
             if (focus_menu && !current_labels_.empty()) {
                 keyboard_focus_menu_index_ = 0;
                 syncActiveLabelState();
+                syncAccessKeyVisibility();
                 wants_input_ = true;
                 if (event.dispatch)
                     event.dispatch->consumed = true;
                 return true;
             }
+            syncAccessKeyVisibility();
             return false;
         }
         if (event.kind != FrameInputEventKind::KeyDown)
@@ -1094,6 +1316,18 @@ namespace lfs::vis::gui {
         if (event.repeat && !arrow)
             return false;
 
+        switch (handleAccessKey(event)) {
+        case AccessKeyResult::Handled:
+            wants_input_ = true;
+            if (event.dispatch)
+                event.dispatch->consumed = true;
+            return true;
+        case AccessKeyResult::Decline:
+            return false;
+        case AccessKeyResult::Ignore:
+            break;
+        }
+
         if (!isOpen()) {
             if (keyboard_focus_menu_index_ < 0)
                 return false;
@@ -1101,7 +1335,7 @@ namespace lfs::vis::gui {
             case SDL_SCANCODE_DOWN:
             case SDL_SCANCODE_RETURN:
             case SDL_SCANCODE_SPACE:
-                openDropdown(keyboard_focus_menu_index_);
+                openDropdown(keyboard_focus_menu_index_, true);
                 break;
             case SDL_SCANCODE_LEFT:
                 keyboard_focus_menu_index_ = (keyboard_focus_menu_index_ + static_cast<int>(current_labels_.size()) - 1) %
@@ -1115,10 +1349,12 @@ namespace lfs::vis::gui {
             case SDL_SCANCODE_ESCAPE:
                 keyboard_focus_menu_index_ = -1;
                 syncActiveLabelState();
+                syncAccessKeyVisibility();
                 break;
             default:
                 keyboard_focus_menu_index_ = -1;
                 syncActiveLabelState();
+                syncAccessKeyVisibility();
                 return false;
             }
             wants_input_ = true;
@@ -1171,7 +1407,7 @@ namespace lfs::vis::gui {
             if (keyboard_depth_ == 0) {
                 if (!activateKeyboardHighlight(true)) {
                     const int next = (open_menu_index_ + 1) % static_cast<int>(current_labels_.size());
-                    openDropdown(next);
+                    openDropdown(next, true);
                 }
             } else {
                 activateKeyboardHighlight(true);
@@ -1181,7 +1417,7 @@ namespace lfs::vis::gui {
             if (keyboard_depth_ == 0) {
                 const int previous = (open_menu_index_ + static_cast<int>(current_labels_.size()) - 1) %
                                      static_cast<int>(current_labels_.size());
-                openDropdown(previous);
+                openDropdown(previous, true);
             } else {
                 close_one_level();
             }
@@ -1205,10 +1441,12 @@ namespace lfs::vis::gui {
     void RmlMenuBar::onWindowFocusLost() {
         if (alt_pressed_)
             alt_chord_ = true;
+        access_alt_held_ = false;
         if (!isOpen() && keyboard_focus_menu_index_ >= 0) {
             keyboard_focus_menu_index_ = -1;
             syncActiveLabelState();
         }
+        syncAccessKeyVisibility();
     }
 
     void RmlMenuBar::updateKeyboardHighlight() {
@@ -1346,7 +1584,117 @@ namespace lfs::vis::gui {
         return true;
     }
 
-    void RmlMenuBar::openDropdown(int index) {
+    void RmlMenuBar::syncAccessKeyVisibility() {
+        const bool show = access_alt_held_ || (keyboard_focus_menu_index_ >= 0 && open_menu_index_ < 0) ||
+                          (open_menu_index_ >= 0 && keyboard_opened_menu_);
+        if (show == access_keys_visible_)
+            return;
+        access_keys_visible_ = show;
+        Rml::Element* body = body_el_;
+        if (!body && document_)
+            body = document_->GetElementById("body");
+        if (body)
+            body->SetClass("access-keys-visible", show);
+        render_needed_ = true;
+    }
+
+    RmlMenuBar::AccessKeyResult RmlMenuBar::handleAccessKey(const FrameInputEvent& event) {
+        const int app_mods = lfs::vis::input::sdlModsToAppMods(static_cast<SDL_Keymod>(event.modifiers));
+        constexpr int blocked = lfs::vis::input::KEYMOD_CTRL | lfs::vis::input::KEYMOD_SHIFT |
+                                lfs::vis::input::KEYMOD_SUPER | lfs::vis::input::KEYMOD_ALTGR;
+        if ((app_mods & blocked) != 0)
+            return AccessKeyResult::Ignore;
+        const int app_key = lfs::vis::input::sdlKeycodeToAppKey(event.keycode);
+        char letter = 0;
+        if (app_key >= lfs::vis::input::KEY_A && app_key <= lfs::vis::input::KEY_Z)
+            letter = static_cast<char>(app_key);
+        else if (app_key >= lfs::vis::input::KEY_0 && app_key <= lfs::vis::input::KEY_9)
+            letter = static_cast<char>(app_key);
+        else
+            return AccessKeyResult::Ignore;
+
+        if (!isOpen()) {
+            const bool plain_alt = access_alt_held_ || (app_mods & lfs::vis::input::KEYMOD_ALT) != 0;
+            if (!plain_alt && keyboard_focus_menu_index_ < 0)
+                return AccessKeyResult::Ignore;
+            if (plain_alt && altLetterBoundInActiveMap(app_key))
+                return AccessKeyResult::Decline;
+            int found = -1;
+            for (std::size_t i = 0; i < menu_labels_.size(); ++i) {
+                if (menu_labels_[i].access.access_key == letter) {
+                    found = static_cast<int>(i);
+                    break;
+                }
+            }
+            if (found < 0)
+                return AccessKeyResult::Ignore;
+            openDropdown(found, true);
+            return AccessKeyResult::Handled;
+        }
+
+        const auto level_count = [&]() -> int {
+            if (keyboard_depth_ == 0)
+                return static_cast<int>(dropdown_items_.size());
+            if (keyboard_depth_ == 1 && keyboard_path_[0] >= 0 && keyboard_path_[0] < static_cast<int>(dropdown_items_.size()))
+                return static_cast<int>(dropdown_items_[keyboard_path_[0]].children.size());
+            if (keyboard_depth_ == 2 && keyboard_path_[0] >= 0 && keyboard_path_[1] >= 0 &&
+                keyboard_path_[0] < static_cast<int>(dropdown_items_.size()) &&
+                keyboard_path_[1] < static_cast<int>(dropdown_items_[keyboard_path_[0]].children.size()))
+                return static_cast<int>(dropdown_items_[keyboard_path_[0]].children[keyboard_path_[1]].children.size());
+            if (keyboard_depth_ == 3 && keyboard_path_[0] >= 0 && keyboard_path_[1] >= 0 && keyboard_path_[2] >= 0 &&
+                keyboard_path_[0] < static_cast<int>(dropdown_items_.size()) &&
+                keyboard_path_[1] < static_cast<int>(dropdown_items_[keyboard_path_[0]].children.size()) &&
+                keyboard_path_[2] < static_cast<int>(dropdown_items_[keyboard_path_[0]].children[keyboard_path_[1]].children.size()))
+                return static_cast<int>(
+                    dropdown_items_[keyboard_path_[0]].children[keyboard_path_[1]].children[keyboard_path_[2]].children.size());
+            return 0;
+        };
+        const auto matches_letter = [&](int index) {
+            if (keyboard_depth_ == 0) {
+                const auto& item = dropdown_items_[index];
+                return item.enabled && item.access.access_key == letter;
+            }
+            if (keyboard_depth_ == 1) {
+                const auto& item = dropdown_items_[keyboard_path_[0]].children[index];
+                return item.enabled && item.access.access_key == letter;
+            }
+            if (keyboard_depth_ == 2) {
+                const auto& item = dropdown_items_[keyboard_path_[0]].children[keyboard_path_[1]].children[index];
+                return item.enabled && item.access.access_key == letter;
+            }
+            const auto& item =
+                dropdown_items_[keyboard_path_[0]].children[keyboard_path_[1]].children[keyboard_path_[2]].children[index];
+            return item.enabled && !item.is_label && item.access.access_key == letter;
+        };
+
+        std::vector<int> matches;
+        const int count = level_count();
+        for (int index = 0; index < count; ++index) {
+            if (matches_letter(index))
+                matches.push_back(index);
+        }
+        if (matches.empty())
+            return AccessKeyResult::Ignore;
+        int chosen = matches.front();
+        if (matches.size() > 1) {
+            const int current = keyboard_path_[keyboard_depth_];
+            for (const int index : matches) {
+                if (index > current) {
+                    chosen = index;
+                    break;
+                }
+            }
+        }
+        keyboard_path_[keyboard_depth_] = chosen;
+        for (int level = keyboard_depth_ + 1; level < 4; ++level)
+            keyboard_path_[level] = -1;
+        updateKeyboardHighlight();
+        if (matches.size() == 1)
+            activateKeyboardHighlight();
+        return AccessKeyResult::Handled;
+    }
+
+    void RmlMenuBar::openDropdown(int index, const bool from_keyboard) {
         assert(index >= 0 && index < static_cast<int>(current_idnames_.size()));
 
         if (open_menu_index_ < 0)
@@ -1358,6 +1706,7 @@ namespace lfs::vis::gui {
         keyboard_path_.fill(-1);
         keyboard_depth_ = 0;
         keyboard_focus_menu_index_ = -1;
+        keyboard_opened_menu_ = from_keyboard;
         open_menu_idname_ = current_idnames_[index];
         clearTitlebarDragRegion();
 
@@ -1385,11 +1734,13 @@ namespace lfs::vis::gui {
         rebuildDropdownDOM();
         moveKeyboardHighlight(1, true);
         syncActiveLabelState();
+        syncAccessKeyVisibility();
         render_needed_ = true;
     }
 
     void RmlMenuBar::closeDropdown() {
         open_menu_index_ = -1;
+        keyboard_opened_menu_ = false;
         rml_manager_->deactivateInput(rml_context_, true);
         open_submenu_index_ = -1;
         open_child_submenu_index_ = -1;
@@ -1408,11 +1759,14 @@ namespace lfs::vis::gui {
             dropdown_overlay_->SetClass("visible", false);
 
         syncActiveLabelState();
+        syncAccessKeyVisibility();
         render_needed_ = true;
     }
 
     std::vector<MenuDropdownRootView> RmlMenuBar::buildDropdownItems(const std::vector<MenuItemDesc>& items) {
-        return buildRootMenuItems(items);
+        auto built = buildRootMenuItems(items);
+        assignSiblingAccessKeys(built);
+        return built;
     }
 
     void RmlMenuBar::setOpenSubmenu(const int root_index, const int child_index, const int grandchild_index) {

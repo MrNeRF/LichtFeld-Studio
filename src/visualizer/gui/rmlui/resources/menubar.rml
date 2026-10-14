@@ -10,7 +10,7 @@
                 <span class="menu-label"
                       data-for="menu : menu_labels"
                       data-class-active="menu.active"
-                      data-attr-data-index="menu.index">{{ menu.label }}</span>
+                      data-attr-data-index="menu.index">{{ menu.access.label_before }}<span class="access-key" data-if="menu.access.access_mark != ''">{{ menu.access.access_mark }}</span>{{ menu.access.label_after }}</span>
             </div>
         </div>
         <div id="menu-toolbar">
@@ -137,7 +137,7 @@
                          data-attr-data-root-index="item.index"
                          data-class-active="item.keyboard_active"
                          data-attr-title="item.tooltip">
-                        <span class="label">{{ item.label }}</span>
+                        <span class="label">{{ item.access.label_before }}<span class="access-key" data-if="item.access.access_mark != ''">{{ item.access.access_mark }}</span>{{ item.access.label_after }}</span>
                         <span class="submenu-arrow">&gt;</span>
                     </div>
                     <div class="submenu-popup dropdown-popup">
@@ -155,7 +155,7 @@
                                      data-attr-data-child-index="child.index"
                                      data-class-active="child.keyboard_active"
                                      data-attr-title="child.tooltip">
-                                    <span class="label">{{ child.label }}</span>
+                                    <span class="label">{{ child.access.label_before }}<span class="access-key" data-if="child.access.access_mark != ''">{{ child.access.access_mark }}</span>{{ child.access.label_after }}</span>
                                     <span class="submenu-arrow">&gt;</span>
                                 </div>
                                 <div class="submenu-popup dropdown-popup">
@@ -173,7 +173,7 @@
                                                  data-attr-data-child-index="child.index"
                                                  data-attr-data-grandchild-index="grandchild.index"
                                                  data-attr-title="grandchild.tooltip">
-                                                <span class="label">{{ grandchild.label }}</span>
+                                                <span class="label">{{ grandchild.access.label_before }}<span class="access-key" data-if="grandchild.access.access_mark != ''">{{ grandchild.access.access_mark }}</span>{{ grandchild.access.label_after }}</span>
                                                 <span class="submenu-arrow">&gt;</span>
                                             </div>
                                             <div class="submenu-popup dropdown-popup">
@@ -189,7 +189,7 @@
                                                          data-class-disabled="true"
                                                          data-class-active="leaf.keyboard_active"
                                                          data-attr-title="leaf.tooltip">
-                                                        <span class="label">{{ leaf.label }}</span>
+                                                        <span class="label">{{ leaf.access.label_before }}<span class="access-key" data-if="leaf.access.access_mark != ''">{{ leaf.access.access_mark }}</span>{{ leaf.access.label_after }}</span>
                                                     </div>
                                                     <div class="menu-item"
                                                          data-if="!leaf.is_label"
@@ -205,7 +205,7 @@
                                                          data-attr-data-callback-index="leaf.callback_index"
                                                          data-attr-title="leaf.tooltip"
                                                          data-attrif-disabled="!leaf.enabled">
-                                                        <span class="label">{{ leaf.label }}</span>
+                                                        <span class="label">{{ leaf.access.label_before }}<span class="access-key" data-if="leaf.access.access_mark != ''">{{ leaf.access.access_mark }}</span>{{ leaf.access.label_after }}</span>
                                                         <span class="shortcut" data-if="leaf.has_shortcut">{{ leaf.shortcut }}</span>
                                                         <span class="checkmark" data-if="leaf.show_checkmark">{{ leaf.checkmark }}</span>
                                             </div>
@@ -226,7 +226,7 @@
                                              data-attr-data-callback-index="grandchild.callback_index"
                                              data-attr-title="grandchild.tooltip"
                                              data-attrif-disabled="!grandchild.enabled">
-                                            <span class="label">{{ grandchild.label }}</span>
+                                            <span class="label">{{ grandchild.access.label_before }}<span class="access-key" data-if="grandchild.access.access_mark != ''">{{ grandchild.access.access_mark }}</span>{{ grandchild.access.label_after }}</span>
                                             <span class="shortcut" data-if="grandchild.has_shortcut">{{ grandchild.shortcut }}</span>
                                             <span class="checkmark" data-if="grandchild.show_checkmark">{{ grandchild.checkmark }}</span>
                                         </div>
@@ -246,7 +246,7 @@
                                  data-attr-data-callback-index="child.callback_index"
                                  data-attr-title="child.tooltip"
                                  data-attrif-disabled="!child.enabled">
-                                <span class="label">{{ child.label }}</span>
+                                <span class="label">{{ child.access.label_before }}<span class="access-key" data-if="child.access.access_mark != ''">{{ child.access.access_mark }}</span>{{ child.access.label_after }}</span>
                                 <span class="shortcut" data-if="child.has_shortcut">{{ child.shortcut }}</span>
                                 <span class="checkmark" data-if="child.show_checkmark">{{ child.checkmark }}</span>
                             </div>
@@ -265,7 +265,7 @@
                      data-attr-data-callback-index="item.callback_index"
                      data-attr-title="item.tooltip"
                      data-attrif-disabled="!item.enabled">
-                    <span class="label">{{ item.label }}</span>
+                    <span class="label">{{ item.access.label_before }}<span class="access-key" data-if="item.access.access_mark != ''">{{ item.access.access_mark }}</span>{{ item.access.label_after }}</span>
                     <span class="shortcut" data-if="item.has_shortcut">{{ item.shortcut }}</span>
                     <span class="checkmark" data-if="item.show_checkmark">{{ item.checkmark }}</span>
                 </div>

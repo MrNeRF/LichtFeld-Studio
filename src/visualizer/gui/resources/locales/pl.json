@@ -148,6 +148,12 @@
   "projects.gallery.error.download_size": "Pobrany plik jest niekompletny lub większy, niż zadeklarowano na Galerii.",
   "_language_name": "Polski",
   "menu": {
+    "access_key.file": "P",
+    "access_key.edit": "E",
+    "access_key.select": "Z",
+    "access_key.tools": "N",
+    "access_key.view": "W",
+    "access_key.help": "M",
     "file": "Plik",
     "file.new_project": "Nowy Projekt",
     "file.open_project": "Otwórz projekt...",

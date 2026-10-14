@@ -148,6 +148,12 @@
   "projects.gallery.error.download_size": "ダウンロードしたファイルが不完全であるか、ギャラリーが示したサイズを超えています。",
   "_language_name": "日本語",
   "menu": {
+    "access_key.file": "F",
+    "access_key.edit": "E",
+    "access_key.select": "S",
+    "access_key.tools": "T",
+    "access_key.view": "V",
+    "access_key.help": "H",
     "file": "ファイル",
     "file.new_project": "新規プロジェクト",
     "file.open_project": "プロジェクトを開く...",

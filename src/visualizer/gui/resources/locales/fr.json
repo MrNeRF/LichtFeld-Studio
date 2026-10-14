@@ -148,6 +148,12 @@
   "projects.gallery.error.download_size": "Le fichier téléchargé est incomplet ou sa taille dépasse celle indiquée par la Galerie.",
   "_language_name": "Français",
   "menu": {
+    "access_key.file": "F",
+    "access_key.edit": "D",
+    "access_key.select": "S",
+    "access_key.tools": "O",
+    "access_key.view": "A",
+    "access_key.help": "E",
     "file": "Fichier",
     "file.new_project": "Nouveau Projet",
     "file.open_project": "Ouvrir un projet...",

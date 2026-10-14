@@ -148,6 +148,12 @@
   "projects.gallery.error.download_size": "Het gedownloade bestand is onvolledig of groter dan door de Galerij aangegeven.",
   "_language_name": "Nederlands",
   "menu": {
+    "access_key.file": "B",
+    "access_key.edit": "E",
+    "access_key.select": "S",
+    "access_key.tools": "U",
+    "access_key.view": "W",
+    "access_key.help": "H",
     "file": "Bestand",
     "file.new_project": "Nieuw Project",
     "file.open_project": "Project openen...",

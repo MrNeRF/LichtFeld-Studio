@@ -53,10 +53,18 @@ namespace lfs::vis::gui {
         std::vector<MenuItemDesc> items;
     };
 
+    struct AccessKeyLabel {
+        std::string label_before;
+        std::string access_mark;
+        std::string label_after;
+        char access_key = 0;
+    };
+
     struct MenuLabelView {
         int index = -1;
         std::string label;
         bool active = false;
+        AccessKeyLabel access;
     };
 
     struct MenuToolbarButtonView {
@@ -85,6 +93,7 @@ namespace lfs::vis::gui {
         bool is_label = false;
         bool keyboard_active = false;
         int callback_index = -1;
+        AccessKeyLabel access;
     };
 
     struct MenuDropdownGrandchildView {
@@ -103,6 +112,7 @@ namespace lfs::vis::gui {
         bool submenu_open = false;
         bool keyboard_active = false;
         int callback_index = -1;
+        AccessKeyLabel access;
         std::vector<MenuDropdownLeafView> children = {};
     };
 
@@ -122,6 +132,7 @@ namespace lfs::vis::gui {
         bool submenu_open = false;
         bool keyboard_active = false;
         int callback_index = -1;
+        AccessKeyLabel access;
         std::vector<MenuDropdownGrandchildView> children = {};
     };
 
@@ -141,6 +152,7 @@ namespace lfs::vis::gui {
         bool submenu_open = false;
         bool keyboard_active = false;
         int callback_index = -1;
+        AccessKeyLabel access;
         std::vector<MenuDropdownChildView> children;
     };
 
@@ -175,7 +187,12 @@ namespace lfs::vis::gui {
         bool updateTheme();
         void rebuildLabels();
         void syncActiveLabelState();
-        void openDropdown(int index);
+        void openDropdown(int index, bool from_keyboard = false);
+        void syncAccessKeyVisibility();
+        enum class AccessKeyResult { Ignore,
+                                     Handled,
+                                     Decline };
+        AccessKeyResult handleAccessKey(const FrameInputEvent& event);
         void rebuildDropdownDOM();
         void sizeOpenDropdowns();
         void setOpenSubmenu(int root_index, int child_index, int grandchild_index = -1);
@@ -270,6 +287,9 @@ namespace lfs::vis::gui {
         int keyboard_focus_menu_index_ = -1;
         bool alt_pressed_ = false;
         bool alt_chord_ = false;
+        bool access_alt_held_ = false;
+        bool keyboard_opened_menu_ = false;
+        bool access_keys_visible_ = false;
         // Keys this bar already handled through SDL dispatch since the last frame pass.
         struct DispatchKeyReceipt {
             uint64_t timestamp = 0;
