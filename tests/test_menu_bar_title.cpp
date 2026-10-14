@@ -903,6 +903,53 @@ namespace {
         EXPECT_FLOAT_EQ(bar_.barHeight(), 30);
     }
 
+    TEST_F(MenuBarTitleTest, GermanToolsStayOnTheTitleRowAt1100) {
+        auto* body = el("body");
+        auto* portal = el("menu-portal-connection");
+        Rml::Element* portal_label = nullptr;
+        for (int i = 0; i < portal->GetNumChildren(); ++i) {
+            if (portal->GetChild(i)->GetTagName() == "span")
+                portal_label = portal->GetChild(i);
+        }
+        ASSERT_NE(portal_label, nullptr);
+        const auto layout_at = [&](int width) {
+            context_->SetDimensions({width, 700});
+            context_->Update();
+            RmlMenuBarTestAccess::toolbarLayout(bar_, width, 1.0f);
+            context_->Update();
+        };
+
+        bar_.updateLabels({"Datei", "Bearbeiten", "Auswahl", "Werkzeuge", "Ansicht", "Hilfe"},
+                          {"file", "edit", "select", "tools", "view", "help"});
+        bar_.updateProjectDisplay("Untitled", "/projects/scene.licht", false);
+        RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Nicht verbunden");
+        RmlMenuBarTestAccess::fullToolbar(bar_);
+        layout_at(1100);
+        EXPECT_FALSE(el("menu-toolbar")->IsClassSet("second-row"));
+        EXPECT_FLOAT_EQ(RmlMenuBarTestAccess::heightDp(bar_), 30);
+        EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).top, 0);
+        EXPECT_TRUE(body->IsClassSet("toolbar-squeeze"));
+        EXPECT_FALSE(portal_label->IsVisible());
+        EXPECT_TRUE(el("menu-window-maximize")->IsVisible());
+        EXPECT_LT(bounds(el("toolbar-test-0")).bottom, 30.5f);
+        EXPECT_GT(bounds(el("toolbar-test-10")).right, bounds(el("menu-items")).right);
+
+        layout_at(1600);
+        EXPECT_FALSE(body->IsClassSet("toolbar-squeeze"));
+        EXPECT_FALSE(el("menu-toolbar")->IsClassSet("second-row"));
+        EXPECT_TRUE(portal_label->IsVisible());
+        EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).top, 0);
+
+        bar_.updateLabels({"File", "Edit", "Select", "Tools", "View", "Help"},
+                          {"file", "edit", "select", "tools", "view", "help"});
+        RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Not connected");
+        layout_at(1100);
+        EXPECT_FALSE(body->IsClassSet("toolbar-squeeze"));
+        EXPECT_FALSE(el("menu-toolbar")->IsClassSet("second-row"));
+        EXPECT_TRUE(portal_label->IsVisible());
+        EXPECT_FLOAT_EQ(RmlMenuBarTestAccess::heightDp(bar_), 30);
+    }
+
     TEST_F(MenuBarTitleTest, WideToolbarKeepsOriginalPlacementAndUpdateCost) {
         RmlMenuBarTestAccess::fullToolbar(bar_);
         resize(1600);

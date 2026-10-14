@@ -17,6 +17,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
+#include "gui/guide_segment_clipping.hpp"
 #include "gui/import_error.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "gui/volume_guide_visibility.hpp"
@@ -1256,20 +1257,16 @@ namespace lfs::vis::gui {
                 return std::nullopt;
             }
 
-            struct ViewClipPlane {
-                glm::vec3 normal;
-                float offset;
-            };
-            const std::array<ViewClipPlane, 5> clip_planes =
+            const std::array<GuideClipPlane, 5> clip_planes =
                 settings.orthographic
-                    ? std::array<ViewClipPlane, 5>{{
+                    ? std::array<GuideClipPlane, 5>{{
                           {{0.0f, 0.0f, -1.0f}, kMinViewZ},
                           {{ortho_scale, 0.0f, 0.0f}, cx},
                           {{-ortho_scale, 0.0f, 0.0f}, cx},
                           {{0.0f, -ortho_scale, 0.0f}, cy},
                           {{0.0f, ortho_scale, 0.0f}, cy},
                       }}
-                    : std::array<ViewClipPlane, 5>{{
+                    : std::array<GuideClipPlane, 5>{{
                           {{0.0f, 0.0f, -1.0f}, kMinViewZ},
                           {{fx, 0.0f, -cx}, 0.0f},
                           {{-fx, 0.0f, -cx}, 0.0f},
@@ -1277,25 +1274,11 @@ namespace lfs::vis::gui {
                           {{0.0f, fy, -cy}, 0.0f},
                       }};
 
-            float t_enter = 0.0f;
-            float t_exit = 1.0f;
-            for (const auto& plane : clip_planes) {
-                const float distance_a = glm::dot(plane.normal, view_a) + plane.offset;
-                const float distance_b = glm::dot(plane.normal, view_b) + plane.offset;
-                if (distance_a < 0.0f && distance_b < 0.0f) {
-                    return std::nullopt;
-                }
-                if (distance_a < 0.0f) {
-                    t_enter = std::max(t_enter, distance_a / (distance_a - distance_b));
-                } else if (distance_b < 0.0f) {
-                    t_exit = std::min(t_exit, distance_a / (distance_a - distance_b));
-                }
-            }
-            if (t_enter >= t_exit) {
+            const auto clipped = clipGuideSegment(view_a, view_b, clip_planes);
+            if (!clipped) {
                 return std::nullopt;
             }
-            const glm::vec3 clipped_a = glm::mix(view_a, view_b, t_enter);
-            const glm::vec3 clipped_b = glm::mix(view_a, view_b, t_exit);
+            const auto& [clipped_a, clipped_b] = *clipped;
 
             const auto project_view = [&](const glm::vec3& view) -> std::optional<glm::vec2> {
                 if (settings.orthographic) {

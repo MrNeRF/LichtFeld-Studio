@@ -508,6 +508,15 @@ body {
     display: flex;
 }
 
+/* A wide portal status yields its words before the viewport tools wrap. The icon stays. */
+body.toolbar-squeeze #menu-portal-connection span {
+    display: none;
+}
+body.toolbar-squeeze #menu-portal-connection {
+    padding: 0 4dp;
+    min-width: 26dp;
+}
+
 /* Keep menus and native window controls reachable in narrow windows. */
 body.compact #brand-logo,
 body.compact .menu-window-utility-btn,

@@ -277,6 +277,9 @@ namespace lfs::vis::gui {
         float applied_project_title_width_ = -1.0f;
         bool project_title_has_room_ = false;
         bool toolbar_fits_ = true;
+        bool toolbar_squeezed_ = false;
+        int toolbar_squeeze_screen_w_ = -1;
+        float toolbar_squeeze_menus_right_ = -1.0f;
         bool ui_hidden_ = false;
         bool last_window_split_view_ = false;
         bool last_ui_hidden_ = false;
