@@ -664,7 +664,9 @@ def get_zoom_toward_cursor_enabled() -> bool:
     """Check whether camera zoom moves toward the point under the cursor"""
 
 def set_zoom_toward_cursor_enabled(enabled: bool) -> None:
-    """Enable or disable zooming toward the point under the cursor instead of the view center"""
+    """
+    Enable or disable zooming toward the point under the cursor instead of the view center
+    """
 
 def file_associations_status() -> list:
     """
