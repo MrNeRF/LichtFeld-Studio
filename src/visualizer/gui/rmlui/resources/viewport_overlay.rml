@@ -7,7 +7,7 @@
     <div id="left-dock-resize-indicator" class="left-dock-resize-indicator hidden"></div>
     <div id="viewport-content">
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>
-    <div id="empty-state-hint" class="empty-state-hint" data-if="show_empty_state">
+    <div id="empty-state-hint" class="empty-state-hint hidden" data-class-hidden="!show_empty_state">
         <img class="empty-state-icon" src="../icon/archive.png" />
         <div class="empty-state-title">{{empty_state_title}}</div>
         <div class="empty-state-subtitle">{{empty_state_subtitle}}</div>
