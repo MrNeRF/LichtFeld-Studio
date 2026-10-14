@@ -114,6 +114,7 @@ namespace lfs::vis::gui {
         static void enableLeafLabel(RmlMenuBar& bar, int root, int child, int grandchild, int leaf) {
             bar.dropdown_items_[root].children[child].children[grandchild].children[leaf].enabled = true;
         }
+        static void keepContextHeight(RmlMenuBar& bar) { bar.last_ctx_h_ = bar.rml_context_->GetDimensions().y; }
         static void windowFocusLost(RmlMenuBar& bar) { bar.onWindowFocusLost(); }
         static bool renderNeeded(const RmlMenuBar& bar) { return bar.render_needed_; }
         static void setRenderNeeded(RmlMenuBar& bar, bool needed) { bar.render_needed_ = needed; }
@@ -1197,6 +1198,7 @@ namespace {
     }
 
     TEST_F(MenuBarTitleTest, LosingWindowFocusClearsPointerFeedback) {
+        RmlMenuBarTestAccess::keepContextHeight(bar_);
         auto* button = el("menu-window-close");
         ASSERT_NE(button, nullptr);
         const auto rect = bounds(button);
