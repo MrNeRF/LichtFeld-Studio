@@ -1052,7 +1052,12 @@ namespace lfs::vis::gui {
             }
             return false;
         }
-        if (event.kind != FrameInputEventKind::KeyDown || event.repeat)
+        if (event.kind != FrameInputEventKind::KeyDown)
+            return false;
+        // A held arrow keeps stepping through entries; every other key acts once per press.
+        const bool arrow = event.scancode == SDL_SCANCODE_UP || event.scancode == SDL_SCANCODE_DOWN ||
+                           event.scancode == SDL_SCANCODE_LEFT || event.scancode == SDL_SCANCODE_RIGHT;
+        if (event.repeat && !arrow)
             return false;
 
         if (!isOpen()) {
