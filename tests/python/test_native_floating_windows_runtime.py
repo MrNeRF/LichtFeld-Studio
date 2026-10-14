@@ -210,6 +210,16 @@ class NativeWindowsClient:
         existing = next((window for window in self.windows() if window["title"] == panel["label"]), None)
         if existing:
             return existing
+        # Reset actions can reopen embedded panels at overlapping defaults. An
+        # enabled target is not necessarily on top; don't drag a different
+        # panel's title or an underlying control using the target's bounds.
+        # Keep existing desktop hosts open for the multi-window assertions.
+        for other_id in ("lfs.preferences", "lfs.plugin_marketplace", "native.video_extractor"):
+            if other_id == panel_id:
+                continue
+            other = self.call("ui_panel_describe", panel_id=other_id)["panel"]
+            if other["enabled"] and not other.get("desktop_window"):
+                self.call("ui_panel_update", panel_id=other_id, enabled=False)
         state = self.until(lambda: next((window for window in self.windows() if window["title"] == panel["label"]), None)
                            or self.call("ui_panel_describe", panel_id=panel_id)["panel"].get("floating_bounds"))
         if "hwnd" in state:
