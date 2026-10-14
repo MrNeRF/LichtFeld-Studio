@@ -78,12 +78,12 @@ namespace lfs::vis::gui {
         std::unique_ptr<GraphicsContext> graphics;
         std::unique_ptr<UiRenderer> renderer;
         std::string name;
-        std::string panel_id;
         bool drawn = false;
         bool visible = false;
         bool failed = false;
         bool geometry_dirty = false;
-        std::function<void()> on_close;
+        WindowRectangle rectangle;
+        bool rectangle_initialized = false;
         std::function<void(lfs::Result<WindowCapture>)> capture_callback;
         ~NativeWindow() {
             if (capture_callback)
@@ -135,26 +135,60 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
+    void RmlUIManager::disableExternalWindows(const std::string& name) {
+        if (!native_windows_enabled_)
+            return;
+        native_windows_enabled_ = false;
+        LOG_WARN("External panel '{}' could not be initialized; external windows are disabled for this session", name);
+    }
+
+    void RmlUIManager::recordNativeGeometry(NativeWindow& native) {
+        native.geometry_dirty = false;
+        if (SDL_GetWindowFlags(native.window) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_MAXIMIZED))
+            return;
+        WindowRectangle rect;
+        SDL_GetWindowPosition(native.window, &rect.x, &rect.y);
+        SDL_GetWindowSize(native.window, &rect.width, &rect.height);
+        if (native.rectangle_initialized && native.rectangle == rect)
+            return;
+        native.rectangle = rect;
+        native.rectangle_initialized = true;
+        pending_native_geometry_[native.name] = rect;
+        native_geometry_deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    }
+
+    std::optional<double> RmlUIManager::secondsUntilNativeGeometryFlush() const {
+        if (!native_geometry_deadline_)
+            return std::nullopt;
+        if (SDL_GetGlobalMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK)
+            return 0.05;
+        return std::max(0.0, std::chrono::duration<double>(*native_geometry_deadline_ - std::chrono::steady_clock::now()).count());
+    }
+
+    void RmlUIManager::flushNativeGeometry() {
+        if (pending_native_geometry_.empty())
+            return;
+        if (automaticWindowStatePersistenceEnabled()) {
+            auto state = nlohmann::json::parse(UserPreferences::instance().floatingWindowGeometry(), nullptr, false);
+            if (!state.is_object())
+                state = nlohmann::json::object();
+            for (const auto& [name, rect] : pending_native_geometry_)
+                state[name] = {rect.x, rect.y, rect.width, rect.height};
+            UserPreferences::instance().setFloatingWindowGeometry(state.dump());
+        }
+        pending_native_geometry_.clear();
+        native_geometry_deadline_.reset();
+    }
+
     std::unique_ptr<RmlUIManager::NativeWindow> RmlUIManager::createNativeWindow(
         const std::string& name, int width, int height) {
         const auto start = std::chrono::steady_clock::now();
         auto result = std::make_unique<NativeWindow>();
         result->name = name;
-        const bool modal = name == "modal_overlay";
-        auto rect = nativeDefaultRect(window_, modal ? 560 : std::max(width, 640), modal ? 360 : std::max(height, 480));
-        bool restored_geometry = false;
-        if (automaticWindowStatePersistenceEnabled()) {
-            const auto state = nlohmann::json::parse(UserPreferences::instance().floatingWindowGeometry(), nullptr, false);
-            if (state.is_object()) {
-                const auto saved = state.find(name);
-                if (saved != state.end() && saved->is_array() && saved->size() == 4 &&
-                    std::ranges::all_of(*saved, [](const auto& v) { return v.is_number_integer() && v >= -100000 && v <= 100000; })) {
-                    const WindowRectangle requested{(*saved)[0], (*saved)[1], (*saved)[2], (*saved)[3]};
-                    rect = recoverFloatingWindowRectangle(requested, nativeDisplays(), nativeParentDisplay(window_));
-                    restored_geometry = true;
-                }
-            }
-        }
+        result->graphics = create_native_graphics_();
+        if (!result->graphics)
+            return {};
+        const auto rect = nativeDefaultRect(window_, std::max(width, 640), std::max(height, 480));
         SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
                                 SDL_WINDOW_HIDDEN | SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT;
 #ifdef LFS_GRAPHICS_METAL
@@ -166,8 +200,6 @@ namespace lfs::vis::gui {
         if (!result->window)
             return {};
         SDL_SetWindowMinimumSize(result->window, 320, 180);
-        SDL_SetPointerProperty(SDL_GetWindowProperties(result->window), "lfs.parent_window", window_);
-        SDL_SetBooleanProperty(SDL_GetWindowProperties(result->window), "lfs.geometry_initialized", restored_geometry);
         SDL_SetWindowHitTest(result->window, [](SDL_Window* window, const SDL_Point* point, void*) -> SDL_HitTestResult {
             if (!point)
                 return SDL_HITTEST_NORMAL;
@@ -201,10 +233,8 @@ namespace lfs::vis::gui {
         (void)SDL_SetWindowPosition(result->window, rect.x, rect.y);
         int pw = 0, ph = 0;
         SDL_GetWindowSizeInPixels(result->window, &pw, &ph);
-        result->graphics = createGraphicsContext();
         result->graphics->setAuxiliaryWindow(true);
         if (!result->graphics->initialize(result->window, pw, ph)) {
-            LOG_WARN("Native panel '{}' graphics initialization failed; keeping it inside the main window", name);
             return {};
         }
 #ifdef LFS_GRAPHICS_METAL
@@ -219,7 +249,7 @@ namespace lfs::vis::gui {
         return result;
     }
 
-    bool RmlUIManager::restoredExternalBounds(const std::string& name, float* bounds) const {
+    bool RmlUIManager::restoredExternalBounds(const std::string& name, float* bounds) {
         if (!native_windows_enabled_)
             return false;
         auto state = nlohmann::json::parse(UserPreferences::instance().floatingWindowGeometry(), nullptr, false);
@@ -232,8 +262,8 @@ namespace lfs::vis::gui {
         const WindowRectangle requested{(*saved)[0], (*saved)[1], (*saved)[2], (*saved)[3]};
         const auto rect = recoverFloatingWindowRectangle(requested, nativeDisplays(), nativeParentDisplay(window_));
         if (rect != requested && automaticWindowStatePersistenceEnabled()) {
-            state[name] = {rect.x, rect.y, rect.width, rect.height};
-            UserPreferences::instance().setFloatingWindowGeometry(state.dump());
+            pending_native_geometry_[name] = rect;
+            native_geometry_deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
         }
         WindowRectangle parent;
         SDL_GetWindowPosition(window_, &parent.x, &parent.y);
@@ -287,6 +317,8 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::resetNativeWindowGeometry() {
+        pending_native_geometry_.clear();
+        native_geometry_deadline_.reset();
         UserPreferences::instance().setFloatingWindowGeometry("{}");
         for (auto& [context, native] : native_windows_) {
             const auto properties = SDL_GetWindowProperties(native->window);
@@ -327,9 +359,8 @@ namespace lfs::vis::gui {
                 SDL_HideWindow(target);
                 native->visible = false;
                 cancelPointerInput(const_cast<Rml::Context*>(context));
-                auto on_close = native->on_close;
-                if (on_close)
-                    on_close();
+                recordNativeGeometry(*native);
+                flushNativeGeometry();
                 return true;
             }
             if (event.type == SDL_EVENT_WINDOW_MOVED || event.type == SDL_EVENT_WINDOW_RESIZED)
@@ -342,11 +373,6 @@ namespace lfs::vis::gui {
             return true;
         }
         return false;
-    }
-
-    void RmlUIManager::setNativeWindowCloseHandler(Rml::Context* context, std::function<void()> handler) {
-        if (const auto it = native_windows_.find(context); it != native_windows_.end())
-            it->second->on_close = std::move(handler);
     }
 
     bool RmlUIManager::requestNativeWindowCapture(const std::string& panel_id, std::function<void(lfs::Result<WindowCapture>)> callback) {
@@ -362,10 +388,12 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::renderNativeWindows() {
-        if (native_windows_.empty())
+        if (native_windows_.empty()) {
+            if (const auto delay = secondsUntilNativeGeometryFlush(); delay && *delay <= 0)
+                flushNativeGeometry();
             return;
-        nlohmann::json state;
-        bool changed = false;
+        }
+        std::vector<std::string> closed_panels;
         for (auto& [context, native] : native_windows_) {
             const auto properties = SDL_GetWindowProperties(native->window);
             if (SDL_GetBooleanProperty(properties, "lfs.drag_handoff", false)) {
@@ -386,27 +414,28 @@ namespace lfs::vis::gui {
                                               .user_message = "Native window is not ready for capture",
                                               .detection = LFS_SOURCE_SITE_CURRENT()}));
             };
-            if (native->geometry_dirty && !(SDL_GetWindowFlags(native->window) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_MAXIMIZED))) {
-                if (!changed) {
-                    state = nlohmann::json::parse(UserPreferences::instance().floatingWindowGeometry(), nullptr, false);
-                    if (!state.is_object())
-                        state = nlohmann::json::object();
-                }
-                int x = 0, y = 0, w = 0, h = 0;
-                SDL_GetWindowPosition(native->window, &x, &y);
-                SDL_GetWindowSize(native->window, &w, &h);
-                state[native->name] = {x, y, w, h};
-                native->geometry_dirty = false;
-                changed = true;
-            }
+            if (native->geometry_dirty)
+                recordNativeGeometry(*native);
             if (!native->drawn) {
                 fail_capture();
                 if (native->visible)
                     SDL_HideWindow(native->window);
                 native->visible = false;
+                recordNativeGeometry(*native);
+                flushNativeGeometry();
+                const char* id = SDL_GetStringProperty(properties, "lfs.panel_id", "");
+                if (*id)
+                    closed_panels.emplace_back(id);
                 continue;
             }
-            if (native->failed || (SDL_GetWindowFlags(native->window) & SDL_WINDOW_MINIMIZED)) {
+            if (native->failed) {
+                fail_capture();
+                const char* id = SDL_GetStringProperty(properties, "lfs.panel_id", "");
+                if (*id)
+                    closed_panels.emplace_back(id);
+                continue;
+            }
+            if (SDL_GetWindowFlags(native->window) & SDL_WINDOW_MINIMIZED) {
                 fail_capture();
                 continue;
             }
@@ -434,13 +463,18 @@ namespace lfs::vis::gui {
                 if (const auto status = native->graphics->endFrame(); !status) {
                     LOG_ERROR("Native panel '{}' presentation failed: {}", native->name, native->graphics->lastError());
                     native->failed = true;
+                    disableExternalWindows(native->name);
                 }
             }
         }
         // Discard commands for hidden/minimized targets too; they contain borrowed caches.
         clearQueue();
-        if (changed && automaticWindowStatePersistenceEnabled())
-            UserPreferences::instance().setFloatingWindowGeometry(state.dump());
+        if (const auto delay = secondsUntilNativeGeometryFlush(); delay && *delay <= 0)
+            flushNativeGeometry();
+        // Owners tear down their document/model before the context and device.
+        for (const auto& id : closed_panels)
+            if (auto panel = PanelRegistry::instance().get_panel_instance(id))
+                panel->releaseDesktopWindow();
     }
 
     namespace {
@@ -854,6 +888,9 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::shutdown() {
+        for (auto& [context, native] : native_windows_)
+            recordNativeGeometry(*native);
+        flushNativeGeometry();
         cancelDragPayload();
         // Input routing can also borrow externally owned contexts without init.
         for (const auto& [context, _] : input_handlers_)
@@ -915,8 +952,12 @@ namespace lfs::vis::gui {
         }
 
         auto native = floating && native_windows_enabled_ ? createNativeWindow(name, width, height) : nullptr;
+        if (floating && native_windows_enabled_ && !native)
+            disableExternalWindows(name);
         Rml::Context* ctx = Rml::CreateContext(name, Rml::Vector2i(width, height), native ? native->renderer.get() : nullptr);
         if (!ctx) {
+            if (floating)
+                disableExternalWindows(name);
             LOG_ERROR("RmlUI: failed to create context '{}'", name);
             return nullptr;
         }
@@ -990,8 +1031,11 @@ namespace lfs::vis::gui {
         if (!context)
             return;
         const std::string name = context->GetName();
-        if (const auto native = native_windows_.find(context); native != native_windows_.end())
+        if (const auto native = native_windows_.find(context); native != native_windows_.end()) {
+            recordNativeGeometry(*native->second);
+            flushNativeGeometry();
             (void)native->second->graphics->waitIdle();
+        }
         // Retire the identity before callbacks can request destruction again.
         context_ids_.erase(context);
         if (current_drag_context_id_ == id)
@@ -1500,7 +1544,6 @@ namespace lfs::vis::gui {
         auto* dispatch_window = SDL_GetWindowFromEvent(&native_event);
         if (!dispatch_window)
             dispatch_window = window_;
-        input_window_ = dispatch_window;
         if (system_interface_)
             system_interface_->setWindow(dispatch_window);
         const SDL_Event event = input::pointerEventInPixels(native_event, dispatch_window);
@@ -1511,7 +1554,6 @@ namespace lfs::vis::gui {
             ~FinishDispatch() {
                 manager.input_dispatch_active_ = false;
                 manager.flushInputLifecycle();
-                manager.input_window_ = nullptr;
                 if (manager.system_interface_)
                     manager.system_interface_->setWindow(manager.window_);
             }

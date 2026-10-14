@@ -619,9 +619,15 @@ namespace lfs::vis::gui {
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         assert(ops.create && ops.draw_direct && ops.get_document && ops.is_loaded);
 
-        if (!prepareForRender(&ctx))
+        auto* document = prepareForRender(&ctx);
+        if (!document)
             return;
 
+        if (desktop_reopen_scroll_) {
+            if (auto* content = document->GetElementById("content-wrap"))
+                content->SetScrollTop(*desktop_reopen_scroll_);
+            desktop_reopen_scroll_.reset();
+        }
         ops.draw_direct(host_, x, y, w, h);
     }
 
@@ -679,10 +685,39 @@ namespace lfs::vis::gui {
         if (desktop_restore_checked_ || !ensureHost())
             return false;
         desktop_restore_checked_ = true;
+        if (desktop_reopen_bounds_) {
+            const auto bounds = *desktop_reopen_bounds_;
+            desktop_reopen_bounds_.reset();
+            return detachHost(bounds[0], bounds[1], bounds[2], bounds[3], true);
+        }
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         float bounds[4]{};
         return ops.restored_external_bounds && ops.restored_external_bounds(host_, bounds) &&
                detachHost(bounds[0], bounds[1], bounds[2], bounds[3], true);
+    }
+
+    void RmlPythonPanelAdapter::releaseDesktopWindow() {
+        auto* native = nativeWindow();
+        if (!native || !lfs::python::can_acquire_gil())
+            return;
+        int x = 0, y = 0, w = 0, h = 0;
+        SDL_GetWindowPosition(native, &x, &y);
+        SDL_GetWindowSize(native, &w, &h);
+        desktop_reopen_bounds_ = std::array<float, 4>{float(x), float(y), float(w), float(h)};
+        const lfs::python::GilAcquire gil;
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        auto* document = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
+        if (document) {
+            if (auto* content = document->GetElementById("content-wrap"))
+                desktop_reopen_scroll_ = content->GetScrollTop();
+            callOnUnload(document);
+        }
+        lfs::python::RmlDocumentRegistry::instance().unregister_document(context_name_);
+        layout_.release_elements();
+        ops.destroy(host_);
+        host_ = nullptr;
+        desktop_restore_checked_ = false;
+        resetLifecycle();
     }
 
     bool RmlPythonPanelAdapter::poll(const PanelDrawContext& ctx) {

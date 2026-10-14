@@ -167,6 +167,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] virtual SDL_Window* nativeWindow() const { return nullptr; }
         virtual bool detachToDesktop(float, float, float, float) { return false; }
         virtual bool restoreDesktopWindow() { return false; }
+        virtual void releaseDesktopWindow() {}
         // Called on the GUI thread only after a native viewport drop hit test.
         virtual bool onViewportDrop(const std::string& type, const std::string& data) {
             (void)type;

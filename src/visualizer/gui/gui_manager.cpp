@@ -8633,6 +8633,8 @@ namespace lfs::vis::gui {
         std::optional<double> result;
         const auto now = std::chrono::steady_clock::now();
 
+        result = min_delay(result, rmlui_manager_.secondsUntilNativeGeometryFlush(), "external_window_geometry");
+
         if (!python::is_plugin_preload_running()) {
             result = min_delay(result,
                                PanelRegistry::instance().nextScheduledAnimationDelayForVisiblePanels(

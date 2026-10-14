@@ -585,6 +585,14 @@ namespace lfs::vis {
             gui::guiFocusState().reset();
         }
         gui::RmlUIManager& manager() { return gui_->rmlui_manager_; }
+        bool hasDesktopHost(const Rml::Context* context) { return manager().native_windows_.contains(context); }
+        void failExternalGraphics(int& attempts) {
+            manager().native_windows_enabled_ = true;
+            manager().create_native_graphics_ = [&attempts]() -> std::unique_ptr<GraphicsContext> {
+                ++attempts;
+                return nullptr;
+            };
+        }
         void mapContextWindow(Rml::Context* context, SDL_Window* window) {
             manager().context_windows_[context] = window;
         }
@@ -1211,6 +1219,25 @@ namespace lfs::vis {
         uint64_t timestamp_ = 0;
         gui::rml_input::TextInputEscapeRevertController revert_;
     };
+
+    TEST_F(WindowInputDispatchTest, FailedExternalHostDisablesFurtherAttemptsForTheSession) {
+        int attempts = 0;
+        failExternalGraphics(attempts);
+        auto* first = manager().createContext("failed-external-first", 400, 300, true);
+        ASSERT_NE(first, nullptr);
+        EXPECT_FALSE(hasDesktopHost(first));
+        EXPECT_FALSE(manager().externalWindowsAllowed());
+        for (int frame = 0; frame < 10; ++frame) {
+            const auto name = "failed-external-retry-" + std::to_string(frame);
+            auto* fallback = manager().createContext(name, 400, 300, true);
+            ASSERT_NE(fallback, nullptr);
+            EXPECT_FALSE(hasDesktopHost(fallback));
+            EXPECT_FALSE(manager().externalWindowsAllowed());
+            manager().destroyContext(name);
+        }
+        EXPECT_EQ(attempts, 1);
+        manager().destroyContext("failed-external-first");
+    }
 
     TEST_F(WindowInputDispatchTest, SecondaryWindowMouseDoesNotReachMainWindowContext) {
         auto* secondary = SDL_CreateWindow("Secondary input", 400, 300, SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);

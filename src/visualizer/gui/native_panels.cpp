@@ -140,6 +140,11 @@ namespace lfs::vis::gui::native_panels {
         return widget_ && widget_->restoreDesktopWindow();
     }
 
+    void VideoExtractorPanel::releaseDesktopWindow() {
+        if (widget_)
+            widget_->releaseDesktopWindow();
+    }
+
     bool VideoExtractorPanel::needsAnimationFrame() const {
         return widget_ && widget_->needsAnimationFrame();
     }

@@ -261,7 +261,6 @@ namespace lfs::vis::gui {
         if (auto* native = nativeWindow()) {
             SDL_SetWindowPosition(native, static_cast<int>(desktop_bounds_[0]), static_cast<int>(desktop_bounds_[1]));
             SDL_SetWindowSize(native, static_cast<int>(desktop_bounds_[2]), static_cast<int>(desktop_bounds_[3]));
-            SDL_SetBooleanProperty(SDL_GetWindowProperties(native), "lfs.geometry_initialized", true);
         }
         return rml_context_ != nullptr;
     }
@@ -825,15 +824,11 @@ namespace lfs::vis::gui {
             return;
 
         auto* native = nativeWindow();
-        const bool initialize_geometry = native &&
-                                         !SDL_GetBooleanProperty(SDL_GetWindowProperties(native), "lfs.geometry_initialized", false);
         if (native) {
             const float density = SDL_GetWindowPixelDensity(native);
             const auto properties = SDL_GetWindowProperties(native);
             SDL_SetNumberProperty(properties, "lfs.default_width", static_cast<int>(std::ceil(w / density)));
             SDL_SetNumberProperty(properties, "lfs.default_height", static_cast<int>(std::ceil(h / density)));
-            if (initialize_geometry)
-                SDL_SetWindowSize(native, static_cast<int>(std::ceil(w / density)), static_cast<int>(std::ceil(h / density)));
             syncDirectLayout(w, h);
         }
 
@@ -843,24 +838,6 @@ namespace lfs::vis::gui {
         resolveDirectRenderHeight(h, ph, display_h);
 
         renderIfDirty(pw, ph, display_h);
-        if (initialize_geometry) {
-            const float density = SDL_GetWindowPixelDensity(native);
-            const auto properties = SDL_GetWindowProperties(native);
-            const int height = static_cast<int>(std::ceil(display_h / density));
-            WindowRectangle rectangle{0, 0, static_cast<int>(std::ceil(w / density)), height};
-            if (auto* parent = static_cast<SDL_Window*>(SDL_GetPointerProperty(properties, "lfs.parent_window", nullptr))) {
-                WindowRectangle bounds;
-                SDL_GetWindowPosition(parent, &bounds.x, &bounds.y);
-                SDL_GetWindowSize(parent, &bounds.width, &bounds.height);
-                SDL_Rect display{};
-                if (SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(parent), &display))
-                    rectangle = defaultFloatingWindowRectangle(rectangle, bounds, {display.x, display.y, display.w, display.h});
-                SDL_SetWindowPosition(native, rectangle.x, rectangle.y);
-            }
-            SDL_SetWindowSize(native, rectangle.width, rectangle.height);
-            SDL_SetNumberProperty(properties, "lfs.default_height", height);
-            SDL_SetBooleanProperty(properties, "lfs.geometry_initialized", true);
-        }
     }
 
     void RmlPanelHost::drawDirect(float x, float y, float w, float h) {

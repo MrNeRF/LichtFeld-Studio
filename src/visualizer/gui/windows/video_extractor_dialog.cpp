@@ -421,11 +421,36 @@ namespace lfs::gui {
     }
 
     bool VideoExtractorDialog::restoreDesktopWindow() {
+        if (!host_ && desktop_reopen_bounds_ && desktop_manager_)
+            ensureInitialized(desktop_manager_);
         if (desktop_restore_checked_ || !host_)
             return false;
         desktop_restore_checked_ = true;
+        if (desktop_reopen_bounds_) {
+            const auto bounds = *desktop_reopen_bounds_;
+            desktop_reopen_bounds_.reset();
+            return detachHost(bounds[0], bounds[1], bounds[2], bounds[3], true);
+        }
         float bounds[4]{};
         return host_->restoredExternalBounds(bounds) && detachHost(bounds[0], bounds[1], bounds[2], bounds[3], true);
+    }
+
+    void VideoExtractorDialog::releaseDesktopWindow() {
+        auto* native = nativeWindow();
+        if (!native)
+            return;
+        int x = 0, y = 0, w = 0, h = 0;
+        SDL_GetWindowPosition(native, &x, &y);
+        SDL_GetWindowSize(native, &w, &h);
+        desktop_reopen_bounds_ = std::array<float, 4>{float(x), float(y), float(w), float(h)};
+        desktop_manager_ = host_->manager();
+        preview_texture_.reset();
+        preview_src_.clear();
+        host_.reset();
+        document_ = nullptr;
+        clearElementCache();
+        desktop_restore_checked_ = false;
+        texture_needs_update_ = controls_dirty_ = true;
     }
 
     bool VideoExtractorDialog::needsAnimationFrame() const {

@@ -39,6 +39,7 @@ class NativeWindowsClient:
         self.user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
         self.user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
         self.user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        self.user32.IsWindow.argtypes = [wintypes.HWND]
         self.user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
         self.user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
         self.user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
@@ -209,7 +210,8 @@ def test_original_rml_close_button_closes_only_its_panel(native_client):
     for message, buttons in ((0x0200, 0), (0x0201, 1), (0x0202, 0)):
         assert native_client.user32.PostMessageW(preferences["hwnd"], message, buttons, coordinates)
     native_client.until(lambda: not native_client.call("ui_panel_describe", panel_id="lfs.preferences")["panel"]["enabled"])
-    assert native_client.open("lfs.preferences")["hwnd"] == preferences["hwnd"]
+    native_client.until(lambda: not native_client.user32.IsWindow(preferences["hwnd"]))
+    assert native_client.open("lfs.preferences")["title"] == "Preferences"
 
 
 def test_title_drag_and_resize_use_the_original_rml_window(native_client):
@@ -238,14 +240,16 @@ def test_native_close_preserves_application_and_reopens_the_same_panel(native_cl
     preferences = native_client.open("lfs.preferences")
     assert native_client.user32.PostMessageW(preferences["hwnd"], 0x0010, 0, 0)  # WM_CLOSE
     native_client.until(lambda: not native_client.call("ui_panel_describe", panel_id="lfs.preferences")["panel"]["enabled"])
+    native_client.until(lambda: not native_client.user32.IsWindow(preferences["hwnd"]))
     reopened = native_client.open("lfs.preferences")
-    assert reopened["hwnd"] == preferences["hwnd"]
+    assert reopened["title"] == preferences["title"]
 
 
 def test_reopening_an_inaccessible_window_recovers_its_rml_title(native_client):
     preferences = native_client.open("lfs.preferences")
-    native_client.call("ui_panel_update", panel_id="lfs.preferences", enabled=False)
     assert native_client.user32.SetWindowPos(preferences["hwnd"], 0, -30000, -30000, 0, 0, 0x0015)
+    native_client.call("ui_panel_update", panel_id="lfs.preferences", enabled=False)
+    native_client.until(lambda: not native_client.user32.IsWindow(preferences["hwnd"]))
     reopened = native_client.open("lfs.preferences")
     def accessible():
         panel = next(window for window in native_client.windows() if window["hwnd"] == reopened["hwnd"])
@@ -253,7 +257,7 @@ def test_reopening_an_inaccessible_window_recovers_its_rml_title(native_client):
         return any(min(right, mr) - max(left, ml) >= 96 and min(top + 30, mb) - max(top, mt) >= 24
                    for ml, mt, mr, mb in native_client.monitors())
     native_client.until(accessible)
-    assert reopened["hwnd"] == preferences["hwnd"]
+    assert reopened["title"] == preferences["title"]
 
 
 def test_window_geometry_persists_and_reset_keeps_preferences_open(native_client):
@@ -318,3 +322,34 @@ def test_native_window_capture_contains_rendered_controls(native_client, panel_i
     assert len(set(zlib.decompress(compressed))) > 32, "native capture is an empty clear frame"
     filename = "preferences-rendered.png" if panel_id == "lfs.preferences" else f"capture-{panel_id or 'main'}.png"
     (native_client.profile.parent / filename).write_bytes(png)
+
+
+def test_moving_geometry_is_buffered_then_flushed_at_rest_and_close(native_client):
+    preferences = native_client.open("lfs.preferences")
+    path = native_client.profile / "config/preferences.json"
+    time.sleep(.5)
+    before = path.stat().st_mtime_ns
+    for step in range(30):
+        assert native_client.user32.SetWindowPos(preferences["hwnd"], 0, 100 + step, 100, 0, 0, 0x0015)
+        time.sleep(.02)
+        assert path.stat().st_mtime_ns == before, "preferences were rewritten while the panel was moving"
+    native_client.until(lambda: path.stat().st_mtime_ns != before)
+    saved = json.loads(path.read_text(encoding="utf-8"))["floating_window_geometry"]["lfs.preferences"]
+    assert saved[:2] == [129, 100]
+    assert native_client.user32.SetWindowPos(preferences["hwnd"], 0, 160, 120, 0, 0, 0x0015)
+    native_client.call("ui_panel_update", panel_id="lfs.preferences", enabled=False)
+    native_client.until(lambda: not native_client.user32.IsWindow(preferences["hwnd"]))
+    saved = json.loads(path.read_text(encoding="utf-8"))["floating_window_geometry"]["lfs.preferences"]
+    assert saved[:2] == [160, 120], "close did not flush the final rectangle"
+    reopened = native_client.open("lfs.preferences")
+    assert reopened["rect"][:2] == (160, 120)
+
+
+@pytest.mark.parametrize("panel_id", ["lfs.preferences", "lfs.plugin_marketplace", "native.video_extractor"])
+def test_closing_external_panels_destroys_their_desktop_hosts(native_client, panel_id):
+    window = native_client.open(panel_id)
+    native_client.call("ui_panel_update", panel_id=panel_id, enabled=False)
+    native_client.until(lambda: not native_client.user32.IsWindow(window["hwnd"]))
+    assert not native_client.call("ui_panel_describe", panel_id=panel_id)["panel"]["desktop_window"]
+    reopened = native_client.open(panel_id)
+    assert reopened["title"] == window["title"]

@@ -26,6 +26,7 @@ namespace lfs::gui {
         [[nodiscard]] virtual SDL_Window* nativeWindow() const { return nullptr; }
         virtual bool detachToDesktop(float, float, float, float) { return false; }
         virtual bool restoreDesktopWindow() { return false; }
+        virtual void releaseDesktopWindow() {}
         [[nodiscard]] virtual bool isVideoPlaying() const = 0;
         [[nodiscard]] virtual bool openVideoPath(const std::filesystem::path& path) {
             (void)path;

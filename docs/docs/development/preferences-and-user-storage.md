@@ -37,7 +37,12 @@ crossing, or when restoring a saved position outside the main window.
 explicit feature override. Initialization failures also fall back to embedded
 rendering. With no external hosts, the native rendering pass returns before
 reading preferences or parsing geometry; geometry is parsed only when saving
-changed external rectangles.
+changed external rectangles. Moves and resizes update an in-memory rectangle;
+a durable write is deferred until input is released and geometry has been quiet
+for 250 ms. Hiding/closing the panel and application shutdown flush the final
+rectangle immediately. Failed host initialization disables further external
+host creation for the session, with one warning; existing panel state remains
+available in embedded mode.
 
 Desktop rectangles are stored in the user-global `floating_window_geometry`
 object, keyed by RmlUi context name, and never in a project's workspace. Both
@@ -57,7 +62,9 @@ The desktop host is borderless and transparent: the panel keeps its RmlUi title,
 close button, theme and original dimensions. Its RmlUi title bar moves the window
 and its edges resize it. Confirmation and input popups remain embedded.
 Closing a panel window disables that panel without exiting the
-application. This experiment covers existing floating panels; docked panels
+application and destroys its desktop surface, UI renderer, and auxiliary GPU
+device. Reopening recreates the host from the saved rectangle while retaining
+the panel instance and its state. This experiment covers existing floating panels; docked panels
 are not yet detachable. Native window integration has been validated on Windows;
 the Linux and macOS paths still require platform testing.
 The shared host updates monitor DPI before drawing both Python and C++ panels,
@@ -78,9 +85,9 @@ the 780×440 panel raised it to 284.79 MiB (+62.34 MiB). Shared GPU memory
 increased by 26.56 MiB. The first embedded open took 79.8 ms, native host
 initialization took 137.1 ms, and the MCP drag-to-visible measurement took
 507.4 ms including the test's 100 ms press interval and RPC/frame scheduling.
-These are single-run observations, not latency guarantees. Closing the panel
-hides and caches its host for reopening; the added allocation remains until
-host destruction or application exit. No extra desktop host or GPU device is
+These are single-run observations of the initial lazy-host implementation,
+not latency guarantees. Hosts are now destroyed on close rather than cached;
+updated close/reopen memory measurements are documented in the pull request. No extra desktop host or GPU device is
 created merely by opening embedded Preferences, Plugin Marketplace, or Video
 Extractor.
 
