@@ -78,7 +78,7 @@ running GUI selected by `LFS_NATIVE_WINDOWS_TEST_ENDPOINT` and the matching
 `LFS_NATIVE_WINDOWS_TEST_PROFILE` (the application's `LFS_HOME`).
 
 One-panel cost was measured on Windows with an NVIDIA RTX 5060 Ti, Vulkan,
-Release build, an empty scene, and a fresh isolated profile. For a 1170×633
+Release build, an empty scene, and a fresh isolated profile. For a 1170Ã—633
 panel at the current monitor scale, medians of three WDDM GPU Process Memory
 samples were 270.41 MiB dedicated with Preferences embedded, 395.07 MiB
 detached, 279.21 MiB after close, and 397.76 MiB after reopen. Closing returned
@@ -90,7 +90,15 @@ latency or zero-retention guarantees. Although the SDL surface, renderer,
 RmlUi render manager and auxiliary graphics device are destroyed, process-wide
 WDDM totals retain some memory. An instrumented ten-cycle run kept live main
 UI allocations around 46 MiB while WDDM dedicated totals rose by about 35 MiB;
-that residual is not fully attributed. Other process/driver caches and reserved
+that residual is not fully attributed. Subsequent controls in a remote Windows
+session (one 2560x1600 display at 120 DPI) did not reproduce progressive growth:
+20 close/reopen cycles without captures, 20 main-window captures, repeated cycles
+with captures and a larger main window, and 30 cycles at application UI scale
+1.5 all had stable post-close WDDM totals within each series. Ten additional
+cycles with the VRAM profiler kept Viewer ownership constant after close.
+The earlier local 144-DPI observation remains open; remote-session stability
+does not establish its cause or prove it fixed. Sampled profiler process totals
+can also lag behind host retirement. Other process/driver caches and reserved
 allocator blocks are included in those counters. No additional desktop host or
 GPU device is created merely by opening embedded panels.
 
