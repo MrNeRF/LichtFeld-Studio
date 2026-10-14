@@ -22,6 +22,7 @@
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene_upscaler_registry.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "viewport_appearance_correction.hpp"
@@ -2662,6 +2663,7 @@ namespace lfs::vis {
             .frame_dirty = frame_dirty,
             .training_active = is_training,
             .gaussian_selection_visible = gaussian_selection_visible_,
+            .exact_surface_picking = UnifiedToolRegistry::instance().getActiveTool() == "builtin.align",
             .cursor_preview = viewport_overlay_service_.cursorPreview(),
             .gizmo = viewport_overlay_service_.makeFrameGizmoState(),
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),

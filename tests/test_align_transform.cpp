@@ -10,6 +10,7 @@
 #include "operator/ops/align_ops.hpp"
 #include "rendering/point_cloud_vulkan_renderer.hpp"
 #include "rendering/viewport_artifact_service.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/app_store.hpp"
 
@@ -23,6 +24,39 @@ namespace {
 
     [[nodiscard]] glm::vec3 applyRot(const glm::mat4& m, const glm::vec3& v) {
         return glm::mat3(m) * v;
+    }
+
+    TEST(AlignDepth, RequestsExactDepthOutsideFrustumCoverage) {
+        using namespace lfs::vis;
+        struct EventGuard {
+            EventGuard() { clear(); }
+            ~EventGuard() { clear(); }
+            static void clear() {
+                lfs::event::EventBridge::instance().clear_all();
+                lfs::core::event::bus().clear_all();
+            }
+        } event_guard;
+        Viewport viewport(640, 480);
+        const ViewportRegion region{0, 0, 640, 480};
+        SceneManager manager;
+        FrameContext ctx{.viewport = viewport,
+                         .viewport_region = &region,
+                         .scene_manager = &manager,
+                         .settings = {},
+                         .render_size = {640, 480}};
+        EXPECT_FALSE(buildViewportRenderRequest(ctx, {640, 480}).require_exact_depth);
+        ctx.settings.show_camera_frustums = true;
+        auto request = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_TRUE(request.require_exact_depth);
+        ASSERT_FALSE(request.exact_depth_sample_mask.empty());
+        ctx.exact_surface_picking = true;
+        request = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_TRUE(request.require_exact_depth);
+        EXPECT_TRUE(request.exact_depth_sample_mask.empty());
+        ctx.settings.show_camera_frustums = false;
+        EXPECT_TRUE(buildViewportRenderRequest(ctx, {640, 480}).require_exact_depth);
+        ctx.exact_surface_picking = false;
+        EXPECT_FALSE(buildViewportRenderRequest(ctx, {640, 480}).require_exact_depth);
     }
 
     TEST(AlignDepth, PointDepthSamplerFollowsPublishedOutput) {

@@ -497,7 +497,7 @@ namespace lfs::vis {
                  .has_selection = gaussian_selection_visible && ctx.scene_state.has_selection},
             .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings),
             .depth_view = ctx.settings.depth_view,
-            .require_exact_depth = ctx.settings.show_camera_frustums ||
+            .require_exact_depth = ctx.exact_surface_picking || ctx.settings.show_camera_frustums ||
                                    std::any_of(ctx.scene_state.meshes.begin(), ctx.scene_state.meshes.end(),
                                                [](const auto& mesh) { return mesh.mesh != nullptr; }),
             .depth_view_min = ctx.settings.depth_view_min,
@@ -515,7 +515,8 @@ namespace lfs::vis {
         applyGaussianViewVolume(request.filters, ctx);
         request.frame_view.subregion_origin = subregion_origin;
         request.frame_view.subregion_full_size = subregion_full_size;
-        if (ctx.settings.show_camera_frustums && !ctx.training_active && !request.gut && !request.depth_view &&
+        // Align can sample anywhere, including away from camera overlays.
+        if (!ctx.exact_surface_picking && ctx.settings.show_camera_frustums && !ctx.training_active && !request.gut && !request.depth_view &&
             ctx.settings.split_view_mode == SplitViewMode::Disabled &&
             !render_panel && (!source_viewport || source_viewport == &ctx.viewport) &&
             std::none_of(ctx.scene_state.meshes.begin(), ctx.scene_state.meshes.end(),
