@@ -827,10 +827,10 @@ namespace {
             expectImmediateSelection(button);
     }
 
-    TEST_F(MenuBarToolbarTest, WindowControlsKeepTheirHoverTransition) {
+    TEST_F(MenuBarToolbarTest, WindowControlsUseImmediateHoverFeedback) {
         for (const auto* id : {"menu-window-minimize", "menu-window-maximize", "menu-window-close"}) {
             const auto transition = el(id)->GetProperty("transition")->ToString();
-            EXPECT_NE(transition.find("background-color"), std::string::npos);
+            EXPECT_EQ(transition, "none");
             EXPECT_NE(transition.find("0.12s"), std::string::npos);
         }
     }
