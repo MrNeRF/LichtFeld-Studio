@@ -9,10 +9,12 @@
 #include "training/metrics/compare_images.hpp"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <torch/torch.h>
 
 namespace fs = std::filesystem;
@@ -380,6 +382,71 @@ TEST(CompareImages, DistortedReferencesCompareInEitherSpace) {
     write_model(pinhole, std::format("OPENCV {} {} {} {} {} {} -0.3 0 0 0", width, height, focal, focal,
                                      0.5f * width, 0.5f * height));
     EXPECT_FALSE(lfs::training::compare_image_sets(compare(reference, pinhole, output / "other"), std::nullopt));
+}
+
+// Catches renders made at one --max-width compared at full size because the undistorted grids of their references
+// differ: each render was then upscaled to its own grid and lost detail, instead of every reference being capped at
+// the renders' size like the training images were.
+TEST(CompareImages, PinholeRendersAtOneMaxWidthCapEveryReference) {
+    if (!torch::cuda::is_available())
+        GTEST_SKIP() << "CUDA not available";
+    install_image_loader();
+    const auto root = fresh_directory("lfs_compare_capped_renders");
+    const auto reference = root / "reference";
+    copy_images_to("images_8", reference / "images");
+    const auto [width, height, channels] = lfs::core::get_image_info(reference / "images" / (NAMES[0] + ".JPG"));
+    const float focal = 0.8f * static_cast<float>(width);
+    const std::array<std::vector<float>, 2> radial{{{-0.08f, 0.02f}, {-0.14f, 0.04f}}};
+    {
+        const auto sparse = reference / "sparse" / "0";
+        fs::create_directories(sparse);
+        std::ofstream cameras(sparse / "cameras.txt");
+        std::ofstream images(sparse / "images.txt");
+        for (size_t i = 0; i < NAMES.size(); ++i) {
+            cameras << i + 1 << ' '
+                    << std::format("OPENCV {} {} {} {} {} {} {} {} 0 0", width, height, focal, focal, 0.5f * width,
+                                   0.5f * height, radial[i][0], radial[i][1])
+                    << '\n';
+            images << i + 1 << " 1 0 0 0 0 0 " << i << ' ' << i + 1 << ' ' << NAMES[i] << ".JPG\n\n";
+        }
+        std::ofstream(sparse / "points3D.txt").put('\n');
+    }
+
+    const int cap = width / 2;
+    const auto renders = root / "renders";
+    fs::create_directories(renders);
+    const auto loader = lfs::training::make_eval_image_loader(lfs::core::param::TrainingParameters{});
+    std::set<int> grid_widths;
+    for (size_t i = 0; i < NAMES.size(); ++i) {
+        const auto full = lfs::core::compute_undistort_params(
+            focal, focal, 0.5f * width, 0.5f * height, width, height,
+            Tensor::from_vector(radial[i], {radial[i].size()}, lfs::core::Device::CPU), Tensor(),
+            CameraModelType::PINHOLE);
+        grid_widths.insert(full.dst_width);
+        const auto capped = lfs::core::prepare_undistort_params(full, width, height, -1, cap);
+        lfs::io::LoadParams load;
+        load.resize_factor = -1;
+        load.max_width = cap;
+        load.undistort = &capped;
+        load.decode_float = true;
+        load.decode_16bit = true;
+        load.skip_blob_cache = true;
+        save_png16(renders / (NAMES[i] + ".png"),
+                   loader->load_image_immediate(reference / "images" / (NAMES[i] + ".JPG"), load));
+    }
+    ASSERT_EQ(grid_widths.size(), 2u);
+
+    auto params = compare(reference, renders, root / "output");
+    params.evaluation.undistort = true;
+    params.evaluation.eval_space = EvalSpace::Undistorted;
+    const auto result = lfs::training::compare_image_sets(params, std::nullopt);
+    ASSERT_TRUE(result) << result.error().detail();
+    ASSERT_EQ(result->metrics.views.size(), 2u);
+    for (const auto& view : result->metrics.views) {
+        EXPECT_EQ(std::max(view.width, view.height), cap) << view.image_name;
+        ASSERT_TRUE(view.psnr) << view.image_name;
+        EXPECT_GT(*view.psnr, 50.0f) << view.image_name;
+    }
 }
 
 // Catches a mask folder or a box mask that does not restrict the scored pixels, masks that need cameras

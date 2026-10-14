@@ -411,8 +411,15 @@ namespace lfs::training {
             long_sides.emplace(expected, std::max(test_width, test_height));
         }
         const auto [expected_side, test_side] = *long_sides.begin();
+        // Renders made at one --max-width share their long side even when the undistorted grids of their references
+        // differ in size; that side caps every reference, like it capped the training images.
+        const bool capped_renders = std::ranges::all_of(long_sides, [test_side](const auto& sides) {
+            return sides.second == test_side && sides.second < sides.first;
+        });
         if (long_sides.size() == 1 && expected_side != test_side)
             evaluation.dataset.max_width = std::min(expected_side, test_side);
+        else if (capped_renders)
+            evaluation.dataset.max_width = test_side;
         else if (long_sides.size() > 1)
             LOG_WARN("compare: the test images differ in size from their references in more than one way; each is "
                      "resized to its reference");
