@@ -4577,7 +4577,9 @@ namespace lfs::vis {
         const bool extent_fixed_to_surface =
             support.capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max();
         const bool add_resize_headroom =
-            old_swapchain != VK_NULL_HANDLE && framebuffer_resize_allow_headroom_;
+            !transparent_surface_ && old_swapchain != VK_NULL_HANDLE && framebuffer_resize_allow_headroom_;
+        // Layered desktop panels require an exact surface extent. NVIDIA's
+        // scaled transparent swapchains can fail during interactive resizing.
         // Present scaling only has work to do when the swapchain is deliberately sized
         // away from the surface, which is the headroom path. Requesting it for an
         // exact-extent swapchain gains nothing and makes NVIDIA run a scaled-image setup
@@ -4656,7 +4658,9 @@ namespace lfs::vis {
             result = vkCreateSwapchainKHR(device_, &create_info, nullptr, &swapchain_);
         }
         if (result != VK_SUCCESS) {
-            return setVkFailure(std::format("vkCreateSwapchainKHR failed: {}", vkResultToString(result)), result);
+            return setVkFailure(std::format("vkCreateSwapchainKHR failed: {} (extent={}x{}, transparent={}, present_scaling={}, old_swapchain={:#x})",
+                                            vkResultToString(result), extent.width, extent.height,
+                                            transparent_surface_, use_present_scaling, vkHandleValue(old_swapchain)), result);
         }
         setDebugObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, swapchain_, "swapchain.main");
 

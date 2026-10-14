@@ -78,18 +78,21 @@ running GUI selected by `LFS_NATIVE_WINDOWS_TEST_ENDPOINT` and the matching
 `LFS_NATIVE_WINDOWS_TEST_PROFILE` (the application's `LFS_HOME`).
 
 One-panel cost was measured on Windows with an NVIDIA RTX 5060 Ti, Vulkan,
-Release build, an empty scene, and a fresh isolated preferences profile.
-Windows WDDM GPU Process Memory counters were sampled three times per state:
-opening Preferences embedded left dedicated memory at 222.45 MiB; detaching
-the 780Ã—440 panel raised it to 284.79 MiB (+62.34 MiB). Shared GPU memory
-increased by 26.56 MiB. The first embedded open took 79.8 ms, native host
-initialization took 137.1 ms, and the MCP drag-to-visible measurement took
-507.4 ms including the test's 100 ms press interval and RPC/frame scheduling.
-These are single-run observations of the initial lazy-host implementation,
-not latency guarantees. Hosts are now destroyed on close rather than cached;
-updated close/reopen memory measurements are documented in the pull request. No extra desktop host or GPU device is
-created merely by opening embedded Preferences, Plugin Marketplace, or Video
-Extractor.
+Release build, an empty scene, and a fresh isolated profile. For a 1170×633
+panel at the current monitor scale, medians of three WDDM GPU Process Memory
+samples were 270.41 MiB dedicated with Preferences embedded, 395.07 MiB
+detached, 279.21 MiB after close, and 397.76 MiB after reopen. Closing returned
+115.86 MiB dedicated and 66.22 MiB shared in this run. First embedded open took
+78.1 ms, native initialization 209.9 ms, and recreated-host initialization
+245.7 ms. MCP drag-to-visible took 629.2 ms, including the test's 100 ms press
+interval and RPC/frame scheduling. These are single-run observations, not
+latency or zero-retention guarantees. Although the SDL surface, renderer,
+RmlUi render manager and auxiliary graphics device are destroyed, process-wide
+WDDM totals retain some memory. An instrumented ten-cycle run kept live main
+UI allocations around 46 MiB while WDDM dedicated totals rose by about 35 MiB;
+that residual is not fully attributed. Other process/driver caches and reserved
+allocator blocks are included in those counters. No additional desktop host or
+GPU device is created merely by opening embedded panels.
 
 The panel can be opened from the Edit menu or with the default `Ctrl+,`
 shortcut. The shortcut is a regular keymap action and can be rebound in Input

@@ -958,6 +958,8 @@ namespace lfs::vis::gui {
         if (!ctx) {
             if (floating)
                 disableExternalWindows(name);
+            if (native)
+                Rml::ReleaseRenderManagers();
             LOG_ERROR("RmlUI: failed to create context '{}'", name);
             return nullptr;
         }
@@ -1065,6 +1067,11 @@ namespace lfs::vis::gui {
         if (auto fn = lfs::python::get_rml_context_destroy_handler())
             fn(context);
         Rml::RemoveContext(name);
+        // RmlUi keeps render managers after RemoveContext. Retire their font,
+        // texture and geometry caches while the owning renderer/device is alive.
+        if (native_windows_.contains(context)) {
+            Rml::ReleaseRenderManagers();
+        }
         context_windows_.erase(context);
         native_windows_.erase(context);
     }

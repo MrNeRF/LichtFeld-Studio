@@ -246,6 +246,8 @@ def test_native_close_preserves_application_and_reopens_the_same_panel(native_cl
     native_client.until(lambda: not native_client.user32.IsWindow(preferences["hwnd"]))
     reopened = native_client.open("lfs.preferences")
     assert reopened["title"] == preferences["title"]
+    assert reopened["rect"][2] - reopened["rect"][0] == preferences["rect"][2] - preferences["rect"][0]
+    assert reopened["rect"][3] - reopened["rect"][1] == preferences["rect"][3] - preferences["rect"][1]
 
 
 def test_reopening_an_inaccessible_window_recovers_its_rml_title(native_client):
@@ -309,6 +311,10 @@ def test_video_extractor_uses_a_separate_window(native_client):
 
 @pytest.mark.parametrize("panel_id", [None, "lfs.preferences", "native.video_extractor"])
 def test_native_window_capture_contains_rendered_controls(native_client, panel_id):
+    assert_rendered_capture(native_client, panel_id)
+
+
+def assert_rendered_capture(native_client, panel_id):
     if panel_id:
         native_client.open(panel_id)
     capture = native_client.call("render_capture_window", **({"panel_id": panel_id} if panel_id else {}))
@@ -356,3 +362,11 @@ def test_closing_external_panels_destroys_their_desktop_hosts(native_client, pan
     assert not native_client.call("ui_panel_describe", panel_id=panel_id)["panel"]["desktop_window"]
     reopened = native_client.open(panel_id)
     assert reopened["title"] == window["title"]
+
+
+def test_repeated_close_reopen_keeps_rendering_valid(native_client):
+    for cycle in range(5):
+        window = native_client.open("lfs.preferences")
+        assert_rendered_capture(native_client, "lfs.preferences")
+        native_client.call("ui_panel_update", panel_id="lfs.preferences", enabled=False)
+        native_client.until(lambda: not native_client.user32.IsWindow(window["hwnd"]))
