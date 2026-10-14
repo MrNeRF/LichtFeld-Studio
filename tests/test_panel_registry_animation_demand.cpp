@@ -739,6 +739,7 @@ TEST_F(PanelRegistryAnimationDemandTest, HiddenDragDoesNotBlockAnotherPanelResiz
         info.space = PanelSpace::Floating;
         info.initial_width = 400;
         info.initial_height = 200;
+        info.is_native = false;
         info.panel = panel;
         ASSERT_TRUE(registry.register_panel(std::move(info)));
     }
