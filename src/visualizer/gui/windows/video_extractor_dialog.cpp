@@ -30,9 +30,9 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
-#include <cstddef>
 #include <format>
 #include <limits>
 #include <set>
@@ -1910,7 +1910,7 @@ namespace lfs::gui {
 
         const std::string video_display = batch_items_.empty()
                                               ? (video_path_.empty() ? LOC(VideoExtractor::NO_FILE)
-                                                                    : lfs::core::path_to_utf8(video_path_.filename()))
+                                                                     : lfs::core::path_to_utf8(video_path_.filename()))
                                               : LOCF("video_extractor.batch_video_count", batch_items_.size());
         const std::string output_display = output_dir_.empty()
                                                ? LOC(VideoExtractor::NO_DIR)
@@ -2565,7 +2565,8 @@ namespace lfs::gui {
                 std::error_code ec;
                 if (!std::filesystem::remove(path, ec) && ec) {
                     setExtractionError(LOCF(VideoExtractor::OVERWRITE_DELETE_ERROR,
-                                             lfs::core::path_to_utf8(path), ec.message()), false);
+                                            lfs::core::path_to_utf8(path), ec.message()),
+                                       false);
                     return false;
                 }
             }
@@ -2599,9 +2600,9 @@ namespace lfs::gui {
                 continue;
             ++conflict_count;
             metadata_will_be_replaced |= item_params.generate_metadata &&
-                std::any_of(existing.begin(), existing.end(), [](const std::filesystem::path& path) {
-                    return lfs::core::path_to_utf8(path.filename()) == "extraction_metadata.json";
-                });
+                                         std::any_of(existing.begin(), existing.end(), [](const std::filesystem::path& path) {
+                                             return lfs::core::path_to_utf8(path.filename()) == "extraction_metadata.json";
+                                         });
         }
         batch_list_dirty_.store(true);
         if (conflict_count > 0) {

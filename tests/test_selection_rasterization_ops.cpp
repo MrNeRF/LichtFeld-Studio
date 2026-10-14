@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "rendering/selection_ops.hpp"
 
 #include <algorithm>
@@ -457,4 +458,65 @@ TEST_F(SelectionRasterizationOpsTest, CropFilterAppliesModelTransformsBeforeWorl
         &transform_indices);
 
     EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{true, false}));
+}
+
+TEST_F(SelectionRasterizationOpsTest, ProjectsSplatsPastTheCappedLaunch) {
+    // The projection launch on master was capped at 4096 blocks of 256 threads.
+    // Rectangle, polygon (lasso), and brush selection all read this buffer, so a
+    // splat past that prefix still needs a screen position. Dev projects and
+    // selects through the tensor backends.
+    constexpr size_t kPrefix = 4096u * 256u;
+    constexpr size_t n = kPrefix + 2u;
+    constexpr std::array<float, 9> kRotation{1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
+    constexpr std::array<float, 3> kTranslation{0.0f, 0.0f, 5.0f};
+
+    int ran = 0;
+    for (const auto backend : {lfs::core::GpuBackend::CUDA, lfs::core::GpuBackend::Vulkan}) {
+        if (!lfs::core::gpu_backend_available(backend))
+            continue;
+        ++ran;
+        SCOPED_TRACE(backend == lfs::core::GpuBackend::CUDA ? "cuda" : "vulkan");
+        const lfs::core::GpuBackendScope scope(backend);
+
+        auto means = Tensor::zeros({n, size_t{3}}, Device::GPU);
+        means.slice(0, n - 1, n)
+            .copy_from(Tensor::from_vector(
+                std::vector<float>{1.0f, 0.0f, 0.0f}, {size_t{1}, size_t{3}}, Device::GPU));
+
+        const auto positions = lfs::rendering::project_screen_positions_tensor(
+            means, 100, 80, kRotation, kTranslation, 100.0f, 100.0f, 50.0f, 40.0f,
+            lfs::core::PointProjectionModel::Pinhole, 1.0f, nullptr, nullptr, {});
+        ASSERT_TRUE(positions.is_valid());
+        ASSERT_EQ(positions.size(0), n);
+
+        const auto at = [&](const size_t index) {
+            const auto row = positions.slice(0, index, index + 1).cpu().contiguous();
+            return std::array<float, 2>{row.ptr<float>()[0], row.ptr<float>()[1]};
+        };
+        EXPECT_FLOAT_EQ(at(0)[0], 50.0f);
+        EXPECT_FLOAT_EQ(at(0)[1], 40.0f);
+        EXPECT_FLOAT_EQ(at(kPrefix)[0], 50.0f);
+        EXPECT_FLOAT_EQ(at(kPrefix)[1], 40.0f);
+        EXPECT_FLOAT_EQ(at(n - 1)[0], 70.0f);
+        EXPECT_FLOAT_EQ(at(n - 1)[1], 40.0f);
+
+        auto rect = Tensor::zeros({n}, Device::GPU, DataType::Bool);
+        auto polygon = Tensor::zeros({n}, Device::GPU, DataType::Bool);
+        auto brush = Tensor::zeros({n}, Device::GPU, DataType::Bool);
+        lfs::rendering::rect_select_tensor(positions, 40.0f, 30.0f, 80.0f, 50.0f, rect);
+        lfs::rendering::polygon_select_tensor(
+            positions,
+            Tensor::from_vector(std::vector<float>{40, 30, 80, 30, 80, 50, 40, 50}, {size_t{4}, size_t{2}}, Device::GPU),
+            polygon);
+        lfs::rendering::brush_select_tensor(positions, 70.0f, 40.0f, 2.0f, brush);
+
+        EXPECT_TRUE(rect.get_bool(std::array<size_t, 1>{0}));
+        EXPECT_TRUE(rect.get_bool(std::array<size_t, 1>{n - 1}));
+        EXPECT_TRUE(polygon.get_bool(std::array<size_t, 1>{0}));
+        EXPECT_TRUE(polygon.get_bool(std::array<size_t, 1>{n - 1}));
+        EXPECT_FALSE(brush.get_bool(std::array<size_t, 1>{0}));
+        EXPECT_TRUE(brush.get_bool(std::array<size_t, 1>{n - 1}));
+    }
+    if (ran == 0)
+        GTEST_SKIP() << "No GPU backend available";
 }

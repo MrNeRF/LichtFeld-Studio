@@ -48,7 +48,8 @@ endif()
 add_executable(lichtfeld_image_codec_tests
     ../test_heif_codecs.cpp
     ../test_exr_codecs.cpp
-    ../test_image_codec_dependencies.cpp)
+    ../test_image_codec_dependencies.cpp
+    ../test_tiff_orientation.cpp)
 target_compile_features(lichtfeld_image_codec_tests PRIVATE cxx_std_20)
 target_compile_definitions(lichtfeld_image_codec_tests PRIVATE LFS_HEIF_FIXTURES="${LFS_CODEC_ROOT}/tests/data/heif")
 target_include_directories(lichtfeld_image_codec_tests PRIVATE ${LFS_CODEC_ROOT}/src ${LFS_CODEC_ROOT}/src/core/include)

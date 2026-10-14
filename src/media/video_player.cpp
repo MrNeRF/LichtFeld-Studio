@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "media/video_player.hpp"
-#include "io/video/video_metadata.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "decoded_video_frame_ffmpeg.hpp"
 #include "io/video/probed_stream_rewind.hpp"
+#include "io/video/video_metadata.hpp"
 #include "media/frame_color_range.hpp"
 #include "media/hdr_renderer.hpp"
 #include "media/hdr_tonemap.hpp"
