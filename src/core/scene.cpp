@@ -3011,8 +3011,23 @@ namespace lfs::core {
             cached_visible_selection_mask_visibility_generation_ == visibility_generation)
             return cached_visible_selection_mask_;
 
+        // Visible indices are built on the CUDA selection device. A restored
+        // chapter mask can still be on the host. Tensor::to clones when the
+        // device already matches, so transfer only a mismatch.
+        Tensor selection_on_device;
+        const Tensor* selection_tensor = selection.get();
+        if (selection->device() != Device::CUDA) {
+            selection_on_device = selection->to(Device::CUDA);
+            selection_tensor = &selection_on_device;
+        }
+        Tensor indices_on_device;
+        const Tensor* index_tensor = visible_indices.get();
+        if (visible_indices->device() != selection_tensor->device()) {
+            indices_on_device = visible_indices->to(selection_tensor->device());
+            index_tensor = &indices_on_device;
+        }
         cached_visible_selection_mask_ = std::make_shared<lfs::core::Tensor>(
-            selection->index_select(0, *visible_indices).contiguous());
+            selection_tensor->index_select(0, *index_tensor).contiguous());
         cached_visible_selection_mask_source_ = selection.get();
         cached_visible_selection_mask_model_ = model;
         cached_visible_selection_mask_indices_ = visible_indices.get();

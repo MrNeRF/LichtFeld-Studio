@@ -583,6 +583,63 @@ namespace {
         ASSERT_EQ(previous.slices().size(), 1u);
         EXPECT_EQ(previous.slices()[0].node_uuid, kept);
     }
+
+    // A hidden splat makes the visible model smaller than the saved selection.
+    // Reopening that chapter used to install a CPU mask and then index_select
+    // it with CUDA visible indices.
+    TEST(SelectionChapterTest, RestoredHiddenNodeSelectionMaskStaysOnSelectionDevice) {
+        Scene source;
+        const auto kept_id = source.addSplat("kept", lfs::test::licht::make_splat(2));
+        const auto hidden_id = source.addSplat("cropped", lfs::test::licht::make_splat(3));
+        ASSERT_NE(kept_id, lfs::core::NULL_NODE);
+        ASSERT_NE(hidden_id, lfs::core::NULL_NODE);
+        const auto kept_uuid = source.getNodeUuid(kept_id);
+        const auto hidden_uuid = source.getNodeUuid(hidden_id);
+        source.setNodeVisibility(hidden_id, false);
+        source.applyPerNodeSelectionSlices(SelectionDomain::Splat, {
+                                                                       {kept_uuid, mask_tensor({1, 0})},
+                                                                       {hidden_uuid, mask_tensor({0, 1, 0})},
+                                                                   });
+
+        auto chapter = lfs::io::project::capture_selection_chapter(source, {});
+        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
+        auto encoded = lfs::io::project::encode_selection_chapter(*chapter);
+        ASSERT_TRUE(encoded) << lfs::format_for_developer(encoded.error());
+        auto decoded = lfs::io::project::decode_selection_chapter(*encoded);
+        ASSERT_TRUE(decoded) << lfs::format_for_developer(decoded.error());
+
+        Scene restored;
+        ASSERT_NE(restored.restoreNodeWithUuid(Scene::RestoreNodeDesc{
+                      .uuid = kept_uuid,
+                      .type = NodeType::SPLAT,
+                      .name = "kept",
+                      .gaussian_count = 2,
+                      .model = lfs::test::licht::make_splat(2),
+                  }),
+                  lfs::core::NULL_NODE);
+        ASSERT_NE(restored.restoreNodeWithUuid(Scene::RestoreNodeDesc{
+                      .uuid = hidden_uuid,
+                      .type = NodeType::SPLAT,
+                      .name = "cropped",
+                      .gaussian_count = 3,
+                      .visible = false,
+                      .model = lfs::test::licht::make_splat(3),
+                  }),
+                  lfs::core::NULL_NODE);
+        auto hydration = lfs::io::project::hydrate_selection_chapter(*decoded, restored);
+        ASSERT_TRUE(hydration) << lfs::format_for_developer(hydration.error());
+
+        const auto stored = restored.getSelectionMask();
+        ASSERT_NE(stored, nullptr);
+        EXPECT_EQ(stored->device(), Device::CUDA);
+        EXPECT_EQ(stored->cpu().to_vector_uint8(), (std::vector<std::uint8_t>{1, 0, 0, 1, 0}));
+
+        const auto visible = restored.getVisibleSelectionMask();
+        ASSERT_NE(visible, nullptr);
+        EXPECT_EQ(visible->device(), Device::CUDA);
+        EXPECT_EQ(visible->numel(), 2u);
+        EXPECT_EQ(visible->cpu().to_vector_uint8(), (std::vector<std::uint8_t>{1, 0}));
+    }
 #endif
 
     TEST(SelectionChapterTest,
