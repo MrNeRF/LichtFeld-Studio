@@ -294,6 +294,10 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert logging["selected"] is False
     logging["callback"]()
     assert state["panel_enabled"][-1] == ("lfs.logging", True)
+    history = next(item for item in view_items if item.get("label") == "tr:scene.history")
+    assert history["selected"] is False
+    history["callback"]()
+    assert state["panel_enabled"][-1] == ("lfs.history", True)
     appearance = view_items[-1]["items"]
     assert appearance[0]["type"] == "submenu"
     assert appearance[0]["label"] == "tr:menu.view.theme · LichtFeld · Dark"

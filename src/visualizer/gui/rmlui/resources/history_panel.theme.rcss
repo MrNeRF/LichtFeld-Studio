@@ -1,0 +1,5 @@
+.history-tabs, .history-footer { border-color: @{border}; }
+.history-tabs .btn.is-active { color: @{primary}; background-color: @{alpha(primary, 0.15)}; }
+.btn.history-row { background-color: @{surface}; border-color: @{alpha(border, 0.4)}; }
+.btn.history-row:hover { background-color: @{surface_bright}; }
+.btn.history-row:focus, .btn.history-row:focus-visible { background-color: @{alpha(primary, 0.18)}; color: @{text}; }

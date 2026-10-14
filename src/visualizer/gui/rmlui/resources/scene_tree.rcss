@@ -24,60 +24,6 @@ body {
     padding: 5dp 6dp 3dp;
 }
 
-.scene-header-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6dp;
-    min-width: 0;
-}
-
-.scene-tab-bar {
-    display: flex;
-    align-items: stretch;
-    gap: 4dp;
-    min-width: 0;
-    flex-grow: 1;
-    flex-shrink: 1;
-    flex-basis: 0;
-}
-
-.scene-tab {
-    display: inline-block;
-    min-width: 0;
-    padding: 5dp 6dp 6dp;
-    flex-grow: 1;
-    flex-shrink: 1;
-    flex-basis: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: #a6adc8;
-    background-color: rgba(49, 50, 68, 140);
-    border-width: 1dp;
-    border-color: #45475a;
-    border-bottom-width: 2dp;
-    border-bottom-color: transparent;
-    border-top-left-radius: 4dp;
-    border-top-right-radius: 4dp;
-    cursor: pointer;
-    transition: border-color background-color color 0.12s quadratic-out;
-}
-
-.scene-tab:hover,
-.scene-tab:focus-visible {
-    color: #f5f7ff;
-    border-color: rgba(137, 180, 250, 110);
-    background-color: rgba(137, 180, 250, 24);
-}
-
-.scene-tab.active {
-    color: #f5f7ff;
-    background-color: rgba(137, 180, 250, 28);
-    border-color: rgba(137, 180, 250, 132);
-    border-bottom-color: rgba(137, 180, 250, 255);
-}
-
 .scene-chip-row {
     display: flex;
     flex-wrap: wrap;
@@ -190,18 +136,6 @@ scene-graph,
     margin: 0;
     border-top-width: 0;
 }
-
-#history-container {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 8dp;
-    padding-top: 4dp;
-}
-
-
 
 .tree-row {
     display: block;

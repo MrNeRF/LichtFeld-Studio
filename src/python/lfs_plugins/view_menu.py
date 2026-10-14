@@ -158,6 +158,11 @@ class ViewMenu:
                 lambda: lf.ui.set_panel_enabled("lfs.logging", not lf.ui.is_panel_enabled("lfs.logging")),
                 lf.ui.is_panel_enabled("lfs.logging"),
             ),
+            menu_toggle(
+                tr("scene.history"),
+                lambda: lf.ui.set_panel_enabled("lfs.history", not lf.ui.is_panel_enabled("lfs.history")),
+                lf.ui.is_panel_enabled("lfs.history"),
+            ),
             menu_separator(),
             menu_submenu(tr("preferences.appearance"), [
                 menu_submenu(f"{tr('menu.view.theme')} · {active_theme_label}", theme_items),
