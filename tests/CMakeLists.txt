@@ -78,8 +78,14 @@ target_compile_features(lichtfeld_file_dialog_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_file_dialog_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/visualizer
+    ${CMAKE_SOURCE_DIR}/src/core/include
+    ${CMAKE_SOURCE_DIR}/src/geometry/include
 )
-target_link_libraries(lichtfeld_file_dialog_tests PRIVATE GTest::gtest_main)
+# scene_export_path.hpp includes the core event declarations and geometry headers.
+# Declare their header dependencies here, independently of the Linux GTK adapter.
+target_link_libraries(lichtfeld_file_dialog_tests PRIVATE
+    GTest::gtest_main glm::glm nlohmann_json::nlohmann_json
+)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET lfs_visualizer AND TARGET PkgConfig::LFS_GTK3)
     target_sources(lichtfeld_file_dialog_tests PRIVATE
         test_native_save_dialog.cpp
