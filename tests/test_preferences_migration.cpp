@@ -83,6 +83,27 @@ namespace {
     }
 } // namespace
 
+TEST(PreferencesMigration, StartupSidebarNeverOverridesAnAppliedProjectLayout) {
+    const auto home = makeHome("lfs_sidebar_startup_defaults");
+    const ScopedLfsHome scoped_home(home);
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    preferences.setSidebarDefaults(510, 0.35f, "lfs.rendering");
+    lfs::vis::gui::PanelLayoutManager manager;
+    manager.loadState();
+    EXPECT_FLOAT_EQ(manager.captureProjectState().right_panel_width, 510);
+    EXPECT_EQ(manager.captureProjectState().active_tab_id, "lfs.rendering");
+    auto project = manager.captureProjectState();
+    project.right_panel_width = 720;
+    project.active_tab_id = "lfs.training";
+    manager.applyProjectState(project);
+    EXPECT_FLOAT_EQ(manager.captureProjectState().right_panel_width, 720);
+    EXPECT_EQ(manager.captureProjectState().active_tab_id, "lfs.training");
+    EXPECT_EQ(json::parse(preferences.sidebarDefaults())["right_panel_width"], 510);
+    preferences.clearSidebarDefaults();
+    EXPECT_EQ(preferences.sidebarDefaults(), "{}");
+    EXPECT_FLOAT_EQ(manager.captureProjectState().right_panel_width, 720);
+}
+
 TEST(PreferencesMigration, AssetDirectoryWinsOverWorkingDirectoryAndErasesLegacyKeys) {
     const auto home = makeHome("lfs_preferences_migration_asset_wins");
     const ScopedLfsHome scoped_home(home);

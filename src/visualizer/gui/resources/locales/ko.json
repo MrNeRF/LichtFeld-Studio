@@ -1053,7 +1053,10 @@
     "viewport_defaults_hint": "새 프로젝트에 적용됩니다. 기존 프로젝트는 저장된 값을 유지합니다.",
     "viewport_style_defaults": "가이드 및 선택 스타일",
     "viewport_performance_defaults": "LOD 캐시 제한",
-    "viewport_defaults_invalid": "지원 범위 내의 올바른 값을 입력하세요."
+    "viewport_defaults_invalid": "지원 범위 내의 올바른 값을 입력하세요.",
+    "sidebar_defaults_description": "Save the current right sidebar width, scene split and active tab for application startup. Existing .licht projects restore their own workspace. New Project keeps the current workspace.",
+    "save_startup_sidebar": "Save sidebar for startup",
+    "clear_startup_sidebar": "Clear startup sidebar"
   },
   "main_panel": {
     "console": "콘솔",

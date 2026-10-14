@@ -1053,7 +1053,10 @@
     "viewport_defaults_hint": "Te wartości inicjują nowe projekty. Istniejące projekty zachowują zapisane wartości.",
     "viewport_style_defaults": "Styl prowadnic i zaznaczenia",
     "viewport_performance_defaults": "Limity pamięci podręcznej LOD",
-    "viewport_defaults_invalid": "Wprowadź prawidłową wartość z obsługiwanego zakresu."
+    "viewport_defaults_invalid": "Wprowadź prawidłową wartość z obsługiwanego zakresu.",
+    "sidebar_defaults_description": "Save the current right sidebar width, scene split and active tab for application startup. Existing .licht projects restore their own workspace. New Project keeps the current workspace.",
+    "save_startup_sidebar": "Save sidebar for startup",
+    "clear_startup_sidebar": "Clear startup sidebar"
   },
   "main_panel": {
     "console": "Konsola",

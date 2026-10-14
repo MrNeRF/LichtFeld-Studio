@@ -400,6 +400,10 @@ def get_panel_names(space: PanelSpace = PanelSpace.FLOATING) -> list[str]:
 def set_panel_enabled(panel_id: str, enabled: bool) -> None:
     """Enable or disable a panel by id"""
 
+def save_startup_sidebar() -> bool:
+    """Save the right sidebar as a startup default; .licht GUIL overrides it."""
+def clear_startup_sidebar() -> None:
+    """Clear startup sidebar defaults without changing the current workspace."""
 def reset_layout() -> str:
     """
     Reset the saved UI layout and apply the default dock arrangement immediately.

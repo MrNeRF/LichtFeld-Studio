@@ -257,6 +257,14 @@ Adding a splat or mesh onto an existing SplatFiles scene does not start a new
 session. Machine paths (`scene.load_dataset`, `lf.load_dataset`, CLI `-d`)
 do not take this reset.
 
+Preferences > Interface can explicitly save the current right sidebar width,
+scene split and active tab as startup defaults (`sidebar_defaults` in
+`preferences.json`). Clearing these defaults does not change the live workspace.
+They are applied once at application startup. Loading a `.licht` then restores
+its GUIL layout, and never writes back to the startup defaults. New Project keeps
+the current workspace, as before. The Project Manager retains its own independent
+preferences.
+
 `config/layout.json` is a legacy, import-only layout source. New project
 workspace state is not written there.
 

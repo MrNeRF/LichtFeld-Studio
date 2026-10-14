@@ -1049,7 +1049,10 @@
     "viewport_defaults_hint": "These defaults initialize new projects. Existing projects keep their saved values.",
     "viewport_style_defaults": "Overlay & Selection Style",
     "viewport_performance_defaults": "LOD Cache Limits",
-    "viewport_defaults_invalid": "Enter a valid value within the supported range."
+    "viewport_defaults_invalid": "Enter a valid value within the supported range.",
+    "sidebar_defaults_description": "Save the current right sidebar width, scene split and active tab for application startup. Existing .licht projects restore their own workspace. New Project keeps the current workspace.",
+    "save_startup_sidebar": "Save sidebar for startup",
+    "clear_startup_sidebar": "Clear startup sidebar"
   },
   "main_panel": {
     "console": "Console",
