@@ -33,6 +33,11 @@
 
 namespace {
 
+    // Tests that load the locale files reset them so later tests see untranslated keys.
+    struct LocaleReset {
+        ~LocaleReset() { lfs::event::LocalizationManager::getInstance().reset(); }
+    };
+
     lfs::Error makeError(const lfs::ErrorCode code, const lfs::ErrorDomain domain,
                          const std::string& message, const char* operation = "unit_test") {
         return lfs::make_legacy_error(message, lfs::LegacyErrorContext{
@@ -362,6 +367,7 @@ TEST(ErrorEventBridgeTest, CudaVersionUnsupportedMapsToToast) {
 }
 
 TEST(ErrorEventBridgeTest, FileDropListsAllFivePathsAndLogsThem) {
+    const LocaleReset locale_reset;
     ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
         (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
     const lfs::core::events::state::FileDropFailed event{
@@ -389,6 +395,7 @@ TEST(ErrorEventBridgeTest, FileDropListsAllFivePathsAndLogsThem) {
 }
 
 TEST(ErrorEventBridgeTest, FileDropLimitsDialogAndLogsAllPaths) {
+    const LocaleReset locale_reset;
     ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
         (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
     const lfs::core::events::state::FileDropFailed event{
