@@ -700,8 +700,8 @@ namespace lfs::vis {
             }
         }
         if (owns_scene_runtimes_)
-        lfs::rendering::set_graphics_queue_external_sync(
-            nullptr, VK_NULL_HANDLE, VK_NULL_HANDLE, nullptr);
+            lfs::rendering::set_graphics_queue_external_sync(
+                nullptr, VK_NULL_HANDLE, VK_NULL_HANDLE, nullptr);
 
         // #1488: surface leaked External* counts after idle, before device destroy.
         {
