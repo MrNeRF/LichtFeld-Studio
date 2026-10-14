@@ -138,6 +138,23 @@ TEST(PreferencesMigration, GuilRestoreOverridesStartupSidebarThroughTheCoordinat
     EXPECT_EQ(json::parse(preferences.sidebarDefaults())["right_panel_width"], 510);
 }
 
+TEST(PreferencesMigration, ClearingAfterAnotherInstanceRemovesTheParentDoesNotWriteNulls) {
+    const auto home = makeHome("lfs_sidebar_missing_parent");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    preferences.setSidebarDefaults(510, 0.35f, "lfs.rendering");
+    writePreferences(*paths, {{"schema_version", 1}});
+    preferences.clearSidebarDefaults();
+    EXPECT_EQ(readPreferences(*paths)["sidebar_defaults"], json::object());
+    preferences.setSidebarDefaults(610, 0.45f, "lfs.training");
+    EXPECT_EQ(readPreferences(*paths)["sidebar_defaults"]["right_panel_width"], 610);
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(paths->backupDir()))
+        EXPECT_NE(entry.path().filename(), paths->preferencesFile().filename());
+}
+
 TEST(PreferencesMigration, SidebarSaveClearSaveDoesNotBackupHealthyPreferences) {
     const auto home = makeHome("lfs_sidebar_clear_no_backup");
     const ScopedLfsHome scoped_home(home);
