@@ -35,7 +35,7 @@ namespace lfs::media {
         std::string codecOpenFailure(const AVCodec* codec, int width, int height, const char* error) {
             std::string reason = std::format("{} codec open failed for {}x{}: {}", codec->name, width, height, error);
             if (std::strcmp(codec->name, "h264_nvenc") == 0 && (width > 4096 || height > 4096)) {
-                reason += std::format(" (NVENC side limit is 4096 pixels; requested {}x{})", width, height);
+                reason += " (NVENC side limit is 4096 pixels)";
             } else if (std::strcmp(codec->name, "libopenh264") == 0 &&
                        static_cast<std::int64_t>(width) * height > 9'437'184) {
                 reason += std::format(" (OpenH264 pixel limit is 9437184; requested {}x{})", width, height);
@@ -104,7 +104,7 @@ namespace lfs::media {
                     LOG_INFO("Requested hardware video encoder unavailable");
                 if (opts.codec == VideoEncodeCodec::HEVC) {
                     const auto detail = hardware_open_error_.empty() ? "No requested native provider is available" : hardware_open_error_;
-                    return encodeError(ErrorCode::Unavailable, std::format("H.265/HEVC encoding unavailable: {}. Select an available NVENC or VideoToolbox provider; no additional software encoder is configured", detail));
+                    return encodeError(ErrorCode::Unavailable, std::format("H.265/HEVC encoding unavailable: {}. HEVC export requires the CUDA backend (NVENC) or macOS (VideoToolbox); no additional software encoder is configured", detail));
                 }
                 if (const auto result = initCpuEncoder(path, opts, avcodec_find_encoder(AV_CODEC_ID_H264)); !result) {
                     std::string detail(result.error().detail());
@@ -337,7 +337,7 @@ namespace lfs::media {
 
             use_nvenc_ = true;
             backend_ = VideoEncodeBackend::Cuda;
-            LOG_INFO("NVENC: {}x{} @ {} fps", width_, height_, framerate_);
+            LOG_INFO("NVENC ({}): {}x{} @ {} fps", codec->name, width_, height_, framerate_);
             return true;
         }
 
@@ -351,6 +351,7 @@ namespace lfs::media {
             }
             if (const auto result = initCpuEncoder(path, opts, codec); !result) {
                 hardware_open_error_ = std::string(result.error().detail());
+                LOG_INFO("VideoToolbox hardware encoder unavailable: {}; retrying with Apple software encoder", hardware_open_error_);
                 cleanup();
                 if (const auto software = initCpuEncoder(path, opts, codec, true); !software) {
                     hardware_open_error_ += std::format("; Apple software: {}", software.error().detail());

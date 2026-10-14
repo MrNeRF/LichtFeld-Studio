@@ -5,25 +5,15 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "media/decoded_video_frame.hpp"
+#include "media/video_encode_codec.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <optional>
 #include <string>
-#include <string_view>
 
 namespace lfs::media {
-    enum class VideoEncodeCodec { H264,
-                                  HEVC };
-    [[nodiscard]] inline constexpr std::optional<VideoEncodeCodec> videoEncodeCodecFromId(std::string_view id) {
-        if (id == "h264")
-            return VideoEncodeCodec::H264;
-        if (id == "hevc")
-            return VideoEncodeCodec::HEVC;
-        return std::nullopt;
-    }
     enum class VideoEncodeBackend { Software,
                                     Cuda,
                                     VideoToolbox,

@@ -12,7 +12,10 @@ The current contract is MP4 with the `hvc1` sample entry and 8-bit SDR frames, u
 
 This affects video export. HEVC input decoding and the P010 extraction pipeline have separate capabilities.
 
-
 The Sequencer GUI keeps its existing H.264 default; exposing codec choices there is deferred to the media GUI redesign.
+
+On macOS, the current quality setting maps to the same target bitrate for H.264
+and HEVC. Selecting HEVC therefore does not request a smaller file at that
+setting. Codec-specific quality controls belong to the planned media GUI work.
 
 Native Mac validation can enable `LFS_MEDIA_TEST_VIDEOTOOLBOX_8K=1` when running `MediaExtractionContracts`. It exercises hardware HEVC at small, 4K and 8K extents, spherical metadata and a test-only hardware-open failure followed by the real Apple software encoder and hardware recovery. No fault injection is compiled into the production media library.
