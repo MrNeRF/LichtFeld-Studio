@@ -2653,6 +2653,44 @@ contract["check_selection_submode_follows_native_mode"](lf)
         lfs::vis::UnifiedToolRegistry::instance().setActiveTool("");
     }
 
+    TEST_F(VisualizerImplResetTest, ApplyingCropBoxIsOneUndoStep) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+        auto& scene = viewer.getScene();
+        auto* const scene_manager = viewer.getSceneManager();
+        ASSERT_NE(scene_manager, nullptr);
+
+        const auto target_id = scene.addSplat("target", lfs::test::licht::make_splat(6));
+        ASSERT_NE(target_id, lfs::core::NULL_NODE);
+        const auto cropbox_id = scene.addCropBox("target_cropbox", target_id);
+        ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+        auto* const cropbox = scene.getMutableNode("target_cropbox");
+        ASSERT_NE(cropbox, nullptr);
+        ASSERT_NE(cropbox->cropbox, nullptr);
+        cropbox->cropbox->min = glm::vec3(-0.5f, -1.0f, -1.0f);
+        cropbox->cropbox->max = glm::vec3(1.5f, 1.0f, 1.0f);
+        cropbox->cropbox->inverse = true;
+        const auto live_splats = [&] { return scene.getNodeById(target_id)->model->visible_count(); };
+        const auto splats_before = live_splats();
+
+        scene_manager->selectNode("target");
+        auto& gizmo = viewer.getGuiManager()->gizmo();
+        gizmo.setCropToolShape("box");
+        ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
+        lfs::vis::UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+        op::undoHistory().clear();
+        gizmo.applyActiveCropTool();
+        ASSERT_EQ(scene.getNode("target_cropbox"), nullptr);
+        ASSERT_LT(live_splats(), splats_before);
+
+        // One Ctrl+Z restores both the cropped splats and the crop box.
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(live_splats(), splats_before);
+        EXPECT_NE(scene.getNode("target_cropbox"), nullptr);
+        lfs::vis::UnifiedToolRegistry::instance().setActiveTool("");
+    }
+
     // Catches tool switches that leave crop mode only while the crop tool is active: undo
     // reselects a crop volume without crop mode, and the transform tool then kept the volume
     // selected and visible instead of switching to its splat.
