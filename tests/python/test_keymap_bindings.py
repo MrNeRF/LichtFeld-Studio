@@ -303,6 +303,8 @@ def _install_lf_stub(monkeypatch):
         get_theme_family=lambda: "lichtfeld",
         get_theme_mode=lambda: "dark",
         get_ui_scale_preference=lambda: 0.0,
+        get_native_floating_windows=lambda: getattr(state, "native_floating_windows", False),
+        set_native_floating_windows=lambda enabled: setattr(state, "native_floating_windows", enabled),
         get_zoom_speed_preference=lambda: 0.0,
         set_zoom_speed_preference=lambda _speed: None,
         get_navigation_speed_preference=lambda: 0.0,
