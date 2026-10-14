@@ -29,8 +29,8 @@
 #include "python/python_runtime.hpp"
 
 #include "gui/rmlui/rmlui_vk_backend.hpp"
-#include "window/vulkan_context.hpp"
 #include "visualizer/preferences.hpp"
+#include "window/vulkan_context.hpp"
 #include "window/window_state_utils.hpp"
 #include <SDL3/SDL.h>
 #include <nlohmann/json.hpp>
@@ -76,7 +76,7 @@ namespace lfs::vis::gui {
             context.host_image_copy = vulkan_context.hasHostImageCopy();
             return context;
         }
-    }
+    } // namespace
 
     // Each native panel keeps its original document/model and its own UI-only
     // graphics device. It never adopts or disconnects the scene tensor backend.
@@ -198,11 +198,7 @@ namespace lfs::vis::gui {
         const auto rect = nativeDefaultRect(window_, std::max(width, 640), std::max(height, 480));
         SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
                                 SDL_WINDOW_HIDDEN | SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT;
-#ifdef LFS_GRAPHICS_METAL
-        flags |= SDL_WINDOW_METAL;
-#else
         flags |= SDL_WINDOW_VULKAN;
-#endif
         result->window = SDL_CreateWindow("LichtFeld Studio", rect.width, rect.height, flags);
         if (!result->window)
             return {};
@@ -244,11 +240,7 @@ namespace lfs::vis::gui {
         if (!result->graphics->init(result->window, pw, ph)) {
             return {};
         }
-#ifdef LFS_GRAPHICS_METAL
-        result->renderer = std::make_unique<TensorRmlUiRenderer>();
-#else
         result->renderer = std::make_unique<RenderInterface_VK>();
-#endif
         if (!result->renderer->InitializeExternal(nativeRenderContext(*result->graphics)))
             return {};
         LOG_INFO("External RmlUi host '{}' initialized in {:.2f} ms", name,
@@ -464,11 +456,12 @@ namespace lfs::vis::gui {
             }
             render_window_ = nullptr;
             vulkan_render_interface_ = main_renderer;
-            if (auto callback = std::move(native->capture_callback))
-                {
+            if (auto callback = std::move(native->capture_callback)) {
                 auto capture = native->graphics->captureAndEndActiveFrameRgba();
-                if (capture) callback(std::move(*capture));
-                else callback(lfs::make_error({.code = lfs::ErrorCode::Unavailable, .domain = lfs::ErrorDomain::Rendering, .user_message = capture.error(), .detection = LFS_SOURCE_SITE_CURRENT()}));
+                if (capture)
+                    callback(std::move(*capture));
+                else
+                    callback(lfs::make_error({.code = lfs::ErrorCode::Unavailable, .domain = lfs::ErrorDomain::Rendering, .user_message = capture.error(), .detection = LFS_SOURCE_SITE_CURRENT()}));
             }
             // A synchronous capture submits and consumes the active frame.
             if (native->graphics->hasActiveFrame()) {

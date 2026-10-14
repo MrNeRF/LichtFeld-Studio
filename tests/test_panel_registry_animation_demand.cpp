@@ -235,7 +235,7 @@ TEST_F(PanelRegistryAnimationDemandTest, NativeWindowAnimationSurvivesHiddenMain
     EXPECT_TRUE(demand.floating);
 }
 
-TEST_F(PanelRegistryAnimationDemandTest, ScheduledDelaySkipsHiddenLeftArea) {
+TEST_F(PanelRegistryAnimationDemandTest, ScheduledDelaySkipsHiddenLeftDock) {
     using namespace lfs::vis::gui;
 
     registerPanel("test.left.scheduled", PanelSpace::LeftDock, false, {}, 0.25);

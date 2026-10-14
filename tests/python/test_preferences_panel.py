@@ -1356,3 +1356,21 @@ def test_window_mode_change_refreshes_preferences_state(preferences_panel_module
     panel._handle = SimpleNamespace(dirty=dirty.append)
     panel._dirty_selection()
     assert 'native_floating_windows' in dirty
+
+
+def test_save_on_close_change_invalidates_preferences_state(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    before = panel._state()
+    module.lf.project_set_auto_save_on_close(True)
+    assert state.auto_save_on_close is True
+    assert panel._state() != before
+
+
+def test_default_app_settings_preserve_registration_step(preferences_panel_module):
+    module, _state = preferences_panel_module
+    calls = []
+    module.lf.ui.register_file_associations = lambda: calls.append("register")
+    module.lf.ui.open_file_association_settings = lambda: calls.append("open")
+    module.PreferencesPanel._open_default_app_settings()
+    assert calls == ["register", "open"]
