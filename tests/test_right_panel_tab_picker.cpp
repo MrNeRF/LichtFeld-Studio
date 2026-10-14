@@ -44,7 +44,7 @@ namespace {
     class RightPanelTabPickerTest : public ::testing::Test {
     protected:
         PickerRenderer renderer;
-        Rml::ElementInstancerGeneric<FormControlLayoutElement<Rml::ElementFormControlSelect>> select;
+        Rml::ElementInstancerGeneric<FormControlLayout<Rml::ElementFormControlSelect>> select;
         Rml::Context* context = nullptr;
         RmlRightPanel panel;
         Rml::ElementFormControlSelect* picker = nullptr;
