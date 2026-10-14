@@ -820,6 +820,10 @@ namespace lfs::vis::gui {
             x = (snap_corner_ == 1 || snap_corner_ == 3) ? 0 : std::max(0.f, bounds.x - extent.x);
             y = snap_corner_ <= 2 ? 0 : std::max(0.f, bounds.y - extent.y);
         }
+        if (dragging_resize_) {
+            x = drag_start_pos_x_;
+            y = drag_start_pos_y_;
+        }
         if (x >= 0 && y >= 0) {
             root_->SetProperty("right", "auto");
             root_->SetProperty("left", std::format("{:.1f}px", x));
@@ -2692,14 +2696,18 @@ namespace lfs::vis::gui {
         if (type == Rml::EventId::Dragstart) {
             const auto position = root_->GetAbsoluteOffset(Rml::BoxArea::Border) -
                                   viewportOrigin(root_, viewport_origin_, has_viewport_geometry_);
-            const auto bounds = viewportSize(root_, document_, viewport_size_, has_viewport_geometry_);
             const auto box = root_->GetBox().GetSize(Rml::BoxArea::Border);
-            pos_x_ = vram_hud_geometry::clampPosition(position.x, box.x, bounds.x);
-            pos_y_ = vram_hud_geometry::clampPosition(position.y, box.y, bounds.y);
-            snap_corner_ = 0;
-            applyDisplayedGeometry();
+            // Keep the corner as persistent intent, but pin the displayed
+            // origin for this drag so layout cannot repeatedly re-anchor it.
+            drag_start_pos_x_ = position.x;
+            drag_start_pos_y_ = position.y;
+            if (snap_corner_ == 0) {
+                pos_x_ = position.x;
+                pos_y_ = position.y;
+            }
             dragging_resize_ = true;
             pointer_captured_ = true;
+            applyDisplayedGeometry();
             drag_start_size_w_ = box.x;
             drag_start_size_h_ = box.y;
             drag_start_mouse_x_ = mx;
@@ -2711,15 +2719,18 @@ namespace lfs::vis::gui {
             const auto bounds = viewportSize(
                 root_, document_, viewport_size_, has_viewport_geometry_);
             size_w_ = vram_hud_geometry::clampExtent(
-                drag_start_size_w_ + dx, kMinHudWidthPx, bounds.x, pos_x_);
+                drag_start_size_w_ + dx, kMinHudWidthPx, bounds.x, drag_start_pos_x_,
+                (snap_corner_ == 2 || snap_corner_ == 4) ? 0.0f : vram_hud_geometry::kViewportPadding);
             size_h_ = vram_hud_geometry::clampExtent(
-                drag_start_size_h_ + dy, kMinHudHeightPx, bounds.y, pos_y_);
+                drag_start_size_h_ + dy, kMinHudHeightPx, bounds.y, drag_start_pos_y_,
+                (snap_corner_ == 3 || snap_corner_ == 4) ? 0.0f : vram_hud_geometry::kViewportPadding);
             root_->SetProperty("width", std::format("{:.1f}px", size_w_));
             root_->SetProperty("height", std::format("{:.1f}px", size_h_));
             event.StopPropagation();
         } else if (type == Rml::EventId::Dragend && dragging_resize_) {
             dragging_resize_ = false;
             pointer_captured_ = dragging_header_;
+            applyDisplayedGeometry();
             schedulePersistSave();
             persistNow();
             event.StopPropagation();

@@ -252,6 +252,8 @@ namespace lfs::vis::gui {
     };
 
     TEST_F(VramHudHeaderClickTest, ResizingAfterBottomCornerSnapDoesNotShrinkEveryFrame) {
+        setExpanded(true);
+        dragBy(centerOf("vram-hud-resize"), {180, 160});
         for (const bool right : {false, true}) {
             setExpanded(false);
             press(centerOf("perf-hud-strip-header"));
@@ -259,6 +261,7 @@ namespace lfs::vis::gui {
             release();
             setExpanded(true);
             auto* root = document_->GetElementById("vram-hud-overlay");
+            const auto origin = root->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto before = root->GetBox().GetSize(Rml::BoxArea::Border);
             const auto from = centerOf("vram-hud-resize");
             press(from);
@@ -267,13 +270,32 @@ namespace lfs::vis::gui {
                 (void)overlay_->initializeGeometryAfterLayout();
                 context_->Update();
                 const auto size = root->GetBox().GetSize(Rml::BoxArea::Border);
+                EXPECT_EQ(root->GetAbsoluteOffset(Rml::BoxArea::Border), origin);
                 EXPECT_GE(size.x, before.x - 0.1f);
                 EXPECT_GE(size.y, before.y - 0.1f);
             }
             release();
             LayoutState saved;
             saved.load();
-            EXPECT_EQ(saved.vram_hud_snap_corner, 0);
+            EXPECT_EQ(saved.vram_hud_snap_corner, right ? 4 : 3);
+            const auto before_inward = root->GetBox().GetSize(Rml::BoxArea::Border);
+            const auto handle = centerOf("vram-hud-resize");
+            dragBy(handle, {-40, -40});
+            const auto resized = root->GetBox().GetSize(Rml::BoxArea::Border);
+            EXPECT_LT(resized.x, before_inward.x);
+            EXPECT_LT(resized.y, before_inward.y);
+            const auto anchored = root->GetAbsoluteOffset(Rml::BoxArea::Border);
+            EXPECT_NEAR(anchored.y + resized.y, 600, 0.1f);
+            EXPECT_NEAR(right ? anchored.x + resized.x : anchored.x, right ? 800 : 0, 0.1f);
+            setExpanded(false);
+            const auto compact = root->GetBox().GetSize(Rml::BoxArea::Border);
+            const auto compact_origin = root->GetAbsoluteOffset(Rml::BoxArea::Border);
+            EXPECT_NEAR(compact_origin.y + compact.y, 600, 0.1f);
+            EXPECT_NEAR(right ? compact_origin.x + compact.x : compact_origin.x, right ? 800 : 0, 0.1f);
+            setExpanded(true);
+            EXPECT_EQ(root->GetBox().GetSize(Rml::BoxArea::Border), resized);
+            saved.load();
+            EXPECT_EQ(saved.vram_hud_snap_corner, right ? 4 : 3);
         }
     }
 

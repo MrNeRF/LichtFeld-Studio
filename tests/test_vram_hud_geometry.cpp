@@ -31,6 +31,13 @@ namespace lfs::vis::gui::vram_hud_geometry {
         EXPECT_FLOAT_EQ(clampExtent(30.0f, 360.0f, visible_viewport_width, 0.0f), 360.0f);
     }
 
+    TEST(VramHudGeometry, SnappedResizeDoesNotReservePaddingBeyondItsAnchoredEdge) {
+        EXPECT_FLOAT_EQ(clampExtent(620, 360, 800, 180, 0), 620);
+        EXPECT_FLOAT_EQ(clampExtent(620, 360, 800, 180), 604);
+        EXPECT_FLOAT_EQ(clampExtent(400, 200, 600, 200, 0), 400);
+        EXPECT_FLOAT_EQ(clampExtent(340, 200, 600, 200, 0), 340);
+    }
+
     TEST(VramHudGeometry, CompactHudCapturesOnlyItsVisibleRectangle) {
         EXPECT_FALSE(pointerTargetEnabled(true, true, false));
         EXPECT_TRUE(pointerTargetEnabled(true, true, true));
