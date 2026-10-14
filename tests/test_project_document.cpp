@@ -2116,6 +2116,49 @@ namespace {
         }
     }
 
+    TEST(ProjectDocumentTest, EmptySelectionChapterRestoresDefaultGroupWithoutDirty) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "empty-selection.licht";
+        auto created = make_empty_document(fixed_uuid(156001), 100);
+        const auto saved = created->save(path, save_options(156001, 200));
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        EXPECT_FALSE(reopened->dirty());
+        auto reader = require_result(ProjectReader::open(path));
+        const auto* row = reader.find(FOURCC_SELM, reopened->project_uuid());
+        ASSERT_NE(row, nullptr);
+        auto decoded = require_result(decode_selection_chapter(
+            require_result(reader.read_chunk(*row))));
+        EXPECT_TRUE(decoded.groups().empty());
+        EXPECT_EQ(decoded.active_group_id(), 0);
+
+        Scene live;
+        auto shell = reopened->stage_shell(live);
+        ASSERT_TRUE(shell) << lfs::format_for_developer(shell.error());
+        live.commitRestoreStage(std::move(*shell));
+        const Scene fresh;
+        ASSERT_EQ(live.getSelectionGroups().size(), fresh.getSelectionGroups().size());
+        ASSERT_FALSE(live.getSelectionGroups().empty());
+        EXPECT_EQ(live.getActiveSelectionGroup(), fresh.getActiveSelectionGroup());
+        EXPECT_EQ(live.getSelectionGroups().front().id, fresh.getSelectionGroups().front().id);
+        EXPECT_EQ(live.getSelectionGroups().front().name, fresh.getSelectionGroups().front().name);
+        EXPECT_FLOAT_EQ(live.getSelectionGroups().front().color.x, fresh.getSelectionGroups().front().color.x);
+        EXPECT_FLOAT_EQ(live.getSelectionGroups().front().color.y, fresh.getSelectionGroups().front().color.y);
+        EXPECT_FLOAT_EQ(live.getSelectionGroups().front().color.z, fresh.getSelectionGroups().front().color.z);
+        EXPECT_FALSE(reopened->dirty());
+
+        auto captured = require_result(capture_selection_chapter(live, {}));
+        EXPECT_EQ(
+            require_result(encode_selection_chapter(captured)),
+            require_result(encode_selection_chapter(reopened->selection())));
+
+        auto again = reopened->save(path, save_options(156002, 300));
+        ASSERT_TRUE(again) << lfs::format_for_developer(again.error());
+        EXPECT_EQ(again->rewritten_chunks, 1u);
+        EXPECT_FALSE(reopened->dirty());
+    }
+
     TEST(ProjectDocumentTest,
          DeferredShellExposesUnloadedUnitsAndCommitsHydrationPerNodeUuid) {
         TemporaryDirectory temporary;

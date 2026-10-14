@@ -1147,6 +1147,42 @@ TEST_F(SelectionServiceInteractionsTest, ViewerSelectionShapesMatchProjectedCent
     }
 }
 
+TEST_F(SelectionServiceInteractionsTest, MissingSelectionGroupStillSelectsLikeANewScene) {
+    auto& scene = scene_manager_->getScene();
+    const lfs::core::Scene fresh;
+    scene.removeSelectionGroup(scene.getActiveSelectionGroup());
+    ASSERT_EQ(scene.getSelectionGroups().size(), fresh.getSelectionGroups().size());
+    ASSERT_FALSE(scene.getSelectionGroups().empty());
+    EXPECT_EQ(scene.getActiveSelectionGroup(), fresh.getActiveSelectionGroup());
+    EXPECT_EQ(scene.getSelectionGroups().front().id, fresh.getSelectionGroups().front().id);
+    EXPECT_EQ(scene.getSelectionGroups().front().name, fresh.getSelectionGroups().front().name);
+    EXPECT_FLOAT_EQ(scene.getSelectionGroups().front().color.x, fresh.getSelectionGroups().front().color.x);
+    EXPECT_FLOAT_EQ(scene.getSelectionGroups().front().color.y, fresh.getSelectionGroups().front().color.y);
+    EXPECT_FLOAT_EQ(scene.getSelectionGroups().front().color.z, fresh.getSelectionGroups().front().color.z);
+
+    service_->setTestingScreenPositions(make_screen_positions({10.0f, 10.0f, 80.0f, 80.0f}));
+    const auto rect = service_->selectRect(
+        0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace, -1);
+    ASSERT_TRUE(rect.success) << rect.error;
+    EXPECT_EQ(rect.affected_count, 1u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+
+    const auto mask = service_->applyMask(
+        std::vector<uint8_t>{1, 1}, lfs::vis::SelectionMode::Replace);
+    ASSERT_TRUE(mask.success) << mask.error;
+    EXPECT_EQ(mask.affected_count, 2u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 1}));
+
+    scene.installRestoreSelectionState({});
+    EXPECT_EQ(scene.getActiveSelectionGroup(), fresh.getActiveSelectionGroup());
+    EXPECT_EQ(scene.getSelectionGroups().front().name, fresh.getSelectionGroups().front().name);
+    const auto restored = service_->applyMask(
+        std::vector<uint8_t>{0, 1}, lfs::vis::SelectionMode::Replace);
+    ASSERT_TRUE(restored.success) << restored.error;
+    EXPECT_EQ(restored.affected_count, 1u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
+}
+
 TEST_F(SelectionServiceInteractionsTest, DatasetCameraSelectionKeepsImagePixelCoordinates) {
     using lfs::vis::SelectionMode;
     service_->setTestingViewport({.x = 324, .y = 30, .width = 100, .height = 100, .render_width = 200, .render_height = 200});

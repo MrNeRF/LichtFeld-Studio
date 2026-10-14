@@ -48,6 +48,7 @@
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <future>
@@ -56,6 +57,15 @@
 #include <set>
 #include <thread>
 #include <vector>
+#ifndef _WIN32
+#include <cstdlib>
+#endif
+
+#ifndef _WIN32
+namespace lfs_test_lsp {
+    std::filesystem::path write_mock_lsp_server();
+}
+#endif
 
 namespace lfs::vis {
     namespace {
@@ -511,6 +521,40 @@ namespace lfs::vis {
         gui::rml_input::processKeyboardEvent(*context_, {.kind = FrameInputEventKind::Text, .text = "x"});
         EXPECT_EQ(editor.getText(), "£x");
         view->setEditor(nullptr);
+    }
+
+    TEST_F(RmlPointerReplayTest, DotOffersCompletionAfterThePanelConsumesTheEdit) {
+#ifdef _WIN32
+        GTEST_SKIP() << "Mock language server fixture is POSIX-only.";
+#else
+        const auto script = lfs_test_lsp::write_mock_lsp_server();
+        setenv("LFS_PYTHON_LSP", script.c_str(), 1);
+        setenv("LFS_PYTHON_LSP_WORKSPACE", (script.parent_path() / "workspace").c_str(), 1);
+        static Rml::ElementInstancerGeneric<gui::PythonEditorElement> instancer;
+        Rml::Factory::RegisterElementInstancer("python-editor", &instancer);
+        editor::PythonEditor editor;
+        auto element = document_->CreateElement("python-editor");
+        auto* view = dynamic_cast<gui::PythonEditorElement*>(element.get());
+        ASSERT_NE(view, nullptr);
+        view->setEditor(&editor);
+        document_->AppendChild(std::move(element));
+        context_->Update();
+        ASSERT_TRUE(view->Focus());
+        for (const char* piece : {"l", "f", "."})
+            gui::rml_input::processKeyboardEvent(*context_, {.kind = FrameInputEventKind::Text, .text = piece});
+        EXPECT_EQ(editor.getText(), "lf.");
+        // The docked console consumes the edit before the deferred Rml render.
+        EXPECT_TRUE(editor.consumeTextChanged());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!editor.hasActiveCompletion() && std::chrono::steady_clock::now() < deadline) {
+            editor.renderRml(*view, 200.0f, 80.0f, 14.0f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        EXPECT_TRUE(editor.hasActiveCompletion());
+        view->setEditor(nullptr);
+        unsetenv("LFS_PYTHON_LSP");
+        unsetenv("LFS_PYTHON_LSP_WORKSPACE");
+#endif
     }
 } // namespace lfs::vis
 

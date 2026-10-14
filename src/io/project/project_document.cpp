@@ -2247,6 +2247,15 @@ namespace lfs::io::project {
                     return std::move(chapter).error();
                 }
                 impl->selection = std::move(*chapter);
+                // In memory only. The stored chapter stays unchanged until a later selection edit.
+                if (impl->selection.groups().empty()) {
+                    auto group = lfs::core::defaultSelectionGroup();
+                    const auto id = group.id;
+                    (void)impl->selection.set_groups(
+                        {std::move(group)},
+                        id,
+                        static_cast<std::uint8_t>(id + 1));
+                }
                 have_selection = true;
             } else if (row.key.fourcc == FOURCC_PRMS) {
                 if (have_parameters) {

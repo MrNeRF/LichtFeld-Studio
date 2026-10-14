@@ -2865,8 +2865,8 @@ contract["check_selection_submode_follows_native_mode"](lf)
         ASSERT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Right), 1);
         require_status(viewer.project_lifecycle_->newProject(ProjectSwitchDisposition::DiscardChanges));
         EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::DataZ);
-        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
-        // NewProject closes independent split mode, keeping the primary plane.
+        EXPECT_EQ(rendering.getGridPlaneForPanel(SplitViewPanelId::Left), RenderSettings{}.grid_plane);
+        // New Project resets the per-project grid plane after split view closes.
         // An older project retains historical Y even with a global Z default.
         applyGuiSession(viewer, require_result(prepareGuiSessionRestore(captured)), bookmarks);
         EXPECT_EQ(input.navigationUpAxis(), NavigationUpAxis::LegacyY);
@@ -2933,6 +2933,39 @@ contract["check_selection_submode_follows_native_mode"](lf)
             // An unknown up axis the user did not edit is written back unchanged.
             EXPECT_EQ(saved->view().dom().get_json("navigation.up_axis"), unknown);
             EXPECT_EQ(saved->view().dom().get_json("navigation.future_option"), nlohmann::json("preserved"));
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest, NewProjectResetsPerProjectRenderSettings) {
+        auto& preferences = UserPreferences::instance();
+        struct Restore {
+            std::string json;
+            ~Restore() { (void)UserPreferences::instance().setRenderingDefaults(json); }
+        } restore{preferences.renderingDefaults()};
+        ASSERT_TRUE(preferences.setRenderingDefaults(R"({"show_grid":false,"axes_size":4.5})"));
+        VisualizerImpl viewer(projectOptions());
+        auto* const rendering = viewer.getRenderingManager();
+        ASSERT_NE(rendering, nullptr);
+        auto settings = rendering->getSettings();
+        settings.show_grid = true;
+        settings.axes_size = 2.0f;
+        settings.scene_upscaler = "spatial";
+        settings.scene_upscaler_preset = "performance";
+        for (const float focal : {48.0f, 62.0f}) {
+            settings.focal_length_mm = focal;
+            settings.render_scale = 0.5f;
+            settings.background_color = {0.2f, 0.4f, 0.6f};
+            rendering->updateSettings(settings);
+            core::events::cmd::NewProject{.discard_changes = true}.emit();
+            const auto created = rendering->getSettings();
+            EXPECT_FLOAT_EQ(created.focal_length_mm, lfs::rendering::DEFAULT_FOCAL_LENGTH_MM);
+            EXPECT_FLOAT_EQ(created.render_scale, 1.0f);
+            EXPECT_EQ(created.background_color, (glm::vec3{0.0f, 0.0f, 0.0f}));
+            EXPECT_FALSE(created.show_grid);
+            EXPECT_FLOAT_EQ(created.axes_size, 4.5f);
+            EXPECT_EQ(created.scene_upscaler, "spatial");
+            EXPECT_EQ(created.scene_upscaler_preset, "performance");
+            settings = created;
         }
     }
 
