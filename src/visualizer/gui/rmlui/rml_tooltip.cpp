@@ -65,6 +65,17 @@ namespace lfs::vis::gui {
         return false;
     }
 
+    Rml::Element* propertyTooltipTarget(Rml::Element* item) {
+        if (!item || !item->IsClassSet("setting-row"))
+            return item;
+        for (int i = 0; i < item->GetNumChildren(); ++i) {
+            auto* child = item->GetChild(i);
+            if (child->IsClassSet("prop-label"))
+                return child;
+        }
+        return nullptr;
+    }
+
     std::string resolveRmlTooltip(Rml::Element* hover) {
         if (rmlHoverInsideOpenDropdown(hover))
             return {};

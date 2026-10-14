@@ -1134,6 +1134,16 @@ namespace {
         EXPECT_TRUE(resolveRmlTooltip(row).empty());
         control->SetAttribute("title", "Control help");
         EXPECT_EQ(resolveRmlTooltip(control), "Control help");
+        label->SetClass("setting-row__label-col", false);
+        label->SetClass("prop-label", true);
+        EXPECT_EQ(lfs::vis::gui::propertyTooltipTarget(row), label);
+        EXPECT_EQ(lfs::vis::gui::propertyTooltipTarget(control), control);
+        EXPECT_EQ(resolveRmlTooltip(label->GetChild(0)), "Setting help");
+        EXPECT_TRUE(resolveRmlTooltip(row).empty());
+        control->RemoveAttribute("title");
+        EXPECT_TRUE(resolveRmlTooltip(control).empty());
+        label->SetClass("prop-label", false);
+        EXPECT_EQ(lfs::vis::gui::propertyTooltipTarget(row), nullptr);
     }
 
     TEST_F(MenuBarTitleTest, ShortcutTooltipTracksBindingAndUnbinding) {

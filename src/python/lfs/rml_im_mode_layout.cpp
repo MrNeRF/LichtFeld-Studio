@@ -3015,8 +3015,13 @@ namespace lfs::python {
             text_disabled(display_name + ": " + info_str);
         }
 
-        if (!description.empty() && is_item_hovered())
-            set_tooltip(description);
+        if (!description.empty() && last_element_) {
+            auto* const item = last_element_;
+            last_element_ = lfs::vis::gui::propertyTooltipTarget(item);
+            if (is_item_hovered())
+                set_tooltip(description);
+            last_element_ = item;
+        }
 
         if (changed) {
             const bool has_set = nb::hasattr(data, "set") && PyCallable_Check(data.attr("set").ptr());
