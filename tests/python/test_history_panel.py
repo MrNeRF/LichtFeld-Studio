@@ -86,12 +86,12 @@ def test_paging_keeps_absolute_jump_counts_and_bounds_dom(history):
     rows = doc.elements["history-rows"]
     assert len(rows.nodes) == mod.PAGE_SIZE
     panel._action("older")
-    assert rows.nodes[0].attrs["data-steps"] == "101"
+    assert rows.nodes[0].attrs["data-steps"] == "26"
     # Clicking a child must route to the containing button.
     panel._on_row(event(Element(parent=rows.nodes[4])))
-    assert state.calls == [("undo", 105)]
-    panel._action("older")
-    panel._action("older")
+    assert state.calls == [("undo", 30)]
+    while "disabled" not in doc.elements["history-older"].attrs:
+        panel._action("older")
     assert len(rows.nodes) == 5
     assert "disabled" in doc.elements["history-older"].attrs
 
@@ -184,3 +184,19 @@ def test_floating_title_is_bound_and_buttons_have_layout_children(history):
     for button in template.iter("button"):
         if button.get("id") not in ("history-undo-tab", "history-redo-tab"):
             assert button.find("span") is not None
+
+
+def test_new_page_appears_at_26_and_past_100_entries(history):
+    _, panel, doc, state = history
+    for count, pages in ((25, 1), (26, 2), (100, 4), (101, 5)):
+        state.undo = [f"edit {i}" for i in range(count)]
+        state.generation += 1
+        panel.on_update(doc)
+        assert len(doc.elements["history-rows"].nodes) == 25
+        assert doc.elements["history-page"].markup == f"1 / {pages}"
+        assert ("disabled" in doc.elements["history-older"].attrs) == (pages == 1)
+    for _ in range(4): panel._action("older")
+    assert len(doc.elements["history-rows"].nodes) == 1
+    assert doc.elements["history-rows"].nodes[0].attrs["data-steps"] == "101"
+    panel._action("newer")
+    assert doc.elements["history-page"].markup == "4 / 5"

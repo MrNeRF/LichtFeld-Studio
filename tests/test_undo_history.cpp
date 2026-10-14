@@ -817,6 +817,25 @@ TEST_F(UndoHistoryTest, PushInsideActiveTransactionKeepsRedoUntilCommit) {
     EXPECT_FALSE(history.canRedo());
 }
 
+TEST_F(UndoHistoryTest, MoreThanOneHundredEditsRemainAvailableForHistoryPages) {
+    auto& history = lfs::vis::op::undoHistory();
+    int value = 0;
+    for (size_t i = 0; i < 125; ++i) {
+        history.push(std::make_unique<CountingEntry>("paged.step", value, 1));
+        ++value;
+    }
+    ASSERT_EQ(history.undoCount(), 125u);
+    const auto result = history.undoMultiple(101);
+    EXPECT_TRUE(result.success);
+    EXPECT_EQ(result.steps_performed, 101u);
+    EXPECT_EQ(value, 24);
+    EXPECT_EQ(history.undoCount(), 24u);
+    EXPECT_EQ(history.redoCount(), 101u);
+    const auto redo_result = history.redoMultiple(101);
+    EXPECT_TRUE(redo_result.success);
+    EXPECT_EQ(value, 125);
+}
+
 TEST_F(UndoHistoryTest, RedoStackStaysWithinConfiguredBoundsAfterUndoingHistory) {
     auto& history = lfs::vis::op::undoHistory();
     int value = 0;

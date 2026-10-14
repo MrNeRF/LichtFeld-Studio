@@ -13,7 +13,7 @@ from .rml_keys import KI_UP, KI_DOWN, KI_HOME, KI_END, KI_RETURN, KI_SPACE
 __lfs_panel_classes__ = ["HistoryPanel"]
 __lfs_panel_ids__ = ["lfs.history"]
 
-PAGE_SIZE = 100
+PAGE_SIZE = 25
 LABEL_CHARS = 256
 
 

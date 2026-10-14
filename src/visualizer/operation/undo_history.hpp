@@ -55,7 +55,7 @@ namespace lfs::vis::op {
 
     class LFS_VIS_API UndoHistory {
     public:
-        static constexpr size_t MAX_ENTRIES = 100;
+        static constexpr size_t MAX_ENTRIES = 1000;
         static constexpr size_t MAX_BYTES = 512ull * 1024ull * 1024ull;
         static constexpr size_t HOT_ENTRIES = 5;
         using ObserverId = uint64_t;
