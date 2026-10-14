@@ -846,8 +846,16 @@ namespace lfs::gui {
             output_dir_.clear();
             refreshBatchOutputDirectories();
         }
-        if (!errors.empty())
-            setExtractionError(errors.front(), false);
+        if (!errors.empty()) {
+            for (const auto& error : errors)
+                LOG_WARN("Video extractor: could not add batch video: {}", error);
+
+            const std::string message = errors.size() == 1
+                                            ? errors.front()
+                                            : std::format("{} videos could not be opened; see log for details.",
+                                                          errors.size());
+            setExtractionError(message, false);
+        }
         controls_dirty_ = true;
         batch_list_dirty_.store(true);
         markContentDirty();

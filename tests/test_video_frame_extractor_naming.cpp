@@ -1701,6 +1701,15 @@ namespace {
         EXPECT_GT(params[1].end_time, 0.0);
     }
 
+    TEST_F(VideoExtractorNamingUiTest, BatchAddReportsTheNumberOfUnreadableVideos) {
+        TempDir temp("batch_unreadable_videos");
+
+        NamingAccess::addBatch(*dialog, {temp.path / "missing_a.mp4", temp.path / "missing_b.mp4"});
+
+        EXPECT_EQ(NamingAccess::sourceState(*dialog)["error"].get<std::string>(),
+                  "2 videos could not be opened; see log for details.");
+    }
+
     TEST_F(VideoExtractorNamingUiTest, SelectingBatchItemPreservesSharedOutputSettings) {
         TempDir temp("batch_shared_settings");
         const auto first = temp.path / "first.mp4";
