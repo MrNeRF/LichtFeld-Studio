@@ -3,12 +3,12 @@
     <link type="text/template" href="floating_window.rml"/>
     <link type="text/rcss" href="history_panel.rcss"/>
 </head>
-<body template="floating-window">
+<body template="floating-window" data-model="history_panel">
     <div class="history-toolbar">
-        <button id="history-undo" type="button" class="btn btn--secondary" data-action="undo" data-tooltip="common.undo">@tr:common.undo</button>
-        <button id="history-redo" type="button" class="btn btn--secondary" data-action="redo" data-tooltip="common.redo">@tr:common.redo</button>
+        <button id="history-undo" type="button" class="btn btn--secondary" data-action="undo" data-tooltip="common.undo"><img class="history-icon" src="../icon/undo.png"/><span>@tr:common.undo</span></button>
+        <button id="history-redo" type="button" class="btn btn--secondary" data-action="redo" data-tooltip="common.redo"><img class="history-icon" src="../icon/redo.png"/><span>@tr:common.redo</span></button>
         <span class="history-spacer"></span>
-        <button id="history-clear" type="button" class="btn btn--ghost">@tr:debug_info.clear_history</button>
+        <button id="history-clear" type="button" class="btn btn--ghost"><img class="history-icon" src="../icon/scene/trash.png"/><span>@tr:debug_info.clear_history</span></button>
     </div>
     <div class="history-tabs">
         <button id="history-undo-tab" type="button" class="btn btn--ghost"></button>
@@ -21,8 +21,8 @@
     <div class="history-footer">
         <span id="history-page" class="text-muted"></span>
         <span class="history-spacer"></span>
-        <button id="history-newer" type="button" class="btn btn--ghost">@tr:logging.newer</button>
-        <button id="history-older" type="button" class="btn btn--ghost">@tr:logging.older</button>
+        <button id="history-newer" type="button" class="btn btn--ghost"><span>@tr:logging.newer</span></button>
+        <button id="history-older" type="button" class="btn btn--ghost"><span>@tr:logging.older</span></button>
     </div>
     <div id="history-feedback" class="status-error"></div>
 </body>

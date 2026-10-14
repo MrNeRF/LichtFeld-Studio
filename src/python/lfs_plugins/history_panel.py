@@ -8,7 +8,7 @@ import lichtfeld as lf
 
 from .panels import panel_class
 from .types import Panel
-from .rml_keys import KI_UP, KI_DOWN, KI_HOME, KI_END
+from .rml_keys import KI_UP, KI_DOWN, KI_HOME, KI_END, KI_RETURN, KI_SPACE
 
 __lfs_panel_classes__ = ["HistoryPanel"]
 __lfs_panel_ids__ = ["lfs.history"]
@@ -17,15 +17,17 @@ PAGE_SIZE = 100
 LABEL_CHARS = 256
 
 
-def row_markup(name, steps, generation):
+def row_markup(name, steps, generation, stack="undo"):
     # Bound text before RmlUi layout, including tooltips. Retained names stay intact.
     name = name or lf.ui.tr("runtime.untitled_change")
     name = name.replace("\n", " ").replace("\r", " ")
     name = name if len(name) <= LABEL_CHARS else name[:LABEL_CHARS] + "…"
-    return (f'<button type="button" class="btn btn--ghost history-row" '
+    classes = "btn btn--ghost history-row" + (" is-next" if steps == 1 else "")
+    return (f'<button type="button" class="{classes}" '
             f'data-steps="{steps}" data-generation="{generation}" data-tooltip="scene.history_note">'
             f'<span class="history-index text-muted">{steps}</span>'
-            f'<span class="history-label">{escape(name)}</span></button>')
+            f'<span class="history-label">{escape(name)}</span>'
+            f'<img class="history-icon" src="../icon/{stack}.png"/></button>')
 
 
 @panel_class("history")
@@ -33,6 +35,7 @@ class HistoryPanel(Panel):
     def __init__(self):
         super().__init__()
         self._doc = None
+        self._handle = None
         self._stamp = None
         self._rows_stamp = None
         self._generation = None
@@ -40,6 +43,12 @@ class HistoryPanel(Panel):
         self._stack = "undo"
         self._page = 0
         self._feedback = ""
+
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("history_panel")
+        if model is not None:
+            model.bind_func("panel_label", lambda: lf.ui.tr("scene.history"))
+            self._handle = model.get_handle()
 
     def on_mount(self, doc):
         super().on_mount(doc)
@@ -55,7 +64,10 @@ class HistoryPanel(Panel):
         self.on_update(doc)
 
     def on_unmount(self, doc):
+        if doc:
+            doc.remove_data_model("history_panel")
         self._doc = None
+        self._handle = None
         self._stamp = None
         self._rows_stamp = None
         self._generation = None
@@ -86,7 +98,7 @@ class HistoryPanel(Panel):
         for stack in ("undo", "redo"):
             tab = doc.get_element_by_id("history-" + stack + "-tab")
             tab_text = f"{tr('common.' + stack)} ({len(self._names[stack]):n})"
-            tab.set_inner_rml(escape(tab_text))
+            tab.set_inner_rml(f'<span>{escape(tab_text)}</span>')
             tab.set_class("is-active", stack == self._stack)
             self._disabled(stack, active or not self._names[stack])
         self._disabled("clear", active or not any(self._names.values()))
@@ -96,7 +108,7 @@ class HistoryPanel(Panel):
         rows_stamp = (generation, language, self._stack, self._page)
         if rows_stamp != self._rows_stamp:
             doc.get_element_by_id("history-rows").set_inner_rml("".join(
-                row_markup(name, first + i + 1, generation)
+                row_markup(name, first + i + 1, generation, self._stack)
                 for i, name in enumerate(names[first:first + PAGE_SIZE])))
             doc.get_element_by_id("history-scroll").scroll_top = 0
             self._rows_stamp = rows_stamp
@@ -162,6 +174,9 @@ class HistoryPanel(Panel):
 
     def _on_key(self, event):
         key = int(event.get_parameter("key_identifier", "0"))
+        if key in (KI_RETURN, KI_SPACE):
+            self._on_row(event)
+            return
         if key not in (KI_UP, KI_DOWN, KI_HOME, KI_END):
             return
         row = self._row_target(event)

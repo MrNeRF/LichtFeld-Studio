@@ -9,16 +9,22 @@
 .history-spacer { flex: 1; }
 .history-toolbar .btn, .history-tabs .btn, .history-footer .btn {
     display: inline-flex; align-items: center; justify-content: center;
-    min-height: 28dp; padding: 4dp 10dp; font-size: 12dp;
+    height: 30dp; min-height: 30dp; box-sizing: border-box;
+    padding: 0 10dp; gap: 7dp; font-size: 12dp;
 }
 #history-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
 #history-empty { padding: 32dp 12dp; text-align: center; }
 .btn.history-row {
     display: flex; align-items: center; width: 100%; box-sizing: border-box;
     min-height: 32dp; padding: 7dp 12dp; gap: 10dp;
-    border-width: 0 0 1dp; border-radius: 0; text-align: left; font-size: 13dp;
+    border-width: 0 0 1dp 3dp; border-radius: 0; text-align: left; font-size: 13dp;
 }
 .history-index { width: 40dp; flex-shrink: 0; text-align: right; font-size: 11dp; }
 .history-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history-footer { border-top-width: 1dp; font-size: 12dp; }
 #history-feedback { padding: 8dp 12dp; font-size: 12dp; }
+
+.history-icon { width: 14dp; height: 14dp; flex-shrink: 0; }
+.history-toolbar .btn { min-width: 86dp; }
+.history-tabs .btn { min-width: 100dp; }
+.history-footer .btn { min-width: 70dp; }

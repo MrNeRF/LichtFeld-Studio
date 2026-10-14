@@ -38,6 +38,7 @@ class Element:
 class Document:
     def __init__(self): self.elements = {}
     def get_element_by_id(self, name): return self.elements.setdefault(name, Element(name))
+    def remove_data_model(self, name): pass
 
 
 @pytest.fixture
@@ -161,3 +162,25 @@ def test_arrow_navigation_moves_focus_without_playback(history):
     assert rows[1].focused and not state.calls
     panel._on_key(event(rows[1], str(mod.KI_END)))
     assert rows[-1].focused
+
+
+def test_keyboard_activates_the_focused_row(history):
+    mod, panel, doc, state = history
+    panel._on_key(event(doc.elements["history-rows"].nodes[2], str(mod.KI_RETURN)))
+    assert state.calls == [("undo", 3)]
+
+
+def test_floating_title_is_bound_and_buttons_have_layout_children(history):
+    mod, panel, _, _ = history
+    bindings = {}
+    model = SimpleNamespace(bind_func=lambda key, getter: bindings.update({key: getter}),
+                            get_handle=lambda: object())
+    panel.on_bind_model(SimpleNamespace(create_data_model=lambda name: model))
+    assert bindings["panel_label"]() == "scene.history"
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    template = ET.parse(root / "src/visualizer/gui/rmlui/resources/history_panel.rml")
+    assert template.find("body").get("data-model") == "history_panel"
+    for button in template.iter("button"):
+        if button.get("id") not in ("history-undo-tab", "history-redo-tab"):
+            assert button.find("span") is not None
