@@ -4,6 +4,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_viewport_overlay.hpp"
+#include "gui/viewport_gizmo_geometry.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "visualizer/app_store.hpp"
 #include <RmlUi/Core.h>
@@ -132,11 +133,11 @@ namespace {
             const auto pos = panel()->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto size = panel()->GetBox().GetSize(Rml::BoxArea::Border);
             const float right = width_ * scale_ * divider_ - 10 * scale_;
-            const float left = right - 95 * scale_;
+            const float left = right - lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE * scale_;
             EXPECT_TRUE(pos.x + size.x <= left || pos.x >= right ||
-                        pos.y >= 105 * scale_ || pos.y + size.y <= 10 * scale_);
+                        pos.y >= (10 + lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE) * scale_ || pos.y + size.y <= 10 * scale_);
             // The top (+Y) circle must fall through to the viewport, not the depth field.
-            EXPECT_NE(context_->GetElementAtPoint({right - 47.5f * scale_, 25 * scale_}), panel());
+            EXPECT_NE(context_->GetElementAtPoint({right - lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE * 0.5f * scale_, 25 * scale_}), panel());
         }
         DepthLayoutRenderer renderer_;
         lfs::vis::gui::RmlViewportOverlay overlay_;
@@ -253,6 +254,25 @@ namespace {
             bar->SetId(id);
             layout(true);
             EXPECT_FLOAT_EQ(top(), 5);
+        }
+    }
+
+    TEST_F(ViewportDepthLayoutTest, ExportBarInsetClearsTheLargerGizmoAtTheBreakpoint) {
+        auto* bar = document_->GetElementById("depth-view-block");
+        bar->SetClass("viewport-export-overlay", true);
+        for (const float scale : {1.0f, 1.5f, 2.0f}) {
+            context_->SetDensityIndependentPixelRatio(scale);
+            for (const int width : {1099, 1100, 1101}) {
+                SCOPED_TRACE(std::format("width={} scale={}", width, scale));
+                context_->SetDimensions({width, 840});
+                context_->Update();
+                const auto position = bar->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto size = bar->GetBox().GetSize(Rml::BoxArea::Border);
+                const float inset = width - position.x - size.x;
+                EXPECT_NEAR(inset, (width <= 1100 ? 137 : 12) * scale, 0.1f);
+                if (width <= 1100)
+                    EXPECT_GE(inset - (10 + lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE) * scale, 6.9f * scale);
+            }
         }
     }
 
