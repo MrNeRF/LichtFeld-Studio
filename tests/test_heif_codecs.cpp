@@ -27,6 +27,20 @@ namespace {
         ASSERT_EQ(heif_get_decoder_descriptors(heif_compression_AV1, &decoder, 1), 1);
         EXPECT_STREQ(heif_decoder_descriptor_get_id_name(decoder), "dav1d");
     }
+    TEST(ProductionHeif, NativeYuvFixtureReallyUses420) {
+        auto* context = heif_context_alloc();
+        ASSERT_NE(context, nullptr);
+        std::unique_ptr<heif_context, decltype(&heif_context_free)> owner(context, heif_context_free);
+        ASSERT_EQ(heif_context_read_from_file(context, (fixtures / "system-yuv420.heic").string().c_str(), nullptr).code, heif_error_Ok);
+        heif_image_handle* raw = nullptr;
+        ASSERT_EQ(heif_context_get_primary_image_handle(context, &raw).code, heif_error_Ok);
+        std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> handle(raw, heif_image_handle_release);
+        heif_colorspace colorspace;
+        heif_chroma chroma;
+        ASSERT_EQ(heif_image_handle_get_preferred_decoding_colorspace(raw, &colorspace, &chroma).code, heif_error_Ok);
+        EXPECT_EQ(colorspace, heif_colorspace_YCbCr);
+        EXPECT_EQ(chroma, heif_chroma_420);
+    }
     TEST(ProductionHeif, SystemProviderPreservesQualifiedSamplesAndMemoryTargets) {
         const auto path = fixtures / "system-p3icc.heic";
         codec::Image image;
@@ -34,16 +48,19 @@ namespace {
         if (!codec::decode(path, image, error)) {
             EXPECT_TRUE(image.data.empty());
             EXPECT_NE(error.find("HEVC"), std::string::npos) << error;
+            codec::Probe unavailable;
+            EXPECT_FALSE(codec::probe(path, unavailable, error));
+            EXPECT_EQ(unavailable.width, 0);
 #ifdef __APPLE__
             FAIL() << "Apple system provider failed its qualified RGB8 input: " << error;
 #elif defined(_WIN32)
-            ASSERT_TRUE(error.find("provider open failed") != std::string::npos || error.find("provider factory failed") != std::string::npos) << error;
+            ASSERT_TRUE(error.find("provider unavailable") != std::string::npos) << error;
             GTEST_SKIP() << "Microsoft HEIF/HEVC extension unavailable: " << error;
 #else
             GTEST_SKIP() << "No configured system HEIC provider: " << error;
 #endif
         }
-        const auto check = [&](const std::filesystem::path& input, const char* reference, int bits) {
+        const auto check = [&](const std::filesystem::path& input, const char* reference, int bits, int tolerance = 0) {
             codec::Image raw, memory, display;
             codec::Probe info;
             ASSERT_TRUE(codec::probe(input, info, error)) << error;
@@ -52,9 +69,22 @@ namespace {
             const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(source)), {});
             const std::vector<uint8_t> expected((std::istreambuf_iterator<char>(ref)), {});
             ASSERT_EQ(raw.data.size(), expected.size());
-            if (bits == 8)
-                EXPECT_EQ(raw.data, expected);
-            else {
+            if (bits == 8) {
+                if (!tolerance)
+                    EXPECT_EQ(raw.data, expected);
+                else {
+                    int maximum = 0;
+                    uint64_t total = 0;
+                    for (size_t i = 0; i < expected.size(); ++i) {
+                        const int difference = std::abs(int(raw.data[i]) - int(expected[i]));
+                        maximum = std::max(maximum, difference);
+                        total += difference;
+                    }
+                    const double mean = double(total) / expected.size();
+                    EXPECT_LE(maximum, tolerance) << "mean RGB8 difference: " << mean;
+                    EXPECT_LE(mean, 2.0);
+                }
+            } else {
                 const uint32_t maximum = (1u << bits) - 1;
                 for (size_t i = 0; i < expected.size(); i += 2) {
                     uint16_t code, actual;
@@ -80,7 +110,12 @@ namespace {
         };
 #ifdef __APPLE__
         check(fixtures / "rgb8.heic", "system-grid.reference", 8);
+        check(fixtures / "system-combined.heic", "system-combined.reference", 8);
 #endif
+        // Native YUV reconstruction differs from the independent wheel decoder:
+        // measured Apple maximum 5 / mean 1.392 RGB8 levels. Bound both tails
+        // and average; all file/memory/target comparisons above remain exact.
+        check(fixtures / "system-yuv420.heic", "system-yuv420.reference", 8, 6);
         for (const auto name : {"rotated", "mirrored", "multi", "p3icc"}) {
             SCOPED_TRACE(name);
             check(fixtures / (std::string("system-") + name + ".heic"), (std::string("system-") + name + ".reference").c_str(), 8);
@@ -126,7 +161,7 @@ namespace {
         for (const auto name : {"system-rgb12.heic", "system-rgba8.heic"
 #ifndef __APPLE__
                                 ,
-                                "system-rgb10.heic", "rgb8.heic"
+                                "system-rgb10.heic", "rgb8.heic", "system-combined.heic"
 #endif
              }) {
             SCOPED_TRACE(name);
@@ -148,6 +183,50 @@ namespace {
             EXPECT_TRUE(std::all_of(unchanged.begin(), unchanged.end(), [](auto value) { return value == 0xa5; }));
         }
     }
+    TEST(ProductionHeif, NativeHdrErrorsDoNotPromiseRawDecoding) {
+        const auto path = std::filesystem::temp_directory_path() / ("lfs-heic-hdr-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".heic");
+        struct Cleanup {
+            std::filesystem::path path;
+            ~Cleanup() {
+                std::error_code error;
+                std::filesystem::remove(path, error);
+            }
+        } cleanup{path};
+        std::ifstream file(fixtures / "system-yuv420.heic", std::ios::binary);
+        const std::vector<uint8_t> original((std::istreambuf_iterator<char>(file)), {});
+        const std::array<uint8_t, 8> marker{'c', 'o', 'l', 'r', 'n', 'c', 'l', 'x'};
+        const auto tag = std::search(original.begin(), original.end(), marker.begin(), marker.end());
+        ASSERT_NE(tag, original.end());
+        const auto offset = static_cast<size_t>(tag - original.begin());
+        ASSERT_GE(original.size() - offset, 15u);
+        for (const auto transfer : {16, 18}) {
+            auto bytes = original;
+            bytes[offset + 10] = 0;
+            bytes[offset + 11] = static_cast<uint8_t>(transfer);
+            codec::Image image;
+            std::string error;
+            {
+                std::ofstream output(path, std::ios::binary);
+                output.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                ASSERT_TRUE(output.good());
+            }
+            codec::Probe info;
+            EXPECT_FALSE(codec::probe(path, info, error));
+            EXPECT_EQ(info.width, 0);
+            EXPECT_EQ(error.find("raw decoding remains available"), std::string::npos) << error;
+#if !defined(_WIN32) && !defined(__APPLE__)
+            EXPECT_NE(error.find("unsupported in this build"), std::string::npos) << error;
+#endif
+            for (const bool display : {false, true}) {
+                EXPECT_FALSE(codec::decode_heif(bytes, image, error, display));
+                EXPECT_TRUE(image.data.empty());
+                EXPECT_EQ(error.find("raw decoding remains available"), std::string::npos) << error;
+#if !defined(_WIN32) && !defined(__APPLE__)
+                EXPECT_NE(error.find("unsupported in this build"), std::string::npos) << error;
+#endif
+            }
+        }
+    }
     TEST(ProductionHeif, SystemProviderUsesContainerRotationInsteadOfExifTwice) {
         codec::Image available;
         std::string error;
@@ -155,7 +234,7 @@ namespace {
 #ifdef __APPLE__
             FAIL() << "Apple system provider failed its qualified RGB8 input: " << error;
 #elif defined(_WIN32)
-            ASSERT_TRUE(error.find("provider open failed") != std::string::npos || error.find("provider factory failed") != std::string::npos) << error;
+            ASSERT_TRUE(error.find("provider unavailable") != std::string::npos) << error;
 #endif
             GTEST_SKIP() << "OS provider unavailable: " << error;
         }

@@ -46,4 +46,21 @@ to append a real second NCLX declaration without re-encoding. Tests read it back
 and exercise ICC precedence over sRGB/PQ/HLG. The AV1 regeneration command above
 does not regenerate these historical HEVC files. No encoder is needed to run
 either set of tests. Native availability, precision, alpha and RGB-grid limits
-are explicit; see the system-provider qualification document.
+are explicit; see `docs/development/media-heif.md`.
+
+`system-yuv420.heic` is an original 32x24 limited-range YCbCr 4:2:0 fixture,
+authored with pillow-heif 0.18.0 (HEVC quality 90, chroma 420, NCLX primaries 1,
+transfer 13, matrix 1, full-range flag 0). Source RGB is
+`(48+3*x, 64+4*y, 80+x+y)`. Its reference is the independent wheel decoder's
+RGB8 output. Native comparisons allow at most six RGB8 levels and a mean at
+most two for YUV reconstruction differences (Apple measured maximum five, mean
+1.39149); bitstream range/matrix/transfer were independently checked with
+FFmpeg 8. File/memory/direct-target equivalence remains
+exact. Tests also verify the declared YCbCr/420 format, and mutate only the NCLX
+transfer for HDR error regressions.
+
+`system-combined.heic` appends essential `imir=1` after the original rotated
+fixture's `irot`, using the existing property helper without re-encoding.
+Its reference horizontally mirrors the 24x32 rotated reference. Apple must
+match these independent pixels; Windows explicitly rejects this unqualified
+combination instead of relying on undocumented WIC transform composition.

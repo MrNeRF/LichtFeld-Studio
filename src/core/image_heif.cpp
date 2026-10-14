@@ -162,6 +162,25 @@ namespace lfs::core::image_codecs {
                           (declared->transfer_characteristics == 16 || declared->transfer_characteristics == 18);
                 }
 #ifdef _WIN32
+                if (hevc) {
+                    bool rotation = false, mirror = false;
+                    std::array<heif_property_id, 32> properties{};
+                    const int count = heif_item_get_transformation_properties(context.get(), id, nullptr, 0);
+                    if (count < 0 || count > static_cast<int>(properties.size()) ||
+                        heif_item_get_transformation_properties(context.get(), id, properties.data(), count) != count) {
+                        error = "HEIF: unsupported HEVC transformation list";
+                        return false;
+                    }
+                    for (int i = 0; i < count; ++i) {
+                        const auto type = heif_item_get_property_type(context.get(), id, properties[i]);
+                        rotation |= type == heif_item_property_type_transform_rotation;
+                        mirror |= type == heif_item_property_type_transform_mirror;
+                    }
+                    if (rotation && mirror) {
+                        error = "HEIF: Windows HEVC system provider unsupported for combined rotation and mirroring";
+                        return false;
+                    }
+                }
                 if (hevc && grid) {
                     heif_colorspace colorspace;
                     heif_chroma chroma;
@@ -266,7 +285,7 @@ namespace lfs::core::image_codecs {
             DisplayKey key;
             Transform transform{nullptr, cmsDeleteTransform};
         };
-        bool to_display(const heif_image_handle* handle, Image& image, std::string& error, bool apply = true) {
+        bool to_display(const heif_image_handle* handle, Image& image, std::string& error, bool apply = true, bool raw_available = true) {
             const bool wide = image.sample_type == SampleType::UInt16;
             DisplayKey key;
             key.format = image.channels == 4 ? (wide ? TYPE_RGBA_16 : TYPE_RGBA_8) : (wide ? TYPE_RGB_16 : TYPE_RGB_8);
@@ -292,11 +311,15 @@ namespace lfs::core::image_codecs {
                 const int transfer = nclx->transfer_characteristics;
                 // PQ and HLG have different physical units; never label their samples SDR.
                 if (transfer == 16 || transfer == 18) {
-                    error = "HEIF: HDR display import requires an explicit conversion to SDR; raw decoding remains available";
+                    error = "HEIF: HDR display import requires an explicit conversion to SDR";
+                    if (raw_available)
+                        error += "; raw decoding remains available";
                     return false;
                 }
                 if (transfer != 1 && transfer != 6 && transfer != 13 && transfer != 8) {
-                    error = "HEIF: display import requires a supported SDR transfer; raw decoding remains available";
+                    error = "HEIF: display import requires a supported SDR transfer";
+                    if (raw_available)
+                        error += "; raw decoding remains available";
                     return false;
                 }
                 key.transfer = transfer;
@@ -364,8 +387,10 @@ namespace lfs::core::image_codecs {
         if (!source.open(path, error) || !layout(source.handle.get(), info, error))
             return false;
         if (source.hevc) {
+            if (!heic_system_available(error))
+                return false;
             Image metadata{info.width, info.height, info.channels, info.sample_type, {}};
-            if (source.hdr && !to_display(source.handle.get(), metadata, error, false))
+            if (source.hdr && !to_display(source.handle.get(), metadata, error, false, false))
                 return false;
             if (!read_heic_system(source.input_path, source.input_bytes, info,
                                   heif_image_handle_get_luma_bits_per_pixel(source.handle.get()), source.orientation, source.hdr, nullptr, error))
@@ -380,14 +405,16 @@ namespace lfs::core::image_codecs {
             if (!layout(source.handle.get(), info, error))
                 return false;
             if (source.hevc) {
+                if (!heic_system_available(error))
+                    return false;
                 Image image{info.width, info.height, info.channels, info.sample_type, {}};
                 // Validate shared ICC/HDR policy before an OS decoder can select
                 // an HDR layout or obscure an invalid ICC with its own failure.
-                if ((display || source.hdr) && !to_display(source.handle.get(), image, error, false))
+                if ((display || source.hdr) && !to_display(source.handle.get(), image, error, false, false))
                     return false;
                 if (!read_heic_system(source.input_path, source.input_bytes, info,
                                       heif_image_handle_get_luma_bits_per_pixel(source.handle.get()), source.orientation, source.hdr, &image, error) ||
-                    (display && !to_display(source.handle.get(), image, error)))
+                    (display && !to_display(source.handle.get(), image, error, true, false)))
                     return false;
                 result = std::move(image);
                 return true;

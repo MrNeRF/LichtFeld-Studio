@@ -213,7 +213,7 @@ namespace {
         lfs::core::image_codecs::Probe info;
         if (!lfs::core::image_codecs::probe(path, info, error)) {
 #ifdef _WIN32
-            ASSERT_TRUE(error.find("provider open failed") != std::string::npos || error.find("provider factory failed") != std::string::npos) << error;
+            ASSERT_TRUE(error.find("provider unavailable") != std::string::npos) << error;
             GTEST_SKIP() << "Microsoft HEIF/HEVC extension unavailable: " << error;
 #else
             FAIL() << "Apple system provider failed its qualified RGB8 input: " << error;

@@ -1,10 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "image_heic_system.hpp"
+#include <cstdio>
 #include <cstring>
 #include <limits>
 
 #ifdef _WIN32
+#include <mfapi.h>
+#include <mferror.h>
+#include <mfidl.h>
 #include <wincodec.h>
 #include <windows.h>
 #include <wrl/client.h>
@@ -29,11 +33,42 @@ namespace lfs::core::image_codecs {
         bool wic_status(HRESULT status, const char* operation, std::string& error) {
             if (SUCCEEDED(status))
                 return true;
-            error = "HEIF: HEVC system provider " + std::string(operation) + " failed (HRESULT " +
-                    std::to_string(static_cast<unsigned long>(status)) + "); required Microsoft HEIF/HEVC support may be unavailable";
+            char hex[11];
+            std::snprintf(hex, sizeof(hex), "0x%08lX", static_cast<unsigned long>(status));
+            if (status == WINCODEC_ERR_COMPONENTNOTFOUND || status == MF_E_TOPO_CODEC_NOT_FOUND)
+                error = "HEIF: HEVC system provider unavailable; install HEVC Video Extensions and HEIF Image Extensions (HRESULT " + std::string(hex) + ")";
+            else
+                error = "HEIF: HEVC system provider " + std::string(operation) + " failed (HRESULT " + std::string(hex) + ")";
             return false;
         }
+        HRESULT hevc_decoder_status() {
+            static const HRESULT status = [] {
+                const HRESULT startup = MFStartup(MF_VERSION, MFSTARTUP_LITE);
+                if (FAILED(startup))
+                    return startup;
+                IMFActivate** decoders = nullptr;
+                UINT32 count = 0;
+                const MFT_REGISTER_TYPE_INFO input{MFMediaType_Video, MFVideoFormat_HEVC};
+                HRESULT result = MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER,
+                                           MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
+                                           &input, nullptr, &decoders, &count);
+                for (UINT32 i = 0; i < count; ++i)
+                    decoders[i]->Release();
+                CoTaskMemFree(decoders);
+                MFShutdown();
+                if (SUCCEEDED(result) && count == 0)
+                    result = MF_E_TOPO_CODEC_NOT_FOUND;
+                return result;
+            }();
+            return status;
+        }
     } // namespace
+    bool heic_system_available(std::string& error) {
+        Apartment apartment;
+        if (FAILED(apartment.status) && apartment.status != RPC_E_CHANGED_MODE)
+            return wic_status(apartment.status, "COM initialization", error);
+        return wic_status(hevc_decoder_status(), "HEVC decoder enumeration", error);
+    }
     bool read_heic_system(const std::filesystem::path* path, std::span<const std::uint8_t> bytes,
                           const Probe& expected, int source_bits, int, bool, Image* image, std::string& error) {
         // WIC's qualified HEIF provider exposes only 8-bit RGB. Do not silently
@@ -45,6 +80,8 @@ namespace lfs::core::image_codecs {
         Apartment apartment;
         if (FAILED(apartment.status) && apartment.status != RPC_E_CHANGED_MODE)
             return wic_status(apartment.status, "COM initialization", error);
+        if (!wic_status(hevc_decoder_status(), "HEVC decoder enumeration", error))
+            return false;
         ComPtr<IWICImagingFactory> factory;
         if (!wic_status(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                          IID_PPV_ARGS(&factory)),
@@ -108,6 +145,7 @@ namespace lfs::core::image_codecs {
         return true;
     }
 #elif defined(__APPLE__)
+    bool heic_system_available(std::string&) { return true; }
     namespace {
         template <typename T>
         struct Release {
@@ -238,10 +276,13 @@ namespace lfs::core::image_codecs {
         return true;
     }
 #else
-    bool read_heic_system(const std::filesystem::path*, std::span<const std::uint8_t>,
-                          const Probe&, int, int, bool, Image*, std::string& error) {
+    bool heic_system_available(std::string& error) {
         error = "HEIF: HEVC-coded HEIC is unsupported in this build; no qualified system provider is configured";
         return false;
+    }
+    bool read_heic_system(const std::filesystem::path*, std::span<const std::uint8_t>,
+                          const Probe&, int, int, bool, Image*, std::string& error) {
+        return heic_system_available(error);
     }
 #endif
 } // namespace lfs::core::image_codecs

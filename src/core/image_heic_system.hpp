@@ -4,6 +4,7 @@
 #include "image_codecs.hpp"
 
 namespace lfs::core::image_codecs {
+    bool heic_system_available(std::string& error);
     // Internal adapter: libheif still owns container validation and color policy.
     // A null path selects the borrowed memory span; neither input outlives this call.
     // A null image requests metadata/capability probing without decoding pixels.

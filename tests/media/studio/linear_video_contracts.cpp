@@ -325,7 +325,7 @@ void heifCacheAndQueueContracts() {
             throw std::runtime_error(std::string("Qualified Apple HEIC consumer failed: ") + error);
 #elif defined(_WIN32)
             if (std::string_view(name) == "system-p3icc.heic" &&
-                error.find("provider open failed") == std::string::npos && error.find("provider factory failed") == std::string::npos)
+                error.find("provider unavailable") == std::string::npos)
                 throw std::runtime_error(std::string("Qualified Windows HEIC consumer failed: ") + error);
 #endif
             std::cout << "Native HEIC consumer unavailable for " << name << ": " << error << '\n';
