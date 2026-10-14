@@ -2,6 +2,18 @@
 
 
 
+def snapshot(previous_generation: int = -1) -> object:
+    """Return a consistent bounded log snapshot, or None if unchanged."""
+
+def clear_buffer() -> None:
+    """Clear the in-memory log buffer without modifying log files."""
+
+def set_buffer_limit(limit: int) -> None: ...
+
+def capture_level() -> int: ...
+
+def set_capture_level(level: int) -> None: ...
+
 def info(message: str) -> None:
     """Log an info message"""
 

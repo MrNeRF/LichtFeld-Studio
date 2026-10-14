@@ -1,0 +1,70 @@
+<rml>
+  <head>
+    <link type="text/template" href="floating_window.rml" />
+    <link type="text/rcss" href="rendering.rcss" />
+  </head>
+  <body template="floating-window" data-model="splat_simplify">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.simplify_source">
+      <span class="setting-row__label-col">{{label_simplify_source}}</span>
+      <div class="setting-row__control-col setting-row__control-col--fill">
+        <span class="text-muted" data-if="!simplify_has_source">{{label_simplify_select_source}}</span>
+        <span data-if="simplify_has_source">{{simplify_source_name}}</span>
+      </div>
+    </div>
+    <div data-if="simplify_has_source">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.simplify_target">
+        <span class="setting-row__label-col">{{label_simplify_target}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="simplify_target" min="1" max="1" step="1" />
+          <span class="slider-value">{{simplify_target_count}}</span>
+        </div>
+      </div>
+      <div class="section-header text-accent" data-event-click="toggle_advanced">
+        <span class="section-arrow text-accent" data-class-is-expanded="advanced">▶</span>
+        <span>@tr:rendering_panel.advanced</span>
+      </div>
+      <div class="section-content" data-if="advanced">
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.simplify_lod_base">
+          <span class="setting-row__label-col">{{label_simplify_lod_base}}</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="simplify_lod_base" min="0.1" max="10" step="0.1" />
+            <span class="slider-value">{{simplify_lod_base}}</span>
+          </div>
+        </div>
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.simplify_opacity_prune">
+          <span class="setting-row__label-col">{{label_simplify_opacity_prune}}</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="simplify_opacity_prune_threshold" min="0" max="1" step="0.01" />
+            <span class="slider-value">{{simplify_opacity_prune_threshold}}</span>
+          </div>
+        </div>
+      </div>
+      <div class="rendering-simplify-stats">
+        <div class="rendering-simplify-stat">
+          <span class="rendering-simplify-stat__label">{{label_simplify_original}}</span>
+          <span class="rendering-simplify-stat__value">{{simplify_original_count}}</span>
+        </div>
+        <div class="rendering-simplify-stat">
+          <span class="rendering-simplify-stat__label">{{label_simplify_target_stat}}</span>
+          <span class="rendering-simplify-stat__value">{{simplify_target_count}}</span>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.simplify_output">
+        <span class="setting-row__label-col">{{label_simplify_output}}</span>
+        <div class="setting-row__control-col setting-row__control-col--fill">
+          <span class="text-muted">{{simplify_output_name}}</span>
+        </div>
+      </div>
+      <div class="rendering-simplify-progress" data-if="simplify_show_progress">
+        <progress max="1" data-attr-value="simplify_progress_value" />
+        <span class="progress__text">{{simplify_progress_pct}}</span>
+      </div>
+      <div class="rendering-simplify-stage text-muted" data-if="simplify_show_progress">{{simplify_progress_stage}}</div>
+      <div class="rendering-simplify-error" data-if="simplify_show_error">{{simplify_error_text}}</div>
+    </div>
+    <div class="rendering-simplify-actions">
+      <button class="btn btn--primary" data-tooltip="tooltip.simplify_apply" data-event-click="simplify_apply()" data-attrif-disabled="!simplify_can_apply">{{label_simplify_apply}}</button>
+      <button class="btn btn--secondary" data-attr-data-tooltip="simplify_cancel_tooltip" data-event-click="simplify_cancel()">{{label_simplify_cancel}}</button>
+    </div>
+  </body>
+</rml>

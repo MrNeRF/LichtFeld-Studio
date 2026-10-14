@@ -191,7 +191,7 @@ Getting started:
 
 ## License
 
-This project is licensed under GPLv3. Optional external plugins have separate licenses and distribution terms.
+This project is licensed under GPLv3 or later. See [LICENSE](LICENSE) for details. It includes an additional permission for NVIDIA GPU libraries (the CUDA Toolkit runtime libraries, nvJPEG2000, the NVIDIA driver and Video Codec SDK runtime, DLSS/NGX); see [LICENSE-EXCEPTION.txt](LICENSE-EXCEPTION.txt). Optional external plugins have separate licenses and distribution terms.
 
 #### _Agents_
 

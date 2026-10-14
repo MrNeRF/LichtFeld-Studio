@@ -1,4 +1,7 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#define LFS_EQUIRECT_GLSL
+#include "../../../../rendering/rasterizer/vulkan/shader/src/slang/equirect_projection.inc"
 layout(location = 0) in vec2 TexCoord;
 layout(location = 0) out vec4 outColor;
 
@@ -10,8 +13,6 @@ layout(push_constant) uniform EnvPush {
     vec4 viewport_exposure;  // viewport.xy, exposure, rotation_radians
     vec4 flags;              // x = is_equirectangular_view
 } push;
-
-const float PI = 3.14159265358979323846;
 
 vec3 rotate_y(vec3 v, float angle) {
     float c = cos(angle);
@@ -32,10 +33,7 @@ vec3 ray_direction_local() {
     vec2 viewport_uv = vec2(TexCoord.x, 1.0 - TexCoord.y);
     bool equirect = push.flags.x > 0.5;
     if (equirect) {
-        float lon = (viewport_uv.x - 0.5) * (2.0 * PI);
-        float lat = (viewport_uv.y - 0.5) * PI;
-        float cos_lat = cos(lat);
-        return normalize(vec3(sin(lon) * cos_lat, sin(lat), -cos(lon) * cos_lat));
+        return lfs_equirect_direction(vec2(viewport_uv.x, 1.0 - viewport_uv.y));
     }
     vec2 viewport = push.viewport_exposure.xy;
     vec2 pixel = viewport_uv * viewport;
@@ -46,10 +44,7 @@ vec3 ray_direction_local() {
 }
 
 vec2 environment_uv(vec3 dir) {
-    float longitude = atan(dir.x, -dir.z);
-    float latitude = asin(clamp(dir.y, -1.0, 1.0));
-    return vec2(longitude / (2.0 * PI) + 0.5,
-                0.5 - latitude / PI);
+    return lfs_equirect_uv(dir);
 }
 
 void main() {

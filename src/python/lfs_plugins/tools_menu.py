@@ -57,6 +57,10 @@ class ToolsMenu:
                 "lfs_plugins.file_menu.ExtractVideoFramesOperator",
                 label=tr("menu.file.extract_video_frames"),
             ),
+            menu_action(
+                tr("rendering_panel.section_simplify"),
+                lambda: lf.ui.set_panel_enabled("lfs.splat_simplify", True),
+            ),
             menu_separator(),
             menu_submenu(tr("menu.tools.developer"), developer_items),
             menu_action(

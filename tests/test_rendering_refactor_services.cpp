@@ -29,6 +29,7 @@
 #include "project/session_state.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/graphics_external_tensor.hpp"
+#include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
@@ -36,6 +37,7 @@
 #include "screen/screen_service.hpp"
 #include "selection/selection_service.hpp"
 #include "tools/selection_tool.hpp"
+#include "training/trainer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/gt_comparison_cache_utils.hpp"
@@ -5674,6 +5676,33 @@ namespace lfs::vis {
         EXPECT_TRUE(lfs::vis::op::operators().hasModalOperator());
         EXPECT_EQ(lfs::vis::op::operators().activeModalId(), "selection.stroke");
         lfs::vis::op::operators().cancelModalOperator();
+    }
+
+    TEST_F(GTComparisonAsyncTest, EmptyIndependentSplitSkipsMeshPanels) {
+        // A second 3D view is its own viewport here. A ground-truth split with no
+        // triangle meshes still publishes the composite and allocates no mesh panels.
+        settings.split_view_mode = SplitViewMode::GTComparison;
+        manager->updateSettings(settings);
+        refreshReference();
+        const auto frame = vulkanViewRenderState(
+                               manager->viewState(manager_views.activeView()))
+                               .mesh_frame;
+
+        ASSERT_TRUE(frame.split_view.enabled);
+        EXPECT_TRUE(frame.items.empty());
+        EXPECT_EQ(frame.panels.capacity(), 0u);
+    }
+
+    TEST(MeshDepthSourceTest, UsesOnlyReadyPaneDepth) {
+        VulkanViewportPassParams params;
+        params.split_view.enabled = true;
+        params.mesh_panels.emplace_back();
+        EXPECT_FALSE(meshUsesLeftDepth(params, false));
+        EXPECT_FALSE(meshUsesLeftDepth(params, true));
+        params.split_view.left.depth_blit.depth = std::make_shared<lfs::core::Tensor>();
+        EXPECT_TRUE(meshUsesLeftDepth(params, true));
+        params.mesh_panels.clear();
+        EXPECT_FALSE(meshUsesLeftDepth(params, true));
     }
 
 } // namespace lfs::vis

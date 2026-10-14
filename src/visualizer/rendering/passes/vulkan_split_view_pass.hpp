@@ -7,6 +7,7 @@
 #include "core/tensor_fwd.hpp"
 #include "rendering/scene_temporal_resolve.hpp"
 #include "rendering/temporal_frame_tracker.hpp"
+#include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 
 #include <cstddef>
@@ -45,6 +46,7 @@ namespace lfs::vis {
         std::optional<TemporalFrameInput> temporal_input;
         SceneTemporalResolveSettings temporal_settings;
         SceneTemporalQuality temporal_quality = SceneTemporalQuality::Balanced;
+        VulkanDepthBlitParams depth_blit{};
         // Valid-region UV for padded panel textures (default identity).
         glm::vec2 uv_scale{1.0f, 1.0f};
         glm::vec2 uv_clamp_max{1.0f, 1.0f};

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from test_file_menu_recent import _load_file_menu
+from test_file_menu_recent import _all_file_items, _load_file_menu
 
 
 def test_unsaved_scene_enables_publish_and_offers_three_choices(monkeypatch):
@@ -21,6 +21,8 @@ def test_unsaved_scene_enables_publish_and_offers_three_choices(monkeypatch):
         return None
 
     entry = find(menu.FileMenu().menu_items())
+    entry = next(item for item in _all_file_items(menu)
+                 if item.get("label") == "tr:menu.file.publish_to_gallery")
     assert entry["enabled"]
     entry["callback"]()
     assert len(menu.lf.confirm_dialogs) == 1

@@ -603,6 +603,13 @@ namespace lfs::core::image_codecs {
                    (sample_format == SAMPLEFORMAT_IEEEFP && bits == 32);
         }
 
+        void invert_tiff_samples(std::uint8_t* samples, const std::size_t count,
+                                 const std::uint16_t bits_per_sample) {
+            const auto byte_count = count * (bits_per_sample / 8);
+            for (std::size_t i = 0; i < byte_count; ++i)
+                samples[i] = static_cast<std::uint8_t>(~samples[i]);
+        }
+
         bool decode_tiff(const std::filesystem::path& path, Image& result, std::string& error) {
             TIFF* tiff = open_tiff(path, "r", error);
             if (!tiff)
@@ -612,11 +619,13 @@ namespace lfs::core::image_codecs {
             std::uint16_t channels = 1;
             std::uint16_t bits = 8;
             std::uint16_t sample_format = SAMPLEFORMAT_UINT;
+            std::uint16_t photometric = PHOTOMETRIC_MINISBLACK;
             std::uint16_t planar = PLANARCONFIG_CONTIG;
             TIFFGetField(tiff, TIFFTAG_IMAGEWIDTH, &width);
             TIFFGetField(tiff, TIFFTAG_IMAGELENGTH, &height);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLESPERPIXEL, &channels);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_BITSPERSAMPLE, &bits);
+            TIFFGetFieldDefaulted(tiff, TIFFTAG_PHOTOMETRIC, &photometric);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLEFORMAT, &sample_format);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_PLANARCONFIG, &planar);
             if (width == 0 || height == 0 || channels < 1 || channels > 4) {
@@ -684,6 +693,8 @@ namespace lfs::core::image_codecs {
                     }
                 }
             }
+            if (photometric == PHOTOMETRIC_MINISWHITE && channels == 1 && sample_format == SAMPLEFORMAT_UINT)
+                invert_tiff_samples(result.data.data(), static_cast<std::size_t>(width) * height, bits);
             // UINT32 TIFF is retained as normalized float rather than being
             // mislabeled UInt8 or rejected. Preserve endpoints using 2^32-1;
             // float32 precision is the supported in-memory representation.
@@ -709,11 +720,13 @@ namespace lfs::core::image_codecs {
             std::uint16_t channels = 1;
             std::uint16_t bits = 8;
             std::uint16_t sample_format = SAMPLEFORMAT_UINT;
+            std::uint16_t photometric = PHOTOMETRIC_MINISBLACK;
             std::uint16_t planar = PLANARCONFIG_CONTIG;
             TIFFGetField(tiff, TIFFTAG_IMAGEWIDTH, &width);
             TIFFGetField(tiff, TIFFTAG_IMAGELENGTH, &height);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLESPERPIXEL, &channels);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_BITSPERSAMPLE, &bits);
+            TIFFGetFieldDefaulted(tiff, TIFFTAG_PHOTOMETRIC, &photometric);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLEFORMAT, &sample_format);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_PLANARCONFIG, &planar);
             const auto source_type = sample_format == SAMPLEFORMAT_IEEEFP ? SampleType::Float32
@@ -744,6 +757,19 @@ namespace lfs::core::image_codecs {
                     TIFFClose(tiff);
                     error = "TIFF scanline read failed";
                     return false;
+                }
+            }
+            if (photometric == PHOTOMETRIC_MINISWHITE && channels == 1 && sample_format == SAMPLEFORMAT_UINT)
+                invert_tiff_samples(static_cast<std::uint8_t*>(target.data),
+                                    static_cast<std::size_t>(width) * height, bits);
+            // Keep dev's normalized-float representation for direct UINT32 buffers.
+            if (sample_format == SAMPLEFORMAT_UINT && bits == 32) {
+                auto* const samples = static_cast<std::uint8_t*>(target.data);
+                for (std::size_t offset = 0; offset < row_bytes * height; offset += sizeof(std::uint32_t)) {
+                    std::uint32_t sample;
+                    std::memcpy(&sample, samples + offset, sizeof(sample));
+                    const float normalized = static_cast<float>(static_cast<double>(sample) / 4294967295.0);
+                    std::memcpy(samples + offset, &normalized, sizeof(normalized));
                 }
             }
             TIFFClose(tiff);

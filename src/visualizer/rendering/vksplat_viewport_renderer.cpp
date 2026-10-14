@@ -8623,6 +8623,9 @@ namespace lfs::vis {
         // Synchronous exports use the exact instance-count gate and must keep
         // the same raster chain across every band, including a cold first band.
         // Interactive viewport and sequencer previews retain their warmup.
+        // The legacy chain warms renderer initialization once. Every regular
+        // frame rebuilds projection and sort data from current inputs, so an
+        // input snapshot change does not make an already warmed macro chain cold.
         const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_ &&
                                        !deterministic_export;
         const bool higs_active = higs_candidate && !higs_warmup_frame;

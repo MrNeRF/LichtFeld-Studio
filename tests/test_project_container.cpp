@@ -62,6 +62,10 @@
 namespace lfs::io::project::detail {
     void reset_framed_record_decode_calls_for_testing();
     std::uint64_t framed_record_decode_calls_for_testing();
+    void reset_framed_record_stored_cache_view_bytes_for_testing();
+    std::uint64_t framed_record_stored_cache_view_bytes_for_testing();
+    void reset_framed_record_stored_cache_nonalias_bytes_for_testing();
+    std::uint64_t framed_record_stored_cache_nonalias_bytes_for_testing();
 } // namespace lfs::io::project::detail
 
 namespace {
@@ -1631,7 +1635,7 @@ namespace {
         check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
     }
 
-    TEST(ProjectContainerReader, BoundedStreamSmallReadsDoNotRedecodeFramedRecords) {
+    TEST(ProjectContainerReader, BoundedStreamSmallReadsUseAliasedCacheSpans) {
         constexpr std::size_t kBytes =
             2ull * 64ull * 1024ull * 1024ull + 32ull * 1024ull * 1024ull;
         const auto payload = patterned_payload(kBytes);
@@ -1647,6 +1651,10 @@ namespace {
             EXPECT_EQ(chunk.compression, compression) << name;
             const auto records = read_framed_table(path, chunk);
             ASSERT_GE(records.size(), 3u) << name;
+            std::uint64_t expected_cached_bytes = 0;
+            for (const auto& record : records) {
+                expected_cached_bytes += record.stored_bytes;
+            }
             const auto materialized = require_result(reader.read_chunk(chunk));
             ASSERT_EQ(materialized, payload) << name;
 
@@ -1657,6 +1665,8 @@ namespace {
             const auto step = std::max<std::uint64_t>(
                 records.front().decoded_bytes / 4, 1);
             detail::reset_framed_record_decode_calls_for_testing();
+            detail::reset_framed_record_stored_cache_view_bytes_for_testing();
+            detail::reset_framed_record_stored_cache_nonalias_bytes_for_testing();
             std::vector<std::byte> got(payload.size());
             std::size_t filled = 0;
             while (filled < got.size()) {
@@ -1672,6 +1682,13 @@ namespace {
             EXPECT_EQ(detail::framed_record_decode_calls_for_testing(),
                       records.size())
                 << name;
+            EXPECT_EQ(detail::framed_record_stored_cache_view_bytes_for_testing(),
+                      expected_cached_bytes)
+                << name << " cache-hit spans did not cover each stored record";
+            // Cache-hit bytes alone do not prove the span aliases the cache buffer.
+            EXPECT_EQ(detail::framed_record_stored_cache_nonalias_bytes_for_testing(),
+                      0u)
+                << name << " cache-hit spans must alias the stored cache buffers";
         };
         check(Compression::ZstdFramed, "zstd-framed");
         check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");

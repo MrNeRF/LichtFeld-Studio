@@ -165,6 +165,29 @@ def test_independent_scalar_drag_cancel_release_and_threshold():
     assert values["scale"] == pytest.approx(0.83, abs=1e-15)
 
 
+def test_scrub_drag_precision_modifiers_and_mid_drag_change():
+    module = import_module("lfs_plugins.scrub_fields")
+    rows = [
+        ("plain", [(10, {})], 50),
+        ("shift", [(10, {"shift_key": True})], 41),
+        ("ctrl", [(10, {"ctrl_key": True})], 100),
+        ("change", [(5, {}), (2, {"shift_key": True}), (1, {"ctrl_key": True})], 55),
+    ]
+    for _, moves, expected in rows:
+        values = {"speed": 40}
+        scrub = module.ScrubFieldController(
+            {"speed": module.ScrubFieldSpec(0.0, 100.0, 1.0, "%d", data_type=int)},
+            values.__getitem__, values.__setitem__)
+        attach_fields(scrub)
+        scrub._on_field_mousedown("speed", Event(mouse_x=40))
+        mouse_x = 40
+        for delta, modifiers in moves:
+            mouse_x += delta
+            scrub._on_body_mousemove(Event(mouse_x=mouse_x, **modifiers))
+        scrub._on_body_mouseup(Event())
+        assert values["speed"] == expected
+
+
 @pytest.mark.parametrize("language,text,expected", [
     ("de", "0,5", 0.5),
     ("fr", "0,5", 0.5),

@@ -82,6 +82,7 @@ namespace lfs::io::video {
         std::expected<void, std::string> legacyResult(const lfs::Result<void>& result) {
             return result ? std::expected<void, std::string>{} : std::unexpected(std::string(result.error().detail()));
         }
+
     } // namespace
     class VideoEncoderImpl {
         media::VideoEncodeSession session_;
@@ -102,6 +103,7 @@ namespace lfs::io::video {
             // establish them merely by selecting an output resolution.
             request.matrix = media::ColorMatrix::Smpte170M;
             request.range = media::ColorRange::Limited;
+            request.spherical_video = options.spherical_video;
 #if LFS_HAS_CUDA
             if (core::default_gpu_backend() == core::GpuBackend::CUDA)
                 request.preferred_backend = media::VideoEncodeBackend::Cuda;

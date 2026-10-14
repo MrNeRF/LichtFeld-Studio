@@ -1,0 +1,37 @@
+CUDA TOOLKIT SUPPLEMENT, SECTION 2.1 (LICENSE SCOPE)
+
+The SDK is licensed for you to develop applications only for use in systems with NVIDIA GPUs.
+
+CUDA TOOLKIT SUPPLEMENT, ATTACHMENT A (REDISTRIBUTABLE ENTRIES)
+
+The following CUDA Toolkit files may be distributed with applications developed by you, including certain variations of these files that have version number or architecture specific information embedded in the file name.
+
+Component: CUDA Runtime
+Windows: cudart.dll, cudart_static.lib, cudadevrt.lib
+Mac OSX: libcudart.dylib, libcudart_static.a, libcudadevrt.a
+Linux: libcudart.so, libcudart_static.a, libcudadevrt.a
+
+Component: CUDA Random Number Generation Library
+Windows: curand.dll, curand.lib
+Mac OSX: libcurand.dylib, libcurand_static.a
+Linux: libcurand.so, libcurand_static.a
+
+Component: NVIDIA JPEG Library
+Windows: nvjpeg.lib, nvjpeg.dll
+Linux: libnvjpeg.so, libnvjpeg_static.a
+
+Component: NVIDIA Runtime Compilation Library
+Windows: nvrtc.dll, nvrtc-builtins.dll
+Mac OSX: libnvrtc.dylib, libnvrtc-builtins.dylib
+Linux: libnvrtc.so, libnvrtc-builtins.so, libnvrtc_static.a, libnvrtc-builtins_static.a
+
+Component: NVIDIA JIT Linking Library
+Windows: libnvJitLink.dll, libnvJitLink.lib
+Linux: libnvJitLink.so, libnvJitLink_static.a
+
+Component: NVIDIA Tools Extension Library
+Windows: nvToolsExt.dll, nvToolsExt.lib
+Mac OSX: libnvToolsExt.dylib
+Linux: libnvToolsExt.so, libnvtx3interop.so
+
+NVIDIA Corporation. CUDA Toolkit license and Attachment A: https://docs.nvidia.com/cuda/eula/index.html

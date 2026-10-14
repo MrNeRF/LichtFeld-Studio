@@ -794,7 +794,8 @@
     flex: 1;
     height: 24dp;
     border-width: 1dp;
-    padding: 0 8dp;
+    padding: 3dp 8dp;
+    line-height: 16dp;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

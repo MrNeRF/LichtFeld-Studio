@@ -117,6 +117,7 @@ namespace lfs::vis {
         void initialize();
         bool isInitialized() const { return initialized_; }
         void releaseSceneModelResources();
+        void clearVulkanMeshFrames();
         void beginImportRenderCheck(uint64_t scene_generation);
         bool importUsesCombinedModel() const;
         std::optional<std::string> pollImportRenderCheck(const RenderContext& context, const std::function<void()>& prepare_viewport = {});

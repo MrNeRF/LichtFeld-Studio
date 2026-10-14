@@ -15,6 +15,7 @@
 #include "config.slang"
 #include "overlay_flags.inc"
 #include "../../../../slang/spark_alpha.inc"
+#include "equirect_projection.inc"
 
 #define LFS_PORTAL_INLINE
 #define LFS_PORTAL_VEC3 float3
@@ -185,11 +186,11 @@ float3 project_point_equirect(float3 point, Camera cam) {
         return {0, 0, -1};
 
     float3 dir = view_point / len;
-    float azimuth = atan2(dir.x, dir.z);
-    float elevation = asin(clamp(dir.y, -1.0f, 1.0f));
+    // Rasterizer camera space has +Z forward; convert to the shared -Z convention.
+    float2 uv = lfs_equirect_uv(float3(dir.x, dir.y, -dir.z));
     return {
-        (azimuth / (2.0f * M_PI) + 0.5f) * float(cam.W),
-        (elevation / M_PI + 0.5f) * float(cam.H),
+        uv.x * float(cam.W),
+        uv.y * float(cam.H),
         len
     };
 }
@@ -515,13 +516,11 @@ WorldRay pixel_to_world_ray(float2 pixel, Camera cam) {
     float3x3 view_to_world_rotation = float3x3(world_view_t);
     float3 camera_origin = -mul(view_to_world_rotation, world_view_t[3]);
     if (cam.model == int(CameraModel::EQUIRECTANGULAR)) {
-        float azimuth = 2.0f * M_PI * (pixel.x / float(cam.W) - 0.5f);
-        float elevation = M_PI * (pixel.y / float(cam.H) - 0.5f);
-        float cos_elevation = cos(elevation);
-        float3 ray_camera = safe_normalize(float3(
-            sin(azimuth) * cos_elevation,
-            sin(elevation),
-            cos(azimuth) * cos_elevation));
+        // Inverse of project_point_equirect. Shared equirect is -Z forward
+        // with +Y at uv.y = 0; the rasterizer camera is +Z forward.
+        float2 equirect_uv = float2(pixel.x / float(cam.W), pixel.y / float(cam.H));
+        float3 shared_dir = lfs_equirect_direction(equirect_uv);
+        float3 ray_camera = float3(shared_dir.x, shared_dir.y, -shared_dir.z);
         float3 direction = safe_normalize(mul(view_to_world_rotation, ray_camera));
         return { camera_origin, direction, isfinite(dot(camera_origin, camera_origin)) && isfinite(dot(direction, direction)) };
     }

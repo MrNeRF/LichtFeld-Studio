@@ -268,12 +268,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* REDO_STACK = "scene.redo_stack";
         inline constexpr const char* NOTHING_RECORDED = "scene.nothing_recorded";
         inline constexpr const char* NO_ENTRIES_IN_STACK = "scene.no_entries_in_stack";
-        inline constexpr const char* LOG_MIRROR = "scene.log_mirror";
         inline constexpr const char* LOG_LEVEL = "scene.log_level";
-        inline constexpr const char* LOG_EXPORT = "scene.log_export";
-        inline constexpr const char* LOG_COPY = "scene.log_copy";
-        inline constexpr const char* LOG_NOTE = "scene.log_note";
-        inline constexpr const char* NO_LOGS = "scene.no_logs";
         inline constexpr const char* LOG_TRACE = "scene.log_trace";
         inline constexpr const char* LOG_DEBUG = "scene.log_debug";
         inline constexpr const char* LOG_INFO = "scene.log_info";
@@ -941,6 +936,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EXPORT_EXTENSION_WARNING = "runtime.export_extension_warning";
         inline constexpr const char* EXPORT_SH_DEGREE_CLAMPED = "runtime.export_sh_degree_clamped";
         inline constexpr const char* VIDEO_ENCODER_UNAVAILABLE = "runtime.video_encoder_unavailable";
+        inline constexpr const char* VIDEO_ENCODER_PROBE_FAILED = "runtime.video_encoder_probe_failed";
         inline constexpr const char* SCENE_MANAGER_UNAVAILABLE = "runtime.scene_manager_unavailable";
         inline constexpr const char* NO_MODEL_SELECTED = "runtime.no_model_selected";
         inline constexpr const char* NO_SCENE_MANAGER = "runtime.no_scene_manager";

@@ -679,6 +679,10 @@ namespace lfs::vis {
         }
     }
 
+#if !LFS_GRAPHICS_VULKAN
+    void RenderingManager::clearVulkanMeshFrames() {}
+#endif
+
     void RenderingManager::clearViewportImageState(ViewRenderState& view, const glm::ivec2 size,
                                                    const bool flip_y,
                                                    const glm::ivec2 alloc_size) {

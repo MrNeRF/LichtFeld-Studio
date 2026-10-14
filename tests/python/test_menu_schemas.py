@@ -253,6 +253,11 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert edit_items[5]["shortcut"] == "Ctrl+V"
 
     assert edit_mod.EditMenu.order < select_mod.SelectMenu.order < view_mod.ViewMenu.order < tools_mod.ToolsMenu.order
+    tools_items = tools_mod.ToolsMenu().menu_items()
+    python_console = tools_items[4]["items"][0]
+    assert python_console["shortcut"] == "Ctrl+`"
+    python_console["callback"]()
+    assert state["python_console_shown"] == 1
 
     select_items = select_mod.SelectMenu().menu_items()
     assert len(select_items) == 5
@@ -300,6 +305,10 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert [item.get("enabled") for item in select_items if item["type"] == "item"] == [False] * 4
 
     view_items = view_mod.ViewMenu().menu_items()
+    logging = next(item for item in view_items if item.get("label") == "tr:scene.logging")
+    assert logging["selected"] is False
+    logging["callback"]()
+    assert state["panel_enabled"][-1] == ("lfs.logging", True)
     assert view_items[0]["type"] == "submenu"
     assert view_items[0]["label"] == "tr:menu.view.theme · LichtFeld · Dark"
     assert view_items[1]["type"] == "submenu"
@@ -341,7 +350,7 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert [item["label"] for item in theme_families[0]["items"]] == ["Dark", "Light"]
     assert [item["label"] for item in theme_families[1]["items"]] == ["Night", "Day"]
     assert view_items[1]["items"][1]["label"] == "100%"
-    # theme, ui_scale, separator, performance_hud, streaming_settings, reset_view, console
+    # theme, ui_scale, separator, performance_hud, streaming_settings, reset_view, console, logging
     assert view_items[3]["label"] == "tr:menu.view.performance_hud"
     assert view_items[3]["shortcut"] == "F10"
     view_items[3]["callback"]()
@@ -360,7 +369,8 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert view_items[5]["label"] == "tr:image_preview.reset_view"
     assert view_items[6]["label"] == "tr:main_panel.console"
     view_items[6]["callback"]()
-    assert state["python_console_shown"] == 1
+    # The tools menu already opened the console once above.
+    assert state["python_console_shown"] == 2
 
     keymap = sys.modules["lichtfeld"].keymap
     keymap.get_trigger_description = lambda action, _mode: {
@@ -396,15 +406,26 @@ def test_tools_menu_contains_processing_and_python_tools(monkeypatch):
 
     items = tools_mod.ToolsMenu().menu_items()
     labels = [item.get("label") for item in items]
-    assert labels == [
-        "tr:menu.file.mesh_to_splat",
-        "tr:menu.file.extract_video_frames",
-        None,
-        "tr:menu.tools.developer",
-        "tr:menu.tools.plugin_marketplace",
-    ]
-    items[3]["items"][0]["callback"]()
+    assert labels == ["tr:menu.file.mesh_to_splat", "tr:menu.file.extract_video_frames",
+                      "tr:rendering_panel.section_simplify", None, "tr:menu.tools.developer", "tr:menu.tools.plugin_marketplace"]
+    items[4]["items"][0]["callback"]()
+    items[2]["callback"]()
+
     assert state["python_console_shown"] == 1
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
+def test_developer_system_console_is_windows_only(monkeypatch, platform):
+    state = _install_lichtfeld_stub(monkeypatch)
+    monkeypatch.setattr(sys, "platform", platform)
+    tools_mod = _import_tools_menu(monkeypatch)
+    items = tools_mod.ToolsMenu().menu_items()[4]["items"]
+    assert items[0]["label"] == "tr:menu.tools.python_console"
+    assert len(items) == (2 if platform == "win32" else 1)
+    if platform == "win32":
+        assert items[1]["label"] == "tr:menu.tools.system_console"
+        items[1]["callback"]()
+        assert state["python_console_shown"] == 1
 
 
 def test_tools_menu_projects_selects_scope_when_available(monkeypatch):

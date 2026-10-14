@@ -2,15 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Generated mesh geometry follows the panorama camera projection."""
 
-import base64
-import io
 import json
+import time
 
 import pytest
 
 from test_api_camera_project_runtime import _editor
 from test_api_camera_project_runtime import camera_runtime
-from test_render_on_demand_idle import _call, _tool
+from test_render_on_demand_idle import _tool
 from viewer_mesh_test_support import difference, setup_mesh, viewport_image
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
@@ -45,9 +44,42 @@ settings.equirectangular=True
 def _magenta_pixels(image, bounds):
     x0, y0, x1, y1 = bounds
     return sum(
-        r > 100 and b > 100 and g < 100
+        r > 100 and b > 100 and 2 * g < min(r, b)
         for r, g, b in image.crop((x0, y0, x1, y1)).getdata()
     )
+
+
+def _hide_viewport_chrome(endpoint, directory):
+    """The active viewport toolbar sits on the left edge and covers the seam sliver."""
+    _editor(endpoint, "import lichtfeld as lf\nlf.toggle_ui()")
+    path = directory / "chrome-bounds.json"
+    previous = None
+    stable = 0
+    started = time.monotonic()
+    for _ in range(40):
+        time.sleep(0.15)
+        _editor(endpoint, "import json, lichtfeld as lf\nopen(%r, 'w').write(json.dumps(lf.selection.get_viewport_bounds()))" % str(path))
+        bounds = json.loads(path.read_text())
+        if bounds == previous and bounds[2] > 50 and time.monotonic() - started >= 1.3:
+            stable += 1
+            if stable >= 2:
+                return
+        else:
+            stable = 0
+        previous = bounds
+    raise AssertionError("viewport chrome did not settle after hiding the UI: %s" % previous)
+
+
+def _assert_seam_edges(image):
+    width, height = image.size
+    assert width > 200 and height > 200, image.size
+    band = max(width // 20, 8)
+    center = _magenta_pixels(image, (width // 5, height // 5, width * 4 // 5, height * 4 // 5))
+    left_edge = _magenta_pixels(image, (0, height // 5, band, height * 4 // 5))
+    right_edge = _magenta_pixels(image, (width - band, height // 5, width, height * 4 // 5))
+    assert center == 0, "Seam-crossing triangle stretched across the panorama"
+    assert left_edge > 0 and right_edge > 0, (
+        "Seam geometry disappeared from a panorama edge (%s, %s, %s)" % (left_edge, right_edge, image.size))
 
 
 def test_mesh_equirectangular_projection_changes_geometry(camera_runtime, tmp_path):
@@ -85,46 +117,30 @@ def test_mesh_equirectangular_seam_does_not_stretch_across_view(camera_runtime, 
     })
     if split:
         areas_path = tmp_path / "split-areas.json"
-        views = _editor(endpoint, """\
+        _editor(endpoint, """\
 import json, lichtfeld as lf
 view = next(area for area in lf.ui.screen.areas() if area['is_view'])['id']
-lf.ui.screen.split(view, 'vertical', .5)
-views = [area for area in lf.ui.screen.areas() if area['is_view']]
+added = lf.ui.screen.split(view, 'vertical', .5)
+assert added
+views = [area['id'] for area in lf.ui.screen.areas() if area['is_view']]
+assert len(views) == 2
 for area in views:
-    lf.ui.screen.set_view_camera(area['id'], (0.,0.,0.), (0.,0.,-1.), (0.,1.,0.))
-    lf.ui.screen.set_view_settings(area['id'], equirectangular=True, show_grid=False,
+    lf.ui.screen.set_view_camera(area, (0.,0.,0.), (0.,0.,-1.), (0.,1.,0.))
+    lf.ui.screen.set_view_settings(area, equirectangular=True, show_grid=False,
                                    show_coord_axes=False, show_pivot=False)
 open(%r, 'w').write(json.dumps(views))
 """ % str(areas_path))
-        areas = sorted(json.loads(areas_path.read_text()), key=lambda area: area["x"])
-        assert len(areas) == 2
-        result = _call(endpoint, "tools/call", {"name": "render_capture_window", "arguments": {}})
-        content = next(item for item in result["content"] if item["type"] == "image")
-        from PIL import Image
-        window = Image.open(io.BytesIO(base64.b64decode(content["data"]))).convert("RGB")
-        images = [window.crop((round(area["x"]), round(area["y"]),
-                              round(area["x"] + area["width"]), round(area["y"] + area["height"])))
-                  for area in areas]
+        _hide_viewport_chrome(endpoint, tmp_path)
+        images = []
+        for index, view_id in enumerate(json.loads(areas_path.read_text())):
+            _editor(endpoint, "import lichtfeld as lf\nlf.ui.screen.set_active_view(%d)" % int(view_id))
+            images.append(viewport_image(endpoint, tmp_path, "seam-split-%d" % index, require_green=False))
     else:
         _tool(endpoint, "camera_set_view", {
             "eye": [0., 0., 0.], "target": [0., 0., -1.], "up": [0., 1., 0.],
         })
+        _hide_viewport_chrome(endpoint, tmp_path)
         images = [viewport_image(endpoint, tmp_path, "seam", require_green=False)]
 
-    width, height = images[0].size
-    if split:
-        for image in images:
-            width, height = image.size
-            center = _magenta_pixels(image, (width // 5, height // 5, width * 4 // 5, height * 4 // 5))
-            left_edge = _magenta_pixels(image, (0, height // 5, width // 20, height * 4 // 5))
-            right_edge = _magenta_pixels(image, (width * 19 // 20, height // 5, width, height * 4 // 5))
-            assert center == 0, "Seam-crossing triangle stretched across a panorama view"
-            assert left_edge > 0 and right_edge > 0, "Seam geometry disappeared from a panorama view edge"
-    else:
-        image = images[0]
-        width, height = image.size
-        center = _magenta_pixels(image, (width // 5, height // 5, width * 4 // 5, height * 4 // 5))
-        left_edge = _magenta_pixels(image, (0, height // 5, width // 20, height * 4 // 5))
-        right_edge = _magenta_pixels(image, (width * 19 // 20, height // 5, width, height * 4 // 5))
-        assert center == 0, "Seam-crossing triangle stretched across the panorama"
-        assert left_edge > 0 and right_edge > 0, "Seam geometry disappeared from a panorama edge"
+    for image in images:
+        _assert_seam_edges(image)
