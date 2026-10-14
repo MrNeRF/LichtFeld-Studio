@@ -67,3 +67,7 @@ Future HEIC import requires separately qualified OS-provided decoders (Apple
 ImageIO/Core Image or Windows WIC with the HEIF extension), availability checks
 and explicit unsupported behavior elsewhere. No such provider, image writer or
 implicit HDR display conversion is added here.
+
+System-provider qualification and its measured limitations are tracked in
+[`media-heic-system-providers.md`](media-heic-system-providers.md). The diagnostic
+probes do not enable HEIC in this provider or change its distribution policy.
