@@ -24,6 +24,23 @@
 
 namespace lfs::vis::gui {
 
+    namespace {
+        std::optional<RmlRect> tabPickerPopupBounds(Rml::ElementFormControlSelect* picker) {
+            if (!picker || !picker->IsSelectBoxVisible())
+                return std::nullopt;
+            for (int i = 0; i < picker->GetNumChildren(true); ++i) {
+                auto* child = picker->GetChild(i);
+                if (child->GetTagName() != "selectbox")
+                    continue;
+                const auto position = child->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto size = child->GetBox().GetSize(Rml::BoxArea::Border);
+                if (size.x > 0 && size.y > 0)
+                    return RmlRect{position.x, position.y, position.x + size.x, position.y + size.y};
+            }
+            return std::nullopt;
+        }
+    } // namespace
+
     void RmlRightPanel::init(RmlUIManager* mgr) {
         assert(mgr);
         rml_manager_ = mgr;
@@ -34,6 +51,33 @@ namespace lfs::vis::gui {
             return;
         }
 
+        bindTabModel();
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/right_panel.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlRightPanel: failed to load right_panel.rml");
+                return;
+            }
+            document_->Show();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlRightPanel: resource not found: {}", e.what());
+            return;
+        }
+
+        resize_handle_el_ = document_->GetElementById("resize-handle");
+        left_border_el_ = document_->GetElementById("left-border");
+        splitter_el_ = document_->GetElementById("splitter");
+        tab_bar_el_ = document_->GetElementById("tab-bar");
+        tab_picker_el_ = dynamic_cast<Rml::ElementFormControlSelect*>(document_->GetElementById("tab-picker"));
+        tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
+        tab_separator_el_ = document_->GetElementById("tab-separator");
+
+        updateTheme();
+    }
+
+    void RmlRightPanel::bindTabModel() {
         auto ctor = rml_context_->CreateDataModel("right_panel_tabs");
         assert(ctor);
 
@@ -49,6 +93,15 @@ namespace lfs::vis::gui {
         ctor.Bind("tabs_overflow", &tabs_overflow_);
         ctor.Bind("can_scroll_tabs_left", &can_scroll_tabs_left_);
         ctor.Bind("can_scroll_tabs_right", &can_scroll_tabs_right_);
+        ctor.BindEventCallback("pick_tab",
+                               [this](Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&) {
+                                   const auto id = event.GetParameter<Rml::String>("value", "");
+                                   if (!syncing_tab_picker_ && tab_picker_el_ && tab_picker_el_->IsSelectBoxVisible() &&
+                                       !id.empty() && on_tab_changed) {
+                                       selected_tab_ = id;
+                                       on_tab_changed(id);
+                                   }
+                               });
 
         ctor.BindEventCallback("tab_click",
                                [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
@@ -79,28 +132,6 @@ namespace lfs::vis::gui {
                                });
 
         tab_model_ = ctor.GetModelHandle();
-
-        try {
-            const auto rml_path = lfs::vis::getAssetPath("rmlui/right_panel.rml");
-            document_ = rml_documents::loadDocument(rml_context_, rml_path);
-            if (!document_) {
-                LOG_ERROR("RmlRightPanel: failed to load right_panel.rml");
-                return;
-            }
-            document_->Show();
-        } catch (const std::exception& e) {
-            LOG_ERROR("RmlRightPanel: resource not found: {}", e.what());
-            return;
-        }
-
-        resize_handle_el_ = document_->GetElementById("resize-handle");
-        left_border_el_ = document_->GetElementById("left-border");
-        splitter_el_ = document_->GetElementById("splitter");
-        tab_bar_el_ = document_->GetElementById("tab-bar");
-        tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
-        tab_separator_el_ = document_->GetElementById("tab-separator");
-
-        updateTheme();
     }
 
     void RmlRightPanel::shutdown() {
@@ -117,6 +148,8 @@ namespace lfs::vis::gui {
         left_border_el_ = nullptr;
         splitter_el_ = nullptr;
         tab_bar_el_ = nullptr;
+        tab_picker_el_ = nullptr;
+        tooltip_.setHover({}, nullptr);
         tab_strip_viewport_el_ = nullptr;
         tab_separator_el_ = nullptr;
         tab_scroll_left_ = 0.0f;
@@ -144,6 +177,8 @@ namespace lfs::vis::gui {
         left_border_el_ = nullptr;
         splitter_el_ = nullptr;
         tab_bar_el_ = nullptr;
+        tab_picker_el_ = nullptr;
+        tooltip_.setHover({}, nullptr);
         tab_strip_viewport_el_ = nullptr;
         tab_separator_el_ = nullptr;
         base_rcss_.clear();
@@ -181,6 +216,7 @@ namespace lfs::vis::gui {
         left_border_el_ = document_->GetElementById("left-border");
         splitter_el_ = document_->GetElementById("splitter");
         tab_bar_el_ = document_->GetElementById("tab-bar");
+        tab_picker_el_ = dynamic_cast<Rml::ElementFormControlSelect*>(document_->GetElementById("tab-picker"));
         tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
         tab_separator_el_ = document_->GetElementById("tab-separator");
 
@@ -215,6 +251,7 @@ namespace lfs::vis::gui {
     bool RmlRightPanel::syncTabData(const std::vector<TabSnapshot>& tabs,
                                     const std::string& active_tab) {
         bool dirty = false;
+        selected_tab_ = active_tab;
 
         if (tabs_ != tabs) {
             tabs_ = tabs;
@@ -229,6 +266,32 @@ namespace lfs::vis::gui {
         }
 
         return dirty;
+    }
+
+    void RmlRightPanel::updateTabModel() {
+        syncing_tab_picker_ = true;
+        rml_context_->Update();
+        // data-for reuses options by index and data-value can write a stale
+        // option back during that update. Keep the owner's selection authoritative.
+        bool corrected = false;
+        if (active_tab_ != selected_tab_) {
+            active_tab_ = selected_tab_;
+            tab_model_.DirtyVariable("active_tab");
+            corrected = true;
+        }
+        if (tab_picker_el_) {
+            const auto* option = tab_picker_el_->GetOption(tab_picker_el_->GetSelection());
+            if (tab_picker_el_->GetValue() != selected_tab_ ||
+                !option || option->GetAttribute<Rml::String>("value", "") != selected_tab_) {
+                tab_picker_el_->SetValue(selected_tab_);
+                corrected = true;
+            }
+        }
+        // Publish the corrected value to the strip in this frame, without
+        // allowing programmatic changes to become user picks.
+        if (corrected)
+            rml_context_->Update();
+        syncing_tab_picker_ = false;
     }
 
     void RmlRightPanel::scrollTabs(float delta) {
@@ -394,7 +457,7 @@ namespace lfs::vis::gui {
     }
 
     bool RmlRightPanel::needsAnimationFrame() const {
-        return render_needed_ || input_dirty_ || splitter_dragging_ || resize_dragging_;
+        return render_needed_ || input_dirty_ || splitter_dragging_ || resize_dragging_ || tooltip_.revealDue();
     }
 
     std::string RmlRightPanel::animationDemandDescription() const {
@@ -515,6 +578,7 @@ namespace lfs::vis::gui {
             input_dirty_ = true;
         }
         last_hover_element_ = hover;
+        tooltip_.setHover(resolveRmlTooltip(hover), hover);
 
         if (resize_dragging_) {
             wants_input_ = true;
@@ -616,12 +680,6 @@ namespace lfs::vis::gui {
             return;
         if (layout.size.x <= 0 || layout.size.y <= 0)
             return;
-        if (rml_manager_) {
-            rml_manager_->trackContextFrame(rml_context_,
-                                            static_cast<int>(layout.pos.x - screen_x),
-                                            static_cast<int>(layout.pos.y - screen_y));
-        }
-
         const bool theme_changed = updateTheme();
 
         const int w = static_cast<int>(layout.size.x);
@@ -636,8 +694,13 @@ namespace lfs::vis::gui {
                                      layout.splitter_h != last_splitter_h_);
         const bool tabs_changed = syncTabData(tabs, active_tab);
 
+        const bool tooltip_changed = tooltip_.apply(document_,
+                                                    static_cast<int>(prev_mouse_x_ - layout.pos.x),
+                                                    static_cast<int>(prev_mouse_y_ - layout.pos.y), w, h);
+        rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.hasActiveState());
+        rml_manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
         const bool needs_render = render_needed_ || theme_changed || layout_changed ||
-                                  tabs_changed || dims_changed || input_dirty_;
+                                  tabs_changed || dims_changed || input_dirty_ || tooltip_changed;
 
         if (needs_render) {
             const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * dp_ratio;
@@ -666,7 +729,7 @@ namespace lfs::vis::gui {
 
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
             for (int pass = 0; pass < 3; ++pass) {
-                rml_context_->Update();
+                updateTabModel();
                 syncTabNavigation();
                 if (!syncTabScrollState())
                     break;
@@ -699,7 +762,11 @@ namespace lfs::vis::gui {
             input_dirty_ = false;
         }
 
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        const auto picker_bounds = tabPickerPopupBounds(tab_picker_el_);
+        rml_manager_->trackContextFrame(rml_context_,
+                                        static_cast<int>(layout.pos.x - screen_x),
+                                        static_cast<int>(layout.pos.y - screen_y), picker_bounds);
+        if (!rml_manager_->getVulkanRenderInterface())
             return;
 
         const float x = layout.pos.x - screen_x;
@@ -715,7 +782,8 @@ namespace lfs::vis::gui {
             .draw_height = static_cast<float>(h),
             .refresh = needs_render || direct_cache_.texture == 0 ||
                        direct_cache_.width != w || direct_cache_.height != h,
-            .foreground = false,
+            // The picker overlaps the independently rendered active panel.
+            .foreground = picker_bounds.has_value() || tooltip_.hasActiveState(),
             .clip_enabled = true,
             .clip = {
                 .x1 = x,

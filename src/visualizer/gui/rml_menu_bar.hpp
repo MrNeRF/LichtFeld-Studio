@@ -10,6 +10,7 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 
 #include <RmlUi/Core/DataModelHandle.h>
+#include <SDL3/SDL_events.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -167,6 +168,9 @@ namespace lfs::vis::gui {
         void updateProjectDisplay(std::string title, std::string tooltip, bool dirty);
         void reloadResources();
         void processInput(const PanelInputState& input);
+        void onPointerLeave();
+        void onPointerMotion();
+        void onWindowPointerEvent(const SDL_Event& event, std::uint32_t main_window_id);
         void closeDropdown();
         void setViewportRightEdge(float x) { viewport_right_edge_ = x; }
         void setUiHidden(bool hidden);
@@ -304,6 +308,7 @@ namespace lfs::vis::gui {
         bool wants_input_ = false;
         bool render_needed_ = true;
         bool mouse_pos_valid_ = false;
+        bool pointer_suspended_ = false;
         int last_mouse_x_ = 0;
         int last_mouse_y_ = 0;
         int last_hovered_label_ = -1;

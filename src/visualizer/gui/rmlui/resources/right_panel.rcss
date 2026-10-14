@@ -34,6 +34,21 @@ body {
     cursor: resize-vertical;
 }
 
+#tab-bar.with-scroll #tab-strip-viewport { right: 60dp; }
+#tab-bar.with-scroll #tab-scroll-right { right: 30dp; }
+#tab-picker {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 28dp;
+    min-width: 28dp;
+    height: 28dp;
+    z-index: 3;
+}
+#tab-picker selectvalue { visibility: hidden; }
+#tab-picker selectarrow { width: 26dp; }
+#tab-picker selectbox { right: 0; min-width: 200dp; max-height: 400dp; overflow-y: auto; }
+
 /* The shared panel_tabs stylesheet owns the common geometry. These right-panel
    overrides preserve the immediate selection feedback required by its cached
    context and leave the new bottom dock's transition behavior untouched. */

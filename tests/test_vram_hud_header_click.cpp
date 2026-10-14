@@ -4,15 +4,19 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/events.hpp"
+#include "gui/layout_state.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/vram_hud_overlay.hpp"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Factory.h>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -80,6 +84,7 @@ namespace lfs::vis::gui {
             #perf-hud-card { display: block; width: 300px; height: 200px; }
             #vram-hud-header { display: block; position: relative; width: 300px; height: 20px; drag: drag; }
             #perf-hud-collapse { position: absolute; right: 0px; top: 0px; width: 20px; height: 20px; }
+            #vram-hud-resize { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; drag: drag; }
             #vram-hud-summary, .vram-hud-summary-row { display: block; } .hidden { display: none; }
         </style></head><body>
             <div id="vram-hud-overlay">
@@ -94,6 +99,7 @@ namespace lfs::vis::gui {
                     <div id="vram-hud-panel-overview"><div id="vram-hud-summary"></div></div>
                     <div id="vram-hud-panel-ledger" class="hidden"></div>
                 </div>
+                <div id="vram-hud-resize"></div>
             </div>
         </body></rml>)";
     } // namespace
@@ -160,6 +166,8 @@ namespace lfs::vis::gui {
             state.perf_hud.visible = true;
             state.perf_hud.expanded = expanded;
             (void)overlay_->setState(std::move(state));
+            context_->Update();
+            (void)overlay_->initializeGeometryAfterLayout();
             context_->Update();
         }
 
@@ -242,6 +250,151 @@ namespace lfs::vis::gui {
         Rml::ElementDocument* document_ = nullptr;
         std::unique_ptr<VramHudOverlay> overlay_;
     };
+
+    TEST_F(VramHudHeaderClickTest, ResizingAfterBottomCornerSnapDoesNotShrinkEveryFrame) {
+        setExpanded(true);
+        dragBy(centerOf("vram-hud-resize"), {180, 160});
+        for (const bool right : {false, true}) {
+            setExpanded(false);
+            press(centerOf("perf-hud-strip-header"));
+            moveTo({right ? 2000 : -2000, 2000});
+            release();
+            setExpanded(true);
+            auto* root = document_->GetElementById("vram-hud-overlay");
+            const auto origin = root->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto before = root->GetBox().GetSize(Rml::BoxArea::Border);
+            const auto from = centerOf("vram-hud-resize");
+            press(from);
+            for (int delta = 4; delta <= 40; delta += 4) {
+                moveTo({from.x + delta, from.y + delta});
+                (void)overlay_->initializeGeometryAfterLayout();
+                context_->Update();
+                const auto size = root->GetBox().GetSize(Rml::BoxArea::Border);
+                EXPECT_EQ(root->GetAbsoluteOffset(Rml::BoxArea::Border), origin);
+                EXPECT_GE(size.x, before.x - 0.1f);
+                EXPECT_GE(size.y, before.y - 0.1f);
+            }
+            release();
+            LayoutState saved;
+            saved.load();
+            EXPECT_EQ(saved.vram_hud_snap_corner, right ? 4 : 3);
+            const auto before_inward = root->GetBox().GetSize(Rml::BoxArea::Border);
+            const auto handle = centerOf("vram-hud-resize");
+            dragBy(handle, {-40, -40});
+            const auto resized = root->GetBox().GetSize(Rml::BoxArea::Border);
+            EXPECT_LT(resized.x, before_inward.x);
+            EXPECT_LT(resized.y, before_inward.y);
+            const auto anchored = root->GetAbsoluteOffset(Rml::BoxArea::Border);
+            EXPECT_NEAR(anchored.y + resized.y, 600, 0.1f);
+            EXPECT_NEAR(right ? anchored.x + resized.x : anchored.x, right ? 800 : 0, 0.1f);
+            setExpanded(false);
+            const auto compact = root->GetBox().GetSize(Rml::BoxArea::Border);
+            const auto compact_origin = root->GetAbsoluteOffset(Rml::BoxArea::Border);
+            EXPECT_NEAR(compact_origin.y + compact.y, 600, 0.1f);
+            EXPECT_NEAR(right ? compact_origin.x + compact.x : compact_origin.x, right ? 800 : 0, 0.1f);
+            setExpanded(true);
+            EXPECT_EQ(root->GetBox().GetSize(Rml::BoxArea::Border), resized);
+            saved.load();
+            EXPECT_EQ(saved.vram_hud_snap_corner, right ? 4 : 3);
+        }
+    }
+
+    TEST_F(VramHudHeaderClickTest, BottomCornersSurviveExpansionAndViewportChanges) {
+        for (const bool right : {false, true}) {
+            press(centerOf("perf-hud-strip-header"));
+            moveTo({right ? 2000 : -2000, 2000});
+            release();
+            auto* root = document_->GetElementById("vram-hud-overlay");
+            const auto compact_position = root->GetAbsoluteOffset(Rml::BoxArea::Border);
+            LayoutState saved;
+            saved.load();
+            EXPECT_EQ(saved.vram_hud_snap_corner, right ? 4 : 3);
+            for (int i = 0; i < 2; ++i) {
+                setExpanded(true);
+                const auto expanded_position = root->GetAbsoluteOffset(Rml::BoxArea::Border);
+                EXPECT_LE(expanded_position.x, compact_position.x);
+                EXPECT_LT(expanded_position.y, compact_position.y);
+                setExpanded(false);
+                EXPECT_EQ(root->GetAbsoluteOffset(Rml::BoxArea::Border), compact_position);
+            }
+            overlay_->setViewportGeometry(200, 0, 340, 180);
+            EXPECT_TRUE(overlay_->initializeGeometryAfterLayout());
+            context_->Update();
+            EXPECT_LE(root->GetAbsoluteOffset(Rml::BoxArea::Border).x, compact_position.x);
+            setExpanded(true);
+            EXPECT_LE(root->GetBox().GetSize(Rml::BoxArea::Border).x, 340);
+            setExpanded(false);
+            overlay_->setViewportGeometry(0, 0, 800, 600);
+            EXPECT_TRUE(overlay_->initializeGeometryAfterLayout());
+            context_->Update();
+            EXPECT_EQ(root->GetAbsoluteOffset(Rml::BoxArea::Border), compact_position);
+            setExpanded(true);
+            EXPECT_FLOAT_EQ(root->GetBox().GetSize(Rml::BoxArea::Border).x, saved.vram_hud_width);
+            EXPECT_FLOAT_EQ(root->GetBox().GetSize(Rml::BoxArea::Border).y, saved.vram_hud_height);
+            setExpanded(false);
+            LayoutState after;
+            after.load();
+            EXPECT_FLOAT_EQ(after.vram_hud_x, saved.vram_hud_x);
+            EXPECT_FLOAT_EQ(after.vram_hud_y, saved.vram_hud_y);
+            EXPECT_FLOAT_EQ(after.vram_hud_width, saved.vram_hud_width);
+            EXPECT_FLOAT_EQ(after.vram_hud_height, saved.vram_hud_height);
+            EXPECT_FALSE(overlay_->initializeGeometryAfterLayout());
+        }
+    }
+
+    TEST_F(VramHudHeaderClickTest, UnsnappedPositionReturnsAfterExpandingAndCollapsing) {
+        const auto start = centerOf("perf-hud-strip-header");
+        press(start);
+        moveTo({start.x + 380, start.y + 400});
+        release();
+        auto* root = document_->GetElementById("vram-hud-overlay");
+        const auto position = root->GetAbsoluteOffset(Rml::BoxArea::Border);
+        LayoutState saved;
+        saved.load();
+        EXPECT_EQ(saved.vram_hud_snap_corner, 0);
+        setExpanded(true);
+        EXPECT_LT(root->GetAbsoluteOffset(Rml::BoxArea::Border).y, position.y);
+        setExpanded(false);
+        EXPECT_EQ(root->GetAbsoluteOffset(Rml::BoxArea::Border), position);
+    }
+
+    TEST_F(VramHudHeaderClickTest, SnappingUsesTheSameBorderExtentAsDisplayGeometry) {
+        auto* strip = document_->GetElementById("perf-hud-strip");
+        strip->SetProperty("padding", "5px");
+        strip->SetProperty("border-width", "2px");
+        context_->Update();
+        EXPECT_TRUE(overlay_->initializeGeometryAfterLayout());
+        context_->Update();
+        press(centerOf("perf-hud-strip-header"));
+        moveTo({2000, 2000});
+        release();
+        auto* root = document_->GetElementById("vram-hud-overlay");
+        const auto before = root->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto extent = strip->GetBox().GetSize(Rml::BoxArea::Border);
+        EXPECT_FLOAT_EQ(before.x + extent.x, 800);
+        EXPECT_FLOAT_EQ(before.y + extent.y, 600);
+        setExpanded(true);
+        setExpanded(false);
+        EXPECT_EQ(root->GetAbsoluteOffset(Rml::BoxArea::Border), before);
+    }
+
+    TEST_F(VramHudHeaderClickTest, CompactStripUsesItsContainersLeftEdge) {
+        std::ifstream file(std::filesystem::path(PROJECT_ROOT_PATH) /
+                           "src/visualizer/gui/rmlui/resources/viewport_overlay.rcss");
+        ASSERT_TRUE(file);
+        const std::string css{std::istreambuf_iterator<char>(file), {}};
+        document_->SetStyleSheetContainer(Rml::Factory::InstanceStyleSheetString(css));
+        auto* root = document_->GetElementById("vram-hud-overlay");
+        auto* strip = document_->GetElementById("perf-hud-strip");
+        root->SetClass("vram-hud-overlay", true);
+        strip->SetClass("perf-hud-strip", true);
+        root->SetProperty("width", "620px");
+        root->SetProperty("left", "0px");
+        root->SetProperty("top", "0px");
+        context_->Update();
+        EXPECT_NEAR(strip->GetAbsoluteOffset(Rml::BoxArea::Border).x, root->GetAbsoluteOffset(Rml::BoxArea::Border).x, 0.1f);
+        EXPECT_NEAR(strip->GetAbsoluteOffset(Rml::BoxArea::Border).y, root->GetAbsoluteOffset(Rml::BoxArea::Border).y, 0.1f);
+    }
 
     TEST_F(VramHudHeaderClickTest, DraggingCompactStripMovesItWithoutExpanding) {
         auto* const root = document_->GetElementById("vram-hud-overlay");

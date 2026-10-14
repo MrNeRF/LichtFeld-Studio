@@ -118,7 +118,9 @@ namespace lfs::core::persisted_settings {
             if (preserve_unrecognized && destination.contains(key) &&
                 !compatibleType(destination[key], value))
                 continue;
-            if (destination.contains(key) && destination[key].is_object() && value.is_object()) {
+            if (value.is_object()) {
+                if (!destination.contains(key) || !destination[key].is_object())
+                    destination[key] = Json::object();
                 mergeKnown(destination[key], value, preserve_unrecognized, array_identity);
             } else if (destination.contains(key) && destination[key].is_array() && value.is_array()) {
                 const auto identity_it = array_identity.find(key);

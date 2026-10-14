@@ -1076,6 +1076,10 @@ namespace lfs::vis::gui {
         if (rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, isOpen()))
             return;
         wants_input_ = false;
+        if (pointer_suspended_) {
+            wants_input_ = isOpen();
+            return;
+        }
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
@@ -1113,7 +1117,10 @@ namespace lfs::vis::gui {
             last_mouse_x_ = rml_mx;
             last_mouse_y_ = rml_my;
             render_needed_ = true;
-            rml_context_->ProcessMouseMove(rml_mx, rml_my, 0);
+            if (is_in_context)
+                rml_context_->ProcessMouseMove(rml_mx, rml_my, 0);
+            else
+                rml_context_->ProcessMouseLeave();
         }
 
         const int count = menu_items_->GetNumChildren();
@@ -1438,7 +1445,34 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    void RmlMenuBar::onWindowPointerEvent(const SDL_Event& event, const std::uint32_t main_window_id) {
+        if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE && event.window.windowID == main_window_id)
+            onPointerLeave();
+        else if ((event.type == SDL_EVENT_MOUSE_MOTION && event.motion.windowID == main_window_id) ||
+                 (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.windowID == main_window_id))
+            onPointerMotion();
+    }
+
+    void RmlMenuBar::onPointerMotion() {
+        if (pointer_suspended_) {
+            pointer_suspended_ = false;
+            mouse_pos_valid_ = false;
+        }
+    }
+
+    void RmlMenuBar::onPointerLeave() {
+        pointer_suspended_ = true;
+        if (rml_context_)
+            rml_context_->ProcessMouseLeave();
+        mouse_pos_valid_ = false;
+        last_hovered_label_ = -1;
+        last_toolbar_hovered_ = false;
+        tooltip_.setHover({}, nullptr);
+        render_needed_ = true;
+    }
+
     void RmlMenuBar::onWindowFocusLost() {
+        onPointerLeave();
         if (alt_pressed_)
             alt_chord_ = true;
         access_alt_held_ = false;
