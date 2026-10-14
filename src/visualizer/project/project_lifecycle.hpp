@@ -713,7 +713,8 @@ namespace lfs::vis::project {
         void stopHydrationThreads(bool cancel_open_job = true);
         void markHydrationFailed(
             std::uint64_t epoch,
-            const std::string& detail);
+            const std::string& detail,
+            std::string user_message = {});
         [[nodiscard]] static std::string
         hydrationName(Hydration state);
 

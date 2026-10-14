@@ -2328,12 +2328,24 @@ contract["check_selection_submode_follows_native_mode"](lf)
             const auto info = viewer.projectGetInfo();
             return info && info->hydration_state == "complete";
         }));
+        class ToastMessages final : public lfs::NativeErrorConsumer {
+        public:
+            void on_error(const lfs::ErrorNotification& notification,
+                          const lfs::ErrorDeliveryInfo&) noexcept override {
+                if (notification.surface == lfs::ErrorSurface::Toast)
+                    message = std::string(notification.error.user_message());
+            }
+            std::string message;
+        } toasts;
+        auto subscription = lfs::ErrorBus::instance().subscribe(toasts);
         ASSERT_TRUE(viewer.projectOpen(corrupt_path, ProjectSwitchDisposition::DiscardChanges));
         ASSERT_TRUE(waitUntil([&] {
             viewer.pumpPostedWorkForProjectWrite();
             const auto info = viewer.projectGetInfo();
             return info && info->hydration_state == "failed";
         }));
+        // The toast shows the user message; the developer detail stays in the log.
+        EXPECT_EQ(toasts.message, "The project container is corrupt.");
 
         EXPECT_FALSE(viewer.projectGetInfo()->dirty);
         const auto saved = viewer.projectSave(false);
