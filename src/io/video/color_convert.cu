@@ -88,6 +88,62 @@ namespace lfs::io::video {
         }
     }
 
+    template <bool P010>
+    __global__ void semiplanarToRgbKernel(const uint8_t* y_plane, const uint8_t* uv_plane,
+                                          uint8_t* rgb, int width, int height,
+                                          int y_pitch, int uv_pitch, core::color::VideoColorParameters color) {
+        const int x = blockIdx.x * blockDim.x + threadIdx.x;
+        const int y = blockIdx.y * blockDim.y + threadIdx.y;
+        if (x >= width || y >= height)
+            return;
+        const auto* y_row = y_plane + static_cast<size_t>(y) * y_pitch;
+        const int uv_x = (x / 2) * 2;
+        float code[3];
+        if constexpr (P010)
+            code[0] = reinterpret_cast<const uint16_t*>(y_row)[x] >> 6;
+        else
+            code[0] = y_row[x];
+        // Match the generic unscaled RGB8 swscale path: paired horizontal
+        // samples and pixel-center vertical chroma interpolation.
+        const float sy = y * color.chroma_y_scale + color.chroma_y_offset;
+        const int first = static_cast<int>(floorf(sy));
+        const float weight = sy - first;
+        const int rows = (height + 1) / 2;
+        const auto* a = uv_plane + static_cast<size_t>(max(0, min(rows - 1, first))) * uv_pitch;
+        const auto* b = uv_plane + static_cast<size_t>(max(0, min(rows - 1, first + 1))) * uv_pitch;
+        for (int channel = 1; channel < 3; ++channel) {
+            float first_code, second_code;
+            if constexpr (P010) {
+                first_code = reinterpret_cast<const uint16_t*>(a)[uv_x + channel - 1] >> 6;
+                second_code = reinterpret_cast<const uint16_t*>(b)[uv_x + channel - 1] >> 6;
+            } else {
+                first_code = a[uv_x + channel - 1];
+                second_code = b[uv_x + channel - 1];
+            }
+            code[channel] = first_code + (second_code - first_code) * weight;
+        }
+        for (int channel = 0; channel < 3; ++channel)
+            code[channel] = code[channel] * color.scale[channel] - color.bias[channel];
+        const size_t pixel = (static_cast<size_t>(y) * width + x) * 3;
+        for (int channel = 0; channel < 3; ++channel) {
+            const float value = color.decode[channel * 3] * code[0] +
+                                color.decode[channel * 3 + 1] * code[1] +
+                                color.decode[channel * 3 + 2] * code[2];
+            rgb[pixel + channel] = clampU8(static_cast<int>(floorf(value * 255.f + .5f)));
+        }
+    }
+    void semiplanarToRgbCuda(const uint8_t* y, const uint8_t* uv, uint8_t* rgb,
+                             int width, int height, int y_pitch, int uv_pitch,
+                             bool p010, const core::color::VideoColorParameters& color, cudaStream_t stream) {
+        const dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+        const dim3 grid((width + BLOCK_SIZE - 1) / BLOCK_SIZE, (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        if (p010)
+            semiplanarToRgbKernel<true><<<grid, block, 0, stream>>>(y, uv, rgb, width, height, y_pitch, uv_pitch, color);
+        else
+            semiplanarToRgbKernel<false><<<grid, block, 0, stream>>>(y, uv, rgb, width, height, y_pitch, uv_pitch, color);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.semiplanar_to_rgb");
+    }
+
     __global__ void rotateRgbKernel(
         const uint8_t* __restrict__ src,
         uint8_t* __restrict__ dst,

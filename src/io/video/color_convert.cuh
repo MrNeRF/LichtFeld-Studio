@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/video_color_math.h"
 #include <cstdint>
 #include <cuda_runtime.h>
 
@@ -20,6 +21,13 @@ namespace lfs::io::video {
         int uv_pitch = 0, // UV plane pitch (0 = use width)
         cudaStream_t stream = nullptr,
         bool full_range = false);
+
+    // Same semiplanar conversion with explicit source depth and shared color policy.
+    // P010 loads all ten meaningful bits from MSB-aligned UINT16 samples.
+    void semiplanarToRgbCuda(const uint8_t* y, const uint8_t* uv, uint8_t* rgb,
+                             int width, int height, int y_pitch, int uv_pitch,
+                             bool p010, const core::color::VideoColorParameters& color,
+                             cudaStream_t stream = nullptr);
 
     // Rotate RGB uint8 image on GPU by 90/180/270 degrees
     // src and dst must be separate GPU buffers

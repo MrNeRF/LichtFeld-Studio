@@ -855,6 +855,16 @@ TEST(VideoEncoderValidationTest, RejectsUnsafeOptionsBeforeCodecInitialization) 
     EXPECT_FALSE(encoder.isOpen());
 }
 
+TEST(VideoEncoderValidationTest, RejectsInvalidCodecBeforeCodecInitialization) {
+    lfs::io::video::VideoEncoder encoder;
+    lfs::io::video::VideoExportOptions options;
+    options.codec = static_cast<lfs::media::VideoEncodeCodec>(-1);
+    const auto result = encoder.open("unused.mp4", options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("codec"), std::string::npos);
+    EXPECT_FALSE(encoder.isOpen());
+}
+
 namespace {
     struct VideoOutputDirectory {
         std::filesystem::path path = std::filesystem::temp_directory_path() /
