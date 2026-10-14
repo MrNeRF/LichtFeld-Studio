@@ -49,6 +49,12 @@ namespace lfs::vis::gui {
         ctor.Bind("tabs_overflow", &tabs_overflow_);
         ctor.Bind("can_scroll_tabs_left", &can_scroll_tabs_left_);
         ctor.Bind("can_scroll_tabs_right", &can_scroll_tabs_right_);
+        ctor.BindEventCallback("pick_tab",
+                               [this](Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&) {
+                                   const auto id = event.GetParameter<Rml::String>("value", "");
+                                   if (!id.empty() && on_tab_changed)
+                                       on_tab_changed(id);
+                               });
 
         ctor.BindEventCallback("tab_click",
                                [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {

@@ -2604,7 +2604,8 @@
     "perf_collapse": "Einklappen",
     "gt_metrics_training_required": "Kamerametriken benötigen eine initialisierte Trainingssitzung.",
     "gt_metrics_calculation_failed": "Metriken für diese Ansicht konnten nicht berechnet werden.",
-    "perf_hud_tooltip": "Leistungs-HUD ein- oder ausblenden"
+    "perf_hud_tooltip": "Leistungs-HUD ein- oder ausblenden",
+    "all_panel_tabs": "All panels"
   },
   "runtime": {
     "environment_map_failed": "Die Umgebungskarte „{}“ konnte nicht gelesen werden. Die bisherige Umgebung wurde beibehalten.",

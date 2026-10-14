@@ -2604,7 +2604,8 @@
     "perf_collapse": "Contraer",
     "gt_metrics_training_required": "Las métricas de cámara necesitan una sesión de entrenamiento inicializada.",
     "gt_metrics_calculation_failed": "No se pudieron calcular las métricas de esta vista.",
-    "perf_hud_tooltip": "Mostrar u ocultar el HUD de rendimiento"
+    "perf_hud_tooltip": "Mostrar u ocultar el HUD de rendimiento",
+    "all_panel_tabs": "All panels"
   },
   "runtime": {
     "environment_map_failed": "No se pudo leer el mapa de entorno «{}». Se ha conservado el entorno anterior.",

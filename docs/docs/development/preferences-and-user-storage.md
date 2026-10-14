@@ -145,6 +145,12 @@ id when available. Request parameters, tool names, payloads, free-form messages,
 and error details are deliberately not recorded. Because network addresses can
 identify devices and interfaces, request logging remains an explicit opt-in.
 
+When right-panel tabs overflow, the larger arrow buttons scroll the strip and
+the final dropdown lists every available panel vertically. Selecting a panel
+uses the same active-tab callback as its tab; the choice continues to be saved
+in the project's GUIL chapter. The open picker supports arrow-key navigation
+and does not require plugins to change their panel registration.
+
 Application preferences are stored in `config/preferences.json`. User-global
 UI details that are not project layout, such as HUD state, are written to
 `config/ui_preferences.json`. Preferences, UI state, window state, lifecycle

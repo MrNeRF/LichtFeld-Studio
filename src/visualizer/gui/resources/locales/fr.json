@@ -2604,7 +2604,8 @@
     "perf_collapse": "Réduire",
     "gt_metrics_training_required": "Les métriques de caméra nécessitent une session d’entraînement initialisée.",
     "gt_metrics_calculation_failed": "Impossible de calculer les métriques de cette vue.",
-    "perf_hud_tooltip": "Afficher ou masquer le HUD de performances"
+    "perf_hud_tooltip": "Afficher ou masquer le HUD de performances",
+    "all_panel_tabs": "All panels"
   },
   "runtime": {
     "environment_map_failed": "Impossible de lire la carte d’environnement « {} ». L’environnement précédent a été conservé.",
