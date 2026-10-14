@@ -769,7 +769,9 @@ namespace lfs::vis {
         auto saved = impl_->values.find("sidebar_defaults");
         if (saved != impl_->values.end() && saved->is_object())
             for (const char* key : {"right_panel_width", "scene_panel_ratio", "active_tab"})
-                saved->erase(key);
+                // Explicit nulls replace these fields during the recursive
+                // settings merge, without deleting future/unknown children.
+                (*saved)[key] = nullptr;
         impl_->saveValuesLocked();
     }
 
