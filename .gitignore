@@ -54,6 +54,7 @@ tests/data/nn/*
 !tests/media/test_extraction_contracts.py
 !tests/media/test_media_bindings.py
 !tests/media/test_studio_backends.py
+!tests/media/hevc_contracts.py
 !tests/media/test_mcp_media.py
 !docs/plugins/examples/**/*.py
 !docs/docs/development/node-graph/examples/*.py

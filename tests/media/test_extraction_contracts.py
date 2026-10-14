@@ -10,6 +10,7 @@ import subprocess
 import struct
 import tempfile
 import unittest
+from hevc_contracts import assert_hvc1_samples
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_SPEC = importlib.util.spec_from_file_location("media_fixtures", ROOT / "scripts/prepare_media_fixtures.py")
@@ -203,6 +204,80 @@ class ExtractionContracts(unittest.TestCase):
                     # Hardware H.264 can have localized inter-frame artifacts;
                     # mean error still detects stale or incorrectly ranged planes.
                     self.assertLess(sum(abs(value - (32 + index * 32)) for value in luma) / len(luma), 2)
+
+    @unittest.skipUnless(os.environ.get("LFS_MEDIA_TEST_VIDEOTOOLBOX_8K") == "1",
+                         "requires an explicit native Mac VideoToolbox run")
+    def test_videotoolbox_hevc_session_codec_color_pts_and_lifecycle(self):
+        work = Path(tempfile.mkdtemp(prefix="apple-hevc-session-", dir=self.root))
+        for width, height in ((64, 48), (3840, 2160), (7680, 4320)):
+            with self.subTest(extent=(width, height)):
+                video = work / f"hevc-{width}.mp4"
+                request = work / "encode.json"
+                request.write_text(json.dumps({"operation": "encode-session", "output": str(video),
+                                               "width": width, "height": height, "videotoolbox": True,
+                                               "hevc": True, "matrix": 1, "range": 1, "spherical": True}), encoding="utf-8")
+                result = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=120)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads(result.stdout)
+                self.assertTrue(report["success"])
+                self.assertIn(report["backend"], (2, 3))
+                self.assertEqual(report["writer_calls"], 8)
+                decoded = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_frames",
+                                                              "-show_streams", "-show_format", "-of", "json", str(video)]))
+                stream = decoded["streams"][0]
+                self.assertEqual((stream["codec_name"], stream["codec_tag_string"], stream["pix_fmt"]),
+                                 ("hevc", "hvc1", "yuv420p"))
+                assert_hvc1_samples(self, FFPROBE, video)
+                self.assertEqual((stream["width"], stream["height"]), (width, height))
+                spherical = next(item for item in stream["side_data_list"] if item["side_data_type"] == "Spherical Mapping")
+                self.assertEqual(spherical["projection"], "equirectangular")
+                self.assertEqual(stream["color_space"], "bt709")
+                self.assertEqual(stream["color_range"], "tv")
+                self.assertEqual(decoded["format"]["tags"]["comment"], report["comment"])
+                self.assertEqual(len(decoded["frames"]), 4)
+                for index, frame in enumerate(decoded["frames"]):
+                    self.assertAlmostEqual(float(frame["best_effort_timestamp_time"]), index / 10)
+                pixels = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(video), "-vf", "scale=64:48",
+                                                  "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"])
+                self.assertEqual(len(pixels), 4 * 4608)
+                for index in range(4):
+                    luma = pixels[index * 4608:index * 4608 + 3072]
+                    self.assertLess(sum(abs(value - (32 + index * 32)) for value in luma) / len(luma), 3)
+
+    @unittest.skipUnless(os.environ.get("LFS_MEDIA_TEST_VIDEOTOOLBOX_8K") == "1",
+                         "requires an explicit native Mac VideoToolbox run")
+    def test_hevc_apple_software_fallback_and_hardware_recovery(self):
+        work = Path(tempfile.mkdtemp(prefix="apple-hevc-fallback-", dir=self.root))
+        for width, height in ((64, 48), (7680, 4320)):
+            with self.subTest(extent=(width, height)):
+                video = work / f"fallback-{width}.mp4"
+                request = work / "request.json"
+                request.write_text(json.dumps({"output": str(video), "spherical": True, "width": width, "height": height}), encoding="utf-8")
+                runner = RUNNER.parent / "media_apple_hevc_fallback_runner"
+                result = subprocess.run([str(runner), str(request)], capture_output=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads(result.stdout)
+                self.assertEqual(report["backend"], 3)
+                self.assertEqual(report["recovery_backend"], 2)
+                for path in (video, Path(report["recovery_output"])):
+                    assert_hvc1_samples(self, FFPROBE, path)
+                    decoded = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams",
+                                                                  "-show_frames", "-of", "json", str(path)]))
+                    stream = decoded["streams"][0]
+                    self.assertEqual((stream["codec_name"], stream["codec_tag_string"], stream["pix_fmt"]),
+                                     ("hevc", "hvc1", "yuv420p"))
+                    self.assertEqual((stream["width"], stream["height"]), (width, height))
+                    self.assertEqual(len(decoded["frames"]), 4)
+                    spherical = next(item for item in stream["side_data_list"] if item["side_data_type"] == "Spherical Mapping")
+                    self.assertEqual(spherical["projection"], "equirectangular")
+                    for index, frame in enumerate(decoded["frames"]):
+                        self.assertAlmostEqual(float(frame["best_effort_timestamp_time"]), index / 10)
+                    pixels = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path), "-vf", "scale=64:48", "-f", "rawvideo",
+                                                      "-pix_fmt", "yuv420p", "-"])
+                    self.assertEqual(len(pixels), 4 * 4608)
+                    for index in range(4):
+                        luma = pixels[index * 4608:index * 4608 + 3072]
+                        self.assertLess(sum(abs(value - (32 + index * 32)) for value in luma) / len(luma), 3)
 
     def test_optional_jpeg_backend_failures_and_cpu_fallback(self):
         reference, files = self.extract(format="jpg")

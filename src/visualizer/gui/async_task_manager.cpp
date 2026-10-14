@@ -1729,6 +1729,7 @@ namespace lfs::vis::gui {
             if (const auto* rendering = viewer_->getRenderingManager())
                 options.spherical_video = rendering->getSettings().equirectangular;
             options.crf = evt.crf;
+            options.codec = media::videoEncodeCodecFromId(evt.codec).value_or(static_cast<media::VideoEncodeCodec>(-1));
             const auto reconstruction_fallback =
                 io::video::videoReconstructionFallbackFromId(evt.reconstruction_fallback);
             options.reconstruction = {
