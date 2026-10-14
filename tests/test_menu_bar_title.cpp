@@ -1210,6 +1210,21 @@ namespace {
         EXPECT_FALSE(button->IsPseudoClassSet("hover"));
         EXPECT_TRUE(RmlMenuBarTestAccess::renderNeeded(bar_));
         EXPECT_FALSE(RmlMenuBarTestAccess::tooltip(bar_).needsFrame());
+        const PanelInputState input{.mouse_x = (rect.left + rect.right) / 2,
+                                    .mouse_y = (rect.top + rect.bottom) / 2,
+                                    .screen_w = 1600,
+                                    .screen_h = 300};
+        bar_.processInput(input);
+        context_->Update();
+        EXPECT_FALSE(button->IsPseudoClassSet("hover"));
+        bar_.onPointerMotion();
+        bar_.processInput(input);
+        context_->Update();
+        EXPECT_TRUE(button->IsPseudoClassSet("hover"));
+        bar_.onPointerLeave();
+        bar_.processInput(input);
+        context_->Update();
+        EXPECT_FALSE(button->IsPseudoClassSet("hover"));
     }
 
     TEST_F(MenuBarTitleTest, TooltipPreservesFullPathAsTextIncludingMarkupCharacters) {

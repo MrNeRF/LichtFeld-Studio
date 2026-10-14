@@ -138,6 +138,10 @@ namespace lfs::vis {
                 return rmlui_manager_.requestNativeWindowCapture(panel_id, std::move(callback));
             }
             RmlUIManager::InputDispatchResult dispatchInputEvent(const SDL_Event& event) {
+                if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE)
+                    rml_menu_bar_.onPointerLeave();
+                else if (event.type == SDL_EVENT_MOUSE_MOTION)
+                    rml_menu_bar_.onPointerMotion();
                 return rmlui_manager_.dispatchInputEvent(event);
             }
             void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }

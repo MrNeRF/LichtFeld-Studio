@@ -1076,6 +1076,10 @@ namespace lfs::vis::gui {
         if (rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, isOpen()))
             return;
         wants_input_ = false;
+        if (pointer_suspended_) {
+            wants_input_ = isOpen();
+            return;
+        }
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
@@ -1441,7 +1445,15 @@ namespace lfs::vis::gui {
         return true;
     }
 
-    void RmlMenuBar::onWindowFocusLost() {
+    void RmlMenuBar::onPointerMotion() {
+        if (pointer_suspended_) {
+            pointer_suspended_ = false;
+            mouse_pos_valid_ = false;
+        }
+    }
+
+    void RmlMenuBar::onPointerLeave() {
+        pointer_suspended_ = true;
         if (rml_context_)
             rml_context_->ProcessMouseLeave();
         mouse_pos_valid_ = false;
@@ -1449,6 +1461,10 @@ namespace lfs::vis::gui {
         last_toolbar_hovered_ = false;
         tooltip_.setHover({}, nullptr);
         render_needed_ = true;
+    }
+
+    void RmlMenuBar::onWindowFocusLost() {
+        onPointerLeave();
         if (alt_pressed_)
             alt_chord_ = true;
         access_alt_held_ = false;

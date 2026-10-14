@@ -304,6 +304,7 @@ body {
 }
 
 .window-restore-back {
+    border-width: 1dp 1dp 0 0;
     left: 5dp;
     top: 3dp;
 }
@@ -311,7 +312,6 @@ body {
 .window-restore-front {
     left: 3dp;
     top: 5dp;
-    z-index: 1;
 }
 
 #menu-window-maximize.maximized .window-icon-maximize {
@@ -379,7 +379,6 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
-    z-index: 1;
 }
 
 #dropdown-overlay.visible {
