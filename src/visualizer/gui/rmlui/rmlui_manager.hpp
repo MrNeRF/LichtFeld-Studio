@@ -124,6 +124,7 @@ namespace lfs::vis::gui {
 
         RenderInterface_VK* getVulkanRenderInterface() const { return vulkan_render_interface_; }
         RmlTextInputHandler* getTextInputHandler() const { return text_input_handler_.get(); }
+        [[nodiscard]] bool isDispatchingInput() const { return dispatching_input_; }
         SDL_Window* getWindow() const { return window_; }
 
         // Render passes register geometry and handlers. SDL polling dispatches each

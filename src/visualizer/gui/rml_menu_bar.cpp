@@ -36,6 +36,7 @@
 #include <cmath>
 #include <format>
 #include <glm/glm.hpp>
+#include <span>
 #include <string_view>
 
 namespace lfs::vis::gui {
@@ -808,7 +809,11 @@ namespace lfs::vis::gui {
                                          input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
         if (alt_pressed_ && mouse_button_active)
             alt_chord_ = true;
-        for (const auto& event : input.input_events) {
+        // While the menu owns the keyboard, SDL dispatch also delivers each key here,
+        // and the frame pass sees the same key again. Handle keys once, in the frame pass.
+        const std::span<const FrameInputEvent> key_events =
+            rml_manager_->isDispatchingInput() ? std::span<const FrameInputEvent>{} : std::span{input.input_events};
+        for (const auto& event : key_events) {
             const bool alt_key = event.scancode == SDL_SCANCODE_LALT || event.scancode == SDL_SCANCODE_RALT;
             bool window_has_keyboard_focus = true;
             const bool check_window_focus = alt_pressed_ || keyboard_focus_menu_index_ >= 0 || alt_key;

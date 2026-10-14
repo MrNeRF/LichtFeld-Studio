@@ -124,6 +124,21 @@ namespace lfs::vis::gui {
             event.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
             bar.rml_manager_->dispatchInputEvent(event);
         }
+        static void frame(RmlMenuBar& bar, std::vector<lfs::vis::FrameInputEvent> events = {}) {
+            lfs::vis::gui::PanelInputState input{};
+            input.screen_w = 1600;
+            input.screen_h = 300;
+            input.input_events = std::move(events);
+            bar.processInput(input);
+        }
+        static void dispatchKey(RmlMenuBar& bar, SDL_Scancode code) {
+            SDL_Event event{};
+            event.type = SDL_EVENT_KEY_DOWN;
+            event.key.type = SDL_EVENT_KEY_DOWN;
+            event.key.scancode = code;
+            event.key.down = true;
+            bar.rml_manager_->dispatchInputEvent(event);
+        }
         static Rml::Element* menuHit(RmlMenuBar& bar, float x, float y) {
             return bar.dropdownElementAtPoint(x, y);
         }
@@ -354,6 +369,26 @@ namespace {
         RmlMenuBarTestAccess::openPath(bar_, -1, -1, -1);
         for (auto* popup : popups)
             EXPECT_EQ(popup->GetDisplay(), Rml::Style::Display::None);
+    }
+
+    TEST_F(MenuBarTitleTest, ArrowKeyMovesOpenMenuOncePerPress) {
+        using Item = lfs::vis::gui::MenuItemDesc;
+        using Type = Item::Type;
+        const std::vector<Item> items{
+            {.type = Type::Item, .label = "One", .callback_index = 1},
+            {.type = Type::Item, .label = "Two", .callback_index = 2},
+            {.type = Type::Item, .label = "Three", .callback_index = 3},
+        };
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        // A frame makes the open menu the keyboard owner.
+        RmlMenuBarTestAccess::frame(bar_);
+        // One press reaches the menu through SDL dispatch and again in the next frame.
+        RmlMenuBarTestAccess::dispatchKey(bar_, SDL_SCANCODE_DOWN);
+        lfs::vis::InputEventDispatch dispatch;
+        RmlMenuBarTestAccess::frame(bar_, {{.kind = lfs::vis::FrameInputEventKind::KeyDown,
+                                            .scancode = SDL_SCANCODE_DOWN,
+                                            .dispatch = &dispatch}});
+        EXPECT_EQ(RmlMenuBarTestAccess::path(bar_, 0), 1);
     }
 
     TEST_F(MenuBarTitleTest, KeyboardNavigationSequences) {
