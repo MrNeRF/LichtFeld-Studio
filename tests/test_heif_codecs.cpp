@@ -51,6 +51,12 @@ namespace {
             codec::Probe unavailable;
             EXPECT_FALSE(codec::probe(path, unavailable, error));
             EXPECT_EQ(unavailable.width, 0);
+#ifdef _WIN32
+            for (const auto name : {"system-combined.heic", "rgb8.heic"}) {
+                EXPECT_FALSE(codec::probe(fixtures / name, unavailable, error));
+                EXPECT_NE(error.find("provider unavailable"), std::string::npos) << error;
+            }
+#endif
 #ifdef __APPLE__
             FAIL() << "Apple system provider failed its qualified RGB8 input: " << error;
 #elif defined(_WIN32)

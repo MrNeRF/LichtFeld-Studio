@@ -15,6 +15,10 @@ Windows checks for an HEVC Media Foundation decoder once per process with
 `MFTEnumEx`, before both metadata probing and pixel decoding. Install missing
 extensions and restart the app to refresh that check. Missing HEVC and WIC
 component errors name both extensions and include a hexadecimal HRESULT.
+Media Foundation is loaded on demand from System32, with the three required
+functions resolved dynamically. It is not a load-time dependency of the codec
+library. Windows without Media Foundation can still start the app and use other
+formats; HEIC reports provider unavailable and names the Media Feature Pack.
 Availability is a capability check; malformed files and later decode errors
 still fail explicitly.
 

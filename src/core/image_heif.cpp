@@ -154,6 +154,8 @@ namespace lfs::core::image_codecs {
                     error = "HEIF: inconsistent HEVC primary precision";
                     return false;
                 }
+                if (hevc && !heic_system_available(error))
+                    return false;
                 if (hevc) {
                     heif_color_profile_nclx* declared = nullptr;
                     const auto status = heif_image_handle_get_nclx_color_profile(handle.get(), &declared);

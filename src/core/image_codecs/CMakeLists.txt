@@ -17,7 +17,7 @@ set_target_properties(lfs_image_codecs PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 target_compile_features(lfs_image_codecs PUBLIC cxx_std_23)
 if(WIN32)
-    target_link_libraries(lfs_image_codecs PRIVATE windowscodecs ole32 mfplat mfuuid)
+    target_link_libraries(lfs_image_codecs PRIVATE windowscodecs ole32 mfuuid)
 elseif(APPLE)
     target_link_libraries(lfs_image_codecs PRIVATE "-framework ImageIO" "-framework CoreGraphics" "-framework CoreFoundation")
 endif()

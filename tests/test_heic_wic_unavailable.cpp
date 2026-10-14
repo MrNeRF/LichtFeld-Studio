@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <array>
+#include <cstring>
 #include <gtest/gtest.h>
 #include <mfapi.h>
 #include <mferror.h>
@@ -20,17 +21,22 @@ namespace {
         *count = 0;
         return S_OK;
     }
+    FARPROC WINAPI missing_hevc_proc(HMODULE module, LPCSTR name) {
+        if (std::strcmp(name, "MFTEnumEx") == 0)
+            return reinterpret_cast<FARPROC>(&missing_hevc_decoder);
+        return GetProcAddress(module, name);
+    }
 } // namespace
 
 // Compile the actual adapter with WIC installed but no HEVC MFT. The
 // substitution is confined to this translation unit, without registry edits.
-#define MFTEnumEx             missing_hevc_decoder
+#define GetProcAddress        missing_hevc_proc
 #define read_heic_system      read_heic_system_without_hevc
 #define heic_system_available heic_system_available_without_hevc
 #include "../src/core/image_heic_system.cpp"
 #undef heic_system_available
 #undef read_heic_system
-#undef MFTEnumEx
+#undef GetProcAddress
 
 TEST(ProductionHeif, MissingHevcDecoderFailsBeforeWicProbeAndPixelCopy) {
     namespace codec = lfs::core::image_codecs;

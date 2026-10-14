@@ -30,32 +30,48 @@ namespace lfs::core::image_codecs {
                     CoUninitialize();
             }
         };
+        struct MediaFoundationModule {
+            HMODULE handle = LoadLibraryExW(L"mfplat.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+            ~MediaFoundationModule() {
+                if (handle)
+                    FreeLibrary(handle);
+            }
+        };
         bool wic_status(HRESULT status, const char* operation, std::string& error) {
             if (SUCCEEDED(status))
                 return true;
             char hex[11];
             std::snprintf(hex, sizeof(hex), "0x%08lX", static_cast<unsigned long>(status));
-            if (status == WINCODEC_ERR_COMPONENTNOTFOUND || status == MF_E_TOPO_CODEC_NOT_FOUND)
-                error = "HEIF: HEVC system provider unavailable; install HEVC Video Extensions and HEIF Image Extensions (HRESULT " + std::string(hex) + ")";
+            if (status == WINCODEC_ERR_COMPONENTNOTFOUND || status == MF_E_TOPO_CODEC_NOT_FOUND ||
+                status == HRESULT_FROM_WIN32(ERROR_MOD_NOT_FOUND) || status == HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND))
+                error = "HEIF: HEVC system provider unavailable; enable Media Foundation / Media Feature Pack and install HEVC Video Extensions and HEIF Image Extensions (HRESULT " + std::string(hex) + ")";
             else
                 error = "HEIF: HEVC system provider " + std::string(operation) + " failed (HRESULT " + std::string(hex) + ")";
             return false;
         }
         HRESULT hevc_decoder_status() {
             static const HRESULT status = [] {
-                const HRESULT startup = MFStartup(MF_VERSION, MFSTARTUP_LITE);
+                MediaFoundationModule module;
+                if (!module.handle)
+                    return HRESULT_FROM_WIN32(GetLastError());
+                const auto startup_function = reinterpret_cast<decltype(&MFStartup)>(GetProcAddress(module.handle, "MFStartup"));
+                const auto shutdown_function = reinterpret_cast<decltype(&MFShutdown)>(GetProcAddress(module.handle, "MFShutdown"));
+                const auto enumerate_function = reinterpret_cast<decltype(&MFTEnumEx)>(GetProcAddress(module.handle, "MFTEnumEx"));
+                if (!startup_function || !shutdown_function || !enumerate_function)
+                    return HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+                const HRESULT startup = startup_function(MF_VERSION, MFSTARTUP_LITE);
                 if (FAILED(startup))
                     return startup;
                 IMFActivate** decoders = nullptr;
                 UINT32 count = 0;
                 const MFT_REGISTER_TYPE_INFO input{MFMediaType_Video, MFVideoFormat_HEVC};
-                HRESULT result = MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER,
-                                           MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
-                                           &input, nullptr, &decoders, &count);
+                HRESULT result = enumerate_function(MFT_CATEGORY_VIDEO_DECODER,
+                                                    MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
+                                                    &input, nullptr, &decoders, &count);
                 for (UINT32 i = 0; i < count; ++i)
                     decoders[i]->Release();
                 CoTaskMemFree(decoders);
-                MFShutdown();
+                shutdown_function();
                 if (SUCCEEDED(result) && count == 0)
                     result = MF_E_TOPO_CODEC_NOT_FOUND;
                 return result;
