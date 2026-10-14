@@ -19,6 +19,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/dict.h>
 #include <libavutil/error.h>
 #include <libswscale/swscale.h>
 }
@@ -40,6 +41,7 @@ extern "C" {
 #include <system_error>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #if defined(__linux__)
@@ -320,6 +322,32 @@ namespace lfs::gui {
             dialog.selected_batch_item_.reset();
             dialog.refreshBatchOutputDirectories();
         }
+        static void addBatch(VideoExtractorDialog& dialog,
+                             const std::vector<std::filesystem::path>& videos) {
+            dialog.addBatchVideos(videos);
+        }
+        static void addFromBrowse(VideoExtractorDialog& dialog,
+                                  std::vector<std::filesystem::path> videos) {
+            dialog.addVideosFromBrowse(std::move(videos));
+        }
+        static void outputRoot(VideoExtractorDialog& dialog, const std::filesystem::path& output_root) {
+            dialog.output_dir_ = output_root;
+            dialog.batch_output_root_explicit_ = true;
+            dialog.refreshBatchOutputDirectories();
+        }
+        static void fps(VideoExtractorDialog& dialog, const float value) { dialog.fps_ = value; }
+        static void sharedOutputSettings(VideoExtractorDialog& dialog, const int width, const int height,
+                                         const bool hdr_to_sdr) {
+            dialog.custom_width_ = width;
+            dialog.custom_height_ = height;
+            dialog.hdr_to_sdr_ = hdr_to_sdr;
+        }
+        static void selectBatch(VideoExtractorDialog& dialog, const std::size_t index) {
+            dialog.selectBatchItem(index);
+        }
+        static int customWidth(const VideoExtractorDialog& dialog) { return dialog.custom_width_; }
+        static int customHeight(const VideoExtractorDialog& dialog) { return dialog.custom_height_; }
+        static bool hdrToSdr(const VideoExtractorDialog& dialog) { return dialog.hdr_to_sdr_; }
         static void batchItemSettings(VideoExtractorDialog& dialog, const std::size_t index,
                                       const double start_time, const double end_time,
                                       const int rotation, const double duration,
@@ -329,7 +357,6 @@ namespace lfs::gui {
             item.end_time = end_time;
             item.end_time_is_auto = false;
             item.rotation = rotation;
-            item.rotation_initialized = true;
             item.duration = duration;
             item.source_fps = source_fps;
         }
@@ -460,7 +487,8 @@ namespace {
     bool writeProbedVideoWithRate(const std::filesystem::path& path, const char* container,
                                   AVCodecID codec_id, int frame_count, int leading_frames,
                                   int rate_numerator, int rate_denominator,
-                                  bool variable_rate = false, int frame_pattern_step = 8);
+                                  bool variable_rate = false, int frame_pattern_step = 8,
+                                  int rotation_degrees = 0);
 
     class FpsTestRenderInterface final : public Rml::RenderInterface {
     public:
@@ -1651,6 +1679,87 @@ namespace {
         EXPECT_EQ(params[1].rotation, 270);
     }
 
+    TEST_F(VideoExtractorNamingUiTest, BatchProbePreservesUnselectedVideoRotationAndFps) {
+        TempDir temp("batch_unselected_rotation");
+        const auto first = temp.path / "first.mp4";
+        const auto portrait = temp.path / "portrait.mp4";
+        ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 6, 0, 60, 1));
+        ASSERT_TRUE(writeProbedVideoWithRate(portrait, "mp4", AV_CODEC_ID_MPEG4, 6, 0, 24, 1,
+                                             false, 8, 90));
+
+        NamingAccess::addBatch(*dialog, {first, portrait});
+        NamingAccess::outputRoot(*dialog, temp.path / "output");
+        NamingAccess::fps(*dialog, 30.0f);
+
+        std::vector<lfs::gui::VideoExtractionParams> params;
+        std::string error;
+        ASSERT_TRUE(NamingAccess::buildBatch(*dialog, params, error)) << error;
+        ASSERT_EQ(params.size(), 2u);
+        EXPECT_EQ(params[1].rotation, 90);
+        EXPECT_DOUBLE_EQ(params[1].fps, 24.0);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, SelectingBatchItemPreservesSharedOutputSettings) {
+        TempDir temp("batch_shared_settings");
+        const auto first = temp.path / "first.mp4";
+        const auto second = temp.path / "second.mp4";
+        ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+        ASSERT_TRUE(writeProbedVideoWithRate(second, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 24, 1));
+
+        NamingAccess::addBatch(*dialog, {first, second});
+        NamingAccess::sharedOutputSettings(*dialog, 800, 600, true);
+        NamingAccess::selectBatch(*dialog, 1);
+
+        EXPECT_EQ(NamingAccess::customWidth(*dialog), 800);
+        EXPECT_EQ(NamingAccess::customHeight(*dialog), 600);
+        EXPECT_TRUE(NamingAccess::hdrToSdr(*dialog));
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, DroppedVideoIsAddedWithoutChangingTheBatchOutputRoot) {
+        TempDir temp("batch_drop");
+        const auto first = temp.path / "first.mp4";
+        const auto dropped = temp.path / "dropped.mp4";
+        const auto output_root = temp.path / "output";
+        ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+        ASSERT_TRUE(writeProbedVideoWithRate(dropped, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+
+        NamingAccess::addBatch(*dialog, {first});
+        NamingAccess::outputRoot(*dialog, output_root);
+        ASSERT_TRUE(dialog->openVideoPath(dropped));
+        EXPECT_EQ(NamingAccess::outputPath(*dialog), output_root);
+
+        std::vector<lfs::gui::VideoExtractionParams> params;
+        std::string error;
+        ASSERT_TRUE(NamingAccess::buildBatch(*dialog, params, error)) << error;
+        ASSERT_EQ(params.size(), 2u);
+        EXPECT_EQ(params[0].output_dir, output_root / "first");
+        EXPECT_EQ(params[1].output_dir, output_root / "dropped");
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, SecondBrowseSelectionPromotesTheExistingVideoToABatch) {
+        TempDir temp("batch_second_browse");
+        const auto first = temp.path / "clip.mp4";
+        const auto second = temp.path / "other" / "clip.mp4";
+        const auto output_root = temp.path / "output";
+        std::filesystem::create_directories(second.parent_path());
+        ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+        ASSERT_TRUE(writeProbedVideoWithRate(second, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+
+        ASSERT_TRUE(dialog->openVideoPath(first));
+        NamingAccess::sharedOutputSettings(*dialog, 800, 600, false);
+        NamingAccess::addFromBrowse(*dialog, {second});
+        NamingAccess::outputRoot(*dialog, output_root);
+
+        std::vector<lfs::gui::VideoExtractionParams> params;
+        std::string error;
+        ASSERT_TRUE(NamingAccess::buildBatch(*dialog, params, error)) << error;
+        ASSERT_EQ(params.size(), 2u);
+        EXPECT_EQ(params[0].output_dir, output_root / "clip");
+        EXPECT_EQ(params[1].output_dir, output_root / "clip_2");
+        EXPECT_EQ(params[0].custom_width, 800);
+        EXPECT_EQ(params[1].custom_height, 600);
+    }
+
     TEST_F(VideoExtractorNamingUiTest, BatchRequiresAnExplicitOutputRoot) {
         NamingAccess::configureBatch(*dialog, {"capture/clip.mp4"}, {});
         std::vector<lfs::gui::VideoExtractionParams> params;
@@ -1756,7 +1865,8 @@ namespace {
     bool writeProbedVideoWithRate(const std::filesystem::path& path, const char* const container,
                                   const AVCodecID codec_id, const int frame_count, const int leading_frames,
                                   const int rate_numerator, const int rate_denominator,
-                                  const bool variable_rate, const int frame_pattern_step) {
+                                  const bool variable_rate, const int frame_pattern_step,
+                                  const int rotation_degrees) {
         AVFormatContext* format = nullptr;
         const std::string path_utf8 = path.string();
         if (avformat_alloc_output_context2(&format, nullptr, container, path_utf8.c_str()) < 0 || !format)
@@ -1777,6 +1887,9 @@ namespace {
                 encoder->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             ok = avcodec_open2(encoder, codec, nullptr) >= 0 &&
                  avcodec_parameters_from_context(stream->codecpar, encoder) >= 0;
+            if (ok && rotation_degrees != 0)
+                ok = av_dict_set(&stream->metadata, "rotate",
+                                 std::to_string(rotation_degrees).c_str(), 0) >= 0;
         }
         if (ok) {
             stream->time_base = encoder->time_base;

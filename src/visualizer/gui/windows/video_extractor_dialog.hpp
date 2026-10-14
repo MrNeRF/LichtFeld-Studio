@@ -131,9 +131,10 @@ namespace lfs::gui {
             double end_time = -1.0;
             bool end_time_is_auto = true;
             int rotation = 0;
-            bool rotation_initialized = false;
             double source_fps = 0.0;
             double duration = 0.0;
+            bool is_hdr = false;
+            bool hdr_to_sdr_supported = false;
             bool has_existing_output = false;
             BatchItemStatus status = BatchItemStatus::Pending;
             std::string error;
@@ -183,9 +184,11 @@ namespace lfs::gui {
                                             std::string& error);
         void beginBatchExtractionFromUi();
         void launchBatchExtraction(std::vector<VideoExtractionParams> params);
+        void addVideosFromBrowse(std::vector<std::filesystem::path> paths);
         void addBatchVideos(const std::vector<std::filesystem::path>& paths);
         void selectBatchItem(std::size_t index);
         void saveSelectedBatchItem();
+        [[nodiscard]] bool probeBatchVideo(BatchVideoItem& item, std::string& error) const;
         void refreshBatchOutputDirectories();
         void syncBatchList();
         void removeSelectedBatchItem();
@@ -209,6 +212,7 @@ namespace lfs::gui {
         int pending_batch_conflict_count_ = 0;
         bool continue_batch_on_failure_ = true;
         bool batch_output_root_explicit_ = false;
+        std::atomic<bool> batch_list_dirty_{true};
         std::atomic<int> active_batch_index_{-1};
         std::atomic<int> completed_batch_items_{0};
         std::atomic<int> failed_batch_items_{0};
