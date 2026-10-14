@@ -5436,6 +5436,87 @@ namespace {
             elevated_master.commit().required_writer_capabilities));
     }
 
+    TEST(ProjectDocumentTest, RecoveredAutosaveKeepsSplatAbsentFromMaster) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "recovered-new-splat.licht";
+        const fs::path sidecar = autosave_sidecar_path(master);
+        const Uuid project_uuid = fixed_uuid(9901);
+        const Uuid master_splat = fixed_uuid(9902);
+        const Uuid added_splat = fixed_uuid(9903);
+        write_one_splat_document(master, *make_splat(2), project_uuid, master_splat, 9904);
+        ProjectReader base = require_result(ProjectReader::open(master));
+        const auto master_bytes = read_file_bytes(master);
+        {
+            auto session = require_result_ptr(ProjectDocument::open(master));
+            require_status(session->edit_scene_graph().upsert_node(SceneNodeRecord{
+                .uuid = added_splat,
+                .type = "splat",
+                .name = "Added",
+                .child_order = 1,
+                .payload = PayloadBinding{
+                    .fourcc = "SPLT",
+                    .instance_uuid = added_splat,
+                    .source_kind = "ply"},
+            }));
+            require_status(session->set_splat(
+                added_splat, require_result(SplatChapterPayload::capture(
+                                 *make_splat(1), SplatSourceKind::ImportedPly, false))));
+            require_status(session->edit_project().upsert_embed_decision(EmbedDecision{
+                .uuid = added_splat,
+                .node_uuid = added_splat,
+                .payload_fourcc = "SPLT",
+                .decision = "embedded",
+                .reason = "added after the explicit save"}));
+            require_status(session->edit_project().upsert_embedded_payload_provenance(
+                provenance(added_splat, "SPLT", "assets/added.bin", 44)));
+            auto autosaved = session->save_autosave(sidecar, ProjectDocumentAutosaveOptions{
+                                                                 .file_uuid = fixed_uuid(9905),
+                                                                 .base_explicit_commit_uuid = base.commit().commit_uuid,
+                                                                 .autosave_sequence = 1,
+                                                                 .snapshot_uuid = fixed_uuid(9906),
+                                                                 .index_compression = IndexCompression::StoredForDeterministicTests,
+                                                                 .disk_reserve_bytes = 0});
+            ASSERT_TRUE(autosaved) << lfs::format_for_developer(autosaved.error());
+        }
+        RecoverySession recovery = require_result(begin_recovery_session(master, sidecar));
+        const fs::path staging = recovery_session_temp_path(master);
+        require_status(materialize_recovered_project(master, sidecar, staging, recovery));
+        auto recovered = require_result_ptr(ProjectDocument::open(
+            staging, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        require_status(recovered->prepare_recovery_autosave(sidecar));
+        require_status(recovered->edit_view().dom().set("after_recover", std::string{"kept"}));
+        auto next = recovered->save_autosave(sidecar, ProjectDocumentAutosaveOptions{
+                                                          .file_uuid = fixed_uuid(9907),
+                                                          .base_explicit_commit_uuid = base.commit().commit_uuid,
+                                                          .autosave_sequence = 2,
+                                                          .snapshot_uuid = fixed_uuid(9908),
+                                                          .index_compression = IndexCompression::StoredForDeterministicTests,
+                                                          .disk_reserve_bytes = 0,
+                                                          .writer_lock_lease = recovery.writer_lock(),
+                                                          .recovery_base_path = master});
+        ASSERT_TRUE(next) << lfs::format_for_developer(next.error());
+        EXPECT_EQ(read_file_bytes(master), master_bytes);
+        ProjectReader overlay = require_result(ProjectReader::open(sidecar));
+        EXPECT_EQ(overlay.superblock().autosave_sequence, 2u);
+        const ChunkInfo* kept = overlay.find(FOURCC_SPLT, master_splat);
+        const ChunkInfo* added = overlay.find(FOURCC_SPLT, added_splat);
+        ASSERT_NE(kept, nullptr);
+        ASSERT_NE(added, nullptr);
+        EXPECT_EQ(kept->row_kind, RowKind::SidecarBaseReference);
+        EXPECT_EQ(added->row_kind, RowKind::Live);
+        EXPECT_GT(added->stored_bytes, 0u);
+        recovered.reset();
+        require_status(recovery.release());
+        const fs::path again = temporary.path / "recovered-again.licht";
+        require_status(materialize_recovered_project(master, sidecar, again));
+        auto reopened = require_result_ptr(ProjectDocument::open(again));
+        EXPECT_NE(reopened->find_splat(master_splat), nullptr);
+        EXPECT_NE(reopened->find_splat(added_splat), nullptr);
+        const auto marker = reopened->view().dom().get_json("after_recover");
+        ASSERT_TRUE(marker.has_value());
+        EXPECT_EQ(*marker, "kept");
+    }
+
     TEST(ProjectDocumentTest,
          RecoveredDocumentMergeHoldsMasterLockAndPublishesRecoveredKind) {
         TemporaryDirectory temporary;

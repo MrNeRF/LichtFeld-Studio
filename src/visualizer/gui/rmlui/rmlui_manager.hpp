@@ -139,6 +139,7 @@ namespace lfs::vis::gui {
 
         UiRenderer* getUiRenderer() const { return ui_renderer_; }
         RmlTextInputHandler* getTextInputHandler() const { return text_input_handler_.get(); }
+        [[nodiscard]] bool isDispatchingInput() const { return dispatching_input_; }
         SDL_Window* getWindow() const { return window_; }
 
         // Render passes register geometry and handlers. SDL polling dispatches each

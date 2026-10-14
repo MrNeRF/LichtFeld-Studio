@@ -280,6 +280,8 @@ def _install_lf_stub(monkeypatch):
     lf_stub.get_new_project_navigation_up_axis = lambda: "legacy_y"
     lf_stub.get_new_project_align_grid = lambda: True
     lf_stub.get_camera_view_snap_enabled = lambda: False
+    lf_stub.get_zoom_toward_cursor_enabled = lambda: True
+    lf_stub.set_zoom_toward_cursor_enabled = lambda _enabled: None
     lf_stub.ui = SimpleNamespace(
         PanelSpace=panel_space,
         PanelHeightMode=panel_height_mode,
@@ -314,6 +316,8 @@ def _install_lf_stub(monkeypatch):
         get_theme_family=lambda: "lichtfeld",
         get_theme_mode=lambda: "dark",
         get_ui_scale_preference=lambda: 0.0,
+        get_native_floating_windows=lambda: False,
+        set_native_floating_windows=lambda _enabled: None,
         get_zoom_speed_preference=lambda: 0.0,
         set_zoom_speed_preference=lambda _speed: None,
         get_navigation_speed_preference=lambda: 0.0,
@@ -473,6 +477,9 @@ class _DocStub:
 
     def get_element_by_id(self, element_id):
         return self.elements.get(element_id)
+
+    def query_selector_all(self, _selector):
+        return []
 
 
 class _EventStub:

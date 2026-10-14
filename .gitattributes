@@ -13,3 +13,6 @@ tests/data/heif/*.heic binary
 tests/data/heif/*.avif binary
 tests/data/heif/*.reference binary
 tests/data/heif/*.icc binary
+
+# Unified-diff prefixes are not source indentation.
+.github/overlays/rmlui/*.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

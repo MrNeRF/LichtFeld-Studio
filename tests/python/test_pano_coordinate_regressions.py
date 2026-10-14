@@ -34,7 +34,7 @@ def test_vksplat_equirectangular_shaders_project_rays_and_wrap_tiles():
 
     assert "EQUIRECTANGULAR = 3" in utils
     assert "project_point_equirect" in utils
-    assert "lfs_equirect_uv(float3(dir.x, dir.y, -dir.z))" in utils
+    assert "lfs_equirect_uv(float3(dir.x, -dir.y, -dir.z))" in utils
     assert "unwrap_image_points_x(image_points, cam)" in vertex
     assert "covariance_mean2d" in vertex
     assert "get_wrapped_rectangle_tile_space" in vertex

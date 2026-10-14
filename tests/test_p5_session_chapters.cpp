@@ -2908,6 +2908,14 @@ namespace {
         EXPECT_EQ(prepared.unsupported_settings.front().fallback, "legacy_y");
     }
 
+    TEST(P5SessionChapterTest, NoActiveToolIsNotReportedAsANewerSetting) {
+        UnknownSessionValueFixture test;
+        auto prepared = test.restore("no-tool", [](Json& view, Json&, Json&) {
+            view["tools"]["active_tool_id"] = "";
+        });
+        EXPECT_TRUE(prepared.unsupported_settings.empty());
+    }
+
     TEST(P5SessionChapterTest, UnknownSelectionSubmodesResetIndependently) {
         UnknownSessionValueFixture test;
         auto prepared = test.restore("submodes", [](Json& view, Json&, Json&) {

@@ -73,6 +73,31 @@ def test_invalid_defaults_leave_saved_values_unchanged(preferences_panel_module,
     assert panel._rendering_defaults._error
 
 
+def test_default_text_saves_on_commit_not_per_keystroke(preferences_panel_module):
+    module, state = preferences_panel_module
+    state.rendering_defaults = {"axes_size": 9.0}
+    panel = module.PreferencesPanel()
+    section = panel._rendering_defaults
+    model = _BindingModelStub()
+    section.bind(model)
+    getter, setter = model.bindings["default_axes_size"]
+    for text in ("1", "15"):
+        setter(text)
+    assert state.rendering_defaults["axes_size"] == 9.0
+    assert getter() == "15"
+    section._commit("axes_size")
+    assert state.rendering_defaults["axes_size"] == 9.0
+    assert section._error and getter() == 9.0
+    setter("4")
+    section._commit("axes_size")
+    assert state.rendering_defaults["axes_size"] == 4.0
+    assert not section._error
+    setter("7")
+    section._discard("axes_size")
+    section._commit("axes_size")
+    assert state.rendering_defaults["axes_size"] == 4.0
+
+
 def test_apply_defaults_requires_explicit_confirmation(rendering_panel_module):
     module = rendering_panel_module
     panel = module.RenderingPanel()

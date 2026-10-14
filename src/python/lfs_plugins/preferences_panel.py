@@ -370,6 +370,8 @@ class PreferencesPanel(Panel):
             refresh=self._sync_scene_upscaler_preset_records,
             dirty=("scene_upscaler_idx", "scene_upscaler_preset_idx", "scene_upscaler_has_preset"),
         )
+        if doc:
+            self._rendering_defaults.mount(doc)
         self._portal_state_binding.close()
         self._portal_state_binding.watch(
             RuntimeState.account_state,
