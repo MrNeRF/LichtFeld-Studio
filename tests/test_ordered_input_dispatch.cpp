@@ -2107,6 +2107,32 @@ namespace lfs::vis {
         chart->RemoveEventListener("click", &recorder);
     }
 
+    TEST_F(WindowInputDispatchTest, FloatingCloseButtonDisablesItsPanel) {
+        gui::RmlPanelHost host(&manager(), "test.input_float", "");
+        attachInputHost(host, 180, 100,
+                        "<rml><head><style>body { width:180px; height:100px; }</style></head>"
+                        "<body id='window-frame'><div id='title-bar'><span id='close-btn'>x</span></div>"
+                        "<div id='body'>log</div></body></rml>");
+        host.setFloating(true);
+        host.getContext()->Update();
+        registerInputFloat();
+        forwardHost(host, 100, 60);
+        ASSERT_TRUE(gui::PanelRegistry::instance().is_panel_enabled("test.input_float"));
+
+        click(120, 140);
+        EXPECT_TRUE(gui::PanelRegistry::instance().is_panel_enabled("test.input_float"));
+
+        auto* button = host.getDocument()->GetElementById("close-btn");
+        ASSERT_NE(button, nullptr);
+        const auto origin = button->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = button->GetBox().GetSize(Rml::BoxArea::Border);
+        ASSERT_GT(size.x, 0.f);
+        ASSERT_GT(size.y, 0.f);
+        click(100 + static_cast<int>(origin.x + size.x * 0.5f),
+              60 + static_cast<int>(origin.y + size.y * 0.5f));
+        EXPECT_FALSE(gui::PanelRegistry::instance().is_panel_enabled("test.input_float"));
+    }
+
     TEST_F(WindowInputDispatchTest, FloatingOcclusionPreservesDockedGestureOwnership) {
         gui::RmlPanelHost docked(&manager(), "test-input-drag", "");
         attachInputHost(docked, 400, 300,
