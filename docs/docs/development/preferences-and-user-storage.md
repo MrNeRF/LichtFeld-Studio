@@ -28,7 +28,10 @@ The Preferences panel currently exposes:
 
 External floating panels are opt-in and disabled by default. Enable the
 experimental setting in Preferences > Interface and restart to allow dragging
-an existing floating panel outside the main application window. Opening or
+Preferences, Plugin Marketplace, or Video Extractor outside the main application
+window. An explicit allowlist keeps other floating panels, including Asset
+Manager, Histogram, and third-party plugin panels, embedded until arbitrary
+panel-owned textures can migrate safely between Vulkan devices. Opening or
 preloading a panel keeps it embedded and does not allocate an SDL desktop
 surface or an auxiliary GPU device. The host is created only at the boundary
 crossing, or when restoring a saved position outside the main window.
@@ -46,7 +49,8 @@ available in embedded mode.
 
 Desktop rectangles are stored in the user-global `floating_window_geometry`
 object, keyed by RmlUi context name, and never in a project's workspace. Both
-Reset Layout and Reset Window State clear these rectangles and center live
+Reset Layout and Reset Window State clear these rectangles, including the
+in-memory reopen positions of closed panels, and center live
 windows inside the main application window. Panels without saved positions also
 start inside the application, fitting their initial size to its available area.
 Reset Interface disables the experiment; Reset Appearance preserves its
@@ -64,9 +68,12 @@ and its edges resize it. Confirmation and input popups remain embedded.
 Closing a panel window disables that panel without exiting the
 application and destroys its desktop surface, UI renderer, and auxiliary GPU
 device. Reopening recreates the host from the saved rectangle while retaining
-the panel instance and its state. This experiment covers existing floating panels; docked panels
-are not yet detachable. Native window integration has been validated on Windows;
+the panel instance and its state. This experiment covers only the three allowed
+floating panels; docked panels are not yet detachable. Native window integration has been validated on Windows;
 the Linux and macOS paths still require platform testing.
+Main-window focus loss preserves the focused text field and its uncommitted
+value, including when external windows are disabled. Focus cleanup for an
+auxiliary window affects only that window.
 The shared host updates monitor DPI before drawing both Python and C++ panels,
 including Video Extractor. Runtime checks compared its rendered title with
 Preferences on Windows monitors at 96 and 144 DPI.
