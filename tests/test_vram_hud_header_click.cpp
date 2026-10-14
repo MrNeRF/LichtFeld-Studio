@@ -249,38 +249,47 @@ namespace lfs::vis::gui {
         std::unique_ptr<VramHudOverlay> overlay_;
     };
 
-    TEST_F(VramHudHeaderClickTest, BottomRightCornerSurvivesExpansionAndViewportChanges) {
-        press(centerOf("perf-hud-strip-header"));
-        moveTo({2000, 2000});
-        release();
-        auto* root = document_->GetElementById("vram-hud-overlay");
-        const auto compact_position = root->GetAbsoluteOffset(Rml::BoxArea::Border);
-        LayoutState saved;
-        saved.load();
-        EXPECT_EQ(saved.vram_hud_snap_corner, 4);
-        for (int i = 0; i < 2; ++i) {
+    TEST_F(VramHudHeaderClickTest, BottomCornersSurviveExpansionAndViewportChanges) {
+        for (const bool right : {false, true}) {
+            press(centerOf("perf-hud-strip-header"));
+            moveTo({right ? 2000 : -2000, 2000});
+            release();
+            auto* root = document_->GetElementById("vram-hud-overlay");
+            const auto compact_position = root->GetAbsoluteOffset(Rml::BoxArea::Border);
+            LayoutState saved;
+            saved.load();
+            EXPECT_EQ(saved.vram_hud_snap_corner, right ? 4 : 3);
+            for (int i = 0; i < 2; ++i) {
+                setExpanded(true);
+                const auto expanded_position = root->GetAbsoluteOffset(Rml::BoxArea::Border);
+                EXPECT_LE(expanded_position.x, compact_position.x);
+                EXPECT_LT(expanded_position.y, compact_position.y);
+                setExpanded(false);
+                EXPECT_EQ(root->GetAbsoluteOffset(Rml::BoxArea::Border), compact_position);
+            }
+            overlay_->setViewportGeometry(200, 0, 340, 180);
+            EXPECT_TRUE(overlay_->initializeGeometryAfterLayout());
+            context_->Update();
+            EXPECT_LE(root->GetAbsoluteOffset(Rml::BoxArea::Border).x, compact_position.x);
             setExpanded(true);
-            const auto expanded_position = root->GetAbsoluteOffset(Rml::BoxArea::Border);
-            EXPECT_LT(expanded_position.x, compact_position.x);
-            EXPECT_LT(expanded_position.y, compact_position.y);
+            EXPECT_LE(root->GetBox().GetSize(Rml::BoxArea::Border).x, 340);
             setExpanded(false);
+            overlay_->setViewportGeometry(0, 0, 800, 600);
+            EXPECT_TRUE(overlay_->initializeGeometryAfterLayout());
+            context_->Update();
             EXPECT_EQ(root->GetAbsoluteOffset(Rml::BoxArea::Border), compact_position);
+            setExpanded(true);
+            EXPECT_FLOAT_EQ(root->GetBox().GetSize(Rml::BoxArea::Border).x, saved.vram_hud_width);
+            EXPECT_FLOAT_EQ(root->GetBox().GetSize(Rml::BoxArea::Border).y, saved.vram_hud_height);
+            setExpanded(false);
+            LayoutState after;
+            after.load();
+            EXPECT_FLOAT_EQ(after.vram_hud_x, saved.vram_hud_x);
+            EXPECT_FLOAT_EQ(after.vram_hud_y, saved.vram_hud_y);
+            EXPECT_FLOAT_EQ(after.vram_hud_width, saved.vram_hud_width);
+            EXPECT_FLOAT_EQ(after.vram_hud_height, saved.vram_hud_height);
+            EXPECT_FALSE(overlay_->initializeGeometryAfterLayout());
         }
-        overlay_->setViewportGeometry(200, 0, 600, 400);
-        EXPECT_TRUE(overlay_->initializeGeometryAfterLayout());
-        context_->Update();
-        EXPECT_LT(root->GetAbsoluteOffset(Rml::BoxArea::Border).x, compact_position.x);
-        overlay_->setViewportGeometry(0, 0, 800, 600);
-        EXPECT_TRUE(overlay_->initializeGeometryAfterLayout());
-        context_->Update();
-        EXPECT_EQ(root->GetAbsoluteOffset(Rml::BoxArea::Border), compact_position);
-        LayoutState after;
-        after.load();
-        EXPECT_FLOAT_EQ(after.vram_hud_x, saved.vram_hud_x);
-        EXPECT_FLOAT_EQ(after.vram_hud_y, saved.vram_hud_y);
-        EXPECT_FLOAT_EQ(after.vram_hud_width, saved.vram_hud_width);
-        EXPECT_FLOAT_EQ(after.vram_hud_height, saved.vram_hud_height);
-        EXPECT_FALSE(overlay_->initializeGeometryAfterLayout());
     }
 
     TEST_F(VramHudHeaderClickTest, UnsnappedPositionReturnsAfterExpandingAndCollapsing) {
