@@ -1091,17 +1091,120 @@ namespace lfs::vis {
         lfs::core::Tensor image;
         if (rendered && rendered->is_valid()) {
             image = std::move(*rendered);
-        } else if (request.mode == ExportPostProcessMode::EnvironmentComposite ||
-                   (scene_manager && !scene_manager->getScene().getVisibleMeshes().empty())) {
-            // No renderable Gaussians: the environment alone (zero alpha composites
-            // to pure environment, as in the video export) or the background, with
-            // the meshes composited on top below.
-            image = emptyExportImage(request.width, request.height, request.mode, settings.background_color);
-            if (!image.is_valid()) {
-                return std::unexpected("export failed to allocate the background image");
-            }
         } else {
-            return std::unexpected("export render produced no image");
+            // Scene content only. Grid and camera frustums stay viewport overlays.
+            // An empty result means no point cloud; error is a render failure.
+            struct PointCloudExport {
+                lfs::core::Tensor image;
+                bool present = false;
+                std::string error;
+            };
+            auto point_cloud = [&]() -> PointCloudExport {
+                if (!scene_manager) {
+                    return {};
+                }
+                auto render_lock = acquireLiveModelRenderLock(scene_manager);
+                auto render_state = scene_manager->buildRenderState({.current_geometry = true});
+                const auto* const cloud = render_state.point_cloud;
+                if (!cloud || cloud->size() <= 0 || !cloud->means.is_valid() || !cloud->colors.is_valid()) {
+                    return {};
+                }
+                if (!last_graphics_context_) {
+                    return {.image = {}, .present = false, .error = "no Vulkan context is available"};
+                }
+                if (last_graphics_context_->terminalState() != RendererTerminalState::Running) {
+                    return {.image = {},
+                            .present = false,
+                            .error = "renderer is unavailable after a GPU failure; restart LichtFeld Studio"};
+                }
+
+                const int width = request.width;
+                const int height = request.height;
+                const bool transparent = request.mode != ExportPostProcessMode::Opaque;
+                RenderSettings preview_settings = settings;
+                preview_settings.focal_length_mm = std::clamp(
+                    request.focal_length_mm, lfs::rendering::MIN_FOCAL_LENGTH_MM, lfs::rendering::MAX_FOCAL_LENGTH_MM);
+                preview_settings.split_view_mode = SplitViewMode::Disabled;
+                preview_settings.equirectangular = false;
+                if (request.orthographic_override) {
+                    preview_settings.orthographic = *request.orthographic_override;
+                }
+                if (const auto ortho_scale =
+                        exportOrthoScale(request.ortho_scale_override, height, request.reference_height);
+                    ortho_scale && std::isfinite(*ortho_scale) && *ortho_scale > 0.0f) {
+                    preview_settings.ortho_scale = *ortho_scale;
+                }
+
+                Viewport viewport(static_cast<std::size_t>(width), static_cast<std::size_t>(height));
+                viewport.setViewMatrix(request.rotation, request.translation);
+                std::vector<glm::mat4> transforms{render_state.point_cloud_transform};
+                FrameContext frame_ctx{
+                    .viewport = viewport,
+                    .scene_manager = scene_manager,
+                    .scene_state = std::move(render_state),
+                    .settings = preview_settings,
+                    .render_size = {width, height},
+                    .viewport_pos = {0, 0},
+                    .gaussian_selection_visible = gaussian_selection_visible_,
+                    .cursor_preview = {},
+                    .gizmo = {},
+                    .view_panels = {},
+                };
+                auto pc_request = buildPointCloudRenderRequest(frame_ctx, {width, height}, transforms);
+                auto point_request = buildPointSceneRequest(pc_request, preview_settings);
+                point_request.positions = &cloud->means;
+                point_request.colors = &cloud->colors;
+                point_request.transparent_background = transparent;
+                point_request.equirectangular = false;
+                // Export reads the image immediately. The live viewport leaves this wait on the GPU.
+                point_request.synchronize_output = true;
+                if (transparent) {
+                    point_request.background_color = glm::vec3(0.0f);
+                }
+
+                // One-shot renderer and target, so export does not resize the live viewport's images.
+                // A missing graphics backend throws; the caller already rejected a terminal context.
+                std::unique_ptr<PointSceneRenderer> renderer = createPointSceneRenderer(*last_graphics_context_);
+                const RenderTargetId export_target = render_targets_.allocate();
+                struct ExportTargetGuard {
+                    PointSceneRenderer& renderer;
+                    RenderTargetRegistry& targets;
+                    RenderTargetId id;
+                    ~ExportTargetGuard() {
+                        renderer.releaseRenderTarget(id);
+                        targets.release(id);
+                    }
+                } export_target_guard{*renderer, render_targets_, export_target};
+                if (auto rendered_points = renderer->render(point_request, export_target); !rendered_points) {
+                    return {.image = {}, .present = false, .error = rendered_points.error()};
+                }
+                auto readback = renderer->readOutputImage(export_target, true);
+                if (!readback || !*readback || !(*readback)->is_valid()) {
+                    return {.image = {},
+                            .present = false,
+                            .error = readback ? "export render produced no image" : readback.error()};
+                }
+                auto exported = transparent ? std::move(**readback) : (*readback)->slice(2, 0, 3).contiguous();
+                if (!exported.is_valid() || !exported.is_contiguous()) {
+                    return {.image = {}, .present = false, .error = "export render produced no image"};
+                }
+                return {.image = std::move(exported), .present = true, .error = {}};
+            }();
+            if (!point_cloud.error.empty()) {
+                return std::unexpected(std::move(point_cloud.error));
+            }
+            if (point_cloud.present) {
+                image = std::move(point_cloud.image);
+            } else if (request.mode == ExportPostProcessMode::EnvironmentComposite ||
+                       (scene_manager && !scene_manager->getScene().getVisibleMeshes().empty())) {
+                // No Gaussians or point cloud: environment (zero alpha) or background, then meshes.
+                image = emptyExportImage(request.width, request.height, request.mode, settings.background_color);
+                if (!image.is_valid()) {
+                    return std::unexpected("export failed to allocate the background image");
+                }
+            } else {
+                return std::unexpected("export render produced no image");
+            }
         }
 
         const ExportPostProcessView view{

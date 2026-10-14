@@ -18,7 +18,12 @@ from viewer_mesh_test_support import viewport_image
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
 
-def _front_splats(path):
+def _green(rgb):
+    r, g, b = rgb
+    return g > 80 and g > 2 * max(r, b)
+
+
+def _front_splats(path, z=1.):
     fields = ["x", "y", "z", "nx", "ny", "nz"]
     fields += [f"f_dc_{i}" for i in range(3)] + [f"f_rest_{i}" for i in range(45)]
     fields += ["opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
@@ -28,7 +33,7 @@ def _front_splats(path):
         output.write(header.encode())
         for y in range(31):
             for x in range(31):
-                values = [(x - 15) / 15., (y - 15) / 15., 1., 0., 0., 1.]
+                values = [(x - 15) / 15., (y - 15) / 15., z, 0., 0., 1.]
                 values += [(channel - .5) / .28209479177387814 for channel in (.95, .05, .05)]
                 values += [0.] * 45 + [10.] + [math.log(.075)] * 3 + [1., 0., 0., 0.]
                 output.write(struct.pack("<" + str(len(values)) + "f", *values))
@@ -62,6 +67,27 @@ def _red(rgb):
     return r > 100 and r > 3 * max(g, b)
 
 
+def _split_panes(endpoint, pictures, prefix):
+    views_path = pictures / f"{prefix}views.json"
+    _editor(endpoint, """\
+import json, lichtfeld as lf
+view = next(area for area in lf.ui.screen.areas() if area['is_view'])['id']
+added = lf.ui.screen.split(view, 'vertical', .5)
+assert added
+views = [area['id'] for area in lf.ui.screen.areas() if area['is_view']]
+assert len(views) == 2
+for area in views:
+    lf.ui.screen.set_view_camera(area, (0., 0., 6.), (0., 0., 0.), (0., 1., 0.))
+open(%r, 'w').write(json.dumps(views))
+""" % str(views_path))
+    panes = []
+    for index, view_id in enumerate(json.loads(views_path.read_text())):
+        _editor(endpoint, "import lichtfeld as lf\nlf.ui.screen.set_active_view(%d)" % int(view_id))
+        panes.append(viewport_image(endpoint, pictures, f"{prefix}split-{index}", require_green=False))
+    assert len(panes) == 2
+    return panes
+
+
 @pytest.mark.parametrize("backend", ["3dgs", "3dgut"])
 def test_split_mesh_respects_front_splat_depth(tmp_path, backend):
     pictures = Path(os.environ.get("LFS_TEST_ARTIFACT_DIR", tmp_path)) / backend
@@ -81,28 +107,40 @@ def test_split_mesh_respects_front_splat_depth(tmp_path, backend):
             "eye": [0., 0., 6.], "target": [0., 0., 0.], "up": [0., 1., 0.],
         })
         single = viewport_image(endpoint, pictures, "single", require_green=False)
-        views_path = pictures / "views.json"
-        _editor(endpoint, """\
-import json, lichtfeld as lf
-view = next(area for area in lf.ui.screen.areas() if area['is_view'])['id']
-added = lf.ui.screen.split(view, 'vertical', .5)
-assert added
-views = [area['id'] for area in lf.ui.screen.areas() if area['is_view']]
-assert len(views) == 2
-for area in views:
-    lf.ui.screen.set_view_camera(area, (0., 0., 6.), (0., 0., 0.), (0., 1., 0.))
-open(%r, 'w').write(json.dumps(views))
-""" % str(views_path))
-        panes = []
-        for index, view_id in enumerate(json.loads(views_path.read_text())):
-            _editor(endpoint, "import lichtfeld as lf\nlf.ui.screen.set_active_view(%d)" % int(view_id))
-            panes.append(viewport_image(endpoint, pictures, "split-%d" % index, require_green=False))
+        panes = _split_panes(endpoint, pictures, "")
 
     w, h = single.size
     assert w > 50 and h > 50
     assert _red(single.getpixel((w // 2, h // 2)))
-    assert len(panes) == 2
     for pane in panes:
         pw, ph = pane.size
         assert pw > 50 and ph > 50
         assert _red(pane.getpixel((pw // 2, ph // 2)))
+
+
+@pytest.mark.parametrize("backend", ["3dgs", "3dgut"])
+def test_split_mesh_shows_through_splat_sheet_behind(tmp_path, backend):
+    pictures = Path(os.environ.get("LFS_TEST_ARTIFACT_DIR", tmp_path)) / backend
+    pictures.mkdir(parents=True, exist_ok=True)
+    model = tmp_path / "front.ply"
+    _front_splats(model, -4.)
+    with isolated_app(tmp_path) as endpoint:
+        _tool(endpoint, "scene_load_ply", {"path": str(model)})
+        job = _tool(endpoint, "runtime_job_wait", {"job_id": "import.dataset", "timeout_ms": 60000})
+        assert job["success"], job
+        _editor(endpoint, MESH)
+        _tool(endpoint, "render_settings_set", {
+            "show_grid": False, "show_coord_axes": False, "show_pivot": False,
+            "render_scale": 1., "raster_backend": backend,
+        })
+        _tool(endpoint, "camera_set_view", {
+            "eye": [0., 0., 6.], "target": [0., 0., 0.], "up": [0., 1., 0.],
+        })
+        single = viewport_image(endpoint, pictures, "behind-single", require_green=False)
+        panes = _split_panes(endpoint, pictures, "behind-")
+
+    w, h = single.size
+    assert _green(single.getpixel((w // 2, h // 2))), single.getpixel((w // 2, h // 2))
+    for pane in panes:
+        pw, ph = pane.size
+        assert _green(pane.getpixel((pw // 2, ph // 2))), pane.getpixel((pw // 2, ph // 2))

@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Bound retry time and keep compiler/configuration failures visible."""
 
+import contextlib
 import importlib.util
+import io
 from pathlib import Path
+import sys
 import unittest
 from unittest.mock import Mock
 
@@ -55,6 +58,15 @@ class RetryConfigureTest(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertEqual(run.call_count, 2)
         sleep.assert_called_once_with(15)
+
+    def test_output_the_console_cannot_encode_is_replaced(self):
+        # CMake status banners use box-drawing characters; cp1252 has no mapping for them.
+        console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+        script = "import sys; sys.stdout.buffer.write('\\u2550 tcp\\n'.encode('utf-8'))"
+        with contextlib.redirect_stdout(console):
+            code, output = module.run_command([sys.executable, "-c", script])
+        self.assertEqual(code, 0)
+        self.assertEqual(output, "\u2550 tcp\n")
 
 
 if __name__ == "__main__":

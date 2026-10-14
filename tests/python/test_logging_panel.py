@@ -76,9 +76,11 @@ class Element:
     def remove_child(self, node): self.nodes.remove(node)
     def get_attribute(self, name, default=""): return self.attrs.get(name, default)
     def has_attribute(self, name): return name in self.attrs
-    def parent(self): return None
+    def parent(self): return self
     def focus(self): return True
-    def add_event_listener(self, name, callback): self.listeners[name] = callback
+    def add_event_listener(self, name, callback):
+        previous = self.listeners.get(name)
+        self.listeners[name] = callback if previous is None else lambda event: (previous(event), callback(event))
     def select(self): return True
     def set_class(self, name, value): pass
     def set_attribute(self, name, value):
@@ -192,6 +194,52 @@ def test_retention_edit_commits_on_enter_or_blur_and_preserves_partial_input(log
     assert applied == [0, 5000]
     assert panel._limit == "5000"
     assert panel._page_size == "250"
+
+
+def test_escape_cancels_a_retention_edit(logging_module):
+    panel, doc, _snapshot = make_panel(logging_module)
+    applied = []
+    logging_module.lf.log.set_buffer_limit = applied.append
+    field = doc.elements["log-limit"]
+    field.listeners["focus"](None)
+    panel._set_limit("3")
+    field.listeners["escapecancel"](SimpleNamespace(stop_propagation=lambda: None))
+    field.listeners["blur"](None)
+    assert panel._limit == "5000"
+    assert 3 not in applied
+
+
+def test_blank_or_out_of_range_retention_is_rejected(logging_module):
+    panel, doc, _snapshot = make_panel(logging_module)
+    applied = []
+    logging_module.lf.log.set_buffer_limit = applied.append
+    field = doc.elements["log-limit"]
+    for text in ("", "-4", "50001"):
+        panel._feedback = ""
+        panel._set_limit(text)
+        field.listeners["blur"](None)
+        assert panel._feedback, text
+    assert applied == []
+
+
+def test_long_messages_are_cut_in_rows_but_copied_whole(logging_module):
+    message = "A" * 70000
+    long_entry = entry(1, message)
+    markup = logging_module.entry_contents(long_entry)
+    assert "A" * logging_module.ROW_MESSAGE_CHARS + "\u2026" in markup
+    assert len(markup) < logging_module.ROW_MESSAGE_CHARS + 1000
+    assert message in logging_module.entries_text([long_entry])
+
+
+def test_grouped_retention_values_commit_in_any_locale(logging_module):
+    panel, doc, _snapshot = make_panel(logging_module)
+    applied = []
+    logging_module.lf.log.set_buffer_limit = applied.append
+    field = doc.elements["log-limit"]
+    for text in ("50.000", "1 000", "2,500", "1.0", "\u00b2"):
+        panel._set_limit(text)
+        field.listeners["blur"](None)
+    assert applied == [50000, 1000, 2500]
 
 
 def test_live_tail_reuses_unchanged_row_nodes(logging_module):

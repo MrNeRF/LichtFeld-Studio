@@ -63,6 +63,7 @@ namespace {
         std::ifstream backup(lfs::test::licht::find_backup(root / "backups", path));
         ASSERT_TRUE(backup);
         EXPECT_EQ(std::string(std::istreambuf_iterator<char>(backup), {}), original);
+        backup.close();
         std::filesystem::remove_all(root);
     }
 
