@@ -230,6 +230,8 @@ namespace lfs::vis {
             VkDescriptorSet shape_overlay_descriptor_set = VK_NULL_HANDLE;
             VkImageView bound_shape_overlay_depth_view = VK_NULL_HANDLE;
             std::uint64_t bound_shape_overlay_depth_revision = 0;
+            bool scene_split_active = false;
+            bool use_left_mesh_depth = false;
         };
         std::vector<FrameResources> frame_resources;
 
@@ -240,6 +242,7 @@ namespace lfs::vis {
         VulkanMeshPass mesh_pass;
         VulkanEnvironmentPass environment_pass;
         VulkanDepthBlitPass depth_blit_pass;
+        VulkanDepthBlitPass split_depth_blit_pass;
         VulkanSplitViewPass split_view_pass;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
@@ -336,6 +339,11 @@ namespace lfs::vis {
                 reset();
                 return false;
             }
+            if (!split_depth_blit_pass.init(ctx, color_format, depth_stencil_format, quad_buffer)) {
+                LOG_ERROR("Vulkan viewport pass: split depth-blit sub-pass init failed");
+                reset();
+                return false;
+            }
             if (!split_view_pass.init(ctx, color_format, depth_stencil_format, quad_buffer)) {
                 LOG_ERROR("Vulkan viewport pass: split-view sub-pass init failed");
                 reset();
@@ -385,8 +393,14 @@ namespace lfs::vis {
             addGraphPass(
                 "depth_blit", P::DepthBlit,
                 [this](const VulkanViewportPassParams& p) {
-                    return !sceneSplitActive(p) && !p.mesh_items.empty() &&
-                           depth_blit_pass.hasDepth(p.frame_slot);
+                    if (p.mesh_items.empty()) {
+                        return false;
+                    }
+                    if (!sceneSplitActive(p)) {
+                        return depth_blit_pass.hasDepth(p.frame_slot);
+                    }
+                    return (!p.mesh_panels.empty() && depth_blit_pass.hasDepth(p.frame_slot)) ||
+                           (p.mesh_panels.size() > 1 && split_depth_blit_pass.hasDepth(p.frame_slot));
                 },
                 [this, rect_of](const ViewportRecordContext& c, const VulkanViewportPassParams& p) {
                     recordDepthBlitPass(c.cmd, rect_of(c), p);
@@ -2116,8 +2130,7 @@ namespace lfs::vis {
             };
             mesh_pass.prepare(*context, mesh_params);
             environment_pass.prepare(params.environment, params.frame_slot);
-            depth_blit_pass.prepare(params.depth_blit, params.frame_slot);
-            split_view_pass.prepare(params.split_view, params.frame_slot);
+            prepareSplitDepth(params);
             const bool runtime_available = params.split_view.enabled
                                                ? split_view_pass.available()
                                                : scene_spatial_pipeline != VK_NULL_HANDLE;
@@ -2264,7 +2277,22 @@ namespace lfs::vis {
         // does not restore shared state on exit.
 
         [[nodiscard]] bool sceneSplitActive(const VulkanViewportPassParams& params) const {
-            return params.split_view.enabled && split_view_pass.ready(params.frame_slot);
+            return resourcesForFrame(params.frame_slot).scene_split_active;
+        }
+
+        void prepareSplitDepth(const VulkanViewportPassParams& params) {
+            auto& frame = resourcesForFrame(params.frame_slot);
+            split_view_pass.prepare(params.split_view, params.frame_slot);
+            frame.scene_split_active = params.split_view.enabled && split_view_pass.ready(params.frame_slot);
+            frame.use_left_mesh_depth = meshUsesLeftDepth(params, frame.scene_split_active);
+            const auto& primary_depth = frame.use_left_mesh_depth
+                                            ? params.split_view.left.depth_blit
+                                            : params.depth_blit;
+            depth_blit_pass.prepare(primary_depth, params.frame_slot);
+            if (!params.mesh_items.empty() && frame.scene_split_active &&
+                params.mesh_panels.size() > 1) {
+                split_depth_blit_pass.prepare(params.split_view.right.depth_blit, params.frame_slot);
+            }
         }
 
         struct OverlayVertexSplit {
@@ -2389,20 +2417,70 @@ namespace lfs::vis {
 
         void recordDepthBlitPass(VkCommandBuffer command_buffer, const FramebufferRect& rect,
                                  const VulkanViewportPassParams& params) {
+            const bool split_active = sceneSplitActive(params);
+            const auto& primary_depth = resourcesForFrame(params.frame_slot).use_left_mesh_depth
+                                            ? params.split_view.left.depth_blit
+                                            : params.depth_blit;
             LFS_VK_DEBUG_ASSERT(
-                !sceneSplitActive(params) && !params.mesh_items.empty() &&
-                    depth_blit_pass.hasDepth(params.frame_slot),
-                "Viewport depth-blit pass requires non-split mesh rendering with a ready depth image (frame_slot={}, split_active={}, mesh_items={}, depth_ready={})",
+                !params.mesh_items.empty() &&
+                    (split_active
+                         ? ((!params.mesh_panels.empty() && depth_blit_pass.hasDepth(params.frame_slot)) ||
+                            (params.mesh_panels.size() > 1 &&
+                             split_depth_blit_pass.hasDepth(params.frame_slot)))
+                         : depth_blit_pass.hasDepth(params.frame_slot)),
+                "Viewport depth-blit pass requires mesh items and at least one matching depth image (frame_slot={}, split_active={}, mesh_items={}, mesh_panels={}, primary_ready={}, secondary_ready={})",
                 params.frame_slot,
-                sceneSplitActive(params),
+                split_active,
                 params.mesh_items.size(),
-                depth_blit_pass.hasDepth(params.frame_slot));
+                params.mesh_panels.size(),
+                depth_blit_pass.hasDepth(params.frame_slot),
+                split_depth_blit_pass.hasDepth(params.frame_slot));
+            if (split_active) {
+                const auto panel_count = params.mesh_panels.size();
+                for (std::size_t panel_index = 0; panel_index < panel_count; ++panel_index) {
+                    const bool ready = panel_index == 0
+                                           ? depth_blit_pass.hasDepth(params.frame_slot)
+                                           : split_depth_blit_pass.hasDepth(params.frame_slot);
+                    if (!ready) {
+                        continue;
+                    }
+                    const auto& panel = params.mesh_panels[panel_index];
+                    const int x0 = std::clamp(
+                        rect.x + static_cast<int>(std::lround(panel.start_position * static_cast<float>(rect.width))),
+                        rect.x,
+                        rect.x + static_cast<int>(rect.width));
+                    const int x1 = std::clamp(
+                        rect.x + static_cast<int>(std::lround(panel.end_position * static_cast<float>(rect.width))),
+                        rect.x,
+                        rect.x + static_cast<int>(rect.width));
+                    if (x1 <= x0) {
+                        continue;
+                    }
+                    const VkRect2D depth_rect{
+                        .offset = {x0, rect.y},
+                        .extent = {static_cast<std::uint32_t>(x1 - x0),
+                                   static_cast<std::uint32_t>(rect.height)},
+                    };
+                    if (panel_index == 0) {
+                        depth_blit_pass.record(command_buffer,
+                                               depth_rect,
+                                               primary_depth,
+                                               params.frame_slot);
+                    } else {
+                        split_depth_blit_pass.record(command_buffer,
+                                                     depth_rect,
+                                                     params.split_view.right.depth_blit,
+                                                     params.frame_slot);
+                    }
+                }
+                return;
+            }
             const VkRect2D depth_rect{
                 .offset = {rect.x, rect.y},
                 .extent = {static_cast<std::uint32_t>(rect.width),
                            static_cast<std::uint32_t>(rect.height)},
             };
-            depth_blit_pass.record(command_buffer, depth_rect, params.depth_blit, params.frame_slot);
+            depth_blit_pass.record(command_buffer, depth_rect, primary_depth, params.frame_slot);
         }
 
         void recordMeshPass(VkCommandBuffer command_buffer, const FramebufferRect& rect,
@@ -2805,6 +2883,7 @@ namespace lfs::vis {
                 mesh_pass.shutdown();
                 environment_pass.shutdown();
                 depth_blit_pass.shutdown();
+                split_depth_blit_pass.shutdown();
                 split_view_pass.shutdown();
                 if (scene_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
@@ -2935,8 +3014,7 @@ namespace lfs::vis {
             auto& mesh_owner = resident_mesh_resources ? *resident_mesh_resources : *this;
             mesh_owner.impl_->mesh_pass.prepare(context, mesh_params);
             impl_->environment_pass.prepare(params.environment, slot);
-            impl_->depth_blit_pass.prepare(params.depth_blit, slot);
-            impl_->split_view_pass.prepare(params.split_view, slot);
+            impl_->prepareSplitDepth(params);
             if (!error.empty())
                 throw std::runtime_error(error);
             LOG_DEBUG("Prepared import viewport resources: meshes={}, frame_slot={}", params.mesh_items.size(), slot);

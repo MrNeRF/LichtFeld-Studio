@@ -44,7 +44,7 @@ settings.equirectangular=True
 def _magenta_pixels(image, bounds):
     x0, y0, x1, y1 = bounds
     return sum(
-        r > 100 and b > 100 and g < 100
+        r > 100 and b > 100 and 2 * g < min(r, b)
         for r, g, b in image.crop((x0, y0, x1, y1)).getdata()
     )
 

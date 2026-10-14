@@ -143,4 +143,4 @@ values before using the new rule in UI code.
 
 ## License
 
-Contributions are licensed under GPLv3.
+Contributions are licensed under GPLv3 or later, together with the additional permission for NVIDIA GPU libraries in [LICENSE-EXCEPTION.txt](LICENSE-EXCEPTION.txt).

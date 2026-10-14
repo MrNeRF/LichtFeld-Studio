@@ -208,13 +208,13 @@ class Theme:
 def theme() -> Theme:
     """Get the current theme"""
 
-def set_theme_vignette_enabled(arg: bool, /) -> None:
+def set_theme_vignette_enabled(enabled: bool, persist: bool = True) -> None:
     """Set theme vignette enabled"""
 
-def set_theme_vignette_intensity(arg: float, /) -> None:
+def set_theme_vignette_intensity(intensity: float, persist: bool = True) -> None:
     """Set theme vignette intensity"""
 
-def set_theme_vignette_style(arg0: float, arg1: float, arg2: float, /) -> None:
+def set_theme_vignette_style(intensity: float, radius: float, softness: float, persist: bool = True) -> None:
     """Set vignette intensity, radius, and softness"""
 
 def remember_camera_navigation() -> bool:
@@ -1985,6 +1985,9 @@ def save_laz_file_dialog(default_name: str = 'export') -> str:
     Open a save file dialog for LAZ compressed files. Returns empty string if cancelled.
     """
 
+def save_text_file_dialog(default_name: str = 'lichtfeld_logs') -> str:
+    """Choose a text log export path. Returns empty string if cancelled."""
+
 def save_json_file_dialog(default_name: str = 'config.json') -> str:
     """
     Open a save file dialog for JSON files. Returns empty string if cancelled.
@@ -2244,7 +2247,7 @@ def clear_gizmo() -> None:
 def get_active_submode() -> str:
     """Get active selection submode"""
 
-def set_selection_mode(mode: str) -> None:
+def set_selection_mode(mode: str, mark_session_dirty: bool = True) -> None:
     """Set selection mode"""
 
 def execute_mirror(axis: str) -> None:
@@ -2738,6 +2741,26 @@ def set_navigation_speed_preference(speed: float, persist: bool = True) -> None:
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
 
+def get_rendering_defaults_json() -> str:
+    """
+    Get user defaults for new projects; project VIEW values are independent overrides.
+    """
+
+def set_rendering_defaults_json(serialized: str) -> None:
+    """
+    Validate and persist rendering defaults without changing the current project.
+    """
+
+def capture_rendering_defaults() -> None:
+    """
+    Save current project overlay style and LOD cache limits as defaults for new projects.
+    """
+
+def apply_rendering_defaults() -> None:
+    """
+    Explicitly apply user defaults to the current project; other rendering fields are preserved.
+    """
+
 def get_project_manager_preferences() -> dict:
     """
     Get Project Manager preferences from the canonical user preferences store
@@ -2804,6 +2827,9 @@ def clear_project_location() -> None:
 
 def get_embed_dataset_by_default() -> bool:
     """Get whether new projects copy datasets into the project by default."""
+
+def mark_project_session_chapter_committed(chapter: str) -> None:
+    """Mark a committed project session setting change for autosave."""
 
 def set_embed_dataset_by_default(enabled: bool) -> bool:
     """Set whether new projects copy datasets into the project by default."""

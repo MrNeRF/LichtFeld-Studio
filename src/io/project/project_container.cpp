@@ -5050,6 +5050,8 @@ namespace lfs::io::project {
         }
 
         std::atomic<std::uint64_t> g_framed_record_decode_calls{0};
+        std::atomic<std::uint64_t> g_framed_record_stored_cache_view_bytes{0};
+        std::atomic<std::uint64_t> g_framed_record_stored_cache_nonalias_bytes{0};
 
         // Logical (decoded / unshuffled) view of a framed payload. Resident
         // decoded records are capped: ZstdFramed keeps current + one
@@ -5458,7 +5460,8 @@ namespace lfs::io::project {
                     if (!stored_cache_[index].empty()) {
                         continue;
                     }
-                    if (!read_record_stored(index, stored_cache_[index])) {
+                    std::span<const std::byte> stored;
+                    if (!read_record_stored(index, stored_cache_[index], stored)) {
                         stored_cache_[index].clear();
                         break;
                     }
@@ -5467,18 +5470,25 @@ namespace lfs::io::project {
             }
 
             bool read_record_stored(const std::size_t index,
-                                    std::vector<std::byte>& stored) {
+                                    std::vector<std::byte>& scratch,
+                                    std::span<const std::byte>& stored) {
                 if (index >= records_.size()) {
                     return false;
                 }
                 if (index < stored_cache_.size() &&
                     !stored_cache_[index].empty()) {
                     stored = stored_cache_[index];
+                    g_framed_record_stored_cache_view_bytes.fetch_add(
+                        stored.size(), std::memory_order_relaxed);
+                    if (stored.data() != stored_cache_[index].data()) {
+                        g_framed_record_stored_cache_nonalias_bytes.fetch_add(
+                            stored.size(), std::memory_order_relaxed);
+                    }
                     return true;
                 }
                 const FramedRecord& record = records_[index];
                 try {
-                    stored.resize(static_cast<std::size_t>(record.sb));
+                    scratch.resize(static_cast<std::size_t>(record.sb));
                 } catch (const std::bad_alloc&) {
                     return false;
                 } catch (const std::length_error&) {
@@ -5488,12 +5498,16 @@ namespace lfs::io::project {
                 if (!ensure_blocks_locked(record.so, record.sb)) {
                     return false;
                 }
-                return read_stored_locked(
-                    record.so, std::span<std::byte>(stored.data(), stored.size()));
+                if (!read_stored_locked(
+                        record.so, std::span<std::byte>(scratch.data(), scratch.size()))) {
+                    return false;
+                }
+                stored = scratch;
+                return true;
             }
 
             bool decompress_record(const FramedRecord& record,
-                                   const std::vector<std::byte>& stored, void* dest,
+                                   const std::span<const std::byte> stored, void* dest,
                                    const std::size_t dest_bytes) const {
                 if (dest == nullptr || dest_bytes != record.ub) {
                     return false;
@@ -5513,8 +5527,9 @@ namespace lfs::io::project {
                 if (index >= records_.size()) {
                     return false;
                 }
-                std::vector<std::byte> stored;
-                if (!read_record_stored(index, stored)) {
+                std::vector<std::byte> scratch;
+                std::span<const std::byte> stored;
+                if (!read_record_stored(index, scratch, stored)) {
                     return false;
                 }
                 try {
@@ -5533,8 +5548,9 @@ namespace lfs::io::project {
                 if (index >= records_.size()) {
                     return false;
                 }
-                std::vector<std::byte> stored;
-                if (!read_record_stored(index, stored)) {
+                std::vector<std::byte> scratch;
+                std::span<const std::byte> stored;
+                if (!read_record_stored(index, scratch, stored)) {
                     return false;
                 }
                 return decompress_record(records_[index], stored, dest, dest_bytes);
@@ -6219,6 +6235,26 @@ namespace lfs::io::project {
 
         std::uint64_t framed_record_decode_calls_for_testing() {
             return g_framed_record_decode_calls.load(std::memory_order_relaxed);
+        }
+
+        void reset_framed_record_stored_cache_view_bytes_for_testing() {
+            g_framed_record_stored_cache_view_bytes.store(
+                0, std::memory_order_relaxed);
+        }
+
+        std::uint64_t framed_record_stored_cache_view_bytes_for_testing() {
+            return g_framed_record_stored_cache_view_bytes.load(
+                std::memory_order_relaxed);
+        }
+
+        void reset_framed_record_stored_cache_nonalias_bytes_for_testing() {
+            g_framed_record_stored_cache_nonalias_bytes.store(
+                0, std::memory_order_relaxed);
+        }
+
+        std::uint64_t framed_record_stored_cache_nonalias_bytes_for_testing() {
+            return g_framed_record_stored_cache_nonalias_bytes.load(
+                std::memory_order_relaxed);
         }
     } // namespace detail
 

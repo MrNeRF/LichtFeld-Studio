@@ -89,7 +89,7 @@ A mask restricts all metrics to a part of each image, for example the object wit
 | `mesh:<file>` | Pixels covered by a mesh (OBJ, PLY, ...) in the dataset's coordinates. |
 | `bbox:x0,y0,z0,x1,y1,z1` | Pixels covered by an axis-aligned box given by its minimum and maximum corner, in the dataset's coordinates. |
 | `cropbox` | Pixels covered by the training model's crop box, as placed when training starts. |
-| `masks:<folder>` | One mask image per input image, matched by file name. White pixels are scored. |
+| `masks:<folder>` | One mask image per evaluated image, found by the image's name, see [Mask folders](#mask-folders). White pixels are scored. |
 | `depth:near,far` | Rendered pixels that are solid and whose depth lies between `near` and `far`. |
 | `points` or `points:radius,close` | Pixels around the initial point cloud: every point is drawn as a disk of `radius` pixels (default 2) and gaps up to twice `close` pixels (default 3) are closed. |
 | `points:<file>` | Pixels around the points of a splat or point cloud PLY in the dataset's coordinates, drawn like `points` with the default radius and closing. Use it when the initial point cloud is not the subject, for example when the subject is added with `--add-splat`. |
@@ -101,6 +101,48 @@ A mask restricts all metrics to a part of each image, for example the object wit
 `points` uses the points the model was initialized from, either the dataset's sparse points or the file given with `--init`. A resumed project reads them again from there, so that file or dataset must still be in place.
 
 In the GUI, **Browse** picks a mesh, **Mask Folder** a mask folder and **Use Crop Box** the crop box; the text field accepts any of the specifications above.
+
+### Mask folders
+
+`masks:<folder>` is a normal path to the folder that holds the masks; it does not have to be inside the dataset. An absolute path is used as given. A relative path is resolved from the directory the command is started in, not from the dataset, and is stored as an absolute path, so a resumed project still finds it. A folder that does not exist stops the run before anything is evaluated.
+
+Each mask is found from the name the image has in its dataset:
+
+| Images come from | Image name | Example |
+|---|---|---|
+| A COLMAP dataset | The name stored in the model, which is the path below the images folder | `cam_a/frame_0001.exr` |
+| A `transforms.json` dataset | The image's file name | `frame_0001.png` |
+| `compare` with a reference folder | The path below the reference folder | `cam_a/frame_0001.exr` |
+| `compare` with a reference dataset or `--colmap` | The name stored in the COLMAP model | `cam_a/frame_0001.exr` |
+
+The mask folder is searched including its subfolders:
+
+1. The image's path inside the folder comes first, so a folder that mirrors the image layout always works: `eval_masks/cam_a/frame_0001.png`.
+2. Otherwise the file name alone is looked up anywhere in the folder, so a flat folder works too: `eval_masks/frame_0001.png`. If that file name exists in more than one subfolder, the match is ambiguous and the image is reported as having no mask. Mirror the image layout whenever file names repeat across folders.
+
+At each place the mask may be named like the image including its extension (`frame_0001.exr`), with the extension replaced by `.png`, `.jpg`, `.jpeg` or `.mask.png` (`frame_0001.png`), or with one of those appended (`frame_0001.exr.png`). An EXR image can therefore use a PNG mask. Names are matched ignoring case, and `/` and `\` both separate folders.
+
+A mask has the resolution of its image file and is scaled together with the image. White pixels are scored; `--eval-mask-invert` scores the others. Every evaluated image needs a mask: a missing one stops the evaluation and names the image.
+
+For example, a COLMAP dataset whose two cameras both have a `frame_0001`:
+
+```
+dataset/
+├── images/
+│   ├── cam_a/frame_0001.exr
+│   └── cam_b/frame_0001.exr
+└── sparse/0/
+eval_masks/
+├── cam_a/frame_0001.png
+└── cam_b/frame_0001.png
+```
+
+```bash
+LichtFeld-Studio --headless -d dataset -o output --eval --eval-mask masks:eval_masks
+LichtFeld-Studio compare dataset/ renders/ --eval-mask masks:/data/eval_masks
+```
+
+The masks mirror the layout because `frame_0001.png` alone would match both cameras.
 
 ## Distorted images
 

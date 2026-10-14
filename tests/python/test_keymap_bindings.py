@@ -459,6 +459,9 @@ class _DocStub:
     def get_element_by_id(self, element_id):
         return self.elements.get(element_id)
 
+    def query_selector_all(self, _selector):
+        return []
+
 
 class _EventStub:
     def __init__(self, target):

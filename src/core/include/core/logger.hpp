@@ -53,6 +53,17 @@ namespace lfs::core {
         std::string message;
     };
 
+    struct LFS_LOGGER_API LogBufferSnapshot {
+        uint64_t generation = 0;
+        size_t max_entries = 5000;
+        size_t max_bytes = 64 * 1024 * 1024;
+        size_t bytes = 0;
+        size_t discarded = 0;
+        size_t entry_count = 0;
+        uint64_t first_sequence = 0;
+        std::vector<LogEntrySnapshot> entries;
+    };
+
     using LogHandler = std::function<void(LogLevel level, const SourceSite& loc, std::string_view msg)>;
     using LogHandlerToken = uint32_t;
 
@@ -111,6 +122,9 @@ namespace lfs::core {
         [[nodiscard]] std::vector<LogEntrySnapshot>
         buffered_logs_since(uint64_t generation, size_t max_count) const;
         [[nodiscard]] std::string buffered_logs_as_text() const;
+        [[nodiscard]] LogBufferSnapshot log_buffer_snapshot(uint64_t since_generation = 0) const;
+        void set_log_buffer_limit(size_t max_entries);
+        void clear_log_buffer();
 
         bool is_enabled(LogLevel level) const {
             return should_emit(level);

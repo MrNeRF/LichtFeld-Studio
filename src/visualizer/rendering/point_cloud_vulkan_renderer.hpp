@@ -136,9 +136,11 @@ namespace lfs::vis {
             VulkanContext& context,
             const RenderRequest& request,
             OutputSlot output_slot = OutputSlot::Main);
+        // uint8_rgba copies the attachment. The default stays the float RGB readback.
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
-            OutputSlot output_slot = OutputSlot::Main);
+            OutputSlot output_slot = OutputSlot::Main,
+            bool uint8_rgba = false);
 
         [[nodiscard]] lfs::Result<float> sampleDepthAtPixel(
             VulkanContext& context, const DepthSampleRequest& request);

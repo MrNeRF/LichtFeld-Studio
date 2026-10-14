@@ -721,30 +721,14 @@ body {
 }
 
 .viewport-transform-panel.viewport-export-panel {
-    width: 470dp;
+    width: auto;
     min-width: 0;
-    max-width: 470dp;
-    padding: 6dp 8dp;
+    max-width: 100%;
+    padding: 5dp 6dp;
+    border-radius: 6dp;
     gap: 4dp;
     box-sizing: border-box;
-}
-
-.viewport-transform-panel.viewport-export-panel.has-custom {
-    width: 624dp;
-    min-width: 0;
-    max-width: 624dp;
-}
-
-.viewport-transform-panel.viewport-export-panel.has-alpha {
-    width: 532dp;
-    min-width: 0;
-    max-width: 532dp;
-}
-
-.viewport-transform-panel.viewport-export-panel.has-custom.has-alpha {
-    width: 686dp;
-    min-width: 0;
-    max-width: 686dp;
+    flex-shrink: 0;
 }
 
 .viewport-transform-overlay > .viewport-transform-panel,
@@ -754,6 +738,13 @@ body {
     max-width: 100%;
     box-sizing: border-box;
     flex-shrink: 1;
+}
+
+.viewport-depth-overlay > .viewport-transform-panel.viewport-export-panel {
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    flex-shrink: 0;
 }
 
 #transform-block .viewport-transform-panel {
@@ -788,6 +779,17 @@ body {
     flex-direction: column;
     align-items: center;
     gap: 5dp;
+    overflow: visible;
+}
+
+/* The overlay context is the viewport plus the left dock, so this is about
+   920px at a 1280 window and about 1240px at 1600. The corner axis widget
+   occupies the viewport's right 105px. Inset only the narrower context;
+   a fixed inset would shift the one-row bar at 1600. */
+@media (max-width: 1100px) {
+    .viewport-depth-overlay.viewport-export-overlay {
+        right: 112dp;
+    }
 }
 
 .viewport-transform-header {
@@ -884,37 +886,49 @@ body {
 .viewport-export-fields {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 8dp;
-    height: 26dp;
+    row-gap: 4dp;
+    height: auto;
     min-height: 26dp;
-    flex-shrink: 0;
-    flex-wrap: nowrap;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    min-width: 0;
 }
 
 .viewport-export-axis {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 6dp;
-    height: 26dp;
+    height: auto;
     min-height: 26dp;
-    flex-shrink: 0;
+    flex: 0 1 auto;
+    min-width: 0;
+    flex-wrap: wrap;
 }
 
 .viewport-export-header {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    justify-content: center;
     align-items: center;
+    align-content: center;
+    row-gap: 4dp;
     min-height: 26dp;
+    width: auto;
+    min-width: 0;
+    flex: 0 0 auto;
 }
 
 .viewport-transform-meta.viewport-export-meta {
-    width: 171dp;
-    min-width: 171dp;
-    max-width: 171dp;
+    width: auto;
+    min-width: 0;
+    max-width: none;
     flex-direction: row;
     align-items: center;
     gap: 6dp;
     flex-grow: 0;
-    flex-shrink: 0;
+    flex-shrink: 1;
     min-height: 26dp;
 }
 
@@ -922,16 +936,22 @@ body {
     font-size: 12dp;
     line-height: 26dp;
     white-space: nowrap;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .viewport-export-axis > .viewport-transform-axis-label {
-    width: 64dp;
-    min-width: 64dp;
+    width: auto;
+    min-width: 0;
     font-size: 12dp;
     line-height: 26dp;
     text-align: left;
     white-space: nowrap;
-    flex-shrink: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .viewport-export-resolution-select,
@@ -939,39 +959,42 @@ body {
     height: 26dp;
     min-height: 26dp;
     font-size: 12dp;
-    line-height: 24dp;
+    line-height: 26dp;
     padding: 0;
     margin: 0;
-    flex-shrink: 0;
+    flex: 0 0 auto;
 }
 
 .viewport-export-resolution-select {
-    width: 102dp;
-    min-width: 102dp;
+    /* Closed value must fit the longest locale, "Benutzerdefiniert". */
+    width: 128dp;
+    min-width: 128dp;
 }
 
 .viewport-export-format-select {
-    width: 74dp;
-    min-width: 74dp;
+    width: 58dp;
+    min-width: 58dp;
 }
 
 .viewport-export-resolution-select selectvalue,
 .viewport-export-format-select selectvalue {
-    height: 24dp;
-    line-height: 24dp;
+    height: 26dp;
+    line-height: 26dp;
     margin-right: 20dp;
     padding: 0 0 0 8dp;
     position: relative;
     top: 0;
+    transform: none;
 }
 
 .viewport-export-resolution-select selectarrow,
 .viewport-export-format-select selectarrow {
     width: 20dp;
-    height: 24dp;
-    line-height: 24dp;
+    height: 26dp;
+    line-height: 26dp;
     position: relative;
     top: 0;
+    transform: none;
 }
 
 .viewport-export-custom-size {
@@ -980,7 +1003,7 @@ body {
     gap: 5dp;
     height: 26dp;
     min-height: 26dp;
-    flex-shrink: 0;
+    flex: 0 0 auto;
 }
 
 .viewport-export-custom-size.hidden {
@@ -995,7 +1018,7 @@ body {
     font-size: 12dp;
     line-height: 16dp;
     padding: 3dp 6dp;
-    flex-shrink: 0;
+    flex: 0 0 auto;
     text-align: right;
     box-sizing: border-box;
 }
@@ -1007,7 +1030,7 @@ body {
     line-height: 26dp;
     height: 26dp;
     text-align: center;
-    flex-shrink: 0;
+    flex: 0 0 auto;
 }
 
 .viewport-export-transparency {
@@ -1017,8 +1040,18 @@ body {
     height: 26dp;
     min-height: 26dp;
     font-size: 12dp;
+    line-height: 26dp;
     white-space: nowrap;
-    flex-shrink: 0;
+    flex: 0 0 auto;
+}
+
+.viewport-export-transparency input {
+    width: 14dp;
+    height: 14dp;
+    min-width: 14dp;
+    min-height: 14dp;
+    margin: 0;
+    flex: 0 0 auto;
 }
 
 .viewport-export-transparency.hidden {
@@ -1026,26 +1059,40 @@ body {
 }
 
 .viewport-export-actions {
+    display: flex;
+    align-items: center;
+    gap: 4dp;
     height: 26dp;
     min-height: 26dp;
-    flex-shrink: 0;
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.viewport-export-actions .viewport-transform-action {
+    width: 26dp;
+    height: 26dp;
+    min-width: 26dp;
+    min-height: 26dp;
+    flex: 0 0 auto;
 }
 
 .viewport-export-button {
-    width: 66dp;
     min-width: 66dp;
+    width: auto;
     height: 26dp;
     min-height: 26dp;
-    padding: 0;
+    padding: 0 8dp;
     font-size: 12dp;
-    line-height: 24dp;
+    line-height: 26dp;
     box-sizing: border-box;
-    flex-shrink: 0;
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
 
 .viewport-export-status {
     pointer-events: none;
-    max-width: 360dp;
+    width: auto;
+    max-width: none;
     min-height: 22dp;
     padding: 4dp 10dp;
     border-width: 1dp;
@@ -1053,6 +1100,8 @@ body {
     font-size: 11dp;
     line-height: 14dp;
     white-space: nowrap;
+    text-align: center;
+    box-sizing: border-box;
     opacity: 1;
 }
 

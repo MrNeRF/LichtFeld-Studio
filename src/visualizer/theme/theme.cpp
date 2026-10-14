@@ -56,7 +56,7 @@ namespace lfs::vis {
 
         void ensureThemesLoaded();
         const Theme& activeTheme();
-        void applyCurrentTheme(const Theme& theme, std::string_view theme_id);
+        void applyCurrentTheme(const Theme& theme, std::string_view theme_id, bool use_preferences = true);
         bool activateThemePreset(std::string_view theme_id);
         bool loadThemeFamilyVariant(Theme& theme,
                                     const std::filesystem::path& path,
@@ -263,7 +263,7 @@ namespace lfs::vis {
             // RML theme activation and preset hot-reload continue to target
             // the selected preset even if the theme JSON name is customized.
             const std::string active_theme_id = g_current_theme_id;
-            applyCurrentTheme(t, active_theme_id);
+            applyCurrentTheme(t, active_theme_id, false);
         }
     } // namespace
 
@@ -988,8 +988,15 @@ namespace lfs::vis {
     }
 
     namespace {
-        void applyCurrentTheme(const Theme& theme, std::string_view theme_id) {
+        void applyCurrentTheme(const Theme& theme, std::string_view theme_id, const bool use_preferences) {
             g_current_theme = theme;
+            if (use_preferences) {
+                const auto vignette = json::parse(UserPreferences::instance().viewportVignette());
+                g_current_theme.vignette.enabled = vignette.value("enabled", g_current_theme.vignette.enabled);
+                g_current_theme.vignette.intensity = vignette.value("intensity", g_current_theme.vignette.intensity);
+                g_current_theme.vignette.radius = vignette.value("radius", g_current_theme.vignette.radius);
+                g_current_theme.vignette.softness = vignette.value("softness", g_current_theme.vignette.softness);
+            }
             g_current_theme_id = std::string(theme_id);
             g_initialized = true;
             if (g_theme_change_cb)
@@ -1590,22 +1597,58 @@ namespace lfs::vis {
     }
 
     void setThemeVignetteEnabled(bool enabled) {
-        Theme t = theme();
-        t.vignette.enabled = enabled;
-        applyThemePreservingCurrentId(t);
+        setThemeVignetteEnabled(enabled, true);
     }
 
     void setThemeVignetteIntensity(float intensity) {
-        Theme t = theme();
-        t.vignette.intensity = std::clamp(intensity, 0.0f, 1.0f);
-        applyThemePreservingCurrentId(t);
+        setThemeVignetteIntensity(intensity, true);
     }
 
     void setThemeVignetteStyle(float intensity, float radius, float softness) {
+        setThemeVignetteStyle(intensity, radius, softness, true);
+    }
+
+    void setThemeVignetteEnabled(bool enabled, const bool persist) {
+        Theme t = theme();
+        t.vignette.enabled = enabled;
+        if (persist) {
+            if (auto result = UserPreferences::instance().setViewportVignette(
+                    json{{"enabled", t.vignette.enabled}, {"intensity", t.vignette.intensity}, {"radius", t.vignette.radius}, {"softness", t.vignette.softness}}.dump());
+                !result) {
+                LOG_WARN("Unable to update vignette preferences: {}", lfs::format_for_developer(result.error()));
+                return;
+            }
+        }
+        applyThemePreservingCurrentId(t);
+    }
+
+    void setThemeVignetteIntensity(float intensity, const bool persist) {
+        Theme t = theme();
+        t.vignette.intensity = std::clamp(intensity, 0.0f, 1.0f);
+        if (persist) {
+            if (auto result = UserPreferences::instance().setViewportVignette(
+                    json{{"enabled", t.vignette.enabled}, {"intensity", t.vignette.intensity}, {"radius", t.vignette.radius}, {"softness", t.vignette.softness}}.dump());
+                !result) {
+                LOG_WARN("Unable to update vignette preferences: {}", lfs::format_for_developer(result.error()));
+                return;
+            }
+        }
+        applyThemePreservingCurrentId(t);
+    }
+
+    void setThemeVignetteStyle(float intensity, float radius, float softness, const bool persist) {
         Theme t = theme();
         t.vignette.intensity = std::clamp(intensity, 0.0f, 1.0f);
         t.vignette.radius = std::clamp(radius, 0.0f, 1.0f);
         t.vignette.softness = std::clamp(softness, 0.0f, 1.0f);
+        if (persist) {
+            if (auto result = UserPreferences::instance().setViewportVignette(
+                    json{{"enabled", t.vignette.enabled}, {"intensity", t.vignette.intensity}, {"radius", t.vignette.radius}, {"softness", t.vignette.softness}}.dump());
+                !result) {
+                LOG_WARN("Unable to update vignette preferences: {}", lfs::format_for_developer(result.error()));
+                return;
+            }
+        }
         applyThemePreservingCurrentId(t);
     }
 

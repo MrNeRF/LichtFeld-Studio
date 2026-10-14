@@ -29,6 +29,11 @@
 
 namespace lfs::vis::input {
 
+    const Profile*& detail::defaultProfileOverride() {
+        static thread_local const Profile* profile_override = nullptr;
+        return profile_override;
+    }
+
     namespace {
 
         std::atomic<bool> g_persistence_enabled{true};

@@ -7820,9 +7820,6 @@ namespace lfs::vis {
         if (!input_binding) {
             return std::unexpected(input_binding.error());
         }
-        if (input_binding->model_snapshot_changed) {
-            macro_chain_warmup_pending_ = true;
-        }
         // The borrowed Vulkan-external model storage stays resident across selection calls.
         // Stale data is detected via the model snapshot and its CUDA producer stream is ordered
         // into the Vulkan batch by the per-ring upload timeline.
@@ -8888,9 +8885,6 @@ namespace lfs::vis {
         if (!input_binding) {
             return std::unexpected(input_binding.error());
         }
-        if (input_binding->model_snapshot_changed) {
-            macro_chain_warmup_pending_ = true;
-        }
         if (lod_request_active) {
             if (auto ok = ensureGpuLodTreeStorage(splat_data); !ok) {
                 static std::string last_gpu_lod_storage_error;
@@ -9147,6 +9141,9 @@ namespace lfs::vis {
         // Synchronous exports use the exact instance-count gate and must keep
         // the same raster chain across every band, including a cold first band.
         // Interactive viewport and sequencer previews retain their warmup.
+        // The legacy chain warms renderer initialization once. Every regular
+        // frame rebuilds projection and sort data from current inputs, so an
+        // input snapshot change does not make an already warmed macro chain cold.
         const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_ &&
                                        !deterministic_export;
         const bool higs_active = higs_candidate && !higs_warmup_frame;

@@ -92,6 +92,7 @@ namespace lfs::python {
         [[nodiscard]] const std::string& property_group() const { return prop_.group_id(); }
         [[nodiscard]] nb::object get(const std::string& name) const { return prop_.getattr(name); }
         void set(const std::string& name, nb::object value);
+        void _set_without_session_dirty(const std::string& name, nb::object value);
         [[nodiscard]] nb::dict prop_info(const std::string& name) const {
             return prop_.prop_info(name);
         }
@@ -131,6 +132,7 @@ namespace lfs::python {
         PyRenderSettings& operator=(const PyRenderSettings&) = delete;
 
     private:
+        void set_impl(const std::string& name, nb::object value, bool mark_session_dirty);
         vis::RenderSettingsProxy settings_;
         PyProp<vis::RenderSettingsProxy> prop_;
     };

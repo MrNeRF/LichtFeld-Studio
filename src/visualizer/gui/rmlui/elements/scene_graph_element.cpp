@@ -23,6 +23,7 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/training_manager.hpp"
@@ -1797,6 +1798,9 @@ namespace lfs::vis::gui {
                     auto settings = rendering->getSettings();
                     settings.show_camera_frustums = !settings.show_camera_frustums;
                     rendering->updateSettings(settings);
+                    if (auto* const viewer = lfs::python::get_visualizer()) {
+                        viewer->projectMarkSessionChapterCommitted("VIEW");
+                    }
                     syncCameraFrustumVisibility();
                 }
                 return;
@@ -2205,6 +2209,9 @@ namespace lfs::vis::gui {
             collapsed_ids_.insert(node_id);
         tree_rebuild_needed_ = true;
         markStateDirty();
+        if (auto* const viewer = lfs::python::get_visualizer()) {
+            viewer->projectMarkSessionChapterCommitted("GUIL");
+        }
     }
 
     void SceneGraphElement::toggleModelsSection() {}
@@ -2618,6 +2625,9 @@ namespace lfs::vis::gui {
                 auto settings = rendering->getSettings();
                 settings.show_camera_frustums = visible;
                 rendering->updateSettings(settings);
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+                }
             }
         }
         tree_rebuild_needed_ = true;
@@ -3111,12 +3121,18 @@ namespace lfs::vis::gui {
         }
         if (kind == "go_to_camera" && parts.size() >= 2) {
             cmd::GoToCamView{.cam_id = std::stoi(parts[1])}.emit();
+            if (auto* const viewer = lfs::python::get_visualizer()) {
+                viewer->projectMarkSessionChapterCommitted("VIEW");
+            }
             Blur();
         } else if (kind == "go_to_image" && parts.size() >= 2) {
             cmd::OpenCameraPreview{.cam_id = std::stoi(parts[1])}.emit();
         } else if (kind == "open_in_gt_compare" && parts.size() >= 2) {
             const int cam_uid = std::stoi(parts[1]);
             cmd::GoToCamView{.cam_id = cam_uid}.emit();
+            if (auto* const viewer = lfs::python::get_visualizer()) {
+                viewer->projectMarkSessionChapterCommitted("VIEW");
+            }
             auto* const rm = services().renderingOrNull();
             if (!rm || !rm->isGTComparisonActive())
                 cmd::ToggleGTComparison{}.emit();

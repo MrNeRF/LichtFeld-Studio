@@ -5,13 +5,11 @@
 #include <gtest/gtest.h>
 
 #include <python/python_runtime.hpp>
-#include <thread>
 #include <visualizer/app_store.hpp>
 #include <visualizer/gui/panel_layout.hpp>
 #include <visualizer/gui/panel_registry.hpp>
 #include <visualizer/gui/resize_geometry.hpp>
 #include <visualizer/gui/rmlui/rmlui_manager.hpp>
-#include <visualizer/gui/scene_panel_native.hpp>
 #include <visualizer/gui/viewport_gizmo_geometry.hpp>
 
 #include <memory>
@@ -904,26 +902,4 @@ TEST_F(PanelLayoutRenderDemandTest, FloatingToolbarStaysOutsideTheDockResizeBand
     layout.renderLeftDock(ctx, true, false, input, s);
     EXPECT_FALSE(layout.isResizeInteractionActive());
     EXPECT_FLOAT_EQ(layout.getLeftDockWidth(), after.panel_width);
-}
-
-TEST(ScenePanelLogDemandTest, BackgroundLogsWakeOnlyTheActiveLogTab) {
-    auto& logger = lfs::core::Logger::get();
-    // The CPU-only visualizer test binary runs gtest's own main, which leaves the logger uninitialized.
-    if (!logger.is_ready())
-        logger.init(lfs::core::LogLevel::Info);
-    // The panel's RML host requires a manager; an uninitialised one is never driven.
-    lfs::vis::gui::RmlUIManager manager;
-    lfs::vis::gui::NativeScenePanel panel(&manager);
-    const auto previous_level = logger.level();
-    logger.set_level(lfs::core::LogLevel::Info);
-    panel.setProjectActiveTab("logging");
-    lfs::python::consume_redraw_request();
-    LOG_INFO("GUI log demand check");
-    EXPECT_FALSE(lfs::python::has_redraw_request());
-    std::thread([] { LOG_INFO("Background log demand check"); }).join();
-    EXPECT_TRUE(lfs::python::consume_redraw_request());
-    panel.setProjectActiveTab("scene");
-    std::thread([] { LOG_INFO("Inactive log demand check"); }).join();
-    EXPECT_FALSE(lfs::python::consume_redraw_request());
-    logger.set_level(previous_level);
 }

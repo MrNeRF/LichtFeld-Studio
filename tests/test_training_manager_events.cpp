@@ -7,11 +7,29 @@
 #include "core/services.hpp"
 #include "training/training_manager.hpp"
 
+#include <chrono>
+#include <condition_variable>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <mutex>
+#include <thread>
 
 namespace {
     using namespace lfs::core::events;
+
+    std::mutex trim_test_mutex;
+    std::condition_variable trim_test_condition;
+    bool trim_test_ran = false;
+    std::thread::id trim_test_thread;
+
+    void signal_heap_trim() noexcept {
+        {
+            std::lock_guard lock(trim_test_mutex);
+            trim_test_ran = true;
+            trim_test_thread = std::this_thread::get_id();
+        }
+        trim_test_condition.notify_one();
+    }
 
     class TrainingManagerPresentationTest : public testing::Test {
     protected:
@@ -27,6 +45,7 @@ namespace {
         }
 
         void TearDown() override {
+            lfs::vis::training_memory_detail::setClearTrainerTrimHookForTesting(nullptr);
             EXPECT_TRUE(manager_.clearTrainer());
             lfs::vis::services().set(previous_params_);
         }
@@ -147,6 +166,33 @@ namespace {
         const auto expected = params_.copyActiveParams();
         manager_.applyPendingParams();
         EXPECT_EQ(manager_.getTrainer()->getParams().optimization.to_json(), expected.to_json());
+    }
+
+    TEST_F(TrainingManagerPresentationTest, ClearTrainerRunsHeapTrimOffThread) {
+#ifdef __GLIBC__
+        installTrainer();
+        {
+            std::lock_guard lock(trim_test_mutex);
+            trim_test_ran = false;
+            trim_test_thread = {};
+        }
+        lfs::vis::training_memory_detail::setClearTrainerTrimHookForTesting(signal_heap_trim);
+
+        const bool cleared = manager_.clearTrainer();
+        ASSERT_TRUE(cleared);
+        {
+            std::unique_lock lock(trim_test_mutex);
+            ASSERT_TRUE(trim_test_condition.wait_for(lock, std::chrono::seconds(5), [] { return trim_test_ran; }));
+            EXPECT_NE(trim_test_thread, std::this_thread::get_id());
+        }
+        lfs::vis::training_memory_detail::setClearTrainerTrimHookForTesting(nullptr);
+        lfs::vis::training_memory_detail::shutdownHeapTrimWorker();
+        EXPECT_EQ(manager_.getTrainer(), nullptr);
+        EXPECT_EQ(manager_.getState(), lfs::vis::TrainingState::Idle);
+        EXPECT_TRUE(manager_.clearTrainer());
+#else
+        GTEST_SKIP() << "Requires glibc heap trim";
+#endif
     }
 
     // Fails if a destroyed manager leaves its handlers on the process-wide bridge: the next training run would

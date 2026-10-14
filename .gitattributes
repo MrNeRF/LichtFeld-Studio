@@ -4,3 +4,6 @@ tools/ci_format_push.sh text eol=lf
 # vcpkg applies these patches to sources extracted with LF line endings.
 .github/overlays/**/*.patch text eol=lf
 .github/overlays/**/*.diff text eol=lf
+
+# Unified-diff prefixes are not source indentation.
+.github/overlays/rmlui/*.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

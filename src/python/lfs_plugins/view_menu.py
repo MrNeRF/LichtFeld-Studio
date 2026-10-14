@@ -153,6 +153,11 @@ class ViewMenu:
                 bool(getattr(lf.ui, "is_perf_hud_visible", lambda: False)()),
                 shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_PERFORMANCE_HUD),
             ),
+            menu_toggle(
+                tr("scene.logging"),
+                lambda: lf.ui.set_panel_enabled("lfs.logging", not lf.ui.is_panel_enabled("lfs.logging")),
+                lf.ui.is_panel_enabled("lfs.logging"),
+            ),
             menu_separator(),
             menu_submenu(tr("preferences.appearance"), [
                 menu_submenu(f"{tr('menu.view.theme')} · {active_theme_label}", theme_items),

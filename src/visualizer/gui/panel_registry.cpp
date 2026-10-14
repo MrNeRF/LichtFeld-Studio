@@ -1486,6 +1486,15 @@ apply_registered_chrome:
         return nullptr;
     }
 
+    std::optional<PanelSpace>
+    PanelRegistry::default_space_for_panel(const std::string& id) const {
+        std::lock_guard lock(mutex_);
+        const auto found = std::ranges::find(panels_, id, &PanelInfo::id);
+        if (found == panels_.end())
+            return std::nullopt;
+        return found->default_space;
+    }
+
     std::vector<PanelProjectState>
     PanelRegistry::capture_project_state() const {
         std::lock_guard lock(mutex_);

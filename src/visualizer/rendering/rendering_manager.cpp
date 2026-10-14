@@ -145,6 +145,7 @@ namespace lfs::vis {
 
     // RenderingManager Implementation
     RenderingManager::RenderingManager() {
+        (void)applyRenderingDefaults(settings_, UserPreferences::instance().renderingDefaults());
         viewport_interop_ = std::make_unique<ViewportInteropService>();
         frame_demand_ledger_.request(FrameRequest{.reason = FrameReason::Startup,
                                                   .scope = FrameScope::All,
@@ -692,6 +693,21 @@ namespace lfs::vis {
     RenderSettings RenderingManager::getSettings() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return settings_;
+    }
+
+    RenderingManager::CameraProjectionSettings RenderingManager::getCameraProjectionSettings() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return {settings_.orthographic, settings_.focal_length_mm, settings_.ortho_scale};
+    }
+
+    void RenderingManager::setOrthographicScale(const float scale) {
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            settings_.ortho_scale = std::clamp(scale, 1.0f, 10000.0f);
+            markDirty(DirtyFlag::CAMERA, lfs::vis::FrameReason::CameraMotion);
+        }
+        auto& generation = app_store().render_settings_generation;
+        generation.set(generation.get() + 1);
     }
 
     void RenderingManager::reportSceneUpscalerRuntimeSelection(

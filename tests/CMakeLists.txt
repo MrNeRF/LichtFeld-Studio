@@ -128,6 +128,29 @@ if(BUILD_VISUALIZER_TESTS)
     add_executable(lichtfeld_visualizer_tests
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
     )
+    # Focused RmlUi migration contracts for the retained master interface.
+    add_executable(lichtfeld_rmlui_tests
+        test_rml_text_input_handler.cpp
+        test_rml_text_input_native_keys.cpp
+        test_rml_path_utils.cpp
+        test_rml_static_style_boundaries.cpp
+        test_rml_drag_payload.cpp
+        test_sdl_rml_key_mapping.cpp
+        test_rml_form_control_layout.cpp
+    )
+    target_compile_features(lichtfeld_rmlui_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_rmlui_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(lichtfeld_rmlui_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(lichtfeld_rmlui_tests PRIVATE
+        lfs_visualizer lfs_core lfs_python_runtime GTest::gtest_main Zep::Zep SDL3::SDL3)
+    if(MSVC)
+        target_link_options(lichtfeld_rmlui_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
+        target_link_libraries(lichtfeld_rmlui_tests PRIVATE delayimp)
+    endif()
+    add_test(NAME lichtfeld.rmlui COMMAND lichtfeld_rmlui_tests)
+    set_tests_properties(lichtfeld.rmlui PROPERTIES LABELS "fast;cpu;ui" TIMEOUT 120
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     target_compile_features(lichtfeld_visualizer_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_visualizer_tests PRIVATE
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>
@@ -619,6 +642,7 @@ set(TEST_FILES
     test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_export_utils.cpp
+    test_viewport_point_cloud_export.cpp
     test_video_export_frame_schedule.cpp
     test_video_frame_extractor_naming.cpp
     test_video_cpu_rgb_conversion.cpp
@@ -708,6 +732,7 @@ set(TEST_FILES
     test_masked_ssim_metrics.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
+    test_nvcodec_jpeg2k_chw_layout.cpp
     test_nvcodec_sentinel_validation.cpp
     test_compressed_blob_tier.cpp
     test_pipelined_loader.cpp
@@ -1579,11 +1604,33 @@ if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
         RESOURCE_LOCK lfs_gui_gpu
         ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
     )
+    add_test(NAME lichtfeld.python.mesh_removal_keeps_viewport
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_removal_keeps_viewport_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_removal_keeps_viewport PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
     add_test(NAME lichtfeld.python.mesh_panorama
         COMMAND ${Python_EXECUTABLE} -m pytest -q
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_panorama_runtime.py
     )
     set_tests_properties(lichtfeld.python.mesh_panorama PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_split_depth
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_split_depth_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_split_depth PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS "gpu;integration"
         TIMEOUT 300

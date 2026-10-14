@@ -138,9 +138,9 @@ namespace lfs::python {
             .def_ro("vignette", &PyTheme::vignette);
 
         m.def("theme", &get_current_theme, "Get the current theme");
-        m.def("set_theme_vignette_enabled", &lfs::vis::setThemeVignetteEnabled, "Set theme vignette enabled");
-        m.def("set_theme_vignette_intensity", &lfs::vis::setThemeVignetteIntensity, "Set theme vignette intensity");
-        m.def("set_theme_vignette_style", &lfs::vis::setThemeVignetteStyle, "Set vignette intensity, radius, and softness");
+        m.def("set_theme_vignette_enabled", nb::overload_cast<bool, bool>(&lfs::vis::setThemeVignetteEnabled), nb::arg("enabled"), nb::arg("persist") = true, "Set theme vignette enabled");
+        m.def("set_theme_vignette_intensity", nb::overload_cast<float, bool>(&lfs::vis::setThemeVignetteIntensity), nb::arg("intensity"), nb::arg("persist") = true, "Set theme vignette intensity");
+        m.def("set_theme_vignette_style", nb::overload_cast<float, float, float, bool>(&lfs::vis::setThemeVignetteStyle), nb::arg("intensity"), nb::arg("radius"), nb::arg("softness"), nb::arg("persist") = true, "Set vignette intensity, radius, and softness");
         m.def("remember_camera_navigation", &lfs::vis::rememberCameraNavigationPreference,
               "Return whether camera navigation is persisted between launches");
         m.def("set_remember_camera_navigation", &lfs::vis::setRememberCameraNavigationPreference,

@@ -1,0 +1,42 @@
+--- a/Source/Core/Layout/ContainerBox.cpp
++++ b/Source/Core/Layout/ContainerBox.cpp
+@@ -114,12 +114,15 @@
+ }
+ 
+ Vector2f ContainerBox::GetScrollableOverflowContentSize(Vector2f visible_overflow_size, Vector2f scrollable_content_size,
+ 	Vector2f padding_bottom_right) const
+ {
+-	// The scrollable overflow content size is the largest of:
+-	//     1. Visible overflow: Descendant boxes whose border box overflow outside the padding area of this box.
+-	//     2. Scrollable content: Margin boxes of our direct descendant overflowing onto the padding box of this box.
+-	return Math::Max(visible_overflow_size, scrollable_content_size + padding_bottom_right);
++	// LichtFeld's existing RCSS was laid out against the 6.2 scroll contract.
++	// Counting child margins and trailing padding introduces scrollbars in
++	// previously fitting panels and changes their width and scroll endpoints.
++	// Keep that contract while adopting the other 6.3 fixes and features.
++	(void)scrollable_content_size;
++	(void)padding_bottom_right;
++	return visible_overflow_size;
+ }
+ 
+ bool ContainerBox::CatchOverflow(const Vector2f visible_overflow_size, const Vector2f scrollable_content_size, const Box& box,
+--- a/Source/Core/ElementDocument.cpp
++++ b/Source/Core/ElementDocument.cpp
+@@ -586,7 +586,7 @@
+ 			{
+ 				if (element->Focus(true))
+ 				{
+-					element->ScrollIntoView(ScrollAlignment::Adaptive);
++					element->ScrollIntoView(ScrollAlignment::Nearest);
+ 					event.StopPropagation();
+ 				}
+ 			}
+@@ -633,7 +633,7 @@
+ 				{
+ 					if (next->Focus(true))
+ 					{
+-						next->ScrollIntoView(ScrollAlignment::Adaptive);
++						next->ScrollIntoView(ScrollAlignment::Nearest);
+ 						event.StopPropagation();
+ 					}
+ 				}

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "preferences.hpp"
+#include "rendering/rendering_types.hpp"
 #include "visualizer/navigation_up_axis.hpp"
 
 #include "core/environment.hpp"
@@ -503,6 +504,225 @@ namespace lfs::vis {
 
     UserPreferences::UserPreferences() : impl_(std::make_unique<Impl>()) {}
     UserPreferences::~UserPreferences() = default;
+
+    namespace {
+        lfs::Status invalidRenderingPreference(const std::string_view message, const std::string_view field = {}) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::App,
+                .user_message = std::string(message),
+                .detail = std::string(field),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+    } // namespace
+
+    std::string renderingDefaultsFromSettings(const RenderSettings& settings) {
+        json values = json::object();
+        values["show_coord_axes"] = settings.show_coord_axes;
+        values["show_pivot"] = settings.show_pivot;
+        values["show_grid"] = settings.show_grid;
+        values["show_camera_frustums"] = settings.show_camera_frustums;
+        values["desaturate_unselected"] = settings.desaturate_unselected;
+        values["desaturate_cropping"] = settings.desaturate_cropping;
+        values["hide_outside_depth_box"] = settings.hide_outside_depth_box;
+        values["axes_size"] = settings.axes_size;
+        values["grid_opacity"] = settings.grid_opacity;
+        values["camera_frustum_scale"] = settings.camera_frustum_scale;
+        values["lod_pool_vram_fraction"] = settings.lod_pool_vram_fraction;
+        values["lod_page_pool_splats"] = settings.lod_page_pool_splats;
+        values["selection_color_preview"] = {settings.selection_color_preview.r, settings.selection_color_preview.g, settings.selection_color_preview.b};
+        values["selection_color_center_marker"] = {settings.selection_color_center_marker.r, settings.selection_color_center_marker.g, settings.selection_color_center_marker.b};
+        return values.dump();
+    }
+
+    lfs::Status applyRenderingDefaults(RenderSettings& settings, const std::string_view serialized) {
+        const auto values = json::parse(serialized, nullptr, false);
+        if (!values.is_object())
+            return invalidRenderingPreference("Rendering defaults must be an object.");
+        auto candidate = settings;
+        const auto invalid = [](const char* field) {
+            return invalidRenderingPreference("Invalid rendering default.", field);
+        };
+        if (const auto it = values.find("show_coord_axes"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("show_coord_axes");
+            candidate.show_coord_axes = it->get<bool>();
+        }
+        if (const auto it = values.find("show_pivot"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("show_pivot");
+            candidate.show_pivot = it->get<bool>();
+        }
+        if (const auto it = values.find("show_grid"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("show_grid");
+            candidate.show_grid = it->get<bool>();
+        }
+        if (const auto it = values.find("show_camera_frustums"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("show_camera_frustums");
+            candidate.show_camera_frustums = it->get<bool>();
+        }
+        if (const auto it = values.find("desaturate_unselected"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("desaturate_unselected");
+            candidate.desaturate_unselected = it->get<bool>();
+        }
+        if (const auto it = values.find("desaturate_cropping"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("desaturate_cropping");
+            candidate.desaturate_cropping = it->get<bool>();
+        }
+        if (const auto it = values.find("hide_outside_depth_box"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("hide_outside_depth_box");
+            candidate.hide_outside_depth_box = it->get<bool>();
+        }
+        if (const auto it = values.find("axes_size"); it != values.end()) {
+            if (!it->is_number())
+                return invalid("axes_size");
+            const double value = it->get<double>();
+            if (!std::isfinite(value) || value < 0.5 || value > 10)
+                return invalid("axes_size");
+            candidate.axes_size = static_cast<float>(value);
+        }
+        if (const auto it = values.find("grid_opacity"); it != values.end()) {
+            if (!it->is_number())
+                return invalid("grid_opacity");
+            const double value = it->get<double>();
+            if (!std::isfinite(value) || value < 0 || value > 1)
+                return invalid("grid_opacity");
+            candidate.grid_opacity = static_cast<float>(value);
+        }
+        if (const auto it = values.find("camera_frustum_scale"); it != values.end()) {
+            if (!it->is_number())
+                return invalid("camera_frustum_scale");
+            const double value = it->get<double>();
+            if (!std::isfinite(value) || value < 0.01 || value > 10)
+                return invalid("camera_frustum_scale");
+            candidate.camera_frustum_scale = static_cast<float>(value);
+        }
+        if (const auto it = values.find("lod_pool_vram_fraction"); it != values.end()) {
+            if (!it->is_number())
+                return invalid("lod_pool_vram_fraction");
+            const double value = it->get<double>();
+            if (!std::isfinite(value) || value < 0.05 || value > 0.9)
+                return invalid("lod_pool_vram_fraction");
+            candidate.lod_pool_vram_fraction = static_cast<float>(value);
+        }
+        if (const auto it = values.find("lod_page_pool_splats"); it != values.end()) {
+            if (!it->is_number())
+                return invalid("lod_page_pool_splats");
+            const double value = it->get<double>();
+            if (!std::isfinite(value) || value < 0 || value > 100'000'000 || std::floor(value) != value)
+                return invalid("lod_page_pool_splats");
+            candidate.lod_page_pool_splats = static_cast<size_t>(value);
+        }
+        if (const auto it = values.find("selection_color_preview"); it != values.end()) {
+            if (!it->is_array() || it->size() != 3)
+                return invalid("selection_color_preview");
+            for (size_t i = 0; i < 3; ++i) {
+                if (!(*it)[i].is_number())
+                    return invalid("selection_color_preview");
+                const double value = (*it)[i].get<double>();
+                if (!std::isfinite(value) || value < 0 || value > 1)
+                    return invalid("selection_color_preview");
+                candidate.selection_color_preview[static_cast<int>(i)] = static_cast<float>(value);
+            }
+        }
+        if (const auto it = values.find("selection_color_center_marker"); it != values.end()) {
+            if (!it->is_array() || it->size() != 3)
+                return invalid("selection_color_center_marker");
+            for (size_t i = 0; i < 3; ++i) {
+                if (!(*it)[i].is_number())
+                    return invalid("selection_color_center_marker");
+                const double value = (*it)[i].get<double>();
+                if (!std::isfinite(value) || value < 0 || value > 1)
+                    return invalid("selection_color_center_marker");
+                candidate.selection_color_center_marker[static_cast<int>(i)] = static_cast<float>(value);
+            }
+        }
+        settings = std::move(candidate);
+        return {};
+    }
+
+    lfs::Status UserPreferences::setRenderingDefaults(const std::string_view serialized) {
+        RenderSettings validated;
+        if (auto result = applyRenderingDefaults(validated, serialized); !result)
+            return result;
+        const auto update = json::parse(serialized);
+        const auto known = json::parse(renderingDefaultsFromSettings(validated));
+        std::lock_guard lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& saved = impl_->values["rendering_defaults"];
+        if (!saved.is_object())
+            saved = json::object();
+        for (auto it = update.begin(); it != update.end(); ++it)
+            if (known.contains(it.key()))
+                saved[it.key()] = known[it.key()];
+        impl_->saveValuesLocked();
+        return {};
+    }
+
+    std::string UserPreferences::renderingDefaults() {
+        std::lock_guard lock(impl_->mutex);
+        impl_->loadLocked();
+        RenderSettings defaults;
+        const auto stored = impl_->values.find("rendering_defaults");
+        if (stored != impl_->values.end() && stored->is_object()) {
+            for (auto it = stored->begin(); it != stored->end(); ++it) {
+                // Validate independently so one damaged value does not erase valid defaults.
+                (void)applyRenderingDefaults(defaults, json{{it.key(), it.value()}}.dump());
+            }
+        }
+        return renderingDefaultsFromSettings(defaults);
+    }
+
+    lfs::Status UserPreferences::setViewportVignette(const std::string_view serialized) {
+        const auto values = json::parse(serialized, nullptr, false);
+        if (!values.is_object())
+            return invalidRenderingPreference("Vignette preferences must be an object.");
+        if (values.contains("enabled") && !values["enabled"].is_boolean())
+            return invalidRenderingPreference("Invalid vignette enabled flag.");
+        for (const char* key : {"intensity", "radius", "softness"}) {
+            if (!values.contains(key))
+                continue;
+            if (!values[key].is_number())
+                return invalidRenderingPreference("Invalid vignette preference.", key);
+            const auto value = values[key].get<double>();
+            if (!std::isfinite(value) || value < 0 || value > 1)
+                return invalidRenderingPreference("Invalid vignette preference.", key);
+        }
+        std::lock_guard lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& saved = impl_->values["viewport_vignette"];
+        if (!saved.is_object())
+            saved = json::object();
+        saved.update(values);
+        impl_->saveValuesLocked();
+        return {};
+    }
+
+    std::string UserPreferences::viewportVignette() {
+        std::lock_guard lock(impl_->mutex);
+        impl_->loadLocked();
+        json result = json::object();
+        const auto stored = impl_->values.find("viewport_vignette");
+        if (stored != impl_->values.end() && stored->is_object()) {
+            if (stored->contains("enabled") && (*stored)["enabled"].is_boolean())
+                result["enabled"] = (*stored)["enabled"];
+            for (const char* key : {"intensity", "radius", "softness"}) {
+                const auto field = stored->find(key);
+                if (field != stored->end() && field->is_number()) {
+                    const auto value = field->get<double>();
+                    if (std::isfinite(value) && value >= 0 && value <= 1)
+                        result[key] = value;
+                }
+            }
+        }
+        return result.dump();
+    }
 
     void UserPreferences::setThemeName(const std::string& value) {
         std::scoped_lock lock(impl_->mutex);

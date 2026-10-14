@@ -159,6 +159,10 @@ namespace lfs::vis {
         projectHasPath() override;
         lfs::Result<ProjectInfo>
         projectGetInfo() override;
+        void projectMarkSessionChapterCommitted(std::string_view chapter) override;
+        [[nodiscard]] bool projectSessionRestoreInProgress() const override {
+            return applying_project_session_restore_.load(std::memory_order_acquire);
+        }
         void recoverDeferredProjectPayloadsAfterUndo(
             std::vector<lfs::core::Uuid> node_uuids);
         ProjectDisplayInfo projectGetDisplayInfo() override;
@@ -296,6 +300,7 @@ namespace lfs::vis {
         JobRegistry job_registry_;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
+        friend void installSessionTestInputController(VisualizerImpl& viewer);
         friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadWithoutActiveTrainingStillReplacesScene_Test;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
@@ -381,7 +386,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_PendingCloseSuppressesBackgroundAutosave_Test;
         friend class VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
         friend class VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
-        friend class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
+        friend class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptButArmsAutosave_Test;
         friend class VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
         friend class VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
         friend class VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;
@@ -751,6 +756,7 @@ namespace lfs::vis {
                 ProjectSwitchDisposition::RequireClean;
         bool pending_open_keep_asset_manager_open_ = false;
         bool keep_asset_manager_open_after_restore_ = false;
+        std::atomic_bool applying_project_session_restore_ = false;
         std::vector<lfs::core::events::cmd::LoadFile>
             pending_load_files_;
         int pending_training_completion_refresh_frames_ = 0;

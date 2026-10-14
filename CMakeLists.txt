@@ -1330,7 +1330,7 @@ install(TARGETS lfs_mcp
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
+install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_SOURCE_DIR}/LICENSE-EXCEPTION.txt" DESTINATION ".")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/resources/licenses/"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio/licenses")
 
@@ -1548,3 +1548,23 @@ elseif(SCCACHE_PROGRAM)
         COMMENT "Cleaning build and resetting sccache stats"
     )
 endif()
+
+# Generate release notices from the exact installed vcpkg triplet and payload.
+# This runs last so the shared-library inventory includes all runtime bundles.
+install(CODE "
+    set(_lfs_notice_output \"${CMAKE_BINARY_DIR}/generated/THIRD-PARTY-LICENSES.md\")
+    execute_process(
+        COMMAND \"${Python_EXECUTABLE}\" \"${CMAKE_SOURCE_DIR}/tools/generate_third_party_licenses.py\"
+            --source \"${CMAKE_SOURCE_DIR}\"
+            --triplet-dir \"${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}\"
+            --install-prefix \"\${CMAKE_INSTALL_PREFIX}\"
+            --output \"\${_lfs_notice_output}\"
+            --vcpkg-root \"${Z_VCPKG_ROOT_DIR}\"
+            --check
+        RESULT_VARIABLE _lfs_notice_result
+    )
+    if(NOT _lfs_notice_result EQUAL 0)
+        message(FATAL_ERROR \"Third-party notice generation or coverage check failed\")
+    endif()
+    file(INSTALL \"\${_lfs_notice_output}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
+" COMPONENT runtime)

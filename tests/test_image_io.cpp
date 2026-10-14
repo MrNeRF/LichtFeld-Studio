@@ -135,6 +135,34 @@ namespace {
         return data;
     }
 
+    void write_variant_tiff(const std::filesystem::path& path, const std::uint16_t photometric,
+                            const std::uint16_t samples, const bool extra_sample) {
+        std::vector<std::uint8_t> data = {'I', 'I', 42, 0, 8, 0, 0, 0};
+        const std::uint16_t entries = extra_sample ? 12 : 11;
+        const std::uint32_t strip_offset = 8 + 2 + 12 * entries + 4;
+        append_u16(data, entries);
+        append_tiff_tag(data, 256, 3, 1, 2);
+        append_tiff_tag(data, 257, 3, 1, 1);
+        append_tiff_tag(data, 258, 3, 1, 16);
+        append_tiff_tag(data, 259, 3, 1, 1);
+        append_tiff_tag(data, 262, 3, 1, photometric);
+        append_tiff_tag(data, 273, 4, 1, strip_offset);
+        append_tiff_tag(data, 277, 3, 1, samples);
+        append_tiff_tag(data, 278, 4, 1, 1);
+        append_tiff_tag(data, 279, 4, 1, 4 * samples);
+        append_tiff_tag(data, 284, 3, 1, 1);
+        if (extra_sample)
+            append_tiff_tag(data, 338, 3, 1, 0);
+        append_tiff_tag(data, 339, 3, 1, 1);
+        append_u32(data, 0);
+        const std::uint16_t pixels[] = {0x1234, 0xFEDC, 0x2345, 0xABCD, 0x3456, 0x9876, 0x4567, 0x7654};
+        for (std::size_t i = 0; i < 2 * samples; ++i)
+            append_u16(data, pixels[i]);
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        ASSERT_TRUE(file.good());
+    }
+
     std::vector<std::uint8_t> add_exif_thumbnail(std::vector<std::uint8_t> primary,
                                                  const std::vector<std::uint8_t>& thumbnail) {
         std::vector<std::uint8_t> tiff = {'I', 'I', 42, 0, 8, 0, 0, 0};
@@ -481,6 +509,36 @@ TEST(ImageIoTest, FloatTiffInferenceRangeNormalization) {
     EXPECT_FLOAT_EQ(decoded[0], 128.0f / 255.0f);
     EXPECT_FLOAT_EQ(decoded[1], 64.0f / 255.0f);
     lfs::core::free_image_float(decoded);
+}
+
+TEST(ImageIoTest, TiffPhotometricAndUnspecifiedExtraSamplesVariants) {
+    struct Case {
+        std::uint16_t photometric;
+        std::uint16_t samples;
+        bool extra_sample;
+        std::vector<std::uint16_t> expected;
+    };
+    const std::vector<Case> cases = {
+        {1, 1, false, {0x1234, 0xFEDC}},
+        {0, 1, false, {static_cast<std::uint16_t>(0xFFFF - 0x1234), static_cast<std::uint16_t>(0xFFFF - 0xFEDC)}},
+        {2, 3, false, {0x1234, 0xFEDC, 0x2345, 0xABCD, 0x3456, 0x9876}},
+        {2, 4, true, {0x1234, 0xFEDC, 0x2345, 0xABCD, 0x3456, 0x9876, 0x4567, 0x7654}},
+        {2, 4, false, {0x1234, 0xFEDC, 0x2345, 0xABCD, 0x3456, 0x9876, 0x4567, 0x7654}},
+        {0, 3, false, {0x1234, 0xFEDC, 0x2345, 0xABCD, 0x3456, 0x9876}},
+    };
+    for (std::size_t i = 0; i < cases.size(); ++i) {
+        const auto path = unique_temp_path("tiff_variant", ".tif");
+        write_variant_tiff(path, cases[i].photometric, cases[i].samples, cases[i].extra_sample);
+        auto [pixels, width, height, channels] = lfs::core::load_image_float(path);
+        ASSERT_NE(pixels, nullptr) << "case " << i;
+        ASSERT_EQ(width, 2);
+        ASSERT_EQ(height, 1);
+        ASSERT_EQ(channels, cases[i].samples);
+        for (std::size_t j = 0; j < cases[i].expected.size(); ++j)
+            EXPECT_FLOAT_EQ(pixels[j], cases[i].expected[j] / 65535.0f) << "case " << i;
+        lfs::core::free_image_float(pixels);
+        std::filesystem::remove(path);
+    }
 }
 
 TEST(ImageIoTest, ExrPreservesLinearHdrAndHighBitdepthPaths) {

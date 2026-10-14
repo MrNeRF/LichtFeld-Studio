@@ -936,6 +936,21 @@ namespace lfs::python {
           prop_(&settings_, "render_settings") {}
 
     void PyRenderSettings::set(const std::string& name, nb::object value) {
+        set_impl(name, std::move(value), true);
+    }
+
+    void PyRenderSettings::_set_without_session_dirty(
+        const std::string& name, nb::object value) {
+        set_impl(name, std::move(value), false);
+    }
+
+    void PyRenderSettings::set_impl(
+        const std::string& name, nb::object value,
+        const bool mark_session_dirty) {
+        std::optional<std::any> previous_value;
+        if (mark_session_dirty) {
+            previous_value = prop_.get_value(name);
+        }
         prop_.setattr(name, value);
         if (name == "raster_backend") {
             const auto backend = static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend);
@@ -959,6 +974,10 @@ namespace lfs::python {
         // preset.
         if (const auto applied = vis::get_render_settings()) {
             settings_ = *applied;
+        }
+        if (previous_value &&
+            !prop_.values_equal(name, *previous_value, prop_.get_value(name))) {
+            markProjectSessionChapterCommitted("VIEW");
         }
         request_redraw();
     }
@@ -1964,6 +1983,8 @@ Args:
             .def_prop_ro("__property_group__", &PyRenderSettings::property_group)
             .def("get", &PyRenderSettings::get, nb::arg("name"), "Get property value by name")
             .def("set", &PyRenderSettings::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
+            .def("_set_without_session_dirty", &PyRenderSettings::_set_without_session_dirty,
+                 nb::arg("name"), nb::arg("value"))
             .def("prop_info", &PyRenderSettings::prop_info, nb::arg("name"))
             .def("get_all_properties", &PyRenderSettings::get_all_properties,
                  "Get all property descriptors as Python Property objects")

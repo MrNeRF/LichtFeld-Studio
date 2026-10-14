@@ -250,6 +250,7 @@ namespace lfs::vis::input {
                         const std::string actual{std::istreambuf_iterator<char>(backup),
                                                  std::istreambuf_iterator<char>()};
                         preserved = actual == original;
+                        backup.close();
                         fs::remove(entry.path());
                     }
                 }

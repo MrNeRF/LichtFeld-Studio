@@ -1,0 +1,15 @@
+nvJPEG2K SUPPLEMENT TO SOFTWARE LICENSE AGREEMENT FOR NVIDIA SOFTWARE DEVELOPMENT KITS
+
+The terms in this supplement govern your use of the NVIDIA nvJPEG2K SDK under the terms of your license agreement ("Agreement") as modified by this supplement. Capitalized terms used but not defined below have the meaning assigned to them in the Agreement.
+
+This supplement is an exhibit to the Agreement and is incorporated as an integral part of the Agreement. In the event of conflict between the terms in this supplement and the terms in the Agreement, the terms in this supplement govern.
+
+4.1 License Scope. The SDK is licensed for you to develop applications only for use in systems with NVIDIA GPUs.
+
+2. Distribution. The following portions of the SDK are distributable under the Agreement: the runtime files .so and .h, nvjpeg2k_0.dll, nvjpeg2k.lib and libnvjpeg2k_static.a.
+
+3. Licensing. If the distribution terms in this Agreement are not suitable for your organization, or for any questions regarding this Agreement, please contact NVIDIA at nvidia-compute-license-questions@nvidia.com.
+
+(v. November 14, 2020)
+
+NVIDIA's notice and agreement: https://docs.nvidia.com/cuda/nvjpeg2000/license.html

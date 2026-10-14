@@ -1933,6 +1933,7 @@ namespace lfs::io {
 
     std::vector<uint8_t> NvCodecImageLoader::encode_to_jpeg2k(
         const lfs::core::Tensor& image,
+        const RgbLayout layout,
         void* cuda_stream,
         bool high_throughput) {
 
@@ -1953,16 +1954,19 @@ namespace lfs::io {
             throw std::runtime_error("encode_to_jpeg2k expects a Float32 CUDA tensor");
         }
 
-        const bool is_hwc = (shape[2] == 3);
-        const bool is_chw = !is_hwc && (shape[0] == 3 && shape[1] > 3 && shape[2] > 3);
-        const uint32_t height = static_cast<uint32_t>(is_chw ? shape[1] : shape[0]);
-        const uint32_t width = static_cast<uint32_t>(is_chw ? shape[2] : shape[1]);
+        const bool chw = layout == RgbLayout::CHW;
+        if ((chw ? shape[0] : shape[2]) != 3) {
+            throw std::runtime_error("encode_to_jpeg2k expects 3 RGB channels in the stated layout");
+        }
+        const uint32_t height = static_cast<uint32_t>(chw ? shape[1] : shape[0]);
+        const uint32_t width = static_cast<uint32_t>(chw ? shape[2] : shape[1]);
         const uint32_t channels = 3;
 
         // Scale float [0,1] -> uint16 [0, 65535] in HWC layout.
         // Float16 is only a 2-byte container for the uint16 samples (no UInt16 dtype).
-        const Tensor hwc_float = is_chw ? image.permute({1, 2, 0}).contiguous()
-                                        : image.contiguous();
+        // Permute only when the caller named CHW. Contiguous HWC shares its storage.
+        const Tensor hwc_float = chw ? image.permute({1, 2, 0}).contiguous()
+                                     : image.contiguous();
         Tensor hwc_uint16 = Tensor::empty(
             TensorShape({height, width, channels}), Device::CUDA, DataType::Float16);
         cuda::launch_float32_hwc_to_uint16_hwc(

@@ -242,10 +242,13 @@ namespace lfs::vis {
     LFS_VIS_API void refreshThemePresentation();
     [[nodiscard]] LFS_VIS_API std::size_t themePresentationRevision();
 
-    // Runtime vignette control (does not persist to theme file)
+    // User-global viewport vignette preference (theme files remain unchanged)
     LFS_VIS_API void setThemeVignetteEnabled(bool enabled);
+    LFS_VIS_API void setThemeVignetteEnabled(bool enabled, bool persist);
     LFS_VIS_API void setThemeVignetteIntensity(float intensity);
+    LFS_VIS_API void setThemeVignetteIntensity(float intensity, bool persist);
     LFS_VIS_API void setThemeVignetteStyle(float intensity, float radius, float softness);
+    LFS_VIS_API void setThemeVignetteStyle(float intensity, float radius, float softness, bool persist);
 
     // Persistence
     LFS_VIS_API bool saveTheme(const Theme& t, const std::string& path);

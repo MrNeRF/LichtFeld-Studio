@@ -1,0 +1,22 @@
+NVIDIA SOFTWARE LICENSE AGREEMENT
+
+1.1.1 License Grant
+
+Subject to the terms of this Agreement, NVIDIA hereby grants you a non-exclusive, non-transferable license, without the right to sublicense (except as expressly provided in this Agreement) to:
+
+1. Install and use the SDK,
+2. Modify and create derivative works of sample source code delivered in the SDK, and
+3. Distribute those portions of the SDK that are identified in this Agreement as distributable, as incorporated in object code format into a software application that meets the distribution requirements indicated in this Agreement.
+
+1.1.2 Distribution Requirements
+
+These are the distribution requirements for you to exercise the distribution grant:
+
+1. Your application must have material additional functionality, beyond the included portions of the SDK.
+2. The distributable portions of the SDK shall only be accessed by your application.
+3. The following notice shall be included in modifications and derivative works of sample source code distributed: “This software contains source code provided by NVIDIA Corporation.”
+4. Unless a developer tool is identified in this Agreement as distributable, it is delivered for your internal use only.
+5. The terms under which you distribute your application must be consistent with the terms of this Agreement, including (without limitation) terms relating to the license grant and license restrictions and protection of NVIDIA’s intellectual property rights. Additionally, you agree that you will protect the privacy, security and legal rights of your application users.
+6. You agree to notify NVIDIA in writing of any known or suspected distribution or use of the SDK not in compliance with the requirements of this Agreement, and to enforce the terms of your agreements with respect to distributed SDK.
+
+NVIDIA CUDA Toolkit EULA: https://docs.nvidia.com/cuda/eula/index.html

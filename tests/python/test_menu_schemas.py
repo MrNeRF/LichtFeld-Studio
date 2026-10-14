@@ -109,6 +109,7 @@ def _install_lichtfeld_stub(monkeypatch):
         toggle_system_console=lambda: state.__setitem__("python_console_shown", state["python_console_shown"] + 1),
         toggle_vram_hud=lambda: state.__setitem__("vram_hud_toggled", True),
         is_perf_hud_visible=lambda: False,
+        is_panel_enabled=lambda panel_id: False,
         set_panel_enabled=lambda panel_id, enabled: state["panel_enabled"].append((panel_id, enabled)),
         get_panel_object=lambda panel_id: state["panels"].get(panel_id),
         set_main_panel_active_tab=lambda panel_id: state.__setitem__("main_panel_active_tab", panel_id),
@@ -253,7 +254,7 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert edit_mod.EditMenu.order < select_mod.SelectMenu.order < view_mod.ViewMenu.order < tools_mod.ToolsMenu.order
 
     tools_items = tools_mod.ToolsMenu().menu_items()
-    python_console = tools_items[3]["items"][0]
+    python_console = tools_items[4]["items"][0]
     assert python_console["shortcut"] == "Ctrl+`"
     python_console["callback"]()
     assert state["python_console_shown"] == 1
@@ -289,6 +290,10 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert all(not item["enabled"] for item in edit_mod.EditMenu().menu_items()[3:6])
 
     view_items = view_mod.ViewMenu().menu_items()
+    logging = next(item for item in view_items if item.get("label") == "tr:scene.logging")
+    assert logging["selected"] is False
+    logging["callback"]()
+    assert state["panel_enabled"][-1] == ("lfs.logging", True)
     appearance = view_items[-1]["items"]
     assert appearance[0]["type"] == "submenu"
     assert appearance[0]["label"] == "tr:menu.view.theme · LichtFeld · Dark"
@@ -377,8 +382,10 @@ def test_tools_menu_contains_processing_and_python_tools(monkeypatch):
     items = tools_mod.ToolsMenu().menu_items()
     labels = [item.get("label") for item in items]
     assert labels == ["tr:menu.file.mesh_to_splat", "tr:menu.file.extract_video_frames",
-                      None, "tr:menu.tools.developer", "tr:menu.tools.plugin_marketplace"]
-    items[3]["items"][0]["callback"]()
+                      "tr:rendering_panel.section_simplify", None, "tr:menu.tools.developer", "tr:menu.tools.plugin_marketplace"]
+    items[4]["items"][0]["callback"]()
+    items[2]["callback"]()
+
     assert state["python_console_shown"] == 1
 
 
@@ -387,7 +394,7 @@ def test_developer_system_console_is_windows_only(monkeypatch, platform):
     state = _install_lichtfeld_stub(monkeypatch)
     monkeypatch.setattr(sys, "platform", platform)
     tools_mod = _import_tools_menu(monkeypatch)
-    items = tools_mod.ToolsMenu().menu_items()[3]["items"]
+    items = tools_mod.ToolsMenu().menu_items()[4]["items"]
     assert items[0]["label"] == "tr:menu.tools.python_console"
     assert len(items) == (2 if platform == "win32" else 1)
     if platform == "win32":

@@ -980,6 +980,9 @@ namespace lfs::vis::gui {
         if (!sm->canApplyCropToNode(crop_tool_target_node_id_))
             return;
 
+        // Committing the volume, cropping and removing the volume are one user action,
+        // so a single undo restores the splat and the volume.
+        op::TransactionGuard transaction(crop_tool_shape_ == CropToolShape::Box ? "Crop Box" : "Crop Ellipsoid");
         if (!persistActiveCropToolToNode(true))
             return;
 
@@ -1011,6 +1014,7 @@ namespace lfs::vis::gui {
         }
         triggerCropFlash();
         deleteCropVolumeAfterApply(applied_volume_node_id);
+        transaction.commit();
     }
 
     void GizmoManager::deleteActiveCropToolVolume() {
@@ -1208,6 +1212,7 @@ namespace lfs::vis::gui {
                 settings.show_crop_box = cropbox_node->visible;
                 settings.use_crop_box = true;
                 rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+                viewer_->projectMarkSessionChapterCommitted("VIEW");
             }
 
             lfs::geometry::BoundingBox crop_box;
@@ -1256,6 +1261,7 @@ namespace lfs::vis::gui {
                 settings.show_ellipsoid = ellipsoid_node->visible;
                 settings.use_ellipsoid = true;
                 rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+                viewer_->projectMarkSessionChapterCommitted("VIEW");
             }
 
             cmd::CropPLYEllipsoid{
@@ -1303,6 +1309,7 @@ namespace lfs::vis::gui {
             settings.show_center_markers = !centers && !rings;
             settings.show_rings = centers && !rings;
             rm->updateSettings(settings);
+            viewer_->projectMarkSessionChapterCommitted("VIEW");
         });
     }
 
