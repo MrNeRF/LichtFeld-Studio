@@ -2368,7 +2368,7 @@ def duplicate_node(name: str) -> None:
     """Duplicate a node and its children"""
 
 def merge_group(name: str) -> None:
-    """Merge group children into a single PLY"""
+    """Merge group children into a single model"""
 
 def save_node_to_disk(node_name: str) -> None:
     """
