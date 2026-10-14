@@ -222,14 +222,15 @@ bool depth_intersects_pixels(Splat_2D_AlphaBlend g, uint2 origin, uint2 maximum,
     const uint2 tile_size = uint2(HIGS_TILE_WIDTH, HIGS_TILE_HEIGHT);
     const uint2 render_origin = full_frame_binning(uniforms)
         ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
-    // Keep each wave on one full-image tile, even for an unaligned crop.
-    // Leading pixels underflow and fail the output bounds check; the indirect
-    // dispatch includes the trailing partial tile as well.
+    // Map banded exports to full-image tile coordinates.
+    // Leading pixels outside the output fail the bounds check below.
     const uint2 tile_coord = groupID.xy + render_origin / tile_size;
     const uint2 pix_coord = tile_coord * tile_size + groupThreadID.xy;
     const uint2 output_pixel = pix_coord - render_origin;
     const bool is_inside = output_pixel.x < uniforms.image_width && output_pixel.y < uniforms.image_height;
-    const uint sample_tile = (output_pixel.y / 4u) * ((uniforms.image_width + 3u) / 4u) + output_pixel.x / 4u;
+    const uint sample_tile = (output_pixel.y / HIGS_DEPTH_SAMPLE_TILE_SIZE) *
+                             ((uniforms.image_width + HIGS_DEPTH_SAMPLE_TILE_SIZE - 1u) / HIGS_DEPTH_SAMPLE_TILE_SIZE) +
+                             output_pixel.x / HIGS_DEPTH_SAMPLE_TILE_SIZE;
     const bool exact_depth_enabled = (uniforms.mip_filter & 2u) != 0u;
     bool exact_depth = exact_depth_enabled;
     if (is_inside && (uniforms.mip_filter & 8u) != 0u)
