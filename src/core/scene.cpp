@@ -3563,6 +3563,9 @@ namespace lfs::core {
     Scene::SelectionStateMetadata Scene::captureSelectionStateMetadata() const {
         SelectionStateMetadata metadata;
         metadata.has_selection = hasSelection();
+        metadata.counts_valid = selected_count_valid_;
+        metadata.selected_count = selected_count_;
+        metadata.group_counts_valid = !selection_group_counts_dirty_;
         metadata.groups = selection_groups_;
         metadata.active_group_id = active_selection_group_;
         metadata.next_group_id = next_group_id_;
@@ -3580,6 +3583,9 @@ namespace lfs::core {
         snapshot.active_group_id = metadata.active_group_id;
         snapshot.next_group_id = metadata.next_group_id;
         snapshot.has_selection = metadata.has_selection;
+        snapshot.counts_valid = metadata.counts_valid;
+        snapshot.selected_count = metadata.selected_count;
+        snapshot.group_counts_valid = metadata.group_counts_valid;
         return snapshot;
     }
 

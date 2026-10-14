@@ -341,12 +341,14 @@ namespace lfs::vis {
             std::string node_name;
             size_t begin = 0;
             size_t end = 0;
+            size_t selected_count = 0;
         };
 
         struct GaussianDeletionPlan {
             lfs::core::Tensor selection_mask;
             bool consolidated = false;
             bool any_visible_node = false;
+            size_t selected_count = 0;
             std::vector<GaussianDeletionSlice> partial_slices;
             std::vector<std::string> removed_node_names;
         };

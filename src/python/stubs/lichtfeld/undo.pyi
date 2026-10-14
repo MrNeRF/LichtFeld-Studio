@@ -9,8 +9,16 @@ interpreters execute playback on the calling thread.
 from collections.abc import Callable
 
 
-def push(name: str, undo: object, redo: object, validate: bool = False, id: str = '', source: str = 'python', scope: str = 'custom', estimated_bytes: int = 0, dirty_flags: int = 0, merge_window_ms: int = 0) -> None:
-    """Push an undo step with undo/redo functions"""
+def push(name: str, undo: object, redo: object, validate: bool = False, id: str = '', source: str = 'python', scope: str = 'custom', estimated_bytes: int = 0, dirty_flags: int = 0, merge_window_ms: int = 0, details: object | None = None) -> None:
+    """
+    Push an undo step with undo/redo functions.
+
+    details accepts up to 128 dictionaries with property, before and after,
+    plus an optional target. Values must be immutable scalars (str, int, float,
+    bool or None); strings are limited to 4096 bytes. Values are copied when
+    pushed. Use history.field.* property keys and @tr:history.value.* value
+    keys for built-in localized labels and values.
+    """
 
 def undo() -> bool:
     """Undo last operation"""

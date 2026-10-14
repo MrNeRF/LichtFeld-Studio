@@ -225,8 +225,11 @@ namespace lfs::vis {
         public:
             explicit MirrorUndoEntry(core::Scene& scene) : scene_(scene) {}
 
-            void captureBefore(const core::SceneNode& node) {
+            void captureBefore(const core::SceneNode& node, const size_t count, const core::MirrorAxis axis) {
                 states_.push_back(capture(node));
+                static constexpr const char* AXES[] = {"X", "Y", "Z"};
+                addDetail(op::historyDetailField(node.name, "history.field.axis", std::any{}, std::string(AXES[static_cast<int>(axis)])));
+                addDetail(op::historyDetailField(node.name, "history.field.affected_gaussians", std::any{}, count));
             }
 
             void undo() override { apply(); }
@@ -234,7 +237,7 @@ namespace lfs::vis {
             [[nodiscard]] std::string name() const override { return "Mirror"; }
             [[nodiscard]] DirtyMask dirtyFlags() const override { return DirtyFlag::SPLATS; }
             [[nodiscard]] size_t estimatedBytes() const override {
-                size_t bytes = 0;
+                size_t bytes = contextDetailBytes();
                 for (const auto& state : states_)
                     for (const auto& field : state.fields)
                         bytes += field.is_valid() ? field.bytes() : 0;
@@ -5717,7 +5720,7 @@ namespace lfs::vis {
             }
             total_count += count;
 
-            history->captureBefore(*node);
+            history->captureBefore(*node, count, axis);
             const auto center = lfs::core::compute_selection_center(model, *mask);
             lfs::core::mirror_gaussians(model, *mask, axis, center);
             scene_.markPayloadDiverged(node->id);
@@ -6035,6 +6038,7 @@ namespace lfs::vis {
                         .node_name = node->name,
                         .begin = offset,
                         .end = node_end,
+                        .selected_count = selected_count,
                     });
                 }
                 offset = node_end;
@@ -6048,7 +6052,8 @@ namespace lfs::vis {
             }
         }
 
-        if (plan.selection_mask.count_nonzero() == 0) {
+        plan.selected_count = plan.selection_mask.count_nonzero();
+        if (plan.selected_count == 0) {
             return std::unexpected("Nothing selected");
         }
 
@@ -6301,6 +6306,9 @@ namespace lfs::vis {
 
         op::TransactionGuard transaction("edit.delete");
         auto entry = std::make_unique<op::SceneSnapshot>(*this, "edit.delete");
+        entry->addDetail(op::historyDetailField({}, "history.field.affected_gaussians", {}, plan->selected_count));
+        for (const auto& slice : plan->partial_slices)
+            entry->addDetail(op::historyDetailField(slice.node_name, "history.field.affected_gaussians", {}, slice.selected_count));
         entry->captureTopology();
         entry->captureSelection();
 

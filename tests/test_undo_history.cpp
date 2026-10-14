@@ -4261,3 +4261,47 @@ TEST_F(UndoHistoryTest, CropCommandsRespectTargetLocks) {
         }
     }
 }
+
+TEST_F(UndoHistoryTest, DetailScalarSerializationPreservesValuesAndMarksUnsupportedTypes) {
+    using lfs::vis::op::historyDetailValue;
+    EXPECT_EQ(historyDetailValue(std::any{}), "");
+    EXPECT_EQ(historyDetailValue(true), "@tr:history.value.true");
+    EXPECT_EQ(historyDetailValue(size_t{42}), "42");
+    EXPECT_EQ(historyDetailValue(glm::vec3(1, 2, 3)), "1, 2, 3");
+    EXPECT_EQ(historyDetailValue(std::vector<int>{1, 2}), "@tr:history.value.unavailable");
+}
+
+TEST_F(UndoHistoryTest, PropertyDetailsPreserveOriginalBeforeAndMergedAfterWithoutApplying) {
+    using lfs::vis::op::PropertyChangeUndoEntry;
+    int applied = 0;
+    PropertyChangeUndoEntry first("scene_node.example.opacity", 0.25f, 0.5f,
+                                  [&applied](const std::any&) { ++applied; });
+    PropertyChangeUndoEntry second("scene_node.example.opacity", 0.5f, 0.75f,
+                                   [&applied](const std::any&) { ++applied; });
+    ASSERT_TRUE(first.tryMerge(second));
+    auto fields = first.detailFields();
+    ASSERT_EQ(fields.size(), 1u);
+    EXPECT_EQ(fields[0].property, "scene_node.example.opacity");
+    EXPECT_EQ(fields[0].before, "0.25");
+    EXPECT_EQ(fields[0].after, "0.75");
+    EXPECT_EQ(applied, 0);
+}
+
+TEST_F(UndoHistoryTest, MetadataDetailsRetainRecordedRenameAfterLiveSceneChanges) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    scene_manager->getScene().addGroup("Recorded before");
+    auto before = lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {"Recorded before"});
+    ASSERT_EQ(before.size(), 1u);
+    auto after = before;
+    after[0].name = "Recorded after";
+    after[0].visible = false;
+    lfs::vis::op::SceneGraphMetadataEntry entry(*scene_manager, "scene.rename", {{before[0], after[0]}});
+    scene_manager->getScene().addGroup("Unrelated live state");
+    auto fields = entry.detailFields();
+    ASSERT_EQ(fields.size(), 2u);
+    EXPECT_EQ(fields[0].target, "Recorded after");
+    EXPECT_EQ(fields[0].before, "Recorded before");
+    EXPECT_EQ(fields[0].after, "Recorded after");
+    EXPECT_EQ(fields[1].before, "@tr:history.value.true");
+    EXPECT_EQ(fields[1].after, "@tr:history.value.false");
+}

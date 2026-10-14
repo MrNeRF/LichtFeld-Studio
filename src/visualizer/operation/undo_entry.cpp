@@ -18,8 +18,11 @@
 #include <algorithm>
 #include <array>
 #include <cuda_runtime.h>
+#include <iomanip>
 #include <limits>
+#include <locale>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -2421,6 +2424,7 @@ namespace lfs::vis::op {
                 before.present,
                 node->model->has_deleted_mask());
             if (storage.hasChanges()) {
+                deleted_names_[node_uuid] = node->name;
                 deleted_mask_storage_.emplace(node_uuid, std::move(storage));
             }
         }
@@ -2701,7 +2705,9 @@ namespace lfs::vis::op {
     }
 
     size_t SceneSnapshot::estimatedBytes() const {
-        size_t total = selection_mask_storage_.estimatedBytes();
+        size_t total = contextDetailBytes() + selection_mask_storage_.estimatedBytes();
+        for (const auto& [uuid, name] : deleted_names_)
+            total += sizeof(uuid) + sizeof(name) + name.size() + 48;
         for (const auto& [uuid, name] : transform_names_)
             total += sizeof(uuid) + sizeof(name) + name.size() + 48;
         for (const auto& [_, storage] : deleted_mask_storage_) {
@@ -2729,6 +2735,9 @@ namespace lfs::vis::op {
 
     UndoMemoryBreakdown SceneSnapshot::memoryBreakdown() const {
         UndoMemoryBreakdown total = selection_mask_storage_.memoryBreakdown();
+        total.cpu_bytes += contextDetailBytes();
+        for (const auto& [uuid, name] : deleted_names_)
+            total.cpu_bytes += sizeof(uuid) + sizeof(name) + name.size() + 48;
         for (const auto& [uuid, name] : transform_names_)
             total.cpu_bytes += sizeof(uuid) + sizeof(name) + name.size() + 48;
         for (const auto& [_, storage] : deleted_mask_storage_) {
@@ -2781,7 +2790,7 @@ namespace lfs::vis::op {
 
     UndoMetadata SceneSnapshot::metadata() const {
         return UndoMetadata{
-            .id = "scene.snapshot",
+            .id = name_.find('.') != std::string::npos ? name_ : "scene.snapshot",
             .label = name_,
             .source = "core",
             .scope = snapshotScope(captured_),
@@ -2956,11 +2965,12 @@ namespace lfs::vis::op {
     }
 
     size_t ShNCanonicalRowsUndoEntry::estimatedBytes() const {
-        return tensorBytes(indices_) + tensorBytes(before_rows_) + tensorBytes(after_rows_);
+        return contextDetailBytes() + tensorBytes(indices_) + tensorBytes(before_rows_) + tensorBytes(after_rows_);
     }
 
     UndoMemoryBreakdown ShNCanonicalRowsUndoEntry::memoryBreakdown() const {
         UndoMemoryBreakdown total;
+        total.cpu_bytes += contextDetailBytes();
         total += tensorMemory(indices_);
         total += tensorMemory(before_rows_);
         total += tensorMemory(after_rows_);
@@ -3450,7 +3460,7 @@ namespace lfs::vis::op {
     }
 
     size_t SceneGraphMetadataEntry::estimatedBytes() const {
-        size_t total = 0;
+        size_t total = contextDetailBytes();
         for (const auto& diff : diffs_) {
             total += estimateMetadataBytes(diff.before);
             total += estimateMetadataBytes(diff.after);
@@ -3834,7 +3844,7 @@ namespace lfs::vis::op {
     }
 
     size_t SceneGraphPatchEntry::estimatedBytes() const {
-        size_t total = 0;
+        size_t total = contextDetailBytes();
         for (const auto& root : before_.roots) {
             total += estimateSnapshotBytes(root);
         }
@@ -3846,6 +3856,7 @@ namespace lfs::vis::op {
 
     UndoMemoryBreakdown SceneGraphPatchEntry::memoryBreakdown() const {
         UndoMemoryBreakdown total;
+        total.cpu_bytes += contextDetailBytes();
         for (const auto& root : before_.roots) {
             total += snapshotMemoryBreakdown(root);
         }
@@ -3918,6 +3929,318 @@ namespace lfs::vis::op {
             return DirtyFlag::ALL;
         }
         return flags;
+    }
+
+    std::string historyDetailValue(const std::any& value) {
+        if (!value.has_value())
+            return {};
+        if (value.type() == typeid(bool))
+            return std::any_cast<bool>(value) ? "@tr:history.value.true" : "@tr:history.value.false";
+        if (value.type() == typeid(std::string))
+            return std::any_cast<const std::string&>(value);
+        if (value.type() == typeid(const char*))
+            return std::any_cast<const char*>(value);
+        if (value.type() == typeid(std::filesystem::path))
+            return std::any_cast<const std::filesystem::path&>(value).string();
+        std::ostringstream out;
+        out.imbue(std::locale::classic());
+        out << std::setprecision(7);
+#define HISTORY_SCALAR(T)               \
+    if (value.type() == typeid(T)) {    \
+        out << std::any_cast<T>(value); \
+        return out.str();               \
+    }
+        HISTORY_SCALAR(int)
+        HISTORY_SCALAR(unsigned int)
+        HISTORY_SCALAR(long)
+        HISTORY_SCALAR(unsigned long)
+        HISTORY_SCALAR(long long)
+        HISTORY_SCALAR(unsigned long long) HISTORY_SCALAR(float) HISTORY_SCALAR(double)
+#undef HISTORY_SCALAR
+            if (value.type() == typeid(uint8_t)) {
+            out << unsigned(std::any_cast<uint8_t>(value));
+            return out.str();
+        }
+#define HISTORY_VECTOR(T, N)                    \
+    if (value.type() == typeid(T)) {            \
+        const auto v = std::any_cast<T>(value); \
+        for (int i = 0; i < N; ++i) {           \
+            if (i)                              \
+                out << ", ";                    \
+            out << v[i];                        \
+        }                                       \
+        return out.str();                       \
+    }
+        HISTORY_VECTOR(glm::vec2, 2)
+        HISTORY_VECTOR(glm::vec3, 3)
+        HISTORY_VECTOR(glm::vec4, 4)
+        HISTORY_VECTOR(glm::dvec3, 3)
+        HISTORY_VECTOR(glm::quat, 4)
+        HISTORY_VECTOR(glm::dquat, 4)
+#undef HISTORY_VECTOR
+            if (value.type() == typeid(std::vector<std::string>)) {
+            for (const auto& item : std::any_cast<const std::vector<std::string>&>(value)) {
+                if (out.tellp() > 0)
+                    out << ", ";
+                out << item;
+            }
+            return out.str();
+        }
+        if (value.type() == typeid(glm::mat4)) {
+            const auto& matrix = std::any_cast<const glm::mat4&>(value);
+            for (int row = 0; row < 4; ++row) {
+                if (row)
+                    out << "; ";
+                for (int col = 0; col < 4; ++col) {
+                    if (col)
+                        out << ", ";
+                    out << matrix[col][row];
+                }
+            }
+            return out.str();
+        }
+        return "@tr:history.value.unavailable";
+    }
+
+    UndoDetailField historyDetailField(std::string target, std::string property, const std::any& before, const std::any& after) {
+        return {std::move(target), std::move(property), historyDetailValue(before), historyDetailValue(after)};
+    }
+
+    namespace {
+        template <typename T>
+        void appendChanged(std::vector<UndoDetailField>& result, const std::string& target, const char* key, const T& before, const T& after) {
+            if (before != after)
+                result.push_back(historyDetailField(target, std::string("history.field.") + key, before, after));
+        }
+        std::string activeGroup(const std::vector<lfs::core::SelectionGroup>& groups, uint8_t id) {
+            for (const auto& group : groups)
+                if (group.id == id)
+                    return group.name;
+            return std::to_string(id);
+        }
+        template <typename T>
+        void appendNodeDiff(std::vector<UndoDetailField>& result, const T& before, const T& after) {
+            const auto& target = after.name.empty() ? before.name : after.name;
+            appendChanged(result, target, "name", before.name, after.name);
+            appendChanged(result, target, "parent", before.parent_name, after.parent_name);
+            appendChanged(result, target, "visible", before.visible, after.visible);
+            appendChanged(result, target, "locked", before.locked, after.locked);
+            appendChanged(result, target, "training_enabled", before.training_enabled, after.training_enabled);
+            appendChanged(result, target, "order", before.order_index, after.order_index);
+            appendChanged(result, target, "source_path", before.source_path ? before.source_path->string() : std::string{}, after.source_path ? after.source_path->string() : std::string{});
+        }
+        UndoTransformDetail transformDetail(const std::string& target, const glm::mat4& before, const glm::mat4& after) {
+            UndoTransformDetail result{.target = target, .before = {}, .after = {}};
+            std::copy_n(&before[0][0], 16, result.before.begin());
+            std::copy_n(&after[0][0], 16, result.after.begin());
+            return result;
+        }
+        std::vector<std::pair<std::string, std::string>> nodePayloadDetails(const SceneGraphNodeSnapshot& node) {
+            std::vector<std::pair<std::string, std::string>> result;
+            const auto add = [&](const char* key, const std::any& value) { result.emplace_back(std::string("history.field.") + key, historyDetailValue(value)); };
+            if (node.cropbox) {
+                add("bounds_min", node.cropbox->min);
+                add("bounds_max", node.cropbox->max);
+                add("inverse", node.cropbox->inverse);
+                add("enabled", node.cropbox->enabled);
+                add("color", node.cropbox->color);
+                add("line_width", node.cropbox->line_width);
+            }
+            if (node.ellipsoid) {
+                add("radii", node.ellipsoid->radii);
+                add("inverse", node.ellipsoid->inverse);
+                add("enabled", node.ellipsoid->enabled);
+                add("color", node.ellipsoid->color);
+                add("line_width", node.ellipsoid->line_width);
+            }
+            if (node.keyframe) {
+                add("keyframe_id", node.keyframe->keyframe_index);
+                add("time", node.keyframe->time);
+                add("position", node.keyframe->position);
+                add("rotation", node.keyframe->rotation);
+                add("focal_length", node.keyframe->focal_length_mm);
+                const char* easing[] = {"@tr:history.value.linear", "@tr:history.value.ease_in", "@tr:history.value.ease_out", "@tr:history.value.ease_in_out"};
+                add("easing", node.keyframe->easing < 4 ? easing[node.keyframe->easing] : "@tr:history.value.unknown");
+            }
+            if (node.camera) {
+                add("camera_split", node.camera->split == lfs::core::CameraSplit::Train ? "@tr:history.value.train" : "@tr:history.value.eval");
+                add("focal_pixels", glm::vec2(node.camera->focal_x, node.camera->focal_y));
+                add("principal_point", glm::vec2(node.camera->center_x, node.camera->center_y));
+                add("image_size", std::to_string(node.camera->image_width) + " × " + std::to_string(node.camera->image_height));
+                add("image_path", node.camera->image_path);
+                add("mask_path", node.camera->mask_path);
+                add("depth_path", node.camera->depth_path);
+            }
+            return result;
+        }
+        std::string tensorShapeText(const lfs::core::TensorShape& shape) {
+            std::string text;
+            for (size_t i = 0; i < shape.rank(); ++i) {
+                if (i)
+                    text += " × ";
+                text += std::to_string(shape[i]);
+            }
+            return text;
+        }
+    } // namespace
+
+    std::vector<UndoDetailField> SceneSnapshot::detailFields() const {
+        auto result = context_details_;
+        if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
+            const std::any before_count = selection_before_.counts_valid ? std::any(selection_before_.selected_count) : std::any(std::string("@tr:history.value.unavailable"));
+            const std::any after_count = selection_after_metadata_.counts_valid ? std::any(selection_after_metadata_.selected_count) : std::any(std::string("@tr:history.value.unavailable"));
+            result.push_back(historyDetailField({}, "history.field.selected_count", before_count, after_count));
+            appendChanged(result, {}, "selection_groups", selection_before_.groups.size(), selection_after_metadata_.groups.size());
+            appendChanged(result, {}, "active_group", activeGroup(selection_before_.groups, selection_before_.active_group_id), activeGroup(selection_after_metadata_.groups, selection_after_metadata_.active_group_id));
+            for (const auto& before : selection_before_.groups) {
+                const auto after = std::find_if(selection_after_metadata_.groups.begin(), selection_after_metadata_.groups.end(), [&](const auto& group) { return group.id == before.id; });
+                if (after == selection_after_metadata_.groups.end()) {
+                    result.push_back(historyDetailField(before.name, "history.field.node_state", std::string("@tr:history.value.present"), std::string("@tr:history.value.removed")));
+                    continue;
+                }
+                appendChanged(result, after->name, "group_name", before.name, after->name);
+                appendChanged(result, after->name, "group_color", before.color, after->color);
+                appendChanged(result, after->name, "group_locked", before.locked, after->locked);
+                if (selection_before_.group_counts_valid && selection_after_metadata_.group_counts_valid)
+                    appendChanged(result, after->name, "selected_count", before.count, after->count);
+            }
+            for (const auto& after : selection_after_metadata_.groups) {
+                if (std::none_of(selection_before_.groups.begin(), selection_before_.groups.end(), [&](const auto& group) { return group.id == after.id; })) {
+                    result.push_back(historyDetailField(after.name, "history.field.node_state", {}, std::string("@tr:history.value.created")));
+                    result.push_back(historyDetailField(after.name, "history.field.group_color", {}, after.color));
+                }
+            }
+        }
+        for (const auto& [uuid, storage] : deleted_mask_storage_) {
+            if (std::any_of(context_details_.begin(), context_details_.end(), [](const auto& field) { return field.property == "history.field.affected_gaussians"; }))
+                continue;
+            const auto name = deleted_names_.find(uuid);
+            const auto target = name == deleted_names_.end() ? uuid.to_string() : name->second;
+            result.push_back(historyDetailField(target, storage.mode == TensorSwapStorageMode::SPARSE ? "history.field.affected_elements" : "history.field.stored_elements", {}, storage.mode == TensorSwapStorageMode::SPARSE ? storage.indices.numel() : storage.total_size));
+        }
+        return result;
+    }
+
+    std::vector<UndoDetailField> TensorUndoEntry::detailFields() const {
+        auto result = context_details_;
+        result.push_back(historyDetailField(target_name_, "history.field.tensor_shape", {}, tensorShapeText(tensor_shape_)));
+        result.push_back(historyDetailField(target_name_, storage_.mode == TensorSwapStorageMode::SPARSE ? "history.field.affected_elements" : "history.field.stored_elements", {}, storage_.mode == TensorSwapStorageMode::SPARSE ? storage_.indices.numel() : storage_.total_size));
+        return result;
+    }
+    std::vector<UndoDetailField> ShNCanonicalRowsUndoEntry::detailFields() const {
+        auto result = context_details_;
+        result.push_back(historyDetailField(node_name_, "history.field.affected_elements", {}, indices_.numel()));
+        result.push_back(historyDetailField(node_name_, "history.field.tensor_shape", {}, tensorShapeText(before_rows_.shape())));
+        return result;
+    }
+    std::vector<UndoTransformDetail> CropBoxUndoEntry::transformDetails() const {
+        return transform_before_ == transform_after_ ? std::vector<UndoTransformDetail>{} : std::vector{transformDetail(node_name_, transform_before_, transform_after_)};
+    }
+    std::vector<UndoDetailField> CropBoxUndoEntry::detailFields() const {
+        auto result = context_details_;
+        appendChanged(result, node_name_, "bounds_min", before_.min, after_.min);
+        appendChanged(result, node_name_, "bounds_max", before_.max, after_.max);
+        appendChanged(result, node_name_, "inverse", before_.inverse, after_.inverse);
+        appendChanged(result, node_name_, "enabled", before_.enabled, after_.enabled);
+        appendChanged(result, node_name_, "visible", show_before_, show_after_);
+        appendChanged(result, node_name_, "filter_enabled", use_before_, use_after_);
+        appendChanged(result, node_name_, "color", before_.color, after_.color);
+        appendChanged(result, node_name_, "line_width", before_.line_width, after_.line_width);
+        return result;
+    }
+    std::vector<UndoTransformDetail> EllipsoidUndoEntry::transformDetails() const {
+        return transform_before_ == transform_after_ ? std::vector<UndoTransformDetail>{} : std::vector{transformDetail(node_name_, transform_before_, transform_after_)};
+    }
+    std::vector<UndoDetailField> EllipsoidUndoEntry::detailFields() const {
+        auto result = context_details_;
+        appendChanged(result, node_name_, "radii", before_.radii, after_.radii);
+        appendChanged(result, node_name_, "inverse", before_.inverse, after_.inverse);
+        appendChanged(result, node_name_, "enabled", before_.enabled, after_.enabled);
+        appendChanged(result, node_name_, "visible", show_before_, show_after_);
+        appendChanged(result, node_name_, "filter_enabled", use_before_, use_after_);
+        appendChanged(result, node_name_, "color", before_.color, after_.color);
+        appendChanged(result, node_name_, "line_width", before_.line_width, after_.line_width);
+        return result;
+    }
+    std::vector<UndoDetailField> PropertyChangeUndoEntry::detailFields() const {
+        auto result = context_details_;
+        result.push_back(historyDetailField({}, property_path_, before_, after_));
+        return result;
+    }
+    std::vector<UndoTransformDetail> SceneGraphMetadataEntry::transformDetails() const {
+        std::vector<UndoTransformDetail> result;
+        for (const auto& diff : diffs_)
+            if (diff.before.local_transform != diff.after.local_transform)
+                result.push_back(transformDetail(diff.after.name, diff.before.local_transform, diff.after.local_transform));
+        return result;
+    }
+    std::vector<UndoDetailField> SceneGraphMetadataEntry::detailFields() const {
+        auto result = context_details_;
+        for (const auto& diff : diffs_)
+            appendNodeDiff(result, diff.before, diff.after);
+        return result;
+    }
+    std::vector<UndoDetailField> SceneGraphPatchEntry::detailFields() const {
+        auto result = context_details_;
+        std::unordered_map<lfs::core::Uuid, const SceneGraphNodeSnapshot*> before, after;
+        const auto collect = [](const auto& self, const auto& nodes, auto& target) -> void {
+            for (const auto& node : nodes) {
+                target.emplace(node.uuid, &node);
+                self(self, node.children, target);
+            }
+        };
+        collect(collect, before_.roots, before);
+        collect(collect, after_.roots, after);
+        std::vector<lfs::core::Uuid> ids;
+        for (const auto& [uuid, node] : before)
+            ids.push_back(uuid);
+        for (const auto& [uuid, node] : after)
+            if (!before.contains(uuid))
+                ids.push_back(uuid);
+        std::sort(ids.begin(), ids.end(), [&](const auto& a, const auto& b) { return (after.contains(a) ? after.at(a) : before.at(a))->name < (after.contains(b) ? after.at(b) : before.at(b))->name; });
+        for (const auto& uuid : ids) {
+            const auto old = before.find(uuid), next = after.find(uuid);
+            if (old == before.end() || next == after.end()) {
+                const auto& node = *(next == after.end() ? old->second : next->second);
+                result.push_back(historyDetailField(node.name, "history.field.node_state", next == after.end() ? std::any(std::string("@tr:history.value.present")) : std::any{}, std::string(next == after.end() ? "@tr:history.value.removed" : "@tr:history.value.created")));
+                const auto append_state = [&](const char* key, const std::any& value) {
+                    result.push_back(historyDetailField(node.name, std::string("history.field.") + key,
+                                                        next == after.end() ? value : std::any{},
+                                                        next == after.end() ? std::any{} : value));
+                };
+                append_state("gaussian_count", node.gaussian_count);
+                append_state("parent", node.parent_name);
+                append_state("visible", node.visible);
+                append_state("locked", node.locked);
+                append_state("training_enabled", node.training_enabled);
+                if (node.source_path)
+                    append_state("source_path", *node.source_path);
+                for (const auto& [key, value] : nodePayloadDetails(node))
+                    result.push_back({node.name, key, next == after.end() ? value : std::string{}, next == after.end() ? std::string{} : value});
+                continue;
+            }
+            const auto old_payload = nodePayloadDetails(*old->second);
+            const auto next_payload = nodePayloadDetails(*next->second);
+            for (const auto& [key, value] : next_payload) {
+                const auto old_field = std::find_if(old_payload.begin(), old_payload.end(), [&](const auto& field) { return field.first == key; });
+                if (old_field == old_payload.end() || old_field->second != value)
+                    result.push_back({next->second->name, key, old_field == old_payload.end() ? std::string{} : old_field->second, value});
+            }
+            for (const auto& [key, value] : old_payload)
+                if (std::none_of(next_payload.begin(), next_payload.end(), [&](const auto& field) { return field.first == key; }))
+                    result.push_back({old->second->name, key, value, {}});
+            appendNodeDiff(result, *old->second, *next->second);
+            appendChanged(result, next->second->name, "gaussian_count", old->second->gaussian_count, next->second->gaussian_count);
+            if (old->second->local_transform != next->second->local_transform)
+                result.push_back(historyDetailField(next->second->name, "history.field.transform", old->second->local_transform, next->second->local_transform));
+        }
+        if (before_.context && after_.context) {
+            appendChanged(result, {}, "training_model", before_.context->training_model_node_name, after_.context->training_model_node_name);
+            appendChanged(result, {}, "dataset_path", before_.context->dataset_path, after_.context->dataset_path);
+        }
+        if (before_.selected_node_names && after_.selected_node_names)
+            appendChanged(result, {}, "selected_nodes", *before_.selected_node_names, *after_.selected_node_names);
+        return result;
     }
 
 } // namespace lfs::vis::op

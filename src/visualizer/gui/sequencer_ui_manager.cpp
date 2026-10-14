@@ -57,18 +57,53 @@ namespace lfs::vis::gui {
                    lhs.easing == rhs.easing && lhs.is_loop_point == rhs.is_loop_point;
         }
 
+        std::string historyEasing(const sequencer::EasingType easing) {
+            switch (easing) {
+            case sequencer::EasingType::LINEAR: return "history.value.linear";
+            case sequencer::EasingType::EASE_IN: return "history.value.ease_in";
+            case sequencer::EasingType::EASE_OUT: return "history.value.ease_out";
+            case sequencer::EasingType::EASE_IN_OUT: return "history.value.ease_in_out";
+            }
+            return std::to_string(static_cast<int>(easing));
+        }
+
+        void addKeyframeDetails(op::UndoEntry& entry, const std::optional<sequencer::Keyframe>& before,
+                                const std::optional<sequencer::Keyframe>& after) {
+            const auto id = before ? before->id : after->id;
+            const auto target = std::to_string(id);
+            entry.addDetail(op::historyDetailField(target, "history.field.keyframe_id", id, id));
+            entry.addDetail(op::historyDetailField(target, "history.field.exists", before.has_value(), after.has_value()));
+            const auto add = [&](const char* property, const std::any& old_value, const std::any& new_value) {
+                entry.addDetail(op::historyDetailField(target, property,
+                    before ? old_value : std::any{}, after ? new_value : std::any{}));
+            };
+            const auto& old_key = before ? *before : *after;
+            const auto& new_key = after ? *after : *before;
+            add("history.field.time", old_key.time, new_key.time);
+            add("history.field.position", old_key.position, new_key.position);
+            const auto rotation = [](const glm::quat& q) { return glm::vec4(q.x, q.y, q.z, q.w); };
+            add("history.field.rotation", rotation(old_key.rotation), rotation(new_key.rotation));
+            add("history.field.focal_length", old_key.focal_length_mm, new_key.focal_length_mm);
+            add("history.field.easing", historyEasing(old_key.easing), historyEasing(new_key.easing));
+            add("history.field.loop_point", old_key.is_loop_point, new_key.is_loop_point);
+        }
+
         class KeyframeChangeUndoEntry final : public op::UndoEntry {
         public:
             KeyframeChangeUndoEntry(SequencerController& controller, std::weak_ptr<void> lifetime,
                                     std::optional<sequencer::Keyframe> before,
                                     std::optional<sequencer::Keyframe> after,
                                     const float duration_before, const std::string_view action_name)
-                : controller_(controller), lifetime_(std::move(lifetime)), before_(std::move(before)), after_(std::move(after)), id_(before_ ? before_->id : after_->id), duration_before_(duration_before), duration_after_(controller.clipDuration()), action_name_(action_name) {}
+                : controller_(controller), lifetime_(std::move(lifetime)), before_(std::move(before)), after_(std::move(after)), id_(before_ ? before_->id : after_->id), duration_before_(duration_before), duration_after_(controller.clipDuration()), action_name_(action_name) {
+                addKeyframeDetails(*this, before_, after_);
+                if (duration_before_ != duration_after_)
+                    addDetail(op::historyDetailField({}, "history.field.clip_duration", duration_before_, duration_after_));
+            }
 
             void undo() override { apply(after_, before_, duration_after_, duration_before_); }
             void redo() override { apply(before_, after_, duration_before_, duration_after_); }
             [[nodiscard]] std::string name() const override { return std::string(action_name_); }
-            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + contextDetailBytes(); }
 
         private:
             void apply(const std::optional<sequencer::Keyframe>& expected,
@@ -110,12 +145,16 @@ namespace lfs::vis::gui {
         public:
             KeyframeTimeUndoEntry(SequencerController& controller, std::weak_ptr<void> lifetime,
                                   const sequencer::KeyframeId id, const float before, const float after)
-                : controller_(controller), lifetime_(std::move(lifetime)), generation_(controller.timelineGeneration()), id_(id), before_(before), after_(after) {}
+                : controller_(controller), lifetime_(std::move(lifetime)), generation_(controller.timelineGeneration()), id_(id), before_(before), after_(after) {
+                const auto target = std::to_string(id_);
+                addDetail(op::historyDetailField(target, "history.field.keyframe_id", id_, id_));
+                addDetail(op::historyDetailField(target, "history.field.time", before_, after_));
+            }
 
             void undo() override { apply(after_, before_); }
             void redo() override { apply(before_, after_); }
             [[nodiscard]] std::string name() const override { return "Edit Keyframe Time"; }
-            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + contextDetailBytes(); }
 
         private:
             void apply(const float expected, const float desired) {
@@ -142,12 +181,16 @@ namespace lfs::vis::gui {
         public:
             KeyframeEasingUndoEntry(SequencerController& controller, std::weak_ptr<void> lifetime,
                                     sequencer::Keyframe before, const sequencer::EasingType after)
-                : controller_(controller), lifetime_(std::move(lifetime)), before_(std::move(before)), after_(after) {}
+                : controller_(controller), lifetime_(std::move(lifetime)), before_(std::move(before)), after_(after) {
+                const auto target = std::to_string(before_.id);
+                addDetail(op::historyDetailField(target, "history.field.keyframe_id", before_.id, before_.id));
+                addDetail(op::historyDetailField(target, "history.field.easing", historyEasing(before_.easing), historyEasing(after_)));
+            }
 
             void undo() override { apply(after_, before_.easing); }
             void redo() override { apply(before_.easing, after_); }
             [[nodiscard]] std::string name() const override { return "Set Keyframe Easing"; }
-            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + contextDetailBytes(); }
 
         private:
             void apply(const sequencer::EasingType expected, const sequencer::EasingType desired) {
@@ -175,12 +218,14 @@ namespace lfs::vis::gui {
         public:
             ClipDurationUndoEntry(SequencerController& controller, std::weak_ptr<void> lifetime,
                                   const float before, const float after)
-                : controller_(controller), lifetime_(std::move(lifetime)), generation_(controller.timelineGeneration()), before_(before), after_(after) {}
+                : controller_(controller), lifetime_(std::move(lifetime)), generation_(controller.timelineGeneration()), before_(before), after_(after) {
+                addDetail(op::historyDetailField({}, "history.field.clip_duration", before_, after_));
+            }
 
             void undo() override { apply(after_, before_); }
             void redo() override { apply(before_, after_); }
             [[nodiscard]] std::string name() const override { return "Edit Clip Duration"; }
-            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + contextDetailBytes(); }
 
         private:
             void apply(const float expected, const float desired) {

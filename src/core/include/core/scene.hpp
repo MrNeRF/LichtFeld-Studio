@@ -225,6 +225,9 @@ namespace lfs::core {
             uint8_t active_group_id = 0;
             uint8_t next_group_id = 1;
             bool has_selection = false;
+            bool counts_valid = true;
+            size_t selected_count = 0;
+            bool group_counts_valid = true;
         };
 
         struct SelectionStateMetadata {
@@ -232,6 +235,9 @@ namespace lfs::core {
             uint8_t active_group_id = 0;
             uint8_t next_group_id = 1;
             bool has_selection = false;
+            bool counts_valid = true;
+            size_t selected_count = 0;
+            bool group_counts_valid = true;
         };
 
         struct RestoreNodeDesc {

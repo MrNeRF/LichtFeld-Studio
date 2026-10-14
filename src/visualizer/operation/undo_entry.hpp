@@ -43,6 +43,17 @@ namespace lfs::vis::op {
         }
     };
 
+    struct LFS_VIS_API UndoDetailField {
+        std::string target;
+        std::string property;
+        std::string before;
+        std::string after;
+    };
+
+    LFS_VIS_API std::string historyDetailValue(const std::any& value);
+    LFS_VIS_API UndoDetailField historyDetailField(std::string target, std::string property,
+                                                   const std::any& before, const std::any& after);
+
     struct LFS_VIS_API UndoTransformDetail {
         std::string target;
         std::array<float, 16> before;
@@ -109,7 +120,15 @@ namespace lfs::vis::op {
             };
         }
         [[nodiscard]] virtual std::vector<UndoTransformDetail> transformDetails() const { return {}; }
-        [[nodiscard]] virtual size_t estimatedBytes() const { return 0; }
+        [[nodiscard]] virtual std::vector<UndoDetailField> detailFields() const { return context_details_; }
+        void addDetail(UndoDetailField detail) { context_details_.push_back(std::move(detail)); }
+        [[nodiscard]] size_t contextDetailBytes() const {
+            size_t total = context_details_.capacity() * sizeof(UndoDetailField);
+            for (const auto& field : context_details_)
+                total += field.target.size() + field.property.size() + field.before.size() + field.after.size();
+            return total;
+        }
+        [[nodiscard]] virtual size_t estimatedBytes() const { return contextDetailBytes(); }
         [[nodiscard]] virtual UndoMemoryBreakdown memoryBreakdown() const {
             return UndoMemoryBreakdown{
                 .cpu_bytes = estimatedBytes(),
@@ -123,6 +142,9 @@ namespace lfs::vis::op {
         virtual void offloadToCPU() {}
         virtual void restoreToPreferredDevice() {}
         [[nodiscard]] virtual DirtyMask dirtyFlags() const { return DirtyFlag::ALL; }
+
+    protected:
+        std::vector<UndoDetailField> context_details_;
     };
 
     using UndoEntryPtr = std::unique_ptr<UndoEntry>;
@@ -215,6 +237,7 @@ namespace lfs::vis::op {
 
         void undo() override;
         void redo() override;
+        [[nodiscard]] std::vector<UndoDetailField> detailFields() const override;
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] std::vector<UndoTransformDetail> transformDetails() const override;
@@ -241,6 +264,7 @@ namespace lfs::vis::op {
 
         std::unordered_map<lfs::core::Uuid, TensorPresenceSnapshot> deleted_masks_before_;
         std::unordered_map<lfs::core::Uuid, TensorSwapStorage> deleted_mask_storage_;
+        std::unordered_map<lfs::core::Uuid, std::string> deleted_names_;
         std::unordered_map<lfs::core::Uuid, bool> payload_diverged_before_;
         std::unordered_map<lfs::core::Uuid, bool> payload_diverged_after_;
         std::optional<TensorPresenceSnapshot> combined_deleted_before_;
@@ -278,10 +302,15 @@ namespace lfs::vis::op {
 
         void undo() override;
         void redo() override;
+        [[nodiscard]] std::vector<UndoDetailField> detailFields() const override;
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] UndoMetadata metadata() const override { return metadata_; }
-        [[nodiscard]] size_t estimatedBytes() const override { return storage_.estimatedBytes(); }
-        [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override { return storage_.memoryBreakdown(); }
+        [[nodiscard]] size_t estimatedBytes() const override { return contextDetailBytes() + storage_.estimatedBytes(); }
+        [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override {
+            auto result = storage_.memoryBreakdown();
+            result.cpu_bytes += contextDetailBytes();
+            return result;
+        }
         void offloadToCPU() override { storage_.offloadToCPU(); }
         void restoreToPreferredDevice() override { storage_.restoreToDevice(); }
         [[nodiscard]] DirtyMask dirtyFlags() const override;
@@ -316,6 +345,7 @@ namespace lfs::vis::op {
 
         void undo() override;
         void redo() override;
+        [[nodiscard]] std::vector<UndoDetailField> detailFields() const override;
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] UndoMetadata metadata() const override { return metadata_; }
         [[nodiscard]] size_t estimatedBytes() const override;
@@ -352,9 +382,11 @@ namespace lfs::vis::op {
         void undo() override;
         void redo() override;
         [[nodiscard]] bool hasChanges() const;
+        [[nodiscard]] std::vector<UndoTransformDetail> transformDetails() const override;
+        [[nodiscard]] std::vector<UndoDetailField> detailFields() const override;
         [[nodiscard]] std::string name() const override { return "cropbox.transform"; }
         [[nodiscard]] UndoMetadata metadata() const override;
-        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + node_name_.size(); }
+        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + node_name_.size() + contextDetailBytes(); }
         [[nodiscard]] DirtyMask dirtyFlags() const override;
 
     private:
@@ -388,9 +420,11 @@ namespace lfs::vis::op {
         void undo() override;
         void redo() override;
         [[nodiscard]] bool hasChanges() const;
+        [[nodiscard]] std::vector<UndoTransformDetail> transformDetails() const override;
+        [[nodiscard]] std::vector<UndoDetailField> detailFields() const override;
         [[nodiscard]] std::string name() const override { return "ellipsoid.transform"; }
         [[nodiscard]] UndoMetadata metadata() const override;
-        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + node_name_.size(); }
+        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + node_name_.size() + contextDetailBytes(); }
         [[nodiscard]] DirtyMask dirtyFlags() const override;
 
     private:
@@ -421,9 +455,10 @@ namespace lfs::vis::op {
 
         void undo() override;
         void redo() override;
+        [[nodiscard]] std::vector<UndoDetailField> detailFields() const override;
         [[nodiscard]] std::string name() const override { return label_; }
         [[nodiscard]] UndoMetadata metadata() const override;
-        [[nodiscard]] size_t estimatedBytes() const override { return estimated_bytes_; }
+        [[nodiscard]] size_t estimatedBytes() const override { return estimated_bytes_ + contextDetailBytes(); }
         bool tryMerge(const UndoEntry& incoming) override;
         [[nodiscard]] DirtyMask dirtyFlags() const override;
 
@@ -570,6 +605,8 @@ namespace lfs::vis::op {
 
         void undo() override;
         void redo() override;
+        [[nodiscard]] std::vector<UndoTransformDetail> transformDetails() const override;
+        [[nodiscard]] std::vector<UndoDetailField> detailFields() const override;
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] size_t estimatedBytes() const override;
@@ -602,6 +639,7 @@ namespace lfs::vis::op {
 
         void undo() override;
         void redo() override;
+        [[nodiscard]] std::vector<UndoDetailField> detailFields() const override;
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] size_t estimatedBytes() const override;

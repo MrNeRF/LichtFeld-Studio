@@ -92,8 +92,11 @@ namespace lfs::python {
         template <typename Mutator>
         void apply_selection_state_with_undo(vis::SceneManager& scene_manager,
                                              const std::string& undo_label,
-                                             Mutator&& mutator) {
+                                             Mutator&& mutator,
+                                             std::vector<vis::op::UndoDetailField> details = {}) {
             auto snapshot = std::make_unique<vis::op::SceneSnapshot>(scene_manager, undo_label);
+            for (auto& detail : details)
+                snapshot->addDetail(std::move(detail));
             snapshot->captureSelection();
             mutator(scene_manager.getScene());
             snapshot->captureAfter();
@@ -586,7 +589,8 @@ namespace lfs::python {
                     *sm, "selection.grow",
                     [updated = std::move(current)](core::Scene& target_scene) mutable {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
-                    });
+                    },
+                    {vis::op::historyDetailField({}, "history.field.radius", {}, radius), vis::op::historyDetailField({}, "history.field.iterations", {}, iterations)});
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
@@ -614,7 +618,8 @@ namespace lfs::python {
                     *sm, "selection.shrink",
                     [updated = std::move(current)](core::Scene& target_scene) mutable {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
-                    });
+                    },
+                    {vis::op::historyDetailField({}, "history.field.radius", {}, radius), vis::op::historyDetailField({}, "history.field.iterations", {}, iterations)});
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
@@ -635,7 +640,8 @@ namespace lfs::python {
                     *sm, "selection.by_opacity",
                     [updated = std::move(mask)](core::Scene& target_scene) mutable {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
-                    });
+                    },
+                    {vis::op::historyDetailField({}, "history.field.min_opacity", {}, min_opacity), vis::op::historyDetailField({}, "history.field.max_opacity", {}, max_opacity)});
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
@@ -656,7 +662,8 @@ namespace lfs::python {
                     *sm, "selection.by_scale",
                     [updated = std::move(mask)](core::Scene& target_scene) mutable {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
-                    });
+                    },
+                    {vis::op::historyDetailField({}, "history.field.max_scale", {}, max_scale)});
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },
@@ -698,7 +705,8 @@ namespace lfs::python {
                     *sm, "selection.by_color",
                     [updated = std::move(mask)](core::Scene& target_scene) mutable {
                         target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
-                    });
+                    },
+                    {vis::op::historyDetailField({}, "history.field.reference_gaussian", {}, gaussian_index), vis::op::historyDetailField({}, "history.field.threshold", {}, std::clamp(threshold, 0.0f, 1.0f)), vis::op::historyDetailField({}, "history.field.reference_color", {}, glm::vec3(ref_r, ref_g, ref_b))});
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
             },

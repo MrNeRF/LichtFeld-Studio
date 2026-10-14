@@ -144,6 +144,16 @@ namespace lfs::vis::op {
                     .scope = "grouped",
                 };
             }
+            [[nodiscard]] std::vector<UndoDetailField> detailFields() const override {
+                auto result = context_details_;
+                result.push_back(historyDetailField({}, "history.field.operation_count", {}, entries_.size()));
+                for (const auto& entry : entries_) {
+                    result.push_back({entry->name(), "history.field.operation", {}, entry->metadata().label});
+                    auto fields = entry->detailFields();
+                    result.insert(result.end(), std::make_move_iterator(fields.begin()), std::make_move_iterator(fields.end()));
+                }
+                return result;
+            }
             [[nodiscard]] std::vector<UndoTransformDetail> transformDetails() const override {
                 std::vector<UndoTransformDetail> result;
                 for (const auto& entry : entries_) {
@@ -1074,7 +1084,7 @@ namespace lfs::vis::op {
         if (generation != generation_.load(std::memory_order_acquire) || steps == 0 || steps > stack.size())
             return std::nullopt;
         const auto& entry = stack[stack.size() - steps];
-        return UndoEntryDescription{entry->metadata(), entry->transformDetails()};
+        return UndoEntryDescription{entry->metadata(), entry->transformDetails(), entry->detailFields()};
     }
 
     size_t UndoHistory::undoCount() const {

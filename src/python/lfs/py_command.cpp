@@ -51,6 +51,46 @@ namespace lfs::python {
             return flags == 0 ? vis::DirtyFlag::ALL : static_cast<vis::DirtyMask>(flags);
         }
 
+        std::string history_scalar(const nb::handle value) {
+            if (value.is_none())
+                return "@tr:history.value.none";
+            if (nb::isinstance<nb::bool_>(value))
+                return nb::cast<bool>(value) ? "@tr:history.value.true" : "@tr:history.value.false";
+            if (!nb::isinstance<nb::str>(value) && !nb::isinstance<nb::int_>(value) && !nb::isinstance<nb::float_>(value))
+                throw nb::type_error("history details must contain immutable scalar values (str, int, float, bool, None)");
+            auto text = nb::cast<std::string>(nb::str(value));
+            if (text.size() > 4096)
+                throw nb::value_error("history detail values must be at most 4096 bytes");
+            return text;
+        }
+
+        std::vector<vis::op::UndoDetailField> capture_history_details(const nb::object& details) {
+            std::vector<vis::op::UndoDetailField> result;
+            if (details.is_none())
+                return result;
+            if (!nb::isinstance<nb::list>(details) && !nb::isinstance<nb::tuple>(details))
+                throw nb::type_error("details must be a list or tuple of detail dictionaries");
+            for (const auto item : nb::borrow<nb::iterable>(details)) {
+                if (result.size() >= 128)
+                    throw nb::value_error("at most 128 history detail fields are allowed");
+                if (!nb::isinstance<nb::dict>(item))
+                    throw nb::type_error("each history detail must be a dictionary");
+                const auto field = nb::borrow<nb::dict>(item);
+                if (!field.contains("property") || !field.contains("before") || !field.contains("after"))
+                    throw nb::value_error("history details require property, before and after");
+                const auto string_field = [&](const char* key) {
+                    if (!field.contains(key))
+                        return std::string{};
+                    if (!nb::isinstance<nb::str>(field[key]))
+                        throw nb::type_error("history detail target and property must be strings");
+                    return history_scalar(field[key]);
+                };
+                result.push_back({string_field("target"), string_field("property"),
+                                  history_scalar(field["before"]), history_scalar(field["after"])});
+            }
+            return result;
+        }
+
         void validate_undo_callback(const nb::object& callback, const char* name) {
             if (callback.is_none()) {
                 return;
@@ -122,9 +162,9 @@ namespace lfs::python {
 
     size_t PyUndoEntry::estimatedBytes() const {
         if (estimated_bytes_ > 0) {
-            return estimated_bytes_;
+            return estimated_bytes_ + contextDetailBytes();
         }
-        return sizeof(*this) + name_.size() + id_.size() + source_.size() + scope_.size() + 128;
+        return sizeof(*this) + name_.size() + id_.size() + source_.size() + scope_.size() + 128 + contextDetailBytes();
     }
 
     vis::DirtyMask PyUndoEntry::dirtyFlags() const {
@@ -147,6 +187,16 @@ namespace lfs::python {
         }
 
         nb::gil_scoped_acquire gil;
+        // Keep the original before state and the newest after state for coalesced edits.
+        for (const auto& detail : other->context_details_) {
+            const auto existing = std::find_if(context_details_.begin(), context_details_.end(), [&](const auto& field) {
+                return field.target == detail.target && field.property == detail.property;
+            });
+            if (existing == context_details_.end())
+                context_details_.push_back(detail);
+            else
+                existing->after = detail.after;
+        }
         name_ = other->name_;
         redo_fn_ = other->redo_fn_;
         estimated_bytes_ = std::max(estimated_bytes_, other->estimated_bytes_);
@@ -250,7 +300,9 @@ namespace lfs::python {
                const std::string& scope,
                const size_t estimated_bytes,
                const uint32_t dirty_flags,
-               const uint64_t merge_window_ms) {
+               const uint64_t merge_window_ms,
+               nb::object details) {
+                auto captured_details = capture_history_details(details);
                 validate_undo_callback(undo_fn, "undo");
                 validate_undo_callback(redo_fn, "redo");
                 if (validate) {
@@ -270,6 +322,8 @@ namespace lfs::python {
                     estimated_bytes,
                     normalize_dirty_flags(dirty_flags),
                     std::chrono::milliseconds(merge_window_ms));
+                for (auto& detail : captured_details)
+                    entry->addDetail(std::move(detail));
                 vis::op::undoHistory().push(std::move(entry));
             },
             nb::arg("name"),
@@ -282,7 +336,14 @@ namespace lfs::python {
             nb::arg("estimated_bytes") = 0,
             nb::arg("dirty_flags") = 0,
             nb::arg("merge_window_ms") = 0,
-            "Push an undo step with undo/redo functions");
+            nb::arg("details") = nb::none(),
+            R"doc(Push an undo step with undo/redo functions.
+
+details accepts up to 128 dictionaries with property, before and after,
+plus an optional target. Values must be immutable scalars (str, int, float,
+bool or None); strings are limited to 4096 bytes. Values are copied when
+pushed. Use history.field.* property keys and @tr:history.value.* value
+keys for built-in localized labels and values.)doc");
 
         undo.def(
             "undo", []() { return play_history(true).success; }, "Undo last operation");
@@ -434,6 +495,7 @@ namespace lfs::python {
                 if (!description)
                     return nb::none();
                 nb::dict result;
+                result["id"] = description->metadata.id;
                 result["label"] = description->metadata.label;
                 result["source"] = description->metadata.source;
                 result["scope"] = description->metadata.scope;
@@ -445,6 +507,16 @@ namespace lfs::python {
                     transform["after"] = std::vector<float>(detail.after.begin(), detail.after.end());
                     transforms.append(transform);
                 }
+                nb::list fields;
+                for (const auto& field : description->fields) {
+                    nb::dict item;
+                    item["target"] = field.target;
+                    item["property"] = field.property;
+                    item["before"] = field.before;
+                    item["after"] = field.after;
+                    fields.append(item);
+                }
+                result["fields"] = fields;
                 result["transforms"] = transforms;
                 return result;
             },

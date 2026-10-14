@@ -32,6 +32,7 @@ namespace lfs::vis::op {
     struct LFS_VIS_API UndoEntryDescription {
         UndoMetadata metadata;
         std::vector<UndoTransformDetail> transforms;
+        std::vector<UndoDetailField> fields;
     };
 
     struct LFS_VIS_API HistoryResult {

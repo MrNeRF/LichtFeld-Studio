@@ -136,3 +136,42 @@ def test_python_callback_failure_returns_false_and_preserves_history(lf):
     assert lf.undo.undo() is False
     assert lf.undo.can_undo() is True
     assert lf.undo.can_redo() is False
+
+
+def test_python_history_details_are_copied_and_merge_snapshots(lf):
+    fields = [{"target": "Camera", "property": "history.field.time", "before": 0, "after": 1}]
+    lf.undo.push("Custom edit", lambda: None, lambda: None,
+                 id="python.detail_edit", merge_window_ms=1000, details=fields)
+    fields[0]["after"] = 999
+    initial = lf.undo.details("undo", 1, lf.undo.generation())
+    assert initial["fields"][0]["after"] == "1"
+
+    lf.undo.push("Custom edit", lambda: None, lambda: None,
+                 id="python.detail_edit", merge_window_ms=1000,
+                 details=[{"target": "Camera", "property": "history.field.time", "before": 1, "after": 2}])
+    merged = lf.undo.details("undo", 1, lf.undo.generation())
+    assert len(lf.undo.stack()["undo"]) == 1
+    assert merged["fields"] == [{"target": "Camera", "property": "history.field.time", "before": "0", "after": "2"}]
+
+
+def test_python_history_scalar_details_use_localized_values(lf):
+    lf.undo.push("Custom edit", lambda: None, lambda: None,
+                 details=[{"property": "history.field.visibility", "before": False, "after": True},
+                          {"property": "history.field.parent", "before": None, "after": "Group"}])
+    fields = lf.undo.details("undo", 1, lf.undo.generation())["fields"]
+    assert fields[0]["before"] == "@tr:history.value.false"
+    assert fields[0]["after"] == "@tr:history.value.true"
+    assert fields[1]["before"] == "@tr:history.value.none"
+
+
+@pytest.mark.parametrize("details,exception", [
+    ({"property": "time"}, TypeError),
+    ([{"property": "time", "before": [], "after": 1}], TypeError),
+    ([{"property": "time", "before": 0}], ValueError),
+    ([{"property": "time", "before": 0, "after": "x" * 4097}], ValueError),
+    ([{"property": "time", "before": 0, "after": 1}] * 129, ValueError),
+])
+def test_invalid_python_history_details_do_not_push(lf, details, exception):
+    with pytest.raises(exception):
+        lf.undo.push("Custom edit", lambda: None, lambda: None, details=details)
+    assert not lf.undo.can_undo()

@@ -63,6 +63,7 @@ namespace lfs::vis {
     struct SelectionCommitOptions {
         const core::Tensor* base_selection = nullptr;
         bool push_undo = true;
+        std::vector<op::UndoDetailField> history_details;
     };
 
     class LFS_VIS_API SelectionService {

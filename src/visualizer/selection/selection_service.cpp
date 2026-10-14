@@ -1023,6 +1023,9 @@ namespace lfs::vis {
         if (completed_undo_entry) {
             auto metadata = pending.after_metadata;
             metadata.has_selection = selected_count > 0;
+            metadata.counts_valid = true;
+            metadata.selected_count = selected_count;
+            metadata.group_counts_valid = true;
             for (auto& group : metadata.groups) {
                 group.count = group_counts[group.id];
             }
@@ -2119,9 +2122,35 @@ namespace lfs::vis {
             undo_name = "selection.sphere";
         }
 
+        SelectionCommitOptions options;
+        const char* shape_key = "@tr:history.value.brush";
+        switch (session.shape) {
+        case SelectionShape::Brush: break;
+        case SelectionShape::Rectangle: shape_key = "@tr:history.value.rectangle"; break;
+        case SelectionShape::Polygon: shape_key = "@tr:history.value.polygon"; break;
+        case SelectionShape::Lasso: shape_key = "@tr:history.value.lasso"; break;
+        case SelectionShape::Rings: shape_key = "@tr:history.value.rings"; break;
+        case SelectionShape::Box: shape_key = "@tr:history.value.box"; break;
+        case SelectionShape::Sphere: shape_key = "@tr:history.value.sphere"; break;
+        }
+        options.history_details.push_back(op::historyDetailField({}, "history.field.shape", {}, shape_key));
+        if (session.shape == SelectionShape::Brush || session.shape == SelectionShape::Rings)
+            options.history_details.push_back(op::historyDetailField({}, "history.field.brush_radius", {}, session.brush_radius));
+        if (!session.points.empty())
+            options.history_details.push_back(op::historyDetailField({}, "history.field.stroke_points", {}, session.points.size()));
+        if (session.shape == SelectionShape::Rectangle) {
+            options.history_details.push_back(op::historyDetailField({}, "history.field.screen_start", {}, session.start_pos));
+            options.history_details.push_back(op::historyDetailField({}, "history.field.screen_end", {}, session.cursor_pos));
+        }
+        if (session.shape == SelectionShape::Box || session.shape == SelectionShape::Sphere) {
+            if (const auto geometry = buildInteractiveVolumeGeometry()) {
+                options.history_details.push_back(op::historyDetailField({}, "history.field.position", {}, geometry->center_world));
+                options.history_details.push_back(op::historyDetailField({}, "history.field.radius", {}, geometry->radius));
+            }
+        }
         const auto result = commitSelection(selection, session.mode,
                                             effectiveNodeMask(session.filters.restrict_to_selected_nodes),
-                                            session.filters, undo_name);
+                                            session.filters, undo_name, std::move(options));
         clearInteractivePreviewState();
         interactive_selection_ = {};
         return result;
@@ -2538,12 +2567,22 @@ namespace lfs::vis {
         if (options.push_undo) {
             LOG_TIMER_THRESHOLD("SelectionService::commitSelection.snapshot_capture_selection", 1.0);
             entry = std::make_unique<op::SceneSnapshot>(*scene_manager_, undo_name);
+            for (const auto& detail : options.history_details)
+                entry->addDetail(detail);
             // The exact after-state is captured when the asynchronous count
             // ticket completes; mark the operation as potentially changed so
             // large masks keep the dense undo representation without waiting
             // for a host reduction here.
             entry->setSelectionChangeHint(true, true);
             entry->captureSelection();
+            const char* mode_key = mode == SelectionMode::Add         ? "@tr:history.value.add"
+                                   : mode == SelectionMode::Remove    ? "@tr:history.value.remove"
+                                   : mode == SelectionMode::Intersect ? "@tr:history.value.intersect"
+                                                                      : "@tr:history.value.replace";
+            entry->addDetail({{}, "history.field.selection_mode", {}, mode_key});
+            entry->addDetail(op::historyDetailField({}, "history.field.crop_filter", {}, filters.crop_filter));
+            entry->addDetail(op::historyDetailField({}, "history.field.depth_filter", {}, filters.depth_filter));
+            entry->addDetail(op::historyDetailField({}, "history.field.node_scope", {}, filters.restrict_to_selected_nodes));
         }
 
         // Transfer ownership of the completed output buffer to the scene. The
