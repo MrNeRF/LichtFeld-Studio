@@ -695,6 +695,8 @@ apply_registered_chrome:
         if (space == PanelSpace::Floating) {
             std::lock_guard lock(mutex_);
             for (auto& [id, interaction] : floating_interactions_) {
+                if (!interaction.dragging && !interaction.resizing)
+                    continue;
                 const bool drawable = std::ranges::any_of(
                     snapshots, [&](const PanelSnapshot& snap) {
                         const auto index = static_cast<size_t>(&snap - snapshots.data());
