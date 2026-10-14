@@ -780,7 +780,7 @@ void checkAbandonedFloatingDrag(const bool suppress_poll) {
     draw();
     EXPECT_FALSE(registry.has_active_floating_drag());
     registry.set_panel_enabled("test.resize", true);
-    input.mouse_down[0] = input.mouse_clicked[0] = false;
+    input.mouse_clicked[0] = false;
     draw();
     const auto before = state("test.resize");
     input.mouse_x = before.float_last_x + before.float_last_w;
@@ -791,6 +791,8 @@ void checkAbandonedFloatingDrag(const bool suppress_poll) {
     input.mouse_x += 80;
     draw();
     EXPECT_NEAR(state("test.resize").float_last_w, before.float_last_w + 80, 1);
+    input.mouse_down[0] = false;
+    draw();
 }
 
 TEST_F(PanelRegistryAnimationDemandTest, HiddenDragDoesNotBlockAnotherPanelResize) {
