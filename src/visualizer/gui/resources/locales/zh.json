@@ -2605,7 +2605,7 @@
     "gt_metrics_training_required": "相机指标需要已初始化的训练会话。",
     "gt_metrics_calculation_failed": "无法计算此视图的指标。",
     "perf_hud_tooltip": "显示或隐藏性能 HUD",
-    "all_panel_tabs": "All panels"
+    "all_panel_tabs": "所有面板"
   },
   "runtime": {
     "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",

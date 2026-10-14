@@ -2605,7 +2605,7 @@
     "gt_metrics_training_required": "カメラ指標には初期化済みのトレーニングセッションが必要です。",
     "gt_metrics_calculation_failed": "このビューの指標を計算できませんでした。",
     "perf_hud_tooltip": "パフォーマンス HUD の表示/非表示",
-    "all_panel_tabs": "All panels"
+    "all_panel_tabs": "すべてのパネル"
   },
   "runtime": {
     "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",

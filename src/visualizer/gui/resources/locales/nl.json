@@ -2605,7 +2605,7 @@
     "gt_metrics_training_required": "Camerametrieken vereisen een geïnitialiseerde trainingssessie.",
     "gt_metrics_calculation_failed": "Metrieken voor deze weergave konden niet worden berekend.",
     "perf_hud_tooltip": "Prestatie-HUD tonen of verbergen",
-    "all_panel_tabs": "All panels"
+    "all_panel_tabs": "Alle panelen"
   },
   "runtime": {
     "environment_map_failed": "Omgevingskaart ‘{}’ kon niet worden gelezen. De vorige omgeving is behouden.",

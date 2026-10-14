@@ -80,6 +80,11 @@ namespace {
         auto* picker = dynamic_cast<Rml::ElementFormControlSelect*>(doc->GetElementById("tab-picker"));
         ASSERT_NE(picker, nullptr);
         EXPECT_EQ(picker->GetNumOptions(), 40);
+        const auto picker_left = picker->GetAbsoluteOffset(Rml::BoxArea::Border).x;
+        auto* arrow = doc->GetElementById("tab-scroll-right");
+        const auto arrow_right = arrow->GetAbsoluteOffset(Rml::BoxArea::Border).x + arrow->GetBox().GetSize(Rml::BoxArea::Border).x;
+        EXPECT_GE(picker_left, arrow_right);
+        EXPECT_NEAR(picker->GetBox().GetSize(Rml::BoxArea::Border).x, 28 * GetParam(), 0.1f);
         picker->Focus();
         picker->Click();
         context->Update();

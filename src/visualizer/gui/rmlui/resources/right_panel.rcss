@@ -41,6 +41,7 @@ body {
     right: 0;
     top: 0;
     width: 28dp;
+    min-width: 28dp;
     height: 28dp;
     z-index: 3;
 }
