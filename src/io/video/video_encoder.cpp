@@ -104,6 +104,7 @@ namespace lfs::io::video {
             request.matrix = media::ColorMatrix::Smpte170M;
             request.range = media::ColorRange::Limited;
             request.spherical_video = options.spherical_video;
+            request.codec = options.codec;
 #if LFS_HAS_CUDA
             if (core::default_gpu_backend() == core::GpuBackend::CUDA)
                 request.preferred_backend = media::VideoEncodeBackend::Cuda;

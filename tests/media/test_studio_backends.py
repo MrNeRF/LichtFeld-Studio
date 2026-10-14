@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from hevc_contracts import assert_hvc1_samples
 
 FFMPEG = os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("LFS_MEDIA_TEST_FFPROBE", "ffprobe")
@@ -156,28 +157,31 @@ class StudioBackends(unittest.TestCase):
         self.assertLessEqual(max(errors), 8)
 
     def test_shared_encoder_keeps_native_backend_and_studio_producers(self):
-        path = self.root / "native-é-日本語.mp4"
-        actual, _ = self.invoke(operation="native-encode", output=str(path))
-        self.assertEqual(actual["backend"], "nvenc")
-        probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams",
-                                                    "-show_format", "-show_frames", "-of", "json", str(path)]))
-        self.assertEqual((probe["streams"][0]["width"], probe["streams"][0]["height"]), (320, 240))
-        self.assertEqual(probe["streams"][0].get("color_space"), "smpte170m")
-        self.assertEqual(probe["streams"][0].get("color_range"), "tv")
-        self.assertEqual(actual["frames"], 12)
-        self.assertEqual(len(probe["frames"]), 12)
-        # The Studio adapter, not the leaf module, prepares application provenance.
-        self.assertIsInstance(json.loads(probe["format"]["tags"]["comment"]), dict)
-        for index, frame in enumerate(probe["frames"]):
-            self.assertAlmostEqual(float(frame["best_effort_timestamp_time"]), index / 10, places=6)
-        pixels = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path),
-                                           "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
-        frame_bytes = 320 * 240 * 3
-        self.assertEqual(len(pixels), 12 * frame_bytes)
-        for index in range(12):
-            frame = pixels[index * frame_bytes:(index + 1) * frame_bytes]
-            error = sum(abs(value - (64 + index * 12)) for value in frame) / len(frame)
-            self.assertLess(error, 6, f"Studio producer {index} color error {error}")
+        for codec in ("h264", "hevc"):
+            with self.subTest(codec=codec):
+                path = self.root / "native-é-日本語.mp4"
+                actual, _ = self.invoke(operation="native-encode", output=str(path), hevc=codec == "hevc")
+                self.assertEqual(actual["backend"], "nvenc")
+                probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams",
+                                                            "-show_format", "-show_frames", "-of", "json", str(path)]))
+                self.assertEqual(probe["streams"][0]["codec_name"], codec)
+                self.assertEqual((probe["streams"][0]["width"], probe["streams"][0]["height"]), (320, 240))
+                self.assertEqual(probe["streams"][0].get("color_space"), "smpte170m")
+                self.assertEqual(probe["streams"][0].get("color_range"), "tv")
+                self.assertEqual(actual["frames"], 12)
+                self.assertEqual(len(probe["frames"]), 12)
+                # The Studio adapter, not the leaf module, prepares application provenance.
+                self.assertIsInstance(json.loads(probe["format"]["tags"]["comment"]), dict)
+                for index, frame in enumerate(probe["frames"]):
+                    self.assertAlmostEqual(float(frame["best_effort_timestamp_time"]), index / 10, places=6)
+                pixels = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path),
+                                                   "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+                frame_bytes = 320 * 240 * 3
+                self.assertEqual(len(pixels), 12 * frame_bytes)
+                for index in range(12):
+                    frame = pixels[index * frame_bytes:(index + 1) * frame_bytes]
+                    error = sum(abs(value - (64 + index * 12)) for value in frame) / len(frame)
+                    self.assertLess(error, 6, f"Studio producer {index} color error {error}")
 
     def test_cuda_handoff_waits_on_streams_and_exception_unwind(self):
         result = subprocess.run([str(RUNNER), "--handoff-unit"], capture_output=True, timeout=60)
@@ -198,6 +202,26 @@ class StudioBackends(unittest.TestCase):
             luma = pixels[index * frame_bytes:index * frame_bytes + 320 * 240]
             error = sum(abs(value - (32 + index * 16)) for value in luma) / len(luma)
             self.assertLess(error, 3, f"NVENC retained frame {index} was overwritten: {error}")
+
+    def test_native_hevc_session_preserves_codec_pts_and_frames(self):
+        path = self.root / "cuda-hevc.mp4"
+        self.invoke(operation="native-encode-session", output=str(path), hevc=True, spherical=True)
+        assert_hvc1_samples(self, FFPROBE, path)
+        probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-show_frames", "-of", "json", str(path)]))
+        stream = probe["streams"][0]
+        self.assertEqual(stream["codec_name"], "hevc")
+        self.assertEqual(stream["codec_tag_string"], "hvc1")
+        self.assertEqual(stream["pix_fmt"], "yuv420p")
+        spherical = next(item for item in stream["side_data_list"] if item["side_data_type"] == "Spherical Mapping")
+        self.assertEqual(spherical["projection"], "equirectangular")
+        self.assertEqual(len(probe["frames"]), 12)
+        pixels = subprocess.check_output([FFMPEG, "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"])
+        size = 320 * 240 * 3 // 2
+        self.assertEqual(len(pixels), 12 * size)
+        for index, frame in enumerate(probe["frames"]):
+            self.assertAlmostEqual(float(frame["best_effort_timestamp_time"]), index / 10)
+            luma = pixels[index * size:index * size + 320 * 240]
+            self.assertLess(sum(abs(value - (32 + index * 16)) for value in luma) / len(luma), 3)
 
     def test_native_decode_jpeg_rotation_and_scoring(self):
         reference = json.loads(subprocess.check_output([

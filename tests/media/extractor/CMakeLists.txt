@@ -127,3 +127,15 @@ if(WIN32)
     set_tests_properties(MediaFloatExrUnitContracts MediaFloatExrReferenceContracts MediaPublicImageOutputContracts MediaAtomicFileContracts PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
 endif()
+
+# Test-only codec-open seam; no fault injection is exposed by lfs_media.
+if(APPLE)
+    add_executable(media_apple_hevc_fallback_runner apple_hevc_fallback_runner.cpp encode_session_contracts.cpp)
+    set_target_properties(media_apple_hevc_fallback_runner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    add_dependencies(media_extraction_runner media_apple_hevc_fallback_runner)
+    target_compile_features(media_apple_hevc_fallback_runner PRIVATE cxx_std_23)
+    target_include_directories(media_apple_hevc_fallback_runner PRIVATE
+        ${MEDIA_ROOT}/src ${MEDIA_ROOT}/src/media/include ${MEDIA_ROOT}/src/core/include)
+    target_include_directories(media_apple_hevc_fallback_runner SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
+    target_link_libraries(media_apple_hevc_fallback_runner PRIVATE lfs_file_io lfs_logger lfs_error ${FFMPEG_LIBRARIES})
+endif()

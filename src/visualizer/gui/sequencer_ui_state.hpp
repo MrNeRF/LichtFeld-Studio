@@ -33,7 +33,7 @@ namespace lfs::vis::gui::panels {
         // Snapshot the saved selection for both the Sequencer button and Python.
         [[nodiscard]] lfs::core::events::cmd::SequencerExportVideo videoExportRequest(
             const int width, const int height, const int fps, const int crf,
-            std::string path = {}, const bool include_provenance = true) const {
+            std::string path = {}, const bool include_provenance = true, std::string codec = "h264") const {
             return {
                 .width = width,
                 .height = height,
@@ -45,6 +45,7 @@ namespace lfs::vis::gui::panels {
                 .reconstruction_preset_id = reconstruction.preset_id,
                 .reconstruction_fallback = std::string(
                     lfs::io::video::videoReconstructionFallbackId(reconstruction.fallback)),
+                .codec = std::move(codec),
             };
         }
 

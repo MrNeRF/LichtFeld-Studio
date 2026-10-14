@@ -10,9 +10,20 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace lfs::media {
+    enum class VideoEncodeCodec { H264,
+                                  HEVC };
+    [[nodiscard]] inline constexpr std::optional<VideoEncodeCodec> videoEncodeCodecFromId(std::string_view id) {
+        if (id == "h264")
+            return VideoEncodeCodec::H264;
+        if (id == "hevc")
+            return VideoEncodeCodec::HEVC;
+        return std::nullopt;
+    }
     enum class VideoEncodeBackend { Software,
                                     Cuda,
                                     VideoToolbox,
@@ -33,6 +44,8 @@ namespace lfs::media {
         ColorMatrix matrix = ColorMatrix::Unspecified;
         ColorRange range = ColorRange::Unspecified;
         bool spherical_video = false;
+        // Explicit bitstream choice; fallback never changes this codec.
+        VideoEncodeCodec codec = VideoEncodeCodec::H264;
     };
     struct VideoEncodePlane {
         std::uint8_t* data = nullptr;

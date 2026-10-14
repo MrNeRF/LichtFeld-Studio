@@ -1729,6 +1729,7 @@ namespace lfs::vis::gui {
             if (const auto* rendering = viewer_->getRenderingManager())
                 options.spherical_video = rendering->getSettings().equirectangular;
             options.crf = evt.crf;
+            options.codec = media::videoEncodeCodecFromId(evt.codec).value_or(static_cast<media::VideoEncodeCodec>(-1));
             const auto reconstruction_fallback =
                 io::video::videoReconstructionFallbackFromId(evt.reconstruction_fallback);
             options.reconstruction = {
@@ -3388,7 +3389,7 @@ namespace lfs::vis::gui {
                              fps = static_cast<float>(export_options.framerate),
                              cam_state = frame_states[frame],
                              clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate)]() mutable
-                            -> std::expected<lfs::core::Tensor, std::string> {
+                                -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
                                     const auto* current = sequencer_ui.controller().plySequence();
