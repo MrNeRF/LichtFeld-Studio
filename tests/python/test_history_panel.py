@@ -300,38 +300,71 @@ def test_operation_icons_reuse_assets_and_distinguish_edit_families(history):
     assert mod.operation_label("select.stroke") == "history.operation.selection_stroke"
 
 
+@pytest.mark.parametrize("name,key,icon", [
+    ("Selection.histogram", "selection_histogram", "histogram.png"),
+    ("Crop Box", "crop_apply", "scene/cropbox.png"),
+    ("Crop Ellipsoid", "ellipsoid_apply", "scene/ellipsoid.png"),
+    ("Add Crop Box", "crop_add", "scene/cropbox.png"),
+    ("Convert to Ellipsoid", "crop_convert_ellipsoid", "scene/ellipsoid.png"),
+    ("transform.bake", "transform_bake", "translation.png"),
+    ("selection.reset_state", "selection_reset", "deselect.png"),
+])
+def test_native_operation_labels_are_localized_with_specific_icons(history, name, key, icon):
+    mod, _, _, _ = history
+    assert mod.operation_label(name) == "history.operation." + key
+    assert mod.operation_icon(name) == icon
+
+
+def test_language_change_updates_title_and_expanded_details(history, monkeypatch):
+    mod, panel, doc, _ = history
+    dirtied = []
+    panel._handle = SimpleNamespace(dirty=dirtied.append)
+    panel._toggle_details(1, panel._generation)
+    panel._expanded[1]["fields"] = [{"property": "history.field.selected_count", "before": "1", "after": "2"}]
+    monkeypatch.setattr(mod.lf.ui, "get_current_language", lambda: "nl")
+    monkeypatch.setattr(mod.lf.ui, "tr", lambda key: "nl:" + key)
+    panel.on_update(doc)
+    assert dirtied == ["panel_label"]
+    assert "nl:history.field.selected_count" in doc.get_element_by_id("history-detail-1").markup
+    assert doc.get_element_by_id("history-undo-tab").markup.startswith('<span class="history-tab-label">nl:')
+
+
 def test_non_transform_details_show_recorded_fields_and_localized_values(history):
     mod, _, _, _ = history
     markup = mod.details_markup({"id": "select.stroke", "label": "select.stroke", "source": "ui",
                                 "scope": "selection", "fields": [
         {"target": "<Group 1>", "property": "history.field.selected_count", "before": "2", "after": "8"},
         {"property": "history.field.selection_mode", "after": "@tr:history.value.replace"}], "transforms": []})
-    assert "history.operation.selection_stroke" in markup
+    assert "history-detail-title" not in markup
     assert "&lt;Group 1&gt;" in markup
     assert "history.field.selected_count" in markup and ">2<" in markup and ">8<" in markup
     assert "history.value.replace" in markup and "@tr:" not in markup
     assert "history.no_details" not in markup
 
 
-def test_python_metadata_is_available_without_introspecting_callbacks(history):
-    mod, _, _, _ = history
-    markup = mod.details_markup({"id": "plugin.custom", "label": "User label", "source": "python", "scope": "custom"})
-    assert "plugin.custom" in markup and "User label" in markup
-    assert "history.source_values.python" in markup and "history.scope_values.custom" in markup
-    assert "history.no_details" not in markup
-
-
-def test_more_details_reveals_recorded_data_without_playback_or_refetch(history):
-    _, panel, doc, state = history
-    panel._expanded[1] = {"label": "Large edit", "fields": [
-        {"property": "history.field.property", "after": f"field {i}"} for i in range(125)]}
-    panel._show_details(1, panel._expanded[1])
+def test_details_hide_internal_metadata_and_remain_a_compact_summary(history):
+    mod, panel, doc, state = history
+    description = {"id": "selection.histogram", "label": "selection.histogram", "source": "core",
+                   "fields": [{"property": "history.field.selected_count", "before": "0", "after": "7"}]}
+    panel._expanded[1] = description
+    panel._show_details(1, description)
     detail = doc.get_element_by_id("history-detail-1")
-    assert "field 124" not in detail.markup
-    more = detail.query_selector_all(".history-more-details")[0]
-    panel._on_row(event(more))
-    assert "field 124" in detail.markup
+    assert "history.field.selected_count" in detail.markup
+    assert "selection.histogram" not in detail.markup and "history.source" not in detail.markup
+    assert "button" not in detail.markup
+    panel._on_row(event(detail.nodes[0]))
     assert not state.calls and not state.detail_reads
+
+
+def test_large_edits_show_bounded_summary_and_rows_have_no_visible_numbers(history):
+    mod, _, _, _ = history
+    fields = [{"property": "history.field.property", "after": f"value {i}"} for i in range(20)]
+    markup = mod.details_markup({"fields": fields})
+    assert "value 5" in markup and "value 6" not in markup
+    assert "history.more_fields" in markup and "button" not in markup
+    row = mod.row_markup("selection.histogram", 101, 1)
+    assert 'data-steps="101"' in row
+    assert "history-index" not in row and ">101<" not in row
 
 
 def test_large_unbroken_field_values_are_bounded_and_escaped(history):

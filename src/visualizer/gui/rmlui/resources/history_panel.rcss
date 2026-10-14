@@ -27,10 +27,9 @@
 .history-entry-header { display: flex; align-items: stretch; min-width: 0; }
 .btn.history-jump {
     display: flex; align-items: center; flex: 1; min-width: 0; box-sizing: border-box;
-    min-height: 32dp; padding: 7dp 12dp; gap: 10dp;
+    min-height: 32dp; padding: 7dp 6dp; gap: 6dp;
     border-width: 0; border-radius: 0; text-align: left; font-size: 13dp;
 }
-.history-index { width: 40dp; flex-shrink: 0; text-align: right; font-size: 11dp; }
 .history-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history-footer { border-top-width: 1dp; font-size: 12dp; }
 #history-feedback { padding: 8dp 12dp; font-size: 12dp; }
@@ -42,11 +41,11 @@
 .history-entry { border-bottom-width: 1dp; border-left-width: 3dp; }
 .history-disclosure {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 28dp; flex-shrink: 0; border-width: 0; padding: 0; cursor: pointer;
+    width: 20dp; flex-shrink: 0; border-width: 0; padding: 0; cursor: pointer;
 }
 .history-chevron { width: 10dp; height: 10dp; transform: rotate(-90deg); }
 .is-expanded .history-chevron { transform: rotate(0deg); }
-.history-details { padding: 8dp 12dp 12dp 40dp; font-size: 12dp; }
+.history-details { padding: 8dp 8dp 12dp 26dp; font-size: 12dp; }
 .history-detail-title { white-space: pre-wrap; word-break: break-all; margin-bottom: 8dp; }
 .history-detail-target { font-weight: bold; margin-top: 8dp; margin-bottom: 4dp; word-break: break-all; }
 .history-detail-line { display: flex; gap: 8dp; padding: 4dp 0; min-width: 0; }
@@ -56,4 +55,3 @@
 .history-operation-icon { width: 16dp; height: 16dp; flex-shrink: 0; }
 .history-detail-meta { display: flex; gap: 8dp; padding: 3dp 0; min-width: 0; }
 .history-detail-meta-value { flex: 1; min-width: 0; word-break: break-all; }
-.history-more-details { display: inline-flex; padding: 4dp 8dp; margin-top: 8dp; }

@@ -76,7 +76,17 @@
       "group_lock": "Definir bloqueo del grupo de selección",
       "group_visibility": "Definir visibilidad del grupo de selección",
       "group_active": "Definir grupo de selección activo",
-      "settings": "Cambiar ajustes"
+      "settings": "Cambiar ajustes",
+      "selection_histogram": "Seleccionar desde histograma",
+      "crop_apply": "Aplicar caja de recorte",
+      "ellipsoid_apply": "Aplicar recorte elipsoidal",
+      "crop_add": "Añadir caja de recorte",
+      "ellipsoid_add": "Añadir elipsoide",
+      "crop_convert_box": "Convertir en caja de recorte",
+      "crop_convert_ellipsoid": "Convertir en elipsoide",
+      "crop_remove_duplicate": "Eliminar volumen de recorte duplicado",
+      "transform_bake": "Consolidar transformaciones",
+      "selection_reset": "Restablecer estado de selección"
     },
     "source_values": {
       "core": "Operación integrada",
@@ -84,7 +94,8 @@
       "python": "Python",
       "property": "Edición de propiedad",
       "history": "Operación agrupada",
-      "system": "Sistema"
+      "system": "Sistema",
+      "mcp": "MCP"
     },
     "scope_values": {
       "general": "General",
@@ -97,7 +108,10 @@
       "cropbox": "Caja de recorte",
       "ellipsoid": "Elipsoide",
       "custom": "Operación personalizada",
-      "sequencer": "Secuenciador"
+      "sequencer": "Secuenciador",
+      "tensor": "Datos gaussianos",
+      "sh": "Armónicos esféricos",
+      "transform": "Transformación"
     },
     "field": {
       "operation_count": "Número de operaciones",
@@ -169,7 +183,8 @@
       "image_size": "Tamaño de imagen",
       "image_path": "Ruta de imagen",
       "mask_path": "Ruta de máscara",
-      "depth_path": "Ruta del mapa de profundidad"
+      "depth_path": "Ruta del mapa de profundidad",
+      "point_count": "Puntos"
     },
     "value": {
       "add": "Añadir",

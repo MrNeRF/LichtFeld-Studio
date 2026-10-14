@@ -76,7 +76,17 @@
       "group_lock": "Imposta blocco del gruppo di selezione",
       "group_visibility": "Imposta visibilità del gruppo di selezione",
       "group_active": "Imposta gruppo di selezione attivo",
-      "settings": "Modifica impostazioni"
+      "settings": "Modifica impostazioni",
+      "selection_histogram": "Seleziona dall’istogramma",
+      "crop_apply": "Applica riquadro di ritaglio",
+      "ellipsoid_apply": "Applica ritaglio ellissoidale",
+      "crop_add": "Aggiungi riquadro di ritaglio",
+      "ellipsoid_add": "Aggiungi ellissoide",
+      "crop_convert_box": "Converti in riquadro di ritaglio",
+      "crop_convert_ellipsoid": "Converti in ellissoide",
+      "crop_remove_duplicate": "Rimuovi volume di ritaglio duplicato",
+      "transform_bake": "Consolida trasformazioni",
+      "selection_reset": "Reimposta stato di selezione"
     },
     "source_values": {
       "core": "Operazione integrata",
@@ -84,7 +94,8 @@
       "python": "Python",
       "property": "Modifica proprietà",
       "history": "Operazione raggruppata",
-      "system": "Sistema"
+      "system": "Sistema",
+      "mcp": "MCP"
     },
     "scope_values": {
       "general": "Generale",
@@ -97,7 +108,10 @@
       "cropbox": "Riquadro di ritaglio",
       "ellipsoid": "Ellissoide",
       "custom": "Operazione personalizzata",
-      "sequencer": "Sequenziatore"
+      "sequencer": "Sequenziatore",
+      "tensor": "Dati gaussiani",
+      "sh": "Armoniche sferiche",
+      "transform": "Trasformazione"
     },
     "field": {
       "operation_count": "Numero di operazioni",
@@ -169,7 +183,8 @@
       "image_size": "Dimensioni immagine",
       "image_path": "Percorso immagine",
       "mask_path": "Percorso maschera",
-      "depth_path": "Percorso mappa di profondità"
+      "depth_path": "Percorso mappa di profondità",
+      "point_count": "Punti"
     },
     "value": {
       "add": "Aggiungi",

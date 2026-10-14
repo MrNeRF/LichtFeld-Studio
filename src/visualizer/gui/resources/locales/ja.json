@@ -76,7 +76,17 @@
       "group_lock": "選択グループのロックを設定",
       "group_visibility": "選択グループの表示を設定",
       "group_active": "アクティブな選択グループを設定",
-      "settings": "設定を変更"
+      "settings": "設定を変更",
+      "selection_histogram": "ヒストグラムから選択",
+      "crop_apply": "クロップボックスを適用",
+      "ellipsoid_apply": "楕円体クロップを適用",
+      "crop_add": "クロップボックスを追加",
+      "ellipsoid_add": "楕円体を追加",
+      "crop_convert_box": "クロップボックスに変換",
+      "crop_convert_ellipsoid": "楕円体に変換",
+      "crop_remove_duplicate": "重複したクロップ領域を削除",
+      "transform_bake": "変換を焼き込み",
+      "selection_reset": "選択状態をリセット"
     },
     "source_values": {
       "core": "組み込み操作",
@@ -84,7 +94,8 @@
       "python": "Python",
       "property": "プロパティ編集",
       "history": "グループ化された操作",
-      "system": "システム"
+      "system": "システム",
+      "mcp": "MCP"
     },
     "scope_values": {
       "general": "一般",
@@ -97,7 +108,10 @@
       "cropbox": "クロップボックス",
       "ellipsoid": "楕円体",
       "custom": "カスタム操作",
-      "sequencer": "シーケンサー"
+      "sequencer": "シーケンサー",
+      "tensor": "ガウシアンデータ",
+      "sh": "球面調和関数",
+      "transform": "変換"
     },
     "field": {
       "operation_count": "操作数",
@@ -169,7 +183,8 @@
       "image_size": "画像サイズ",
       "image_path": "画像パス",
       "mask_path": "マスクパス",
-      "depth_path": "深度マップのパス"
+      "depth_path": "深度マップのパス",
+      "point_count": "点数"
     },
     "value": {
       "add": "追加",

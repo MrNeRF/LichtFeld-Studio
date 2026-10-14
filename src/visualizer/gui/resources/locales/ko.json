@@ -76,7 +76,17 @@
       "group_lock": "선택 그룹 잠금 설정",
       "group_visibility": "선택 그룹 표시 설정",
       "group_active": "활성 선택 그룹 설정",
-      "settings": "설정 변경"
+      "settings": "설정 변경",
+      "selection_histogram": "히스토그램에서 선택",
+      "crop_apply": "자르기 상자 적용",
+      "ellipsoid_apply": "타원체 자르기 적용",
+      "crop_add": "자르기 상자 추가",
+      "ellipsoid_add": "타원체 추가",
+      "crop_convert_box": "자르기 상자로 변환",
+      "crop_convert_ellipsoid": "타원체로 변환",
+      "crop_remove_duplicate": "중복 자르기 영역 제거",
+      "transform_bake": "변환 굽기",
+      "selection_reset": "선택 상태 초기화"
     },
     "source_values": {
       "core": "내장 작업",
@@ -84,7 +94,8 @@
       "python": "Python",
       "property": "속성 편집",
       "history": "그룹화된 작업",
-      "system": "시스템"
+      "system": "시스템",
+      "mcp": "MCP"
     },
     "scope_values": {
       "general": "일반",
@@ -97,7 +108,10 @@
       "cropbox": "자르기 상자",
       "ellipsoid": "타원체",
       "custom": "사용자 지정 작업",
-      "sequencer": "시퀀서"
+      "sequencer": "시퀀서",
+      "tensor": "가우시안 데이터",
+      "sh": "구면 조화 함수",
+      "transform": "변환"
     },
     "field": {
       "operation_count": "작업 수",
@@ -169,7 +183,8 @@
       "image_size": "이미지 크기",
       "image_path": "이미지 경로",
       "mask_path": "마스크 경로",
-      "depth_path": "깊이 맵 경로"
+      "depth_path": "깊이 맵 경로",
+      "point_count": "점 수"
     },
     "value": {
       "add": "추가",

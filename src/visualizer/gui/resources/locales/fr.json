@@ -76,7 +76,17 @@
       "group_lock": "Définir le verrouillage du groupe de sélection",
       "group_visibility": "Définir la visibilité du groupe de sélection",
       "group_active": "Définir le groupe de sélection actif",
-      "settings": "Modifier les paramètres"
+      "settings": "Modifier les paramètres",
+      "selection_histogram": "Sélectionner depuis l’histogramme",
+      "crop_apply": "Appliquer la boîte de recadrage",
+      "ellipsoid_apply": "Appliquer le recadrage ellipsoïdal",
+      "crop_add": "Ajouter une boîte de recadrage",
+      "ellipsoid_add": "Ajouter un ellipsoïde",
+      "crop_convert_box": "Convertir en boîte de recadrage",
+      "crop_convert_ellipsoid": "Convertir en ellipsoïde",
+      "crop_remove_duplicate": "Supprimer le volume de recadrage en double",
+      "transform_bake": "Intégrer les transformations",
+      "selection_reset": "Réinitialiser l’état de sélection"
     },
     "source_values": {
       "core": "Opération intégrée",
@@ -84,7 +94,8 @@
       "python": "Python",
       "property": "Modification de propriété",
       "history": "Opération groupée",
-      "system": "Système"
+      "system": "Système",
+      "mcp": "MCP"
     },
     "scope_values": {
       "general": "Général",
@@ -97,7 +108,10 @@
       "cropbox": "Boîte de recadrage",
       "ellipsoid": "Ellipsoïde",
       "custom": "Opération personnalisée",
-      "sequencer": "Séquenceur"
+      "sequencer": "Séquenceur",
+      "tensor": "Données gaussiennes",
+      "sh": "Harmoniques sphériques",
+      "transform": "Transformation"
     },
     "field": {
       "operation_count": "Nombre d’opérations",
@@ -169,7 +183,8 @@
       "image_size": "Taille de l’image",
       "image_path": "Chemin de l’image",
       "mask_path": "Chemin du masque",
-      "depth_path": "Chemin de la carte de profondeur"
+      "depth_path": "Chemin de la carte de profondeur",
+      "point_count": "Points"
     },
     "value": {
       "add": "Ajouter",

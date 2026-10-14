@@ -76,7 +76,17 @@
       "group_lock": "Selectiegroepsvergrendeling instellen",
       "group_visibility": "Selectiegroepszichtbaarheid instellen",
       "group_active": "Actieve selectiegroep instellen",
-      "settings": "Instellingen wijzigen"
+      "settings": "Instellingen wijzigen",
+      "selection_histogram": "Selecteren via histogram",
+      "crop_apply": "Uitsnijbox toepassen",
+      "ellipsoid_apply": "Ellipsoïde-uitsnede toepassen",
+      "crop_add": "Uitsnijbox toevoegen",
+      "ellipsoid_add": "Ellipsoïde toevoegen",
+      "crop_convert_box": "Omzetten naar uitsnijbox",
+      "crop_convert_ellipsoid": "Omzetten naar ellipsoïde",
+      "crop_remove_duplicate": "Dubbel uitsnijvolume verwijderen",
+      "transform_bake": "Transformaties vastleggen",
+      "selection_reset": "Selectiestatus herstellen"
     },
     "source_values": {
       "core": "Ingebouwde bewerking",
@@ -84,7 +94,8 @@
       "python": "Python",
       "property": "Eigenschapsbewerking",
       "history": "Gegroepeerde bewerking",
-      "system": "Systeem"
+      "system": "Systeem",
+      "mcp": "MCP"
     },
     "scope_values": {
       "general": "Algemeen",
@@ -97,7 +108,10 @@
       "cropbox": "Uitsnijbox",
       "ellipsoid": "Ellipsoïde",
       "custom": "Aangepaste bewerking",
-      "sequencer": "Sequencer"
+      "sequencer": "Sequencer",
+      "tensor": "Gaussiaanse gegevens",
+      "sh": "Sferische harmonischen",
+      "transform": "Transformatie"
     },
     "field": {
       "operation_count": "Aantal bewerkingen",
@@ -169,7 +183,8 @@
       "image_size": "Afbeeldingsgrootte",
       "image_path": "Afbeeldingspad",
       "mask_path": "Maskerpad",
-      "depth_path": "Dieptekaartpad"
+      "depth_path": "Dieptekaartpad",
+      "point_count": "Punten"
     },
     "value": {
       "add": "Toevoegen",

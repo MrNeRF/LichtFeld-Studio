@@ -76,7 +76,17 @@
       "group_lock": "Auswahlgruppe sperren",
       "group_visibility": "Sichtbarkeit der Auswahlgruppe festlegen",
       "group_active": "Aktive Auswahlgruppe festlegen",
-      "settings": "Einstellungen ändern"
+      "settings": "Einstellungen ändern",
+      "selection_histogram": "Über Histogramm auswählen",
+      "crop_apply": "Zuschnittquader anwenden",
+      "ellipsoid_apply": "Ellipsoidzuschnitt anwenden",
+      "crop_add": "Zuschnittquader hinzufügen",
+      "ellipsoid_add": "Ellipsoid hinzufügen",
+      "crop_convert_box": "In Zuschnittquader umwandeln",
+      "crop_convert_ellipsoid": "In Ellipsoid umwandeln",
+      "crop_remove_duplicate": "Doppeltes Zuschnittvolumen entfernen",
+      "transform_bake": "Transformationen festschreiben",
+      "selection_reset": "Auswahlzustand zurücksetzen"
     },
     "source_values": {
       "core": "Integrierte Operation",
@@ -84,7 +94,8 @@
       "python": "Python",
       "property": "Eigenschaftsänderung",
       "history": "Gruppierte Operation",
-      "system": "System"
+      "system": "System",
+      "mcp": "MCP"
     },
     "scope_values": {
       "general": "Allgemein",
@@ -97,7 +108,10 @@
       "cropbox": "Zuschnittquader",
       "ellipsoid": "Ellipsoid",
       "custom": "Benutzerdefinierte Operation",
-      "sequencer": "Sequencer"
+      "sequencer": "Sequencer",
+      "tensor": "Gaussian-Daten",
+      "sh": "Kugelflächenfunktionen",
+      "transform": "Transformation"
     },
     "field": {
       "operation_count": "Anzahl der Operationen",
@@ -169,7 +183,8 @@
       "image_size": "Bildgröße",
       "image_path": "Bildpfad",
       "mask_path": "Maskenpfad",
-      "depth_path": "Tiefenkartenpfad"
+      "depth_path": "Tiefenkartenpfad",
+      "point_count": "Punkte"
     },
     "value": {
       "add": "Hinzufügen",

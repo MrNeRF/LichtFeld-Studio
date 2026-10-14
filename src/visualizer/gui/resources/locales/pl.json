@@ -76,7 +76,17 @@
       "group_lock": "Ustaw blokadę grupy zaznaczenia",
       "group_visibility": "Ustaw widoczność grupy zaznaczenia",
       "group_active": "Ustaw aktywną grupę zaznaczenia",
-      "settings": "Zmień ustawienia"
+      "settings": "Zmień ustawienia",
+      "selection_histogram": "Zaznacz z histogramu",
+      "crop_apply": "Zastosuj obszar przycinania",
+      "ellipsoid_apply": "Zastosuj przycinanie elipsoidalne",
+      "crop_add": "Dodaj obszar przycinania",
+      "ellipsoid_add": "Dodaj elipsoidę",
+      "crop_convert_box": "Przekształć w obszar przycinania",
+      "crop_convert_ellipsoid": "Przekształć w elipsoidę",
+      "crop_remove_duplicate": "Usuń zduplikowaną bryłę przycinania",
+      "transform_bake": "Utrwal transformacje",
+      "selection_reset": "Zresetuj stan zaznaczenia"
     },
     "source_values": {
       "core": "Operacja wbudowana",
@@ -84,7 +94,8 @@
       "python": "Python",
       "property": "Edycja właściwości",
       "history": "Operacja grupowa",
-      "system": "System"
+      "system": "System",
+      "mcp": "MCP"
     },
     "scope_values": {
       "general": "Ogólne",
@@ -97,7 +108,10 @@
       "cropbox": "Obszar przycinania",
       "ellipsoid": "Elipsoida",
       "custom": "Operacja niestandardowa",
-      "sequencer": "Sekwencer"
+      "sequencer": "Sekwencer",
+      "tensor": "Dane gaussowskie",
+      "sh": "Harmoniki sferyczne",
+      "transform": "Transformacja"
     },
     "field": {
       "operation_count": "Liczba operacji",
@@ -169,7 +183,8 @@
       "image_size": "Rozmiar obrazu",
       "image_path": "Ścieżka obrazu",
       "mask_path": "Ścieżka maski",
-      "depth_path": "Ścieżka mapy głębokości"
+      "depth_path": "Ścieżka mapy głębokości",
+      "point_count": "Punkty"
     },
     "value": {
       "add": "Dodaj",

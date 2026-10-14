@@ -16,6 +16,7 @@ __lfs_panel_ids__ = ["lfs.history"]
 
 PAGE_SIZE = 25
 LABEL_CHARS = 256
+DETAIL_LIMIT = 3
 
 
 # Match identifiers and existing native labels; display strings come from locales.
@@ -55,6 +56,16 @@ _operation_aliases(("select.by_scale", "selection.by_scale", "Select by Scale"),
 _operation_aliases(("selection.by_color", "Select by Color"), "selection_color", "selection.png")
 _operation_aliases(("selection.mask",), "selection_mask", "scene/mask.png")
 _operation_aliases(("selection.preview",), "selection_preview", "selection.png")
+_operation_aliases(("selection.histogram",), "selection_histogram", "histogram.png")
+_operation_aliases(("selection.reset_state",), "selection_reset", "deselect.png")
+_operation_aliases(("transform.bake", "Bake Transforms"), "transform_bake", "translation.png")
+_operation_aliases(("Crop Box",), "crop_apply", "scene/cropbox.png")
+_operation_aliases(("Crop Ellipsoid",), "ellipsoid_apply", "scene/ellipsoid.png")
+_operation_aliases(("Add Crop Box",), "crop_add", "scene/cropbox.png")
+_operation_aliases(("Add Ellipsoid",), "ellipsoid_add", "scene/ellipsoid.png")
+_operation_aliases(("Convert to Crop Box",), "crop_convert_box", "scene/cropbox.png")
+_operation_aliases(("Convert to Ellipsoid",), "crop_convert_ellipsoid", "scene/ellipsoid.png")
+_operation_aliases(("Remove Duplicate Crop Volume",), "crop_remove_duplicate", "scene/trash.png")
 _operation_aliases(("cropbox.transform", "Crop Box Transform"), "crop", "scene/cropbox.png")
 _operation_aliases(("ellipsoid.transform", "Ellipsoid Transform"), "ellipsoid", "scene/ellipsoid.png")
 _operation_aliases(("Set Property",), "property", "settings.png")
@@ -142,7 +153,6 @@ def row_markup(name, steps, generation, stack="undo", metadata=None):
             f'<img class="history-chevron" src="../icon/dropdown-arrow.png"/></button>'
             f'<button type="button" class="btn btn--ghost history-jump" '
             f'data-steps="{steps}" data-generation="{generation}" data-tooltip="scene.history_note">'
-            f'<span class="history-index text-muted">{steps}</span>'
             f'<img class="history-operation-icon" src="../icon/{icon}" title="{escape(name, quote=True)}"/>'
             f'<span class="history-label">{escape(name)}</span>'
             f'<img class="history-icon" src="../icon/{stack}.png"/></button></div>'
@@ -178,10 +188,6 @@ def _detail_value_text(value):
     return value[:1024] + ("…" if len(value) > 1024 else "")
 
 
-def _metadata_value(value, namespace, known):
-    return lf.ui.tr(namespace + value) if value in known else value
-
-
 def _field_caption(key, description):
     if key.startswith(("history.", "transform.", "common.")):
         return lf.ui.tr(key)
@@ -194,30 +200,18 @@ def _field_caption(key, description):
     return key
 
 
-def details_markup(description, limit=25, steps=None, generation=None):
+def details_markup(description, limit=DETAIL_LIMIT):
     tr = lf.ui.tr
-    title = operation_label(description.get("label", ""), description)[:LABEL_CHARS]
-    result = f'<div class="history-detail-title">{escape(title)}</div>'
-    metadata = (
-        ("history.identifier", description.get("id", "")),
-        ("history.source", _metadata_value(description.get("source", ""), "history.source_values.",
-             {"core", "ui", "python", "property", "history", "system"})),
-        ("history.category", _metadata_value(description.get("scope", ""), "history.scope_values.",
-             {"general", "transforms", "selection", "topology", "scene_graph", "grouped", "property", "cropbox", "ellipsoid", "custom", "sequencer"})),
-    )
-    for key, value in metadata:
-        if value:
-            result += (f'<div class="history-detail-meta"><span class="history-detail-property">{escape(tr(key))}</span>'
-                       f'<span class="history-detail-meta-value">{escape(_detail_value_text(value))}</span></div>')
+    result = ""
     transforms = description.get("transforms", [])
     fields = description.get("fields", [])
     if not transforms and not fields:
-        return result
+        return f'<div class="text-muted">{escape(tr("history.no_details"))}</div>'
     result += (f'<div class="history-detail-line text-muted"><span class="history-detail-property"></span>'
                f'<span class="history-detail-value">{escape(tr("history.before"))}</span>'
                f'<span class="history-detail-value">{escape(tr("history.after"))}</span></div>')
     last_target = None
-    for field in fields[:limit * 4]:
+    for field in fields[:limit * 2]:
         key = field.get("property", "")
         target = field.get("target", "")
         before, after = field.get("before", ""), field.get("after", "")
@@ -246,15 +240,10 @@ def details_markup(description, limit=25, steps=None, generation=None):
         else:
             for row in range(4):
                 result += _detail_line("history.matrix", before[row::4], after[row::4])
-    if len(fields) > limit * 4:
-        more_text = tr("history.more_fields").format(count=len(fields) - limit * 4)
-        result += f'<div class="text-muted">{escape(more_text)}</div>'
+    if len(fields) > limit * 2:
+        result += f'<div class="text-muted">{escape(tr("history.more_fields").format(count=len(fields) - limit * 2))}</div>'
     if len(transforms) > limit:
-        more_text = tr("history.more_targets").format(count=len(transforms) - limit)
-        result += f'<div class="text-muted">{escape(more_text)}</div>'
-    if steps is not None and (len(fields) > limit * 4 or len(transforms) > limit):
-        result += (f'<button type="button" class="btn btn--ghost history-more-details" '
-                   f'data-more-details="{steps}" data-generation="{generation}"><span>{escape(tr("history.show_more"))}</span></button>')
+        result += f'<div class="text-muted">{escape(tr("history.more_targets").format(count=len(transforms) - limit))}</div>'
     return result
 
 
@@ -273,7 +262,6 @@ class HistoryPanel(Panel):
         self._page = 0
         self._feedback = ""
         self._expanded = {}
-        self._detail_limits = {}
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("history_panel")
@@ -319,6 +307,8 @@ class HistoryPanel(Panel):
         stamp = (generation, language, active, self._stack, self._page, self._feedback)
         if stamp == self._stamp:
             return
+        if self._handle and (self._stamp is None or language != self._stamp[1]):
+            self._handle.dirty("panel_label")
         if generation != self._generation:
             snapshot = lf.undo.stack()
             self._items = {stack: snapshot[stack] for stack in ("undo", "redo")}
@@ -326,7 +316,6 @@ class HistoryPanel(Panel):
             self._generation = generation
             self._page = 0
             self._expanded.clear()
-            self._detail_limits.clear()
         names = self._names[self._stack]
         pages = max(1, (len(names) + PAGE_SIZE - 1) // PAGE_SIZE)
         self._page = min(self._page, pages - 1)
@@ -385,7 +374,6 @@ class HistoryPanel(Panel):
             self._stack = action[:-4]
             self._page = 0
             self._expanded.clear()
-            self._detail_limits.clear()
         elif action in ("older", "newer"):
             self._page = max(0, self._page + (1 if action == "older" else -1))
         elif action == "clear":
@@ -398,7 +386,7 @@ class HistoryPanel(Panel):
     def _show_details(self, steps, description):
         detail = self._doc.get_element_by_id(f"history-detail-{steps}")
         if detail:
-            detail.set_inner_rml(details_markup(description, self._detail_limits.get(steps, 25), steps, self._generation))
+            detail.set_inner_rml(details_markup(description))
             detail.set_property("display", "block")
             detail.parent().set_class("is-expanded", True)
 
@@ -408,7 +396,6 @@ class HistoryPanel(Panel):
             return
         if steps in self._expanded:
             del self._expanded[steps]
-            self._detail_limits.pop(steps, None)
             detail = self._doc.get_element_by_id(f"history-detail-{steps}")
             detail.set_property("display", "none")
             detail.parent().set_class("is-expanded", False)
@@ -419,14 +406,6 @@ class HistoryPanel(Panel):
                 return
             self._expanded[steps] = description
             self._show_details(steps, description)
-        lf.ui.request_redraw()
-
-    def _show_more_details(self, steps, generation):
-        if generation != lf.undo.generation() or steps not in self._expanded:
-            self._refresh()
-            return
-        self._detail_limits[steps] = self._detail_limits.get(steps, 25) + 25
-        self._show_details(steps, self._expanded[steps])
         lf.ui.request_redraw()
 
     def _row_target(self, event):
@@ -440,11 +419,6 @@ class HistoryPanel(Panel):
     def _on_row(self, event):
         target = event.target()
         while target and target.id != "history-rows":
-            more_steps = target.get_attribute("data-more-details", "")
-            if more_steps:
-                self._show_more_details(int(more_steps), int(target.get_attribute("data-generation", "-1")))
-                event.stop_propagation()
-                return
             if "history-details" in target.get_attribute("class", "").split():
                 event.stop_propagation()
                 return

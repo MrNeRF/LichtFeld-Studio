@@ -76,7 +76,17 @@
       "group_lock": "设置选择组锁定",
       "group_visibility": "设置选择组可见性",
       "group_active": "设置活动选择组",
-      "settings": "更改设置"
+      "settings": "更改设置",
+      "selection_histogram": "从直方图选择",
+      "crop_apply": "应用裁剪框",
+      "ellipsoid_apply": "应用椭球裁剪",
+      "crop_add": "添加裁剪框",
+      "ellipsoid_add": "添加椭球体",
+      "crop_convert_box": "转换为裁剪框",
+      "crop_convert_ellipsoid": "转换为椭球体",
+      "crop_remove_duplicate": "移除重复裁剪体积",
+      "transform_bake": "烘焙变换",
+      "selection_reset": "重置选择状态"
     },
     "source_values": {
       "core": "内置操作",
@@ -84,7 +94,8 @@
       "python": "Python",
       "property": "属性编辑",
       "history": "分组操作",
-      "system": "系统"
+      "system": "系统",
+      "mcp": "MCP"
     },
     "scope_values": {
       "general": "常规",
@@ -97,7 +108,10 @@
       "cropbox": "裁剪框",
       "ellipsoid": "椭球体",
       "custom": "自定义操作",
-      "sequencer": "序列编辑器"
+      "sequencer": "序列编辑器",
+      "tensor": "高斯数据",
+      "sh": "球谐函数",
+      "transform": "变换"
     },
     "field": {
       "operation_count": "操作数量",
@@ -169,7 +183,8 @@
       "image_size": "图像尺寸",
       "image_path": "图像路径",
       "mask_path": "遮罩路径",
-      "depth_path": "深度图路径"
+      "depth_path": "深度图路径",
+      "point_count": "点数"
     },
     "value": {
       "add": "添加",
