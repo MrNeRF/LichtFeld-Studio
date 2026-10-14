@@ -1217,8 +1217,12 @@ namespace {
         bar_.processInput(input);
         context_->Update();
         EXPECT_FALSE(button->IsPseudoClassSet("hover"));
+        const auto resumed_rect = bounds(button);
+        auto moved_input = input;
+        moved_input.mouse_x = (resumed_rect.left + resumed_rect.right) / 2;
+        moved_input.mouse_y = (resumed_rect.top + resumed_rect.bottom) / 2;
         bar_.onPointerMotion();
-        bar_.processInput(input);
+        bar_.processInput(moved_input);
         context_->Update();
         EXPECT_TRUE(button->IsPseudoClassSet("hover"));
         bar_.onPointerLeave();
