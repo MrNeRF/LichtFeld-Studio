@@ -356,6 +356,15 @@ body {
     cursor: pointer;
 }
 
+.access-key {
+    display: inline;
+    text-decoration: none;
+}
+
+.access-keys-visible .access-key {
+    text-decoration: underline;
+}
+
 #bottom-border {
     display: none;
 }

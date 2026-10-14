@@ -148,6 +148,12 @@
   "projects.gallery.error.download_size": "下载的文件不完整或大于图库声明的大小。",
   "_language_name": "简体中文",
   "menu": {
+    "access_key.file": "F",
+    "access_key.edit": "E",
+    "access_key.select": "S",
+    "access_key.tools": "T",
+    "access_key.view": "V",
+    "access_key.help": "H",
     "file": "文件",
     "file.new_project": "新建项目",
     "file.open_project": "打开项目...",

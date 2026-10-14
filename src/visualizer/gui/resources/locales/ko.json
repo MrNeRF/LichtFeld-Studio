@@ -148,6 +148,12 @@
   "projects.gallery.error.download_size": "다운로드한 파일이 불완전하거나 갤러리에서 안내한 크기보다 큽니다.",
   "_language_name": "한국어",
   "menu": {
+    "access_key.file": "F",
+    "access_key.edit": "E",
+    "access_key.select": "S",
+    "access_key.tools": "T",
+    "access_key.view": "V",
+    "access_key.help": "H",
     "file": "파일",
     "file.new_project": "새 프로젝트",
     "file.open_project": "프로젝트 열기...",

@@ -148,6 +148,12 @@
   "projects.gallery.error.download_size": "Die heruntergeladene Datei ist unvollständig oder größer als vom Galerie angegeben.",
   "_language_name": "Deutsch",
   "menu": {
+    "access_key.file": "D",
+    "access_key.edit": "B",
+    "access_key.select": "U",
+    "access_key.tools": "W",
+    "access_key.view": "A",
+    "access_key.help": "H",
     "file": "Datei",
     "file.new_project": "Neues Projekt",
     "file.open_project": "Projekt öffnen...",
