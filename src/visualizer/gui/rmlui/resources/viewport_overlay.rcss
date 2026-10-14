@@ -454,6 +454,7 @@ body {
 #viewport-content.split-view .viewport-transform-overlay {
     top: auto;
     bottom: 5dp;
+    right: 12dp;
 }
 
 .viewport-depth-header {
@@ -785,7 +786,8 @@ body {
 /* Reserve the full 130dp axis corner plus a 7dp gap at every width.
    A centered single-row bar can reach this corner above the old breakpoint. */
 .viewport-transform-overlay,
-.viewport-depth-overlay.viewport-export-overlay {
+.viewport-selection-overlay,
+.viewport-depth-overlay {
     right: 137dp;
 }
 

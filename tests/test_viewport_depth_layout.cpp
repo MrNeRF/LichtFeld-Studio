@@ -20,6 +20,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -204,13 +205,13 @@ namespace {
         }
     }
 
-    TEST_F(ViewportDepthLayoutTest, SingleViewPlacementIsUnchanged) {
+    TEST_F(ViewportDepthLayoutTest, SingleViewDepthReservesTheAxisCorner) {
         for (const float scale : {1.0f, 1.5f, 2.0f}) {
             layout(false, scale);
             EXPECT_FLOAT_EQ(top(), 5 * scale);
             const auto pos = panel()->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto size = panel()->GetBox().GetSize(Rml::BoxArea::Border);
-            EXPECT_NEAR(pos.x + size.x * 0.5f, 460 * scale, 1.0f);
+            EXPECT_NEAR(pos.x + size.x * 0.5f, 397.5f * scale, 1.0f);
         }
     }
 
@@ -257,21 +258,94 @@ namespace {
         }
     }
 
-    TEST_F(ViewportDepthLayoutTest, ExportBarInsetClearsTheLargerGizmoAtTheBreakpoint) {
+    TEST_F(ViewportDepthLayoutTest, AllTopBarsReserveTheAxisCornerAtEveryWidth) {
         auto* bar = document_->GetElementById("depth-view-block");
-        bar->SetClass("viewport-export-overlay", true);
-        for (const float scale : {1.0f, 1.5f, 2.0f}) {
-            context_->SetDensityIndependentPixelRatio(scale);
-            for (const int width : {920, 1099, 1100, 1101, 1240, 1600, 1920}) {
-                SCOPED_TRACE(std::format("width={} scale={}", width, scale));
-                context_->SetDimensions({width, 840});
-                context_->Update();
+        for (const char* classes : {"viewport-transform-overlay", "viewport-selection-overlay", "viewport-depth-overlay", "viewport-depth-overlay viewport-export-overlay"}) {
+            SCOPED_TRACE(classes);
+            bar->SetClassNames(classes);
+            for (const float scale : {1.0f, 1.5f, 2.0f}) {
+                context_->SetDensityIndependentPixelRatio(scale);
+                for (const int width : {920, 1099, 1100, 1101, 1240, 1600, 1920}) {
+                    SCOPED_TRACE(std::format("width={} scale={}", width, scale));
+                    context_->SetDimensions({width, 840});
+                    context_->Update();
+                    const auto position = bar->GetAbsoluteOffset(Rml::BoxArea::Border);
+                    const auto size = bar->GetBox().GetSize(Rml::BoxArea::Border);
+                    const float inset = width - position.x - size.x;
+                    EXPECT_NEAR(inset, 137 * scale, 0.1f);
+                    EXPECT_GE(inset - (10 + lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE) * scale, 6.9f * scale);
+                }
+            }
+        }
+    }
+
+    TEST_F(ViewportDepthLayoutTest, SharedBottomBarsRestoreTheirSymmetricInset) {
+        auto* bar = document_->GetElementById("depth-view-block");
+        for (const char* classes : {"viewport-transform-overlay", "viewport-selection-overlay", "viewport-depth-overlay"}) {
+            bar->SetClassNames(classes);
+            bar->SetId(std::string(classes) == "viewport-depth-overlay" ? "depth-view-block" : "shared-bottom-test");
+            for (const float scale : {1.0f, 1.5f, 2.0f}) {
+                layout(true, scale, 0.5f, 1240);
                 const auto position = bar->GetAbsoluteOffset(Rml::BoxArea::Border);
                 const auto size = bar->GetBox().GetSize(Rml::BoxArea::Border);
-                const float inset = width - position.x - size.x;
-                EXPECT_NEAR(inset, 137 * scale, 0.1f);
-                EXPECT_GE(inset - (10 + lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE) * scale, 6.9f * scale);
+                EXPECT_NEAR(position.x, 12 * scale, 0.1f);
+                EXPECT_NEAR(1240 * scale - position.x - size.x, 12 * scale, 0.1f);
+                layout(false, scale, 0.5f, 1240);
+                EXPECT_NEAR(1240 * scale - bar->GetAbsoluteOffset(Rml::BoxArea::Border).x - bar->GetBox().GetSize(Rml::BoxArea::Border).x, 137 * scale, 0.1f);
             }
+        }
+    }
+
+    TEST_F(ViewportDepthLayoutTest, LocalizedDepthControlsStayOutsideTheAxisCorner) {
+        const auto resources = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui";
+        const auto path = resources / "rmlui/resources/viewport_overlay.rml";
+        std::ifstream input(path);
+        const std::string original((std::istreambuf_iterator<char>(input)), {});
+        for (const char* locale : {"en", "de", "pl", "es", "fr"}) {
+            SCOPED_TRACE(locale);
+            std::ifstream translations(resources / "resources/locales" / (std::string(locale) + ".json"));
+            ASSERT_TRUE(translations);
+            const auto labels = nlohmann::json::parse(translations);
+            std::string markup = original;
+            markup.replace(markup.find("<head>"), 6, "<head><link type=\"text/rcss\" href=\"components.rcss\"/>");
+            for (const auto& [binding, key] : std::array{
+                     std::pair{"depth_view_tool_label", "toolbar.depth_map"},
+                     std::pair{"ui_color_label", "ui.color"}, std::pair{"ui_gray_label", "ui.gray"},
+                     std::pair{"ui_near_label", "ui.near"}, std::pair{"ui_far_label", "ui.far"}}) {
+                const std::string full_key(key);
+                const auto dot = full_key.find('.');
+                const auto text = labels.at(full_key.substr(0, dot)).at(full_key.substr(dot + 1)).get<std::string>();
+                const std::string token = "{{" + std::string(binding) + "}}";
+                for (size_t pos = 0; (pos = markup.find(token, pos)) != std::string::npos; pos += text.size())
+                    markup.replace(pos, token.size(), text);
+            }
+            real_context_ = Rml::CreateContext("viewport_depth_layout_real", {1240, 900}, &renderer_);
+            ASSERT_TRUE(real_context_);
+            auto* doc = real_context_->LoadDocumentFromMemory(markup, path.string());
+            ASSERT_TRUE(doc);
+            doc->Show();
+            auto* bar = doc->GetElementById("depth-view-block");
+            bar->SetClass("hidden", false);
+            for (const float scale : {1.0f, 1.5f, 2.0f}) {
+                real_context_->SetDensityIndependentPixelRatio(scale);
+                for (const int width : {1240, 1600}) {
+                    SCOPED_TRACE(std::format("width={} scale={}", width, scale));
+                    real_context_->SetDimensions({int(width * scale), int(900 * scale)});
+                    real_context_->Update();
+                    Rml::ElementList controls;
+                    bar->QuerySelectorAll(controls, "button, input, select, .viewport-transform-meta__tool, .viewport-transform-axis-label");
+                    ASSERT_FALSE(controls.empty());
+                    for (auto* control : controls) {
+                        if (!control->IsVisible(true))
+                            continue;
+                        const auto position = control->GetAbsoluteOffset(Rml::BoxArea::Border);
+                        const auto size = control->GetBox().GetSize(Rml::BoxArea::Border);
+                        EXPECT_LE(position.x + size.x, (width - 130) * scale) << control->GetTagName();
+                    }
+                }
+            }
+            Rml::RemoveContext("viewport_depth_layout_real");
+            real_context_ = nullptr;
         }
     }
 
@@ -362,7 +436,7 @@ namespace {
                             auto* panel = block->QuerySelector(selector);
                             ASSERT_NE(panel, nullptr);
                             EXPECT_FALSE(intersects(panel, primary)) << id;
-                            if (!split && (std::string(id) == "transform-block" || std::string(id) == "viewport-export-block")) {
+                            if (!split && std::string(id) != "gt-compare-mode-block") {
                                 const auto p = panel->GetAbsoluteOffset(Rml::BoxArea::Border);
                                 const auto s = panel->GetBox().GetSize(Rml::BoxArea::Border);
                                 if (p.y < 130 * scale && p.y + s.y > 10 * scale)
