@@ -485,7 +485,8 @@ namespace lfs::python {
                 compose_retained_style(style, has_immediate_draw),
                 has_poll,
                 height_mode,
-                has_immediate_draw);
+                has_immediate_draw,
+                to_gui_space(space) == gui::PanelSpace::Floating);
             if (to_gui_space(space) == gui::PanelSpace::Floating)
                 retained_adapter->setForeground(true);
             adapter = retained_adapter;

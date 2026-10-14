@@ -707,6 +707,11 @@ namespace lfs::python {
         void* (*get_context)(void* host);
         void (*set_foreground)(void* host, bool fg);
         void (*set_floating)(void* host, bool floating);
+        void* (*native_window)(void* host);
+        void* (*native_graphics)(void* host);
+        bool (*external_allowed)(void* host);
+        bool (*restored_external_bounds)(void* host, float* bounds);
+        bool (*configure_external)(void* host, float x, float y, float w, float h, bool desktop_coordinates);
         void (*mark_content_dirty)(void* host);
         void (*set_input_clip_y)(void* host, float y_min, float y_max);
         void (*set_input)(void* host, const void* input);

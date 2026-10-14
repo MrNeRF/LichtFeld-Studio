@@ -5209,6 +5209,8 @@ namespace lfs::python {
             },
             "Get available theme presets with stable ids and UI metadata");
 
+        m.def("get_native_floating_windows", [] { return vis::UserPreferences::instance().nativeFloatingWindows(); }, "Whether floating panels use native windows on the next application start.");
+        m.def("set_native_floating_windows", [](bool enabled) { vis::UserPreferences::instance().setNativeFloatingWindows(enabled); }, nb::arg("enabled"), "Save the experimental window mode. Requires an application restart.");
         m.def(
             "set_ui_scale",
             [](float scale) {

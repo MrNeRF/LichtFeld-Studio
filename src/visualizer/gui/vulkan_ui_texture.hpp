@@ -23,6 +23,20 @@ namespace lfs::vis::gui {
     LFS_VIS_API void setVulkanUiTextureContext(VulkanContext* context);
     [[nodiscard]] LFS_VIS_API VulkanContext* getVulkanUiTextureContext();
 
+    class ScopedVulkanUiTextureContext {
+    public:
+        explicit ScopedVulkanUiTextureContext(VulkanContext* target)
+            : previous_(getVulkanUiTextureContext()), changed_(target && target != previous_) {
+            if (changed_) setVulkanUiTextureContext(target);
+        }
+        ~ScopedVulkanUiTextureContext() { if (changed_) setVulkanUiTextureContext(previous_); }
+        ScopedVulkanUiTextureContext(const ScopedVulkanUiTextureContext&) = delete;
+        ScopedVulkanUiTextureContext& operator=(const ScopedVulkanUiTextureContext&) = delete;
+    private:
+        VulkanContext* previous_;
+        bool changed_;
+    };
+
     class LFS_VIS_API VulkanUiTexture {
     public:
         VulkanUiTexture() = default;

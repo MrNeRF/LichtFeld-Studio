@@ -62,7 +62,8 @@ namespace lfs::vis {
         VulkanContext& operator=(const VulkanContext&) = delete;
 
         LFS_VIS_API bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height);
-        void shutdown();
+        void setSceneRuntimeOwnership(bool owns) { owns_scene_runtimes_ = owns; }
+        LFS_VIS_API void shutdown();
         void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
         [[nodiscard]] bool hasPendingSwapchainResize() const {
             if (rendererTerminalState() != RendererTerminalState::Running)
@@ -490,6 +491,8 @@ namespace lfs::vis {
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
+        bool owns_scene_runtimes_ = true;
+        bool transparent_surface_ = false;
         VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
         std::array<std::uint8_t, VK_UUID_SIZE> device_uuid_{};
         VkDevice device_ = VK_NULL_HANDLE;

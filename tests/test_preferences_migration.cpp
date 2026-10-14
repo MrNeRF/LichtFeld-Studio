@@ -382,6 +382,33 @@ TEST(PreferencesMigration, InvalidProjectLocationIsRejectedWithoutPersisting) {
     EXPECT_EQ(readPreferences(*paths), before);
 }
 
+TEST(PreferencesMigration, NativeFloatingWindowsPersistAndGeometryResetPreservesOtherPreferences) {
+    const auto home = makeHome("lfs_preferences_native_windows");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_FALSE(preferences.nativeFloatingWindows());
+    preferences.setNativeFloatingWindows(true);
+    EXPECT_TRUE(preferences.nativeFloatingWindows());
+    preferences.setNativeFloatingWindows(false);
+    preferences.setThemeName("dark");
+    preferences.setFloatingWindowGeometry(R"({"preferences":[-900,50,800,600]})");
+    EXPECT_FALSE(preferences.nativeFloatingWindows());
+    EXPECT_FALSE(readPreferences(*paths).at("native_floating_windows").get<bool>());
+    EXPECT_EQ(json::parse(preferences.floatingWindowGeometry()).at("preferences")[0], -900);
+    preferences.setFloatingWindowGeometry("invalid");
+    EXPECT_TRUE(json::parse(preferences.floatingWindowGeometry()).contains("preferences"));
+    preferences.setFloatingWindowGeometry(R"({"video_extractor":[100,50,800,600]})");
+    EXPECT_FALSE(readPreferences(*paths).at("floating_window_geometry").contains("preferences"));
+    preferences.setFloatingWindowGeometry("{}");
+    EXPECT_EQ(preferences.floatingWindowGeometry(), "{}");
+    EXPECT_TRUE(readPreferences(*paths).at("floating_window_geometry").empty());
+    EXPECT_EQ(preferences.themeName(), "dark");
+    EXPECT_FALSE(preferences.nativeFloatingWindows());
+}
+
 TEST(PreferencesMigration, CameraSpeedPreferencesPersistAndClamp) {
     const auto home = makeHome("lfs_preferences_camera_speed");
     const ScopedLfsHome scoped_home(home);

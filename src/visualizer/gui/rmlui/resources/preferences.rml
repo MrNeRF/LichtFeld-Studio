@@ -423,6 +423,11 @@
         </div>
         <div class="section-content" data-if="interface_expanded">
           <span class="preferences-description">@tr:preferences.interface_layout_description</span>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.native_floating_windows</span>
+            <input type="checkbox" data-checked="native_floating_windows"/>
+          </div>
+          <span class="preferences-description">@tr:preferences.native_floating_windows_restart</span>
         </div>
       </div>
 

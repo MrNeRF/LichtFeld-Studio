@@ -673,7 +673,7 @@ namespace lfs::app {
         }
 
         json panel_details_json(const vis::gui::PanelDetails& panel) {
-            return json{
+            json result{
                 {"id", panel.id},
                 {"label", panel.label},
                 {"parent_id", panel.parent_id},
@@ -686,6 +686,14 @@ namespace lfs::app {
                 {"initial_width", panel.initial_width},
                 {"initial_height", panel.initial_height},
             };
+            if (panel.space == vis::gui::PanelSpace::Floating) {
+                const auto instance = vis::gui::PanelRegistry::instance().get_panel_instance(panel.id);
+                result["desktop_window"] = instance && instance->nativeWindow();
+                if (const auto bounds = vis::gui::PanelRegistry::instance().live_floating_bounds(panel.id)) {
+                    result["floating_bounds"] = json{{"x", bounds->x}, {"y", bounds->y}, {"width", bounds->width}, {"height", bounds->height}, {"coordinate_space", "main_window_pixels"}};
+                }
+            }
+            return result;
         }
 
         std::expected<json, std::string> list_tools_payload(vis::Visualizer* viewer,

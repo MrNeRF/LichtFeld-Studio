@@ -389,6 +389,67 @@ namespace lfs::gui {
         return host_ && host_->wantsKeyboard();
     }
 
+    SDL_Window* VideoExtractorDialog::nativeWindow() const {
+        return host_ ? host_->nativeWindow() : nullptr;
+    }
+
+    bool VideoExtractorDialog::detachHost(float x, float y, float w, float h, bool desktop_coordinates) {
+        if (!host_ || host_->nativeWindow() || !host_->externalAllowed())
+            return false;
+        auto* manager = host_->manager();
+        preview_texture_.reset();
+        preview_src_.clear();
+        host_.reset();
+        document_ = nullptr;
+        clearElementCache();
+        host_ = std::make_unique<lfs::vis::gui::RmlPanelHost>(manager, "video_extractor", "rmlui/video_extractor.rml");
+        host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
+        host_->setForeground(true);
+        host_->setFloating(floating_);
+        if (!host_->configureExternal(x, y, w, h, desktop_coordinates) || !ensureInitialized(manager))
+            return false;
+        texture_needs_update_ = controls_dirty_ = true;
+        syncPanel();
+        return nativeWindow() != nullptr;
+    }
+
+    bool VideoExtractorDialog::detachToDesktop(float x, float y, float w, float h) {
+        return detachHost(x, y, w, h, false);
+    }
+
+    bool VideoExtractorDialog::restoreDesktopWindow() {
+        if (!host_ && desktop_reopen_bounds_ && desktop_manager_)
+            ensureInitialized(desktop_manager_);
+        if (desktop_restore_checked_ || !host_)
+            return false;
+        desktop_restore_checked_ = true;
+        if (desktop_reopen_bounds_) {
+            const auto bounds = *desktop_reopen_bounds_;
+            desktop_reopen_bounds_.reset();
+            return detachHost(bounds[0], bounds[1], bounds[2], bounds[3], true);
+        }
+        float bounds[4]{};
+        return host_->restoredExternalBounds(bounds) && detachHost(bounds[0], bounds[1], bounds[2], bounds[3], true);
+    }
+
+    void VideoExtractorDialog::releaseDesktopWindow() {
+        auto* native = nativeWindow();
+        if (!native)
+            return;
+        int x = 0, y = 0, w = 0, h = 0;
+        SDL_GetWindowPosition(native, &x, &y);
+        SDL_GetWindowSize(native, &w, &h);
+        desktop_reopen_bounds_ = std::array<float, 4>{float(x), float(y), float(w), float(h)};
+        desktop_manager_ = host_->manager();
+        preview_texture_.reset();
+        preview_src_.clear();
+        host_.reset();
+        document_ = nullptr;
+        clearElementCache();
+        desktop_restore_checked_ = false;
+        texture_needs_update_ = controls_dirty_ = true;
+    }
+
     bool VideoExtractorDialog::needsAnimationFrame() const {
         const std::string current_language =
             lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
@@ -977,6 +1038,7 @@ namespace lfs::gui {
     }
 
     void VideoExtractorDialog::syncPanel() {
+        const lfs::vis::gui::ScopedVulkanUiTextureContext textures(host_ ? host_->nativeGraphics() : nullptr);
         if (!elements_cached_)
             return;
 

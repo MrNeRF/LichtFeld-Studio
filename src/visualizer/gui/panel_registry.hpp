@@ -25,6 +25,8 @@ namespace lfs::core {
     class Scene;
 }
 
+struct SDL_Window;
+
 namespace lfs::vis::gui {
 
     struct UIContext;
@@ -162,6 +164,10 @@ namespace lfs::vis::gui {
     class IPanel {
     public:
         virtual ~IPanel() = default;
+        [[nodiscard]] virtual SDL_Window* nativeWindow() const { return nullptr; }
+        virtual bool detachToDesktop(float, float, float, float) { return false; }
+        virtual bool restoreDesktopWindow() { return false; }
+        virtual void releaseDesktopWindow() {}
         // Called on the GUI thread only after a native viewport drop hit test.
         virtual bool onViewportDrop(const std::string& type, const std::string& data) {
             (void)type;
@@ -394,6 +400,7 @@ namespace lfs::vis::gui {
         std::vector<std::string> get_panel_names(PanelSpace space) const;
         std::optional<PanelDetails> get_panel(const std::string& id);
         std::shared_ptr<IPanel> get_panel_instance(const std::string& id) const;
+        std::optional<PanelDrawBounds> live_floating_bounds(const std::string& id) const;
         [[nodiscard]] std::optional<PanelSpace>
         default_space_for_panel(const std::string& id) const;
         [[nodiscard]] std::vector<PanelProjectState>

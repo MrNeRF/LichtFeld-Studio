@@ -292,6 +292,9 @@ namespace lfs::vis {
                 auto merged = lfs::core::persisted_settings::mergeForWrite(
                     paths->preferencesFile(), values, "schema_version", 1,
                     nullptr, {}, paths->backupDir());
+                // This map is authoritative: removed panel positions must stay removed.
+                if (values.contains("floating_window_geometry"))
+                    merged["floating_window_geometry"] = values["floating_window_geometry"];
                 if (reset_project_manager_on_save) {
                     auto saved_pm = merged.find("project_manager");
                     if (saved_pm != merged.end() && saved_pm->is_object()) {
@@ -734,6 +737,33 @@ namespace lfs::vis {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
         return lfs::core::persisted_settings::field<std::string>(impl_->values, "theme", {});
+    }
+    void UserPreferences::setNativeFloatingWindows(bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["native_floating_windows"] = enabled;
+        impl_->saveLocked();
+    }
+    bool UserPreferences::nativeFloatingWindows() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("native_floating_windows");
+        return it != impl_->values.end() && it->is_boolean() && it->get<bool>();
+    }
+    void UserPreferences::setFloatingWindowGeometry(const std::string& value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto parsed = json::parse(value, nullptr, false);
+        if (!parsed.is_object())
+            return;
+        impl_->values["floating_window_geometry"] = parsed;
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::floatingWindowGeometry() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("floating_window_geometry");
+        return it != impl_->values.end() && it->is_object() ? it->dump() : "{}";
     }
     void UserPreferences::setUiScale(const float value) {
         std::scoped_lock lock(impl_->mutex);

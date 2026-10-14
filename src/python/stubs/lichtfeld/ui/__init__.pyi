@@ -2720,6 +2720,14 @@ def supports_system_theme() -> bool:
 def themes() -> list:
     """Get available theme presets with stable ids and UI metadata"""
 
+def get_native_floating_windows() -> bool:
+    """
+    Whether floating panels use native windows on the next application start.
+    """
+
+def set_native_floating_windows(enabled: bool) -> None:
+    """Save the experimental window mode. Requires an application restart."""
+
 def set_ui_scale(scale: float) -> None:
     """Set UI scale (0.0 = auto from OS, or 1.0-4.0)"""
 

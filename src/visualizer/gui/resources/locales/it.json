@@ -999,6 +999,8 @@
     "navigation_fpv": "Volo",
     "navigation_drone": "Drone",
     "interface_layout_description": "Fai clic su «Reimposta questa sezione» qui sotto per riportare dock, pannelli, schede, visibilità delle finestre e HUD al layout iniziale. Se è aperto un progetto .licht, il layout salvato nel progetto verrà sostituito al prossimo salvataggio. Il pannello Preferenze rimane aperto.",
+    "native_floating_windows": "Finestre fluttuanti esterne (sperimentale)",
+    "native_floating_windows_restart": "Le finestre possono essere spostate su altri monitor. La modifica richiede il riavvio. Ripristina questa sezione per recuperare la disposizione predefinita.",
     "scene_graph": "Grafo scena",
     "scene_graph_selection_markers": "Indicatori di selezione del grafo scena",
     "scene_graph_selection_markers_description": "Mostra indicatori radiali compatti per selezionare righe e intere gerarchie di nodi.",
