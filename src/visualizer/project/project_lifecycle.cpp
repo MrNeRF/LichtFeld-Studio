@@ -5829,12 +5829,21 @@ namespace lfs::vis::project {
                     LOG_ERROR(
                         "Project background write failed: {}",
                         error);
-                    publishProjectToast(
-                        last_project_write_error_code_.value_or(
-                            lfs::ErrorCode::Unavailable),
-                        lfs::ErrorDomain::IO,
-                        error,
-                        gui::error_op::kSave);
+                    if (last_project_write_typed_error_ &&
+                        !last_project_write_typed_error_
+                             ->user_message()
+                             .empty()) {
+                        publishProjectToast(
+                            *last_project_write_typed_error_,
+                            gui::error_op::kSave);
+                    } else {
+                        publishProjectToast(
+                            last_project_write_error_code_.value_or(
+                                lfs::ErrorCode::Unavailable),
+                            lfs::ErrorDomain::IO,
+                            error,
+                            gui::error_op::kSave);
+                    }
                 }
             }
             if (was_autosave &&
