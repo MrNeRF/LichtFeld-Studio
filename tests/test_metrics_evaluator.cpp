@@ -1234,6 +1234,53 @@ TEST(MetricsEvaluator, SplatMaskSelectsTheRenderedCoverage) {
     std::filesystem::remove_all(tmp);
 }
 
+// Catches the splat mask render replacing the scored render: the rasterizer reuses its output buffers on every
+// render, so the scored image must still be the evaluated model's own render after the mask is rendered.
+TEST(MetricsEvaluator, SplatMaskKeepsTheScoredRender) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_splat_mask_scored_render";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    const auto image_path = tmp / "gt.png";
+    write_rgb_png(image_path, 130, 130, 130, kH, kW);
+    auto camera = make_eval_camera(image_path, {}, kW, kH);
+    const float opaque = std::log(0.99f / 0.01f);
+    const auto make_splat = [opaque](const std::vector<float>& mean, const float sh_dc) {
+        return SplatData(0, Tensor::from_vector(mean, {1, 3}, Device::CUDA), Tensor::full({1, 1, 3}, sh_dc, Device::CUDA),
+                         Tensor::zeros({1, 0, 3}, Device::CUDA),
+                         Tensor::from_vector({-0.4f, -1.2f, -3.0f}, {1, 3}, Device::CUDA),
+                         Tensor::from_vector({0.92f, 0.0f, 0.0f, 0.39f}, {1, 4}, Device::CUDA),
+                         Tensor::full({1}, opaque, Device::CUDA), 1.0f);
+    };
+    auto scored = make_splat({-0.3f, 0.2f, 1.0f}, 1.0f);
+    const lfs::training::EvaluationSplat mask{.model = make_splat({0.3f, -0.2f, 1.0f}, 0.0f)};
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    const auto params = make_eval_params(tmp / "out");
+    const auto render = [&](Camera& render_camera,
+                            const float dilation_scale) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        return lfs::training::EvaluationRenderResult{
+            .output = lfs::training::fast_rasterize(render_camera, scored, background, params.optimization.mip_filter,
+                                                    {}, false, dilation_scale)};
+    };
+    const auto expected =
+        lfs::training::fast_rasterize(*camera, scored, background, params.optimization.mip_filter).image.cpu().to_vector();
+
+    const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, {.splat = &mask});
+    ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
+    ASSERT_GT(prepared->metric_mask.to(DataType::Float32).sum().item<float>(), 0.0f);
+    const auto scored_image = prepared->output.image.cpu().to_vector();
+    ASSERT_EQ(scored_image.size(), expected.size());
+    // The scored render is put on the 8-bit grid of the reference.
+    for (size_t i = 0; i < expected.size(); ++i)
+        ASSERT_NEAR(scored_image[i], expected[i], 0.5f / 255.0f + 1.0e-6f) << i;
+    std::filesystem::remove_all(tmp);
+}
+
 TEST(MetricsEvaluatorUndistort, PointMaskFollowsTheNativeGutLens) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";

@@ -813,6 +813,39 @@ namespace lfs::training {
                     .undistorted = false};
             }
 
+            const cudaStream_t consumer = lfs::core::getCurrentCUDAStream();
+            // The rasterizers hand out per-thread output buffers that the next render overwrites, so the splat mask
+            // renders before the scored image and keeps only its coverage. Same camera and rasterizer as the scored
+            // image, so it follows the same lens.
+            lfs::core::Tensor splat_coverage;
+            if (mask_splat) {
+                auto& model = const_cast<lfs::core::SplatData&>(mask_splat->model);
+                auto mask_background =
+                    background.is_valid() ? background : lfs::core::Tensor::zeros({3}, lfs::core::Device::CUDA);
+                lfs::core::Tensor alpha;
+                try {
+                    alpha = params.optimization.gut
+                                ? gsplat_rasterize(*render_camera, model, mask_background, 1.0f, false,
+                                                   GsplatRenderMode::RGB, true)
+                                      .alpha
+                                : fast_rasterize(*render_camera, model, mask_background, params.optimization.mip_filter,
+                                                 {}, false, dilation_scale)
+                                      .alpha;
+                } catch (const std::exception& e) {
+                    // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error
+                    return evaluation_error(std::string("splat mask render failed: ") + e.what(),
+                                            LFS_SOURCE_SITE_CURRENT());
+                }
+                if (!alpha.is_valid())
+                    return evaluation_error("splat mask render has no alpha", LFS_SOURCE_SITE_CURRENT());
+                alpha.sync_to_stream(consumer);
+                if (warp_to_distorted)
+                    alpha = lfs::core::distort_mask_to_source_area(alpha, *inverse_warp, consumer);
+                splat_coverage = squeeze_to_hw(alpha).ge(mask_splat->opacity).to(lfs::core::DataType::UInt8);
+                if (mask_splat->invert)
+                    splat_coverage = splat_coverage.eq(0).to(lfs::core::DataType::UInt8);
+            }
+
             auto rendered = render(*render_camera, dilation_scale);
             if (!rendered)
                 return std::move(rendered.error());
@@ -829,7 +862,6 @@ namespace lfs::training {
             }
 
             // The render may finish on another stream; everything below runs on the caller's.
-            const cudaStream_t consumer = lfs::core::getCurrentCUDAStream();
             for (const auto* produced : {&rendered->output.image, &rendered->raw_image, &rendered->output.alpha,
                                          &rendered->output.depth, &rendered->output.normal}) {
                 if (produced->is_valid())
@@ -921,40 +953,14 @@ namespace lfs::training {
                     return evaluation_error("depth mask covers no evaluated pixel", LFS_SOURCE_SITE_CURRENT());
             }
 
-            if (mask_splat) {
-                // Rendered with the same camera and rasterizer as the scored image, so it follows the same lens.
-                auto& model = const_cast<lfs::core::SplatData&>(mask_splat->model);
-                auto mask_background =
-                    background.is_valid() ? background : lfs::core::Tensor::zeros({3}, lfs::core::Device::CUDA);
-                lfs::core::Tensor alpha;
-                try {
-                    alpha = params.optimization.gut
-                                ? gsplat_rasterize(*render_camera, model, mask_background, 1.0f, false,
-                                                   GsplatRenderMode::RGB, true)
-                                      .alpha
-                                : fast_rasterize(*render_camera, model, mask_background, params.optimization.mip_filter,
-                                                 {}, false, dilation_scale)
-                                      .alpha;
-                } catch (const std::exception& e) {
-                    // LFS-CENSUS-OK(empty-catch): converted into a typed evaluation error
-                    return evaluation_error(std::string("splat mask render failed: ") + e.what(),
-                                            LFS_SOURCE_SITE_CURRENT());
-                }
-                if (!alpha.is_valid())
-                    return evaluation_error("splat mask render has no alpha", LFS_SOURCE_SITE_CURRENT());
-                alpha.sync_to_stream(consumer);
-                if (warp_to_distorted)
-                    alpha = lfs::core::distort_mask_to_source_area(alpha, *inverse_warp, consumer);
-                auto coverage = squeeze_to_hw(alpha).ge(mask_splat->opacity).to(lfs::core::DataType::UInt8);
-                if (mask_splat->invert)
-                    coverage = coverage.eq(0).to(lfs::core::DataType::UInt8);
+            if (splat_coverage.is_valid()) {
                 metric_mask = validity_mask.is_valid()
-                                  ? (coverage.to(lfs::core::DataType::Float32) *
+                                  ? (splat_coverage.to(lfs::core::DataType::Float32) *
                                      validity_mask.to(lfs::core::DataType::Float32))
                                         .gt(0.5f)
                                         .to(lfs::core::DataType::UInt8)
                                         .contiguous()
-                                  : coverage.contiguous();
+                                  : splat_coverage.contiguous();
                 if (metric_mask.to(lfs::core::DataType::Float32).sum().item<float>() <= 0.0f)
                     return evaluation_error("splat mask covers no evaluated pixel", LFS_SOURCE_SITE_CURRENT());
             }
