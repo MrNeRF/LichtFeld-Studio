@@ -393,6 +393,16 @@ def test_native_window_capture_contains_rendered_controls(native_client, panel_i
     assert_rendered_capture(native_client, panel_id)
 
 
+def test_native_window_capture_reports_unavailable_panel(native_client):
+    response = native_client.rpc("tools/call", {
+        "name": "render_capture_window", "arguments": {"panel_id": "test.nonexistent-panel"},
+    })
+    assert response["isError"]
+    result = json.loads(response["content"][0]["text"])
+    assert "unavailable" in result["error"]["message"]
+    assert "success" not in result
+
+
 def assert_rendered_capture(native_client, panel_id):
     if panel_id:
         native_client.open(panel_id)
