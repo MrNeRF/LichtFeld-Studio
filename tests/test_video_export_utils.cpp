@@ -542,10 +542,10 @@ namespace {
 
         std::vector<uint8_t> render(int y, int rows, bool banded, bool full_frame) {
             lfs::rendering::ViewportRenderRequest request;
-            request.frame_view.size = {1024, rows};
+            request.frame_view.size = {render_width_, rows};
             request.frame_view.subregion_origin = {0, y};
             if (banded)
-                request.frame_view.subregion_full_size = {1024, 512};
+                request.frame_view.subregion_full_size = {render_width_, render_height_};
             request.sh_degree = 0;
             request.gut = true;
             request.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
@@ -564,6 +564,8 @@ namespace {
             return {data, data + (*image)->numel()};
         }
 
+        int render_width_ = 1024;
+        int render_height_ = 512;
         std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window_{nullptr, SDL_DestroyWindow};
         lfs::vis::VulkanContext context_;
         std::unique_ptr<lfs::core::SplatData> model_;
@@ -573,22 +575,27 @@ namespace {
 
     TEST_P(VideoExportBandTest, BandedEqualsFullImage) {
         const bool full_frame = std::get<1>(GetParam());
-        const auto full = render(0, 512, false, full_frame);
-        ASSERT_EQ(full.size(), 1024u * 512u * 3u);
-        for (const int band_rows : {256, 64}) {
-            for (int y = 0; y < 512; y += band_rows) {
-                SCOPED_TRACE(::testing::Message() << "rows=" << band_rows << " y=" << y);
-                const auto band = render(y, band_rows, true, full_frame);
-                ASSERT_EQ(band.size(), 1024u * band_rows * 3u);
-                const auto first = full.begin() + y * 1024 * 3;
-                ASSERT_GT(*std::max_element(first, first + band.size()), 0);
-                int max_diff = 0;
-                size_t changed = 0;
-                for (size_t i = 0; i < band.size(); ++i) {
-                    max_diff = std::max(max_diff, std::abs(int(band[i]) - int(first[i])));
-                    changed += band[i] != first[i];
+        for (const int width : {1024, 2048}) {
+            render_width_ = width;
+            render_height_ = width / 2;
+            SCOPED_TRACE(::testing::Message() << "extent=" << width << "x" << render_height_);
+            const auto full = render(0, render_height_, false, full_frame);
+            ASSERT_EQ(full.size(), size_t(width) * render_height_ * 3u);
+            for (const int band_rows : {256, 64}) {
+                for (int y = 0; y < render_height_; y += band_rows) {
+                    SCOPED_TRACE(::testing::Message() << "rows=" << band_rows << " y=" << y);
+                    const auto band = render(y, band_rows, true, full_frame);
+                    ASSERT_EQ(band.size(), size_t(width) * band_rows * 3u);
+                    const auto first = full.begin() + size_t(y) * width * 3;
+                    ASSERT_GT(*std::max_element(first, first + band.size()), 0);
+                    int max_diff = 0;
+                    size_t changed = 0;
+                    for (size_t i = 0; i < band.size(); ++i) {
+                        max_diff = std::max(max_diff, std::abs(int(band[i]) - int(first[i])));
+                        changed += band[i] != first[i];
+                    }
+                    EXPECT_LE(max_diff, 1) << "changed channels=" << changed;
                 }
-                EXPECT_LE(max_diff, 1) << "changed channels=" << changed;
             }
         }
     }

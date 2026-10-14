@@ -505,13 +505,11 @@ WorldRay pixel_to_world_ray(float2 pixel, Camera cam) {
     float3x3 view_to_world_rotation = float3x3(world_view_t);
     float3 camera_origin = -mul(view_to_world_rotation, world_view_t[3]);
     if (cam.model == int(CameraModel::EQUIRECTANGULAR)) {
-        float azimuth = 2.0f * M_PI * (pixel.x / float(cam.W) - 0.5f);
-        float elevation = M_PI * (pixel.y / float(cam.H) - 0.5f);
-        float cos_elevation = cos(elevation);
-        float3 ray_camera = safe_normalize(float3(
-            sin(azimuth) * cos_elevation,
-            sin(elevation),
-            cos(azimuth) * cos_elevation));
+        // Inverse of project_point_equirect. Shared equirect is -Z forward
+        // with +Y at uv.y = 0; the rasterizer camera is +Z forward.
+        float2 equirect_uv = float2(pixel.x / float(cam.W), pixel.y / float(cam.H));
+        float3 shared_dir = lfs_equirect_direction(equirect_uv);
+        float3 ray_camera = float3(shared_dir.x, shared_dir.y, -shared_dir.z);
         float3 direction = safe_normalize(mul(view_to_world_rotation, ray_camera));
         return { camera_origin, direction, isfinite(dot(camera_origin, camera_origin)) && isfinite(dot(direction, direction)) };
     }
