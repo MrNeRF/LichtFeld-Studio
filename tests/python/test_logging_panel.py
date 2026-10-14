@@ -76,9 +76,11 @@ class Element:
     def remove_child(self, node): self.nodes.remove(node)
     def get_attribute(self, name, default=""): return self.attrs.get(name, default)
     def has_attribute(self, name): return name in self.attrs
-    def parent(self): return None
+    def parent(self): return self
     def focus(self): return True
-    def add_event_listener(self, name, callback): self.listeners[name] = callback
+    def add_event_listener(self, name, callback):
+        previous = self.listeners.get(name)
+        self.listeners[name] = callback if previous is None else lambda event: (previous(event), callback(event))
     def select(self): return True
     def set_class(self, name, value): pass
     def set_attribute(self, name, value):
@@ -192,6 +194,19 @@ def test_retention_edit_commits_on_enter_or_blur_and_preserves_partial_input(log
     assert applied == [0, 5000]
     assert panel._limit == "5000"
     assert panel._page_size == "250"
+
+
+def test_escape_cancels_a_retention_edit(logging_module):
+    panel, doc, _snapshot = make_panel(logging_module)
+    applied = []
+    logging_module.lf.log.set_buffer_limit = applied.append
+    field = doc.elements["log-limit"]
+    field.listeners["focus"](None)
+    panel._set_limit("3")
+    field.listeners["escapecancel"](SimpleNamespace(stop_propagation=lambda: None))
+    field.listeners["blur"](None)
+    assert panel._limit == "5000"
+    assert 3 not in applied
 
 
 def test_live_tail_reuses_unchanged_row_nodes(logging_module):

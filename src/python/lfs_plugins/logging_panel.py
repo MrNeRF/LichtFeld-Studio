@@ -104,6 +104,7 @@ class LoggingPanel(Panel):
         self._limit = "5000"
         self._last_buffer_limit = None
         self._editing_limit = False
+        self._escape_revert = w.EscapeRevertController()
         self._page_size = "250"
         self._paused = False
         self._wrap = True
@@ -154,6 +155,7 @@ class LoggingPanel(Panel):
         doc.get_element_by_id("log-scroll").add_event_listener("keydown", self._on_selection_key)
         w.bind_committed_text_input(
             doc.get_element_by_id("log-limit"), "limit", commit=self._commit_limit,
+            escape_revert=self._escape_revert, capture=lambda: self._limit, restore=self._restore_limit,
             on_focus=lambda key: setattr(self, "_editing_limit", True),
             on_blur=lambda key: setattr(self, "_editing_limit", False),
         )
@@ -201,6 +203,12 @@ class LoggingPanel(Panel):
     def _set_limit(self, value):
         # Editing a number must not trim the buffer halfway through typing it.
         self._limit = str(value)
+
+    def _restore_limit(self, snapshot):
+        # Escape cancels the edit; the blur that follows commits the unchanged value.
+        self._limit = str(snapshot)
+        if self._handle:
+            self._handle.dirty("limit")
 
     def _commit_limit(self, *_):
         try:
