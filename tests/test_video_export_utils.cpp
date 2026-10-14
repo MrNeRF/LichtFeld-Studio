@@ -858,7 +858,7 @@ TEST(VideoEncoderValidationTest, RejectsUnsafeOptionsBeforeCodecInitialization) 
 TEST(VideoEncoderValidationTest, RejectsInvalidCodecBeforeCodecInitialization) {
     lfs::io::video::VideoEncoder encoder;
     lfs::io::video::VideoExportOptions options;
-    options.codec = "h265";
+    options.codec = static_cast<lfs::media::VideoEncodeCodec>(-1);
     const auto result = encoder.open("unused.mp4", options);
     ASSERT_FALSE(result.has_value());
     EXPECT_NE(result.error().find("codec"), std::string::npos);
