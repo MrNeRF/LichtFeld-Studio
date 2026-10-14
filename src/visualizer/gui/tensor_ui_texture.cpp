@@ -51,7 +51,11 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
-    void connectUiTextureGraphics(GraphicsContext*) {}
+    namespace {
+        GraphicsContext* g_ui_texture_graphics = nullptr;
+    }
+    GraphicsContext* uiTextureGraphics() { return g_ui_texture_graphics; }
+    void connectUiTextureGraphics(GraphicsContext* context) { g_ui_texture_graphics = context; }
 
     struct UiTexture::Impl {
         std::shared_ptr<lfs::core::Tensor> image;

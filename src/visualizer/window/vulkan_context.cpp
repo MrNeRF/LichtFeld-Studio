@@ -579,6 +579,7 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::init(SDL_Window* window, const int framebuffer_width, const int framebuffer_height) {
+        transparent_surface_ = (SDL_GetWindowFlags(window) & SDL_WINDOW_TRANSPARENT) != 0;
         framebuffer_width_ = framebuffer_width;
         framebuffer_height_ = framebuffer_height;
 
@@ -644,8 +645,9 @@ namespace lfs::vis {
         // Optional vendor runtimes retain the Vulkan device passed at lazy
         // initialization. Shut them down after all GPU work is retired and
         // before the allocator/device they reference are destroyed.
-        for (auto* const plugin : sceneUpscalerPlugins())
-            plugin->shutdownRuntime();
+        if (owns_scene_runtimes_)
+            for (auto* const plugin : sceneUpscalerPlugins())
+                plugin->shutdownRuntime();
 
         // #1488: surface leaked External* counts after idle, before device destroy.
         {
@@ -1916,6 +1918,7 @@ namespace lfs::vis {
             copy_region.imageSubresource.layerCount = 1;
             copy_region.imageSubresource.mipLevel = 0;
             copy_region.imageSubresource.baseArrayLayer = 0;
+            copy_region.imageSubresource.layerCount = 1;
             copy_region.imageOffset = {0, 0, 0};
             copy_region.imageExtent = {extent.width, extent.height, 1};
             vkCmdCopyImageToBuffer(command_buffer,
@@ -4574,7 +4577,9 @@ namespace lfs::vis {
         const bool extent_fixed_to_surface =
             support.capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max();
         const bool add_resize_headroom =
-            old_swapchain != VK_NULL_HANDLE && framebuffer_resize_allow_headroom_;
+            !transparent_surface_ && old_swapchain != VK_NULL_HANDLE && framebuffer_resize_allow_headroom_;
+        // Layered desktop panels require an exact surface extent. NVIDIA's
+        // scaled transparent swapchains can fail during interactive resizing.
         // Present scaling only has work to do when the swapchain is deliberately sized
         // away from the surface, which is the headroom path. Requesting it for an
         // exact-extent swapchain gains nothing and makes NVIDIA run a scaled-image setup
@@ -4624,6 +4629,16 @@ namespace lfs::vis {
         create_info.pQueueFamilyIndices = shared_queues ? queue_indices.data() : nullptr;
         create_info.preTransform = support.capabilities.currentTransform;
         create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        if (transparent_surface_) {
+            for (const auto alpha : {VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+                                     VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+                                     VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR}) {
+                if (support.capabilities.supportedCompositeAlpha & alpha) {
+                    create_info.compositeAlpha = alpha;
+                    break;
+                }
+            }
+        }
         create_info.presentMode = present_mode;
         create_info.clipped = VK_TRUE;
         create_info.oldSwapchain = old_swapchain;
@@ -4643,7 +4658,9 @@ namespace lfs::vis {
             result = vkCreateSwapchainKHR(device_, &create_info, nullptr, &swapchain_);
         }
         if (result != VK_SUCCESS) {
-            return setVkFailure(std::format("vkCreateSwapchainKHR failed: {}", vkResultToString(result)), result);
+            return setVkFailure(std::format("vkCreateSwapchainKHR failed: {} (extent={}x{}, transparent={}, present_scaling={}, old_swapchain={:#x})",
+                                            vkResultToString(result), extent.width, extent.height,
+                                            transparent_surface_, use_present_scaling, vkHandleValue(old_swapchain)), result);
         }
         setDebugObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, swapchain_, "swapchain.main");
 

@@ -4850,7 +4850,7 @@ namespace lfs::vis::gui {
             auto* const graphics = viewer_->getWindowManager()->getGraphicsContext();
             if (!graphics ||
                 !rmlui_manager_.initGraphics(viewer_->getWindow(), *graphics,
-                                             current_ui_scale_)) {
+                                             current_ui_scale_, viewer_->options_.safe_mode)) {
                 throw std::runtime_error("Failed to initialize RmlUI graphics backend");
             }
         }
@@ -5005,6 +5005,17 @@ namespace lfs::vis::gui {
         };
         ops.set_floating = [](void* host, bool floating) {
             static_cast<RmlPanelHost*>(host)->setFloating(floating);
+        };
+        ops.native_window = [](void* host) -> void* {
+            return static_cast<RmlPanelHost*>(host)->nativeWindow();
+        };
+        ops.native_graphics = [](void* host) -> void* {
+            return static_cast<RmlPanelHost*>(host)->nativeGraphics();
+        };
+        ops.external_allowed = [](void* host) { return static_cast<RmlPanelHost*>(host)->externalAllowed(); };
+        ops.restored_external_bounds = [](void* host, float* bounds) { return static_cast<RmlPanelHost*>(host)->restoredExternalBounds(bounds); };
+        ops.configure_external = [](void* host, float x, float y, float w, float h, bool desktop) {
+            return static_cast<RmlPanelHost*>(host)->configureExternal(x, y, w, h, desktop);
         };
         ops.mark_content_dirty = [](void* host) {
             static_cast<RmlPanelHost*>(host)->markContentDirty();
@@ -7275,7 +7286,7 @@ namespace lfs::vis::gui {
                         renderFloatingPanelDragCursor();
                         rmlui_manager_.endFrame();
                     } else {
-                        rmlui_manager_.clearQueue();
+                        rmlui_manager_.clearQueue(false);
                     }
                 }
                 if (viewer_) {
@@ -7293,7 +7304,7 @@ namespace lfs::vis::gui {
                     }
                 }
             } else if (graphics_context) {
-                rmlui_manager_.clearQueue();
+                rmlui_manager_.clearQueue(false);
                 clearLineRendererCommands();
                 if (graphics_context->terminalState() == RendererTerminalState::Running &&
                     !graphics_context->lastError().empty()) {
@@ -7320,6 +7331,7 @@ namespace lfs::vis::gui {
                 if (auto* const overlay_rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
                     overlay_rendering->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
             }
+            rmlui_manager_.renderNativeWindows();
             return presented;
         }
 
@@ -8621,6 +8633,8 @@ namespace lfs::vis::gui {
         std::optional<double> result;
         const auto now = std::chrono::steady_clock::now();
 
+        result = min_delay(result, rmlui_manager_.secondsUntilNativeGeometryFlush(), "external_window_geometry");
+
         if (!python::is_plugin_preload_running()) {
             result = min_delay(result,
                                PanelRegistry::instance().nextScheduledAnimationDelayForVisiblePanels(
@@ -8691,6 +8705,7 @@ namespace lfs::vis::gui {
             return std::unexpected(lfs::format_for_developer(paths.error()));
         if (const auto backup = paths->resetLayout(); !backup)
             return std::unexpected(lfs::format_for_developer(backup.error()));
+        rmlui_manager_.resetNativeWindowGeometry();
 
         setSequencerVisible(false);
         if (viewer_) {
@@ -8737,6 +8752,7 @@ namespace lfs::vis::gui {
             return std::unexpected(std::string(LOC("preferences.window_manager_unavailable")));
         if (!window_manager->resetPersistentWindowState())
             return std::unexpected(std::string(LOC("preferences.window_state_reset_failed")));
+        rmlui_manager_.resetNativeWindowGeometry();
         return {};
     }
 

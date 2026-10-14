@@ -13,6 +13,7 @@
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
+#include "rendering/rendering_manager.hpp"
 #ifdef __APPLE__
 #include "preferences.hpp"
 #endif
@@ -1091,6 +1092,15 @@ namespace lfs::vis {
 
     void WindowManager::processEvent(const SDL_Event& event) {
         const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
+
+        if (auto* gui = services().guiOrNull()) {
+            if (gui->processNativeWindowEvent(event)) {
+                gui->dispatchInputEvent(event);
+                if (auto* rendering = services().renderingOrNull())
+                    rendering->markDirty(DirtyFlag::OVERLAY, FrameReason::Overlay);
+                return;
+            }
+        }
 
         if (std::getenv("LFS_TRACE_INPUT") && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN))
             LOG_INFO("INPUT arrival type={} key={} text={} active={}", event.type,

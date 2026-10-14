@@ -21,6 +21,14 @@ namespace {
 
     using lfs::vis::WindowRectangle;
 
+    TEST(WindowStateContract, ExternalPanelsRequireOptInAndHonorBothSafeModePaths) {
+        EXPECT_FALSE(lfs::vis::externalFloatingWindowsEnabled(true, false, false, false));
+        EXPECT_TRUE(lfs::vis::externalFloatingWindowsEnabled(true, false, false, true));
+        EXPECT_FALSE(lfs::vis::externalFloatingWindowsEnabled(true, true, false, true));
+        EXPECT_FALSE(lfs::vis::externalFloatingWindowsEnabled(true, false, true, true));
+        EXPECT_FALSE(lfs::vis::externalFloatingWindowsEnabled(false, false, false, true));
+    }
+
     TEST(WindowStateContract, FutureWindowFieldsSurviveGeometrySave) {
         const auto root = std::filesystem::temp_directory_path() / "lfs_window_future_settings";
         std::filesystem::create_directories(root);
@@ -149,6 +157,71 @@ namespace {
         const std::vector<WindowRectangle> displays{{0, 32, 1920, 1168}, {1920, 32, 1920, 1168}};
         const WindowRectangle saved{1400, 100, 1200, 700};
         EXPECT_EQ(lfs::vis::recoverWindowRectangle(saved, displays, displays.front()), saved);
+    }
+
+    TEST(WindowStateContract, DetachedSmallPanelRecoversAfterSecondaryMonitorDisappears) {
+        const WindowRectangle primary{0, 0, 1920, 1080};
+        const WindowRectangle panel{-1200, 100, 480, 300};
+        const auto recovered = lfs::vis::recoverWindowRectangle(panel, {primary}, primary, 96, 64, 320, 180);
+        EXPECT_EQ(recovered.width, 480);
+        EXPECT_EQ(recovered.height, 300);
+        EXPECT_GE(recovered.x, primary.x);
+        EXPECT_GE(recovered.y, primary.y);
+        EXPECT_LE(recovered.x + recovered.width, primary.width);
+        EXPECT_LE(recovered.y + recovered.height, primary.height);
+    }
+
+    TEST(WindowStateContract, DetachedPanelRemainsOnConnectedMonitorWithNegativeCoordinates) {
+        const WindowRectangle primary{0, 0, 1920, 1080};
+        const WindowRectangle secondary{-1920, -200, 1920, 1080};
+        const WindowRectangle panel{-1400, 0, 640, 480};
+        EXPECT_EQ(lfs::vis::recoverWindowRectangle(panel, {primary, secondary}, primary, 96, 64, 320, 180), panel);
+    }
+
+    TEST(WindowStateContract, DetachedLargePanelKeepsItsSizeAfterMonitorRemoval) {
+        const WindowRectangle remaining{100, 32, 1920, 1048};
+        const WindowRectangle panel{-1800, 100, 1200, 700};
+        EXPECT_EQ(lfs::vis::recoverWindowRectangle(panel, {remaining}, remaining, 96, 64, 320, 180),
+                  (WindowRectangle{460, 206, 1200, 700}));
+    }
+
+    TEST(WindowStateContract, DetachedPanelFitsSmallerRemainingMonitorIncludingTitleBar) {
+        const WindowRectangle remaining{0, 40, 800, 560};
+        const WindowRectangle panel{3000, -700, 1600, 900};
+        EXPECT_EQ(lfs::vis::recoverWindowRectangle(panel, {remaining}, remaining, 96, 64, 320, 180), remaining);
+    }
+
+    TEST(WindowStateContract, DetachedPanelWithOnlyLowerEdgeVisibleRecoversItsTitleBar) {
+        const WindowRectangle remaining{0, 40, 1280, 680};
+        const WindowRectangle panel{200, -400, 640, 600};
+        const auto recovered = lfs::vis::recoverWindowRectangle(panel, {remaining}, remaining, 96, 64, 320, 180);
+        EXPECT_EQ(recovered, (WindowRectangle{200, 40, 640, 600}));
+    }
+
+    TEST(WindowStateContract, DetachedPanelStraddlingOffsetMonitorsCannotLoseItsTitleBar) {
+        const std::vector<WindowRectangle> displays{{0, 100, 1280, 800}, {1280, 200, 1280, 800}};
+        const WindowRectangle panel{1000, -100, 600, 500};
+        EXPECT_EQ(lfs::vis::recoverFloatingWindowRectangle(panel, displays, displays.front()),
+                  (WindowRectangle{680, 100, 600, 500}));
+    }
+
+    TEST(WindowStateContract, FloatingPanelWithoutSavedPositionOpensInsideApplication) {
+        const WindowRectangle app{500, 300, 1000, 700};
+        const WindowRectangle display{0, 0, 1920, 1080};
+        EXPECT_EQ(lfs::vis::defaultFloatingWindowRectangle({0, 0, 780, 440}, app, display),
+                  (WindowRectangle{610, 430, 780, 440}));
+    }
+
+    TEST(WindowStateContract, FloatingPanelInitialSizeFitsSmallerApplicationWindow) {
+        const WindowRectangle app{200, 100, 640, 480};
+        const WindowRectangle display{0, 0, 1920, 1080};
+        EXPECT_EQ(lfs::vis::defaultFloatingWindowRectangle({0, 0, 1200, 900}, app, display), app);
+    }
+
+    TEST(WindowStateContract, DetachedPanelStraddlingMonitorsWithAccessibleTitleIsPreserved) {
+        const std::vector<WindowRectangle> displays{{0, 100, 1280, 800}, {1280, 200, 1280, 800}};
+        const WindowRectangle panel{1000, 220, 600, 500};
+        EXPECT_EQ(lfs::vis::recoverFloatingWindowRectangle(panel, displays, displays.front()), panel);
     }
 
     TEST(WindowStateContract, SafeModeDisablesAutomaticPersistence) {

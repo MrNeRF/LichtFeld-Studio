@@ -3037,12 +3037,13 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "render.capture_window",
-                .description = "Capture the current composited app window. Unlike render_capture, which grabs the viewport region only, this includes the full window, including panels, toolbars, and GUI overlays.",
+                .description = "Capture the current composited app window, including panels, toolbars, and GUI overlays. Pass panel_id to capture an open native floating panel window instead.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
                         {"width", mcp::capture_size_schema("Optional output width in pixels; preserves aspect ratio when height is omitted")},
-                        {"height", mcp::capture_size_schema("Optional output height in pixels; preserves aspect ratio when width is omitted")}},
+                        {"height", mcp::capture_size_schema("Optional output height in pixels; preserves aspect ratio when width is omitted")},
+                        {"panel_id", json{{"type", "string"}, {"description", "Optional native floating panel id; the panel must be open and not minimized"}}}},
                     .required = {}},
                 .metadata = mcp::McpToolMetadata{
                     .category = "render",
@@ -3054,9 +3055,32 @@ namespace lfs::app {
                 const int width = args.value("width", 0);
                 const int height = args.value("height", 0);
 
-                auto result = capture_after_gui_render(viewer, [viewer, width, height]() {
-                    return capture_full_window_to_base64(viewer, width, height);
-                });
+                const auto panel_id = args.value("panel_id", std::string{});
+                auto result = [&]() -> lfs::Result<std::string> {
+                    if (panel_id.empty())
+                        return capture_after_gui_render(viewer, [viewer, width, height]() {
+                            return capture_full_window_to_base64(viewer, width, height);
+                        });
+                    auto promise = std::make_shared<std::promise<lfs::Result<vis::WindowCapture>>>();
+                    auto future = promise->get_future();
+                    const auto accepted = capture_after_gui_render(viewer, [viewer, panel_id, promise]() -> lfs::Result<bool> {
+                        auto* impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+                        auto* gui = impl ? impl->getGuiManager() : nullptr;
+                        return gui && gui->requestNativeWindowCapture(panel_id, [promise](auto capture) {
+                            promise->set_value(std::move(capture));
+                        });
+                    });
+                    if (!accepted)
+                        return accepted.error();
+                    if (!*accepted)
+                        return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Native panel window is unavailable, minimized, or already being captured");
+                    if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+                        return mcp::capture_error(lfs::ErrorCode::Unavailable, "Native window capture timed out");
+                    auto capture = future.get();
+                    if (!capture)
+                        return capture.error();
+                    return mcp::encode_pixels_to_base64(capture->rgba.data(), capture->width, capture->height, 4, width, height);
+                }();
                 if (!result)
                     return json{{"error", lfs::core::to_wire_envelope(result.error())}};
 

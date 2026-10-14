@@ -209,6 +209,8 @@ class PreferencesPanel(Panel):
             self._set_viewport_toolbar_position_index,
         )
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
+        model.bind("native_floating_windows", lf.ui.get_native_floating_windows,
+                   lambda value: lf.ui.set_native_floating_windows(bool(value)))
         model.bind(
             "scene_upscaler_idx",
             self._scene_upscaler_index,
@@ -468,6 +470,7 @@ class PreferencesPanel(Panel):
             lf.ui.get_viewport_chrome_style(),
             lf.ui.get_viewport_toolbar_position(),
             float(lf.ui.get_ui_scale_preference()),
+            bool(lf.ui.get_native_floating_windows()),
             self._scene_upscaler(),
             self._scene_upscaler_preset(),
             lf.ui.get_current_language(),
@@ -1745,6 +1748,7 @@ class PreferencesPanel(Panel):
             lf.set_camera_navigation_mode("orbit")
             lf.set_camera_view_snap_enabled(False)
         elif section == "interface":
+            lf.ui.set_native_floating_windows(False)
             if not self._mcp_safe_mode:
                 lf.ui.set_scene_graph_selection_markers(False)
             return lf.ui.reset_layout()
@@ -1770,6 +1774,7 @@ class PreferencesPanel(Panel):
             self._handle.dirty("viewport_chrome_idx")
             self._handle.dirty("viewport_toolbar_position_idx")
             self._handle.dirty("scale_idx")
+            self._handle.dirty("native_floating_windows")
             self._handle.dirty("scene_upscaler_idx")
             self._handle.dirty("scene_upscaler_preset_idx")
             self._handle.dirty("scene_upscaler_has_preset")

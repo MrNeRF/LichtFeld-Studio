@@ -50,6 +50,12 @@ namespace lfs::vis::gui {
         void prepareDirect(float w, float h);
         void syncDirectLayout(float w, float h);
         bool ensureContext();
+        SDL_Window* nativeWindow() const;
+        RmlUIManager* manager() const { return manager_; }
+        bool externalAllowed() const { return floating_ && manager_->externalWindowsAllowed(); }
+        bool restoredExternalBounds(float* bounds) const { return externalAllowed() && manager_->restoredExternalBounds(context_name_, bounds); }
+        bool configureExternal(float x, float y, float w, float h, bool desktop_coordinates);
+        GraphicsContext* nativeGraphics() const { return manager_->nativeGraphics(rml_context_); }
         bool ensureDocumentLoaded();
         bool reloadDocument();
         void releaseRendererResources();
@@ -77,8 +83,9 @@ namespace lfs::vis::gui {
             clip_y_max_ = y_max;
         }
         bool needsAnimationFrame() const {
-            return render_needed_ || content_dirty_ || animation_active_ || scheduledUpdateDue() || tooltip_.revealDue();
+            return nativeDragActive() || render_needed_ || content_dirty_ || animation_active_ || scheduledUpdateDue() || tooltip_.revealDue();
         }
+        bool nativeDragActive() const;
         [[nodiscard]] bool needsImmediateAnimationFrame() const {
             return content_height_settling_;
         }
@@ -150,6 +157,8 @@ namespace lfs::vis::gui {
 
         bool foreground_ = false;
         bool floating_ = false;
+        bool desktop_requested_ = false;
+        float desktop_bounds_[4]{};
         float clip_y_min_ = -1.0f;
         float clip_y_max_ = -1.0f;
         const PanelInputState* input_ = nullptr;

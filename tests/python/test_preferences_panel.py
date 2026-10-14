@@ -171,6 +171,8 @@ def preferences_panel_module(monkeypatch):
         get_theme_family=lambda: "lichtfeld",
         get_theme_mode=lambda: "dark",
         get_ui_scale_preference=lambda: 0.0,
+        get_native_floating_windows=lambda: getattr(state, "native_floating_windows", True),
+        set_native_floating_windows=lambda enabled: setattr(state, "native_floating_windows", enabled),
         set_ui_scale=lambda *_a, **_k: None,
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
         get_mcp_port_override=lambda: None,
@@ -1478,3 +1480,37 @@ def test_navigation_defaults_do_not_modify_current_project(preferences_panel_mod
     assert state.new_project_navigation_calls[-1] == ("data_z", False)
     assert state.navigation_up_calls == []
     assert state.navigation_up_axis == "legacy_y"
+
+def test_interface_reset_disables_external_windows_without_resetting_input(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    state.native_floating_windows = True
+    calls = []
+    module.lf.ui.reset_layout = lambda: calls.append('layout')
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    module.lf.keymap.reset_to_default = lambda: calls.append('input')
+    panel._reset_section('interface')
+    assert state.native_floating_windows is False
+    assert calls == ['layout']
+
+
+def test_appearance_reset_preserves_native_window_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    state.native_floating_windows = False
+    module.lf.ui.set_theme = lambda _theme: None
+    panel._reset_section('appearance')
+    assert state.native_floating_windows is False
+
+
+def test_window_mode_change_refreshes_preferences_state(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    before = panel._state()
+    state.native_floating_windows = False
+    assert panel._state() != before
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    panel._dirty_selection()
+    assert 'native_floating_windows' in dirty

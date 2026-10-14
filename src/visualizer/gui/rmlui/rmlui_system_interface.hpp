@@ -36,6 +36,7 @@ namespace lfs::vis::gui {
     class LFS_VIS_API RmlSystemInterface final : public Rml::SystemInterface {
     public:
         explicit RmlSystemInterface(SDL_Window* window);
+        void setWindow(SDL_Window* window) { window_ = window; }
 
         void beginFrame();
         void trackContext(const Rml::Context* context, int window_x, int window_y);
