@@ -784,11 +784,11 @@ body {
 
 /* The overlay context is the viewport plus the left dock, so this is about
    920px at a 1280 window and about 1240px at 1600. The corner axis widget
-   occupies the viewport's right 105px. Inset only the narrower context;
+   occupies the viewport's right 130dp. Inset only the narrower context;
    a fixed inset would shift the one-row bar at 1600. */
 @media (max-width: 1100px) {
     .viewport-depth-overlay.viewport-export-overlay {
-        right: 112dp;
+        right: 137dp;
     }
 }
 

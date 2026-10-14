@@ -24,8 +24,9 @@ namespace lfs::vis::gui {
 
     constexpr float VIEWPORT_GIZMO_HIT_RADIUS_SCALE = 2.5f;
 
+    template <typename Marker, size_t N>
     [[nodiscard]] inline int hitTestViewportGizmoMarkers(
-        const std::array<ViewportGizmoMarker, 6>& markers,
+        const std::array<Marker, N>& markers,
         const glm::vec2& mouse_pos) {
         int closest_axis = -1;
         float closest_distance_sq = std::numeric_limits<float>::max();

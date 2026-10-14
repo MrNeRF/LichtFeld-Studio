@@ -1411,7 +1411,6 @@ namespace lfs::vis::gui {
         constexpr float kViewportGizmoLabelDistance = VIEWPORT_AXIS_MARKER_DISTANCE;
         constexpr float kViewportGizmoHoverScale = 1.2f;
         constexpr float kViewportGizmoHoverBrightness = 1.3f;
-        constexpr float kViewportGizmoHitRadiusScale = 2.5f;
         constexpr float kViewportGizmoRingInnerRadius = 0.55f;
 
         [[nodiscard]] glm::vec4 viewportGizmoAxisColor(const int axis,
@@ -1483,17 +1482,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] int hitTestViewportGizmoLayout(const VulkanViewportGizmoLayout& layout,
                                                      const glm::vec2& mouse_pos) {
-            for (const auto& marker : layout.markers) {
-                if (!marker.visible) {
-                    continue;
-                }
-                const glm::vec2 delta = mouse_pos - marker.screen_pos;
-                const float radius = marker.radius * kViewportGizmoHitRadiusScale;
-                if (glm::dot(delta, delta) <= radius * radius) {
-                    return marker.encoded_axis;
-                }
-            }
-            return -1;
+            return hitTestViewportGizmoMarkers(layout.markers, mouse_pos);
         }
 
         void appendViewportGizmoLabel(std::vector<VulkanViewportShapeOverlayVertex>& out,
