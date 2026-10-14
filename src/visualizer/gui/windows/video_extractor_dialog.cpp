@@ -13,6 +13,8 @@
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "io/hdr_tonemap.hpp"
+#include "io/video/probed_stream_rewind.hpp"
 #include <cctype>
 
 #include <RmlUi/Core.h>
@@ -20,6 +22,15 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
+
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavutil/display.h>
+#include <libavutil/dict.h>
+#include <libavutil/dovi_meta.h>
+#include <libavutil/error.h>
+#include <libavutil/pixdesc.h>
+}
 
 #include <algorithm>
 #include <array>
@@ -50,6 +61,161 @@ namespace lfs::gui {
                 return static_cast<char>(std::tolower(character));
             });
             return name;
+        }
+
+        struct VideoStreamMetadata {
+            int rotation = 0;
+            double fps = 0.0;
+            double duration = 0.0;
+            bool is_hdr = false;
+            bool hdr_to_sdr_supported = false;
+        };
+
+        [[nodiscard]] std::string ffmpegError(const int result) {
+            char buffer[AV_ERROR_MAX_STRING_SIZE]{};
+            av_strerror(result, buffer, sizeof(buffer));
+            return buffer;
+        }
+
+        [[nodiscard]] int findUsableHeaderVideoStream(const AVFormatContext* const context) {
+            if (!context)
+                return -1;
+
+            for (unsigned int i = 0; i < context->nb_streams; ++i) {
+                const AVStream* const stream = context->streams[i];
+                const AVCodecParameters* const parameters = stream ? stream->codecpar : nullptr;
+                if (parameters && parameters->codec_type == AVMEDIA_TYPE_VIDEO &&
+                    parameters->codec_id != AV_CODEC_ID_NONE && parameters->width > 0 &&
+                    parameters->height > 0) {
+                    return static_cast<int>(i);
+                }
+            }
+            return -1;
+        }
+
+        void discardNonVideoStreams(AVFormatContext* const context, const int video_stream_idx) {
+            if (!context)
+                return;
+
+            for (unsigned int i = 0; i < context->nb_streams; ++i)
+                context->streams[i]->discard = static_cast<int>(i) == video_stream_idx
+                                                   ? AVDISCARD_DEFAULT
+                                                   : AVDISCARD_ALL;
+        }
+
+        [[nodiscard]] int pixelFormatBitDepth(const AVCodecParameters* const parameters) {
+            if (!parameters)
+                return 0;
+            const AVPixFmtDescriptor* const descriptor =
+                av_pix_fmt_desc_get(static_cast<AVPixelFormat>(parameters->format));
+            return std::max(descriptor ? descriptor->comp[0].depth : 0,
+                            parameters->bits_per_raw_sample);
+        }
+
+        [[nodiscard]] bool hasCodedSideData(const AVCodecParameters* const parameters,
+                                            const AVPacketSideDataType type) {
+            if (!parameters)
+                return false;
+            for (int i = 0; i < parameters->nb_coded_side_data; ++i) {
+                if (parameters->coded_side_data[i].type == type)
+                    return true;
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool probeVideoStreamMetadata(const std::filesystem::path& path,
+                                                     VideoStreamMetadata& metadata,
+                                                     std::string& error) {
+            AVFormatContext* context = nullptr;
+            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            const int open_result = avformat_open_input(&context, path_utf8.c_str(), nullptr, nullptr);
+            if (open_result < 0) {
+                error = std::format("Failed to open video: {}", ffmpegError(open_result));
+                return false;
+            }
+
+            const auto close_context = [&] { avformat_close_input(&context); };
+            io::video::limitUntimedVideoProbe(context);
+            int stream_index = findUsableHeaderVideoStream(context);
+            bool stream_info_probed = false;
+            if (stream_index < 0) {
+                stream_info_probed = true;
+                const int probe_result = avformat_find_stream_info(context, nullptr);
+                if (probe_result < 0) {
+                    error = std::format("Failed to read video stream metadata: {}", ffmpegError(probe_result));
+                    close_context();
+                    return false;
+                }
+                stream_index = findUsableHeaderVideoStream(context);
+            }
+            if (stream_index < 0) {
+                error = "No usable video stream found";
+                close_context();
+                return false;
+            }
+
+            discardNonVideoStreams(context, stream_index);
+            if (!stream_info_probed && avformat_find_stream_info(context, nullptr) < 0)
+                LOG_WARN("Video extractor: could not complete stream metadata probe for {}", path_utf8);
+
+            AVStream* const stream = context->streams[stream_index];
+            const AVCodecParameters* const parameters = stream->codecpar;
+            if (AVDictionaryEntry* const tag = av_dict_get(stream->metadata, "rotate", nullptr, 0);
+                tag && tag->value) {
+                metadata.rotation = std::atoi(tag->value);
+            } else {
+                for (int i = 0; i < parameters->nb_coded_side_data; ++i) {
+                    const AVPacketSideData& side_data = parameters->coded_side_data[i];
+                    if (side_data.type != AV_PKT_DATA_DISPLAYMATRIX)
+                        continue;
+                    const double angle = av_display_rotation_get(reinterpret_cast<int32_t*>(side_data.data));
+                    metadata.rotation = static_cast<int>(std::round(-angle));
+                    break;
+                }
+            }
+            metadata.rotation = ((metadata.rotation % 360) + 360) % 360;
+            if (metadata.rotation != 0 && metadata.rotation != 90 &&
+                metadata.rotation != 180 && metadata.rotation != 270) {
+                metadata.rotation = 0;
+            }
+
+            const int source_bit_depth = pixelFormatBitDepth(parameters);
+            io::HdrFormat hdr_format = io::detectHdrFormat(
+                parameters->color_trc, source_bit_depth,
+                hasCodedSideData(parameters, AV_PKT_DATA_MASTERING_DISPLAY_METADATA),
+                hasCodedSideData(parameters, AV_PKT_DATA_CONTENT_LIGHT_LEVEL));
+            for (int i = 0; i < parameters->nb_coded_side_data; ++i) {
+                const AVPacketSideData& side_data = parameters->coded_side_data[i];
+                if (side_data.type != AV_PKT_DATA_DOVI_CONF ||
+                    side_data.size < static_cast<int>(sizeof(AVDOVIDecoderConfigurationRecord))) {
+                    continue;
+                }
+                const auto* const dovi = reinterpret_cast<const AVDOVIDecoderConfigurationRecord*>(side_data.data);
+                hdr_format = io::detectDolbyVisionFormat(parameters->color_trc, dovi->dv_profile,
+                                                          dovi->dv_bl_signal_compatibility_id);
+                break;
+            }
+            metadata.is_hdr = io::isHdrFormat(hdr_format);
+            metadata.hdr_to_sdr_supported = metadata.is_hdr && io::isHdrTonemapSupported(hdr_format);
+
+            metadata.fps = av_q2d(stream->avg_frame_rate);
+            if (!std::isfinite(metadata.fps) || metadata.fps <= 0.0)
+                metadata.fps = av_q2d(stream->r_frame_rate);
+            if (!std::isfinite(metadata.fps) || metadata.fps <= 0.0)
+                metadata.fps = 30.0;
+            const double time_base = av_q2d(stream->time_base);
+            const bool is_untimed = context->iformat &&
+                                    (context->iformat->flags & AVFMT_NOTIMESTAMPS) != 0;
+            if (!is_untimed && stream->nb_frames > 0) {
+                metadata.duration = static_cast<double>(stream->nb_frames) / metadata.fps;
+            } else if (!is_untimed && context->duration != AV_NOPTS_VALUE && context->duration > 0) {
+                metadata.duration = static_cast<double>(context->duration) / AV_TIME_BASE;
+            } else if (!is_untimed && stream->duration != AV_NOPTS_VALUE && stream->duration > 0 &&
+                       std::isfinite(time_base) && time_base > 0.0) {
+                metadata.duration = static_cast<double>(stream->duration) * time_base;
+            }
+            close_context();
+            return true;
         }
 
         [[nodiscard]] float maximumExtractionFps(const io::VideoPlayer& player) {
@@ -758,16 +924,14 @@ namespace lfs::gui {
     }
 
     bool VideoExtractorDialog::probeBatchVideo(BatchVideoItem& item, std::string& error) const {
-        io::VideoPlayer probe;
-        if (!probe.open(item.video_path)) {
-            error = probe.takeError();
+        VideoStreamMetadata metadata;
+        if (!probeVideoStreamMetadata(item.video_path, metadata, error))
             return false;
-        }
-        item.rotation = probe.rotation();
-        item.source_fps = probe.fps();
-        item.duration = probe.duration();
-        item.is_hdr = probe.isHdr();
-        item.hdr_to_sdr_supported = item.is_hdr && probe.isHdrConversionSupported();
+        item.rotation = metadata.rotation;
+        item.source_fps = metadata.fps;
+        item.duration = metadata.duration;
+        item.is_hdr = metadata.is_hdr;
+        item.hdr_to_sdr_supported = metadata.hdr_to_sdr_supported;
         return true;
     }
 

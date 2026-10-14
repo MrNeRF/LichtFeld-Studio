@@ -1697,6 +1697,7 @@ namespace {
         ASSERT_EQ(params.size(), 2u);
         EXPECT_EQ(params[1].rotation, 90);
         EXPECT_DOUBLE_EQ(params[1].fps, 24.0);
+        EXPECT_GT(params[1].end_time, 0.0);
     }
 
     TEST_F(VideoExtractorNamingUiTest, SelectingBatchItemPreservesSharedOutputSettings) {
