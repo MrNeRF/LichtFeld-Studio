@@ -262,16 +262,36 @@ namespace {
         bar->SetClass("viewport-export-overlay", true);
         for (const float scale : {1.0f, 1.5f, 2.0f}) {
             context_->SetDensityIndependentPixelRatio(scale);
-            for (const int width : {1099, 1100, 1101}) {
+            for (const int width : {920, 1099, 1100, 1101, 1240, 1600, 1920}) {
                 SCOPED_TRACE(std::format("width={} scale={}", width, scale));
                 context_->SetDimensions({width, 840});
                 context_->Update();
                 const auto position = bar->GetAbsoluteOffset(Rml::BoxArea::Border);
                 const auto size = bar->GetBox().GetSize(Rml::BoxArea::Border);
                 const float inset = width - position.x - size.x;
-                EXPECT_NEAR(inset, (width <= 1100 ? 137 : 12) * scale, 0.1f);
-                if (width <= 1100)
-                    EXPECT_GE(inset - (10 + lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE) * scale, 6.9f * scale);
+                EXPECT_NEAR(inset, 137 * scale, 0.1f);
+                EXPECT_GE(inset - (10 + lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE) * scale, 6.9f * scale);
+            }
+        }
+    }
+
+    TEST_F(ViewportDepthLayoutTest, AlignToolbarReservesTheWholeAxisCornerAtEveryWidth) {
+        auto wrapper = document_->CreateElement("div");
+        wrapper->SetClassNames("toolbar-hcenter align-active");
+        auto bar = document_->CreateElement("div");
+        bar->SetClassNames("toolbar-container toolbar-row align-toolbar");
+        bar->SetProperty("width", "100%");
+        bar->SetProperty("height", "40dp");
+        auto* panel = wrapper->AppendChild(std::move(bar));
+        document_->GetElementById("viewport-content")->AppendChild(std::move(wrapper));
+        for (const float scale : {1.0f, 1.5f, 2.0f}) {
+            context_->SetDensityIndependentPixelRatio(scale);
+            for (const int width : {720, 920, 1240, 1600}) {
+                context_->SetDimensions({int(width * scale), int(840 * scale)});
+                context_->Update();
+                const auto p = panel->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto s = panel->GetBox().GetSize(Rml::BoxArea::Border);
+                EXPECT_LE(p.x + s.x, (width - 137) * scale + 0.1f);
             }
         }
     }
@@ -320,7 +340,7 @@ namespace {
         ASSERT_NE(content, nullptr);
         for (const float scale : {1.0f, 1.25f, 1.5f, 2.0f})
             for (const char* position : {"centered", "top", "free"})
-                for (const int width : {1280, 720})
+                for (const int width : {1280, 1240, 1600, 720})
                     for (const bool split : {false, true}) {
                         SCOPED_TRACE(std::format("scale={} position={} width={} split={}", scale, position, width, split));
                         real_context_->SetDensityIndependentPixelRatio(scale);
@@ -342,6 +362,12 @@ namespace {
                             auto* panel = block->QuerySelector(selector);
                             ASSERT_NE(panel, nullptr);
                             EXPECT_FALSE(intersects(panel, primary)) << id;
+                            if (!split && (std::string(id) == "transform-block" || std::string(id) == "viewport-export-block")) {
+                                const auto p = panel->GetAbsoluteOffset(Rml::BoxArea::Border);
+                                const auto s = panel->GetBox().GetSize(Rml::BoxArea::Border);
+                                if (p.y < 130 * scale && p.y + s.y > 10 * scale)
+                                    EXPECT_LE(p.x + s.x, (width - 130) * scale) << id;
+                            }
                             if (split)
                                 EXPECT_FALSE(intersects(panel, secondary)) << id;
                             Rml::ElementList controls;
