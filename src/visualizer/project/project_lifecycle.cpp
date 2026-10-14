@@ -6001,12 +6001,21 @@ namespace lfs::vis::project {
                     LOG_ERROR(
                         "Project background write failed: {}",
                         error);
-                    publishProjectToast(
-                        last_project_write_error_code_.value_or(
-                            lfs::ErrorCode::Unavailable),
-                        lfs::ErrorDomain::IO,
-                        error,
-                        gui::error_op::kSave);
+                    if (last_project_write_typed_error_ &&
+                        !last_project_write_typed_error_
+                             ->user_message()
+                             .empty()) {
+                        publishProjectToast(
+                            *last_project_write_typed_error_,
+                            gui::error_op::kSave);
+                    } else {
+                        publishProjectToast(
+                            last_project_write_error_code_.value_or(
+                                lfs::ErrorCode::Unavailable),
+                            lfs::ErrorDomain::IO,
+                            error,
+                            gui::error_op::kSave);
+                    }
                 }
             }
             if (was_autosave &&
@@ -8357,7 +8366,8 @@ namespace lfs::vis::project {
             !launched) {
             markHydrationFailed(
                 epoch,
-                developerError(launched.error()));
+                developerError(launched.error()),
+                std::string(launched.error().user_message()));
         }
         const auto hydration_launched_at =
             std::chrono::steady_clock::now();
@@ -8586,7 +8596,8 @@ namespace lfs::vis::project {
                                 epoch,
                                 developerError(
                                     opened_source
-                                        .error()));
+                                        .error()),
+                                std::string(opened_source.error().user_message()));
                         }
                         return;
                     }
@@ -8678,7 +8689,7 @@ namespace lfs::vis::project {
                             developerError(staged.error());
                         if (!stop.stop_requested()) {
                             markHydrationFailed(
-                                epoch, detail);
+                                epoch, detail, std::string(staged.error().user_message()));
                         }
                         return;
                     }
@@ -9016,10 +9027,11 @@ namespace lfs::vis::project {
 
     void ProjectLifecycle::markHydrationFailed(
         const std::uint64_t epoch,
-        const std::string& detail) {
+        const std::string& detail,
+        std::string user_message) {
         viewer_.postWork({
             .run =
-                [this, epoch, detail] {
+                [this, epoch, detail, user_message = std::move(user_message)] {
                     if (epoch_.load(
                             std::memory_order_acquire) !=
                         epoch) {
@@ -9089,10 +9101,11 @@ namespace lfs::vis::project {
                     LOG_ERROR(
                         "Project hydration failed; the coherent shell remains active: {}",
                         detail);
+                    // The log keeps the developer detail; the toast shows the user message.
                     publishProjectToast(
                         lfs::ErrorCode::Unavailable,
                         lfs::ErrorDomain::IO,
-                        detail,
+                        user_message.empty() ? detail : user_message,
                         gui::error_op::kOpenProject);
                 },
             .cancel = [] {},

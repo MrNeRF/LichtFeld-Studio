@@ -4561,6 +4561,82 @@ namespace lfs::io::project {
         if (auto result = writer->plan_commit(commit); !result) {
             return std::move(result).error();
         }
+        if (recovery_base_reader) {
+            // Payloads the original master does not contain are copied into
+            // the sidecar below. Count them here so disk preflight matches
+            // the bytes that copy actually writes.
+            const auto count_recovered_copy =
+                [&](const ChunkInfo& source,
+                    const bool opaque_carry) -> lfs::Result<void> {
+                if (opaque_carry || encoded.contains(source.key) ||
+                    recovery_base_reader->find(source.key) != nullptr) {
+                    return {};
+                }
+                if (!desired.contains(source.key) &&
+                    is_project_managed_fourcc(source.key.fourcc)) {
+                    return {};
+                }
+                auto added = checked_add(
+                    *planned_bytes, source.stored_bytes,
+                    "save.recovered_payload_bytes");
+                if (!added) {
+                    return lfs::Result<void>::failure(
+                        std::move(added).error());
+                }
+                *planned_bytes = *added;
+                return {};
+            };
+            for (const auto& [key, source] : impl_->source_rows) {
+                const bool recovery_lazy_override =
+                    impl_->recovery_autosave_live_keys.contains(key) &&
+                    (key.fourcc == FOURCC_CKPT ||
+                     key.fourcc == FOURCC_PPIS ||
+                     key.fourcc == FOURCC_DSRC ||
+                     key.fourcc == FOURCC_SFMO);
+                if (recovery_lazy_override) {
+                    continue;
+                }
+                const bool opaque_carry =
+                    desired.contains(key) && source.opaque &&
+                    impl_->recovery_autosave_live_keys.contains(key);
+                if (auto counted = count_recovered_copy(
+                        source.info, opaque_carry);
+                    !counted) {
+                    return std::move(counted).error();
+                }
+            }
+            const auto count_clean_lazy =
+                [&](const auto& payloads) -> lfs::Result<void> {
+                for (const auto& [uuid, payload] : payloads) {
+                    (void)uuid;
+                    if (!payload.is_clean_reference()) {
+                        continue;
+                    }
+                    if (auto counted = count_recovered_copy(
+                            *payload.impl_->source, false);
+                        !counted) {
+                        return counted;
+                    }
+                }
+                return {};
+            };
+            if (auto counted = count_clean_lazy(impl_->checkpoints);
+                !counted) {
+                return std::move(counted).error();
+            }
+            if (auto counted = count_clean_lazy(impl_->ppisp_payloads);
+                !counted) {
+                return std::move(counted).error();
+            }
+            if (auto counted = count_clean_lazy(impl_->dataset_sources);
+                !counted) {
+                return std::move(counted).error();
+            }
+            if (auto counted = count_clean_lazy(impl_->sfm_observations);
+                !counted) {
+                return std::move(counted).error();
+            }
+        }
         if (auto result = writer->preflight(*planned_bytes); !result) {
             return std::move(result).error();
         }
@@ -4606,14 +4682,11 @@ namespace lfs::io::project {
             if (recovery_base_reader) {
                 base = recovery_base_reader->find(source.key);
                 if (!base) {
-                    return fail<void>(
-                        lfs::ErrorCode::FailedPrecondition,
-                        "The recovered autosave base is incomplete.",
-                        std::format(
-                            "{} instance {} is absent from the original master",
-                            source.key.fourcc.to_string(),
-                            source.key.instance_uuid.to_string()),
-                        "autosave.recovery_base");
+                    // Created after the last explicit save, so the original
+                    // master has no row to reference. Store the recovered
+                    // bytes in this sidecar; master rows stay references.
+                    return writer->copy_chunk_verbatim(
+                        *impl_->source_reader, source);
                 }
             }
             return writer->add_sidecar_base_reference(*base);
@@ -4668,6 +4741,12 @@ namespace lfs::io::project {
                 is_autosave &&
                 is_project_managed_fourcc(
                     key.fourcc)) {
+                if (recovery_base_reader &&
+                    !recovery_base_reader->find(key)) {
+                    // Absent from the master. A tombstone would be invalid;
+                    // leaving the key out keeps the overlay complete.
+                    continue;
+                }
                 if (auto seeded =
                         add_autosave_base_reference(
                             source.info);
@@ -4705,6 +4784,10 @@ namespace lfs::io::project {
                 continue;
             }
             if (is_autosave) {
+                if (recovery_base_reader &&
+                    !recovery_base_reader->find(key)) {
+                    continue;
+                }
                 const auto* const base =
                     impl_->source_reader
                         ? impl_->source_reader->find(

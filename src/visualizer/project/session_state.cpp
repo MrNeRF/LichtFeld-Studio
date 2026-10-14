@@ -2107,7 +2107,8 @@ namespace lfs::vis::project {
                                    : spec.chapter == "VIEW" ? view
                                                             : sequencer;
                 const auto* value = session_value_path(root, spec.chapter, spec.path);
-                if (!value || spec.accepts(*value))
+                // A fallback is always supported, e.g. no active tool ("").
+                if (!value || *value == spec.fallback || spec.accepts(*value))
                     continue;
                 const auto text = setting_text(*value);
                 const auto fallback = setting_text(spec.fallback);

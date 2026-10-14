@@ -50,20 +50,51 @@ class RenderingDefaultsSection:
         self._values = read_defaults()
         self._handle = None
         self._error = ""
+        # Text typed into a field; it is validated and saved only on Enter or blur.
+        self._text = {}
+        self._escape_revert = w.EscapeRevertController()
 
     def bind(self, model):
         for prop, default in DEFAULTS.items():
             def getter(p=prop, d=default):
+                if p in self._text:
+                    return self._text[p]
                 value = self._values.get(p, d)
                 return w.color_to_hex(value) if isinstance(d, list) else value
-            model.bind("default_" + prop, getter,
-                       lambda value, p=prop: self._set(p, value))
+            if isinstance(default, bool):
+                setter = lambda value, p=prop: self._set(p, value)
+            else:
+                setter = lambda value, p=prop: self._text.__setitem__(p, str(value))
+            model.bind("default_" + prop, getter, setter)
         model.bind_func("rendering_defaults_error", lambda: self._error)
         for prop in ("enabled", "intensity", "radius", "softness"):
             model.bind("theme_vignette_" + prop,
                        lambda p=prop: vignette_value(p),
                        lambda value, p=prop: set_vignette_value(p, value))
         self._handle = model.get_handle()
+
+    def mount(self, doc):
+        for element in doc.query_selector_all('input[type="text"]'):
+            prop = element.get_attribute("data-value", "")
+            if not prop.startswith("default_") or prop[len("default_"):] not in self._text_props():
+                continue
+            w.bind_committed_text_input(
+                element, prop[len("default_"):], escape_revert=self._escape_revert,
+                capture=lambda: None, restore=lambda _snapshot, p=prop[len("default_"):]: self._discard(p),
+                commit=self._commit)
+
+    @staticmethod
+    def _text_props():
+        return {prop for prop, default in DEFAULTS.items() if not isinstance(default, bool)}
+
+    def _discard(self, prop):
+        if self._text.pop(prop, None) is not None and self._handle:
+            self._handle.dirty("default_" + prop)
+
+    def _commit(self, prop):
+        text = self._text.pop(prop, None)
+        if text is not None:
+            self._set(prop, text)
 
     def _set(self, prop, value):
         try:

@@ -76,6 +76,15 @@ namespace lfs::vis::gui {
             }
             return dispatch.consumed;
         }
+        static void heldKey(RmlMenuBar& bar, SDL_Scancode code) {
+            lfs::vis::gui::PanelInputState input{};
+            input.screen_w = 1600;
+            input.screen_h = 300;
+            lfs::vis::InputEventDispatch dispatch;
+            input.input_events.push_back(
+                {.kind = lfs::vis::FrameInputEventKind::KeyDown, .scancode = code, .repeat = true, .dispatch = &dispatch});
+            bar.processInput(input);
+        }
         static void key(RmlMenuBar& bar, SDL_Scancode code) {
             SCOPED_TRACE(static_cast<int>(code));
             EXPECT_TRUE(keyEvent(bar, lfs::vis::FrameInputEventKind::KeyDown, code))
@@ -124,6 +133,21 @@ namespace lfs::vis::gui {
             bar.rml_manager_->dispatchInputEvent(event);
             event.type = SDL_EVENT_MOUSE_BUTTON_UP;
             event.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            bar.rml_manager_->dispatchInputEvent(event);
+        }
+        static void frame(RmlMenuBar& bar, std::vector<lfs::vis::FrameInputEvent> events = {}) {
+            lfs::vis::gui::PanelInputState input{};
+            input.screen_w = 1600;
+            input.screen_h = 300;
+            input.input_events = std::move(events);
+            bar.processInput(input);
+        }
+        static void dispatchKey(RmlMenuBar& bar, SDL_Scancode code) {
+            SDL_Event event{};
+            event.type = SDL_EVENT_KEY_DOWN;
+            event.key.type = SDL_EVENT_KEY_DOWN;
+            event.key.scancode = code;
+            event.key.down = true;
             bar.rml_manager_->dispatchInputEvent(event);
         }
         static Rml::Element* menuHit(RmlMenuBar& bar, float x, float y) {
@@ -353,6 +377,42 @@ namespace {
         context_->Update();
         EXPECT_LT(bounds(menu).right - bounds(menu).left, wide);
         doc->Close();
+    }
+
+    TEST_F(MenuBarTitleTest, ArrowKeyMovesOpenMenuOncePerPress) {
+        using Item = lfs::vis::gui::MenuItemDesc;
+        using Type = Item::Type;
+        const std::vector<Item> items{
+            {.type = Type::Item, .label = "One", .callback_index = 1},
+            {.type = Type::Item, .label = "Two", .callback_index = 2},
+            {.type = Type::Item, .label = "Three", .callback_index = 3},
+        };
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        // A frame makes the open menu the keyboard owner.
+        RmlMenuBarTestAccess::frame(bar_);
+        // One press reaches the menu through SDL dispatch and again in the next frame.
+        RmlMenuBarTestAccess::dispatchKey(bar_, SDL_SCANCODE_DOWN);
+        lfs::vis::InputEventDispatch dispatch;
+        RmlMenuBarTestAccess::frame(bar_, {{.kind = lfs::vis::FrameInputEventKind::KeyDown,
+                                            .scancode = SDL_SCANCODE_DOWN,
+                                            .dispatch = &dispatch}});
+        EXPECT_EQ(RmlMenuBarTestAccess::path(bar_, 0), 1);
+    }
+
+    TEST_F(MenuBarTitleTest, HeldArrowKeysRepeatButOtherKeysActOnce) {
+        using Item = lfs::vis::gui::MenuItemDesc;
+        using Type = Item::Type;
+        const std::vector<Item> items{
+            {.type = Type::Item, .label = "One", .callback_index = 1},
+            {.type = Type::Item, .label = "Two", .callback_index = 2},
+            {.type = Type::Item, .label = "Three", .callback_index = 3},
+        };
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        RmlMenuBarTestAccess::heldKey(bar_, SDL_SCANCODE_DOWN);
+        RmlMenuBarTestAccess::heldKey(bar_, SDL_SCANCODE_DOWN);
+        EXPECT_EQ(RmlMenuBarTestAccess::path(bar_, 0), 2);
+        RmlMenuBarTestAccess::heldKey(bar_, SDL_SCANCODE_RETURN);
+        EXPECT_TRUE(bar_.isOpen());
     }
 
     TEST_F(MenuBarTitleTest, KeyboardNavigationSequences) {
