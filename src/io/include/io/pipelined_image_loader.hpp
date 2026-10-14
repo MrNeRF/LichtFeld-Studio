@@ -82,6 +82,8 @@ namespace lfs::io {
         size_t io_threads = config::DEFAULT_IO_THREADS;
         size_t cold_process_threads = config::DEFAULT_COLD_THREADS;
         size_t max_cache_bytes = config::DEFAULT_MAX_CACHE_BYTES;
+        // Free space the run spill leaves on its filesystem. Zero keeps 10% of the filesystem, at most 10 GiB.
+        size_t spill_reserve_bytes = 0;
         int cache_jpeg_quality = config::DEFAULT_JPEG_QUALITY;
         std::chrono::milliseconds batch_collect_timeout{config::DEFAULT_BATCH_TIMEOUT_MS};
         std::chrono::milliseconds output_wait_timeout{config::DEFAULT_OUTPUT_TIMEOUT_MS};
@@ -593,6 +595,7 @@ namespace lfs::io {
         std::filesystem::path run_spill_folder_;
         size_t spill_cache_bytes_ = 0;
         std::uint64_t spill_sequence_ = 0;
+        bool spill_disabled_ = false;
 
         struct DecodedFrameRing;
         std::shared_ptr<DecodedFrameRing> decoded_frame_ring_;

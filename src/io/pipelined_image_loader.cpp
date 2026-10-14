@@ -79,7 +79,9 @@ namespace lfs::io {
             return cpu.to(lfs::core::Device::CUDA, stream);
         }
 
-        constexpr double HOST_FREE_RAM_EVICTION_RATIO = 0.10;
+        // earlyoom terminates the largest process at 10% available memory by default; release well before that.
+        constexpr double HOST_FREE_RAM_EVICTION_RATIO = 0.20;
+        constexpr size_t MAX_DEFAULT_SPILL_RESERVE_BYTES = size_t{10} << 30;
         constexpr double HOST_FREE_RAM_RELIEF_HYSTERESIS_RATIO = 0.05;
         constexpr std::chrono::milliseconds HOST_MEMORY_CHECK_INTERVAL{500};
 
@@ -677,7 +679,7 @@ namespace lfs::io {
             config_.decode_frame_ring_capacity, 4, DECODE_FRAME_RING_CAPACITY);
         if (config_.max_cache_bytes == 0)
             config_.max_cache_bytes = static_cast<size_t>(
-                static_cast<double>(get_total_physical_memory()) * 0.90);
+                static_cast<double>(get_total_physical_memory()) * 0.50);
         {
             std::lock_guard<std::mutex> lock(adaptive_mutex_);
             adaptive_max_target_ = config_.decode_frame_ring_capacity - 2;
@@ -1780,16 +1782,20 @@ namespace lfs::io {
 
     size_t PipelinedImageLoader::release_host_cache(const size_t bytes) {
         size_t released = 0;
+        size_t spilled = 0;
         {
             std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
             const size_t cached = jpeg_cache_bytes_.load();
+            const size_t spilled_before = spill_cache_bytes_;
             released = spill_least_recent_until_locked(cached > bytes ? cached - bytes : 0);
+            spilled = spill_cache_bytes_ - spilled_before;
         }
         if (released > 0) {
             return_freed_heap_to_os();
-            LOG_INFO("[PipelinedImageLoader] Moved {:.1f} MiB of cached images from RAM to the run spill "
-                     "to free host memory",
-                     static_cast<double>(released) / (1024.0 * 1024.0));
+            LOG_INFO("[PipelinedImageLoader] Released {:.1f} MiB of cached images from RAM to free host memory "
+                     "({:.1f} MiB kept in the run spill)",
+                     static_cast<double>(released) / (1024.0 * 1024.0),
+                     static_cast<double>(spilled) / (1024.0 * 1024.0));
         }
         return released;
     }
@@ -1820,19 +1826,38 @@ namespace lfs::io {
     void PipelinedImageLoader::spill_cache_entry_locked(
         const std::string& cache_key,
         const std::shared_ptr<std::vector<uint8_t>>& data) {
-        if (!data || run_spill_folder_.empty())
+        if (!data || run_spill_folder_.empty() || spill_disabled_)
             return;
+
+        std::error_code ec;
+        const auto space = std::filesystem::space(run_spill_folder_, ec);
+        const size_t reserve = config_.spill_reserve_bytes != 0
+                                   ? config_.spill_reserve_bytes
+                                   : std::min<size_t>(space.capacity / 10, MAX_DEFAULT_SPILL_RESERVE_BYTES);
+        if (ec || space.available < reserve || space.available - reserve < data->size()) {
+            spill_disabled_ = true;
+            LOG_WARN("[PipelinedImageLoader] Run spill disabled: {:.1f} GiB free in {}, {:.1f} GiB must stay free; "
+                     "images released from RAM are decoded again from their files",
+                     static_cast<double>(ec ? 0 : space.available) / (1024.0 * 1024.0 * 1024.0),
+                     lfs::core::path_to_utf8(run_spill_folder_),
+                     static_cast<double>(reserve) / (1024.0 * 1024.0 * 1024.0));
+            return;
+        }
 
         const auto path = run_spill_folder_ /
                           ("blob_" + std::to_string(++spill_sequence_) + ".bin");
         std::ofstream file;
-        if (!lfs::core::open_file_for_write(path, std::ios::binary, file)) {
-            LOG_WARN("[PipelinedImageLoader] Failed to open run spill: {}", lfs::core::path_to_utf8(path));
-            return;
+        if (lfs::core::open_file_for_write(path, std::ios::binary, file)) {
+            file.write(reinterpret_cast<const char*>(data->data()), static_cast<std::streamsize>(data->size()));
+            file.flush();
         }
-        file.write(reinterpret_cast<const char*>(data->data()), static_cast<std::streamsize>(data->size()));
-        if (!file.good()) {
-            LOG_WARN("[PipelinedImageLoader] Failed to write run spill: {}", lfs::core::path_to_utf8(path));
+        if (!file.is_open() || !file.good()) {
+            file.close();
+            std::filesystem::remove(path, ec);
+            spill_disabled_ = true;
+            LOG_WARN("[PipelinedImageLoader] Run spill disabled: failed to write {}; images released from RAM are "
+                     "decoded again from their files",
+                     lfs::core::path_to_utf8(path));
             return;
         }
         spill_cache_[cache_key] = SpillCacheEntry{path, std::chrono::steady_clock::now(), data->size()};
