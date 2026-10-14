@@ -2880,7 +2880,8 @@ contract["check_selection_submode_follows_native_mode"](lf)
             }));
             auto saved = ProjectDocument::open(path);
             ASSERT_TRUE(saved);
-            EXPECT_EQ(saved->view().dom().get_json("navigation.up_axis"), nlohmann::json("legacy_y"));
+            // An unknown up axis the user did not edit is written back unchanged.
+            EXPECT_EQ(saved->view().dom().get_json("navigation.up_axis"), unknown);
             EXPECT_EQ(saved->view().dom().get_json("navigation.future_option"), nlohmann::json("preserved"));
         }
     }
