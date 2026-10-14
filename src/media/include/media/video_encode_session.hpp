@@ -32,6 +32,7 @@ namespace lfs::media {
         // Describes the planes supplied by the producer; never inferred from extent.
         ColorMatrix matrix = ColorMatrix::Unspecified;
         ColorRange range = ColorRange::Unspecified;
+        bool spherical_video = false;
     };
     struct VideoEncodePlane {
         std::uint8_t* data = nullptr;

@@ -200,10 +200,13 @@ namespace lfs::training {
             LFS_ASSERT_MSG(gx <= context->caps().max_workgroup_count[0], "random background dispatch exceeds Vulkan limit");
             launch(p, kRandom, 0, {}, writes, gx);
         }
-        void canny(In image, Out edges) {
+        void canny(In image, In photometric_weight, Out edges) {
             Push p{};
             p.input = vk::address(ref(image));
             p.output = vk::address(ref(edges));
+            p.channels = photometric_weight.is_valid() ? 1u : 0u;
+            if (photometric_weight.is_valid())
+                p.tertiary = vk::address(ref(photometric_weight));
             p.height = count32(image.shape()[1]);
             p.width = count32(image.shape()[2]);
             p.count = p.height * p.width;
@@ -214,7 +217,13 @@ namespace lfs::training {
             const auto context = acquire_vulkan_context();
             const uint32_t gx = (p.width + 15) / 16, gy = (p.height + 15) / 16;
             LFS_ASSERT_MSG(gx <= context->caps().max_workgroup_count[0] && gy <= context->caps().max_workgroup_count[1], "Canny dispatch exceeds Vulkan limit");
-            launch(p, kCanny, bytes, reads, writes, gx, gy);
+            if (photometric_weight.is_valid()) {
+                const auto mask = ref(photometric_weight);
+                const std::array masked_reads{input, mask};
+                launch(p, kCanny, bytes, masked_reads, writes, gx, gy);
+            } else {
+                launch(p, kCanny, bytes, reads, writes, gx, gy);
+            }
         }
         void normalize_scalar(Out values, In scalar, float skip_below) {
             if (values.numel() == 0)

@@ -1301,11 +1301,11 @@ namespace {
         keep(out.snapshot, backend, "image.random.high_seed", random_high_seed, kExact);
         const auto canny_src = pattern({3, 35, 37}, 1.f, 6);
         auto edges = Tensor::full({35, 37}, -1.f, Device::GPU);
-        table->canny(canny_src, edges);
+        table->canny(canny_src, {}, edges);
         keep(out.snapshot, backend, "image.canny", edges, kConv);
         const auto canny_bytes = image_bytes({3, 35, 37});
         auto byte_edges = Tensor::full({35, 37}, -1.f, Device::GPU);
-        table->canny(canny_bytes, byte_edges);
+        table->canny(canny_bytes, {}, byte_edges);
         keep(out.snapshot, backend, "image.canny.bytes", byte_edges, kConv);
         auto normalized = pattern({257}, 1.f, 8);
         auto scalar = Tensor::full({1}, 2.f, Device::GPU);
@@ -2842,7 +2842,7 @@ namespace {
             }
             const auto launch = [&] {
                 if (family == "TrainingImage") {
-                    table.training_image->canny(first, output);
+                    table.training_image->canny(first, {}, output);
                 } else if (family == "Refine") {
                     table.refine->rotation_mask(first, output);
                 } else {

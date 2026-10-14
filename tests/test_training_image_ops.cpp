@@ -169,7 +169,7 @@ TEST_F(TrainingImageOpsBytes, CannyFloatAndByte) {
         auto actual = Tensor::full({35, 37}, -1.f, Device::GPU);
         auto direct = actual.clone();
         const auto before = bytes(actual);
-        image_ops().canny(source, actual);
+        image_ops().canny(source, {}, actual);
         if (dtype == DataType::UInt8) {
             kernels::launch_fused_canny_edge_filter_chw(source.ptr<uint8_t>(), direct.ptr<float>(), 35, 37,
                                                         lfs::core::getCurrentCUDAStream());
@@ -210,8 +210,15 @@ TEST(TrainingImageEdgeMask, ExcludesPixelsBeforeNormalizingOnSelectedBackend) {
                 mask_values[i] = i % 3 == 0 ? 0.f : (i % 3 == 1 ? 128.f : 255.f);
             auto mask = Tensor::from_vector(mask_values, {h, w}, Device::GPU);
             mask = dtype == DataType::UInt8 ? mask.to(dtype) : mask / 255.f;
+            auto masked_input = image.cpu().to_vector();
+            for (size_t i = 0; i < mask_values.size(); ++i) {
+                if (mask_values[i] == 0.f || (band && mask_values[i] <= 250.f))
+                    for (size_t c = 0; c < 3; ++c)
+                        masked_input[c * h * w + i] = 0.f;
+            }
+            const auto expected_input = Tensor::from_vector(masked_input, {3, h, w}, Device::GPU);
             auto raw = Tensor::zeros({h, w}, Device::GPU);
-            ops.training_image->canny(image, raw);
+            ops.training_image->canny(expected_input, {}, raw);
             auto expected = raw.cpu().to_vector();
             std::vector<float> positive;
             for (size_t i = 0; i < expected.size(); ++i) {

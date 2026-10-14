@@ -16,6 +16,13 @@ namespace {
 
     constexpr std::uint32_t kInvalid = LodPageCache::kInvalidPage;
 
+    TEST(LodPageCache, BudgetRefreshReusesUnchangedPagePool) {
+        EXPECT_FALSE(lfs::vis::detail::lodPageCacheNeedsReconfigure(true, true, 128, 128));
+        EXPECT_TRUE(lfs::vis::detail::lodPageCacheNeedsReconfigure(true, true, 128, 256));
+        EXPECT_TRUE(lfs::vis::detail::lodPageCacheNeedsReconfigure(false, false, 128, 128));
+        EXPECT_FALSE(lfs::vis::detail::lodPageCacheNeedsReconfigure(true, false, 128, 128));
+    }
+
     std::vector<LodPageCache::PendingUpload> drainAndComplete(LodPageCache& cache) {
         auto uploads = cache.drainPendingUploads();
         cache.completeUploads(uploads);

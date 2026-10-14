@@ -181,3 +181,11 @@ body {
     flex-shrink: 0;
     padding: 2dp 4dp;
 }
+
+.rendering-default-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6dp;
+    margin: 4dp 0 8dp;
+}
+.rendering-default-actions .btn { flex: 0 1 auto; white-space: normal; }

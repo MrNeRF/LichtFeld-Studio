@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Regression tests for hook-driven viewport toolbar updates."""
 
+import inspect
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -478,7 +479,7 @@ def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
 
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: state.active_submode, raising=False)
-    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode: setattr(state, "active_submode", mode), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode, mark_session_dirty=True: setattr(state, "active_submode", mode), raising=False)
     monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [select_tool]), raising=False)
     monkeypatch.setattr(
         module.ToolRegistry,
@@ -535,6 +536,64 @@ def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
     assert state.active_tool == ""
     assert snapshot["selection_group_buttons"][0]["selected"] is False
 
+
+def test_histogram_toolbar_entry_is_a_selection_mode_not_a_utility(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    select_tool = SimpleNamespace(
+        id="builtin.select",
+        icon="selection",
+        label="Select",
+        submodes=(SimpleNamespace(id="centers", label="Centers", icon="circle-dot"),),
+        can_activate=lambda _context: True,
+    )
+    monkeypatch.setattr(module, "histogram_mode_available", lambda _context: True)
+    monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "centers", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "is_panel_enabled", lambda _panel_id: False, raising=False)
+
+    _groups, modes = module._GizmoToolbarController()._build_selection_records(
+        select_tool, "builtin.select", SimpleNamespace()
+    )
+    utility_source = inspect.getsource(module._UtilityToolbarController.snapshot)
+
+    histogram = next(button for button in modes if button["button_id"] == "selection-histogram")
+    assert histogram["action"] == "toggle_histogram"
+    assert histogram["tooltip_text"] == "Histogram"
+    assert "util-histogram" not in utility_source
+
+
+def test_toolbar_default_submodes_do_not_mark_session_dirty(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    calls = []
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "set_selection_mode",
+        lambda mode, mark_session_dirty=True: calls.append((mode, mark_session_dirty)),
+        raising=False,
+    )
+    monkeypatch.setattr(lf_stub.ui, "get_transform_space", lambda: 0, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "", raising=False)
+    select_tool = SimpleNamespace(
+        id="builtin.select",
+        icon="selection",
+        label="Select",
+        can_activate=lambda _context: True,
+        submodes=(SimpleNamespace(id="centers", label="Centers", icon="circle-dot"),),
+    )
+    crop_tool = SimpleNamespace(
+        id="builtin.cropbox",
+        submodes=(SimpleNamespace(id="translate", label="Translate", icon="move"),),
+    )
+
+    module._GizmoToolbarController()._build_selection_records(
+        select_tool, "builtin.select", SimpleNamespace()
+    )
+    module._GizmoToolbarController()._build_submode_records(
+        "builtin.cropbox", crop_tool
+    )
+
+    assert calls == [("centers", False), ("translate", False)]
 
 def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
@@ -1300,7 +1359,7 @@ def test_selection_volume_modes_show_inline_gizmo_controls(toolbar_module, monke
 
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: state.active_submode, raising=False)
-    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode: setattr(state, "active_submode", mode), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode, mark_session_dirty=True: setattr(state, "active_submode", mode), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_crop_tool_operation", lambda: state.crop_operation, raising=False)
     monkeypatch.setattr(
         lf_stub.ui,
@@ -1917,7 +1976,6 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     lf_stub = sys.modules["lichtfeld"]
     panel_enabled = {
         "lfs.asset_manager": True,
-        "lfs.preferences": True,
         "lfs.plugin_marketplace": True,
     }
 
@@ -1946,9 +2004,8 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
         "tr",
         lambda key: {
             "toolbar.focus_selection": "Focus Selection",
-            "toolbar.asset_manager": "Assets",
+            "toolbar.asset_manager": "Projects",
             "menu.tools.plugin_marketplace": "Plugins",
-            "window.preferences": "Preferences",
             "toolbar.viewport_export": "Export",
         }.get(key, key),
         raising=False,
@@ -1985,20 +2042,12 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     ]
     assert camera_buttons[3]["icon_src"] == "../icon/drone.png"
     assert [button["button_id"] for button in extra_buttons] == [
-        "util-preferences",
-        "util-viewport-export",
         "util-asset-manager",
-        "util-plugin-marketplace",
+        "util-viewport-export",
         "util-sequencer",
+        "util-plugin-marketplace",
     ]
     extra_by_id = {button["button_id"]: button for button in extra_buttons}
-    preferences = extra_by_id["util-preferences"]
-    assert preferences["action"] == "toggle_panel"
-    assert preferences["value"] == "lfs.preferences"
-    assert preferences["icon_src"] == "../icon/settings.png"
-    assert preferences["tooltip_text"] == "Preferences"
-    assert preferences["action_id"] == "OPEN_PREFERENCES"
-    assert preferences["selected"] is True
     assert extra_by_id["util-viewport-export"]["action"] == "toggle_viewport_export"
     assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/viewport-export.png"
     assert extra_by_id["util-viewport-export"]["tooltip_text"] == "Export"
@@ -2006,7 +2055,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert extra_by_id["util-asset-manager"]["action"] == "toggle_panel"
     assert extra_by_id["util-asset-manager"]["value"] == "lfs.asset_manager"
     assert extra_by_id["util-asset-manager"]["icon_src"] == "../icon/archive.png"
-    assert extra_by_id["util-asset-manager"]["tooltip_text"] == "Assets"
+    assert extra_by_id["util-asset-manager"]["tooltip_text"] == "Projects"
     assert extra_by_id["util-asset-manager"]["selected"] is True
     assert extra_by_id["util-plugin-marketplace"]["action"] == "toggle_panel"
     assert extra_by_id["util-plugin-marketplace"]["value"] == "lfs.plugin_marketplace"

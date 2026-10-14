@@ -25,6 +25,7 @@ namespace lfs::media {
         bool preserve_metadata = false;
         // Appended to preserve existing positional aggregate initializers.
         core::AtomicFileOptions image_output{.overwrite = true, .durable = false, .create_directories = false};
+        int first_source_frame_number = 1;
         Tiff16OutputOptions tiff16;
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {

@@ -524,11 +524,12 @@ namespace lfs::vis {
     }
 
     inline void enforceProjectionBackend(RenderSettings& settings) {
-        if (!settings.equirectangular) {
+        if (settings.equirectangular) {
+            settings.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+            settings.gut = true;
             return;
         }
-        settings.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
-        settings.gut = true;
+        settings.gut = lfs::rendering::isGutBackend(settings.raster_backend);
     }
 
     [[nodiscard]] inline bool environmentBackgroundEnabled(const RenderSettings& settings) {

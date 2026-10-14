@@ -18,6 +18,7 @@ namespace lfs::vis {
           eval_ssim(store_, Field::EvalSsim, "eval_ssim", std::optional<float>{}),
           eval_lpips(store_, Field::EvalLpips, "eval_lpips", std::optional<float>{}),
           scene_generation(store_, Field::SceneGeneration, "scene_generation", 0),
+          stored_session_generation(store_, Field::StoredSessionGeneration, "stored_session_generation", 0),
           selection_generation(store_, Field::SelectionGeneration, "selection_generation", 0),
           mode_text(store_, Field::ModeText, "mode_text", std::string{}),
           camera_metrics(store_, Field::CameraMetricsValue, "camera_metrics", std::optional<CameraMetrics>{}),

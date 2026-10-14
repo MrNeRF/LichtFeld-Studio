@@ -54,6 +54,12 @@ static float grayAt(Parameters p, int x, int y) {
     float bl = imageIsBytes != 0 ? float(b[2u * plane + at]) * (1.0f / 255.0f) : f[2u * plane + at];
     return 0.299f * r + 0.587f * g + 0.114f * bl;
 }
+static bool maskKeeps(Parameters p, int x, int y) {
+    if (p.channels == 0) return true;
+    x = clamp(x, 0, int(p.width) - 1); y = clamp(y, 0, int(p.height) - 1);
+    uint at = uint(y) * p.width + uint(x);
+    return ((Ptr<float, Access.Read>)p.tertiary)[at] > 0.0f;
+}
 groupshared float grayTile[576];
 groupshared float blurTile[400];
 groupshared float2 gradientTile[324];
@@ -115,8 +121,11 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Paramet
     }
     if (operation == 4) {
         int2 origin = int2(groupId.xy) * 16;
-        for (uint t = lane; t < 576u; t += 256u)
-            grayTile[t] = grayAt(p, origin.x + int(t % 24u) - 4, origin.y + int(t / 24u) - 4);
+        for (uint t = lane; t < 576u; t += 256u) {
+            int x = origin.x + int(t % 24u) - 4;
+            int y = origin.y + int(t / 24u) - 4;
+            grayTile[t] = maskKeeps(p, x, y) ? grayAt(p, x, y) : 0.0f;
+        }
         GroupMemoryBarrierWithGroupSync();
         const float blurWeights[25] = {2,4,5,4,2, 4,9,12,9,4, 5,12,15,12,5,
                                        4,9,12,9,4, 2,4,5,4,2};
@@ -152,6 +161,10 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Paramet
             int dx = clamp(int(round(g.x / magnitude)), -1, 1), dy = clamp(int(round(g.y / magnitude)), -1, 1);
             float2 forward = gradientTile[at + dy * 18 + dx], backward = gradientTile[at - dy * 18 - dx];
             if (magnitude < length(forward) || magnitude < length(backward)) magnitude = 0.0f;
+        }
+        if (!maskKeeps(p, int(outputX), int(outputY))) {
+            output[outputY * p.width + outputX] = 0.0f;
+            return;
         }
         output[outputY * p.width + outputX] = magnitude;
         return;

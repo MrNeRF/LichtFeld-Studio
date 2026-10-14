@@ -382,6 +382,7 @@ namespace lfs::vis {
                                          const lfs::core::ExportableBlock& block);
         [[nodiscard]] bool sparseBindingEnabled() const { return sparse_binding_enabled_; }
         [[nodiscard]] bool bufferDeviceAddressEnabled() const { return buffer_device_address_enabled_; }
+        [[nodiscard]] bool geometryShaderEnabled() const { return geometry_shader_enabled_; }
         [[nodiscard]] bool createExternalTimelineSemaphore(
             std::uint64_t initial_value,
             ExternalSemaphore& out,
@@ -625,6 +626,7 @@ namespace lfs::vis {
         bool external_memory_dedicated_allocation_enabled_ = false;
         bool sparse_binding_enabled_ = false;
         bool buffer_device_address_enabled_ = false;
+        bool geometry_shader_enabled_ = false;
         std::mutex graphics_queue_mutex_;
         std::mutex tensor_interop_mutex_;
         std::unique_ptr<lfs::core::TensorVulkanInterop> tensor_interop_;

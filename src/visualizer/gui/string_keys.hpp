@@ -268,12 +268,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* REDO_STACK = "scene.redo_stack";
         inline constexpr const char* NOTHING_RECORDED = "scene.nothing_recorded";
         inline constexpr const char* NO_ENTRIES_IN_STACK = "scene.no_entries_in_stack";
-        inline constexpr const char* LOG_MIRROR = "scene.log_mirror";
         inline constexpr const char* LOG_LEVEL = "scene.log_level";
-        inline constexpr const char* LOG_EXPORT = "scene.log_export";
-        inline constexpr const char* LOG_COPY = "scene.log_copy";
-        inline constexpr const char* LOG_NOTE = "scene.log_note";
-        inline constexpr const char* NO_LOGS = "scene.no_logs";
         inline constexpr const char* LOG_TRACE = "scene.log_trace";
         inline constexpr const char* LOG_DEBUG = "scene.log_debug";
         inline constexpr const char* LOG_INFO = "scene.log_info";
@@ -786,6 +781,13 @@ namespace lichtfeld::Strings {
         inline constexpr const char* CANDIDATES_READOUT_FMT = "video_extractor.candidates_readout_fmt";
         inline constexpr const char* SHARPNESS_MODE_DESC_THRESHOLD = "video_extractor.sharpness_mode_desc_threshold";
         inline constexpr const char* SHARPNESS_MODE_DESC_WINDOW = "video_extractor.sharpness_mode_desc_window";
+        inline constexpr const char* OVERWRITE_PROMPT = "video_extractor.overwrite_prompt";
+        inline constexpr const char* OVERWRITE_PROMPT_METADATA = "video_extractor.overwrite_prompt_metadata";
+        inline constexpr const char* OVERWRITE_PROMPT_FRAMES_METADATA = "video_extractor.overwrite_prompt_frames_metadata";
+        inline constexpr const char* OVERWRITE_CANCEL = "video_extractor.overwrite_cancel";
+        inline constexpr const char* OVERWRITE_DELETE = "video_extractor.overwrite_delete";
+        inline constexpr const char* OVERWRITE_PROCEED = "video_extractor.overwrite_proceed";
+        inline constexpr const char* OVERWRITE_DELETE_ERROR = "video_extractor.overwrite_delete_error";
     } // namespace VideoExtractor
 
     namespace Mesh2Splat {
@@ -934,6 +936,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EXPORT_EXTENSION_WARNING = "runtime.export_extension_warning";
         inline constexpr const char* EXPORT_SH_DEGREE_CLAMPED = "runtime.export_sh_degree_clamped";
         inline constexpr const char* VIDEO_ENCODER_UNAVAILABLE = "runtime.video_encoder_unavailable";
+        inline constexpr const char* VIDEO_ENCODER_PROBE_FAILED = "runtime.video_encoder_probe_failed";
         inline constexpr const char* SCENE_MANAGER_UNAVAILABLE = "runtime.scene_manager_unavailable";
         inline constexpr const char* NO_MODEL_SELECTED = "runtime.no_model_selected";
         inline constexpr const char* NO_SCENE_MANAGER = "runtime.no_scene_manager";

@@ -102,10 +102,12 @@ namespace lfs::vis::training_session_detail {
         bool completed = false;
         bool stopped = false;
         bool hydrated = false;
+        bool restoring = false;
         int iteration = 0;
         int max_iterations = 0;
         int num_gaussians = 0;
         std::string strategy;
+        std::string restore_error;
     };
 
     inline LastStoredSessionPublish g_last_stored_session_publish;

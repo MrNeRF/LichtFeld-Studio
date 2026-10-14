@@ -285,6 +285,8 @@ add_executable(lichtfeld_file_dialog_tests test_file_dialog_path.cpp)
 target_compile_features(lichtfeld_file_dialog_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_file_dialog_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/core/include
+    ${CMAKE_SOURCE_DIR}/src/geometry/include
     ${CMAKE_SOURCE_DIR}/src/visualizer
 )
 target_link_libraries(lichtfeld_file_dialog_tests PRIVATE GTest::gtest_main)
@@ -986,6 +988,7 @@ set(TEST_FILES
     test_warp_cull_bwd.cpp
     test_thin_structure.cpp
     test_mask_thin_structure_guidance.cpp
+    test_mask_edge_guidance.cpp
     test_blob_seeding.cpp
     test_rendered_structure.cpp
     test_gradient_residual.cpp
@@ -1166,6 +1169,7 @@ set(TEST_FILES
     test_view_info_json.cpp
     test_video_reconstruction.cpp
     test_video_export_utils.cpp
+    test_video_export_frame_schedule.cpp
     test_video_frame_extractor_naming.cpp
     test_video_cpu_rgb_conversion.cpp
     test_video_cuda_frame_handoff.cpp
@@ -1243,6 +1247,10 @@ set(TEST_FILES
     test_navigation_up_axis.cpp
     test_input_controller_focus.cpp
     test_input_layout_chords.cpp
+    test_keymap_layout_contract.cpp
+    test_keymap_profile_io.cpp
+    test_keymap_upgrade.cpp
+    test_keymap_default_contract.cpp
     test_ordered_input_dispatch.cpp
     test_python_editor_input.cpp
     test_input_controller_dataset_load.cpp
@@ -1600,6 +1608,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
     vterm
     GTest::gtest
     nanobind-static
+    ZLIB::ZLIB
     ${TORCH_LIBRARIES}
     OpenMeshCore
     assimp::assimp
@@ -1907,6 +1916,8 @@ endif()
 # Keep every Python tier explicit so new modules cannot silently drift out of
 # the curated suite.
 set(LFS_PYTHON_FAST_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_ci_format_push.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_ci_retry_configure.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gallery_storage.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
@@ -2215,6 +2226,39 @@ if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_empty_split_runtime.py
     )
     set_tests_properties(lichtfeld.python.mesh_empty_split PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_removal_keeps_viewport
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_removal_keeps_viewport_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_removal_keeps_viewport PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_panorama
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_panorama_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_panorama PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.mesh_split_depth
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh_split_depth_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.mesh_split_depth PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS "gpu;integration"
         TIMEOUT 300

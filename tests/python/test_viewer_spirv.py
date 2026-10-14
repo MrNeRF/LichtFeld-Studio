@@ -49,7 +49,7 @@ class ViewerSpirv(unittest.TestCase):
             blob = bytes(int(w, 16) for w in re.findall(r'0x[0-9a-fA-F]+', body))
             modules['rmlui/' + name] = struct.unpack('<%dI' % (len(blob) // 4), blob)
         # Allowed capabilities map to explicit device requirements or tensor per-op gates.
-        allowed = {1, 9, 11, 22, 49, 50, 61, 62, 63, 64, 65, 4434, 4466, 5347, 6033}
+        allowed = {1, 2, 9, 11, 22, 49, 50, 61, 62, 63, 64, 65, 4434, 4466, 5347, 6033}
         per_module = {'tensor/kWords_export_kmeans_screen': {5345, 5346, 6022}}
         for name, words in modules.items():
             with self.subTest(module=name):

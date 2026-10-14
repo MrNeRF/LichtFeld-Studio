@@ -689,13 +689,16 @@ class TrainingPanel(Panel):
             session = _training_session_state()
             if session.get("restoring"):
                 return "restoring"
-            if session.get("error") and not session.get("hydrated") and not RuntimeState.has_trainer.value:
+            if (
+                session.get("error")
+                and not session.get("hydrated")
+                and (session.get("available") or not RuntimeState.has_trainer.value)
+            ):
                 return "error"
             if (
                 not RuntimeState.has_trainer.value
                 and session.get("available")
                 and not session.get("hydrated")
-                and not session.get("restoring")
                 and value in ("idle", "ready", "", None)
             ):
                 return "completed" if session.get("completed") else "paused"
@@ -1566,6 +1569,7 @@ class TrainingPanel(Panel):
             RuntimeState.eval_psnr,
             RuntimeState.num_gaussians,
             RuntimeState.scene_generation,
+            RuntimeState.stored_session_generation,
             RuntimeState.language_generation,
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)

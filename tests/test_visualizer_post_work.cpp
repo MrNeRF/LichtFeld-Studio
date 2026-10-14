@@ -949,7 +949,8 @@ namespace {
         const std::filesystem::path& dataset_path = {},
         const int sh_degree = 0,
         const bool gut = false,
-        const lfs::training::PPISP* appearance = nullptr) {
+        const lfs::training::PPISP* appearance = nullptr,
+        const std::filesystem::path& background_image = {}) {
         const lfs::core::GpuBackendScope backend_scope(lfs::core::GpuBackend::CUDA);
         const std::size_t count = sh_degree > 0 ? 8 : 2;
         auto model = sh_degree > 0
@@ -963,6 +964,10 @@ namespace {
         parameters.optimization.sh_degree = sh_degree;
         parameters.optimization.gut = gut;
         parameters.optimization.use_ppisp = appearance != nullptr;
+        if (!background_image.empty()) {
+            parameters.optimization.bg_mode = lfs::core::param::BackgroundMode::Image;
+            parameters.optimization.bg_image_path = background_image;
+        }
         parameters.optimization.max_cap =
             static_cast<int>(count);
         parameters.dataset.data_path = dataset_path;
@@ -1119,7 +1124,8 @@ namespace {
         const bool enable_sparsity = false,
         const int sparsify_steps = 15000,
         const lfs::training::PPISP* appearance = nullptr,
-        const int max_cap = -1) {
+        const int max_cap = -1,
+        const std::filesystem::path& background_image = {}) {
         auto document = lfs::test::licht::make_empty_document(
             lfs::core::generate_uuid_v4(), 1);
         lfs::core::Scene source;
@@ -1169,7 +1175,7 @@ namespace {
                 checkpoint_uuid,
                 make_training_autosave_checkpoint_payload(
                     checkpoint_uuid, dataset_path,
-                    sh_degree, gut, appearance)));
+                    sh_degree, gut, appearance, background_image)));
         if (finish_reason !=
             lfs::io::project::TrainingFinishReason::
                 None) {
@@ -2304,6 +2310,52 @@ contract["check_selection_submode_follows_native_mode"](lf)
                               std::chrono::seconds(3)));
     }
 
+    TEST_F(VisualizerImplResetTest,
+           FailedSplatHydrationRefusesSaveWithoutDirtyingProject) {
+        const auto valid_path = temporary_.path / "valid-payload.licht";
+        const auto corrupt_path = temporary_.path / "corrupt-payload.licht";
+        write_splt_project(valid_path, lfs::test::licht::make_splat(50'000),
+                           "First", lfs::test::licht::make_splat(50'000), "Second");
+        std::filesystem::copy_file(valid_path, corrupt_path);
+        auto reader = lfs::test::licht::require_result(
+            lfs::io::project::ProjectReader::open(corrupt_path));
+        const auto splt = std::ranges::find_if(reader.chunks(), [](const auto& chunk) {
+            return chunk.key.fourcc == lfs::io::project::FOURCC_SPLT;
+        });
+        ASSERT_NE(splt, reader.chunks().end());
+        auto bytes = lfs::test::licht::read_file_bytes(corrupt_path);
+        bytes[static_cast<std::size_t>(splt->payload_offset + splt->stored_bytes / 2)] ^=
+            std::byte{1};
+        lfs::test::licht::write_file_bytes(corrupt_path, bytes);
+        const auto before = lfs::test::licht::read_file_bytes(corrupt_path);
+
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.projectOpen(valid_path, ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "complete";
+        }));
+        ASSERT_TRUE(viewer.projectOpen(corrupt_path, ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(waitUntil([&] {
+            viewer.pumpPostedWorkForProjectWrite();
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "failed";
+        }));
+
+        EXPECT_FALSE(viewer.projectGetInfo()->dirty);
+        const auto saved = viewer.projectSave(false);
+        EXPECT_FALSE(saved);
+        if (saved) {
+            ASSERT_TRUE(waitUntil([&] {
+                viewer.pumpPostedWorkForProjectWrite();
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
+        }
+        EXPECT_EQ(lfs::test::licht::read_file_bytes(corrupt_path), before);
+    }
+
     TEST_F(VisualizerImplResetTest, RedoDeletedDeferredNodeAfterUndoHydrates) {
         if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
             GTEST_SKIP() << "CUDA device unavailable";
@@ -2841,7 +2893,8 @@ contract["check_selection_submode_follows_native_mode"](lf)
             }));
             auto saved = ProjectDocument::open(path);
             ASSERT_TRUE(saved);
-            EXPECT_EQ(saved->view().dom().get_json("navigation.up_axis"), nlohmann::json("legacy_y"));
+            // An unknown up axis the user did not edit is written back unchanged.
+            EXPECT_EQ(saved->view().dom().get_json("navigation.up_axis"), unknown);
             EXPECT_EQ(saved->view().dom().get_json("navigation.future_option"), nlohmann::json("preserved"));
         }
     }
@@ -5554,6 +5607,95 @@ contract["check_selection_submode_follows_native_mode"](lf)
                 LOC(lichtfeld::Strings::Recovery::
                         CRASH_TITLE));
         }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RecoverThenAutosaveEditsForNextRecovery) {
+        const auto project_path =
+            temporary_.path / "recover-autosave-again.licht";
+        const auto sidecar =
+            lfs::io::project::autosave_sidecar_path(project_path);
+        std::optional<lfs::core::Uuid> ppisp_uuid;
+        write_recoverable_project(project_path);
+        auto options = projectOptions();
+        const auto recover = [&](VisualizerImpl& viewer) {
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
+            auto pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges);
+            ASSERT_TRUE(pending);
+            ASSERT_EQ(*pending, ProjectOpenOutcome::RecoveryPromptPending);
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_,
+                gui->rml_modal_overlay_->queue_);
+            ASSERT_TRUE(request.on_result);
+            request.on_result({.button_label =
+                                   LOC(lichtfeld::Strings::Recovery::RECOVER)});
+            ASSERT_TRUE(waitForHydrationComplete(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        };
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer);
+            ASSERT_NO_FATAL_FAILURE(recover(viewer));
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(lifecycle->recovered_master_path_);
+            ASSERT_TRUE(lifecycle->recovery_session_);
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Post recovery edit"),
+                lfs::core::NULL_NODE);
+            lifecycle->settings_.autosave_interval_seconds = 2;
+            lifecycle->settings_.autosave_quiet_seconds = 0;
+            lifecycle->settings_.autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosave_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->last_mutation_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            ASSERT_TRUE(lifecycle->project_write_job_)
+                << lifecycle->last_project_write_error_;
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            const auto saved = lfs::test::licht::require_result(
+                lfs::io::project::ProjectReader::open(sidecar));
+            EXPECT_EQ(saved.superblock().autosave_sequence, 2u);
+            const auto ppisp = std::ranges::find_if(
+                saved.chunks(), [](const auto& row) {
+                    return row.key.fourcc ==
+                           lfs::io::project::FOURCC_PPIS;
+                });
+            ASSERT_NE(ppisp, saved.chunks().end());
+            ppisp_uuid = ppisp->key.instance_uuid;
+        }
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            ASSERT_NO_FATAL_FAILURE(recover(viewer));
+            const auto& document = *viewer.project_lifecycle_->document_;
+            const auto nodes = lfs::test::licht::require_result(
+                document.scene_graph().nodes());
+            const auto marker = document.view().dom().get_json("recovery_marker");
+            ASSERT_TRUE(marker);
+            EXPECT_EQ(*marker, "autosaved");
+            ASSERT_TRUE(ppisp_uuid);
+            EXPECT_NE(document.find_ppisp(*ppisp_uuid), nullptr);
+            EXPECT_TRUE(std::ranges::any_of(
+                nodes, [](const auto& node) {
+                    return node.name == "Post recovery edit";
+                }));
+        }
+        EXPECT_TRUE(std::filesystem::is_regular_file(sidecar));
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -11179,10 +11321,15 @@ contract["check_selection_submode_follows_native_mode"](lf)
     }
 
     TEST_F(VisualizerImplResetTest,
-           SessionSoftDirtyDoesNotPromptOrArmAutosave) {
+           SessionSoftDirtyDoesNotPromptButArmsAutosave) {
+        using namespace lfs::io::project;
+        using lfs::test::licht::require_result;
+        using lfs::test::licht::require_status;
         const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "session-soft.licht";
+        const auto recovered_path =
+            temporary / "session-soft-recovered.licht";
         const auto sidecar =
             lfs::io::project::
                 autosave_sidecar_path(project_path);
@@ -11217,10 +11364,25 @@ contract["check_selection_submode_follows_native_mode"](lf)
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
             ASSERT_NE(lifecycle->document_, nullptr);
-            (void)lifecycle->document_
-                ->edit_gui_layout();
-            (void)lifecycle->document_
-                ->edit_view();
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer);
+            viewer.input_controller_->setViewer(&viewer);
+            viewer.noteGuiSessionRestoreOwnerReady(1);
+            auto* const rendering = viewer.getRenderingManager();
+            ASSERT_NE(rendering, nullptr);
+            const auto initial_info = viewer.projectGetInfo();
+            ASSERT_TRUE(initial_info);
+            EXPECT_FALSE(initial_info->session_dirty);
+            EXPECT_TRUE(initial_info->dirty_chapters.empty());
+            auto render_settings = rendering->getSettings();
+            render_settings.render_scale = 0.7F;
+            ASSERT_TRUE(rendering->updateSettingsFromUser(render_settings));
+            EXPECT_FLOAT_EQ(rendering->getSettings().render_scale, 0.7F);
+            auto* const input = viewer.input_controller_.get();
+            input->setNavigationUpAxis(NavigationUpAxis::DataZ);
+            EXPECT_EQ(input->navigationUpAxis(), NavigationUpAxis::DataZ);
+            viewer.projectMarkSessionChapterCommitted("VIEW");
 
             const auto info =
                 viewer.projectGetInfo();
@@ -11229,12 +11391,6 @@ contract["check_selection_submode_follows_native_mode"](lf)
                        info.error());
             EXPECT_FALSE(info->dirty);
             EXPECT_TRUE(info->session_dirty);
-            EXPECT_NE(
-                std::find(
-                    info->dirty_chapters.begin(),
-                    info->dirty_chapters.end(),
-                    "GUIL"),
-                info->dirty_chapters.end());
             EXPECT_NE(
                 std::find(
                     info->dirty_chapters.begin(),
@@ -11261,14 +11417,39 @@ contract["check_selection_submode_follows_native_mode"](lf)
             lifecycle->last_autosave_at_ =
                 std::chrono::steady_clock::now() -
                 std::chrono::hours(1);
-            lifecycle->updateMaintenance();
-            EXPECT_FALSE(viewer.jobs().anyRunning(
-                JobType::ProjectWrite));
-            EXPECT_FALSE(
-                lifecycle->project_write_job_
-                    .has_value());
-            EXPECT_FALSE(
-                std::filesystem::exists(sidecar));
+            lifecycle->last_mutation_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
+            ASSERT_GT(
+                lifecycle->document_->dirty_epoch(),
+                lifecycle->last_autosaved_dirty_epoch_);
+            ASSERT_FALSE(
+                lifecycle->isBackgroundAutosaveSuppressed());
+            ASSERT_FALSE(
+                lifecycle->isTrainingWriteWindowOpen());
+            const auto first_sequence =
+                lifecycle->autosave_sequence_;
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    lifecycle->updateMaintenance();
+                    return lifecycle->autosave_sequence_ >
+                           first_sequence;
+                }));
+            EXPECT_TRUE(std::filesystem::exists(sidecar));
+            require_status(materialize_recovered_project(
+                project_path, sidecar, recovered_path));
+            const auto recovered_document =
+                require_result(ProjectDocument::open(recovered_path));
+            EXPECT_EQ(
+                recovered_document.view().dom().get_json(
+                    "render_settings.render_scale"),
+                lfs::io::JsonChapterDom::Json(0.7F));
+            EXPECT_EQ(
+                recovered_document.view().dom().get_json(
+                    "navigation.up_axis"),
+                lfs::io::JsonChapterDom::Json("data_z"));
         }
     }
 
@@ -18092,6 +18273,93 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(manager->getCurrentIteration(), 11);
     }
 
+    enum class StoredSessionRestoreCase { Success,
+                                          Failure,
+                                          Cancel,
+                                          Replace };
+    class StoredSessionRestoreTest : public VisualizerImplResetTest,
+                                     public ::testing::WithParamInterface<StoredSessionRestoreCase> {};
+
+    TEST_P(StoredSessionRestoreTest, CompletionPublishesOnViewerThread) {
+        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto outcome = GetParam();
+        const bool failure = outcome == StoredSessionRestoreCase::Failure ||
+                             outcome == StoredSessionRestoreCase::Replace;
+        const auto project_path = temporary_.path / "restore.licht";
+        const auto dataset_path = temporary_.path / "restore-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path, lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(), dataset_path,
+            lfs::io::project::TrainingFinishReason::None, 0, -1,
+            false, false, 15000, nullptr, -1,
+            failure ? temporary_.path / "missing-background.png" : std::filesystem::path{});
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer);
+        ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        const auto generation = app_store().stored_session_generation.get();
+        ASSERT_TRUE(viewer.restoreProjectTrainingSession());
+        ASSERT_EQ(app_store().stored_session_generation.get(), generation + 1);
+        auto* manager = viewer.getTrainerManager();
+        ASSERT_NE(manager, nullptr);
+        if (outcome == StoredSessionRestoreCase::Cancel) {
+            auto& worker = viewer.project_lifecycle_->hydration_threads_.back();
+            worker.request_stop();
+            worker.join();
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return app_store().stored_session_generation.get() == generation + 2;
+            }));
+            EXPECT_EQ(viewer.projectTrainingSessionState().error,
+                      "Project trainer restore cancelled");
+            EXPECT_FALSE(manager->canResume());
+            return;
+        }
+        if (outcome == StoredSessionRestoreCase::Replace) {
+            ASSERT_TRUE(waitUntil([&] {
+                std::lock_guard lock(viewer.work_queue_mutex_);
+                return !viewer.work_queue_.empty();
+            }));
+            viewer.project_lifecycle_->hydration_threads_.back().join();
+            {
+                std::lock_guard lock(viewer.work_queue_mutex_);
+                EXPECT_EQ(viewer.work_queue_.size(), 1);
+            }
+            const auto replacement = temporary_.path / "replacement.licht";
+            write_empty_project(replacement);
+            ASSERT_TRUE(viewer.projectOpen(replacement, ProjectSwitchDisposition::DiscardChanges));
+            const auto replacement_generation = app_store().stored_session_generation.get();
+            lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
+            EXPECT_EQ(app_store().stored_session_generation.get(), replacement_generation);
+            const auto state = viewer.projectTrainingSessionState();
+            EXPECT_FALSE(state.restoring);
+            EXPECT_TRUE(state.error.empty());
+            EXPECT_FALSE(state.available);
+            return;
+        }
+        ASSERT_TRUE(waitUntil([&] {
+            std::lock_guard lock(viewer.work_queue_mutex_);
+            return !viewer.work_queue_.empty();
+        },
+                              std::chrono::seconds(2)));
+        EXPECT_EQ(app_store().stored_session_generation.get(), generation + 1);
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return app_store().stored_session_generation.get() == generation + 2;
+        }));
+        EXPECT_EQ(manager->canResume(), !failure);
+        EXPECT_EQ(viewer.projectTrainingSessionState().error.empty(), !failure);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Outcomes, StoredSessionRestoreTest,
+                             ::testing::Values(StoredSessionRestoreCase::Success,
+                                               StoredSessionRestoreCase::Failure,
+                                               StoredSessionRestoreCase::Cancel,
+                                               StoredSessionRestoreCase::Replace));
+
     TEST_F(VisualizerImplResetTest,
            ErrorFinishedCheckpointProjectReopensPausedAndResumable) {
         LFS_CUDA_BACKEND_OR_RETURN();
@@ -20015,25 +20283,3 @@ namespace lfs::vis {
         EXPECT_EQ(viewer.frame_state_.state(), FrameStateMachine::State::RendererDead);
     }
 } // namespace lfs::vis
-
-TEST(ScenePanelLogDemandTest, BackgroundLogsWakeOnlyTheActiveLogTab) {
-    auto& logger = lfs::core::Logger::get();
-    // The CPU-only visualizer test binary runs gtest's own main, which leaves the logger uninitialized.
-    if (!logger.is_ready())
-        logger.init(lfs::core::LogLevel::Info);
-    // The panel's RML host requires a manager; an uninitialised one is never driven.
-    lfs::vis::gui::RmlUIManager manager;
-    lfs::vis::gui::NativeScenePanel panel(&manager);
-    const auto previous_level = logger.level();
-    logger.set_level(lfs::core::LogLevel::Info);
-    panel.setProjectActiveTab("logging");
-    lfs::python::consume_redraw_request();
-    LOG_INFO("GUI log demand check");
-    EXPECT_FALSE(lfs::python::has_redraw_request());
-    std::thread([] { LOG_INFO("Background log demand check"); }).join();
-    EXPECT_TRUE(lfs::python::consume_redraw_request());
-    panel.setProjectActiveTab("scene");
-    std::thread([] { LOG_INFO("Inactive log demand check"); }).join();
-    EXPECT_FALSE(lfs::python::consume_redraw_request());
-    logger.set_level(previous_level);
-}

@@ -10,6 +10,12 @@
 
 namespace lfs::core {
 
+    enum class AlphaMode : std::uint8_t {
+        Opaque,
+        Mask,
+        Blend,
+    };
+
     struct Material {
         glm::vec4 base_color{1.0f, 1.0f, 1.0f, 1.0f};
         glm::vec3 emissive{0.0f};
@@ -28,6 +34,8 @@ namespace lfs::core {
         std::string metallic_roughness_tex_path;
 
         bool double_sided = false;
+        AlphaMode alpha_mode = AlphaMode::Opaque;
+        float alpha_cutoff = 0.5f;
         std::string name;
 
         bool has_albedo_texture() const { return albedo_tex != 0; }

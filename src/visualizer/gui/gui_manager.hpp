@@ -80,6 +80,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
     class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
     class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+    class VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
     class VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
@@ -289,6 +290,7 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
@@ -529,6 +531,7 @@ namespace lfs::vis {
             SceneTreeSessionChrome pending_scene_tree_chrome_;
             uint64_t panel_frame_serial_ = 0;
             uint8_t ui_layout_settle_frames_ = 0;
+            bool ui_layout_changed_during_resize_ = false;
             EditorContextUpdateStamp last_editor_context_update_stamp_;
             glm::vec2 last_ui_layout_work_pos_{-1.0f, -1.0f};
             glm::vec2 last_ui_layout_work_size_{-1.0f, -1.0f};

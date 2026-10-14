@@ -991,6 +991,20 @@ namespace lfs::python {
           prop_(&settings_, "render_settings") {}
 
     void PyRenderSettings::set(const std::string& name, nb::object value) {
+        set_impl(name, std::move(value), true);
+    }
+
+    void PyRenderSettings::_set_without_session_dirty(
+        const std::string& name, nb::object value) {
+        set_impl(name, std::move(value), false);
+    }
+
+    void PyRenderSettings::set_impl(
+        const std::string& name, nb::object value, const bool mark_session_dirty) {
+        std::optional<std::any> previous_value;
+        if (mark_session_dirty)
+            previous_value = prop_.get_value(name);
+
         using core::prop::PropertyObjectRef;
         auto meta = core::prop::PropertyRegistry::instance().get_property(prop_.group_id(), name);
         if (!meta)
@@ -1070,6 +1084,9 @@ namespace lfs::python {
                 meta->on_update(ref, applied->previous, applied->current);
             core::prop::PropertyRegistry::instance().notify(prop_.group_id(), name, applied->previous, applied->current);
         }
+        if (mark_session_dirty && applied->changed)
+            markProjectSessionChapterCommitted("VIEW");
+        request_redraw();
     }
 
     void PyRenderSettings::prop_setattr(const std::string& name, nb::object value) {
@@ -2171,6 +2188,8 @@ Args:
             .def_prop_ro("__property_group__", &PyRenderSettings::property_group)
             .def("get", &PyRenderSettings::get, nb::arg("name"), "Get property value by name")
             .def("set", &PyRenderSettings::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
+            .def("_set_without_session_dirty", &PyRenderSettings::_set_without_session_dirty,
+                 nb::arg("name"), nb::arg("value"))
             .def("prop_info", &PyRenderSettings::prop_info, nb::arg("name"))
             .def("get_all_properties", &PyRenderSettings::get_all_properties,
                  "Get all property descriptors as Python Property objects")

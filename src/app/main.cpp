@@ -39,6 +39,10 @@
 #include <system_error>
 #include <vector>
 
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+
 namespace {
 #if defined(__APPLE__) && defined(LFS_GRAPHICS_VULKAN)
     void configureVulkanDriver() {
@@ -249,6 +253,12 @@ namespace {
                         return 1;
                     }
                 }
+#ifdef __GLIBC__
+                // Training workers create many short-lived glibc arenas. Limit their
+                // retained heap without overriding an explicit user setting.
+                if (std::getenv("MALLOC_ARENA_MAX") == nullptr)
+                    (void)mallopt(M_ARENA_MAX, 4);
+#endif
                 LOG_INFO("LichtFeld Studio");
                 LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
 

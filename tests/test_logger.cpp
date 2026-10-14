@@ -244,6 +244,81 @@ TEST(LoggerTest, DefaultLogFilePathResolvesUnderPerUserDirectory) {
     EXPECT_EQ(resolved.parent_path().parent_path().filename(), ".lichtfeld");
 }
 
+TEST(LoggerTest, BufferLimitAndClearKeepGenerationMonotonic) {
+    LoggerInitGuard reset_guard;
+    auto& logger = lfs::core::Logger::get();
+    logger.init(lfs::core::LogLevel::Info, "", "", false, unique_temp_dir("limits").string());
+    logger.clear_log_buffer();
+    logger.set_log_buffer_limit(100);
+    const auto initial = logger.buffered_log_generation();
+    for (int i = 0; i < 105; ++i)
+        LOG_INFO("retention-{}", i);
+    auto snapshot = logger.log_buffer_snapshot();
+    ASSERT_EQ(snapshot.entries.size(), 100u);
+    EXPECT_EQ(snapshot.entries.front().message, "retention-5");
+    EXPECT_EQ(snapshot.discarded, 5u);
+    EXPECT_GT(snapshot.generation, initial);
+    EXPECT_LE(snapshot.bytes, snapshot.max_bytes);
+    const auto acknowledged = snapshot.generation;
+    LOG_INFO("incremental-limit-tail");
+    const auto tail = logger.log_buffer_snapshot(acknowledged);
+    ASSERT_EQ(tail.entries.size(), 1u);
+    EXPECT_EQ(tail.entries.front().message, "incremental-limit-tail");
+    EXPECT_EQ(tail.entry_count, 100u);
+    EXPECT_GT(tail.first_sequence, snapshot.first_sequence);
+    EXPECT_TRUE(logger.log_buffer_snapshot(tail.generation).entries.empty());
+    snapshot = logger.log_buffer_snapshot();
+    const auto before_clear = snapshot.generation;
+    logger.clear_log_buffer();
+    snapshot = logger.log_buffer_snapshot();
+    EXPECT_TRUE(snapshot.entries.empty());
+    EXPECT_EQ(snapshot.bytes, 0u);
+    EXPECT_EQ(snapshot.discarded, 0u);
+    EXPECT_GT(snapshot.generation, before_clear);
+    LOG_INFO("after-clear");
+    EXPECT_GT(logger.buffered_logs().front().sequence, snapshot.generation);
+    logger.set_log_buffer_limit(0);
+    EXPECT_EQ(logger.log_buffer_snapshot().max_entries, 0u);
+    EXPECT_TRUE(logger.log_buffer_snapshot().entries.empty());
+    const auto disabled_generation = logger.buffered_log_generation();
+    LOG_INFO("not-buffered");
+    EXPECT_EQ(logger.buffered_log_generation(), disabled_generation);
+    logger.set_log_buffer_limit(100000);
+    EXPECT_EQ(logger.log_buffer_snapshot().max_entries, 50000u);
+}
+
+TEST(LoggerTest, BufferByteBudgetBoundsLargeMessages) {
+    LoggerInitGuard reset_guard;
+    auto& logger = lfs::core::Logger::get();
+    logger.init(lfs::core::LogLevel::Info, "", "", false, unique_temp_dir("byte-limits").string());
+    logger.clear_log_buffer();
+    logger.set_log_buffer_limit(50000);
+    const std::string message(128 * 1024, 'x');
+    for (int i = 0; i < 1100; ++i)
+        LOG_INFO("{}", message);
+    const auto snapshot = logger.log_buffer_snapshot();
+    EXPECT_EQ(snapshot.max_bytes, 64u * 1024 * 1024);
+    EXPECT_LE(snapshot.bytes, snapshot.max_bytes);
+    EXPECT_GT(snapshot.discarded, 0u);
+    ASSERT_FALSE(snapshot.entries.empty());
+    EXPECT_LT(snapshot.entries.back().message.size(), message.size());
+    EXPECT_TRUE(snapshot.entries.back().message.ends_with(" [truncated]"));
+}
+
+TEST(LoggerTest, BufferTruncationPreservesCompleteUtf8Characters) {
+    LoggerInitGuard reset_guard;
+    auto& logger = lfs::core::Logger::get();
+    logger.init(lfs::core::LogLevel::Info, "", "", false, unique_temp_dir("utf8-limit").string());
+    logger.clear_log_buffer();
+    constexpr size_t boundary = 64 * 1024;
+    const std::string complete = std::string(boundary - 2, 'x') + "\xc3\xa9";
+    LOG_INFO("{}tail", complete);
+    EXPECT_EQ(logger.buffered_logs().back().message, complete + " [truncated]");
+    const std::string partial = std::string(boundary - 1, 'x') + "\xc3\xa9";
+    LOG_INFO("{}tail", partial);
+    EXPECT_EQ(logger.buffered_logs().back().message, std::string(boundary - 1, 'x') + " [truncated]");
+}
+
 TEST(LoggerTest, BufferedLogsSinceReturnsBoundedMonotonicRingTail) {
     LoggerInitGuard reset_guard;
     const auto temp_root = unique_temp_dir("incremental");

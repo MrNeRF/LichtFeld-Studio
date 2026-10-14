@@ -9,7 +9,6 @@
             <div class="scene-tab-bar">
                 <button id="scene-tab" type="button" class="scene-tab"></button>
                 <button id="history-tab" type="button" class="scene-tab"></button>
-                <button id="logging-tab" type="button" class="scene-tab"></button>
             </div>
         </div>
         <div id="scene-chip-row" class="scene-chip-row">
@@ -97,46 +96,5 @@
         </div>
     </div>
 
-    <div id="logging-container">
-        <div class="history-summary">
-            <div id="logging-summary-label" class="history-summary__label text-muted"></div>
-            <div id="logging-summary-value" class="history-summary__value text-default"></div>
-        </div>
-
-        <div class="logging-toolbar">
-            <div class="logging-level-group">
-            <label id="logging-level-label" for="logging-level-select" class="logging-field-label text-muted"></label>
-                <select id="logging-level-select" class="logging-level-select">
-                    <option id="logging-level-trace" value="trace"></option>
-                    <option id="logging-level-debug" value="debug"></option>
-                    <option id="logging-level-info" value="info"></option>
-                    <option id="logging-level-performance" value="performance"></option>
-                    <option id="logging-level-warn" value="warn"></option>
-                    <option id="logging-level-error" value="error"></option>
-                    <option id="logging-level-critical" value="critical"></option>
-                    <option id="logging-level-off" value="off"></option>
-                </select>
-            </div>
-
-            <div class="logging-actions">
-                <button id="logging-export-btn"
-                        class="btn btn--secondary history-action"
-                        type="button"></button>
-                <button id="logging-copy-btn"
-                        class="btn btn--secondary history-action"
-                        type="button"></button>
-            </div>
-        </div>
-
-        <div id="logging-feedback" class="logging-feedback status-info"></div>
-        <div id="logging-note" class="history-note text-muted"></div>
-
-        <div class="separator"></div>
-
-        <div id="logging-scroll" class="logging-scroll">
-            <span id="logging-empty" class="history-empty text-muted"></span>
-            <div id="logging-list" class="logging-list"></div>
-        </div>
-    </div>
 </body>
 </rml>

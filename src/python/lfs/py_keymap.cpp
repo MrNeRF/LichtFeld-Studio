@@ -203,7 +203,8 @@ namespace lfs::python {
             .value("TOGGLE_QUAD_VIEW", Action::TOGGLE_QUAD_VIEW)
             .value("TOGGLE_MAXIMIZE_AREA", Action::TOGGLE_MAXIMIZE_AREA)
             .value("TOGGLE_NODE_EDITOR", Action::TOGGLE_NODE_EDITOR)
-            .value("DEPTH_WINDOW_DRAG", Action::DEPTH_WINDOW_DRAG);
+            .value("DEPTH_WINDOW_DRAG", Action::DEPTH_WINDOW_DRAG)
+            .value("TOGGLE_PYTHON_CONSOLE", Action::TOGGLE_PYTHON_CONSOLE);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")

@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -32,6 +33,7 @@ namespace lfs::training {
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class StoredSessionRestoreTest_CompletionPublishesOnViewerThread_Test;
     class VisualizerImplResetTest_AsyncViewerTrainingStartCanBeCanceledBeforeInitialization_Test;
     class VisualizerImplResetTest_AsyncTrainingBindCancelDoesNotStart_Test;
     class VisualizerImplResetTest_AsyncTrainingBoundProjectPropagatesStartRejection_Test;
@@ -65,7 +67,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
     class VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
     class VisualizerImplResetTest_NavigationVerticalRoundTripPreservesPosesAndGridChoices_Test;
-    class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
+    class VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptButArmsAutosave_Test;
     class VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
     class VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
     class VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;
@@ -129,6 +131,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
     class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
     class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+    class VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
     class VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
@@ -204,6 +207,7 @@ namespace lfs::vis::project {
 
     class LFS_VIS_API ProjectLifecycle {
     public:
+        friend class lfs::vis::StoredSessionRestoreTest_CompletionPublishesOnViewerThread_Test;
         enum class CloseSaveStatus {
             NotDirty,
             NeedsPrompt,
@@ -292,6 +296,7 @@ namespace lfs::vis::project {
             bool defer_recovery_scan = false);
         void runStartupRecoveryScan();
         void markSceneMutation(std::uint32_t mutation_flags);
+        void markSessionChapterCommitted(std::string_view chapter);
         void updateMaintenance();
         void noteProjectFrameRendered(double render_ms);
         [[nodiscard]] bool hasDirtyProject();
@@ -401,7 +406,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_StoppingTrainerBlocksAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_IdleMaintenanceKeepsEverySave_Test;
         friend class lfs::vis::VisualizerImplResetTest_NavigationVerticalRoundTripPreservesPosesAndGridChoices_Test;
-        friend class lfs::vis::VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptOrArmAutosave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SessionSoftDirtyDoesNotPromptButArmsAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_SceneEditStillPromptsAndArmsAutosave_Test;
         friend class lfs::vis::VisualizerImplResetTest_ParametersUnchangedRoundTripStaysClean_Test;
         friend class lfs::vis::VisualizerImplResetTest_ParametersValueChangeIsHardDirty_Test;
@@ -465,6 +470,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenAutosaveEditsForNextRecovery_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
@@ -722,7 +728,9 @@ namespace lfs::vis::project {
             SceneManager& scene_manager,
             lfs::io::project::ProjectDocument& document,
             const lfs::io::project::ProjectDocumentHydrationReport&
-                report);
+                report,
+            const std::function<void(const std::string&)>&
+                on_failure = {});
         // Returns whether a dataset-only session can build its trainer now.
         bool captureStoredTrainingSession(
             const lfs::io::project::ProjectDocumentHydrationReport&

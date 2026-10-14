@@ -788,6 +788,9 @@ namespace lfs::vis {
         ubo.roughness_flags[2] = has_normal ? 1.0f : 0.0f;
         ubo.roughness_flags[3] = has_mr ? 1.0f : 0.0f;
         ubo.vertex_color_flags[0] = has_vc ? 1.0f : 0.0f;
+        ubo.vertex_color_flags[1] = mat.alpha_mode == lfs::core::AlphaMode::Mask ? 1.0f : 0.0f;
+        ubo.vertex_color_flags[2] = mat.alpha_cutoff;
+        out.binding.alpha_mode = mat.alpha_mode;
         std::memcpy(out.binding.uniform.data(), &ubo, sizeof(ubo));
         const auto pick_view = [&](const GpuTexture& t) {
             return t.view != VK_NULL_HANDLE ? t.view : white_pixel.view;
@@ -1046,12 +1049,20 @@ namespace lfs::vis {
         if (!mesh.submeshes.empty()) {
             gpu.submeshes.reserve(mesh.submeshes.size());
             for (const auto& sm : mesh.submeshes) {
+                glm::vec3 submesh_min(std::numeric_limits<float>::max());
+                glm::vec3 submesh_max(std::numeric_limits<float>::lowest());
+                for (std::size_t index = sm.start_index; index < sm.start_index + sm.index_count; ++index) {
+                    const auto vertex_index = static_cast<std::size_t>(idx[index]);
+                    const glm::vec3 position(pos[vertex_index * 3], pos[vertex_index * 3 + 1], pos[vertex_index * 3 + 2]);
+                    submesh_min = glm::min(submesh_min, position);
+                    submesh_max = glm::max(submesh_max, position);
+                }
                 gpu.submeshes.push_back({static_cast<std::uint32_t>(sm.start_index),
                                          static_cast<std::uint32_t>(sm.index_count),
-                                         sm.material_index});
+                                         sm.material_index, (submesh_min + submesh_max) * 0.5f});
             }
         } else {
-            gpu.submeshes.push_back({0, gpu.total_index_count, 0});
+            gpu.submeshes.push_back({0, gpu.total_index_count, 0, (aabb_min + aabb_max) * 0.5f});
         }
         gpu.aabb_min = aabb_min;
         gpu.aabb_max = aabb_max;
@@ -1065,7 +1076,7 @@ namespace lfs::vis {
         gpu.draw.submeshes.clear();
         gpu.draw.submeshes.reserve(gpu.submeshes.size());
         for (const auto& sm : gpu.submeshes) {
-            gpu.draw.submeshes.push_back({sm.start_index, sm.index_count, sm.material_index});
+            gpu.draw.submeshes.push_back({sm.start_index, sm.index_count, sm.material_index, sm.local_center});
         }
         gpu.draw.materials.clear();
         gpu.draw.materials.reserve(gpu.materials.size());

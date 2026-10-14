@@ -533,6 +533,7 @@ namespace lfs::python {
         sel.def(
             "set_depth_filter", [](bool enabled, float depth_far, float frustum_half_width, float depth_near) {
                 apply_legacy_depth_filter(enabled, depth_near, depth_far, frustum_half_width);
+                lfs::python::markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("enabled"), nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, nb::arg("depth_near") = 0.0f, "Deprecated. Set selection depth filter in camera space.\n"
                                                                                                                                     "frustum_half_width is converted to a screen-space window scale:\n"
@@ -545,6 +546,7 @@ namespace lfs::python {
         sel.def(
             "set_depth_filter_range", [](bool enabled, float depth_near, float depth_far, float frustum_half_width) {
                 apply_legacy_depth_filter(enabled, depth_near, depth_far, frustum_half_width);
+                lfs::python::markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("enabled"), nb::arg("depth_near") = 0.0f, nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, "Deprecated. Set selection depth filter range in camera space as (near, far, width).\n"
                                                                                                                                     "frustum_half_width is converted to a screen-space window scale:\n"
@@ -559,6 +561,7 @@ namespace lfs::python {
                 // None resolves without state access and retains the legacy projection path.
 
                 apply_depth_filter_window(enabled, depth_near, depth_far, scale, offset_x, offset_y, scale_y);
+                lfs::python::markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("enabled"), nb::arg("depth_near") = 0.0f, nb::arg("depth_far") = 100.0f, nb::arg("scale") = 0.35f, nb::arg("offset_x") = 0.0f, nb::arg("offset_y") = 0.0f, nb::arg("scale_y") = nb::none(), "Set the screen-space selection depth window.\n"
                                                                                                                                                                                                                 "scale is the X-axis on-screen fraction of the viewport (0.05-1.0, "
@@ -678,6 +681,7 @@ namespace lfs::python {
                 auto settings = rm->getSettings();
                 settings.crop_filter_for_selection = enabled;
                 rm->updateSettings(settings);
+                lfs::python::markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("enabled"), "Enable/disable crop box filtering for selection");
 

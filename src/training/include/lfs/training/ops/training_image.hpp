@@ -25,7 +25,9 @@ namespace lfs::gpu_ops {
         void (*roi)(In view, In camera_position, Out weights, const RoiParams&);
         void (*resize_background)(In source, Out destination);
         void (*random_background)(Out destination, uint64_t seed);
-        void (*canny)(In image, Out edges);
+        // `photometric_weight` is empty or a Float32 [H,W] map with zero for
+        // ignored pixels. Canny excludes neighborhoods touching zero weights.
+        void (*canny)(In image, In photometric_weight, Out edges);
         void (*normalize_scalar)(Out values, In scalar, float skip_below);
         // Optional upload/layout specialization; callers retain their default path.
         Tensor (*upload_image_chw)(In cpu_hwc) = nullptr;

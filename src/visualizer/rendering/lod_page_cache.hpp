@@ -17,6 +17,18 @@
 
 namespace lfs::vis {
 
+    namespace detail {
+        // A refreshed budget may request a new capacity without requiring a
+        // cache reset when the model and effective page count are unchanged.
+        [[nodiscard]] constexpr bool lodPageCacheNeedsReconfigure(
+            const bool same_model,
+            const bool sizing_dirty,
+            const std::size_t current_pages,
+            const std::size_t requested_pages) {
+            return !same_model || (sizing_dirty && current_pages != requested_pages);
+        }
+    } // namespace detail
+
     class LFS_VIS_API LodPageCache {
     public:
         static constexpr std::uint32_t kInvalidPage = lfs::core::SplatLodTree::kInvalidPage;

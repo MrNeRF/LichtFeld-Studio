@@ -166,6 +166,11 @@ class ViewMenu:
             ),
             menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
             menu_action(_tr_fallback("main_panel.console", "Console"), lf.ui.toggle_system_console),
+            menu_toggle(
+                tr("scene.logging"),
+                lambda: lf.ui.set_panel_enabled("lfs.logging", not lf.ui.is_panel_enabled("lfs.logging")),
+                lf.ui.is_panel_enabled("lfs.logging"),
+            ),
         ]
 
 

@@ -254,6 +254,12 @@ def preferences_panel_module(monkeypatch):
         remember_camera_view_snap=lambda: False,
         set_remember_camera_view_snap=lambda _enabled: None,
     )
+    state.rendering_defaults = {}
+    lf_stub.ui.get_rendering_defaults_json = lambda: json.dumps(state.rendering_defaults)
+    lf_stub.ui.set_rendering_defaults_json = lambda value: state.rendering_defaults.update(json.loads(value))
+    state.auto_save_on_close = False
+    lf_stub.project_auto_save_on_close_enabled = lambda: state.auto_save_on_close
+    lf_stub.project_set_auto_save_on_close = lambda enabled: setattr(state, "auto_save_on_close", bool(enabled))
     lf_stub.keymap = SimpleNamespace(
         ToolMode=IntEnum(
             "ToolMode",
@@ -276,6 +282,7 @@ def preferences_panel_module(monkeypatch):
             CAMERA_MOVE_RIGHT=SimpleNamespace(name="CAMERA_MOVE_RIGHT", value=9),
             CAMERA_MOVE_UP=SimpleNamespace(name="CAMERA_MOVE_UP", value=10),
             CAMERA_MOVE_DOWN=SimpleNamespace(name="CAMERA_MOVE_DOWN", value=11),
+            CAMERA_FOCUS_SELECTION=SimpleNamespace(name="CAMERA_FOCUS_SELECTION", value=12),
             CAMERA_SPEED_UP=SimpleNamespace(name="CAMERA_SPEED_UP", value=12),
             CAMERA_SPEED_DOWN=SimpleNamespace(name="CAMERA_SPEED_DOWN", value=13),
             ZOOM_SPEED_UP=SimpleNamespace(name="ZOOM_SPEED_UP", value=14),
@@ -284,6 +291,7 @@ def preferences_panel_module(monkeypatch):
             CAMERA_SET_HOME=SimpleNamespace(name="CAMERA_SET_HOME", value=17),
             CAMERA_NEXT_VIEW=SimpleNamespace(name="CAMERA_NEXT_VIEW", value=18),
             CAMERA_PREV_VIEW=SimpleNamespace(name="CAMERA_PREV_VIEW", value=19),
+            TOGGLE_PYTHON_CONSOLE=SimpleNamespace(name="TOGGLE_PYTHON_CONSOLE", value=103),
             SELECTION_REPLACE=SimpleNamespace(name="SELECTION_REPLACE", value=20),
             SELECTION_ADD=SimpleNamespace(name="SELECTION_ADD", value=21),
             SELECTION_REMOVE=SimpleNamespace(name="SELECTION_REMOVE", value=22),
@@ -315,6 +323,20 @@ def preferences_panel_module(monkeypatch):
             CUT_SELECTION=SimpleNamespace(name="CUT_SELECTION", value=44),
             PASTE_SELECTION=SimpleNamespace(name="PASTE_SELECTION", value=45),
             INVERT_SELECTION=SimpleNamespace(name="INVERT_SELECTION", value=46),
+            SELECTION_INTERSECT=SimpleNamespace(name="SELECTION_INTERSECT", value=73),
+            GROUP_SELECTED_SCENE_NODES=SimpleNamespace(
+                name="GROUP_SELECTED_SCENE_NODES", value=87
+            ),
+            UNGROUP_SELECTED_SCENE_NODE=SimpleNamespace(
+                name="UNGROUP_SELECTED_SCENE_NODE", value=88
+            ),
+            ASSET_GALLERY_PRIMARY=SimpleNamespace(
+                name="ASSET_GALLERY_PRIMARY", value=89
+            ),
+            ASSET_GALLERY_COPY_LINK=SimpleNamespace(
+                name="ASSET_GALLERY_COPY_LINK", value=90
+            ),
+            ASSET_REFRESH=SimpleNamespace(name="ASSET_REFRESH", value=91),
             DESELECT_ALL=SimpleNamespace(name="DESELECT_ALL", value=47),
             TOGGLE_SELECTION_DEPTH=SimpleNamespace(name="TOGGLE_SELECTION_DEPTH", value=48),
             TOGGLE_GRID=SimpleNamespace(name="TOGGLE_GRID", value=49),
@@ -370,6 +392,7 @@ def preferences_panel_module(monkeypatch):
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",
+        bindings_revision=lambda: 0,
         get_tool_mode_name=lambda mode: str(mode),
         get_action_name=lambda value: str(value),
         get_trigger=lambda *_a, **_k: None,
@@ -402,6 +425,8 @@ def preferences_panel_module(monkeypatch):
         return False
 
     lf_stub.get_render_settings = lambda: state.render_settings
+    lf_stub.project_auto_save_on_close_enabled = lambda: True
+    lf_stub.project_set_auto_save_on_close = lambda _enabled: None
     state.navigation_up_axis = "legacy_y"
     state.navigation_up_calls = []
     state.new_project_axis = "legacy_y"
@@ -428,6 +453,7 @@ def preferences_panel_module(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     sys.modules.pop("lfs_plugins.preferences_panel", None)
+    sys.modules.pop("lfs_plugins.rendering_defaults", None)
     sys.modules.pop("lfs_plugins.keymap_bindings", None)
     sys.modules.pop("lfs_plugins", None)
     module = import_module("lfs_plugins.preferences_panel")

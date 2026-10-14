@@ -73,7 +73,8 @@ namespace lfs::vis::gui {
             ~InputCallbackScope() { active = previous; }
         };
 
-        constexpr const char* INPUT_LIFECYCLE_EVENTS[] = {"focus", "mousedown", "dragstart", "dragend", "hide", "unload"};
+        constexpr const char* INPUT_LIFECYCLE_EVENTS[] = {"focus", "mousedown", "dragstart",
+                                                          "dragend", "show", "hide", "unload"};
 
         // Text field values never pass through TranslateString, so typed, pasted
         // and bound values report emoji here for the fallback font.
@@ -837,6 +838,7 @@ namespace lfs::vis::gui {
         InputCallbackScope callback_scope(dispatching_input_);
         const auto id = identity->second;
         keyboard_context_ = context;
+        popup_state_dirty_ = true;
         std::vector<uint64_t> others;
         for (const auto& [other, _] : input_handlers_)
             if (other != context)
@@ -912,6 +914,8 @@ namespace lfs::vis::gui {
     void RmlUIManager::ProcessEvent(Rml::Event& event) {
         auto* element = event.GetTargetElement();
         auto* context = element->GetContext();
+        if (event.GetType() == "show" || event.GetType() == "hide" || event.GetType() == "unload")
+            popup_state_dirty_ = true;
         const auto it = input_handlers_.find(context);
         if (it != input_handlers_.end()) {
             if (event.GetType() == "mousedown") {
@@ -975,6 +979,22 @@ namespace lfs::vis::gui {
         passive.key_shift = input.key_shift;
         passive.key_alt = input.key_alt;
         passive.key_super = input.key_super;
+        // Mouse motion updates coordinates only; FrameInputEvent has no motion variant.
+        const bool has_popup_state_input = std::ranges::any_of(input.input_events, [](const auto& event) {
+            switch (event.kind) {
+            case FrameInputEventKind::KeyDown:
+            case FrameInputEventKind::KeyUp:
+            case FrameInputEventKind::Text:
+            case FrameInputEventKind::TextEditing:
+            case FrameInputEventKind::MouseButton:
+                return true;
+            }
+            return false;
+        });
+        if (has_popup_state_input || input.mouse_clicked[0] || input.mouse_clicked[1] ||
+            input.mouse_clicked[2] || input.mouse_released[0] || input.mouse_released[1] || input.mouse_released[2] ||
+            input.mouse_wheel != 0.0f)
+            popup_state_dirty_ = true;
         registered.callback = std::make_shared<std::function<void(const PanelInputState&)>>(handler);
         registered.frame = input_frame_;
         registered.exclusive = exclusive;
@@ -1009,6 +1029,7 @@ namespace lfs::vis::gui {
         if (exclusive)
             focusContext(context, true);
         syncTextInput();
+        popup_state_dirty_ = true;
     }
 
     void RmlUIManager::deactivateInput(Rml::Context* context, const bool keep_pointer_input) {
@@ -1031,6 +1052,7 @@ namespace lfs::vis::gui {
         if (context && keyboard_context_ == context)
             keyboard_context_ = nullptr;
         syncTextInput();
+        popup_state_dirty_ = true;
     }
 
     void RmlUIManager::syncTextInput() {
@@ -1047,10 +1069,17 @@ namespace lfs::vis::gui {
         const auto it = input_handlers_.find(keyboard_context_);
         const bool active = it != input_handlers_.end() && it->second.enabled && (it->second.persistent || it->second.frame == input_frame_);
         auto* focused = active ? keyboard_context_->GetFocusElement() : nullptr;
+        if (!active) {
+            modal_keyboard_capture_ = false;
+        } else if (popup_state_dirty_) {
+            modal_keyboard_capture_ = rml_input::hasOpenKeyboardPopup(keyboard_context_);
+            popup_state_dirty_ = false;
+        }
+        keyboard_capture_target_ = rml_input::hasFocusedKeyboardTarget(focused) || modal_keyboard_capture_;
         auto& focus = guiFocusState();
         focus.want_text_input = rml_input::wantsTextInput(focused);
         focus.any_item_active = rml_input::hasFocusedKeyboardTarget(focused);
-        focus.want_capture_keyboard = (active && it->second.exclusive) || rml_input::hasFocusedKeyboardTarget(focused);
+        focus.want_capture_keyboard = (active && it->second.exclusive) || keyboard_capture_target_;
         const bool collect_text = focus.want_text_input;
         if (window_ && SDL_TextInputActive(window_) != collect_text) {
             if (std::getenv("LFS_TRACE_INPUT"))
@@ -1080,8 +1109,14 @@ namespace lfs::vis::gui {
         const bool pointer = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP ||
                              event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_WHEEL ||
                              event.type == SDL_EVENT_PINCH_UPDATE;
+        const bool popup_state_may_change =
+            key || text || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+            event.type == SDL_EVENT_MOUSE_BUTTON_UP || event.type == SDL_EVENT_MOUSE_WHEEL;
+        if (popup_state_may_change)
+            popup_state_dirty_ = true;
         if (!key && !text && !pointer) {
             if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+                popup_state_dirty_ = true;
                 key_owners_.clear();
                 std::fill(std::begin(input_mouse_down_), std::end(input_mouse_down_), false);
                 std::vector<uint64_t> contexts;
@@ -1121,15 +1156,8 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        if (pointer && window_ && event.type != SDL_EVENT_PINCH_UPDATE) {
-            const auto scale = input::windowPixelScale(window_);
-            single.mouse_x *= scale.x;
-            single.mouse_y *= scale.y;
-            for (auto& button : single.mouse_button_events) {
-                button.x *= scale.x;
-                button.y *= scale.y;
-            }
-        }
+        // pointerEventInPixels converted the SDL coordinates at entry. RmlUi
+        // consumes framebuffer pixels, including with an independently scaled UI.
         auto invoke = [&](const uint64_t id) {
             auto* context = contextById(id);
             const auto it = input_handlers_.find(context);
@@ -1329,14 +1357,24 @@ namespace lfs::vis::gui {
                 key_owners_[event.key.scancode] = {result.consumed && input_handlers_.contains(context) ? context : nullptr,
                                                    pressed_element, result.consumed};
         }
+        if (popup_state_may_change)
+            popup_state_dirty_ = true;
         syncTextInput();
         return result;
     }
 
     bool RmlUIManager::wantsCaptureKeyboard() const {
         const auto it = input_handlers_.find(keyboard_context_);
-        return it != input_handlers_.end() && it->second.enabled && (it->second.persistent || it->second.frame == input_frame_) &&
-               (it->second.exclusive || rml_input::hasFocusedKeyboardTarget(keyboard_context_->GetFocusElement()));
+        return it != input_handlers_.end() && it->second.enabled &&
+               (it->second.persistent || it->second.frame == input_frame_) &&
+               (it->second.exclusive || keyboard_capture_target_);
+    }
+
+    bool RmlUIManager::wantsModalKeyboardCapture() const {
+        const auto it = input_handlers_.find(keyboard_context_);
+        return it != input_handlers_.end() && it->second.enabled &&
+               (it->second.persistent || it->second.frame == input_frame_) &&
+               (it->second.exclusive || modal_keyboard_capture_);
     }
 
     bool RmlUIManager::wantsTextInput() const {

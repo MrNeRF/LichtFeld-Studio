@@ -1227,9 +1227,13 @@ namespace lfs::io {
                         !item.alpha_is_transparency, item.fill_masked_rgb ? &fill : nullptr,
                         item.undistort != nullptr &&
                             lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA);
-                    const size_t H = rgba.shape()[1], W = rgba.shape()[2];
-                    auto rgb = rgba.slice(0, 0, 3).contiguous();
-                    auto alpha = rgba.slice(0, 3, 4).squeeze(0).contiguous();
+                    auto rgba_hwc = rgba.permute({1, 2, 0}).contiguous();
+                    if (item.fill_masked_rgb)
+                        fill_masked_image(rgba_hwc, fill, sidecar_stream);
+                    const auto prepared_rgba = rgba_hwc.permute({2, 0, 1}).contiguous();
+                    const size_t H = prepared_rgba.shape()[1], W = prepared_rgba.shape()[2];
+                    auto rgb = prepared_rgba.slice(0, 0, 3).contiguous();
+                    auto alpha = prepared_rgba.slice(0, 3, 4).squeeze(0).contiguous();
                     const auto* ops = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA);
                     if (item.params.output_uint8) {
                         auto rgb_uint8 = lfs::core::Tensor::empty(rgb.shape(), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
@@ -1244,6 +1248,18 @@ namespace lfs::io {
                         apply_requested_undistort(rgb, item.params);
                         const UndistortSlotGuard slot;
                         alpha = lfs::core::undistort_mask_area(alpha, scaled, sidecar_stream);
+                        if (item.fill_masked_rgb) {
+                            MaskedImageFill warped_fill = fill;
+                            warped_fill.alpha = false;
+                            warped_fill.mask = alpha;
+                            warped_fill.invert = item.alpha_mask_params.invert;
+                            warped_fill.threshold = item.alpha_mask_params.threshold;
+                            warped_fill.resize_factor = 1;
+                            warped_fill.max_width = 0;
+                            auto rgb_hwc = rgb.permute({1, 2, 0}).contiguous();
+                            fill_masked_image(rgb_hwc, warped_fill, sidecar_stream);
+                            rgb = rgb_hwc.permute({2, 0, 1}).contiguous();
+                        }
                     }
 
                     // Match the first load to the lossless alpha cache's 16-bit grid.
@@ -1582,23 +1598,29 @@ namespace lfs::io {
                     lfs::core::Tensor decoded;
                     bool used_gpu = false;
                     std::optional<MaskedImageFill> masked_fill;
+                    lfs::core::Tensor output_mask;
 
                     if (item.fill_masked_rgb && (item.rgb_mask_source.valid() || item.rgb_mask || item.rgb_mask_path)) {
                         lfs::core::Tensor source_mask;
-                        if (item.rgb_mask_source.valid()) {
-                            source_mask = item.rgb_mask_source.get();
+                        if (item.rgb_mask_path) {
+                            source_mask = load_mask_image_cpu_decoded(*item.rgb_mask_path, {});
                         } else if (item.rgb_mask) {
                             source_mask = *item.rgb_mask;
-                        } else if (item.rgb_mask_path) {
-                            source_mask = load_mask_image_cpu_decoded(*item.rgb_mask_path, {}).squeeze(0);
+                        } else if (item.rgb_mask_source.valid()) {
+                            source_mask = item.rgb_mask_source.get();
+                        }
+                        if (item.rgb_mask_source.valid()) {
+                            output_mask = item.rgb_mask_source.get();
+                        } else if (source_mask.is_valid()) {
+                            output_mask = source_mask;
                         }
                         if (source_mask.is_valid()) {
                             masked_fill.emplace(MaskedImageFill{.mask = std::move(source_mask),
                                                                 .invert = item.mask_params.invert,
                                                                 .threshold = item.mask_params.threshold,
                                                                 .keep_high_band = item.mask_keep_high_band,
-                                                                .resize_factor = item.params.resize_factor,
-                                                                .max_width = item.params.max_width});
+                                                                .resize_factor = 1,
+                                                                .max_width = 0});
                             item.params.masked_fill = &*masked_fill;
                         }
                     }
@@ -1621,10 +1643,20 @@ namespace lfs::io {
                     }
 
                     if (!used_gpu) {
-                        decoded = decode_file_on_cpu(item.path, item.params);
+                        auto decode_params = item.params;
+                        decoded = decode_file_on_cpu(item.path, decode_params);
                     }
 
                     apply_requested_undistort(decoded, item.params);
+
+                    if (masked_fill) {
+                        MaskedImageFill output_fill = *masked_fill;
+                        if (output_mask.is_valid())
+                            output_fill.mask = output_mask;
+                        auto decoded_hwc = decoded.permute({1, 2, 0}).contiguous();
+                        fill_masked_image(decoded_hwc, output_fill, sidecar_stream);
+                        decoded = decoded_hwc.permute({2, 0, 1}).contiguous();
+                    }
 
                     if (is_nvcodec_available()) {
                         write_derived_cache(*nvcodec, decoded, item.cache_key, sidecar_stream, item.params);

@@ -12,6 +12,7 @@ from .asset_watch import scan_all_asset_folders, scan_asset_folder
 from .keymap_bindings import KeymapBindingsSection
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
+from .rendering_defaults import RenderingDefaultsSection, vignette_value, set_vignette_value
 from .ui import PanelStateBinding, RuntimeState
 from .panels import panel_class
 from .project_manager_preferences import (
@@ -91,6 +92,7 @@ class PreferencesPanel(Panel):
     )
 
     def __init__(self):
+        self._rendering_defaults = RenderingDefaultsSection()
         self._handle = None
         self._scene_upscaler_catalog = []
         self._scene_upscaler_presets = {}
@@ -142,6 +144,9 @@ class PreferencesPanel(Panel):
             model.bind("gallery_" + key, lambda k=key: read_preferences()[k],
                        lambda value, k=key: self._set_gallery_preference(k, value))
         model.bind_func("gallery_preferences_error", lambda: getattr(self, "_gallery_preferences_error", ""))
+        self._rendering_defaults.bind(model)
+        model.bind_func("show_viewport", lambda: self._section == "viewport")
+        model.bind_event("show_viewport", lambda *_: self._set_section("viewport"))
         model.bind_func("panel_label", lambda: lf.ui.tr("preferences.title"))
         model.bind_func("show_general", lambda: self._section == "general")
         model.bind_func("show_appearance", lambda: self._section == "appearance")
@@ -287,6 +292,10 @@ class PreferencesPanel(Panel):
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False),
             self._set_embed_dataset_by_default,
         )
+        model.bind("auto_save_on_close",
+                   lf.project_auto_save_on_close_enabled,
+                   lf.project_set_auto_save_on_close)
+        model.bind_event("open_default_app_settings", self._open_default_app_settings)
         model.bind("mcp_request_logging", lambda: self._mcp_request_logging, self._set_mcp_request_logging)
         model.bind_func("mcp_safe_mode", lambda: self._mcp_safe_mode)
         model.bind_func("mcp_status", self._mcp_status_text)
@@ -410,6 +419,7 @@ class PreferencesPanel(Panel):
             self._sync_theme_variant_records()
             self._dirty_selection()
             self._dirty_mcp()
+        self._rendering_defaults.sync()
         self._scrub_fields.sync_all()
         self._keymap.on_update(doc)
 
@@ -469,13 +479,20 @@ class PreferencesPanel(Panel):
             tuple(sorted(lf.ui.get_trackpad_preferences().items())),
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
+            lf.project_auto_save_on_close_enabled(),
             project_manager_preferences["defaultView"],
             project_manager_preferences["openAtStartup"],
             project_manager_preferences["rememberState"],
             lf.ui.remember_camera_navigation(),
             lf.ui.remember_camera_view_snap(),
             self._mcp_status_signature(),
+            tuple(vignette_value(name) for name in ("enabled", "intensity", "radius", "softness")),
         )
+
+    @staticmethod
+    def _open_default_app_settings(*_):
+        lf.ui.register_file_associations()
+        lf.ui.open_file_association_settings()
 
     def _rebuild_records(self):
         self._sync_scene_reconstruction_catalog()
@@ -908,6 +925,8 @@ class PreferencesPanel(Panel):
         self._refresh_selection()
 
     def _get_scrub_value(self, prop):
+        if prop.startswith("theme_vignette_"):
+            return float(vignette_value(prop.removeprefix("theme_vignette_")))
         if prop == "zoom_speed":
             return float(lf.ui.get_zoom_speed_preference())
         if prop == "navigation_speed":
@@ -919,6 +938,11 @@ class PreferencesPanel(Panel):
         return self.SPEED_SCRUB_FIELD_DEFS[prop].min_value
 
     def _set_scrub_value(self, prop, value):
+        if prop.startswith("theme_vignette_"):
+            set_vignette_value(prop.removeprefix("theme_vignette_"), value, persist=False)
+            if self._handle:
+                self._handle.dirty(prop)
+            return
         if prop == "zoom_speed":
             lf.ui.set_zoom_speed_preference(float(value), persist=False)
         elif prop == "navigation_speed":
@@ -930,6 +954,9 @@ class PreferencesPanel(Panel):
         self._refresh_selection()
 
     def _commit_scrub_value(self, prop, value):
+        if prop.startswith("theme_vignette_"):
+            set_vignette_value(prop.removeprefix("theme_vignette_"), value)
+            return
         if prop == "zoom_speed":
             self._set_zoom_speed(value)
         elif prop == "navigation_speed":
@@ -1435,7 +1462,7 @@ class PreferencesPanel(Panel):
 
     def _consume_section_request(self):
         section = lf.ui.take_preferences_section_request()
-        if section in ("general", "appearance", "input", "interface", "file_associations", "mcp"):
+        if section in ("general", "appearance", "viewport", "input", "interface", "file_associations", "mcp"):
             if section == "file_associations" and not self._has_file_associations():
                 return
             self._set_section(section)
@@ -1508,6 +1535,7 @@ class PreferencesPanel(Panel):
         self._ensure_keymap_rows_if_visible()
         if self._handle:
             for name in (
+                "show_viewport",
                 "show_general",
                 "show_appearance",
                 "show_input",
@@ -1652,7 +1680,7 @@ class PreferencesPanel(Panel):
                 return
             errors = [
                 self._reset_section(section)
-                for section in ("general", "appearance", "input", "interface", "mcp")
+                for section in ("general", "appearance", "viewport", "input", "interface", "mcp")
             ]
             errors.append(lf.ui.reset_window_state())
             error = next((item for item in errors if item), None)
@@ -1694,6 +1722,9 @@ class PreferencesPanel(Panel):
             self._notify_project_manager_preferences_changed()
             self._read_project_location()
         elif section == "appearance":
+            if hasattr(lf.ui, "set_theme_vignette_style"):
+                lf.ui.set_theme_vignette_style(0.3, 0.7, 0.5)
+                lf.ui.set_theme_vignette_enabled(False)
             lf.ui.set_theme("dark")
             lf.ui.set_progress_bar_style("classic")
             lf.ui.set_viewport_chrome_style("translucent")
@@ -1731,6 +1762,8 @@ class PreferencesPanel(Panel):
 
     def _dirty_selection(self):
         if self._handle:
+            for prop in ("enabled", "intensity", "radius", "softness"):
+                self._handle.dirty("theme_vignette_" + prop)
             self._handle.dirty("theme_family_idx")
             self._handle.dirty("theme_has_variants")
             self._handle.dirty("progress_bar_idx")
@@ -1757,6 +1790,7 @@ class PreferencesPanel(Panel):
             self._dirty_mcp()
             self._dirty_project_location()
             self._handle.dirty("embed_dataset_by_default")
+            self._handle.dirty("auto_save_on_close")
             self._handle.dirty("project_manager_default_view")
             self._handle.dirty("project_manager_open_at_startup")
             self._handle.dirty("project_manager_remember_state")

@@ -109,6 +109,7 @@ namespace lfs::media {
                     p.allow_hardware_encode = !files->resume;
                     p.output_dir = files->files.output_directory;
                     p.filename_pattern = files->files.filename_pattern;
+                    p.first_source_frame_number = files->files.first_source_frame_number;
                     p.format = files->files.format == FrameFileFormat::TIFF16 ? io::ImageFormat::TIFF16 : files->files.format == FrameFileFormat::PNG ? io::ImageFormat::PNG
                                                                                                       : files->files.format == FrameFileFormat::EXR   ? io::ImageFormat::EXR
                                                                                                                                                       : io::ImageFormat::JPG;

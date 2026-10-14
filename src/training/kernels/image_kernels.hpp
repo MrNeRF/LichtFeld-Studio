@@ -24,6 +24,12 @@ namespace lfs::training::kernels {
         const int height,
         const int width,
         cudaStream_t stream = nullptr);
+    void launch_fused_canny_edge_filter_chw(
+        const float* d_input_chw, const float* d_mask_hw, float* d_output_hw,
+        const int height, const int width, cudaStream_t stream = nullptr);
+    void launch_fused_canny_edge_filter_chw(
+        const uint8_t* d_input_chw, const float* d_mask_hw, float* d_output_hw,
+        const int height, const int width, cudaStream_t stream = nullptr);
     // Divides d_data by *d_scalar in place; the whole kernel no-ops when
     // *d_scalar <= skip_below (device-side replacement for host mean/median
     // readback + branch).

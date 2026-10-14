@@ -20,6 +20,13 @@ namespace lfs::core::persisted_settings {
     using Json = nlohmann::json;
     using ArrayIdentity = std::map<std::string, std::string>;
 
+    [[nodiscard]] inline bool present(const Json& object, const char* key) {
+        if (!object.is_object())
+            return false;
+        const auto found = object.find(key);
+        return found != object.end() && !found->is_null();
+    }
+
     template <typename T>
     T field(const Json& object, const char* key, T fallback) {
         if (!object.is_object())

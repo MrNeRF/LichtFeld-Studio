@@ -46,6 +46,7 @@
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_keyboard.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -181,6 +182,9 @@ namespace lfs::vis {
             settings.environment_map_path = lfs::core::path_to_utf8(environment_map_path);
             if (!rendering_manager->updateSettingsFromUser(settings)) {
                 return;
+            }
+            if (auto* const viewer = lfs::python::get_visualizer()) {
+                viewer->projectMarkSessionChapterCommitted("VIEW");
             }
 
             LOG_INFO("Applied environment map via drag-and-drop: {}",
@@ -372,18 +376,23 @@ namespace lfs::vis {
 
             lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(*tool)}.emit();
             (void)applySelectionModeShortcut(action, gui);
+            if (auto* const viewer = lfs::python::get_visualizer()) {
+                viewer->projectMarkSessionChapterCommitted("VIEW");
+            }
             return true;
         }
 
         input::Action resolveCrossToolActivationShortcut(const input::InputBindings& bindings,
                                                          const input::ToolMode current_mode,
-                                                         const int key,
+                                                         const int physical_key,
+                                                         const int logical_key,
                                                          const int mods) {
             for (const auto mode : input::kAllToolModes) {
                 if (mode == current_mode) {
                     continue;
                 }
-                const auto candidate = bindings.getActionForKey(mode, key, mods);
+                const auto candidate = bindings.getActionForShortcut(
+                    mode, physical_key, logical_key, mods);
                 if (ownerToolForActivationAction(candidate).has_value()) {
                     return candidate;
                 }
@@ -993,6 +1002,9 @@ namespace lfs::vis {
                 if (!camera_selection_modifier && is_double_click &&
                     hovered_camera_id_ == last_clicked_camera_id_) {
                     cmd::GoToCamView{.cam_id = hovered_camera_id_}.emit();
+                    if (auto* const viewer = lfs::python::get_visualizer()) {
+                        viewer->projectMarkSessionChapterCommitted("VIEW");
+                    }
 
                     // Reset click tracking to prevent triple-click
                     last_click_time_ = std::chrono::steady_clock::time_point();
@@ -1015,6 +1027,9 @@ namespace lfs::vis {
         }
 
         if (action == input::ACTION_RELEASE && drag_mode_ == DragMode::Splitter) {
+            if (auto* const viewer = lfs::python::get_visualizer()) {
+                viewer->projectMarkSessionChapterCommitted("VIEW");
+            }
             drag_mode_ = DragMode::None;
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
@@ -1211,6 +1226,9 @@ namespace lfs::vis {
                 target_viewport.camera.startGlide(new_pivot - forward * current_distance);
                 onCameraMovementStart();
                 publishCameraMove(&target_viewport);
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+                }
                 break;
             }
 
@@ -1945,6 +1963,9 @@ namespace lfs::vis {
 
         onCameraMovementStart();
         publishCameraMove(&target_viewport);
+        if (auto* const viewer = lfs::python::get_visualizer()) {
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+        }
     }
 
     void InputController::handlePinch(const float scale) {
@@ -2102,9 +2123,25 @@ namespace lfs::vis {
             return;
 
         const auto tool_mode = getCurrentToolMode();
-        auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
+        SDL_Keymod sdl_modifiers = SDL_KMOD_NONE;
+        if (mods & input::MODIFIER_SHIFT)
+            sdl_modifiers |= SDL_KMOD_SHIFT;
+        const auto key_scancode = static_cast<SDL_Scancode>(scancode);
+        const auto printed_keycode = scancode > 0
+                                         ? SDL_GetKeyFromScancode(key_scancode, sdl_modifiers, false)
+                                         : SDLK_UNKNOWN;
+        const auto unshifted_keycode = scancode > 0
+                                           ? SDL_GetKeyFromScancode(key_scancode, SDL_KMOD_NONE, false)
+                                           : SDLK_UNKNOWN;
+        const int printed_punctuation = input::sdlPrintedKeyToAppKey(printed_keycode);
+        const bool shift_needed_for_printed_key =
+            (mods & input::MODIFIER_SHIFT) != 0 && printed_keycode != unshifted_keycode;
+        auto bound_action = bindings_.getActionForShortcut(
+            tool_mode, physical_key, logical_key, mods, printed_punctuation,
+            shift_needed_for_printed_key);
         if (bound_action == input::Action::NONE) {
-            bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
+            bound_action = resolveCrossToolActivationShortcut(
+                bindings_, tool_mode, physical_key, logical_key, mods);
         }
 
         const bool gui_keyboard_focus = input_router_
@@ -2141,10 +2178,26 @@ namespace lfs::vis {
         // character is not dispatched. Press and repeat arm the key; release
         // clears it. Ctrl/Alt/Super chords stay on the shortcut path.
         if (physicalMovementConsumesLogicalKey(physical_key, logical_key, mods)) {
+            if (action == input::ACTION_RELEASE) {
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+                }
+            }
             armPhysicalMovementKey(physical_key, action != input::ACTION_RELEASE);
             return;
         }
 
+        if (action == input::ACTION_RELEASE &&
+            (bound_action == input::Action::CAMERA_MOVE_FORWARD ||
+             bound_action == input::Action::CAMERA_MOVE_BACKWARD ||
+             bound_action == input::Action::CAMERA_MOVE_LEFT ||
+             bound_action == input::Action::CAMERA_MOVE_RIGHT ||
+             bound_action == input::Action::CAMERA_MOVE_UP ||
+             bound_action == input::Action::CAMERA_MOVE_DOWN)) {
+            if (auto* const viewer = lfs::python::get_visualizer()) {
+                viewer->projectMarkSessionChapterCommitted("VIEW");
+            }
+        }
         // Dispatch to modal operators first - if consumed, don't continue
         float mx_f, my_f;
         input::mouseStateInPixels(window_, &mx_f, &my_f);
@@ -2301,6 +2354,10 @@ namespace lfs::vis {
                     gui->openPreferences();
                 return;
 
+            case input::Action::TOGGLE_PYTHON_CONSOLE:
+                lfs::python::show_python_console();
+                return;
+
             case input::Action::SELECT_ALL_SCENE_NODES:
                 if (gui)
                     (void)gui->selectAllSceneNodesIfFocused();
@@ -2339,6 +2396,9 @@ namespace lfs::vis {
                     auto settings = rendering_manager->getSettings();
                     settings.show_camera_frustums = !settings.show_camera_frustums;
                     rendering_manager->updateSettings(settings);
+                    if (auto* const viewer = lfs::python::get_visualizer()) {
+                        viewer->projectMarkSessionChapterCommitted("VIEW");
+                    }
                 }
                 return;
 
@@ -2347,6 +2407,9 @@ namespace lfs::vis {
                     auto settings = rendering_manager->getSettings();
                     settings.show_grid = !settings.show_grid;
                     rendering_manager->updateSettings(settings);
+                    if (auto* const viewer = lfs::python::get_visualizer()) {
+                        viewer->projectMarkSessionChapterCommitted("VIEW");
+                    }
                 }
                 return;
 
@@ -2367,6 +2430,9 @@ namespace lfs::vis {
                                               ? (delta > 0 ? 0 : count - 1)
                                               : (static_cast<int>(std::distance(cameras.begin(), current)) + delta + count) % count;
                         cmd::GoToCamView{.cam_id = cameras[index]->uid()}.emit();
+                        if (auto* const viewer = lfs::python::get_visualizer()) {
+                            viewer->projectMarkSessionChapterCommitted("VIEW");
+                        }
                     }
                 }
                 return;
@@ -2375,6 +2441,9 @@ namespace lfs::vis {
             case input::Action::CAMERA_SET_HOME:
                 activeKeyboardViewport().camera.saveHomePosition();
                 publishCameraMove(&activeKeyboardViewport());
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+                }
                 return;
 
             case input::Action::CAMERA_RESET_HOME: {
@@ -2384,11 +2453,16 @@ namespace lfs::vis {
                 if (rendering)
                     rendering->markCameraCut(views_.viewId(target));
                 publishCameraMove(&target);
+                if (auto* const viewer = lfs::python::get_visualizer())
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
                 return;
             }
 
             case input::Action::CAMERA_FOCUS_SELECTION:
                 handleFocusSelection(activeKeyboardViewport());
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+                }
                 return;
 
             case input::Action::CYCLE_PLY:
@@ -2411,6 +2485,9 @@ namespace lfs::vis {
             case input::Action::TOGGLE_SELECTION_CROP_FILTER:
                 if (selection_tool_ && selection_tool_->isEnabled()) {
                     selection_tool_->toggleCropFilter();
+                    if (auto* const viewer = lfs::python::get_visualizer()) {
+                        viewer->projectMarkSessionChapterCommitted("VIEW");
+                    }
                 }
                 return;
 
@@ -2770,24 +2847,26 @@ namespace lfs::vis {
         }
 
         // Sync movement key states with actual keyboard (using cached keys)
-        const auto& mk = currentMovementKeys();
-        if (keys_movement_[0] && (mk.forward < 0 || !isKeyPressed(mk.forward))) {
-            keys_movement_[0] = false;
-        }
-        if (keys_movement_[1] && (mk.left < 0 || !isKeyPressed(mk.left))) {
-            keys_movement_[1] = false;
-        }
-        if (keys_movement_[2] && (mk.backward < 0 || !isKeyPressed(mk.backward))) {
-            keys_movement_[2] = false;
-        }
-        if (keys_movement_[3] && (mk.right < 0 || !isKeyPressed(mk.right))) {
-            keys_movement_[3] = false;
-        }
-        if (keys_movement_[4] && (mk.up < 0 || !isKeyPressed(mk.up))) {
-            keys_movement_[4] = false;
-        }
-        if (keys_movement_[5] && (mk.down < 0 || !isKeyPressed(mk.down))) {
-            keys_movement_[5] = false;
+        if (window_) {
+            const auto& mk = currentMovementKeys();
+            if (keys_movement_[0] && (mk.forward < 0 || !isKeyPressed(mk.forward))) {
+                keys_movement_[0] = false;
+            }
+            if (keys_movement_[1] && (mk.left < 0 || !isKeyPressed(mk.left))) {
+                keys_movement_[1] = false;
+            }
+            if (keys_movement_[2] && (mk.backward < 0 || !isKeyPressed(mk.backward))) {
+                keys_movement_[2] = false;
+            }
+            if (keys_movement_[3] && (mk.right < 0 || !isKeyPressed(mk.right))) {
+                keys_movement_[3] = false;
+            }
+            if (keys_movement_[4] && (mk.up < 0 || !isKeyPressed(mk.up))) {
+                keys_movement_[4] = false;
+            }
+            if (keys_movement_[5] && (mk.down < 0 || !isKeyPressed(mk.down))) {
+                keys_movement_[5] = false;
+            }
         }
 
         // Orbit ease-out: while dragging, let a held-still pause fade the stored
@@ -2906,15 +2985,41 @@ namespace lfs::vis {
         } else {
             auto* const movement_viewport = keys_active ? active_movement_viewport : wasdMomentumViewport();
             if (movement_viewport && (keys_active || movement_viewport->camera.hasWasdMomentum())) {
-                movement_viewport->camera.advanceWasd(
-                    delta_time,
-                    keys_active && keys_movement_[0],
-                    keys_active && keys_movement_[2],
-                    keys_active && keys_movement_[1],
-                    keys_active && keys_movement_[3],
-                    keys_active && keys_movement_[4],
-                    keys_active && keys_movement_[5],
-                    movement_speed_bonus);
+                const bool move_forward = keys_active && keys_movement_[0];
+                const bool move_backward = keys_active && keys_movement_[2];
+                const bool move_left = keys_active && keys_movement_[1];
+                const bool move_right = keys_active && keys_movement_[3];
+                const bool move_up = keys_active && keys_movement_[4];
+                const bool move_down = keys_active && keys_movement_[5];
+                auto* const rendering = services().renderingOrNull();
+                const auto settings = rendering ? std::optional(rendering->getSettings()) : std::nullopt;
+                if (rendering && settings && settings->orthographic && movement_viewport->windowSize.y > 0) {
+                    const float distance = std::max(
+                        glm::length(movement_viewport->camera.pivot - movement_viewport->camera.t), 0.01f);
+                    const float half_tan_fov = std::tan(glm::radians(
+                                                            lfs::rendering::focalLengthToVFov(settings->focal_length_mm)) *
+                                                        0.5f);
+                    const float perspective_scale =
+                        static_cast<float>(movement_viewport->windowSize.y) / (2.0f * distance * half_tan_fov);
+                    const float next_scale = movement_viewport->camera.advanceOrthographicWasd(
+                        delta_time, move_forward, move_backward, move_left, move_right, move_up, move_down,
+                        settings->ortho_scale, perspective_scale, distance, movement_speed_bonus);
+                    if (next_scale != settings->ortho_scale) {
+                        auto updated = *settings;
+                        updated.ortho_scale = next_scale;
+                        rendering->updateSettings(updated, DirtyFlag::CAMERA);
+                    }
+                } else {
+                    movement_viewport->camera.advanceWasd(
+                        delta_time,
+                        keys_active && keys_movement_[0],
+                        keys_active && keys_movement_[2],
+                        keys_active && keys_movement_[1],
+                        keys_active && keys_movement_[3],
+                        keys_active && keys_movement_[4],
+                        keys_active && keys_movement_[5],
+                        movement_speed_bonus);
+                }
 
                 onCameraMovementStart();
                 publishCameraMove(movement_viewport);
@@ -3716,6 +3821,9 @@ namespace lfs::vis {
             [this, camera_name, hovered_camera_uid, image_path](std::string_view action) {
                 if (action == "go_to_camera") {
                     cmd::GoToCamView{.cam_id = hovered_camera_uid}.emit();
+                    if (auto* const viewer = lfs::python::get_visualizer()) {
+                        viewer->projectMarkSessionChapterCommitted("VIEW");
+                    }
                     return;
                 }
                 if (action == "go_to_image") {
@@ -3724,6 +3832,9 @@ namespace lfs::vis {
                 }
                 if (action == "open_in_gt_compare") {
                     cmd::GoToCamView{.cam_id = hovered_camera_uid}.emit();
+                    if (auto* const viewer = lfs::python::get_visualizer()) {
+                        viewer->projectMarkSessionChapterCommitted("VIEW");
+                    }
                     auto* const rm = services().renderingOrNull();
                     if (!rm || !rm->isGTComparisonActive())
                         cmd::ToggleGTComparison{}.emit();
@@ -3808,6 +3919,9 @@ namespace lfs::vis {
             .current_speed = target_viewport.camera.getWasdSpeed(),
             .max_speed = target_viewport.camera.getMaxWasdSpeed()}
             .emit();
+        if (auto* const viewer = lfs::python::get_visualizer()) {
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+        }
     }
 
     void InputController::updateZoomSpeed(const bool increase) {
@@ -3817,6 +3931,9 @@ namespace lfs::vis {
             .zoom_speed = target_viewport.camera.getZoomSpeed(),
             .max_zoom_speed = target_viewport.camera.getMaxZoomSpeed()}
             .emit();
+        if (auto* const viewer = lfs::python::get_visualizer()) {
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+        }
     }
 
     void InputController::publishCameraMove(

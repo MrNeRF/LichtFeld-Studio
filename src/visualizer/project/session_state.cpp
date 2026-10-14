@@ -7,6 +7,7 @@
 
 #include "core/error.hpp"
 #include "core/error_bus.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -37,6 +38,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <concepts>
 #include <cstddef>
@@ -45,6 +47,7 @@
 #include <format>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -415,7 +418,6 @@ namespace lfs::vis::project {
             Enum Owner::*member,
             const int minimum,
             const int maximum,
-            const std::string_view invalid_detail,
             AfterAssign after_assign = nullptr) {
             return JsonField<Owner>(
                 name,
@@ -432,13 +434,10 @@ namespace lfs::vis::project {
                         return status;
                     }
                     if (value < minimum || value > maximum) {
-                        return fail<void>(
-                            lfs::ErrorCode::DataLoss,
-                            std::string(invalid_detail),
-                            std::string(prefix) + "." +
-                                std::string(field));
+                        destination.*member = Owner{}.*member;
+                    } else {
+                        destination.*member = static_cast<Enum>(value);
                     }
-                    destination.*member = static_cast<Enum>(value);
                     if constexpr (!std::same_as<
                                       AfterAssign,
                                       std::nullptr_t>)
@@ -656,7 +655,7 @@ namespace lfs::vis::project {
                 required_field("sh_degree", &RenderSettings::sh_degree),
                 required_field("render_scale", &RenderSettings::render_scale),
                 enum_field("camera_metrics_mode", &RenderSettings::camera_metrics_mode,
-                           0, 2, "Unsupported camera metrics mode"),
+                           0, 2),
                 required_field("show_crop_box", &RenderSettings::show_crop_box),
                 required_field("use_crop_box", &RenderSettings::use_crop_box),
                 required_field("show_ellipsoid", &RenderSettings::show_ellipsoid),
@@ -712,7 +711,7 @@ namespace lfs::vis::project {
                 required_field("crop_filter_for_selection", &RenderSettings::crop_filter_for_selection),
                 required_field("apply_appearance_correction", &RenderSettings::apply_appearance_correction),
                 enum_field("ppisp_mode", &RenderSettings::ppisp_mode,
-                           0, 1, "Unsupported PPISP mode"),
+                           0, 1),
                 custom_field<RenderSettings>(
                     "ppisp_overrides",
                     [](const RenderSettings& settings) {
@@ -735,7 +734,7 @@ namespace lfs::vis::project {
                     }),
                 vec3_field("background_color", &RenderSettings::background_color),
                 enum_field("environment_mode", &RenderSettings::environment_mode,
-                           0, 1, "Unsupported environment mode"),
+                           0, 1),
                 custom_field<RenderSettings>(
                     "environment_reference_uuid",
                     [](const RenderSettings&) { return Json(nullptr); },
@@ -798,11 +797,10 @@ namespace lfs::vis::project {
                 vec3_field("eval_camera_color", &RenderSettings::eval_camera_color),
                 skip_if_missing(required_field("show_pivot", &RenderSettings::show_pivot)),
                 skip_if_missing(enum_field("split_view_mode", &RenderSettings::split_view_mode,
-                                           0, 3, "Unsupported split-view mode")),
+                                           0, 3)),
                 skip_if_missing(enum_field("gt_comparison_mode", &RenderSettings::gt_comparison_mode,
                                            std::numeric_limits<int>::min(),
                                            std::numeric_limits<int>::max(),
-                                           "Unsupported GT comparison mode",
                                            [](ViewSettings& settings) {
                                                sanitizeGTComparisonSettings(settings);
                                            })),
@@ -818,15 +816,16 @@ namespace lfs::vis::project {
                     [](const Json& json, RenderSettings& settings,
                        std::string_view prefix, std::string_view field) {
                         const auto value = scalar<std::string>(json, field);
-                        if (!value ||
-                            !lfs::rendering::isGaussianRasterBackendId(*value)) {
+                        if (!value) {
                             return fail<void>(
                                 lfs::ErrorCode::DataLoss,
-                                "Unsupported raster backend",
+                                "Raster backend must be a string",
                                 std::string(prefix) + "." + std::string(field));
                         }
                         settings.raster_backend =
-                            lfs::rendering::gaussianRasterBackendFromId(*value);
+                            lfs::rendering::isGaussianRasterBackendId(*value)
+                                ? lfs::rendering::gaussianRasterBackendFromId(*value)
+                                : RenderSettings{}.raster_backend;
                         settings.gut = lfs::rendering::isGutBackend(
                             settings.raster_backend);
                         return lfs::Result<void>{};
@@ -840,7 +839,6 @@ namespace lfs::vis::project {
                 skip_if_missing(enum_field("depth_visualization_mode", &RenderSettings::depth_visualization_mode,
                                            std::numeric_limits<int>::min(),
                                            std::numeric_limits<int>::max(),
-                                           "Unsupported depth visualization mode",
                                            [](ViewSettings& settings) {
                                                sanitizeDepthViewSettings(settings);
                                            })),
@@ -977,10 +975,7 @@ namespace lfs::vis::project {
             !status) {
             return std::move(status).error();
         }
-        enforceProjectionBackend(settings);
-        settings.gut =
-            lfs::rendering::isGutBackend(
-                settings.raster_backend);
+        settings.gut = lfs::rendering::isGutBackend(settings.raster_backend);
         return settings;
     }
 
@@ -1488,6 +1483,10 @@ namespace lfs::vis::project {
             return {};
         }
 
+        std::vector<PreparedGuiSessionRestore::UnsupportedSetting>
+        collectUnsupportedSessionSettings(
+            const Json& gui, const Json& view, const Json& sequencer);
+
     } // namespace
 
     lfs::Result<PreparedGuiSessionRestore>
@@ -1553,7 +1552,11 @@ namespace lfs::vis::project {
             return std::move(valid).error();
 
         PreparedGuiSessionRestore prepared{
-            .chapters = std::move(chapters)};
+            .chapters = std::move(chapters),
+            .unsupported_settings = {}};
+        prepared.unsupported_settings =
+            collectUnsupportedSessionSettings(
+                *gui, *view, *sequencer);
         if (references) {
             const auto env_uuid_json =
                 prepared.chapters.view.dom().get_json(
@@ -1874,6 +1877,8 @@ namespace lfs::vis::project {
                             if (const auto parsed =
                                     video_preset_from_name(*name)) {
                                 prefs.preset = *parsed;
+                            } else {
+                                prefs.preset = lfs::io::video::VideoPreset::CUSTOM;
                             }
                         }
                         return lfs::Result<void>{};
@@ -1978,6 +1983,344 @@ namespace lfs::vis::project {
             return "once";
         }
 
+        template <typename Root>
+        Root* find_json_path(Root& root, std::string_view path);
+
+        template <typename Root>
+        Root* find_space_payload(Root& root, std::string_view type);
+
+        template <typename Root>
+        Root* session_value_path(Root& root, std::string_view chapter,
+                                 std::string_view path) {
+            if (chapter == "GUIL") {
+                const auto separator = path.find('.');
+                if (separator == std::string_view::npos)
+                    return nullptr;
+                auto* payload = find_space_payload(root, path.substr(0, separator));
+                return payload ? find_json_path(*payload, path.substr(separator + 1)) : nullptr;
+            }
+            return find_json_path(root, path);
+        }
+
+        struct SessionValueSpec {
+            std::string_view chapter;
+            std::string_view path;
+            std::function<bool(const Json&)> accepts;
+            Json fallback;
+        };
+
+        const std::vector<SessionValueSpec>& session_value_specs() {
+            using Metrics = RenderSettings::CameraMetricsMode;
+            using PPISP = RenderSettings::PPISPMode;
+            using Environment = EnvironmentBackgroundMode;
+            using Comparison = GTComparisonMode;
+            using Depth = lfs::rendering::DepthVisualizationMode;
+            const auto strings = [](std::initializer_list<std::string_view> values) {
+                return [values = std::vector<std::string_view>(values)](const Json& value) {
+                    return value.is_string() &&
+                           std::ranges::find(values, value.get_ref<const std::string&>()) != values.end();
+                };
+            };
+            const auto integers = [](std::initializer_list<int> values) {
+                return [values = std::vector<int>(values)](const Json& value) {
+                    return value.is_number_integer() &&
+                           std::ranges::find(values, value.get<int>()) != values.end();
+                };
+            };
+            const auto string_parser = [](auto parser) {
+                return [parser](const Json& value) {
+                    if (!value.is_string())
+                        return false;
+                    const auto parsed = parser(value.get_ref<const std::string&>());
+                    if constexpr (requires { parsed.has_value(); })
+                        return parsed.has_value();
+                    else
+                        return static_cast<bool>(parsed);
+                };
+            };
+            static const std::vector<SessionValueSpec> specs{
+                {"VIEW", "split.focused_panel", strings({"left", "right"}), "left"},
+                {"VIEW", "navigation.mode", string_parser([](const std::string_view value) {
+                     return InputController::cameraNavigationModeFromName(value).has_value();
+                 }),
+                 "orbit"},
+                {"VIEW", "navigation.up_axis", string_parser([](const std::string_view value) {
+                     return navigationUpAxisFromName(value).has_value();
+                 }),
+                 "legacy_y"},
+                {"VIEW", "render_settings.raster_backend", string_parser([](const std::string_view value) {
+                     return lfs::rendering::isGaussianRasterBackendId(value);
+                 }),
+                 std::string(lfs::rendering::gaussianRasterBackendId(RenderSettings{}.raster_backend))},
+                {"VIEW", "render_settings.camera_metrics_mode", integers({0, 1, 2}), static_cast<int>(Metrics::Off)},
+                {"VIEW", "render_settings.ppisp_mode", integers({0, 1}), static_cast<int>(PPISP::AUTO)},
+                {"VIEW", "render_settings.environment_mode", integers({0, 1}), static_cast<int>(Environment::SolidColor)},
+                {"VIEW", "render_settings.split_view_mode", integers({0, 1, 2, 3}), static_cast<int>(SplitViewMode::Disabled)},
+                {"VIEW", "render_settings.gt_comparison_mode", integers({0, 1, 2}), static_cast<int>(Comparison::RGB)},
+                {"VIEW", "render_settings.depth_visualization_mode", integers({0, 1}), static_cast<int>(Depth::Palette)},
+                {"VIEW", "tools.selection_submode", string_parser([](const std::string_view value) {
+                     return selection_submode_from_name(value).has_value();
+                 }),
+                 "centers"},
+                {"VIEW", "tools.active_submode_id", string_parser([](const std::string_view value) {
+                     return selection_submode_from_name(value).has_value();
+                 }),
+                 "centers"},
+                {"VIEW", "tools.active_tool_id", string_parser([](const std::string_view value) {
+                     static constexpr std::array builtins{
+                         "builtin.select", "builtin.translate", "builtin.rotate",
+                         "builtin.scale", "builtin.mirror", "builtin.align", "builtin.cropbox"};
+                     const auto tools = UnifiedToolRegistry::instance().getAllTools();
+                     return std::ranges::find(builtins, value) != builtins.end() ||
+                            std::ranges::any_of(tools, [&](const auto* tool) {
+                                return tool && tool->id == value;
+                            });
+                 }),
+                 ""},
+                {"VIEW", "tools.gizmo_operation", strings({"translate", "rotate", "scale"}), "translate"},
+                {"VIEW", "tools.transform_space", strings({"local", "world"}), "local"},
+                {"VIEW", "tools.pivot_mode", strings({"origin", "bounds_center"}), "origin"},
+                {"VIEW", "tools.multi_transform_mode", strings({"selection", "individual"}), "selection"},
+                {"VIEW", "tools.crop_shape", strings({"box", "ellipsoid"}), "box"},
+                {"VIEW", "tools.crop_operation", strings({"translate", "rotate", "scale"}), "translate"},
+                {"GUIL", "panel_registry.active_tabs.scene_panel", strings({"scene", "history", "logging"}), "scene"},
+                {"SEQR", "loop_mode", strings({"once", "loop", "ping_pong"}), "once"},
+                {"SEQR", "preferences.preset", string_parser([](const std::string_view value) {
+                     return video_preset_from_name(value).has_value();
+                 }),
+                 "custom"},
+            };
+            return specs;
+        }
+
+        std::string setting_text(const Json& value) {
+            return value.is_string() ? value.get<std::string>() : value.dump();
+        }
+
+        std::vector<PreparedGuiSessionRestore::UnsupportedSetting>
+        collectUnsupportedSessionSettings(
+            const Json& gui, const Json& view, const Json& sequencer) {
+            using Unsupported = PreparedGuiSessionRestore::UnsupportedSetting;
+            std::vector<Unsupported> result;
+            for (const auto& spec : session_value_specs()) {
+                const Json& root = spec.chapter == "GUIL"   ? gui
+                                   : spec.chapter == "VIEW" ? view
+                                                            : sequencer;
+                const auto* value = session_value_path(root, spec.chapter, spec.path);
+                if (!value || spec.accepts(*value))
+                    continue;
+                const auto text = setting_text(*value);
+                const auto fallback = setting_text(spec.fallback);
+                result.push_back({std::format("{}.{}", spec.chapter, spec.path), text, fallback, std::string(spec.chapter), std::string(spec.path), {}});
+            }
+
+            if (const auto cameras = find_required_array(view, "panel_cameras");
+                cameras != view.end()) {
+                bool has_primary = false;
+                bool has_secondary = false;
+                for (const auto& camera : *cameras) {
+                    const auto panel = scalar<std::string>(camera, "panel");
+                    has_primary |= panel == "primary";
+                    has_secondary |= panel == "secondary";
+                }
+                for (std::size_t index = 0; index < cameras->size(); ++index) {
+                    const auto panel = scalar<std::string>((*cameras)[index], "panel");
+                    if (panel && *panel != "primary" && *panel != "secondary") {
+                        const auto fallback = !has_primary     ? "primary"
+                                              : !has_secondary ? "secondary"
+                                              : index == 0     ? "primary"
+                                                               : "secondary";
+                        has_primary |= fallback == std::string_view("primary");
+                        has_secondary |= fallback == std::string_view("secondary");
+                        result.push_back({std::format("VIEW.panel_cameras[{}].panel", index),
+                                          *panel, fallback, "VIEW", "panel_cameras[].panel",
+                                          std::to_string(index)});
+                    }
+                }
+            }
+            if (const auto* panels = find_space_payload(gui, "panel_registry"); panels && panels->is_object()) {
+                if (const auto entries = find_required_array(*panels, "panels"); entries != panels->end()) {
+                    for (std::size_t index = 0; index < entries->size(); ++index) {
+                        const auto space = scalar<std::string>((*entries)[index], "space");
+                        if (space && !panel_space_from_name(*space)) {
+                            const auto id = scalar<std::string>((*entries)[index], "id");
+                            const auto fallback = id
+                                                      ? gui::PanelRegistry::instance()
+                                                            .default_space_for_panel(*id)
+                                                      : std::nullopt;
+                            result.push_back({std::format("GUIL.panel_registry.panels[{}].space", index),
+                                              *space,
+                                              fallback ? panel_space_name(*fallback) : "floating",
+                                              "GUIL", "panel_registry.panels",
+                                              id.value_or(std::to_string(index))});
+                        }
+                    }
+                }
+                if (const auto tabs = find_required_object(*panels, "active_tabs"); tabs != panels->end()) {
+                    const auto active = scalar<std::string>(*tabs, "main_panel");
+                    if (active && !active->empty()) {
+                        const auto available = gui::PanelRegistry::instance()
+                                                   .get_panels_for_space(
+                                                       gui::PanelSpace::MainPanelTab);
+                        if (std::ranges::none_of(available, [&](const auto& panel) {
+                                return panel.id == *active;
+                            })) {
+                            result.push_back({"GUIL.panel_registry.active_tabs.main_panel",
+                                              *active,
+                                              available.empty() ? std::string{} : available.front().id,
+                                              "GUIL",
+                                              "panel_registry.active_tabs.main_panel",
+                                              {}});
+                        }
+                    }
+                }
+            }
+            if (const auto* fixed = find_space_payload(gui, "fixed_arrangement")) {
+                const auto bottom_tab = scalar<std::string>(*fixed, "bottom_dock_active_tab");
+                if (bottom_tab && !bottom_tab->empty()) {
+                    const auto available = gui::PanelRegistry::instance()
+                                               .get_panels_for_space(
+                                                   gui::PanelSpace::BottomArea);
+                    if (std::ranges::none_of(available, [&](const auto& panel) {
+                            return panel.id == *bottom_tab;
+                        })) {
+                        result.push_back({"GUIL.fixed_arrangement.bottom_dock_active_tab",
+                                          *bottom_tab,
+                                          available.empty() ? std::string{} : available.front().id,
+                                          "GUIL",
+                                          "fixed_arrangement.bottom_dock_active_tab",
+                                          {}});
+                    }
+                }
+            }
+            return result;
+        }
+
+        template <typename Root>
+        Root* find_json_path(Root& root, const std::string_view path) {
+            Root* current = &root;
+            std::size_t begin = 0;
+            while (begin < path.size()) {
+                const auto end = path.find('.', begin);
+                const auto key = std::string(path.substr(
+                    begin, (end == std::string_view::npos ? path.size() : end) - begin));
+                if (!current->is_object())
+                    return nullptr;
+                auto found = current->find(key);
+                if (found == current->end())
+                    return nullptr;
+                current = &*found;
+                if (end == std::string_view::npos)
+                    return current;
+                begin = end + 1;
+            }
+            return nullptr;
+        }
+
+        bool edit_space_payload(lfs::io::JsonChapterDom& dom, std::string_view type,
+                                const std::function<void(Json&)>& edit) {
+            auto layouts = dom.get_json("layouts");
+            if (!layouts || !layouts->is_array())
+                return false;
+            Json root{{"layouts", std::move(*layouts)}};
+            auto* payload = find_space_payload(root, type);
+            if (!payload || !payload->is_object())
+                return false;
+            edit(*payload);
+            return static_cast<bool>(dom.set_json("layouts", std::move(root["layouts"])));
+        }
+
+        template <typename Chapters>
+        auto* session_dom(Chapters& chapters, std::string_view chapter) {
+            if (chapter == "GUIL")
+                return &chapters.gui_layout.dom();
+            if (chapter == "VIEW")
+                return &chapters.view.dom();
+            if (chapter == "SEQR")
+                return &chapters.sequencer.dom();
+            return static_cast<decltype(&chapters.view.dom())>(nullptr);
+        }
+
+        std::optional<Json> unsupported_value(
+            const lfs::io::JsonChapterDom& dom, const Json& root,
+            const PreparedGuiSessionRestore::UnsupportedSetting& setting) {
+            if (setting.chapter != "GUIL")
+                return dom.get_json(setting.path);
+            if (setting.path == "panel_registry.panels") {
+                const auto* payload = find_space_payload(root, "panel_registry");
+                const auto* panels = payload ? find_json_path(*payload, "panels") : nullptr;
+                if (!panels || !panels->is_array())
+                    return std::nullopt;
+                for (const auto& panel : *panels)
+                    if (scalar<std::string>(panel, "id") == setting.identity)
+                        if (const auto* space = find_json_path(panel, "space"))
+                            return std::optional<Json>{*space};
+                return std::nullopt;
+            }
+            const auto* value = session_value_path(root, setting.chapter, setting.path);
+            return value ? std::optional<Json>{*value} : std::nullopt;
+        }
+
+        bool restore_unsupported_value(
+            lfs::io::JsonChapterDom& dom,
+            const PreparedGuiSessionRestore::UnsupportedSetting& setting, const Json& value) {
+            if (setting.chapter != "GUIL")
+                return static_cast<bool>(dom.set_json(setting.path, value));
+            if (setting.path == "panel_registry.panels") {
+                return edit_space_payload(dom, "panel_registry", [&](Json& payload) {
+                    auto* panels = find_json_path(payload, "panels");
+                    if (!panels || !panels->is_array())
+                        return;
+                    for (auto& panel : *panels)
+                        if (scalar<std::string>(panel, "id") == setting.identity) {
+                            panel["space"] = value;
+                            return;
+                        }
+                });
+            }
+            auto layouts = dom.get_json("layouts");
+            if (!layouts || !layouts->is_array())
+                return false;
+            Json root{{"layouts", std::move(*layouts)}};
+            auto* field = session_value_path(root, setting.chapter, setting.path);
+            if (!field)
+                return false;
+            *field = value;
+            return static_cast<bool>(dom.set_json("layouts", std::move(root["layouts"])));
+        }
+
+        void preserveUnsupportedSessionSettings(
+            lfs::io::project::ProjectSessionChapters& destination,
+            const lfs::io::project::ProjectSessionChapters& source) {
+            auto source_roots = std::array{
+                chapter_root(source.gui_layout.dom(), "GUIL"),
+                chapter_root(source.view.dom(), "VIEW"),
+                chapter_root(source.sequencer.dom(), "SEQR")};
+            auto destination_roots = std::array{
+                chapter_root(destination.gui_layout.dom(), "GUIL"),
+                chapter_root(destination.view.dom(), "VIEW"),
+                chapter_root(destination.sequencer.dom(), "SEQR")};
+            if (std::ranges::any_of(source_roots, [](const auto& root) { return !root; }) ||
+                std::ranges::any_of(destination_roots, [](const auto& root) { return !root; }))
+                return;
+            for (const auto& setting : collectUnsupportedSessionSettings(
+                     *source_roots[0], *source_roots[1], *source_roots[2])) {
+                const auto* source_dom = session_dom(source, setting.chapter);
+                auto* destination_dom = session_dom(destination, setting.chapter);
+                const auto index = setting.chapter == "GUIL" ? 0u : setting.chapter == "VIEW" ? 1u
+                                                                                              : 2u;
+                const auto original = source_dom
+                                          ? unsupported_value(*source_dom, *source_roots[index], setting)
+                                          : std::nullopt;
+                const auto current = destination_dom
+                                         ? unsupported_value(*destination_dom, *destination_roots[index], setting)
+                                         : std::nullopt;
+                if (original && current && setting_text(*original) == setting.value &&
+                    setting_text(*current) == setting.fallback)
+                    (void)restore_unsupported_value(*destination_dom, setting, *original);
+            }
+        }
+
         Json editor_session_json(
             const editor::PythonEditorSessionState&
                 state) {
@@ -2009,49 +2352,29 @@ namespace lfs::vis::project {
             };
         }
 
-        Json find_space_payload(
-            const Json& root,
-            const std::string_view type) {
-            const auto layouts =
-                find_required_array(root, "layouts");
-            if (layouts == root.end())
-                return Json::object();
-            for (const auto& layout : *layouts) {
-                if (const auto active =
-                        scalar<bool>(
-                            layout, "active");
-                    active && !*active)
+        template <typename Root>
+        Root* find_space_payload(Root& root, const std::string_view type) {
+            auto* layouts = find_json_path(root, "layouts");
+            if (!layouts || !layouts->is_array())
+                return nullptr;
+            for (auto& layout : *layouts) {
+                if (scalar<bool>(layout, "active") == false)
                     continue;
-                const auto areas =
-                    find_required_array(
-                        layout, "areas");
-                if (areas == layout.end())
+                auto* areas = find_json_path(layout, "areas");
+                if (!areas || !areas->is_array())
                     continue;
-                for (const auto& area : *areas) {
-                    const auto spaces =
-                        find_required_array(
-                            area, "spaces");
-                    if (spaces == area.end())
+                for (auto& area : *areas) {
+                    auto* spaces = find_json_path(area, "spaces");
+                    if (!spaces || !spaces->is_array())
                         continue;
-                    for (const auto& space :
-                         *spaces) {
-                        const auto space_type =
-                            scalar<std::string>(
-                                space, "type");
-                        if (!space_type ||
-                            *space_type != type)
+                    for (auto& space : *spaces) {
+                        if (scalar<std::string>(space, "type") != type)
                             continue;
-                        const auto payload =
-                            space.find(
-                                "opaque_payload");
-                        if (payload !=
-                            space.end()) {
-                            return *payload;
-                        }
+                        return find_json_path(space, "opaque_payload");
                     }
                 }
             }
-            return Json::object();
+            return nullptr;
         }
 
     } // namespace
@@ -2123,14 +2446,16 @@ namespace lfs::vis::project {
         auto retained_gui = chapter_root(result.gui_layout.dom(), "GUIL");
         if (!retained_gui)
             return std::move(retained_gui).error();
-        Json fixed_payload = find_space_payload(*retained_gui, "fixed_arrangement");
+        const auto* retained_fixed = find_space_payload(*retained_gui, "fixed_arrangement");
+        Json fixed_payload = retained_fixed ? *retained_fixed : Json::object();
         if (fixed_payload.empty()) {
             auto default_gui = chapter_root(
                 lfs::io::project::default_session_chapter_dom(lfs::io::project::SessionJsonChapterKind::GuiLayout),
                 "GUIL");
             if (!default_gui)
                 return std::move(default_gui).error();
-            fixed_payload = find_space_payload(*default_gui, "fixed_arrangement");
+            if (const auto* default_fixed = find_space_payload(*default_gui, "fixed_arrangement"))
+                fixed_payload = *default_fixed;
         }
         fixed_payload["sequencer_visible"] = gui_manager->isSequencerVisible();
         fixed_payload["python_console_visible"] =
@@ -2298,6 +2623,17 @@ namespace lfs::vis::project {
                 live_files.push_back(
                     std::move(file));
             }
+            // Identity merge keeps embedded files the live editor does not
+            // list, and validation runs before those files are pruned.
+            bool retained_secrets = false;
+            if (const auto existing_flag =
+                    result.editor.dom().get_json(
+                        "contains_embedded_secrets");
+                existing_flag &&
+                existing_flag->is_boolean()) {
+                retained_secrets =
+                    existing_flag->get<bool>();
+            }
             Json editor_known{
                 {"version", 2},
                 {"open_files", live_files},
@@ -2310,7 +2646,7 @@ namespace lfs::vis::project {
                 {"vim_mode",
                  workspace.vim_mode},
                 {"contains_embedded_secrets",
-                 has_embedded},
+                 has_embedded || retained_secrets},
             };
             if (auto merged =
                     result.editor.merge_known_state(
@@ -2455,7 +2791,7 @@ namespace lfs::vis::project {
                     "secondary", capturePanelCameraProjectState(secondary->camera, secondary->settings.ortho_scale)),
             });
         });
-        const Json view_known{
+        Json view_known{
             {"version", 1},
             // Opening a browser-authored camera resolves its long-axis FOV
             // against this viewport. Later saves keep the native vertical FOV.
@@ -2548,6 +2884,16 @@ namespace lfs::vis::project {
                       .show_camera_path},
              }},
         };
+        if (auto retained_view = chapter_root(result.view.dom(), "VIEW"); retained_view) {
+            const auto unsupported = collectUnsupportedSessionSettings(
+                Json::object(), *retained_view, Json::object());
+            for (const auto& setting : unsupported) {
+                if (setting.path == "panel_cameras[].panel") {
+                    const auto index = setting.fallback == "primary" ? 0u : 1u;
+                    view_known["panel_cameras"][index]["panel"] = setting.value;
+                }
+            }
+        }
         if (auto merged =
                 result.view.merge_known_state(
                     view_known);
@@ -2820,6 +3166,8 @@ namespace lfs::vis::project {
             result.nodes = lfs::io::project::NodesSessionChapter(std::move(*dom));
         }
 
+        preserveUnsupportedSessionSettings(result, retained);
+
         auto prepared =
             prepareGuiSessionRestore(result);
         if (!prepared)
@@ -3004,10 +3352,9 @@ namespace lfs::vis::project {
                         return name &&
                                *name == panel;
                     });
-            if (found == cameras->end())
-                return std::nullopt;
-            return std::optional<Json>{
-                Json(*found)};
+            if (found != cameras->end())
+                return std::optional<Json>{Json(*found)};
+            return std::nullopt;
         }
 
         enum class GuilApply : std::uint8_t { Failed,
@@ -3022,11 +3369,10 @@ namespace lfs::vis::project {
             if (!gui_manager)
                 return GuilApply::Failed;
 
-            const Json screen_payload =
-                find_space_payload(root, "screen");
-            const Json fixed =
-                find_space_payload(
-                    root, "fixed_arrangement");
+            const auto* screen_payload_ptr = find_space_payload(root, "screen");
+            const Json screen_payload = screen_payload_ptr ? *screen_payload_ptr : Json::object();
+            const auto* fixed_ptr = find_space_payload(root, "fixed_arrangement");
+            const Json fixed = fixed_ptr ? *fixed_ptr : Json::object();
             const bool has_screen =
                 screen_payload.contains("layout") &&
                 screen_payload.contains("areas");
@@ -3061,9 +3407,9 @@ namespace lfs::vis::project {
                     fixed_layout_fields());
             }
 
-            const Json registry =
-                find_space_payload(
-                    root, "panel_registry");
+            const auto* registry_payload = find_space_payload(root, "panel_registry");
+            const Json registry_empty = Json::object();
+            const Json& registry = registry_payload ? *registry_payload : registry_empty;
             if (const auto active_tabs =
                     find_required_object(
                         registry, "active_tabs");
@@ -3071,6 +3417,14 @@ namespace lfs::vis::project {
                 assign_optional(
                     *active_tabs, "main_panel",
                     layout.active_tab_id);
+                const auto main_tabs = gui::PanelRegistry::instance()
+                                           .get_panels_for_space(
+                                               gui::PanelSpace::MainPanelTab);
+                if (!layout.active_tab_id.empty() &&
+                    std::ranges::none_of(main_tabs, [&](const auto& panel) {
+                        return panel.id == layout.active_tab_id;
+                    }))
+                    layout.active_tab_id = main_tabs.empty() ? std::string{} : main_tabs.front().id;
                 if (const auto scene_tab =
                         scalar<std::string>(
                             *active_tabs,
@@ -3144,9 +3498,13 @@ namespace lfs::vis::project {
                             ? panel_space_from_name(
                                   *space_name)
                             : std::nullopt;
-                    if (!id || !space)
+                    if (!id)
                         continue;
                     gui::PanelProjectState state;
+                    state.space = space.value_or(
+                        gui::PanelRegistry::instance()
+                            .default_space_for_panel(*id)
+                            .value_or(gui::PanelSpace::Floating));
                     (void)read_fields(
                         saved,
                         state,
@@ -3212,9 +3570,9 @@ namespace lfs::vis::project {
 #endif
             }
 
-            const Json console =
-                find_space_payload(
-                    root, "python_console");
+            const auto* console_payload = find_space_payload(root, "python_console");
+            const Json console_empty = Json::object();
+            const Json& console = console_payload ? *console_payload : console_empty;
             if (auto* console_state =
                     gui::panels::
                         PythonConsoleState::
@@ -3642,6 +4000,11 @@ namespace lfs::vis::project {
                         .selection_mode =
                             static_cast<int>(*parsed)}
                         .emit();
+                } else {
+                    lfs::core::events::tools::SetSelectionSubMode{
+                        .selection_mode =
+                            static_cast<int>(SelectionSubMode::Centers)}
+                        .emit();
                 }
             }
             auto& gizmo = gui_manager->gizmo();
@@ -3986,11 +4349,36 @@ namespace lfs::vis::project {
         // keep the event callback noexcept if memory corruption intervenes.
         if (!gui || !editor || !view || !sequencer)
             return;
-
+        for (const auto& spec : session_value_specs()) {
+            Json& root = spec.chapter == "GUIL"   ? *gui
+                         : spec.chapter == "VIEW" ? *view
+                                                  : *sequencer;
+            if (auto* value = session_value_path(root, spec.chapter, spec.path);
+                value && !spec.accepts(*value))
+                *value = spec.fallback;
+        }
         // Panel registration can finish before a newly-visible console has
         // rendered its first frame. Materialize the session owner now so
         // GUIL console settings and EDTR are never consumed by a null owner.
         (void)gui::panels::PythonConsoleState::getInstance();
+
+        if (!prepared.unsupported_settings.empty()) {
+            std::string values;
+            for (const auto& setting : prepared.unsupported_settings) {
+                if (!values.empty())
+                    values += ", ";
+                values += setting.field + "=" + setting.value;
+            }
+            LOG_WARN("Project contains settings from a newer version; fallbacks were used: {}", values);
+            if (auto* gui_manager = viewer.getGuiManager()) {
+                gui_manager->enqueueToast({
+                    .title = LOC("project.session.newer_settings.title"),
+                    .message = LOCF("project.session.newer_settings.message", values),
+                    .level = gui::ErrorNoticeLevel::Warning,
+                    .fingerprint = std::hash<std::string>{}("project-session-newer-settings"),
+                });
+            }
+        }
 
         // VIEW (except tools), GUIL, EDTR, and SEQR apply at the panels-ready
         // boundary. Functional tool activation waits for hydration + SELM.

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rml_menu_bar.hpp"
+#include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
@@ -29,6 +30,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <SDL3/SDL_video.h>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -187,7 +189,7 @@ namespace lfs::vis::gui {
             };
         }
 
-        std::vector<MenuDropdownLeafView> buildGrandchildMenuItems(
+        std::vector<MenuDropdownLeafView> buildLeafMenuItems(
             const std::vector<MenuItemDesc>& items,
             std::size_t& pos,
             bool& warned_excess_depth) {
@@ -204,15 +206,16 @@ namespace lfs::vis::gui {
                 case MenuItemDesc::Type::SubMenuBegin: {
                     if (!warned_excess_depth) {
                         warned_excess_depth = true;
-                        LOG_WARN("RmlMenuBar: nested submenu depth > 2 is flattened in the retained Rml menu model.");
+                        LOG_WARN("RmlMenuBar: nested submenu depth > 3 is flattened in the retained Rml menu model.");
                     }
                     MenuDropdownLeafView label_view = makeSubmenuLabelView(item);
+                    label_view.index = static_cast<int>(result.size());
                     label_view.separator_before = separator_before;
                     separator_before = false;
                     result.push_back(std::move(label_view));
                     ++pos;
 
-                    auto nested_items = buildGrandchildMenuItems(items, pos, warned_excess_depth);
+                    auto nested_items = buildLeafMenuItems(items, pos, warned_excess_depth);
                     for (auto& nested : nested_items)
                         result.push_back(std::move(nested));
                     break;
@@ -225,6 +228,71 @@ namespace lfs::vis::gui {
                 case MenuItemDesc::Type::ShortcutItem:
                 case MenuItemDesc::Type::Item: {
                     MenuDropdownLeafView view = makeLeafItemView(item);
+                    view.index = static_cast<int>(result.size());
+                    view.separator_before = separator_before;
+                    separator_before = false;
+                    result.push_back(std::move(view));
+                    ++pos;
+                    break;
+                }
+                }
+            }
+
+            return result;
+        }
+
+        MenuDropdownGrandchildView makeGrandchildItemView(const MenuItemDesc& item) {
+            const auto leaf = makeLeafItemView(item);
+            return MenuDropdownGrandchildView{
+                .label = leaf.label,
+                .action = leaf.action,
+                .operator_id = leaf.operator_id,
+                .shortcut = leaf.shortcut,
+                .checkmark = leaf.checkmark,
+                .tooltip = leaf.tooltip,
+                .enabled = leaf.enabled,
+                .has_shortcut = leaf.has_shortcut,
+                .show_checkmark = leaf.show_checkmark,
+                .callback_index = leaf.callback_index,
+            };
+        }
+
+        std::vector<MenuDropdownGrandchildView> buildGrandchildMenuItems(
+            const std::vector<MenuItemDesc>& items,
+            std::size_t& pos,
+            bool& warned_excess_depth) {
+            std::vector<MenuDropdownGrandchildView> result;
+            bool separator_before = false;
+
+            while (pos < items.size()) {
+                const auto& item = items[pos];
+                switch (item.type) {
+                case MenuItemDesc::Type::Separator:
+                    separator_before = true;
+                    ++pos;
+                    break;
+                case MenuItemDesc::Type::SubMenuBegin: {
+                    MenuDropdownGrandchildView view;
+                    view.index = static_cast<int>(result.size());
+                    view.label = item.label;
+                    view.tooltip = item.tooltip;
+                    view.has_children = true;
+                    view.separator_before = separator_before;
+                    separator_before = false;
+                    ++pos;
+                    view.children = buildLeafMenuItems(items, pos, warned_excess_depth);
+                    result.push_back(std::move(view));
+                    break;
+                }
+                case MenuItemDesc::Type::SubMenuEnd:
+                    ++pos;
+                    return result;
+                case MenuItemDesc::Type::Operator:
+                case MenuItemDesc::Type::Toggle:
+                case MenuItemDesc::Type::ShortcutItem:
+                case MenuItemDesc::Type::Item: {
+                    MenuDropdownGrandchildView view = makeGrandchildItemView(item);
+                    view.index = static_cast<int>(result.size());
                     view.separator_before = separator_before;
                     separator_before = false;
                     result.push_back(std::move(view));
@@ -359,6 +427,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("active", &MenuLabelView::active);
         }
         if (auto handle = ctor.RegisterStruct<MenuDropdownLeafView>()) {
+            handle.RegisterMember("index", &MenuDropdownLeafView::index);
             handle.RegisterMember("label", &MenuDropdownLeafView::label);
             handle.RegisterMember("action", &MenuDropdownLeafView::action);
             handle.RegisterMember("operator_id", &MenuDropdownLeafView::operator_id);
@@ -370,10 +439,30 @@ namespace lfs::vis::gui {
             handle.RegisterMember("has_shortcut", &MenuDropdownLeafView::has_shortcut);
             handle.RegisterMember("show_checkmark", &MenuDropdownLeafView::show_checkmark);
             handle.RegisterMember("is_label", &MenuDropdownLeafView::is_label);
+            handle.RegisterMember("keyboard_active", &MenuDropdownLeafView::keyboard_active);
             handle.RegisterMember("callback_index", &MenuDropdownLeafView::callback_index);
         }
         ctor.RegisterArray<std::vector<MenuLabelView>>();
         ctor.RegisterArray<std::vector<MenuDropdownLeafView>>();
+        if (auto handle = ctor.RegisterStruct<MenuDropdownGrandchildView>()) {
+            handle.RegisterMember("index", &MenuDropdownGrandchildView::index);
+            handle.RegisterMember("label", &MenuDropdownGrandchildView::label);
+            handle.RegisterMember("action", &MenuDropdownGrandchildView::action);
+            handle.RegisterMember("operator_id", &MenuDropdownGrandchildView::operator_id);
+            handle.RegisterMember("shortcut", &MenuDropdownGrandchildView::shortcut);
+            handle.RegisterMember("checkmark", &MenuDropdownGrandchildView::checkmark);
+            handle.RegisterMember("tooltip", &MenuDropdownGrandchildView::tooltip);
+            handle.RegisterMember("enabled", &MenuDropdownGrandchildView::enabled);
+            handle.RegisterMember("separator_before", &MenuDropdownGrandchildView::separator_before);
+            handle.RegisterMember("has_shortcut", &MenuDropdownGrandchildView::has_shortcut);
+            handle.RegisterMember("show_checkmark", &MenuDropdownGrandchildView::show_checkmark);
+            handle.RegisterMember("has_children", &MenuDropdownGrandchildView::has_children);
+            handle.RegisterMember("submenu_open", &MenuDropdownGrandchildView::submenu_open);
+            handle.RegisterMember("keyboard_active", &MenuDropdownGrandchildView::keyboard_active);
+            handle.RegisterMember("callback_index", &MenuDropdownGrandchildView::callback_index);
+            handle.RegisterMember("children", &MenuDropdownGrandchildView::children);
+        }
+        ctor.RegisterArray<std::vector<MenuDropdownGrandchildView>>();
         if (auto handle = ctor.RegisterStruct<MenuDropdownChildView>()) {
             handle.RegisterMember("index", &MenuDropdownChildView::index);
             handle.RegisterMember("label", &MenuDropdownChildView::label);
@@ -388,6 +477,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("show_checkmark", &MenuDropdownChildView::show_checkmark);
             handle.RegisterMember("has_children", &MenuDropdownChildView::has_children);
             handle.RegisterMember("submenu_open", &MenuDropdownChildView::submenu_open);
+            handle.RegisterMember("keyboard_active", &MenuDropdownChildView::keyboard_active);
             handle.RegisterMember("callback_index", &MenuDropdownChildView::callback_index);
             handle.RegisterMember("children", &MenuDropdownChildView::children);
         }
@@ -406,6 +496,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("show_checkmark", &MenuDropdownRootView::show_checkmark);
             handle.RegisterMember("has_children", &MenuDropdownRootView::has_children);
             handle.RegisterMember("submenu_open", &MenuDropdownRootView::submenu_open);
+            handle.RegisterMember("keyboard_active", &MenuDropdownRootView::keyboard_active);
             handle.RegisterMember("callback_index", &MenuDropdownRootView::callback_index);
             handle.RegisterMember("children", &MenuDropdownRootView::children);
         }
@@ -480,9 +571,16 @@ namespace lfs::vis::gui {
 
         render_needed_ = true;
         updateTheme();
+        window_focus_lost_handler_id_ = lfs::core::events::internal::WindowFocusLost::when(
+            [this](const auto&) { onWindowFocusLost(); });
     }
 
     void RmlMenuBar::shutdown() {
+        if (window_focus_lost_handler_id_ != 0) {
+            lfs::event::EventBridge::instance().unsubscribe(
+                typeid(lfs::core::events::internal::WindowFocusLost), window_focus_lost_handler_id_);
+            window_focus_lost_handler_id_ = 0;
+        }
         menu_model_ = {};
         menu_labels_.clear();
         dropdown_items_.clear();
@@ -672,7 +770,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlMenuBar::syncActiveLabelState() {
-        const int display_active = open_menu_index_ >= 0 ? open_menu_index_ : -1;
+        const int display_active = open_menu_index_ >= 0 ? open_menu_index_ : keyboard_focus_menu_index_;
         if (display_active == active_index_)
             return;
 
@@ -698,16 +796,26 @@ namespace lfs::vis::gui {
             rml_context_->Update();
         }
 
+        const bool mouse_button_active = input.mouse_clicked[0] || input.mouse_clicked[1] || input.mouse_clicked[2] ||
+                                         input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
+        if (alt_pressed_ && mouse_button_active)
+            alt_chord_ = true;
+        for (const auto& event : input.input_events) {
+            const bool alt_key = event.scancode == SDL_SCANCODE_LALT || event.scancode == SDL_SCANCODE_RALT;
+            bool window_has_keyboard_focus = true;
+            const bool check_window_focus = alt_pressed_ || keyboard_focus_menu_index_ >= 0 || alt_key;
+            if (check_window_focus && rml_manager_ && rml_manager_->getWindow()) {
+                window_has_keyboard_focus =
+                    (SDL_GetWindowFlags(rml_manager_->getWindow()) & SDL_WINDOW_INPUT_FOCUS) != 0;
+            }
+            if (!window_has_keyboard_focus) {
+                onWindowFocusLost();
+            }
+            if (handleMenuKey(event, mouse_button_active, window_has_keyboard_focus))
+                return;
+        }
         if (rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, isOpen()))
             return;
-        for (const auto& event : input.input_events) {
-            if (event.kind == FrameInputEventKind::KeyDown && event.scancode == SDL_SCANCODE_ESCAPE && isOpen()) {
-                closeDropdown();
-                if (event.dispatch)
-                    event.dispatch->consumed = true;
-                return;
-            }
-        }
         wants_input_ = false;
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
@@ -786,6 +894,13 @@ namespace lfs::vis::gui {
             return;
         }
 
+        if (!is_open && keyboard_focus_menu_index_ >= 0 &&
+            (input.mouse_clicked[0] || input.mouse_clicked[1] || input.mouse_clicked[2]) &&
+            (my < 0.0f || my >= bar_height_ * dp_ratio)) {
+            keyboard_focus_menu_index_ = -1;
+            syncActiveLabelState();
+        }
+
         if (is_open) {
             wants_input_ = true;
 
@@ -800,7 +915,35 @@ namespace lfs::vis::gui {
             tooltip_.setHover(resolveRmlTooltip(hit_element), hit_element);
             setOpenSubmenu(
                 submenuIndexForElement(hit_element),
-                childSubmenuIndexForElement(hit_element));
+                childSubmenuIndexForElement(hit_element),
+                grandchildSubmenuIndexForElement(hit_element));
+            std::array<int, 4> hovered_path{{-1, -1, -1, -1}};
+            int hovered_depth = -1;
+            for (auto* row = hit_element; row; row = row->GetParentNode()) {
+                if (!row->HasAttribute("data-nav-level"))
+                    continue;
+                const int level = row->GetAttribute<int>("data-nav-level", -1);
+                const int selected = row->GetAttribute<int>("data-nav-index", -1);
+                if (level >= 0 && level < 4 && selected >= 0) {
+                    hovered_depth = level;
+                    hovered_path[level] = selected;
+                    for (auto* parent = row; parent; parent = parent->GetParentNode()) {
+                        if (parent->HasAttribute("data-root-index"))
+                            hovered_path[0] = parent->GetAttribute<int>("data-root-index", -1);
+                        if (parent->HasAttribute("data-child-index"))
+                            hovered_path[1] = parent->GetAttribute<int>("data-child-index", -1);
+                        if (parent->HasAttribute("data-grandchild-index"))
+                            hovered_path[2] = parent->GetAttribute<int>("data-grandchild-index", -1);
+                    }
+                    break;
+                }
+            }
+            if (hovered_depth >= 0 &&
+                (keyboard_path_ != hovered_path || keyboard_depth_ != hovered_depth)) {
+                keyboard_path_ = hovered_path;
+                keyboard_depth_ = hovered_depth;
+                updateKeyboardHighlight();
+            }
 
             if (input.mouse_clicked[0]) {
                 if (hovered_label >= 0 && hovered_label == open_menu_index_) {
@@ -868,13 +1011,277 @@ namespace lfs::vis::gui {
         syncActiveLabelState();
     }
 
+    bool RmlMenuBar::handleMenuKey(const FrameInputEvent& event, const bool mouse_button_active,
+                                   const bool window_has_keyboard_focus) {
+        const bool alt = event.scancode == SDL_SCANCODE_LALT || event.scancode == SDL_SCANCODE_RALT;
+        if (!isOpen() && keyboard_focus_menu_index_ < 0 && !alt && !alt_pressed_)
+            return false;
+        if (rml_manager_ && rml_manager_->wantsTextInput())
+            return false;
+        if (event.kind == FrameInputEventKind::KeyDown && alt && !event.repeat) {
+            alt_pressed_ = true;
+            alt_chord_ = mouse_button_active || !window_has_keyboard_focus;
+            return false;
+        }
+        if (event.kind == FrameInputEventKind::KeyDown && alt_pressed_ && !alt)
+            alt_chord_ = true;
+        if (event.kind == FrameInputEventKind::KeyUp && alt) {
+            alt_pressed_ = false;
+            const bool focus_menu = !alt_chord_ && window_has_keyboard_focus;
+            alt_chord_ = false;
+            if (focus_menu && !current_labels_.empty()) {
+                keyboard_focus_menu_index_ = 0;
+                syncActiveLabelState();
+                wants_input_ = true;
+                if (event.dispatch)
+                    event.dispatch->consumed = true;
+                return true;
+            }
+            return false;
+        }
+        if (event.kind != FrameInputEventKind::KeyDown || event.repeat)
+            return false;
+
+        if (!isOpen()) {
+            if (keyboard_focus_menu_index_ < 0)
+                return false;
+            switch (event.scancode) {
+            case SDL_SCANCODE_DOWN:
+            case SDL_SCANCODE_RETURN:
+            case SDL_SCANCODE_SPACE:
+                openDropdown(keyboard_focus_menu_index_);
+                break;
+            case SDL_SCANCODE_LEFT:
+                keyboard_focus_menu_index_ = (keyboard_focus_menu_index_ + static_cast<int>(current_labels_.size()) - 1) %
+                                             static_cast<int>(current_labels_.size());
+                syncActiveLabelState();
+                break;
+            case SDL_SCANCODE_RIGHT:
+                keyboard_focus_menu_index_ = (keyboard_focus_menu_index_ + 1) % static_cast<int>(current_labels_.size());
+                syncActiveLabelState();
+                break;
+            case SDL_SCANCODE_ESCAPE:
+                keyboard_focus_menu_index_ = -1;
+                syncActiveLabelState();
+                break;
+            default:
+                keyboard_focus_menu_index_ = -1;
+                syncActiveLabelState();
+                return false;
+            }
+            wants_input_ = true;
+            if (event.dispatch)
+                event.dispatch->consumed = true;
+            return true;
+        }
+
+        switch (event.scancode) {
+        case SDL_SCANCODE_UP: moveKeyboardHighlight(-1); break;
+        case SDL_SCANCODE_DOWN: moveKeyboardHighlight(1); break;
+        case SDL_SCANCODE_HOME: moveKeyboardHighlight(1, true); break;
+        case SDL_SCANCODE_END: moveKeyboardHighlight(-1, true); break;
+        case SDL_SCANCODE_RIGHT:
+            if (keyboard_depth_ == 0) {
+                if (!activateKeyboardHighlight(true)) {
+                    const int next = (open_menu_index_ + 1) % static_cast<int>(current_labels_.size());
+                    openDropdown(next);
+                }
+            } else {
+                activateKeyboardHighlight(true);
+            }
+            break;
+        case SDL_SCANCODE_LEFT:
+            if (keyboard_depth_ == 0) {
+                const int previous = (open_menu_index_ + static_cast<int>(current_labels_.size()) - 1) %
+                                     static_cast<int>(current_labels_.size());
+                openDropdown(previous);
+            } else {
+                --keyboard_depth_;
+                keyboard_path_[keyboard_depth_ + 1] = -1;
+                setOpenSubmenu(keyboard_depth_ == 0 ? -1 : keyboard_path_[0],
+                               keyboard_depth_ < 2 ? -1 : keyboard_path_[1],
+                               keyboard_depth_ < 3 ? -1 : keyboard_path_[2]);
+                updateKeyboardHighlight();
+            }
+            break;
+        case SDL_SCANCODE_RETURN:
+        case SDL_SCANCODE_SPACE: activateKeyboardHighlight(); break;
+        case SDL_SCANCODE_ESCAPE:
+            if (keyboard_depth_ > 0) {
+                --keyboard_depth_;
+                keyboard_path_[keyboard_depth_ + 1] = -1;
+                setOpenSubmenu(keyboard_depth_ == 0 ? -1 : keyboard_path_[0],
+                               keyboard_depth_ < 2 ? -1 : keyboard_path_[1],
+                               keyboard_depth_ < 3 ? -1 : keyboard_path_[2]);
+                updateKeyboardHighlight();
+            } else {
+                closeDropdown();
+            }
+            break;
+        default: return false;
+        }
+        wants_input_ = true;
+        if (event.dispatch)
+            event.dispatch->consumed = true;
+        return true;
+    }
+
+    void RmlMenuBar::onWindowFocusLost() {
+        if (alt_pressed_)
+            alt_chord_ = true;
+        if (!isOpen() && keyboard_focus_menu_index_ >= 0) {
+            keyboard_focus_menu_index_ = -1;
+            syncActiveLabelState();
+        }
+    }
+
+    void RmlMenuBar::updateKeyboardHighlight() {
+        for (auto& root : dropdown_items_) {
+            root.keyboard_active = false;
+            for (auto& child : root.children) {
+                child.keyboard_active = false;
+                for (auto& grandchild : child.children) {
+                    grandchild.keyboard_active = false;
+                    for (auto& leaf : grandchild.children)
+                        leaf.keyboard_active = false;
+                }
+            }
+        }
+        if (keyboard_path_[0] >= 0 && keyboard_path_[0] < static_cast<int>(dropdown_items_.size())) {
+            auto& root = dropdown_items_[keyboard_path_[0]];
+            root.keyboard_active = true;
+            if (keyboard_depth_ >= 1 && keyboard_path_[1] >= 0 && keyboard_path_[1] < static_cast<int>(root.children.size())) {
+                auto& child = root.children[keyboard_path_[1]];
+                child.keyboard_active = true;
+                if (keyboard_depth_ >= 2 && keyboard_path_[2] >= 0 && keyboard_path_[2] < static_cast<int>(child.children.size())) {
+                    auto& grandchild = child.children[keyboard_path_[2]];
+                    grandchild.keyboard_active = true;
+                    if (keyboard_depth_ >= 3 && keyboard_path_[3] >= 0 && keyboard_path_[3] < static_cast<int>(grandchild.children.size()))
+                        grandchild.children[keyboard_path_[3]].keyboard_active = true;
+                }
+            }
+        }
+        menu_model_.DirtyVariable("dropdown_items");
+        render_needed_ = true;
+    }
+
+    void RmlMenuBar::moveKeyboardHighlight(const int direction, const bool to_edge) {
+        auto count = [&]() -> int {
+            if (keyboard_depth_ == 0)
+                return static_cast<int>(dropdown_items_.size());
+            if (keyboard_depth_ == 1 && keyboard_path_[0] >= 0)
+                return static_cast<int>(dropdown_items_[keyboard_path_[0]].children.size());
+            if (keyboard_depth_ == 2 && keyboard_path_[0] >= 0 && keyboard_path_[1] >= 0)
+                return static_cast<int>(dropdown_items_[keyboard_path_[0]].children[keyboard_path_[1]].children.size());
+            if (keyboard_depth_ == 3 && keyboard_path_[0] >= 0 && keyboard_path_[1] >= 0 && keyboard_path_[2] >= 0)
+                return static_cast<int>(dropdown_items_[keyboard_path_[0]].children[keyboard_path_[1]].children[keyboard_path_[2]].children.size());
+            return 0;
+        };
+        auto enabled = [&](const int index) {
+            if (keyboard_depth_ == 0)
+                return dropdown_items_[index].enabled;
+            if (keyboard_depth_ == 1)
+                return dropdown_items_[keyboard_path_[0]].children[index].enabled;
+            if (keyboard_depth_ == 2)
+                return dropdown_items_[keyboard_path_[0]].children[keyboard_path_[1]].children[index].enabled;
+            const auto& item = dropdown_items_[keyboard_path_[0]].children[keyboard_path_[1]].children[keyboard_path_[2]].children[index];
+            return item.enabled && !item.is_label;
+        };
+        const int n = count();
+        if (n == 0)
+            return;
+        int index = keyboard_path_[keyboard_depth_];
+        if (to_edge)
+            index = direction > 0 ? -1 : 0;
+        for (int tried = 0; tried < n; ++tried) {
+            index = (index + direction + n) % n;
+            if (enabled(index)) {
+                keyboard_path_[keyboard_depth_] = index;
+                for (int i = keyboard_depth_ + 1; i < 4; ++i)
+                    keyboard_path_[i] = -1;
+                updateKeyboardHighlight();
+                return;
+            }
+        }
+    }
+
+    bool RmlMenuBar::activateKeyboardHighlight(const bool submenu_only) {
+        const int index = keyboard_path_[keyboard_depth_];
+        if (index < 0)
+            return false;
+        bool has_children = false;
+        std::string action, operator_id;
+        int callback_index = -1;
+        bool enabled = true;
+        if (keyboard_depth_ == 0) {
+            const auto& item = dropdown_items_[index];
+            has_children = item.has_children;
+            enabled = item.enabled;
+            action = item.action;
+            operator_id = item.operator_id;
+            callback_index = item.callback_index;
+        } else if (keyboard_depth_ == 1) {
+            const auto& item = dropdown_items_[keyboard_path_[0]].children[index];
+            has_children = item.has_children;
+            enabled = item.enabled;
+            action = item.action;
+            operator_id = item.operator_id;
+            callback_index = item.callback_index;
+        } else if (keyboard_depth_ == 2) {
+            const auto& item = dropdown_items_[keyboard_path_[0]].children[keyboard_path_[1]].children[index];
+            has_children = item.has_children;
+            enabled = item.enabled;
+            action = item.action;
+            operator_id = item.operator_id;
+            callback_index = item.callback_index;
+        } else {
+            const auto& item = dropdown_items_[keyboard_path_[0]].children[keyboard_path_[1]].children[keyboard_path_[2]].children[index];
+            enabled = item.enabled && !item.is_label;
+            action = item.action;
+            operator_id = item.operator_id;
+            callback_index = item.callback_index;
+        }
+        if (has_children && keyboard_depth_ < 3) {
+            if (keyboard_depth_ == 0)
+                setOpenSubmenu(index, -1, -1);
+            if (keyboard_depth_ == 1)
+                setOpenSubmenu(keyboard_path_[0], index, -1);
+            if (keyboard_depth_ == 2)
+                setOpenSubmenu(keyboard_path_[0], keyboard_path_[1], index);
+            ++keyboard_depth_;
+            keyboard_path_[keyboard_depth_] = -1;
+            moveKeyboardHighlight(1, true);
+            return true;
+        }
+        if (submenu_only)
+            return false;
+        if (!enabled)
+            return true;
+        if (action == "operator") {
+            if (!operator_id.empty())
+                op::operators().invoke(operator_id);
+        } else if (action == "callback") {
+            if (callback_index >= 0)
+                python::execute_menu_callback(open_menu_idname_, callback_index);
+        } else {
+            return true;
+        }
+        closeDropdown();
+        return true;
+    }
+
     void RmlMenuBar::openDropdown(int index) {
         assert(index >= 0 && index < static_cast<int>(current_idnames_.size()));
 
-        rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); });
+        if (open_menu_index_ < 0)
+            rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); });
         open_menu_index_ = index;
         open_submenu_index_ = -1;
         open_child_submenu_index_ = -1;
+        open_grandchild_submenu_index_ = -1;
+        keyboard_path_.fill(-1);
+        keyboard_depth_ = 0;
+        keyboard_focus_menu_index_ = -1;
         open_menu_idname_ = current_idnames_[index];
         clearTitlebarDragRegion();
 
@@ -898,8 +1305,9 @@ namespace lfs::vis::gui {
             },
             &content);
 
-        dropdown_items_ = buildRootMenuItems(content.items);
+        dropdown_items_ = buildDropdownItems(content.items);
         rebuildDropdownDOM();
+        moveKeyboardHighlight(1, true);
         syncActiveLabelState();
         render_needed_ = true;
     }
@@ -909,6 +1317,9 @@ namespace lfs::vis::gui {
         rml_manager_->deactivateInput(rml_context_, true);
         open_submenu_index_ = -1;
         open_child_submenu_index_ = -1;
+        open_grandchild_submenu_index_ = -1;
+        keyboard_path_.fill(-1);
+        keyboard_depth_ = 0;
         open_menu_idname_.clear();
         dropdown_items_.clear();
         tooltip_.setHover({}, nullptr);
@@ -924,12 +1335,18 @@ namespace lfs::vis::gui {
         render_needed_ = true;
     }
 
-    void RmlMenuBar::setOpenSubmenu(const int root_index, const int child_index) {
-        if (root_index == open_submenu_index_ && child_index == open_child_submenu_index_)
+    std::vector<MenuDropdownRootView> RmlMenuBar::buildDropdownItems(const std::vector<MenuItemDesc>& items) {
+        return buildRootMenuItems(items);
+    }
+
+    void RmlMenuBar::setOpenSubmenu(const int root_index, const int child_index, const int grandchild_index) {
+        if (root_index == open_submenu_index_ && child_index == open_child_submenu_index_ &&
+            grandchild_index == open_grandchild_submenu_index_)
             return;
 
         open_submenu_index_ = root_index;
         open_child_submenu_index_ = child_index;
+        open_grandchild_submenu_index_ = grandchild_index;
         bool changed = false;
         for (auto& item : dropdown_items_) {
             const bool open = item.has_children && item.index == open_submenu_index_;
@@ -943,6 +1360,14 @@ namespace lfs::vis::gui {
                 if (child.submenu_open != child_open) {
                     child.submenu_open = child_open;
                     changed = true;
+                }
+                for (auto& grandchild : child.children) {
+                    const bool grandchild_open = child_open && grandchild.has_children &&
+                                                 grandchild.index == open_grandchild_submenu_index_;
+                    if (grandchild.submenu_open != grandchild_open) {
+                        grandchild.submenu_open = grandchild_open;
+                        changed = true;
+                    }
                 }
             }
         }
@@ -997,6 +1422,15 @@ namespace lfs::vis::gui {
             if (!el->HasAttribute("data-child-index"))
                 continue;
             return el->GetAttribute<int>("data-child-index", -1);
+        }
+        return -1;
+    }
+
+    int RmlMenuBar::grandchildSubmenuIndexForElement(Rml::Element* element) const {
+        for (auto* el = element; el; el = el->GetParentNode()) {
+            if (!el->HasAttribute("data-grandchild-index"))
+                continue;
+            return el->GetAttribute<int>("data-grandchild-index", -1);
         }
         return -1;
     }
@@ -1163,23 +1597,32 @@ namespace lfs::vis::gui {
 
     void RmlMenuBar::dispatchToolbarAction(const std::string& action, const std::string& value) {
 
-        if (false) {
-        } else if (action == "set_camera_navigation_mode") {
+        if (action == "set_camera_navigation_mode") {
             auto* ic = lfs::vis::InputController::instance();
             if (!ic)
                 return;
             if (const auto mode = lfs::vis::InputController::cameraNavigationModeFromName(value)) {
                 ic->setCameraNavigationMode(*mode);
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+                }
                 lfs::vis::saveCameraNavigationPreference(value);
             }
         } else if (action == "toggle_camera_view_snap") {
-            if (auto* ic = lfs::vis::InputController::instance())
+            if (auto* ic = lfs::vis::InputController::instance()) {
                 ic->setCameraViewSnapEnabled(!ic->cameraViewSnapEnabled());
+                if (auto* const viewer = lfs::python::get_visualizer()) {
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+                }
+            }
             if (const auto* ic = lfs::vis::InputController::instance())
                 lfs::vis::saveCameraViewSnapPreference(ic->cameraViewSnapEnabled());
         } else if (action == "toggle_split_viewport") {
-            if (auto* ic = lfs::vis::InputController::instance())
+            if (auto* ic = lfs::vis::InputController::instance()) {
                 ic->toggleSplitViewport();
+                if (auto* const viewer = lfs::python::get_visualizer())
+                    viewer->projectMarkSessionChapterCommitted("VIEW");
+            }
         } else if (action == "portal_connection") {
             python::invoke_operator("lfs_plugins.help_menu.PortalConnectionOperator");
         } else if (action == "gallery_transfers") {
@@ -1477,6 +1920,33 @@ namespace lfs::vis::gui {
         }
         if (fitted)
             rml_context_->Update();
+
+        // Fit every visible cascade independently. Additional theme levels can
+        // reach the right edge even when the root menu has plenty of room.
+        const auto dimensions = rml_context_->GetDimensions();
+        for (const auto& popup : popups) {
+            auto* element = popup.element;
+            if (element == dropdown_popup_)
+                continue;
+            element->SetProperty("left", "100%");
+            element->SetProperty("top", "-4dp");
+            rml_context_->Update();
+            auto offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
+            if (offset.x + size.x > dimensions.x) {
+                element->SetProperty("left", std::format("{}px", -size.x));
+                rml_context_->Update();
+                offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+            }
+            if (offset.x < 0) {
+                const auto parent_offset = element->GetParentNode()->GetAbsoluteOffset(Rml::BoxArea::Border);
+                element->SetProperty("left", std::format("{}px", -parent_offset.x));
+            }
+            const float fitted_y = std::clamp(offset.y, 0.0f, std::max(0.0f, dimensions.y - size.y));
+            if (std::abs(fitted_y - offset.y) > tolerance_px)
+                element->SetProperty("top", std::format("{}px", -4.0f * dp_ratio + fitted_y - offset.y));
+            rml_context_->Update();
+        }
     }
 
     bool RmlMenuBar::updateTheme() {

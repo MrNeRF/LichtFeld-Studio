@@ -6,6 +6,7 @@
 #include "media/video_output_extent.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <exception>
 #include <format>
 #include <string_view>
@@ -15,6 +16,8 @@ extern "C" {
 #include <libavutil/dict.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
+#include <libavutil/spherical.h>
+#include <libavutil/stereo3d.h>
 }
 namespace lfs::media {
     namespace {
@@ -24,6 +27,46 @@ namespace lfs::media {
         Result<void> encodeError(ErrorCode code, std::string text) {
             return Result<void>::failure(make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(text), .detection = LFS_SOURCE_SITE_CURRENT()}));
         }
+        std::string codecOpenFailure(const AVCodec* codec, int width, int height, const char* error) {
+            std::string reason = std::format("{} codec open failed: {}", codec->name, error);
+            if (std::strcmp(codec->name, "h264_nvenc") == 0 && (width > 4096 || height > 4096)) {
+                reason += std::format(" (NVENC side limit is 4096 pixels; requested {}x{})", width, height);
+            } else if (std::strcmp(codec->name, "libopenh264") == 0 &&
+                       static_cast<std::int64_t>(width) * height > 9'437'184) {
+                reason += std::format(" (OpenH264 pixel limit is 9437184; requested {}x{})", width, height);
+            }
+            return reason;
+        }
+
+        bool applySphericalMetadata(AVFormatContext* const fmt_ctx, AVStream* const stream) {
+            if (!fmt_ctx || !stream || !stream->codecpar)
+                return false;
+            fmt_ctx->strict_std_compliance = FF_COMPLIANCE_UNOFFICIAL;
+            size_t spherical_size = 0;
+            auto* const spherical = av_spherical_alloc(&spherical_size);
+            if (!spherical)
+                return false;
+            spherical->projection = AV_SPHERICAL_EQUIRECTANGULAR;
+            if (!av_packet_side_data_add(&stream->codecpar->coded_side_data,
+                                         &stream->codecpar->nb_coded_side_data,
+                                         AV_PKT_DATA_SPHERICAL, spherical, spherical_size, 0)) {
+                av_free(spherical);
+                return false;
+            }
+            size_t stereo_size = 0;
+            auto* const stereo = av_stereo3d_alloc_size(&stereo_size);
+            if (!stereo)
+                return false;
+            stereo->type = AV_STEREO3D_2D;
+            if (!av_packet_side_data_add(&stream->codecpar->coded_side_data,
+                                         &stream->codecpar->nb_coded_side_data,
+                                         AV_PKT_DATA_STEREO3D, stereo, stereo_size, 0)) {
+                av_free(stereo);
+                return false;
+            }
+            return true;
+        }
+
         void applyProvenanceMetadata(AVFormatContext* fmt_ctx, const VideoEncodeOptions& opts) {
             if (!fmt_ctx || opts.comment.empty())
                 return;
@@ -45,6 +88,7 @@ namespace lfs::media {
                 return encodeError(ErrorCode::Unavailable, "Encoder is already open");
             width_ = opts.width;
             height_ = opts.height;
+            nvenc_open_error_.clear();
             framerate_ = opts.framerate;
             const bool initialized = opts.preferred_backend == VideoEncodeBackend::Cuda
                                          ? tryInitNvenc(path, opts)
@@ -54,8 +98,13 @@ namespace lfs::media {
                 if (opts.preferred_backend != VideoEncodeBackend::Software)
                     LOG_INFO("Hardware H.264 encoding unavailable, falling back to software H.264");
                 if (const auto result = initH264(path, opts, avcodec_find_encoder(AV_CODEC_ID_H264)); !result) {
+                    std::string detail(result.error().detail());
+                    if (!nvenc_open_error_.empty()) {
+                        detail = std::format("H.264 encoding is unavailable for {}x{}. NVENC: {}; H.264 fallback: {}",
+                                             opts.width, opts.height, nvenc_open_error_, detail);
+                    }
                     cleanup();
-                    return result;
+                    return encodeError(ErrorCode::Unavailable, std::move(detail));
                 }
             }
 
@@ -208,13 +257,21 @@ namespace lfs::media {
 
             ret = avcodec_open2(codec_ctx_, codec, nullptr);
             if (ret < 0) {
-                LOG_DEBUG("NVENC open failed");
+                char err[AV_ERROR_MAX_STRING_SIZE];
+                av_strerror(ret, err, sizeof(err));
+                nvenc_open_error_ = codecOpenFailure(codec, width_, height_, err);
+                LOG_DEBUG("{}", nvenc_open_error_);
                 cleanupHwContexts();
                 return false;
             }
 
             ret = avcodec_parameters_from_context(stream_->codecpar, codec_ctx_);
             if (ret < 0) {
+                cleanupHwContexts();
+                return false;
+            }
+            if (opts.spherical_video && !applySphericalMetadata(fmt_ctx_, stream_)) {
+                nvenc_open_error_ = "Spherical video metadata setup failed";
                 cleanupHwContexts();
                 return false;
             }
@@ -345,13 +402,15 @@ namespace lfs::media {
             if (ret < 0) {
                 char err[AV_ERROR_MAX_STRING_SIZE];
                 av_strerror(ret, err, sizeof(err));
-                return encodeError(ErrorCode::Unavailable, std::string("Codec open failed: ") + err);
+                return encodeError(ErrorCode::Unavailable, codecOpenFailure(codec, width_, height_, err));
             }
 
             ret = avcodec_parameters_from_context(stream_->codecpar, codec_ctx_);
             if (ret < 0) {
                 return encodeError(ErrorCode::Unavailable, "Codec parameters copy failed");
             }
+            if (opts.spherical_video && !applySphericalMetadata(fmt_ctx_, stream_))
+                return encodeError(ErrorCode::Unavailable, "Spherical video metadata setup failed");
             stream_->time_base = codec_ctx_->time_base;
 
             if (!(fmt_ctx_->oformat->flags & AVFMT_NOFILE)) {
@@ -488,6 +547,7 @@ namespace lfs::media {
         int64_t frame_count_ = 0;
         bool is_open_ = false;
         bool in_call_ = false;
+        std::string nvenc_open_error_;
         bool use_nvenc_ = false;
 
     public:
