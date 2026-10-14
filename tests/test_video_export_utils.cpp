@@ -397,6 +397,25 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
         ASSERT_TRUE(mask) << mask.error();
         EXPECT_EQ(mask->cpu().ptr<uint8_t>()[0], 1u) << "seam click x=" << x;
     }
+
+    // Rectangle and lasso must select that same seam marker from either wrapped copy.
+    const auto selected_at = [&](const auto shape, const float x0, const float x1, const int index) {
+        selection.shape = shape;
+        selection.primitives = {{x0, 232.0f, x1, 280.0f}};
+        selection.polygon_vertices = {{x0, 232.0f}, {x1, 232.0f}, {x1, 280.0f}, {x0, 280.0f}};
+        auto mask = renderer.buildSelectionMask(context, *model, selection, false);
+        EXPECT_TRUE(mask) << mask.error();
+        return mask ? mask->cpu().ptr<uint8_t>()[index] : static_cast<uint8_t>(255);
+    };
+    using Shape = lfs::vis::VksplatViewportRenderer::SelectionMaskShape;
+    for (const float x0 : {0.0f, 960.0f}) {
+        const float x1 = x0 + 64.0f;
+        EXPECT_EQ(selected_at(Shape::Rectangle, x0, x1, 0), 1u) << "rect x0=" << x0;
+        EXPECT_EQ(selected_at(Shape::Polygon, x0, x1, 0), 1u) << "lasso x0=" << x0;
+    }
+    EXPECT_EQ(selected_at(Shape::Rectangle, 480.0f, 544.0f, 0), 0u);
+    EXPECT_EQ(selected_at(Shape::Rectangle, 480.0f, 544.0f, 1), 1u);
+    EXPECT_EQ(selected_at(Shape::Polygon, 480.0f, 544.0f, 1), 1u);
 }
 
 TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {

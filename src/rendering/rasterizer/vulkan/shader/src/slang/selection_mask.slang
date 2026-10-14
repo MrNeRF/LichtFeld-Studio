@@ -359,11 +359,34 @@ bool project_ring_splat(
 }
 
 [ForceInline]
+bool x_in_range(float x, float x0, float x1)
+{
+    return x >= x0 && x <= x1;
+}
+
+// Circle hits already wrap longitude. Rectangle and lasso must test the same
+// seam copies. The pixel-center shift stores that sample half a pixel outside
+// x=0, so a strip that covers the left edge includes it.
+[ForceInline]
+bool equirect_seam_x(float x, float x0, float x1, float width)
+{
+    if (x0 <= 0.0f)
+        x0 -= 0.5f;
+    return x_in_range(x, x0, x1) || x_in_range(x - width, x0, x1) || x_in_range(x + width, x0, x1);
+}
+
+[ForceInline]
 bool primitive_hit(float2 position, float4 primitive, SelectionUniforms uniforms)
 {
     if (uniforms.mode == SELECTION_MODE_RECTANGLE) {
-        return position.x >= primitive.x && position.x <= primitive.z &&
-               position.y >= primitive.y && position.y <= primitive.w;
+        const bool y_hit = position.y >= primitive.y && position.y <= primitive.w;
+        if (!y_hit)
+            return false;
+        if (base_camera_model(uniforms.camera_model) == uint(CameraModel::EQUIRECTANGULAR) &&
+            uniforms.image_width > 0u) {
+            return equirect_seam_x(position.x, primitive.x, primitive.z, float(uniforms.image_width));
+        }
+        return x_in_range(position.x, primitive.x, primitive.z);
     }
 
     float2 delta = position - primitive.xy;
@@ -478,7 +501,7 @@ bool update_ring_pick(uint depth_key, uint splat_idx, SelectionUniforms uniforms
 }
 
 [ForceInline]
-bool polygon_mask_hit(float2 position, SelectionUniforms uniforms)
+bool polygon_mask_contains(float2 position, SelectionUniforms uniforms)
 {
     int ix = int(floor(position.x)) - int(uniforms.aabb_x0);
     int iy = int(floor(position.y)) - int(uniforms.aabb_y0);
@@ -486,6 +509,24 @@ bool polygon_mask_hit(float2 position, SelectionUniforms uniforms)
         return false;
     uint idx = uint(iy) * uniforms.aabb_w + uint(ix);
     return read_byte(polygon_mask, idx) != 0u;
+}
+
+[ForceInline]
+bool polygon_mask_hit(float2 position, SelectionUniforms uniforms)
+{
+    if (polygon_mask_contains(position, uniforms))
+        return true;
+    if (base_camera_model(uniforms.camera_model) != uint(CameraModel::EQUIRECTANGULAR) ||
+        uniforms.image_width == 0u)
+        return false;
+
+    const float width = float(uniforms.image_width);
+    if (polygon_mask_contains(position + float2(width, 0.0f), uniforms) ||
+        polygon_mask_contains(position - float2(width, 0.0f), uniforms))
+        return true;
+    if (position.x >= -0.5f && position.x < 0.0f)
+        return polygon_mask_contains(float2(0.0f, position.y), uniforms);
+    return false;
 }
 
 [shader("compute")]
