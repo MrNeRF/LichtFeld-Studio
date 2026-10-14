@@ -1029,18 +1029,21 @@ def test_browse_background_image_uses_current_image_dialog(training_panel_module
 
 # Catches a cleared path leaving inversion active or a browse action ignoring its start directory.
 def test_eval_mesh_browser_sets_path_and_clear_resets_invert(
-    training_panel_module, monkeypatch
+    training_panel_module, monkeypatch, tmp_path
 ):
     panel = training_panel_module.TrainingPanel()
     panel._handle = _HandleStub()
     params = _ParamsStub()
-    params.eval_mask = "/tmp/current/mask.obj"
+    current_dir = tmp_path / "current"
+    current_dir.mkdir()
+    params.eval_mask = str(current_dir / "mask.obj")
+    selected_path = str(tmp_path / "new" / "mask.ply")
     params.eval_mask_invert = True
     calls = []
 
     def open_mesh_file_dialog(start_dir):
         calls.append(start_dir)
-        return "/tmp/new/mask.ply"
+        return selected_path
 
     monkeypatch.setattr(
         training_panel_module,
@@ -1052,8 +1055,8 @@ def test_eval_mesh_browser_sets_path_and_clear_resets_invert(
     )
 
     panel._on_action(None, None, ["browse_eval_mask"])
-    assert calls == ["/tmp/current"]
-    assert params.eval_mask == "/tmp/new/mask.ply"
+    assert calls == [str(current_dir)]
+    assert params.eval_mask == selected_path
 
     panel._on_action(None, None, ["clear_eval_mask"])
     assert params.eval_mask == ""

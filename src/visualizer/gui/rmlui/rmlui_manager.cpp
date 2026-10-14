@@ -69,9 +69,9 @@ namespace lfs::vis::gui {
         // Text field values never pass through TranslateString, so typed, pasted
         // and bound values report emoji here for the fallback font.
         template <typename FormControl>
-        class TextFieldNotingEmoji final : public FormControl {
+        class TextFieldNotingEmoji final : public FormControlLayout<FormControl> {
         public:
-            using FormControl::FormControl;
+            using FormControlLayout<FormControl>::FormControlLayout;
 
         protected:
             void OnAttributeChange(const Rml::ElementAttributes& changed_attributes) override {
