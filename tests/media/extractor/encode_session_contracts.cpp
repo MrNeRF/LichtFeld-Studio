@@ -3,6 +3,8 @@
 #include "core/path_utils.hpp"
 #include "media/video_encode_session.hpp"
 #include <algorithm>
+#include <fstream>
+#include <iterator>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <utility>
@@ -86,6 +88,8 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     VideoEncodeOptions options{.width = 64, .height = 48, .framerate = 10, .crf = 18, .comment = "media session é 日本語"};
     options.width = request.value("width", options.width);
     options.height = request.value("height", options.height);
+    if (request.value("hevc", false))
+        options.codec = VideoEncodeCodec::HEVC;
     if (request.value("videotoolbox", false)) {
         options.preferred_backend = VideoEncodeBackend::VideoToolbox;
         options.matrix = ColorMatrix::Smpte170M;
@@ -93,12 +97,13 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
     }
     options.matrix = static_cast<ColorMatrix>(request.value("matrix", static_cast<int>(options.matrix)));
     options.range = static_cast<ColorRange>(request.value("range", static_cast<int>(options.range)));
+    options.spherical_video = request.value("spherical", false);
     Writer writer;
     require(!session.isOpen(), "new session closed");
     require(session.writeFrame(writer).error().code() == lfs::ErrorCode::FailedPrecondition && writer.calls == 0,
             "inactive write never calls producer");
     require(session.close().has_value(), "inactive close is idempotent");
-    for (int variant = 0; variant < 10; ++variant) {
+    for (int variant = 0; variant < 11; ++variant) {
         auto invalid = options;
         if (variant == 0)
             invalid.width = 0;
@@ -120,6 +125,8 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
             invalid.matrix = static_cast<ColorMatrix>(3);
         if (variant == 9)
             invalid.matrix = static_cast<ColorMatrix>(15);
+        if (variant == 10)
+            invalid.codec = static_cast<VideoEncodeCodec>(99);
         auto result = session.open(path, invalid);
         require(!result && result.error().code() == lfs::ErrorCode::InvalidArgument,
                 "invalid options rejected before opening output");
@@ -131,6 +138,35 @@ nlohmann::json runEncodeSessionContracts(const nlohmann::json& request) {
         if (variant == 5)
             require(detail.find("99") != std::string_view::npos, "backend diagnostic includes rejected value");
         require(!std::filesystem::exists(path), "invalid options do not create output");
+    }
+    auto no_software_hevc = options;
+    no_software_hevc.codec = VideoEncodeCodec::HEVC;
+    no_software_hevc.preferred_backend = VideoEncodeBackend::Software;
+    const auto absent = session.open(path, no_software_hevc);
+    require(!absent && absent.error().code() == lfs::ErrorCode::Unavailable &&
+                absent.error().detail().find("HEVC") != std::string_view::npos,
+            "HEVC never silently selects H264 or installs a software encoder");
+    require(!session.isOpen() && !std::filesystem::exists(path), "unavailable HEVC leaves output untouched");
+    const auto existing = path.parent_path() / "existing-output.mp4";
+    const std::string sentinel = "existing output must survive unavailable HEVC";
+    {
+        std::ofstream file(existing, std::ios::binary);
+        file << sentinel;
+    }
+    auto unavailable_native = no_software_hevc;
+    // The opposite platform's native provider is deterministically absent.
+#ifdef __APPLE__
+    unavailable_native.preferred_backend = VideoEncodeBackend::Cuda;
+#else
+    unavailable_native.preferred_backend = VideoEncodeBackend::VideoToolbox;
+#endif
+    for (const auto& unavailable_options : {no_software_hevc, unavailable_native}) {
+        const auto result = session.open(existing, unavailable_options);
+        require(!result && result.error().code() == lfs::ErrorCode::Unavailable && !session.isOpen(),
+                "unavailable native HEVC leaves session reusable");
+        std::ifstream file(existing, std::ios::binary);
+        const std::string actual((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        require(actual == sentinel, "unavailable HEVC preserves existing output bytes");
     }
     const auto unavailable_path = path.parent_path() / "missing-parent" / "video.mp4";
     auto unavailable = session.open(unavailable_path, options);

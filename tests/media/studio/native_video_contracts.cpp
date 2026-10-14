@@ -156,12 +156,18 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     if (request.at("operation") == "native-encode-session") {
         media::VideoEncodeSession session;
         media::VideoEncodeOptions options{.width = 320, .height = 240, .framerate = 10, .preferred_backend = media::VideoEncodeBackend::Cuda};
+        options.width = request.value("width", options.width);
+        options.height = request.value("height", options.height);
+        options.spherical_video = request.value("spherical", false);
+        if (request.value("hevc", false))
+            options.codec = media::VideoEncodeCodec::HEVC;
         auto opened = session.open(core::utf8_to_path(request.at("output").get<std::string>()), options);
         if (!opened)
             throw std::runtime_error(std::string(opened.error().detail()));
         require(session.backend() == media::VideoEncodeBackend::Cuda, "native session silently fell back from NVENC");
         CudaWriter writer;
-        for (int index = 0; index < 12; ++index) {
+        const int frames = request.value("frames", 12);
+        for (int index = 0; index < frames; ++index) {
             writer.luma = static_cast<std::uint8_t>(32 + index * 16);
             auto written = session.writeFrame(writer);
             if (!written)
@@ -170,7 +176,7 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
         auto closed = session.close();
         if (!closed)
             throw std::runtime_error(std::string(closed.error().detail()));
-        return {{"success", true}, {"backend", "nvenc"}, {"frames", 12}};
+        return {{"success", true}, {"backend", "nvenc"}, {"frames", frames}};
     }
     if (request.at("operation") == "native-preview") {
         struct DecodeObservation {
@@ -201,6 +207,8 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     options.height = 240;
     options.framerate = 10;
     options.crf = 18;
+    if (request.value("hevc", false))
+        options.codec = media::VideoEncodeCodec::HEVC;
     CudaStream stream;
     io::video::VideoEncoder encoder;
     auto opened = encoder.open(core::utf8_to_path(request.at("output").get<std::string>()), options);

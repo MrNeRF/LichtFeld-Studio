@@ -5,6 +5,7 @@
 
 #include "core/provenance.hpp"
 #include "io/video/video_reconstruction.hpp"
+#include "media/video_encode_session.hpp"
 #include "media/video_output_extent.hpp"
 
 #include <cstdint>
@@ -71,6 +72,7 @@ namespace lfs::io::video {
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         VideoReconstructionSelection reconstruction{};
         bool spherical_video = false;
+        media::VideoEncodeCodec codec = media::VideoEncodeCodec::H264;
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(
@@ -79,6 +81,8 @@ namespace lfs::io::video {
             return std::unexpected(std::string(*error));
         if (auto error = videoEncodingRangeError(options.framerate, options.crf))
             return std::unexpected(std::move(*error));
+        if (options.codec != media::VideoEncodeCodec::H264 && options.codec != media::VideoEncodeCodec::HEVC)
+            return std::unexpected("Unknown video codec (got " + std::to_string(static_cast<int>(options.codec)) + ")");
 
         return {};
     }
