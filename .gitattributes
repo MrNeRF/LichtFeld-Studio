@@ -4,3 +4,12 @@ tools/ci_format_push.sh text eol=lf
 # vcpkg applies these patches to sources extracted with LF line endings.
 .github/overlays/**/*.patch text eol=lf
 .github/overlays/**/*.diff text eol=lf
+# Preserve upstream patch context lines (a single space) byte-for-byte.
+.github/overlays/libheif/*.patch whitespace=-blank-at-eol,-blank-at-eof
+.github/overlays/libheif/*.diff whitespace=-blank-at-eol,-blank-at-eof
+
+# Encoded images and numeric reference buffers must survive checkout byte-exact.
+tests/data/heif/*.heic binary
+tests/data/heif/*.avif binary
+tests/data/heif/*.reference binary
+tests/data/heif/*.icc binary

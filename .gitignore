@@ -18,6 +18,8 @@ results
 data
 !tests/data/
 tests/data/*
+!tests/data/heif/
+!tests/data/heif/**
 !tests/data/keymap_contract/
 !tests/data/keymap_contract/*.digest
 !tests/data/keymap_layouts/
@@ -35,6 +37,7 @@ tests/data/nn/*
 !tests/data/clamped_colour_regression.ply.fixture
 *.pt
 *.py
+!tests/data/heif/generate.py
 !tests/media/test_float_exr.py
 !scripts/lichtfeld_mcp_bridge.py
 !scripts/verify_video_orientation.py

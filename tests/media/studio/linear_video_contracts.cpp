@@ -10,6 +10,7 @@
 #include "core/tensor_upload.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/image_output.hpp"
+#include "io/pipelined_image_loader.hpp"
 #include "io/video/video_encoder.hpp"
 #include "media/media_probe.hpp"
 #include "media/video_color.hpp"
@@ -306,6 +307,66 @@ void imageCachePrecisionContracts() {
     }
 }
 
+void heifCacheAndQueueContracts() {
+    using namespace lfs;
+    auto& cache = io::CacheLoader::getInstance(true);
+    struct Reset {
+        io::CacheLoader& cache;
+        ~Reset() { cache.reset_cache(); }
+    } reset{cache};
+    for (const auto name : {"rgb12.avif", "p3.avif"}) {
+        const auto path = std::filesystem::path(LFS_HEIF_FIXTURES) / name;
+        cache.reset_cache();
+        cache.update_cache_params(true, 2, 0.f, 0.f, false, 1);
+        io::PipelinedLoaderConfig config;
+        config.backend = core::default_gpu_backend();
+        config.io_threads = 1;
+        config.cold_process_threads = 1;
+        config.output_queue_size = 2;
+        config.prefetch_count = 2;
+        config.use_16bit_color = true;
+        io::PipelinedImageLoader queue(config);
+        size_t sequence = 0;
+        for (const auto params : {io::LoadParams{}, io::LoadParams{.decode_16bit = true}, io::LoadParams{.resize_factor = 2, .decode_16bit = true}, io::LoadParams{.max_width = 5, .output_uint8 = true, .decode_16bit = true}}) {
+            const auto reference = io::load_rgb_image_cpu_decoded(path, params).cpu().contiguous();
+            const auto compare = [&](const core::Tensor& actual) {
+                const auto host = actual.cpu().contiguous();
+                if (host.shape() != reference.shape() || host.dtype() != reference.dtype() || host.bytes() != reference.bytes() || std::memcmp(host.data_ptr(), reference.data_ptr(), host.bytes()))
+                    throw std::runtime_error("HEIF cache/async loader changed color, shape or precision");
+            };
+            compare(cache.load_cached_image(path, params));
+            compare(cache.load_cached_image(path, params));
+            if (cache.get_cache_mode() != io::CacheLoader::CacheMode::CPU_memory)
+                throw std::runtime_error("HEIF test did not exercise decoded memory cache");
+            // Request precision explicitly; preserve the queue's existing run-level default.
+            auto queued = params;
+            queued.decode_16bit = true;
+            const auto queued_reference = io::load_rgb_image_cpu_decoded(path, queued).cpu().contiguous();
+            for (int repeat = 0; repeat < 2; ++repeat) {
+                queue.prefetch(sequence, path, queued);
+                const auto completion = queue.try_get_completion_for(std::chrono::seconds(10));
+                if (!completion || !completion->outcome || completion->sequence != sequence)
+                    throw std::runtime_error("HEIF asynchronous completion failed");
+                const auto host = completion->outcome->tensor.cpu().contiguous();
+                bool equal = host.shape() == queued_reference.shape() && host.dtype() == queued_reference.dtype() && host.bytes() == queued_reference.bytes();
+                if (equal && host.dtype() == core::DataType::Float32 && repeat == 1 &&
+                    config.backend == core::GpuBackend::CUDA && (queued.resize_factor != 1 || queued.max_width != 0)) {
+                    // The existing derived JPEG 2000 cache clamps/rounds resized floats to UINT16.
+                    // Original samples and every cold decode still require byte equality.
+                    for (size_t i = 0; i < host.numel(); ++i)
+                        equal = equal && std::abs(host.ptr<float>()[i] - std::clamp(queued_reference.ptr<float>()[i], 0.f, 1.f)) <= 0.5f / 65535.f + 1e-7f;
+                } else if (equal) {
+                    equal = std::memcmp(host.data_ptr(), queued_reference.data_ptr(), host.bytes()) == 0;
+                }
+                if (!equal)
+                    throw std::runtime_error(std::string("HEIF training queue changed samples: ") + name + " sequence=" + std::to_string(sequence));
+                ++sequence;
+            }
+        }
+        queue.shutdown();
+    }
+}
+
 int main(int argc, char** argv) {
     using namespace lfs;
     using namespace media::detail;
@@ -329,8 +390,10 @@ int main(int argc, char** argv) {
         struct Shutdown {
             ~Shutdown() { core::teardown_gpu_before_exit(); }
         } shutdown;
-        if (!cpu)
+        if (!cpu) {
             imageCachePrecisionContracts();
+            heifCacheAndQueueContracts();
+        }
         imageOutputContracts(cpu ? core::Device::CPU : core::Device::GPU);
         if (!cpu)
             tiffPipelineContracts();

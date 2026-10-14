@@ -3,6 +3,7 @@
 
 #include "image_codecs.hpp"
 #include "image_exr.hpp"
+#include "image_heif.hpp"
 
 #include "core/color_transfer.h"
 #include "core/path_utils.hpp"
@@ -1149,6 +1150,8 @@ namespace lfs::core::image_codecs {
     bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
                           Probe& result, std::string& error) {
         const auto extension = lower_extension(path);
+        if (extension == ".avif" || extension == ".heic" || extension == ".heif")
+            return decode_heif_to_buffer(path, target, result, error);
         if (extension == ".jpg" || extension == ".jpeg")
             return decode_jpeg_file_to_buffer(path, target, result, error);
         if (extension == ".png")
@@ -1171,6 +1174,8 @@ namespace lfs::core::image_codecs {
             error = "Empty image buffer";
             return false;
         }
+        if (is_heif({data, size}))
+            return decode_heif_to_buffer(std::span<const uint8_t>{data, size}, target, result, error);
         if (size >= 2 && data[0] == 0xff && data[1] == 0xd8)
             return decode_jpeg_memory_to_buffer(data, size, target, result, error);
         if (size >= kPngSignature.size() && std::equal(kPngSignature.begin(), kPngSignature.end(), data))
@@ -1185,6 +1190,8 @@ namespace lfs::core::image_codecs {
         if (!read_prefix(path, header, error, kReadLimit))
             return false;
 
+        if (is_heif(header))
+            return true; // Advisory bounded recognition; full decoding validates the payload.
         if (is_png(header)) {
             if (header.size() >= 26 && std::memcmp(header.data() + 12, "IHDR", 4) == 0 &&
                 std::any_of(header.begin() + 16, header.begin() + 20, [](auto byte) { return byte != 0; }) &&
@@ -1224,6 +1231,8 @@ namespace lfs::core::image_codecs {
 
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error) {
         const auto extension = lower_extension(path);
+        if (extension == ".avif" || extension == ".heic" || extension == ".heif")
+            return probe_heif(path, result, error);
         if (extension == ".exr")
             return probe_exr(path, result, error);
         if (extension == ".jpg" || extension == ".jpeg")
@@ -1372,6 +1381,8 @@ namespace lfs::core::image_codecs {
 
     bool decode(const std::filesystem::path& path, Image& result, std::string& error) {
         const auto extension = lower_extension(path);
+        if (extension == ".avif" || extension == ".heic" || extension == ".heif")
+            return decode_heif(path, result, error);
         if (extension == ".tif" || extension == ".tiff")
             return decode_tiff(path, result, error);
         if (extension == ".exr")
@@ -1404,6 +1415,8 @@ namespace lfs::core::image_codecs {
             error = "Empty image buffer";
             return false;
         }
+        if (is_heif({data, size}))
+            return decode_heif(std::span<const uint8_t>{data, size}, result, error);
         if (size >= 2 && data[0] == 0xff && data[1] == 0xd8)
             return decode_jpeg_bytes(data, size, result, error);
         if (size >= kPngSignature.size() && std::equal(kPngSignature.begin(), kPngSignature.end(), data)) {
