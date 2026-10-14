@@ -407,6 +407,52 @@ TEST(LoggerTest, InitOnFreshTempDirCreatesDurableLogFile) {
     std::filesystem::remove_all(temp_root, ec);
 }
 
+TEST(LoggerTest, CaptureErrorKeepsInfoAndWarnInTheSessionFile) {
+    LoggerInitGuard reset_guard;
+
+    const std::filesystem::path temp_root = unique_temp_dir("capture_file");
+    std::error_code ec;
+    std::filesystem::remove_all(temp_root, ec);
+
+    auto& logger = lfs::core::Logger::get();
+    logger.init(lfs::core::LogLevel::Info, "", "", false, temp_root.string());
+    logger.set_level(lfs::core::LogLevel::Error);
+    logger.clear_log_buffer();
+
+    const std::string info_marker = next_marker("capture_info");
+    const std::string warn_marker = next_marker("capture_warn");
+    const std::string error_marker = next_marker("capture_error");
+    LOG_INFO("{}", info_marker);
+    LOG_WARN("{}", warn_marker);
+    LOG_ERROR("{}", error_marker);
+    logger.flush();
+
+    const std::filesystem::path session_path(
+        lfs::core::Logger::default_log_file_path(temp_root.string()));
+    const std::string session = read_file(session_path);
+    EXPECT_NE(session.find(info_marker), std::string::npos);
+    EXPECT_NE(session.find(warn_marker), std::string::npos);
+    EXPECT_NE(session.find(error_marker), std::string::npos);
+
+    const std::string buffer = logger.buffered_logs_as_text();
+    EXPECT_EQ(buffer.find(info_marker), std::string::npos);
+    EXPECT_EQ(buffer.find(warn_marker), std::string::npos);
+    EXPECT_NE(buffer.find(error_marker), std::string::npos);
+
+    const std::string hidden_debug = next_marker("capture_debug_hidden");
+    LOG_DEBUG("{}", hidden_debug);
+    logger.flush();
+    EXPECT_EQ(read_file(session_path).find(hidden_debug), std::string::npos);
+
+    logger.set_level(lfs::core::LogLevel::Debug);
+    const std::string debug_marker = next_marker("capture_debug");
+    LOG_DEBUG("{}", debug_marker);
+    logger.flush();
+    EXPECT_NE(read_file(session_path).find(debug_marker), std::string::npos);
+
+    std::filesystem::remove_all(temp_root, ec);
+}
+
 TEST(LoggerTest, ExplicitLogFileAddsAdditionalSink) {
     LoggerInitGuard reset_guard;
 
