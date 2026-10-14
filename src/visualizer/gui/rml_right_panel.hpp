@@ -46,7 +46,7 @@ namespace lfs::vis::gui {
         float splitter_h = 6.0f;
     };
 
-    class RmlRightPanel {
+    class LFS_VIS_API RmlRightPanel {
     public:
         void init(RmlUIManager* mgr);
         void shutdown();
