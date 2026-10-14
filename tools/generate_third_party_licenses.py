@@ -247,7 +247,9 @@ def ffmpeg_details(args: argparse.Namespace) -> str:
     # second, incomplete expression language or treating them as installed.
     if conditional:
         status_note = f"; platform-conditional manifest requests: {', '.join(conditional)}; installed status is authoritative"
-    if requested_features and (not set(unconditional).issubset(features) if conditional else set(unconditional) != set(features)):
+    missing_requested_features = not set(unconditional).issubset(features)
+    unexpected_installed_features = not conditional and not set(features).issubset(unconditional)
+    if requested_features and (missing_requested_features or unexpected_installed_features):
         status_note += f"; manifest requests {', '.join(unconditional)}, installed status differs"
     gpl = "x264" in features or "gpl" in features
     return "\n".join([
