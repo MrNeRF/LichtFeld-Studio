@@ -175,8 +175,9 @@ float3 project_point_equirect(float3 point, Camera cam) {
         return {0, 0, -1};
 
     float3 dir = view_point / len;
-    // Rasterizer camera space has +Z forward; convert to the shared -Z convention.
-    float2 uv = lfs_equirect_uv(float3(dir.x, dir.y, -dir.z));
+    // Rasterizer camera space is +Y down and +Z forward (see the pinhole projection);
+    // the shared panorama frame is +Y up and -Z forward.
+    float2 uv = lfs_equirect_uv(float3(dir.x, -dir.y, -dir.z));
     return {
         uv.x * float(cam.W),
         uv.y * float(cam.H),
@@ -505,11 +506,11 @@ WorldRay pixel_to_world_ray(float2 pixel, Camera cam) {
     float3x3 view_to_world_rotation = float3x3(world_view_t);
     float3 camera_origin = -mul(view_to_world_rotation, world_view_t[3]);
     if (cam.model == int(CameraModel::EQUIRECTANGULAR)) {
-        // Inverse of project_point_equirect. Shared equirect is -Z forward
-        // with +Y at uv.y = 0; the rasterizer camera is +Z forward.
+        // Inverse of project_point_equirect. Shared equirect is +Y up at uv.y = 0
+        // and -Z forward; the rasterizer camera is +Y down and +Z forward.
         float2 equirect_uv = float2(pixel.x / float(cam.W), pixel.y / float(cam.H));
         float3 shared_dir = lfs_equirect_direction(equirect_uv);
-        float3 ray_camera = float3(shared_dir.x, shared_dir.y, -shared_dir.z);
+        float3 ray_camera = float3(shared_dir.x, -shared_dir.y, -shared_dir.z);
         float3 direction = safe_normalize(mul(view_to_world_rotation, ray_camera));
         return { camera_origin, direction, isfinite(dot(camera_origin, camera_origin)) && isfinite(dot(direction, direction)) };
     }

@@ -306,7 +306,8 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
     lfs::rendering::setExpectedVulkanDeviceUuid(context.deviceUUID());
 
     constexpr std::array points{std::array{0.0f, 0.0f, -5.0f}, std::array{0.0f, 0.0f, 5.0f},
-                                std::array{0.0f, -5.0f, 0.0f}, std::array{0.0f, 5.0f, 0.0f}};
+                                std::array{0.0f, -5.0f, 0.0f}, std::array{0.0f, 5.0f, 0.0f},
+                                std::array{0.0f, 0.5f, 5.0f}};
     lfs::vis::SceneManager manager;
     auto& scene = manager.getScene();
     std::array<lfs::core::NodeId, points.size()> ids;
@@ -357,7 +358,22 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
         auto image = renderer.readOutputImageRgb8(context, lfs::vis::VksplatViewportRenderer::OutputSlot::Preview);
         ASSERT_TRUE(image) << (image ? "" : image.error());
         const auto* bytes = (*image)->ptr<uint8_t>();
-        const int expected_y = panorama ? std::array{256, 256, 0, 511}[marker] : 256;
+        if (marker == 4) {
+            // Up is up in both projections: a point above the horizon draws above the centre row.
+            int lit_rows = 0;
+            for (int y = 0; y < 512; ++y)
+                for (int x = 512 - 32; x <= 512 + 32; ++x) {
+                    const size_t offset = (static_cast<size_t>(y) * 1024 + x) * 3;
+                    if (bytes[offset] + bytes[offset + 1] + bytes[offset + 2] > 24) {
+                        EXPECT_LT(y, 256) << "panorama=" << panorama;
+                        ++lit_rows;
+                        break;
+                    }
+                }
+            EXPECT_GT(lit_rows, 0) << "panorama=" << panorama;
+            return;
+        }
+        const int expected_y = panorama ? std::array{256, 256, 511, 0}[marker] : 256;
         const bool pole = panorama && (marker == 2 || marker == 3);
         const bool seam = panorama && marker == 0;
         constexpr int expected_x = 512;
@@ -375,7 +391,7 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
     };
     for (bool panorama : {false, true})
         for (size_t marker = 0; marker < points.size(); ++marker)
-            if (panorama || marker == 1)
+            if (panorama || marker == 1 || marker == 4)
                 check_marker(marker, panorama);
 
     for (const auto id : ids)
@@ -421,12 +437,12 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
     EXPECT_EQ(selected_at(Shape::Rectangle, middle, 0), 0u);
     EXPECT_EQ(selected_at(Shape::Rectangle, middle, 1), 1u);
     EXPECT_EQ(selected_at(Shape::Polygon, middle, 1), 1u);
-    EXPECT_EQ(selected_at(Shape::Brush, {512.0f, 0.0f, 90.0f * 90.0f, 0.0f}, 2), 1u);
-    EXPECT_EQ(selected_at(Shape::Brush, {512.0f, 511.0f, 90.0f * 90.0f, 0.0f}, 3), 1u);
-    EXPECT_EQ(selected_at(Shape::Rectangle, {0.0f, 0.0f, 1024.0f, 48.0f}, 2), 1u);
-    EXPECT_EQ(selected_at(Shape::Rectangle, {0.0f, 464.0f, 1024.0f, 512.0f}, 3), 1u);
-    EXPECT_EQ(selected_at(Shape::Polygon, {0.0f, 0.0f, 1024.0f, 48.0f}, 2), 1u);
-    EXPECT_EQ(selected_at(Shape::Polygon, {0.0f, 464.0f, 1024.0f, 512.0f}, 3), 1u);
+    EXPECT_EQ(selected_at(Shape::Brush, {512.0f, 0.0f, 90.0f * 90.0f, 0.0f}, 3), 1u);
+    EXPECT_EQ(selected_at(Shape::Brush, {512.0f, 511.0f, 90.0f * 90.0f, 0.0f}, 2), 1u);
+    EXPECT_EQ(selected_at(Shape::Rectangle, {0.0f, 0.0f, 1024.0f, 48.0f}, 3), 1u);
+    EXPECT_EQ(selected_at(Shape::Rectangle, {0.0f, 464.0f, 1024.0f, 512.0f}, 2), 1u);
+    EXPECT_EQ(selected_at(Shape::Polygon, {0.0f, 0.0f, 1024.0f, 48.0f}, 3), 1u);
+    EXPECT_EQ(selected_at(Shape::Polygon, {0.0f, 464.0f, 1024.0f, 512.0f}, 2), 1u);
 }
 
 TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {
