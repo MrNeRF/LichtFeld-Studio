@@ -47,6 +47,11 @@ class NativeWindowsClient:
         self.user32.SendMessageW.restype = ctypes.c_ssize_t
         self.user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
                                           ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        self.user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+        self.user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        self.user32.GetForegroundWindow.restype = wintypes.HWND
+        self.original_cursor = wintypes.POINT()
+        assert self.user32.GetCursorPos(ctypes.byref(self.original_cursor))
         self.rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
                                 "clientInfo": {"name": "native-window-tests", "version": "1"}})
         for uri in ("lichtfeld://runtime/catalog", "lichtfeld://runtime/state", "lichtfeld://ui/state",
@@ -74,6 +79,73 @@ class NativeWindowsClient:
         return result["result"]
 
     def call(self, name, **arguments):
+        if name == "ui_pointer" and name not in self.tools:
+            self._used_native_pointer = True
+            assert arguments.get("button", "left") == "left"
+            # Master has no synthetic-pointer MCP tool. Use real mouse input:
+            # posted messages do not update the physical held-button state used
+            # by drag handoff. Coordinates target this isolated app's main HWND.
+            main = next(window for window in self.windows()
+                        if window["title"].startswith("LichtFeld Studio"))
+            point = wintypes.POINT(int(arguments["x"]), int(arguments["y"]))
+            assert self.user32.ClientToScreen(main["hwnd"], ctypes.byref(point))
+            action = arguments["action"]
+            class MouseInput(ctypes.Structure):
+                _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                            ("mouseData", wintypes.DWORD), ("flags", wintypes.DWORD),
+                            ("time", wintypes.DWORD), ("extra", ctypes.c_size_t)]
+            class InputValue(ctypes.Union):
+                _fields_ = [("mouse", MouseInput)]
+            class Input(ctypes.Structure):
+                _fields_ = [("type", wintypes.DWORD), ("value", InputValue)]
+            self.user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int]
+            if action == "down":
+                foreground = self.user32.GetForegroundWindow()
+                assert foreground, "Master pointer tests require an unlocked interactive Windows desktop"
+                foreground_pid = wintypes.DWORD()
+                self.user32.GetWindowThreadProcessId(foreground, ctypes.byref(foreground_pid))
+                kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+                kernel.OpenProcess.restype = wintypes.HANDLE
+                kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                                              wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+                kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+                process = kernel.OpenProcess(0x1000, False, foreground_pid.value)
+                if process:
+                    try:
+                        executable = ctypes.create_unicode_buffer(1024)
+                        length = wintypes.DWORD(len(executable))
+                        if kernel.QueryFullProcessImageNameW(process, 0, executable, ctypes.byref(length)):
+                            assert Path(executable.value).name.lower() not in {"lockapp.exe", "logonui.exe"}, \
+                                "Master pointer tests require an unlocked Windows session; no mouse input was sent"
+                    finally:
+                        kernel.CloseHandle(process)
+                self.user32.SetForegroundWindow(main["hwnd"])
+                time.sleep(.1)
+                if self.user32.GetForegroundWindow() != main["hwnd"]:
+                    # Windows can deny a background process's activation request.
+                    # Activate with a normal click in the main window's empty corner
+                    # before issuing the title press used by the drag assertion.
+                    corner = wintypes.POINT(4, 4)
+                    assert self.user32.ClientToScreen(main["hwnd"], ctypes.byref(corner))
+                    assert self.user32.SetCursorPos(corner.x, corner.y)
+                    activation = (Input * 2)(Input(0, InputValue(mouse=MouseInput(flags=2))),
+                                             Input(0, InputValue(mouse=MouseInput(flags=4))))
+                    assert self.user32.SendInput(2, activation, ctypes.sizeof(Input)) == 2
+                    self.until(lambda: self.user32.GetForegroundWindow() == main["hwnd"])
+                    time.sleep(.1)
+            assert self.user32.SetCursorPos(point.x, point.y)
+            if action == "down":
+                flags = 0x0002  # MOUSEEVENTF_LEFTDOWN
+            elif action == "up":
+                flags = 0x0004  # MOUSEEVENTF_LEFTUP
+            else:
+                assert action == "move", action
+                return {"success": True}
+            packet = Input(0, InputValue(mouse=MouseInput(flags=flags)))
+            assert self.user32.SendInput(1, ctypes.byref(packet), ctypes.sizeof(Input)) == 1
+            self._pointer_buttons = 1 if action == "down" else 0
+            return {"success": True}
         result = self.rpc("tools/call", {"name": name, "arguments": arguments})
         assert not result.get("isError"), result
         if "structuredContent" in result:
@@ -138,6 +210,16 @@ class NativeWindowsClient:
         existing = next((window for window in self.windows() if window["title"] == panel["label"]), None)
         if existing:
             return existing
+        # Reset actions can reopen embedded panels at overlapping defaults. An
+        # enabled target is not necessarily on top; don't drag a different
+        # panel's title or an underlying control using the target's bounds.
+        # Keep existing desktop hosts open for the multi-window assertions.
+        for other_id in ("lfs.preferences", "lfs.plugin_marketplace", "native.video_extractor"):
+            if other_id == panel_id:
+                continue
+            other = self.call("ui_panel_describe", panel_id=other_id)["panel"]
+            if other["enabled"] and not other.get("desktop_window"):
+                self.call("ui_panel_update", panel_id=other_id, enabled=False)
         state = self.until(lambda: next((window for window in self.windows() if window["title"] == panel["label"]), None)
                            or self.call("ui_panel_describe", panel_id=panel_id)["panel"].get("floating_bounds"))
         if "hwnd" in state:
@@ -171,7 +253,14 @@ class NativeWindowsClient:
 
 @pytest.fixture(scope="module")
 def native_client():
-    return NativeWindowsClient()
+    client = NativeWindowsClient()
+    try:
+        yield client
+    finally:
+        if getattr(client, "_pointer_buttons", 0):
+            client.call("ui_pointer", action="up", button="left", x=0, y=0)
+        if getattr(client, "_used_native_pointer", False):
+            client.user32.SetCursorPos(client.original_cursor.x, client.original_cursor.y)
 
 
 def test_opening_embedded_panels_does_not_create_desktop_hosts(native_client):
@@ -314,6 +403,16 @@ def test_native_window_capture_contains_rendered_controls(native_client, panel_i
     assert_rendered_capture(native_client, panel_id)
 
 
+def test_native_window_capture_reports_unavailable_panel(native_client):
+    response = native_client.rpc("tools/call", {
+        "name": "render_capture_window", "arguments": {"panel_id": "test.nonexistent-panel"},
+    })
+    assert response["isError"]
+    result = json.loads(response["content"][0]["text"])
+    assert "unavailable" in result["error"]["message"]
+    assert "success" not in result
+
+
 def assert_rendered_capture(native_client, panel_id):
     if panel_id:
         native_client.open(panel_id)
@@ -370,3 +469,17 @@ def test_repeated_close_reopen_keeps_rendering_valid(native_client):
         assert_rendered_capture(native_client, "lfs.preferences")
         native_client.call("ui_panel_update", panel_id="lfs.preferences", enabled=False)
         native_client.until(lambda: not native_client.user32.IsWindow(window["hwnd"]))
+
+
+@pytest.mark.parametrize("panel_id", ["lfs.preferences", "lfs.plugin_marketplace", "native.video_extractor"])
+@pytest.mark.parametrize("reset_action", ["reset_window_state", "reset_layout"])
+def test_reset_discards_closed_external_panel_reopen_position(native_client, panel_id, reset_action):
+    native = native_client.open(panel_id)
+    native_client.call("ui_panel_update", panel_id=panel_id, enabled=False)
+    native_client.until(lambda: not native_client.user32.IsWindow(native["hwnd"]))
+    result = native_client.python(f"import lichtfeld as lf,json\nerror=lf.ui.{reset_action}()\nprint('NATIVE_WINDOWS_TEST:'+json.dumps({{'error':error}}))")
+    assert not result["error"]
+    native_client.call("ui_panel_update", panel_id=panel_id, enabled=True)
+    native_client.until(lambda: native_client.call("ui_panel_describe", panel_id=panel_id)["panel"].get("floating_bounds"))
+    time.sleep(.2)
+    assert not any(window["title"] == native["title"] for window in native_client.windows())

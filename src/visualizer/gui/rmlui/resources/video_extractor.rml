@@ -68,12 +68,16 @@
           </div>
           <div class="file-list">
             <div class="file-row">
-              <span class="field-label">@tr:video_extractor.video</span>
+              <span class="field-label">@tr:video_extractor.videos</span>
               <span id="video-value" class="path-value">@tr:video_extractor.no_file</span>
-              <button id="btn-browse-video" class="btn btn--secondary browse-btn" type="button">@tr:video_extractor.browse</button>
+              <button id="btn-browse-video" class="btn btn--secondary browse-btn" type="button">@tr:video_extractor.add_videos</button>
+              <button id="btn-remove-video" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.remove_video</button>
+              <button id="btn-clear-videos" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.clear_videos</button>
             </div>
+            <div id="batch-video-list" class="batch-video-list"></div>
+            <span id="batch-summary" class="inline-note"></span>
             <div class="file-row">
-              <span class="field-label">@tr:video_extractor.output</span>
+              <span class="field-label">@tr:video_extractor.output_root</span>
               <span id="output-value" class="path-value">@tr:video_extractor.no_dir</span>
               <button id="btn-browse-output" class="btn btn--secondary browse-btn" type="button">@tr:video_extractor.browse</button>
             </div>
@@ -102,6 +106,13 @@
               <input id="interval-input" class="interval-input" type="text" value="1" />
               <span id="interval-value" class="interval-unit">@tr:video_extractor.frames_unit</span>
             </div>
+          </div>
+          <div class="settings-row">
+            <span class="field-label"></span>
+            <label class="toggle-label">
+              <input id="continue-batch-on-failure" type="checkbox" checked="checked" />
+              <span>@tr:video_extractor.continue_batch_on_failure</span>
+            </label>
           </div>
         </div>
 

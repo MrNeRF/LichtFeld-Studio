@@ -224,7 +224,13 @@
     "file.mesh": "メッシュ…",
     "file.checkpoint": "チェックポイント…",
     "tools.developer": "開発者",
-    "tools.system_console": "システムコンソール"
+    "tools.system_console": "システムコンソール",
+    "access_key.file": "F",
+    "access_key.edit": "E",
+    "access_key.select": "S",
+    "access_key.tools": "T",
+    "access_key.view": "V",
+    "access_key.help": "H"
   },
   "window": {
     "export": "エクスポート",
@@ -703,7 +709,9 @@
       "bg_modulation": "transparent/empty pixel の背後に使う training background を選びます。Color は選択した固定色を使います。Modulation は sinusoidal colors で solid RGB background を変化させます。Image は選択した画像を使います。Random は各 step で pixel ごとの RGB noise を生成します。",
       "invert_masks": "マスクの意味を反転します。白黒マスクで、マスク領域が想定とは反対の色で示されている場合に使います。",
       "use_alpha_as_mask": "画像の transparency を training mask として使います。RGBA 画像に既に mask が含まれ、別の mask file が不要な場合に使います。",
-      "steps_scaler": "step-based training settings をまとめてスケールします。Auto mode では有効な training image 1 枚あたり約 100 iteration、最小 30,000 iteration を使います。"
+      "steps_scaler": "step-based training settings をまとめてスケールします。Auto mode では有効な training image 1 枚あたり約 100 iteration、最小 30,000 iteration を使います。",
+      "eval_mask_report_unmasked": "同じレンダリングから、マスクなしと同様に各ビューのすべての有効ピクセルも評価します。",
+      "eval_mask_report_inverted": "同じレンダリングから、評価マスクの外側の有効ピクセルも評価します。"
     },
     "section.masking": "マスク設定",
     "section.thresholds": "しきい値",
@@ -784,7 +792,7 @@
     "fit_to_scene": "シーンにフィット",
     "fit_to_scene_trimmed": "シーンにフィット(トリム済み)",
     "reset_crop": "リセット",
-    "merge_to_single_ply": "単一のPLYにマージ",
+    "merge_to_single_ply": "単一のモデルにマージ",
     "move_to": "移動先",
     "move_to_root": "ルート",
     "models": "モデル ({})",
@@ -1909,7 +1917,9 @@
     "prune_opacity": "不透明度のプルーニング:",
     "ppisp_settings": "PPISP設定",
     "ppisp_enable_controller": "コントローラー有効化:",
-    "disabled": "無効"
+    "disabled": "無効",
+    "eval_mask_report_unmasked": "マスクなしでも評価:",
+    "eval_mask_report_inverted": "反転マスクでも評価:"
   },
   "image_preview": {
     "title": "イメージプレビュー",
@@ -2207,7 +2217,25 @@
     "overwrite_proceed": "続行（重複を上書き）",
     "overwrite_prompt_metadata": "出力フォルダには、この実行で置き換えられる抽出メタデータがあります。続行方法を選択してください。",
     "overwrite_prompt_frames_metadata": "出力フォルダには、この抽出の命名パターンに一致するフレームが既にあります。既存の抽出メタデータも置き換えられます。続行方法を選択してください。",
-    "overwrite_delete_error": "{} を削除できませんでした: {}"
+    "overwrite_delete_error": "{} を削除できませんでした: {}",
+    "videos": "動画:",
+    "add_videos": "動画を追加...",
+    "remove_video": "削除",
+    "clear_videos": "クリア",
+    "output_root": "出力ルート:",
+    "continue_batch_on_failure": "動画の抽出に失敗しても残りを続行する",
+    "batch_video_count": "{} 本の動画を選択",
+    "batch_summary": "{} 本 · 完了 {} · 失敗 {}",
+    "batch_no_videos": "抽出を開始する前に少なくとも1本の動画を追加してください。",
+    "batch_no_output_root": "このバッチの出力ルートを選択してください。",
+    "batch_pending": "待機中",
+    "batch_running": "抽出中",
+    "batch_complete": "完了",
+    "batch_failed": "失敗",
+    "batch_stopped": "停止",
+    "batch_existing_output": "既存の出力",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "視野角: {hfov:.1f}° H / {vfov:.1f}° V",

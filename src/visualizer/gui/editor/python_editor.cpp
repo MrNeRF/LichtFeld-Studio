@@ -708,6 +708,7 @@ namespace lfs::vis::editor {
                 case Zep::BufferMessageType::TextChanged:
                 case Zep::BufferMessageType::TextDeleted:
                     owner_.text_changed = true;
+                    owner_.host_text_changed = true;
                     owner_.noteSemanticDirtyRange(
                         static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
                         static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
@@ -890,6 +891,7 @@ namespace lfs::vis::editor {
             buffer->SetText(text);
             suppress_buffer_events = false;
             text_changed = false;
+            host_text_changed = false;
             if (lsp) {
                 document_version = lsp->updateDocument(text);
             }
@@ -1726,6 +1728,8 @@ namespace lfs::vis::editor {
             last_cursor_byte_index = cursor.byte_index;
             last_cursor_line = cursor.line;
             last_cursor_character = cursor.character;
+            // The console reads host_text_changed before this deferred render.
+            text_changed = false;
         }
 
         std::optional<ResolvedEdit> resolveTextEdit(const PythonLspClient::TextEdit& edit,
@@ -1846,6 +1850,7 @@ namespace lfs::vis::editor {
 
             if (changed) {
                 text_changed = true;
+                host_text_changed = true;
                 editor->RequestRefresh();
             }
 
@@ -2770,6 +2775,7 @@ namespace lfs::vis::editor {
         bool force_unfocused = false;
         bool read_only = false;
         bool text_changed = false;
+        bool host_text_changed = false;
         bool suppress_buffer_events = false;
         bool completion_request_pending = false;
         bool manual_completion_requested = false;
@@ -3309,8 +3315,8 @@ namespace lfs::vis::editor {
     }
 
     bool PythonEditor::consumeTextChanged() {
-        const bool changed = impl_->text_changed;
-        impl_->text_changed = false;
+        const bool changed = impl_->host_text_changed;
+        impl_->host_text_changed = false;
         return changed;
     }
 
@@ -3661,6 +3667,7 @@ namespace lfs::vis::editor {
                 active_window);
         }
         impl_->text_changed = false;
+        impl_->host_text_changed = false;
         impl_->setVimModeEnabled(
             state.vim_mode);
         if (active_buffer != nullptr &&

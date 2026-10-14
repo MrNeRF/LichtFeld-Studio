@@ -210,19 +210,26 @@ namespace lfs::core {
             return static_cast<uint8_t>(message_level) >= static_cast<uint8_t>(display_level);
         }
 
+        // True when any active destination still wants the message. Capture
+        // (global_level_) does not change the session-file threshold.
         [[nodiscard]] bool should_emit(const LogLevel level) const {
             if (level == LogLevel::Off)
                 return false;
             if (capture_all_to_file_.load(std::memory_order_relaxed))
                 return true;
-            return passes_display_filter(
-                level,
-                static_cast<LogLevel>(global_level_.load(std::memory_order_relaxed)));
+            const auto capture_level =
+                static_cast<LogLevel>(global_level_.load(std::memory_order_relaxed));
+            const auto file_level =
+                static_cast<LogLevel>(file_level_.load(std::memory_order_relaxed));
+            return passes_display_filter(level, capture_level) ||
+                   passes_display_filter(level, file_level);
         }
 
         struct Impl;
         std::unique_ptr<Impl> impl_;
 
+        // Startup level (--log-level or its default). Not changed by Capture.
+        std::atomic<uint8_t> file_level_{static_cast<uint8_t>(LogLevel::Info)};
         std::atomic<uint8_t> global_level_{static_cast<uint8_t>(LogLevel::Info)};
         std::atomic<bool> capture_all_to_file_{false};
     };

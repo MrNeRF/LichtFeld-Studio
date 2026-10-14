@@ -224,7 +224,13 @@
     "file.mesh": "Mesh…",
     "file.checkpoint": "Checkpoint…",
     "tools.developer": "Ontwikkelaar",
-    "tools.system_console": "Systeemconsole"
+    "tools.system_console": "Systeemconsole",
+    "access_key.file": "B",
+    "access_key.edit": "E",
+    "access_key.select": "S",
+    "access_key.tools": "U",
+    "access_key.view": "W",
+    "access_key.help": "H"
   },
   "window": {
     "export": "Exporteren",
@@ -703,7 +709,9 @@
       "bg_modulation": "Kiest de trainingsachtergrond achter transparante of lege pixels. Color gebruikt de geselecteerde vaste kleur. Modulation varieert een solide RGB-achtergrond met sinusvormige kleuren. Image gebruikt een afbeelding. Random genereert elke stap per-pixel RGB-ruis.",
       "invert_masks": "Draait de betekenis van het masker om. Gebruik dit wanneer je zwart-witmaskers de gemaskeerde regio met de tegenovergestelde kleur markeren.",
       "use_alpha_as_mask": "Gebruikt beeldtransparantie als trainingsmasker. Gebruik dit wanneer RGBA-afbeeldingen het masker al bevatten en aparte bestanden niet nodig zijn.",
-      "steps_scaler": "Schaalt step-gebaseerde trainingsinstellingen samen. Auto-modus gebruikt ongeveer 100 iteraties per actieve trainingsafbeelding, met een minimum van 30.000 iteraties."
+      "steps_scaler": "Schaalt step-gebaseerde trainingsinstellingen samen. Auto-modus gebruikt ongeveer 100 iteraties per actieve trainingsafbeelding, met een minimum van 30.000 iteraties.",
+      "eval_mask_report_unmasked": "Evalueert ook alle geldige pixels van elke weergave, zoals zonder masker, uit dezelfde render.",
+      "eval_mask_report_inverted": "Evalueert ook de geldige pixels buiten het evaluatiemasker, uit dezelfde render."
     },
     "section.masking": "Maskerinstellingen",
     "section.thresholds": "Drempelwaarden",
@@ -784,7 +792,7 @@
     "fit_to_scene": "Aanpassen aan Scène",
     "fit_to_scene_trimmed": "Aanpassen aan Scène (Bijgesneden)",
     "reset_crop": "Resetten",
-    "merge_to_single_ply": "Samenvoegen tot Enkele PLY",
+    "merge_to_single_ply": "Samenvoegen tot Enkel Model",
     "move_to": "Verplaats Naar",
     "move_to_root": "Root",
     "models": "Modellen ({})",
@@ -1909,7 +1917,9 @@
     "prune_opacity": "Opaciteit snoeien:",
     "ppisp_settings": "PPISP Instellingen",
     "ppisp_enable_controller": "Controller inschakelen:",
-    "disabled": "Uitgeschakeld"
+    "disabled": "Uitgeschakeld",
+    "eval_mask_report_unmasked": "Ook zonder masker evalueren:",
+    "eval_mask_report_inverted": "Ook omgekeerd evalueren:"
   },
   "image_preview": {
     "title": "Afbeeldingsvoorbeeld",
@@ -2207,7 +2217,25 @@
     "overwrite_proceed": "Doorgaan (duplicaten overschrijven)",
     "overwrite_prompt_metadata": "De uitvoermap bevat extractiemetadata die deze uitvoering zal vervangen. Kies hoe u wilt doorgaan.",
     "overwrite_prompt_frames_metadata": "De uitvoermap bevat al frames die overeenkomen met het naamgevingspatroon van deze extractie. Bestaande extractiemetadata wordt ook vervangen. Kies hoe u wilt doorgaan.",
-    "overwrite_delete_error": "Kan {} niet verwijderen: {}"
+    "overwrite_delete_error": "Kan {} niet verwijderen: {}",
+    "videos": "Video's:",
+    "add_videos": "Video's toevoegen...",
+    "remove_video": "Verwijderen",
+    "clear_videos": "Wissen",
+    "output_root": "Uitvoerbasis:",
+    "continue_batch_on_failure": "Doorgaan met resterende video's als er één mislukt",
+    "batch_video_count": "{} video's geselecteerd",
+    "batch_summary": "{} video's · {} voltooid · {} mislukt",
+    "batch_no_videos": "Voeg ten minste één video toe voordat u de extractie start.",
+    "batch_no_output_root": "Selecteer een uitvoerbasis voor deze batch.",
+    "batch_pending": "In wachtrij",
+    "batch_running": "Bezig met extraheren",
+    "batch_complete": "Voltooid",
+    "batch_failed": "Mislukt",
+    "batch_stopped": "Gestopt",
+    "batch_existing_output": "Bestaande uitvoer",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "Gezichtsveld: {hfov:.1f}° H / {vfov:.1f}° V",

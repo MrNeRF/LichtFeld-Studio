@@ -224,7 +224,13 @@
     "file.mesh": "Mesh…",
     "file.checkpoint": "Checkpoint…",
     "tools.developer": "Entwickler",
-    "tools.system_console": "Systemkonsole"
+    "tools.system_console": "Systemkonsole",
+    "access_key.file": "D",
+    "access_key.edit": "B",
+    "access_key.select": "U",
+    "access_key.tools": "W",
+    "access_key.view": "A",
+    "access_key.help": "H"
   },
   "window": {
     "export": "Exportieren",
@@ -703,7 +709,9 @@
       "bg_modulation": "Wählt den Trainingshintergrund hinter transparenten oder leeren Pixeln. Color nutzt die ausgewählte feste Farbe. Modulation variiert einen soliden RGB-Hintergrund sinusförmig über Trainingsschritte. Image nutzt ein Bild. Random erzeugt je Schritt pixelweises RGB-Rauschen.",
       "invert_masks": "Kehrt die Maskenbedeutung um. Nutze es, wenn deine Schwarz-Weiß-Masken die maskierte Region mit der entgegengesetzten Farbe markieren.",
       "use_alpha_as_mask": "Verwendet Bildtransparenz als Trainingsmaske. Nutze es, wenn RGBA-Bilder die Maske bereits enthalten und keine separaten Maskendateien nötig sind.",
-      "steps_scaler": "Skaliert schrittbasierte Trainingseinstellungen gemeinsam. Auto nutzt etwa 100 Iterationen pro aktivem Trainingsbild, mit mindestens 30.000 Iterationen."
+      "steps_scaler": "Skaliert schrittbasierte Trainingseinstellungen gemeinsam. Auto nutzt etwa 100 Iterationen pro aktivem Trainingsbild, mit mindestens 30.000 Iterationen.",
+      "eval_mask_report_unmasked": "Wertet zusätzlich alle gültigen Pixel jeder Ansicht aus, wie ohne Maske, aus demselben Rendering.",
+      "eval_mask_report_inverted": "Wertet zusätzlich die gültigen Pixel außerhalb der Auswertungsmaske aus, aus demselben Rendering."
     },
     "section.masking": "Masken Einstellungen",
     "section.thresholds": "Schwellenwerte",
@@ -784,7 +792,7 @@
     "fit_to_scene": "An Szene anpassen",
     "fit_to_scene_trimmed": "An Szene anpassen (beschnitten)",
     "reset_crop": "Zurücksetzen",
-    "merge_to_single_ply": "Zu einzelner PLY zusammenführen",
+    "merge_to_single_ply": "In ein einzelnes Modell zusammenführen",
     "move_to": "Verschieben nach",
     "move_to_root": "Wurzel",
     "models": "Modelle ({})",
@@ -1909,7 +1917,9 @@
     "prune_opacity": "Opazität beschneiden:",
     "ppisp_settings": "PPISP-Einstellungen",
     "ppisp_enable_controller": "Controller aktivieren:",
-    "disabled": "Deaktiviert"
+    "disabled": "Deaktiviert",
+    "eval_mask_report_unmasked": "Auch ohne Maske werten:",
+    "eval_mask_report_inverted": "Auch invertiert werten:"
   },
   "image_preview": {
     "title": "Bildvorschau",
@@ -2207,7 +2217,25 @@
     "overwrite_proceed": "Fortfahren (Duplikate überschreiben)",
     "overwrite_prompt_metadata": "Der Ausgabeordner enthält Extraktionsmetadaten, die dieser Durchlauf ersetzen wird. Wählen Sie, wie Sie fortfahren möchten.",
     "overwrite_prompt_frames_metadata": "Der Ausgabeordner enthält bereits Bilder, die dem Namensmuster dieser Extraktion entsprechen. Vorhandene Extraktionsmetadaten werden ebenfalls ersetzt. Wählen Sie, wie Sie fortfahren möchten.",
-    "overwrite_delete_error": "{} konnte nicht entfernt werden: {}"
+    "overwrite_delete_error": "{} konnte nicht entfernt werden: {}",
+    "videos": "Videos:",
+    "add_videos": "Videos hinzufügen...",
+    "remove_video": "Entfernen",
+    "clear_videos": "Leeren",
+    "output_root": "Ausgabeordner:",
+    "continue_batch_on_failure": "Mit verbleibenden Videos fortfahren, wenn eines fehlschlägt",
+    "batch_video_count": "{} Videos ausgewählt",
+    "batch_summary": "{} Videos · {} abgeschlossen · {} fehlgeschlagen",
+    "batch_no_videos": "Fügen Sie vor dem Start mindestens ein Video hinzu.",
+    "batch_no_output_root": "Wählen Sie einen Ausgabeordner für diesen Batch.",
+    "batch_pending": "Ausstehend",
+    "batch_running": "Extrahieren",
+    "batch_complete": "Abgeschlossen",
+    "batch_failed": "Fehlgeschlagen",
+    "batch_stopped": "Angehalten",
+    "batch_existing_output": "Vorhandene Ausgabe",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "Sichtfeld: {hfov:.1f}° H / {vfov:.1f}° V",

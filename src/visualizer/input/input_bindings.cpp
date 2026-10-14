@@ -929,12 +929,18 @@ namespace lfs::vis::input {
         InputBindings previous = *this;
 
         try {
-            std::ifstream file;
-            if (!lfs::core::open_file_for_read(path, file)) {
-                LOG_ERROR("Failed to open profile file: {}", lfs::core::path_to_utf8(path));
-                return false;
+            // Parse in a nested scope so the source handle is closed before
+            // any migration save. Windows cannot replace a file that this
+            // stream still has open.
+            json j;
+            {
+                std::ifstream file;
+                if (!lfs::core::open_file_for_read(path, file)) {
+                    LOG_ERROR("Failed to open profile file: {}", lfs::core::path_to_utf8(path));
+                    return false;
+                }
+                j = json::parse(file);
             }
-            const json j = json::parse(file);
             const auto stored_version = readStoredProfileVersion(j);
             if (stored_version.kind == StoredProfileVersionKind::Newer) {
                 LOG_WARN("Cannot load newer input profile version {} from '{}'; file is unchanged",

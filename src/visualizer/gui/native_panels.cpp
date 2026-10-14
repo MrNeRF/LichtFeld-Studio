@@ -140,6 +140,11 @@ namespace lfs::vis::gui::native_panels {
         return widget_ && widget_->restoreDesktopWindow();
     }
 
+    void VideoExtractorPanel::resetDesktopRestoreState() {
+        if (widget_)
+            widget_->resetDesktopRestoreState();
+    }
+
     void VideoExtractorPanel::releaseDesktopWindow() {
         if (widget_)
             widget_->releaseDesktopWindow();

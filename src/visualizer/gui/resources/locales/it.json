@@ -224,7 +224,13 @@
     "file.mesh": "Mesh…",
     "file.checkpoint": "Checkpoint…",
     "tools.developer": "Sviluppatore",
-    "tools.system_console": "Console di sistema"
+    "tools.system_console": "Console di sistema",
+    "access_key.file": "F",
+    "access_key.edit": "M",
+    "access_key.select": "S",
+    "access_key.tools": "T",
+    "access_key.view": "V",
+    "access_key.help": "A"
   },
   "window": {
     "export": "Esporta",
@@ -703,7 +709,9 @@
       "bg_modulation": "Sceglie lo sfondo di training dietro pixel trasparenti o vuoti. Color usa il colore fisso selezionato. Modulation varia uno sfondo RGB solido con colori sinusoidali. Image usa un immagine selezionata. Random genera rumore RGB per pixel a ogni passo.",
       "invert_masks": "Inverte il significato della maschera. Usalo quando le maschere in bianco e nero usano il colore opposto per la regione mascherata.",
       "use_alpha_as_mask": "Usa la trasparenza dell'immagine come maschera di training. Usalo quando immagini RGBA contengono già la maschera e non servono file separati.",
-      "steps_scaler": "Scala insieme le impostazioni basate sui passi. Auto usa circa 100 iterazioni per immaginè attiva, con un minimo di 30.000 iterazioni."
+      "steps_scaler": "Scala insieme le impostazioni basate sui passi. Auto usa circa 100 iterazioni per immaginè attiva, con un minimo di 30.000 iterazioni.",
+      "eval_mask_report_unmasked": "Valuta anche tutti i pixel validi di ogni vista, come senza maschera, dallo stesso rendering.",
+      "eval_mask_report_inverted": "Valuta anche i pixel validi fuori dalla maschera di valutazione, dallo stesso rendering."
     },
     "section.masking": "Impostazioni Maschera",
     "section.thresholds": "Soglie",
@@ -784,7 +792,7 @@
     "fit_to_scene": "Adatta alla Scena",
     "fit_to_scene_trimmed": "Adatta alla Scena (Ritagliato)",
     "reset_crop": "Reimposta",
-    "merge_to_single_ply": "Unisci in Singolo PLY",
+    "merge_to_single_ply": "Unisci in Singolo Modello",
     "move_to": "Sposta in",
     "move_to_root": "Radice",
     "models": "Modelli ({})",
@@ -1909,7 +1917,9 @@
     "prune_opacity": "Opacità pruning:",
     "ppisp_settings": "Impostazioni PPISP",
     "ppisp_enable_controller": "Abilita controller:",
-    "disabled": "Disabilitato"
+    "disabled": "Disabilitato",
+    "eval_mask_report_unmasked": "Valuta anche senza maschera:",
+    "eval_mask_report_inverted": "Valuta anche l'inverso:"
   },
   "image_preview": {
     "title": "Anteprima immagine",
@@ -2207,7 +2217,25 @@
     "overwrite_proceed": "Procedi (sovrascrivi duplicati)",
     "overwrite_prompt_metadata": "La cartella di output contiene metadati di estrazione che questa esecuzione sostituirà. Scegli come procedere.",
     "overwrite_prompt_frames_metadata": "La cartella di output contiene già fotogrammi che corrispondono al modello di denominazione di questa estrazione. Anche i metadati di estrazione esistenti verranno sostituiti. Scegli come procedere.",
-    "overwrite_delete_error": "Impossibile rimuovere {}: {}"
+    "overwrite_delete_error": "Impossibile rimuovere {}: {}",
+    "videos": "Video:",
+    "add_videos": "Aggiungi video...",
+    "remove_video": "Rimuovi",
+    "clear_videos": "Cancella",
+    "output_root": "Radice output:",
+    "continue_batch_on_failure": "Continua con i video rimanenti se uno non riesce",
+    "batch_video_count": "{} video selezionati",
+    "batch_summary": "{} video · {} completati · {} non riusciti",
+    "batch_no_videos": "Aggiungi almeno un video prima di iniziare l'estrazione.",
+    "batch_no_output_root": "Seleziona una radice di output per questo batch.",
+    "batch_pending": "In attesa",
+    "batch_running": "Estrazione",
+    "batch_complete": "Completato",
+    "batch_failed": "Non riuscito",
+    "batch_stopped": "Interrotto",
+    "batch_existing_output": "Output esistente",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "Campo visivo: {hfov:.1f}° H / {vfov:.1f}° V",

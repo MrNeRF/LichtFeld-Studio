@@ -693,6 +693,25 @@ apply_registered_chrome:
             }
         }
 
+        if (space == PanelSpace::Floating) {
+            std::lock_guard lock(mutex_);
+            for (auto& [id, interaction] : floating_interactions_) {
+                const bool drawable = std::ranges::any_of(
+                    snapshots, [&](const PanelSnapshot& snap) {
+                        const auto index = static_cast<size_t>(&snap - snapshots.data());
+                        return snap.id == id && should_draw[index];
+                    });
+                // A hidden/poll-suppressed panel will not receive the release
+                // below. Do not let its abandoned interaction lock every panel.
+                if (!drawable || (input && !input->mouse_down[0])) {
+                    interaction.dragging = false;
+                    interaction.resizing = false;
+                    interaction.resize_direction_x = 0;
+                    interaction.resize_direction_y = 0;
+                }
+            }
+        }
+
         struct FloatingDirectLayout {
             bool valid = false;
             float width = 0.0f;
@@ -920,8 +939,11 @@ apply_registered_chrome:
                 switch (space) {
                 case PanelSpace::Floating: {
                     if (auto* native = snap.panel->nativeWindow()) {
-                        SDL_SetWindowTitle(native, std::string(snap.label).c_str());
-                        SDL_SetStringProperty(SDL_GetWindowProperties(native), "lfs.panel_id", std::string(snap.id).c_str());
+                        if (snap.label != SDL_GetWindowTitle(native))
+                            SDL_SetWindowTitle(native, std::string(snap.label).c_str());
+                        const auto properties = SDL_GetWindowProperties(native);
+                        if (snap.id != SDL_GetStringProperty(properties, "lfs.panel_id", ""))
+                            SDL_SetStringProperty(properties, "lfs.panel_id", std::string(snap.id).c_str());
                         PanelInputState native_input;
                         SDL_GetWindowSizeInPixels(native, &native_input.screen_w, &native_input.screen_h);
                         if (SDL_GetMouseFocus() == native) {
@@ -1789,6 +1811,18 @@ apply_registered_chrome:
             });
     }
 
+    void PanelRegistry::resetDesktopRestoreState() {
+        std::vector<std::shared_ptr<IPanel>> panels;
+        {
+            std::lock_guard lock(mutex_);
+            for (const auto& info : panels_)
+                panels.push_back(info.panel);
+        }
+        for (const auto& panel : panels)
+            if (panel)
+                panel->resetDesktopRestoreState();
+    }
+
     void PanelRegistry::reset_project_state() {
         std::lock_guard lock(mutex_);
         reset_project_state_locked();
@@ -1863,6 +1897,10 @@ apply_registered_chrome:
                         if (auto interaction = floating_interactions_.find(id);
                             interaction != floating_interactions_.end()) {
                             interaction->second.last_bounds_valid = false;
+                            interaction->second.dragging = false;
+                            interaction->second.resizing = false;
+                            interaction->second.resize_direction_x = 0;
+                            interaction->second.resize_direction_y = 0;
                         }
                         guiFocusState().want_capture_mouse = false;
                         guiFocusState().want_capture_keyboard = false;

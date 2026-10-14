@@ -18,6 +18,7 @@
 #include <cmath>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iomanip>
@@ -58,17 +59,29 @@ namespace lfs::training {
         float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
                       const lfs::core::Tensor& mask = {});
 
-        // Preserve complete-window scoring where available; normalize partial windows.
+        // Preserve complete-window scoring where available; normalize partial windows. Complete windows read the
+        // unmasked SSIM map, which shared_map keeps across calls on the same image pair when given.
         float compute_evaluation(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
                                  const lfs::core::Tensor& mask, bool complete_windows_only,
-                                 std::string_view camera_name);
+                                 std::string_view camera_name, lfs::core::Tensor* shared_map = nullptr);
 
     private:
         float compute_impl(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
-                           const lfs::core::Tensor& mask, bool normalize_windows);
+                           const lfs::core::Tensor& mask, bool normalize_windows,
+                           lfs::core::Tensor* shared_map = nullptr);
         bool apply_valid_padding_;
         const lfs::gpu_ops::PhotometricOps* ops_ = nullptr;
         lfs::gpu_ops::PhotoSaved saved_{};
+    };
+
+    // Scores of a pixel set reported next to the evaluation mask (eval_mask_report_*).
+    struct MaskSetMetrics {
+        std::optional<float> psnr;
+        std::optional<float> ssim;
+        std::optional<float> lpips;
+        std::optional<float> flip;
+        float evaluated_pixel_fraction = 0.0f;
+        std::string skipped_reason;
     };
 
     struct ViewMetrics {
@@ -85,6 +98,8 @@ namespace lfs::training {
         float evaluated_pixel_fraction = 0.0f;
         bool validity_mask_applied = false;
         std::string skipped_reason;
+        std::optional<MaskSetMetrics> unmasked;
+        std::optional<MaskSetMetrics> inverted;
     };
 
     struct EvalMetrics {
@@ -105,6 +120,8 @@ namespace lfs::training {
         float bias_corr_r = 0.0f;
         float bias_corr_g = 0.0f;
         float bias_corr_b = 0.0f;
+        std::optional<MaskSetMetrics> unmasked;
+        std::optional<MaskSetMetrics> inverted;
         std::vector<ViewMetrics> views;
 
         [[nodiscard]] std::string to_string() const {
@@ -135,6 +152,21 @@ namespace lfs::training {
                 ss << ", depth_absrel: " << *depth_absrel;
             }
             return ss.str();
+        }
+
+        [[nodiscard]] std::vector<std::string> mask_set_summaries() const {
+            const auto score = [](const std::optional<float>& value) {
+                return value && std::isfinite(*value) ? std::format("{:.4f}", *value) : std::string("-");
+            };
+            std::vector<std::string> lines;
+            for (const auto& [name, set] : {std::pair{"Unmasked", &unmasked}, std::pair{"Inverted", &inverted}}) {
+                if (*set)
+                    lines.push_back(std::format("{} PSNR: {}, SSIM: {}, LPIPS: {}{}, pixels: {:.1f}%", name,
+                                                score((*set)->psnr), score((*set)->ssim), score((*set)->lpips),
+                                                (*set)->flip ? ", FLIP: " + score((*set)->flip) : "",
+                                                100.0f * (*set)->evaluated_pixel_fraction));
+            }
+            return lines;
         }
 
         static std::string to_csv_header() {
@@ -269,7 +301,8 @@ namespace lfs::training {
         int num_gaussians = 0;
         // Images that exist at one size, like files, are warped at that size.
         int warp_supersample = kEvaluationWarpSupersample;
-        std::filesystem::path image_dir; // Where images are saved; empty = <output>/eval_step_<iteration>
+        std::filesystem::path image_dir;                                   // Where images are saved; empty = <output>/eval_step_<iteration>
+        std::array<std::string, 2> image_labels{"Ground Truth", "Render"}; // Captions in saved images, left first
     };
 
     [[nodiscard]] lfs::Error evaluation_error(std::string detail, lfs::core::SourceSite site);

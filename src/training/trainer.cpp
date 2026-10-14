@@ -8171,6 +8171,8 @@ namespace lfs::training {
                         }
                         log_eval_appearance();
                         LOG_INFO("{}", metrics.to_string());
+                        for (const auto& line : metrics.mask_set_summaries())
+                            LOG_INFO("{}", line);
                         if (ppisp_ && params_.optimization.ppisp_active() && ppisp_->isFinalized()) {
                             ppisp_->log_eval_diagnostics();
                         }
@@ -8447,6 +8449,8 @@ namespace lfs::training {
         }
         log_eval_appearance();
         LOG_INFO("{}", metrics.to_string());
+        for (const auto& line : metrics.mask_set_summaries())
+            LOG_INFO("{}", line);
         if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
             training_ops_->photometric->shrink_to_required(photo_saved_);
     }

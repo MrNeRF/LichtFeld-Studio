@@ -52,7 +52,7 @@ namespace lfs::vis::gui {
         bool ensureContext();
         SDL_Window* nativeWindow() const;
         RmlUIManager* manager() const { return manager_; }
-        bool externalAllowed() const { return floating_ && manager_->externalWindowsAllowed(); }
+        bool externalAllowed() const { return floating_ && manager_->externalWindowsAllowed(context_name_); }
         bool restoredExternalBounds(float* bounds) const { return externalAllowed() && manager_->restoredExternalBounds(context_name_, bounds); }
         bool configureExternal(float x, float y, float w, float h, bool desktop_coordinates);
         GraphicsContext* nativeGraphics() const { return manager_->nativeGraphics(rml_context_); }
@@ -100,6 +100,19 @@ namespace lfs::vis::gui {
 
     private:
         friend class lfs::vis::WindowInputDispatchTest;
+
+        // Registered after Python on_mount. Panel-specific close handlers run
+        // first; this listener does not stop the click.
+        class CloseButtonListener final : public Rml::EventListener {
+        public:
+            explicit CloseButtonListener(RmlPanelHost* host) : host_(host) {}
+            void ProcessEvent(Rml::Event& event) override;
+
+        private:
+            RmlPanelHost* host_;
+        };
+
+        void bindCloseButton();
         bool scheduledUpdateDue() const {
             return next_update_at_ && std::chrono::steady_clock::now() >= *next_update_at_;
         }
@@ -190,6 +203,9 @@ namespace lfs::vis::gui {
         bool mouse_captured_[3] = {false, false, false};
         std::string resize_cursor_override_;
         Rml::Element* live_inspector_resize_target_ = nullptr;
+        CloseButtonListener close_listener_{this};
+        Rml::Element* close_button_ = nullptr;
+        bool close_button_bound_ = false;
         float live_inspector_resize_start_y_ = 0.0f;
         float live_inspector_resize_start_height_ = 0.0f;
         RmlTooltipController tooltip_;

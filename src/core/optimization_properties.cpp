@@ -804,6 +804,18 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.eval_mask_invert")
             .flags(PROP_NEEDS_RESTART)
             .all_strategies()
+            .bool_prop(&OptimizationParameters::eval_mask_report_unmasked,
+                       "eval_mask_report_unmasked", "Also Score Unmasked", d.eval_mask_report_unmasked,
+                       "With an evaluation mask, also score every valid pixel of each view, as without the mask")
+            .locale("training_params.eval_mask_report_unmasked")
+            .tooltip("training.tooltip.eval_mask_report_unmasked")
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::eval_mask_report_inverted,
+                       "eval_mask_report_inverted", "Also Score Inverted", d.eval_mask_report_inverted,
+                       "With an evaluation mask, also score the valid pixels outside the mask")
+            .locale("training_params.eval_mask_report_inverted")
+            .tooltip("training.tooltip.eval_mask_report_inverted")
+            .all_strategies()
             .float_prop(&OptimizationParameters::eval_mask_opacity,
                         "eval_mask_opacity", "Splat Mask Opacity", d.eval_mask_opacity, 0.01f, 1.0f,
                         "Rendered opacity a pixel needs to count as covered by a splat mask; lower widens the mask past the outline, higher pulls it in")

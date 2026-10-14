@@ -97,6 +97,8 @@ BOOL_PROPS = (
     "eval_all",
     "eval_flip",
     "eval_mask_invert",
+    "eval_mask_report_unmasked",
+    "eval_mask_report_inverted",
 )
 
 SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space", "eval_bit_depth")
@@ -230,6 +232,16 @@ DATASET_RUNS = (
         visibility_condition_id="dep_eval_mask",
     ),
     _run(
+        "dataset_eval_mask_report_unmasked",
+        "eval_mask_report_unmasked",
+        visibility_condition_id="dep_eval_mask",
+    ),
+    _run(
+        "dataset_eval_mask_report_inverted",
+        "eval_mask_report_inverted",
+        visibility_condition_id="dep_eval_mask",
+    ),
+    _run(
         "dataset_eval_mask_opacity",
         "eval_mask_opacity",
         visibility_condition_id="dep_eval_mask_splat",
@@ -329,7 +341,11 @@ APPEARANCE_RUNS = _basic_runs(
     _run("appearance_tuning", "ppisp_lr", "ppisp_reg_weight", "ppisp_warmup_steps",
          visibility_condition_id="dep_ppisp_params"),
 )
-_EVALUATION_RUN_IDS = {"dataset_eval", "dataset_eval_train", "dataset_eval_flip", "dataset_eval_space", "dataset_eval_bit_depth", "dataset_eval_mask_invert", "dataset_eval_mask_opacity"}
+_EVALUATION_RUN_IDS = {
+    "dataset_eval", "dataset_eval_train", "dataset_eval_flip", "dataset_eval_space",
+    "dataset_eval_bit_depth", "dataset_eval_mask_invert", "dataset_eval_mask_report_unmasked",
+    "dataset_eval_mask_report_inverted", "dataset_eval_mask_opacity",
+}
 EVALUATION_RUNS = tuple(run for run in DATASET_RUNS if run.id in _EVALUATION_RUN_IDS)
 DATASET_RUNS = tuple(run for run in DATASET_RUNS if run.id not in _EVALUATION_RUN_IDS)
 

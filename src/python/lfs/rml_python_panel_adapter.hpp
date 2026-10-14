@@ -58,6 +58,10 @@ namespace lfs::vis::gui {
         bool detachToDesktop(float x, float y, float w, float h) override;
         bool restoreDesktopWindow() override;
         void releaseDesktopWindow() override;
+        void resetDesktopRestoreState() override {
+            desktop_reopen_bounds_.reset();
+            desktop_restore_checked_ = false;
+        }
         [[nodiscard]] nb::object panelInstance() const { return panel_instance_; }
 
     private:

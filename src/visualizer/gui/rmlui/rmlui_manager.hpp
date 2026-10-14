@@ -24,6 +24,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -112,6 +113,12 @@ namespace lfs::vis::gui {
         float getDpRatio() const { return dp_ratio_; }
         void setDpRatio(float ratio);
         bool externalWindowsAllowed() const { return native_windows_enabled_; }
+        static bool validatedExternalPanel(std::string_view name) {
+            return name == "lfs.preferences" || name == "lfs.plugin_marketplace" || name == "video_extractor";
+        }
+        bool externalWindowsAllowed(std::string_view name) const {
+            return native_windows_enabled_ && validatedExternalPanel(name);
+        }
         SDL_Window* mainWindow() const { return window_; }
         bool restoredExternalBounds(const std::string& name, float* bounds);
 
@@ -123,7 +130,7 @@ namespace lfs::vis::gui {
         std::optional<double> secondsUntilNativeGeometryFlush() const;
         void resetNativeWindowGeometry();
         bool processNativeWindowEvent(const SDL_Event& event);
-        bool requestNativeWindowCapture(const std::string& panel_id, std::function<void(lfs::Result<WindowCapture>)> callback);
+        LFS_VIS_API bool requestNativeWindowCapture(const std::string& panel_id, std::function<void(lfs::Result<WindowCapture>)> callback);
         LFS_VIS_API Rml::Context* getContext(const std::string& name);
         LFS_VIS_API void destroyContext(const std::string& name);
 

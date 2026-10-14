@@ -199,6 +199,7 @@ namespace lfs::vis::gui {
         result->window = SDL_CreateWindow("LichtFeld Studio", rect.width, rect.height, flags);
         if (!result->window)
             return {};
+        SDL_SetFloatProperty(SDL_GetWindowProperties(result->window), "lfs.ui_scale", UserPreferences::instance().uiScale());
         SDL_SetWindowMinimumSize(result->window, 320, 180);
         SDL_SetWindowHitTest(result->window, [](SDL_Window* window, const SDL_Point* point, void*) -> SDL_HitTestResult {
             if (!point)
@@ -317,6 +318,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::resetNativeWindowGeometry() {
+        PanelRegistry::instance().resetDesktopRestoreState();
         pending_native_geometry_.clear();
         native_geometry_deadline_.reset();
         UserPreferences::instance().setFloatingWindowGeometry("{}");
@@ -938,8 +940,14 @@ namespace lfs::vis::gui {
         if (!initialized_)
             return;
         dp_ratio_ = ratio;
+        const float preference = UserPreferences::instance().uiScale();
         for (auto& [name, ctx] : contexts_) {
-            ctx->SetDensityIndependentPixelRatio(ratio);
+            if (auto* native = nativeWindow(ctx)) {
+                SDL_SetFloatProperty(SDL_GetWindowProperties(native), "lfs.ui_scale", preference);
+                ctx->SetDensityIndependentPixelRatio(preference > 0 ? preference : std::max(1.0f, SDL_GetWindowDisplayScale(native)));
+            } else {
+                ctx->SetDensityIndependentPixelRatio(ratio);
+            }
         }
     }
 
@@ -951,12 +959,13 @@ namespace lfs::vis::gui {
             return getContext(name);
         }
 
-        auto native = floating && native_windows_enabled_ ? createNativeWindow(name, width, height) : nullptr;
-        if (floating && native_windows_enabled_ && !native)
+        const bool external = floating && externalWindowsAllowed(name);
+        auto native = external ? createNativeWindow(name, width, height) : nullptr;
+        if (external && !native)
             disableExternalWindows(name);
         Rml::Context* ctx = Rml::CreateContext(name, Rml::Vector2i(width, height), native ? native->renderer.get() : nullptr);
         if (!ctx) {
-            if (floating)
+            if (external)
                 disableExternalWindows(name);
             if (native)
                 Rml::ReleaseRenderManagers();
@@ -1589,7 +1598,7 @@ namespace lfs::vis::gui {
                     if (auto* context = contextById(id))
                         cancelPointerInput(context);
                 cancelDragPayload();
-                if (keyboard_context_ && contextWindow(keyboard_context_) == dispatch_window) {
+                if (dispatch_window != window_ && keyboard_context_ && contextWindow(keyboard_context_) == dispatch_window) {
                     if (auto* focused = keyboard_context_->GetFocusElement())
                         focused->Blur();
                     keyboard_context_ = nullptr;

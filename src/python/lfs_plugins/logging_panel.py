@@ -153,6 +153,7 @@ class LoggingPanel(Panel):
         self._handle = model.get_handle()
 
     def on_mount(self, doc):
+        super().on_mount(doc)
         self._doc = doc
         self._row_nodes = []
         self._rendered_selection = set()

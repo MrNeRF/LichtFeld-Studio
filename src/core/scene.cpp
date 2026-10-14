@@ -3096,8 +3096,23 @@ namespace lfs::core {
             cached_visible_selection_mask_visibility_generation_ == visibility_generation)
             return cached_visible_selection_mask_;
 
+        // Visible indices are built on the CUDA selection device. A restored
+        // chapter mask can still be on the host. Tensor::to clones when the
+        // device already matches, so transfer only a mismatch.
+        Tensor selection_on_device;
+        const Tensor* selection_tensor = selection.get();
+        if (selection->device() != Device::CUDA) {
+            selection_on_device = selection->to(Device::CUDA);
+            selection_tensor = &selection_on_device;
+        }
+        Tensor indices_on_device;
+        const Tensor* index_tensor = visible_indices.get();
+        if (visible_indices->device() != selection_tensor->device()) {
+            indices_on_device = visible_indices->to(selection_tensor->device());
+            index_tensor = &indices_on_device;
+        }
         cached_visible_selection_mask_ = std::make_shared<lfs::core::Tensor>(
-            selection->index_select(0, *visible_indices).contiguous());
+            selection_tensor->index_select(0, *index_tensor).contiguous());
         cached_visible_selection_mask_source_ = selection.get();
         cached_visible_selection_mask_model_ = model;
         cached_visible_selection_mask_indices_ = visible_indices.get();
@@ -3805,8 +3820,11 @@ namespace lfs::core {
         const std::string name = it->name;
         selection_groups_.erase(it);
 
-        if (active_selection_group_ == id) {
-            active_selection_group_ = selection_groups_.empty() ? 0 : selection_groups_.back().id;
+        if (selection_groups_.empty()) {
+            next_group_id_ = 1;
+            addSelectionGroup("Group 1", glm::vec3(0.0f));
+        } else if (active_selection_group_ == id) {
+            active_selection_group_ = selection_groups_.back().id;
         }
 
         notifyMutation(MutationType::SELECTION_CHANGED);
@@ -4540,6 +4558,11 @@ namespace lfs::core {
         selection_groups_.swap(state.groups);
         active_selection_group_ = state.active_group_id;
         next_group_id_ = state.next_group_id;
+        if (selection_groups_.empty()) {
+            selection_groups_.push_back(defaultSelectionGroup());
+            active_selection_group_ = selection_groups_.back().id;
+            next_group_id_ = static_cast<uint8_t>(selection_groups_.back().id + 1);
+        }
         has_selection_ = state.has_splat_selection;
         has_point_cloud_selection_ =
             state.has_point_cloud_selection;

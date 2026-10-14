@@ -224,7 +224,13 @@
     "file.mesh": "Siatka…",
     "file.checkpoint": "Punkt kontrolny…",
     "tools.developer": "Deweloper",
-    "tools.system_console": "Konsola systemowa"
+    "tools.system_console": "Konsola systemowa",
+    "access_key.file": "P",
+    "access_key.edit": "E",
+    "access_key.select": "Z",
+    "access_key.tools": "N",
+    "access_key.view": "W",
+    "access_key.help": "M"
   },
   "window": {
     "export": "Eksportuj",
@@ -703,7 +709,9 @@
       "bg_modulation": "Wybiera tlo treningowe za przezroczystymi lub pustymi pikselami. Color uzywa wybranego stalego koloru. Modulation zmienia jednolite tlo RGB kolorami sinusoidalnymi. Image uzywa obrazu. Random generuje pikselowy szum RGB w kazdym kroku.",
       "invert_masks": "Odwraca znaczenie maski. Używaj, gdy czarno-białe maski oznaczają maskowany obszar przeciwnym kolorem.",
       "use_alpha_as_mask": "Uzywa przezroczystosci obrazu jako maski treningowej. Używaj, gdy obrazy RGBA juz zawieraja maske i oddzielne pliki nie są potrzebne.",
-      "steps_scaler": "Skaluje razem ustawienia treningu oparte na krokach. Auto uzywa okolo 100 iteracji na aktywny obraz treningowy, z minimum 30 000 iteracji."
+      "steps_scaler": "Skaluje razem ustawienia treningu oparte na krokach. Auto uzywa okolo 100 iteracji na aktywny obraz treningowy, z minimum 30 000 iteracji.",
+      "eval_mask_report_unmasked": "Ocenia też wszystkie prawidłowe piksele każdego widoku, jak bez maski, z tego samego renderu.",
+      "eval_mask_report_inverted": "Ocenia też prawidłowe piksele poza maską ewaluacji, z tego samego renderu."
     },
     "section.masking": "Ustawienia Maski",
     "section.thresholds": "Progi",
@@ -784,7 +792,7 @@
     "fit_to_scene": "Dopasuj do Sceny",
     "fit_to_scene_trimmed": "Dopasuj do Sceny (Przycięty)",
     "reset_crop": "Resetuj",
-    "merge_to_single_ply": "Połącz w Pojedynczy PLY",
+    "merge_to_single_ply": "Połącz w Pojedynczy Model",
     "move_to": "Przenieś do",
     "move_to_root": "Katalog Główny",
     "models": "Modele ({})",
@@ -1909,7 +1917,9 @@
     "prune_opacity": "Przytnij nieprzezroczystość:",
     "ppisp_settings": "Ustawienia PPISP",
     "ppisp_enable_controller": "Włącz kontroler:",
-    "disabled": "Wyłączony"
+    "disabled": "Wyłączony",
+    "eval_mask_report_unmasked": "Oceń też bez maski:",
+    "eval_mask_report_inverted": "Oceń też odwrotność:"
   },
   "image_preview": {
     "title": "Podgląd obrazu",
@@ -2207,7 +2217,25 @@
     "overwrite_proceed": "Kontynuuj (nadpisz duplikaty)",
     "overwrite_prompt_metadata": "Folder wyjściowy zawiera metadane ekstrakcji, które to uruchomienie zastąpi. Wybierz sposób kontynuowania.",
     "overwrite_prompt_frames_metadata": "Folder wyjściowy zawiera już klatki pasujące do wzorca nazewnictwa tej ekstrakcji. Istniejące metadane ekstrakcji również zostaną zastąpione. Wybierz sposób kontynuowania.",
-    "overwrite_delete_error": "Nie udało się usunąć {}: {}"
+    "overwrite_delete_error": "Nie udało się usunąć {}: {}",
+    "videos": "Wideo:",
+    "add_videos": "Dodaj wideo...",
+    "remove_video": "Usuń",
+    "clear_videos": "Wyczyść",
+    "output_root": "Katalog wyjściowy:",
+    "continue_batch_on_failure": "Kontynuuj pozostałe filmy, jeśli jeden się nie powiedzie",
+    "batch_video_count": "Wybrano {} filmów",
+    "batch_summary": "{} filmów · ukończono {} · niepowodzenia {}",
+    "batch_no_videos": "Dodaj co najmniej jeden film przed rozpoczęciem ekstrakcji.",
+    "batch_no_output_root": "Wybierz katalog wyjściowy dla tej partii.",
+    "batch_pending": "Oczekuje",
+    "batch_running": "Ekstrakcja",
+    "batch_complete": "Ukończono",
+    "batch_failed": "Niepowodzenie",
+    "batch_stopped": "Zatrzymano",
+    "batch_existing_output": "Istniejące dane wyjściowe",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "Pole widzenia: {hfov:.1f}° H / {vfov:.1f}° V",

@@ -14,6 +14,7 @@
 #include "gui/ui_context.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/media_studio_backends.hpp"
+#include "io/video/video_metadata.hpp"
 #include "media/media_ingest.hpp"
 #include "media/media_options.hpp"
 #include <cctype>
@@ -31,9 +32,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <cstddef>
 #include <format>
 #include <limits>
+#include <set>
 #include <string_view>
+#include <unordered_map>
 
 using namespace lichtfeld::Strings;
 
@@ -45,6 +49,13 @@ namespace lfs::gui {
         constexpr float MIN_TRIM_SECONDS = 0.1f;
         constexpr int MAX_TIMELINE_MARKERS = 180;
 
+        [[nodiscard]] std::string outputDirectoryKey(std::string name) {
+            std::transform(name.begin(), name.end(), name.begin(), [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+            return name;
+        }
+
         [[nodiscard]] float maximumExtractionFps(const io::VideoPlayer& player) {
             const double source_fps = player.isOpen() ? player.fps() : 0.0;
             if (!std::isfinite(source_fps) || source_fps <= 0.0 ||
@@ -53,9 +64,22 @@ namespace lfs::gui {
             return std::max(0.1f, static_cast<float>(source_fps));
         }
 
-        [[nodiscard]] float sliderExtractionFps(const float value, const io::VideoPlayer& player) {
+        [[nodiscard]] float maximumRequestedExtractionFps(const io::VideoPlayer& player,
+                                                          const bool has_batch,
+                                                          const float requested_fps) {
+            if (!has_batch)
+                return maximumExtractionFps(player);
+
+            // A batch has one shared requested rate. Do not let selecting a lower-rate clip
+            // silently lower it; buildBatchParams clamps it independently for every source.
+            return std::max({30.0f, requested_fps, maximumExtractionFps(player)});
+        }
+
+        [[nodiscard]] float sliderExtractionFps(const float value, const io::VideoPlayer& player,
+                                                const bool has_batch, const float requested_fps) {
             const double rounded = std::round(static_cast<double>(value) * 10.0) / 10.0;
-            return static_cast<float>(std::clamp(rounded, 0.1, static_cast<double>(maximumExtractionFps(player))));
+            return static_cast<float>(std::clamp(
+                rounded, 0.1, static_cast<double>(maximumRequestedExtractionFps(player, has_batch, requested_fps))));
         }
 
         [[nodiscard]] std::string formatTime(const double seconds) {
@@ -322,6 +346,13 @@ namespace lfs::gui {
     }
 
     bool VideoExtractorDialog::openVideoPath(const std::filesystem::path& path) {
+        if (!batch_items_.empty()) {
+            if (pending_params_set_)
+                return false;
+            const std::size_t item_count = batch_items_.size();
+            addBatchVideos({path});
+            return batch_items_.size() > item_count;
+        }
         return openVideo(path);
     }
 
@@ -470,6 +501,7 @@ namespace lfs::gui {
         preview_src_.clear();
         last_language_.clear();
         controls_dirty_ = true;
+        batch_list_dirty_.store(true);
     }
 
     void VideoExtractorDialog::startExtraction(const VideoExtractionParams& params) {
@@ -528,6 +560,121 @@ namespace lfs::gui {
                 LOG_INFO("Video frame extraction completed successfully");
                 setExtractionComplete();
             }
+        });
+    }
+
+    void VideoExtractorDialog::startBatchExtraction(std::vector<VideoExtractionParams> params) {
+        joinExtractionThread();
+        const bool continue_on_failure = continue_batch_on_failure_;
+        extraction_thread_.emplace([this, params = std::move(params), continue_on_failure]() {
+            const auto make_extractor_params = [this](const VideoExtractionParams& item,
+                                                      const int item_index) {
+                io::VideoFrameExtractor::Params extract_params;
+                extract_params.video_path = item.video_path;
+                extract_params.output_dir = item.output_dir;
+                extract_params.mode = item.mode;
+                extract_params.fps = item.fps;
+                extract_params.frame_interval = item.frame_interval;
+                extract_params.format = item.format;
+                extract_params.jpg_quality = item.jpg_quality;
+                extract_params.start_time = item.start_time;
+                extract_params.end_time = item.end_time;
+                extract_params.resolution_mode = item.resolution_mode;
+                extract_params.scale = item.scale;
+                extract_params.custom_width = item.custom_width;
+                extract_params.custom_height = item.custom_height;
+                extract_params.filename_pattern = item.filename_pattern;
+                extract_params.first_source_frame_number = item.first_source_frame_number;
+                extract_params.sharpness.enabled = item.sharpness_enabled;
+                extract_params.sharpness.algorithm = item.sharpness_algorithm;
+                extract_params.sharpness.threshold = item.sharpness_threshold;
+                extract_params.sharpness.window_candidates_target = item.window_candidates_target;
+                extract_params.sharpness.window_mode = item.sharpness_window_mode;
+                extract_params.generate_metadata = item.generate_metadata;
+                extract_params.convert_hdr_to_sdr = item.convert_hdr_to_sdr;
+                extract_params.rotation = item.rotation;
+                extract_params.cancel_requested = [this]() { return stop_extraction_requested_.load(); };
+                extract_params.progress_callback = [this, item_index](const int current, const int total,
+                                                                      const int discarded) {
+                    active_batch_index_.store(item_index);
+                    updateProgress(current, total, discarded);
+                };
+                return extract_params;
+            };
+
+            for (std::size_t i = 0; i < params.size(); ++i) {
+                if (stop_extraction_requested_.load()) {
+                    {
+                        std::lock_guard lock(batch_mutex_);
+                        for (std::size_t remaining = i; remaining < batch_items_.size(); ++remaining)
+                            batch_items_[remaining].status = BatchItemStatus::Stopped;
+                    }
+                    batch_list_dirty_.store(true);
+                    setExtractionStopped();
+                    return;
+                }
+                active_batch_index_.store(static_cast<int>(i));
+                current_frame_.store(0);
+                total_frames_.store(0);
+                discarded_frames_.store(0);
+                {
+                    std::lock_guard lock(batch_mutex_);
+                    if (i < batch_items_.size()) {
+                        batch_items_[i].status = BatchItemStatus::Running;
+                        batch_items_[i].error.clear();
+                    }
+                }
+                batch_list_dirty_.store(true);
+                extraction_status_dirty_.store(true);
+
+                io::VideoFrameExtractor extractor;
+                std::string error;
+                if (extractor.extract(make_extractor_params(params[i], static_cast<int>(i)), error)) {
+                    std::lock_guard lock(batch_mutex_);
+                    if (i < batch_items_.size())
+                        batch_items_[i].status = BatchItemStatus::Complete;
+                    completed_batch_items_.fetch_add(1);
+                    batch_list_dirty_.store(true);
+                    continue;
+                }
+
+                if (extractor.lastOutcome() == io::ExtractionOutcome::Cancelled ||
+                    stop_extraction_requested_.load()) {
+                    {
+                        std::lock_guard lock(batch_mutex_);
+                        if (i < batch_items_.size())
+                            batch_items_[i].status = BatchItemStatus::Stopped;
+                        for (std::size_t remaining = i + 1; remaining < batch_items_.size(); ++remaining)
+                            batch_items_[remaining].status = BatchItemStatus::Stopped;
+                    }
+                    batch_list_dirty_.store(true);
+                    setExtractionStopped();
+                    return;
+                }
+
+                LOG_ERROR("Batch video frame extraction failed for {}: {}",
+                          lfs::core::path_to_utf8(params[i].video_path), error);
+                {
+                    std::lock_guard lock(batch_mutex_);
+                    if (i < batch_items_.size()) {
+                        batch_items_[i].status = BatchItemStatus::Failed;
+                        batch_items_[i].error = error;
+                    }
+                }
+                failed_batch_items_.fetch_add(1);
+                batch_list_dirty_.store(true);
+                if (!continue_on_failure) {
+                    {
+                        std::lock_guard lock(batch_mutex_);
+                        for (std::size_t remaining = i + 1; remaining < batch_items_.size(); ++remaining)
+                            batch_items_[remaining].status = BatchItemStatus::Stopped;
+                    }
+                    batch_list_dirty_.store(true);
+                    setExtractionError(error);
+                    return;
+                }
+            }
+            setExtractionComplete();
         });
     }
 
@@ -662,6 +809,271 @@ namespace lfs::gui {
         return true;
     }
 
+    void VideoExtractorDialog::refreshBatchOutputDirectories() {
+        std::set<std::string> used_names;
+        for (auto& item : batch_items_) {
+            std::string stem = lfs::core::path_to_utf8(item.video_path.stem());
+            if (stem.empty())
+                stem = "video";
+            std::string unique_stem = stem;
+            for (int suffix = 2; !used_names.insert(outputDirectoryKey(unique_stem)).second; ++suffix)
+                unique_stem = std::format("{}_{}", stem, suffix);
+            item.output_dir = output_dir_.empty() ? std::filesystem::path{}
+                                                  : output_dir_ / lfs::core::utf8_to_path(unique_stem);
+        }
+    }
+
+    void VideoExtractorDialog::saveSelectedBatchItem() {
+        if (!selected_batch_item_ || *selected_batch_item_ >= batch_items_.size() || !player_->isOpen())
+            return;
+        auto& item = batch_items_[*selected_batch_item_];
+        item.start_time = trim_start_;
+        item.end_time = trim_end_;
+        item.end_time_is_auto = trim_end_is_auto_;
+        item.rotation = rotation_deg_;
+        item.duration = player_->duration();
+        item.source_fps = player_->fps();
+        item.is_hdr = player_->isHdr();
+        item.hdr_to_sdr_supported = item.is_hdr && player_->isHdrConversionSupported();
+    }
+
+    bool VideoExtractorDialog::probeBatchVideo(BatchVideoItem& item, std::string& error) const {
+        io::video::VideoMetadata metadata;
+        if (!io::video::probeVideoFileMetadata(item.video_path, metadata, error))
+            return false;
+        item.rotation = metadata.rotation;
+        item.source_fps = metadata.fps;
+        item.duration = metadata.duration;
+        item.is_hdr = metadata.is_hdr;
+        item.hdr_to_sdr_supported = item.is_hdr && io::isHdrTonemapSupported(metadata.hdr_format);
+        return true;
+    }
+
+    void VideoExtractorDialog::selectBatchItem(const std::size_t index) {
+        if (extracting_.load() || pending_params_set_ || index >= batch_items_.size())
+            return;
+        saveSelectedBatchItem();
+        const bool preserve_shared_settings = selected_batch_item_.has_value();
+        const std::filesystem::path output_root = output_dir_;
+        const int custom_width = custom_width_;
+        const int custom_height = custom_height_;
+        const bool hdr_to_sdr = hdr_to_sdr_;
+        if (!openVideo(batch_items_[index].video_path)) {
+            output_dir_ = output_root;
+            refreshBatchOutputDirectories();
+            return;
+        }
+
+        // openVideo supplies a single-video default output directory. A batch must preserve its
+        // explicit root instead, including an intentionally empty root before the user chooses it.
+        output_dir_ = output_root;
+        refreshBatchOutputDirectories();
+        if (preserve_shared_settings) {
+            custom_width_ = custom_width;
+            custom_height_ = custom_height;
+            hdr_to_sdr_ = hdr_to_sdr;
+            player_->setHdrToSdr(hdr_to_sdr_ && player_->isHdrConversionSupported());
+        }
+
+        selected_batch_item_ = index;
+        auto& item = batch_items_[index];
+        item.duration = player_->duration();
+        item.source_fps = player_->fps();
+        item.is_hdr = player_->isHdr();
+        item.hdr_to_sdr_supported = item.is_hdr && player_->isHdrConversionSupported();
+        trim_start_ = static_cast<float>(item.start_time);
+        trim_end_ = item.end_time < 0.0 ? static_cast<float>(item.duration)
+                                        : static_cast<float>(item.end_time);
+        trim_end_is_auto_ = item.end_time_is_auto;
+        rotation_deg_ = item.rotation;
+        player_->setPreviewRotation(rotation_deg_);
+        if (player_->currentFrameHasGpuRotation())
+            player_->rerenderCurrentFrame();
+        texture_needs_update_ = true;
+        controls_dirty_ = true;
+        batch_list_dirty_.store(true);
+        markContentDirty();
+    }
+
+    void VideoExtractorDialog::addBatchVideos(const std::vector<std::filesystem::path>& paths) {
+        if (extracting_.load() || pending_params_set_ || paths.empty())
+            return;
+
+        const bool adding_first_batch_item = batch_items_.empty();
+        std::set<std::filesystem::path> existing;
+        for (const auto& item : batch_items_)
+            existing.insert(item.video_path.lexically_normal());
+        std::vector<std::string> errors;
+        for (const auto& path : paths) {
+            const auto normalized = path.lexically_normal();
+            if (normalized.empty() || !existing.insert(normalized).second)
+                continue;
+            BatchVideoItem item{.video_path = normalized};
+            std::string error;
+            if (!probeBatchVideo(item, error)) {
+                errors.push_back(std::format("{}: {}", lfs::core::path_to_utf8(normalized.filename()), error));
+                continue;
+            }
+            batch_items_.push_back(std::move(item));
+        }
+        refreshBatchOutputDirectories();
+        if (!selected_batch_item_ && !batch_items_.empty())
+            selectBatchItem(0);
+        if (adding_first_batch_item && !batch_output_root_explicit_) {
+            // Batch extraction requires an intentional output root. Do not silently reuse the
+            // legacy single-video "<video>_frames" default as a root for every selected video.
+            output_dir_.clear();
+            refreshBatchOutputDirectories();
+        }
+        if (!errors.empty()) {
+            for (const auto& error : errors)
+                LOG_WARN("Video extractor: could not add batch video: {}", error);
+
+            const std::string message = errors.size() == 1
+                                            ? errors.front()
+                                            : std::format("{} videos could not be opened; see log for details.",
+                                                          errors.size());
+            setExtractionError(message, false);
+        }
+        controls_dirty_ = true;
+        batch_list_dirty_.store(true);
+        markContentDirty();
+    }
+
+    void VideoExtractorDialog::addVideosFromBrowse(std::vector<std::filesystem::path> paths) {
+        if (paths.empty())
+            return;
+
+        const bool has_single_video = batch_items_.empty() && player_->isOpen() && !video_path_.empty();
+        const bool repeats_single_video = paths.size() == 1 && has_single_video &&
+                                          paths.front().lexically_normal() == video_path_.lexically_normal();
+        if (!has_single_video || repeats_single_video) {
+            if (paths.size() == 1 && batch_items_.empty())
+                openVideo(paths.front());
+            else
+                addBatchVideos(paths);
+            return;
+        }
+
+        // A second browse selection promotes the existing single source to a batch item rather
+        // than replacing it. Keep the output settings the user already configured for the first
+        // clip; they become the shared batch settings.
+        const int custom_width = custom_width_;
+        const int custom_height = custom_height_;
+        const bool hdr_to_sdr = hdr_to_sdr_;
+        paths.insert(paths.begin(), video_path_);
+        addBatchVideos(paths);
+        if (!batch_items_.empty()) {
+            custom_width_ = custom_width;
+            custom_height_ = custom_height;
+            hdr_to_sdr_ = hdr_to_sdr;
+            player_->setHdrToSdr(hdr_to_sdr_ && player_->isHdrConversionSupported());
+            // buildBatchParams reads these controls. Opening the promoted clip resets them
+            // to the source size, so write the preserved shared size back before the next build.
+            (void)setCachedControlValue(custom_width_input_el_, std::to_string(custom_width_));
+            (void)setCachedControlValue(custom_height_input_el_, std::to_string(custom_height_));
+            (void)setCachedChecked(hdr_to_sdr_el_, hdr_to_sdr_);
+            controls_dirty_ = true;
+            markContentDirty();
+        }
+    }
+
+    void VideoExtractorDialog::removeSelectedBatchItem() {
+        if (extracting_.load() || !selected_batch_item_ || *selected_batch_item_ >= batch_items_.size())
+            return;
+        const std::size_t removed = *selected_batch_item_;
+        batch_items_.erase(batch_items_.begin() + static_cast<std::ptrdiff_t>(removed));
+        selected_batch_item_.reset();
+        refreshBatchOutputDirectories();
+        if (!batch_items_.empty())
+            selectBatchItem(std::min(removed, batch_items_.size() - 1));
+        else {
+            player_->close();
+            video_path_.clear();
+            preview_src_.clear();
+            texture_needs_update_ = true;
+        }
+        controls_dirty_ = true;
+        batch_list_dirty_.store(true);
+        markContentDirty();
+    }
+
+    void VideoExtractorDialog::clearBatchVideos() {
+        if (extracting_.load())
+            return;
+        batch_items_.clear();
+        selected_batch_item_.reset();
+        player_->close();
+        video_path_.clear();
+        preview_src_.clear();
+        texture_needs_update_ = true;
+        controls_dirty_ = true;
+        batch_list_dirty_.store(true);
+        markContentDirty();
+    }
+
+    std::string VideoExtractorDialog::batchStatusLabel(const BatchVideoItem& item) const {
+        switch (item.status) {
+        case BatchItemStatus::Pending: return LOC("video_extractor.batch_pending");
+        case BatchItemStatus::Running: return LOC("video_extractor.batch_running");
+        case BatchItemStatus::Complete: return LOC("video_extractor.batch_complete");
+        case BatchItemStatus::Failed: return LOC("video_extractor.batch_failed");
+        case BatchItemStatus::Stopped: return LOC("video_extractor.batch_stopped");
+        }
+        return {};
+    }
+
+    void VideoExtractorDialog::syncBatchList() {
+        if (!batch_video_list_el_ || !batch_list_dirty_.exchange(false))
+            return;
+        std::string rows;
+        int completed = 0;
+        int failed = 0;
+        {
+            std::lock_guard lock(batch_mutex_);
+            std::unordered_map<std::string, int> filename_counts;
+            for (const auto& item : batch_items_)
+                ++filename_counts[lfs::core::path_to_utf8(item.video_path.filename())];
+            std::unordered_map<std::string, int> filename_occurrences;
+            rows.reserve(batch_items_.size() * 180);
+            for (std::size_t i = 0; i < batch_items_.size(); ++i) {
+                const auto& item = batch_items_[i];
+                completed += item.status == BatchItemStatus::Complete;
+                failed += item.status == BatchItemStatus::Failed;
+                const std::string filename = lfs::core::path_to_utf8(item.video_path.filename());
+                std::string display_name = filename;
+                if (filename_counts[filename] > 1)
+                    display_name += std::format(" ({})", ++filename_occurrences[filename]);
+                const std::string selected = selected_batch_item_ && *selected_batch_item_ == i
+                                                 ? " batch-video-item--selected"
+                                                 : "";
+                std::string status = batchStatusLabel(item);
+                if (item.has_existing_output)
+                    status = std::format("{} · {}", status, LOC("video_extractor.batch_existing_output"));
+                std::string tooltip = std::format("{}: {}\n{}: {}", LOC(VideoExtractor::VIDEO),
+                                                  lfs::core::path_to_utf8(item.video_path),
+                                                  LOC(VideoExtractor::OUTPUT),
+                                                  lfs::core::path_to_utf8(item.output_dir));
+                if (!item.error.empty())
+                    tooltip += std::format("\n{}", item.error);
+                rows += std::format("<button id=\"batch-video-{}\" class=\"batch-video-item{}\" "
+                                    "title=\"{}\" type=\"button\">"
+                                    "<span class=\"batch-video-item__name\">{}</span>"
+                                    "<span class=\"batch-video-item__status\">{}</span></button>",
+                                    i, selected, Rml::StringUtilities::EncodeRml(tooltip),
+                                    Rml::StringUtilities::EncodeRml(display_name),
+                                    Rml::StringUtilities::EncodeRml(status));
+            }
+        }
+        if (rows.empty())
+            rows = std::format("<span class=\"inline-note\">{}</span>", LOC(VideoExtractor::NO_FILE));
+        const bool changed = setCachedInnerRml(batch_video_list_el_, rows);
+        const int total = static_cast<int>(batch_items_.size());
+        const std::string summary = total == 0 ? std::string{} : LOCF("video_extractor.batch_summary", total, completed, failed);
+        if (setCachedText(batch_summary_el_, summary) || changed)
+            markContentDirty();
+    }
+
     int VideoExtractorDialog::calculateEstimatedFrames() const {
         if (!player_ || !player_->isOpen())
             return 0;
@@ -791,6 +1203,10 @@ namespace lfs::gui {
         trim_reset_el_ = nullptr;
         estimated_frames_el_ = nullptr;
         video_value_el_ = nullptr;
+        batch_video_list_el_ = nullptr;
+        batch_summary_el_ = nullptr;
+        remove_video_el_ = nullptr;
+        clear_videos_el_ = nullptr;
         output_value_el_ = nullptr;
         browse_video_el_ = nullptr;
         browse_output_el_ = nullptr;
@@ -839,6 +1255,7 @@ namespace lfs::gui {
         error_section_el_ = nullptr;
         error_text_el_ = nullptr;
         dismiss_btn_el_ = nullptr;
+        continue_batch_on_failure_el_ = nullptr;
         hdr_to_sdr_el_ = nullptr;
         hdr_to_sdr_row_el_ = nullptr;
         rotation_cw_btn_el_ = nullptr;
@@ -877,6 +1294,10 @@ namespace lfs::gui {
         trim_reset_el_ = document_->GetElementById("btn-trim-reset");
         estimated_frames_el_ = document_->GetElementById("estimated-frames");
         video_value_el_ = document_->GetElementById("video-value");
+        batch_video_list_el_ = document_->GetElementById("batch-video-list");
+        batch_summary_el_ = document_->GetElementById("batch-summary");
+        remove_video_el_ = document_->GetElementById("btn-remove-video");
+        clear_videos_el_ = document_->GetElementById("btn-clear-videos");
         output_value_el_ = document_->GetElementById("output-value");
         browse_video_el_ = document_->GetElementById("btn-browse-video");
         browse_output_el_ = document_->GetElementById("btn-browse-output");
@@ -941,6 +1362,7 @@ namespace lfs::gui {
         window_candidates_select_el_ = document_->GetElementById("window-candidates-select");
         window_candidates_readout_el_ = document_->GetElementById("window-candidates-readout");
         generate_metadata_el_ = document_->GetElementById("generate-metadata");
+        continue_batch_on_failure_el_ = document_->GetElementById("continue-batch-on-failure");
         overwrite_overlay_el_ = document_->GetElementById("overwrite-overlay");
         overwrite_message_el_ = document_->GetElementById("overwrite-message");
         overwrite_cancel_btn_el_ = document_->GetElementById("overwrite-cancel");
@@ -954,7 +1376,8 @@ namespace lfs::gui {
             timeline_progress_el_ && timeline_playhead_el_ && timeline_start_el_ &&
             timeline_end_el_ && timeline_markers_el_ && trim_start_input_el_ &&
             trim_end_input_el_ && trim_start_set_el_ && trim_end_set_el_ && trim_reset_el_ &&
-            estimated_frames_el_ && video_value_el_ && output_value_el_ && browse_video_el_ &&
+            estimated_frames_el_ && video_value_el_ && batch_video_list_el_ && batch_summary_el_ &&
+            remove_video_el_ && clear_videos_el_ && output_value_el_ && browse_video_el_ &&
             browse_output_el_ && mode_select_el_ && fps_row_el_ && fps_slider_el_ &&
             fps_value_el_ && interval_row_el_ && interval_input_el_ && interval_value_el_ &&
             format_select_el_ && quality_row_el_ && quality_slider_el_ && quality_value_el_ &&
@@ -985,6 +1408,7 @@ namespace lfs::gui {
 
         bindEventListeners();
         controls_dirty_ = true;
+        batch_list_dirty_.store(true);
     }
 
     void VideoExtractorDialog::bindEventListeners() {
@@ -1011,6 +1435,9 @@ namespace lfs::gui {
         listen_click(trim_end_set_el_);
         listen_click(trim_reset_el_);
         listen_click(browse_video_el_);
+        listen_click(batch_video_list_el_);
+        listen_click(remove_video_el_);
+        listen_click(clear_videos_el_);
         listen_click(browse_output_el_);
         listen_click(start_btn_el_);
         listen_click(stop_btn_el_);
@@ -1049,6 +1476,7 @@ namespace lfs::gui {
         listen_input(sharpness_threshold_slider_el_);
         listen_change(window_candidates_select_el_);
         listen_change(generate_metadata_el_);
+        listen_change(continue_batch_on_failure_el_);
         listen_change(hdr_to_sdr_el_);
         listen_click(rotation_cw_btn_el_);
         listen_click(rotation_ccw_btn_el_);
@@ -1066,6 +1494,7 @@ namespace lfs::gui {
             return;
 
         syncLocale();
+        syncBatchList();
         syncVideoPreview();
         syncTimeline();
         syncControls();
@@ -1084,6 +1513,7 @@ namespace lfs::gui {
             return;
 
         last_language_ = language;
+        batch_list_dirty_.store(true);
         bool changed = false;
         changed |= setCachedText(title_el_, LOC(VideoExtractor::TITLE));
         changed |= setCachedAttribute(preview_empty_el_, "data-empty-text", LOC(VideoExtractor::SELECT_PREVIEW));
@@ -1093,6 +1523,9 @@ namespace lfs::gui {
         changed |= setCachedAttribute(trim_start_set_el_, "title", LOC(VideoExtractor::SET_START));
         changed |= setCachedAttribute(trim_end_set_el_, "title", LOC(VideoExtractor::SET_END));
         changed |= setCachedAttribute(browse_output_el_, "title", LOC(VideoExtractor::SELECT_FOLDER));
+        changed |= setCachedText(browse_video_el_, LOC(VideoExtractor::ADD_VIDEOS));
+        changed |= setCachedText(remove_video_el_, LOC(VideoExtractor::REMOVE_VIDEO));
+        changed |= setCachedText(clear_videos_el_, LOC(VideoExtractor::CLEAR_VIDEOS));
         changed |= setCachedAttribute(fps_slider_el_, "title", LOC(VideoExtractor::FPS_TOOLTIP));
         changed |= setCachedAttribute(fps_value_el_, "title", LOC(VideoExtractor::FPS_TOOLTIP));
         changed |= setCachedAttribute(interval_input_el_, "title", LOC(VideoExtractor::INTERVAL_TOOLTIP));
@@ -1140,6 +1573,14 @@ namespace lfs::gui {
     }
 
     void VideoExtractorDialog::syncOverwritePrompt() {
+        if (!pending_batch_params_.empty()) {
+            const char* const prompt = pending_batch_metadata_will_be_replaced_
+                                           ? "video_extractor.batch_overwrite_prompt_metadata"
+                                           : "video_extractor.batch_overwrite_prompt";
+            if (setCachedText(overwrite_message_el_, LOCF(prompt, pending_batch_conflict_count_)))
+                markContentDirty();
+            return;
+        }
         const char* const prompt = pending_metadata_will_be_replaced_
                                        ? (pending_has_frame_conflicts_
                                               ? VideoExtractor::OVERWRITE_PROMPT_FRAMES_METADATA
@@ -1228,11 +1669,11 @@ namespace lfs::gui {
         const bool is_hdr = has_video && player_->isHdr();
         const bool conversion_supported =
             is_hdr && player_->isHdrConversionSupported();
-        if (!has_video || !conversion_supported)
+        if (batch_items_.empty() && (!has_video || !conversion_supported))
             hdr_to_sdr_ = false;
 
         bool changed = false;
-        changed |= setCachedChecked(hdr_to_sdr_el_, hdr_to_sdr_);
+        changed |= setCachedChecked(hdr_to_sdr_el_, hdr_to_sdr_ && conversion_supported);
         changed |= setCachedProperty(hdr_to_sdr_row_el_, "display",
                                      (is_hdr && format_selection_ != 2) ? "inline-flex" : "none");
         changed |= setCachedDisabled(hdr_to_sdr_el_,
@@ -1342,10 +1783,11 @@ namespace lfs::gui {
     void VideoExtractorDialog::syncControls() {
         bool changed = false;
         const bool has_video = player_->isOpen();
+        const bool has_batch = !batch_items_.empty();
         const bool extracting = extracting_.load();
         const bool stop_requested = stop_extraction_requested_.load();
         const auto preflight = exrPreflightError();
-        const bool can_start = has_video && !output_dir_.empty() && !extracting && preflight.empty();
+        const bool can_start = (has_batch || has_video) && !output_dir_.empty() && !extracting && preflight.empty();
         changed |= setCachedText(exr_preflight_el_, preflight);
         changed |= setCachedProperty(exr_preflight_el_, "display", preflight.empty() ? "none" : "block");
 
@@ -1364,6 +1806,8 @@ namespace lfs::gui {
         changed |= setCachedDisabled(stop_btn_el_, !extracting || stop_requested);
         changed |= setCachedDisabled(cancel_btn_el_, false);
         changed |= setCachedDisabled(browse_video_el_, extracting || pending_params_set_);
+        changed |= setCachedDisabled(remove_video_el_, extracting || pending_params_set_ || !selected_batch_item_);
+        changed |= setCachedDisabled(clear_videos_el_, extracting || pending_params_set_ || batch_items_.empty());
         changed |= setCachedDisabled(browse_output_el_, extracting || pending_params_set_);
 
         changed |= setCachedSelect(naming_select_el_, naming_selection_);
@@ -1392,6 +1836,8 @@ namespace lfs::gui {
         changed |= setCachedProperty(scale_row_el_, "display", resolution_mode_ == 1 ? "flex" : "none");
         changed |= setCachedProperty(custom_resolution_row_el_, "display", resolution_mode_ == 2 ? "flex" : "none");
         changed |= setCachedProperty(stop_btn_el_, "display", extracting ? "block" : "none");
+        changed |= setCachedChecked(continue_batch_on_failure_el_, continue_batch_on_failure_);
+        changed |= setCachedDisabled(continue_batch_on_failure_el_, extracting);
 
         const bool sharpness_on = sharpness_toggle_el_ && sharpness_toggle_el_->HasAttribute("checked");
         changed |= setCachedProperty(sharpness_options_el_, "display", sharpness_on ? "block" : "none");
@@ -1443,7 +1889,7 @@ namespace lfs::gui {
         // Synchronizing the slider must not change the requested FPS.
         changed |= setCachedDisabled(fps_slider_el_, !has_video || extracting);
         changed |= setCachedDisabled(fps_value_el_, !has_video || extracting);
-        const float maximum_fps = maximumExtractionFps(*player_);
+        const float maximum_fps = maximumRequestedExtractionFps(*player_, has_batch, fps_);
         const float requested_fps = std::clamp(fps_, 0.1f, maximum_fps);
         changed |= setCachedAttribute(fps_slider_el_, "max", std::format("{}", maximum_fps));
         changed |= setCachedControlValue(fps_slider_el_, std::format("{}", requested_fps));
@@ -1462,15 +1908,16 @@ namespace lfs::gui {
         changed |= setCachedControlValue(pattern_input_el_, filename_pattern_);
         changed |= setCachedControlValue(first_source_frame_number_input_el_, std::to_string(first_source_frame_number_));
 
-        const std::string video_display = video_path_.empty()
-                                              ? LOC(VideoExtractor::NO_FILE)
-                                              : lfs::core::path_to_utf8(video_path_.filename());
+        const std::string video_display = batch_items_.empty()
+                                              ? (video_path_.empty() ? LOC(VideoExtractor::NO_FILE)
+                                                                    : lfs::core::path_to_utf8(video_path_.filename()))
+                                              : LOCF("video_extractor.batch_video_count", batch_items_.size());
         const std::string output_display = output_dir_.empty()
                                                ? LOC(VideoExtractor::NO_DIR)
                                                : lfs::core::path_to_utf8(output_dir_);
         changed |= setCachedText(video_value_el_, video_display);
         changed |= setCachedText(output_value_el_, output_display);
-        const bool inputs_missing = !player_->isOpen() || output_dir_.empty();
+        const bool inputs_missing = (batch_items_.empty() ? !player_->isOpen() : false) || output_dir_.empty();
         changed |= setCachedProperty(select_hint_el_, "display", inputs_missing || !preflight.empty() ? "inline-block" : "none");
         changed |= setCachedText(select_hint_el_, preflight.empty() ? LOC(VideoExtractor::SELECT_BOTH) : preflight);
 
@@ -1486,7 +1933,18 @@ namespace lfs::gui {
 
         changed |= setCachedProperty(progress_section_el_, "display", extracting ? "flex" : "none");
         if (extracting) {
-            const float progress = total > 0 ? static_cast<float>(current) / static_cast<float>(total) : 0.0f;
+            const int active_index = active_batch_index_.load();
+            const int batch_total = static_cast<int>(batch_items_.size());
+            const std::string batch_prefix = active_index >= 0 && batch_total > 0
+                                                 ? std::format("{}/{} · ", active_index + 1, batch_total)
+                                                 : std::string{};
+            const float item_progress = total > 0
+                                            ? std::clamp(static_cast<float>(current) / static_cast<float>(total), 0.0f, 1.0f)
+                                            : 0.0f;
+            const float progress = batch_total > 0 && active_index >= 0
+                                       ? (static_cast<float>(active_index) + item_progress) /
+                                             static_cast<float>(batch_total)
+                                       : item_progress;
             changed |= setCachedAttribute(progress_bar_el_, "value", std::format("{:.4f}", progress));
             if (total > 0) {
                 const int discarded = discarded_frames_.load();
@@ -1494,9 +1952,10 @@ namespace lfs::gui {
                                                     ? LOCF(VideoExtractor::DISCARDED_FORMAT, lfs::core::format_count(discarded))
                                                     : "";
                 changed |= setCachedText(progress_text_el_,
-                                         std::format("{}/{}{}", lfs::core::format_count(current), lfs::core::format_count(total), discard_str));
+                                         std::format("{}{}/{}{}", batch_prefix, lfs::core::format_count(current),
+                                                     lfs::core::format_count(total), discard_str));
             } else {
-                changed |= setCachedText(progress_text_el_, LOC(VideoExtractor::STARTING));
+                changed |= setCachedText(progress_text_el_, batch_prefix + LOC(VideoExtractor::STARTING));
             }
         }
 
@@ -1506,13 +1965,18 @@ namespace lfs::gui {
                                          ? "flex"
                                          : "none");
         if (snapshot.status_message == ExtractionStatusMessage::Complete && !extracting) {
-            const int saved = current - discarded_frames_.load();
-            const int discarded = discarded_frames_.load();
-            std::string complete_msg = std::format("{} {}",
-                                                   LOC(VideoExtractor::COMPLETE),
-                                                   LOCF(VideoExtractor::EXTRACTED, lfs::core::format_count(saved)));
-            if (discarded > 0)
-                complete_msg += LOCF(VideoExtractor::DISCARDED_FORMAT, lfs::core::format_count(discarded));
+            std::string complete_msg;
+            if (!batch_items_.empty()) {
+                complete_msg = LOCF("video_extractor.batch_summary", batch_items_.size(),
+                                    completed_batch_items_.load(), failed_batch_items_.load());
+            } else {
+                const int saved = current - discarded_frames_.load();
+                const int discarded = discarded_frames_.load();
+                complete_msg = std::format("{} {}", LOC(VideoExtractor::COMPLETE),
+                                           LOCF(VideoExtractor::EXTRACTED, lfs::core::format_count(saved)));
+                if (discarded > 0)
+                    complete_msg += LOCF(VideoExtractor::DISCARDED_FORMAT, lfs::core::format_count(discarded));
+            }
             changed |= setCachedText(complete_text_el_, complete_msg);
         }
 
@@ -1581,9 +2045,12 @@ namespace lfs::gui {
             target = target->GetParentNode();
 
         auto* current = event.GetCurrentElement();
-        const std::string id = current && !current->GetId().empty()
-                                   ? current->GetId()
-                                   : (target ? target->GetId() : std::string{});
+        const std::string target_id = target ? target->GetId() : std::string{};
+        const std::string id = target_id.starts_with("batch-video-")
+                                   ? target_id
+                                   : (current && !current->GetId().empty()
+                                          ? current->GetId()
+                                          : target_id);
 
         const auto event_id = event.GetId();
         if (event_id == Rml::EventId::Mousedown ||
@@ -1605,7 +2072,7 @@ namespace lfs::gui {
             if (id == "fps-slider" && event_id == Rml::EventId::Change) {
                 const float value = event.GetParameter<float>("value", fps_);
                 if (std::isfinite(value))
-                    fps_ = sliderExtractionFps(value, *player_);
+                    fps_ = sliderExtractionFps(value, *player_, !batch_items_.empty(), fps_);
             }
             event.StopPropagation();
         }
@@ -1619,15 +2086,26 @@ namespace lfs::gui {
         } else if (id == "btn-browse-video") {
             if (extracting_.load() || pending_params_set_)
                 return;
-            const auto path = lfs::vis::gui::OpenVideoFileDialog(video_path_);
-            if (!path.empty())
-                (void)openVideo(path);
+            addVideosFromBrowse(lfs::vis::gui::OpenVideoFilesDialog(video_path_));
+        } else if (id == "btn-remove-video") {
+            removeSelectedBatchItem();
+        } else if (id == "btn-clear-videos") {
+            clearBatchVideos();
+        } else if (id.starts_with("batch-video-")) {
+            std::size_t index = 0;
+            const std::string_view index_text(id.data() + std::string_view("batch-video-").size(),
+                                              id.size() - std::string_view("batch-video-").size());
+            const auto [end, error] = std::from_chars(index_text.data(), index_text.data() + index_text.size(), index);
+            if (error == std::errc{} && end == index_text.data() + index_text.size())
+                selectBatchItem(index);
         } else if (id == "btn-browse-output") {
             if (extracting_.load() || pending_params_set_)
                 return;
             const auto path = lfs::vis::gui::PickFolderDialog(output_dir_);
             if (!path.empty()) {
                 output_dir_ = path;
+                batch_output_root_explicit_ = true;
+                refreshBatchOutputDirectories();
                 clearExtractionStatus();
                 controls_dirty_ = true;
                 markContentDirty();
@@ -1662,13 +2140,24 @@ namespace lfs::gui {
             controls_dirty_ = true;
             markContentDirty();
         } else if (id == "btn-start") {
-            beginExtractionFromUi();
-        } else if (id == "overwrite-proceed") {
-            if (pending_params_set_) {
-                pending_params_.exr.overwrite = true;
-                launchExtraction(pending_params_);
-            }
+            if (batch_items_.empty())
+                beginExtractionFromUi();
+            else
+                beginBatchExtractionFromUi();
         } else if (id == "overwrite-delete") {
+            if (!pending_batch_params_.empty()) {
+                if (removeExistingBatchOutput(pending_batch_params_))
+                    launchBatchExtraction(std::move(pending_batch_params_));
+                else {
+                    pending_batch_params_.clear();
+                    pending_params_set_ = false;
+                    pending_batch_metadata_will_be_replaced_ = false;
+                    pending_batch_conflict_count_ = 0;
+                    if (overwrite_overlay_el_)
+                        overwrite_overlay_el_->SetClass("hidden", true);
+                }
+                return;
+            }
             if (pending_params_set_) {
                 pending_params_.exr.overwrite = true;
                 for (const auto& path : generatedExtractionFiles(pending_params_)) {
@@ -1689,8 +2178,18 @@ namespace lfs::gui {
                 }
                 launchExtraction(pending_params_);
             }
+        } else if (id == "overwrite-proceed") {
+            if (!pending_batch_params_.empty())
+                launchBatchExtraction(std::move(pending_batch_params_));
+            else if (pending_params_set_) {
+                pending_params_.exr.overwrite = true;
+                launchExtraction(pending_params_);
+            }
         } else if (id == "overwrite-cancel") {
             pending_params_set_ = false;
+            pending_batch_params_.clear();
+            pending_batch_metadata_will_be_replaced_ = false;
+            pending_batch_conflict_count_ = 0;
             pending_has_frame_conflicts_ = false;
             pending_metadata_will_be_replaced_ = false;
             if (overwrite_overlay_el_)
@@ -1747,14 +2246,16 @@ namespace lfs::gui {
         } else if (id == "scale-select") {
             scale_selection_ = scale_select_el_ ? scale_select_el_->GetSelection() : scale_selection_;
         } else if (id == "fps-slider") {
-            fps_ = sliderExtractionFps(readFloatValue(fps_slider_el_, fps_), *player_);
+            fps_ = sliderExtractionFps(readFloatValue(fps_slider_el_, fps_), *player_,
+                                       !batch_items_.empty(), fps_);
             changed_control = fps_slider_el_;
         } else if (id == "fps-value") {
             const std::string value = controlValue(fps_value_el_);
             float parsed = 0.0f;
             const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
             if (error == std::errc{} && end == value.data() + value.size() && std::isfinite(parsed)) {
-                fps_ = std::clamp(parsed, 0.1f, maximumExtractionFps(*player_));
+                fps_ = std::clamp(parsed, 0.1f,
+                                  maximumRequestedExtractionFps(*player_, !batch_items_.empty(), fps_));
             }
             changed_control = fps_value_el_;
         } else if (id == "interval-input") {
@@ -1783,6 +2284,10 @@ namespace lfs::gui {
             changed_control = sharpness_threshold_slider_el_;
         } else if (id == "generate-metadata") {
             changed_control = generate_metadata_el_;
+        } else if (id == "continue-batch-on-failure") {
+            continue_batch_on_failure_ = continue_batch_on_failure_el_ &&
+                                         continue_batch_on_failure_el_->HasAttribute("checked");
+            changed_control = continue_batch_on_failure_el_;
         } else if (id == "hdr-to-sdr") {
             if (extracting_.load()) {
                 (void)setCachedChecked(hdr_to_sdr_el_, hdr_to_sdr_);
@@ -1913,12 +2418,17 @@ namespace lfs::gui {
     }
 
     bool VideoExtractorDialog::resolveFilenamePattern(std::string& pattern, std::string& error) const {
+        return resolveFilenamePattern(video_path_, pattern, error);
+    }
+
+    bool VideoExtractorDialog::resolveFilenamePattern(const std::filesystem::path& source_path,
+                                                      std::string& pattern, std::string& error) const {
         static constexpr std::array<std::string_view, 4> presets{
             "{video}_frame_%05d", "{video}_%05d", "frame_%05d", "%05d"};
         const std::string_view source = naming_selection_ >= 0 && naming_selection_ < 4
                                             ? presets[naming_selection_]
                                             : std::string_view(filename_pattern_);
-        const std::string video_name = video_path_.empty() ? "video" : lfs::core::path_to_utf8(video_path_.stem());
+        const std::string video_name = source_path.empty() ? "video" : lfs::core::path_to_utf8(source_path.stem());
         pattern.clear();
         error.clear();
         for (size_t i = 0; i < source.size();) {
@@ -1969,6 +2479,175 @@ namespace lfs::gui {
             }
         }
         return true;
+    }
+
+    bool VideoExtractorDialog::buildBatchParams(std::vector<VideoExtractionParams>& params,
+                                                std::string& error) {
+        applyTextInput("trim-start-input");
+        applyTextInput("trim-end-input");
+        saveSelectedBatchItem();
+        params.clear();
+        error.clear();
+        if (batch_items_.empty()) {
+            error = LOC("video_extractor.batch_no_videos");
+            return false;
+        }
+        if (output_dir_.empty()) {
+            error = LOC("video_extractor.batch_no_output_root");
+            return false;
+        }
+
+        applyTextInput("custom-width-input");
+        applyTextInput("custom-height-input");
+        applyTextInput("pattern-input");
+        applyTextInput("first-source-frame-number-input");
+        refreshBatchOutputDirectories();
+
+        VideoExtractionParams shared;
+        shared.mode = mode_selection_ == 0 ? io::ExtractionMode::FPS : io::ExtractionMode::INTERVAL;
+        shared.fps = static_cast<double>(fps_);
+        shared.frame_interval = frame_interval_;
+        shared.format = format_selection_ == 0 ? io::ImageFormat::PNG : io::ImageFormat::JPG;
+        shared.jpg_quality = jpg_quality_;
+        static constexpr std::array<io::ResolutionMode, 3> resolution_modes{
+            io::ResolutionMode::Original, io::ResolutionMode::Scale, io::ResolutionMode::Custom};
+        shared.resolution_mode = resolution_modes[std::clamp(resolution_mode_, 0, 2)];
+        shared.scale = SCALE_VALUES[std::clamp(scale_selection_, 0, static_cast<int>(SCALE_VALUES.size() - 1))];
+        shared.custom_width = custom_width_;
+        shared.custom_height = custom_height_;
+        shared.first_source_frame_number = first_source_frame_number_;
+        shared.sharpness_enabled = sharpness_toggle_el_ && sharpness_toggle_el_->HasAttribute("checked");
+        if (sharpness_algorithm_select_el_) {
+            static constexpr io::SharpnessAlgorithm algorithms[]{
+                io::SharpnessAlgorithm::COMBINED, io::SharpnessAlgorithm::TENENGRAD,
+                io::SharpnessAlgorithm::LAPLACIAN};
+            shared.sharpness_algorithm = algorithms[std::clamp(sharpness_algorithm_select_el_->GetSelection(), 0, 2)];
+        }
+        shared.sharpness_window_mode = sharpness_mode_select_el_ && sharpness_mode_select_el_->GetSelection() == 1;
+        shared.window_candidates_target = window_candidates_target_;
+        shared.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 10));
+        shared.generate_metadata = generate_metadata_el_ && generate_metadata_el_->HasAttribute("checked");
+
+        params.reserve(batch_items_.size());
+        for (const auto& item : batch_items_) {
+            VideoExtractionParams item_params = shared;
+            item_params.video_path = item.video_path;
+            item_params.output_dir = item.output_dir;
+            item_params.start_time = item.start_time;
+            // The selected clip's editor already substitutes the probed duration for an
+            // untouched end. Do the same for clips that were never opened, so an FPS batch
+            // keeps a numeric end instead of the "not set" sentinel.
+            const double trim_end = item.end_time < 0.0 && item.duration > 0.0 ? item.duration : item.end_time;
+            const bool allow_stream_end = item.end_time_is_auto &&
+                                          item_params.mode == io::ExtractionMode::INTERVAL &&
+                                          !(item_params.sharpness_enabled && item_params.sharpness_window_mode);
+            item_params.end_time = item.duration > 0.0
+                                       ? io::extractionEndTime(static_cast<float>(trim_end), item.duration,
+                                                               allow_stream_end)
+                                       : item.end_time;
+            item_params.rotation = item.rotation;
+            item_params.convert_hdr_to_sdr =
+                hdr_to_sdr_ && item.is_hdr && item.hdr_to_sdr_supported;
+            if (item.source_fps > 0.0 && item_params.mode == io::ExtractionMode::FPS)
+                item_params.fps = std::min(item_params.fps, item.source_fps);
+            if (!resolveFilenamePattern(item.video_path, item_params.filename_pattern, error)) {
+                error = std::format("{}: {}", lfs::core::path_to_utf8(item.video_path.filename()), error);
+                return false;
+            }
+            params.push_back(std::move(item_params));
+        }
+        return true;
+    }
+
+    bool VideoExtractorDialog::removeExistingBatchOutput(const std::vector<VideoExtractionParams>& params) {
+        for (const auto& item_params : params) {
+            for (const auto& path : generatedExtractionFiles(item_params)) {
+                std::error_code ec;
+                if (!std::filesystem::remove(path, ec) && ec) {
+                    setExtractionError(LOCF(VideoExtractor::OVERWRITE_DELETE_ERROR,
+                                             lfs::core::path_to_utf8(path), ec.message()), false);
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    void VideoExtractorDialog::beginBatchExtractionFromUi() {
+        if (extracting_.load())
+            return;
+        std::vector<VideoExtractionParams> params;
+        std::string error;
+        if (!buildBatchParams(params, error)) {
+            setExtractionError(error, false);
+            controls_dirty_ = true;
+            markContentDirty();
+            return;
+        }
+
+        bool metadata_will_be_replaced = false;
+        int conflict_count = 0;
+        for (std::size_t i = 0; i < params.size(); ++i) {
+            const auto& item_params = params[i];
+            const auto existing = generatedExtractionFiles(item_params);
+            {
+                std::lock_guard lock(batch_mutex_);
+                if (i < batch_items_.size())
+                    batch_items_[i].has_existing_output = !existing.empty();
+            }
+            if (existing.empty())
+                continue;
+            ++conflict_count;
+            metadata_will_be_replaced |= item_params.generate_metadata &&
+                std::any_of(existing.begin(), existing.end(), [](const std::filesystem::path& path) {
+                    return lfs::core::path_to_utf8(path.filename()) == "extraction_metadata.json";
+                });
+        }
+        batch_list_dirty_.store(true);
+        if (conflict_count > 0) {
+            pending_batch_params_ = std::move(params);
+            pending_params_set_ = true;
+            pending_batch_metadata_will_be_replaced_ = metadata_will_be_replaced;
+            pending_batch_conflict_count_ = conflict_count;
+            syncOverwritePrompt();
+            if (overwrite_overlay_el_)
+                overwrite_overlay_el_->SetClass("hidden", false);
+            return;
+        }
+        launchBatchExtraction(std::move(params));
+    }
+
+    void VideoExtractorDialog::launchBatchExtraction(std::vector<VideoExtractionParams> params) {
+        pending_params_set_ = false;
+        pending_batch_params_.clear();
+        pending_has_frame_conflicts_ = false;
+        pending_metadata_will_be_replaced_ = false;
+        pending_batch_metadata_will_be_replaced_ = false;
+        pending_batch_conflict_count_ = 0;
+        if (overwrite_overlay_el_)
+            overwrite_overlay_el_->SetClass("hidden", true);
+        stop_extraction_requested_.store(false);
+        extracting_.store(true);
+        current_frame_.store(0);
+        total_frames_.store(0);
+        discarded_frames_.store(0);
+        completed_batch_items_.store(0);
+        failed_batch_items_.store(0);
+        active_batch_index_.store(-1);
+        continue_batch_on_failure_ = continue_batch_on_failure_el_ && continue_batch_on_failure_el_->HasAttribute("checked");
+        {
+            std::lock_guard lock(batch_mutex_);
+            for (auto& item : batch_items_) {
+                item.has_existing_output = false;
+                item.status = BatchItemStatus::Pending;
+                item.error.clear();
+            }
+        }
+        batch_list_dirty_.store(true);
+        clearExtractionStatus();
+        startBatchExtraction(std::move(params));
+        controls_dirty_ = true;
+        markContentDirty();
     }
 
     void VideoExtractorDialog::beginExtractionFromUi() {

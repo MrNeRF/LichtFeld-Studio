@@ -35,6 +35,8 @@ namespace lfs::vis {
         SDL_Keycode keycode = SDLK_UNKNOWN;
         SDL_Keymod modifiers = SDL_KMOD_NONE;
         bool repeat = false;
+        // SDL timestamp, so a key handled at dispatch matches its frame-pass copy.
+        uint64_t timestamp = 0;
         std::string text{};
         int editing_start = -1;
         int editing_length = -1;
@@ -177,7 +179,8 @@ namespace lfs::vis {
                                         .scancode = event.key.scancode,
                                         .keycode = event.key.key,
                                         .modifiers = event.key.mod,
-                                        .repeat = event.key.repeat});
+                                        .repeat = event.key.repeat,
+                                        .timestamp = event.common.timestamp});
                 if (!event.key.repeat)
                     keys_pressed.push_back(event.key.scancode);
                 break;
@@ -186,7 +189,8 @@ namespace lfs::vis {
                 input_events.push_back({.kind = FrameInputEventKind::KeyUp,
                                         .scancode = event.key.scancode,
                                         .keycode = event.key.key,
-                                        .modifiers = event.key.mod});
+                                        .modifiers = event.key.mod,
+                                        .timestamp = event.common.timestamp});
 
                 break;
             case SDL_EVENT_TEXT_INPUT:

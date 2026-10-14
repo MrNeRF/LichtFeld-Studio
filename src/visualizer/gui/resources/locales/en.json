@@ -220,7 +220,13 @@
     "file.mesh": "Mesh…",
     "file.checkpoint": "Checkpoint…",
     "tools.developer": "Developer",
-    "tools.system_console": "System Console"
+    "tools.system_console": "System Console",
+    "access_key.file": "F",
+    "access_key.edit": "E",
+    "access_key.select": "S",
+    "access_key.tools": "T",
+    "access_key.view": "V",
+    "access_key.help": "H"
   },
   "window": {
     "export": "Export",
@@ -699,7 +705,9 @@
       "bg_modulation": "Chooses how the training background is supplied behind transparent or empty pixels. Color uses the selected fixed background color. Modulation varies a solid RGB background over training steps using sinusoidal colors. Image uses a selected background image. Random generates a different per-pixel RGB noise background each step.",
       "invert_masks": "Reverses mask meaning. Use when your black-and-white masks use the opposite color for the masked region.",
       "use_alpha_as_mask": "Uses image transparency as the training mask. Use when RGBA images already contain the mask and no separate mask files are needed.",
-      "steps_scaler": "Scales step-based training settings together. Auto mode uses roughly 100 iterations per active training image, with a minimum of 30,000 iterations."
+      "steps_scaler": "Scales step-based training settings together. Auto mode uses roughly 100 iterations per active training image, with a minimum of 30,000 iterations.",
+      "eval_mask_report_unmasked": "Also scores every valid pixel of each view, as without the mask, from the same render.",
+      "eval_mask_report_inverted": "Also scores the valid pixels outside the evaluation mask, from the same render."
     },
     "section.masking": "Mask Settings",
     "section.thresholds": "Thresholds",
@@ -780,7 +788,7 @@
     "fit_to_scene": "Fit to Scene",
     "fit_to_scene_trimmed": "Fit to Scene (Trimmed)",
     "reset_crop": "Reset",
-    "merge_to_single_ply": "Merge to Single PLY",
+    "merge_to_single_ply": "Merge into Single Model",
     "move_to": "Move To",
     "move_to_root": "Root",
     "models": "Models ({})",
@@ -1907,7 +1915,9 @@
     "prune_opacity": "Prune Opacity:",
     "ppisp_settings": "PPISP Settings",
     "ppisp_enable_controller": "Enable Controller:",
-    "disabled": "Disabled"
+    "disabled": "Disabled",
+    "eval_mask_report_unmasked": "Also Score Unmasked:",
+    "eval_mask_report_inverted": "Also Score Inverted:"
   },
   "image_preview": {
     "title": "Image Preview",
@@ -2205,7 +2215,25 @@
     "overwrite_proceed": "Proceed (overwrite duplicates)",
     "overwrite_prompt_metadata": "The output folder contains extraction metadata that this run will replace. Choose how to continue.",
     "overwrite_prompt_frames_metadata": "The output folder already contains frames matching this extraction's naming pattern. Existing extraction metadata will also be replaced. Choose how to continue.",
-    "overwrite_delete_error": "Failed to remove {}: {}"
+    "overwrite_delete_error": "Failed to remove {}: {}",
+    "videos": "Videos:",
+    "add_videos": "Add Videos...",
+    "remove_video": "Remove",
+    "clear_videos": "Clear",
+    "output_root": "Output root:",
+    "continue_batch_on_failure": "Continue with remaining videos if one fails",
+    "batch_video_count": "{} videos selected",
+    "batch_summary": "{} videos · {} complete · {} failed",
+    "batch_no_videos": "Add at least one video before starting extraction.",
+    "batch_no_output_root": "Select an output root for this batch.",
+    "batch_pending": "Pending",
+    "batch_running": "Extracting",
+    "batch_complete": "Complete",
+    "batch_failed": "Failed",
+    "batch_stopped": "Stopped",
+    "batch_existing_output": "Existing output",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",

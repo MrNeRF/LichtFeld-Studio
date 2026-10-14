@@ -125,6 +125,7 @@ set(TRAINING_NEW_SOURCES
     components/sparsity_optimizer.cpp
     control/command_api.cpp
     metrics/compare_images.cpp
+    metrics/eval_image_labels.cpp
     metrics/eval_mask.cpp
     metrics/mesh_mask.cpp
     metrics/flip.cpp

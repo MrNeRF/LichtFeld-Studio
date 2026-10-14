@@ -224,7 +224,13 @@
     "file.mesh": "메시…",
     "file.checkpoint": "체크포인트…",
     "tools.developer": "개발자",
-    "tools.system_console": "시스템 콘솔"
+    "tools.system_console": "시스템 콘솔",
+    "access_key.file": "F",
+    "access_key.edit": "E",
+    "access_key.select": "S",
+    "access_key.tools": "T",
+    "access_key.view": "V",
+    "access_key.help": "H"
   },
   "window": {
     "export": "내보내기",
@@ -703,7 +709,9 @@
       "bg_modulation": "transparent 또는 empty pixels 뒤에 공급되는 training background 방식을 선택합니다. Color 는 selected fixed color 를 사용합니다. Modulation 은 sinusoidal colors 로 solid RGB background 를 변화시킵니다. Image 는 selected image 를 사용합니다. Random 은 매 step pixel별 RGB noise 를 생성합니다.",
       "invert_masks": "마스크 의미를 반전합니다. 흑백 마스크에서 마스크 영역이 반대 색으로 표시되어 있을 때 사용합니다.",
       "use_alpha_as_mask": "image transparency 를 training mask 로 사용합니다. RGBA images 에 이미 mask 가 들어 있고 separate mask files 가 필요 없을 때 사용합니다.",
-      "steps_scaler": "step-based training settings 를 함께 scaling 합니다. Auto mode 는 활성 training image 당 약 100 iterations 를 사용하며, 최소 30,000 iterations 입니다."
+      "steps_scaler": "step-based training settings 를 함께 scaling 합니다. Auto mode 는 활성 training image 당 약 100 iterations 를 사용하며, 최소 30,000 iterations 입니다.",
+      "eval_mask_report_unmasked": "같은 렌더링으로, 마스크가 없을 때처럼 각 뷰의 모든 유효 픽셀도 평가합니다.",
+      "eval_mask_report_inverted": "같은 렌더링으로 평가 마스크 밖의 유효 픽셀도 평가합니다."
     },
     "section.masking": "마스크 설정",
     "section.thresholds": "임계값",
@@ -784,7 +792,7 @@
     "fit_to_scene": "씬에 맞추기",
     "fit_to_scene_trimmed": "씬에 맞추기 (트림됨)",
     "reset_crop": "초기화",
-    "merge_to_single_ply": "단일 PLY로 병합",
+    "merge_to_single_ply": "단일 모델로 병합",
     "move_to": "이동 위치",
     "move_to_root": "루트",
     "models": "모델 ({})",
@@ -1909,7 +1917,9 @@
     "prune_opacity": "불투명도 가지치기:",
     "ppisp_settings": "PPISP 설정",
     "ppisp_enable_controller": "컨트롤러 활성화:",
-    "disabled": "비활성화됨"
+    "disabled": "비활성화됨",
+    "eval_mask_report_unmasked": "마스크 없이도 평가:",
+    "eval_mask_report_inverted": "반전 마스크로도 평가:"
   },
   "image_preview": {
     "title": "이미지 미리보기",
@@ -2207,7 +2217,25 @@
     "overwrite_proceed": "계속 (중복 덮어쓰기)",
     "overwrite_prompt_metadata": "출력 폴더에 이번 실행에서 대체할 추출 메타데이터가 있습니다. 계속할 방법을 선택하세요.",
     "overwrite_prompt_frames_metadata": "출력 폴더에 이 추출의 이름 지정 패턴과 일치하는 프레임이 이미 있습니다. 기존 추출 메타데이터도 대체됩니다. 계속할 방법을 선택하세요.",
-    "overwrite_delete_error": "{}을(를) 제거하지 못했습니다: {}"
+    "overwrite_delete_error": "{}을(를) 제거하지 못했습니다: {}",
+    "videos": "비디오:",
+    "add_videos": "비디오 추가...",
+    "remove_video": "제거",
+    "clear_videos": "지우기",
+    "output_root": "출력 루트:",
+    "continue_batch_on_failure": "하나가 실패해도 남은 비디오 계속 처리",
+    "batch_video_count": "{}개 비디오 선택됨",
+    "batch_summary": "{}개 · 완료 {} · 실패 {}",
+    "batch_no_videos": "추출을 시작하기 전에 비디오를 하나 이상 추가하세요.",
+    "batch_no_output_root": "이 일괄 처리의 출력 루트를 선택하세요.",
+    "batch_pending": "대기 중",
+    "batch_running": "추출 중",
+    "batch_complete": "완료",
+    "batch_failed": "실패",
+    "batch_stopped": "중지됨",
+    "batch_existing_output": "기존 출력",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "시야각: {hfov:.1f}° H / {vfov:.1f}° V",

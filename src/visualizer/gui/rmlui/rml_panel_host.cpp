@@ -321,9 +321,11 @@ namespace lfs::vis::gui {
             return false;
 
         const float scroll_top = scroll_el_ ? scroll_el_->GetScrollTop() : 0.0f;
-        // The live resize target belongs to the current document. Never retain
-        // it across UnloadDocument(), where it immediately becomes dangling.
+        // Element pointers belong to the current document. Never retain them
+        // across UnloadDocument(), where they immediately become dangling.
         live_inspector_resize_target_ = nullptr;
+        close_button_ = nullptr;
+        close_button_bound_ = false;
         resize_cursor_override_.clear();
         if (document_) {
             rml_context_->UnloadDocument(document_);
@@ -488,7 +490,7 @@ namespace lfs::vis::gui {
             SDL_GetWindowSizeInPixels(native, &pw, &ph);
             w = static_cast<float>(pw);
             h = static_cast<float>(ph);
-            const float preference = UserPreferences::instance().uiScale();
+            const float preference = SDL_GetFloatProperty(SDL_GetWindowProperties(native), "lfs.ui_scale", 0.0f);
             const float ratio = preference > 0 ? preference : std::max(1.0f, SDL_GetWindowDisplayScale(native));
             if (rml_context_->GetDensityIndependentPixelRatio() != ratio) {
                 rml_context_->SetDensityIndependentPixelRatio(ratio);
@@ -1210,6 +1212,19 @@ namespace lfs::vis::gui {
                                   frame_el_->GetComputedValues().border_radius());
     }
 
+    void RmlPanelHost::CloseButtonListener::ProcessEvent(Rml::Event&) {
+        PanelRegistry::instance().set_panel_enabled(host_->context_name_, false);
+    }
+
+    void RmlPanelHost::bindCloseButton() {
+        if (close_button_bound_ || !document_)
+            return;
+        close_button_bound_ = true;
+        close_button_ = document_->GetElementById("close-btn");
+        if (close_button_)
+            close_button_->AddEventListener("click", &close_listener_);
+    }
+
     bool RmlPanelHost::forwardInput(float panel_x, float panel_y) {
         assert(rml_context_);
 
@@ -1222,6 +1237,7 @@ namespace lfs::vis::gui {
                 render_needed_ |= forwardInput(panel_x, panel_y);
                 input_ = saved; }, false, [this](float x, float y) { return !floating_ && PanelRegistry::instance().isPositionOverFloatingPanel(x, y); }))
             return false;
+        bindCloseButton();
         bool had_input = false;
         const auto& input = *input_;
         auto* const text_input_handler = manager_ ? manager_->getTextInputHandler() : nullptr;

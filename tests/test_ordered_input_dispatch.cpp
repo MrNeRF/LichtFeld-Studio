@@ -49,6 +49,7 @@
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <future>
@@ -57,6 +58,15 @@
 #include <set>
 #include <thread>
 #include <vector>
+#ifndef _WIN32
+#include <cstdlib>
+#endif
+
+#ifndef _WIN32
+namespace lfs_test_lsp {
+    std::filesystem::path write_mock_lsp_server();
+}
+#endif
 
 namespace lfs::vis {
     namespace {
@@ -513,6 +523,40 @@ namespace lfs::vis {
         EXPECT_EQ(editor.getText(), "£x");
         view->setEditor(nullptr);
     }
+
+    TEST_F(OrderedPointerReplayTest, DotOffersCompletionAfterThePanelConsumesTheEdit) {
+#ifdef _WIN32
+        GTEST_SKIP() << "Mock language server fixture is POSIX-only.";
+#else
+        const auto script = lfs_test_lsp::write_mock_lsp_server();
+        setenv("LFS_PYTHON_LSP", script.c_str(), 1);
+        setenv("LFS_PYTHON_LSP_WORKSPACE", (script.parent_path() / "workspace").c_str(), 1);
+        static Rml::ElementInstancerGeneric<gui::PythonEditorElement> instancer;
+        Rml::Factory::RegisterElementInstancer("python-editor", &instancer);
+        editor::PythonEditor editor;
+        auto element = document_->CreateElement("python-editor");
+        auto* view = dynamic_cast<gui::PythonEditorElement*>(element.get());
+        ASSERT_NE(view, nullptr);
+        view->setEditor(&editor);
+        document_->AppendChild(std::move(element));
+        context_->Update();
+        ASSERT_TRUE(view->Focus());
+        for (const char* piece : {"l", "f", "."})
+            gui::rml_input::processKeyboardEvent(*context_, {.kind = FrameInputEventKind::Text, .text = piece});
+        EXPECT_EQ(editor.getText(), "lf.");
+        // The docked console consumes the edit before the deferred Rml render.
+        EXPECT_TRUE(editor.consumeTextChanged());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!editor.hasActiveCompletion() && std::chrono::steady_clock::now() < deadline) {
+            editor.renderRml(*view, 200.0f, 80.0f, 14.0f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        EXPECT_TRUE(editor.hasActiveCompletion());
+        view->setEditor(nullptr);
+        unsetenv("LFS_PYTHON_LSP");
+        unsetenv("LFS_PYTHON_LSP_WORKSPACE");
+#endif
+    }
 } // namespace lfs::vis
 
 namespace lfs::vis {
@@ -592,6 +636,10 @@ namespace lfs::vis {
                 ++attempts;
                 return nullptr;
             };
+        }
+        void setKeyboardContext(Rml::Context* context, bool external_enabled) {
+            manager().keyboard_context_ = context;
+            manager().native_windows_enabled_ = external_enabled;
         }
         void mapContextWindow(Rml::Context* context, SDL_Window* window) {
             manager().context_windows_[context] = window;
@@ -1220,15 +1268,46 @@ namespace lfs::vis {
         gui::rml_input::TextInputEscapeRevertController revert_;
     };
 
+    TEST_F(WindowInputDispatchTest, MainWindowFocusLossPreservesFocusedFieldWithExternalWindowsOnOrOff) {
+        for (const bool enabled : {false, true}) {
+            SCOPED_TRACE(enabled);
+            ASSERT_TRUE(field_->Focus());
+            field_->SetValue("half-typed");
+            setKeyboardContext(context_, enabled);
+            SDL_Event event{};
+            event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+            event.window.windowID = SDL_GetWindowID(window_->getWindow());
+            manager().dispatchInputEvent(event);
+            EXPECT_EQ(context_->GetFocusElement(), field_);
+            EXPECT_EQ(field_->GetValue(), "half-typed");
+        }
+    }
+
+    TEST_F(WindowInputDispatchTest, UnvalidatedPanelsCannotCreateExternalHosts) {
+        int attempts = 0;
+        failExternalGraphics(attempts);
+        for (const auto* name : {"lfs.asset_manager", "lfs.histogram", "plugin.custom", "modal"}) {
+            auto* context = manager().createContext(name, 400, 300, true);
+            ASSERT_NE(context, nullptr);
+            EXPECT_FALSE(hasDesktopHost(context));
+            EXPECT_TRUE(manager().externalWindowsAllowed());
+            manager().destroyContext(name);
+        }
+        EXPECT_EQ(attempts, 0);
+        EXPECT_TRUE(gui::RmlUIManager::validatedExternalPanel("lfs.preferences"));
+        EXPECT_TRUE(gui::RmlUIManager::validatedExternalPanel("lfs.plugin_marketplace"));
+        EXPECT_TRUE(gui::RmlUIManager::validatedExternalPanel("video_extractor"));
+    }
+
     TEST_F(WindowInputDispatchTest, FailedExternalHostDisablesFurtherAttemptsForTheSession) {
         int attempts = 0;
         failExternalGraphics(attempts);
-        auto* first = manager().createContext("failed-external-first", 400, 300, true);
+        auto* first = manager().createContext("video_extractor", 400, 300, true);
         ASSERT_NE(first, nullptr);
         EXPECT_FALSE(hasDesktopHost(first));
         EXPECT_FALSE(manager().externalWindowsAllowed());
         for (int frame = 0; frame < 10; ++frame) {
-            const auto name = "failed-external-retry-" + std::to_string(frame);
+            const std::string name = "lfs.preferences";
             auto* fallback = manager().createContext(name, 400, 300, true);
             ASSERT_NE(fallback, nullptr);
             EXPECT_FALSE(hasDesktopHost(fallback));
@@ -1236,7 +1315,7 @@ namespace lfs::vis {
             manager().destroyContext(name);
         }
         EXPECT_EQ(attempts, 1);
-        manager().destroyContext("failed-external-first");
+        manager().destroyContext("video_extractor");
     }
 
     TEST_F(WindowInputDispatchTest, SecondaryWindowMouseDoesNotReachMainWindowContext) {
@@ -2068,6 +2147,32 @@ namespace lfs::vis {
         chart->RemoveEventListener("mousedown", &recorder);
         chart->RemoveEventListener("mouseup", &recorder);
         chart->RemoveEventListener("click", &recorder);
+    }
+
+    TEST_F(WindowInputDispatchTest, FloatingCloseButtonDisablesItsPanel) {
+        gui::RmlPanelHost host(&manager(), "test.input_float", "");
+        attachInputHost(host, 180, 100,
+                        "<rml><head><style>body { width:180px; height:100px; }</style></head>"
+                        "<body id='window-frame'><div id='title-bar'><span id='close-btn'>x</span></div>"
+                        "<div id='body'>log</div></body></rml>");
+        host.setFloating(true);
+        host.getContext()->Update();
+        registerInputFloat();
+        forwardHost(host, 100, 60);
+        ASSERT_TRUE(gui::PanelRegistry::instance().is_panel_enabled("test.input_float"));
+
+        click(120, 140);
+        EXPECT_TRUE(gui::PanelRegistry::instance().is_panel_enabled("test.input_float"));
+
+        auto* button = host.getDocument()->GetElementById("close-btn");
+        ASSERT_NE(button, nullptr);
+        const auto origin = button->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = button->GetBox().GetSize(Rml::BoxArea::Border);
+        ASSERT_GT(size.x, 0.f);
+        ASSERT_GT(size.y, 0.f);
+        click(100 + static_cast<int>(origin.x + size.x * 0.5f),
+              60 + static_cast<int>(origin.y + size.y * 0.5f));
+        EXPECT_FALSE(gui::PanelRegistry::instance().is_panel_enabled("test.input_float"));
     }
 
     TEST_F(WindowInputDispatchTest, FloatingOcclusionPreservesDockedGestureOwnership) {

@@ -224,7 +224,13 @@
     "file.mesh": "网格…",
     "file.checkpoint": "检查点…",
     "tools.developer": "开发者",
-    "tools.system_console": "系统控制台"
+    "tools.system_console": "系统控制台",
+    "access_key.file": "F",
+    "access_key.edit": "E",
+    "access_key.select": "S",
+    "access_key.tools": "T",
+    "access_key.view": "V",
+    "access_key.help": "H"
   },
   "window": {
     "export": "导出",
@@ -703,7 +709,9 @@
       "bg_modulation": "选择透明或空像素后面使用的训练背景。Color 使用选定固定颜色。Modulation 用正弦颜色改变纯 RGB 背景。Image 使用选定图像。Random 每个 step 生成逐像素 RGB 噪声。",
       "invert_masks": "反转遮罩含义。适用于黑白遮罩用相反颜色标记被遮罩区域的情况。",
       "use_alpha_as_mask": "使用图像透明度作为训练 mask。当 RGBA 图像已包含 mask，不需要单独 mask 文件时使用。",
-      "steps_scaler": "一起缩放基于 step 的训练设置。Auto 模式按每张有效训练图像约 100 次迭代，最低 30,000 次迭代。"
+      "steps_scaler": "一起缩放基于 step 的训练设置。Auto 模式按每张有效训练图像约 100 次迭代，最低 30,000 次迭代。",
+      "eval_mask_report_unmasked": "使用同一渲染，同时像无遮罩时一样评估每个视图的所有有效像素。",
+      "eval_mask_report_inverted": "使用同一渲染，同时评估评估遮罩之外的有效像素。"
     },
     "section.masking": "掩码设置",
     "section.thresholds": "阈值",
@@ -784,7 +792,7 @@
     "fit_to_scene": "适应场景",
     "fit_to_scene_trimmed": "适应场景（已修剪）",
     "reset_crop": "重置",
-    "merge_to_single_ply": "合并为单个PLY",
+    "merge_to_single_ply": "合并为单个模型",
     "move_to": "移动到",
     "move_to_root": "根目录",
     "models": "模型 ({})",
@@ -1909,7 +1917,9 @@
     "prune_opacity": "不透明度修剪:",
     "ppisp_settings": "PPISP设置",
     "ppisp_enable_controller": "启用控制器:",
-    "disabled": "已禁用"
+    "disabled": "已禁用",
+    "eval_mask_report_unmasked": "同时评估无遮罩:",
+    "eval_mask_report_inverted": "同时评估反向遮罩:"
   },
   "image_preview": {
     "title": "图像预览",
@@ -2207,7 +2217,25 @@
     "overwrite_proceed": "继续（覆盖重复文件）",
     "overwrite_prompt_metadata": "输出文件夹包含本次运行将替换的提取元数据。请选择如何继续。",
     "overwrite_prompt_frames_metadata": "输出文件夹已包含与此次提取命名模式匹配的帧。现有提取元数据也将被替换。请选择如何继续。",
-    "overwrite_delete_error": "无法删除 {}：{}"
+    "overwrite_delete_error": "无法删除 {}：{}",
+    "videos": "视频：",
+    "add_videos": "添加视频...",
+    "remove_video": "移除",
+    "clear_videos": "清除",
+    "output_root": "输出根目录：",
+    "continue_batch_on_failure": "一个视频失败时继续处理其余视频",
+    "batch_video_count": "已选择 {} 个视频",
+    "batch_summary": "{} 个视频 · 完成 {} · 失败 {}",
+    "batch_no_videos": "开始提取前请至少添加一个视频。",
+    "batch_no_output_root": "请选择此批处理的输出根目录。",
+    "batch_pending": "等待中",
+    "batch_running": "正在提取",
+    "batch_complete": "完成",
+    "batch_failed": "失败",
+    "batch_stopped": "已停止",
+    "batch_existing_output": "已有输出",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "视场角：{hfov:.1f}° H / {vfov:.1f}° V",
