@@ -2207,3 +2207,17 @@ body {
     white-space: nowrap;
     font-size: 13dp;
 }
+
+/* Depth keeps its controls inside the reserved span, including narrow views. */
+#depth-view-block .viewport-depth-header {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 4dp;
+}
+
+#depth-view-block .viewport-depth-fields {
+    flex-wrap: wrap;
+    flex-shrink: 1;
+    justify-content: center;
+    row-gap: 4dp;
+}

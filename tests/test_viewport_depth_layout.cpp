@@ -301,7 +301,7 @@ namespace {
         const auto path = resources / "rmlui/resources/viewport_overlay.rml";
         std::ifstream input(path);
         const std::string original((std::istreambuf_iterator<char>(input)), {});
-        for (const char* locale : {"en", "de", "pl", "es", "fr"}) {
+        for (const char* locale : {"en", "de", "pl", "es", "fr", "it", "ja", "ko", "zh", "nl"}) {
             SCOPED_TRACE(locale);
             std::ifstream translations(resources / "resources/locales" / (std::string(locale) + ".json"));
             ASSERT_TRUE(translations);
@@ -326,11 +326,18 @@ namespace {
             doc->Show();
             auto* bar = doc->GetElementById("depth-view-block");
             bar->SetClass("hidden", false);
+            auto* rail = doc->GetElementById("primary-utility-toolbar");
+            ASSERT_TRUE(rail);
+            // Default side-panel layout: reserve the actual rail plus its gap.
+            rail->GetParentNode()->SetProperty("left", "329dp");
             for (const float scale : {1.0f, 1.5f, 2.0f}) {
                 real_context_->SetDensityIndependentPixelRatio(scale);
-                for (const int width : {1240, 1600}) {
+                for (const int width : {920, 1100, 1240, 1600, 1920}) {
                     SCOPED_TRACE(std::format("width={} scale={}", width, scale));
                     real_context_->SetDimensions({int(width * scale), int(900 * scale)});
+                    real_context_->Update();
+                    lfs::vis::gui::ViewportDepthLayoutTestAccess::attach(overlay_, doc);
+                    (void)lfs::vis::gui::ViewportDepthLayoutTestAccess::updateOverlayPanels(overlay_);
                     real_context_->Update();
                     Rml::ElementList controls;
                     bar->QuerySelectorAll(controls, "button, input, select, .viewport-transform-meta__tool, .viewport-transform-axis-label");
@@ -341,9 +348,18 @@ namespace {
                         const auto position = control->GetAbsoluteOffset(Rml::BoxArea::Border);
                         const auto size = control->GetBox().GetSize(Rml::BoxArea::Border);
                         EXPECT_LE(position.x + size.x, (width - 130) * scale) << control->GetTagName();
+                        auto* panel = bar->QuerySelector(".viewport-transform-panel");
+                        ASSERT_TRUE(panel);
+                        const auto pp = panel->GetAbsoluteOffset(Rml::BoxArea::Border);
+                        const auto ps = panel->GetBox().GetSize(Rml::BoxArea::Border);
+                        EXPECT_GE(position.x, pp.x - 0.1f);
+                        EXPECT_LE(position.x + size.x, pp.x + ps.x + 0.1f);
+                        EXPECT_GE(position.y, pp.y - 0.1f);
+                        EXPECT_LE(position.y + size.y, pp.y + ps.y + 0.1f);
                     }
                 }
             }
+            lfs::vis::gui::ViewportDepthLayoutTestAccess::attach(overlay_, document_);
             Rml::RemoveContext("viewport_depth_layout_real");
             real_context_ = nullptr;
         }
