@@ -5,7 +5,9 @@
 #include "core/tensor.hpp"
 #include "core/tensor_color.hpp"
 #include "core/tensor_cuda_interop.hpp"
+#include "io/video/color_convert.cuh"
 #include "io/video/video_encoder.hpp"
+#include "media/cuda_frame_ffmpeg.hpp"
 #include "media/video_player.hpp"
 #include <algorithm>
 #include <array>
@@ -30,6 +32,130 @@ namespace {
         }
         ~CudaStream() { cudaStreamDestroy(value); }
     };
+    nlohmann::json semiplanarColorContracts() {
+        using namespace lfs::core;
+        constexpr int width = 33, height = 9, pitch = width * 2 + 16;
+        CudaStream stream;
+        std::vector<uint16_t> y(pitch / 2 * height, 0xffff), uv(pitch / 2 * ((height + 1) / 2), 0xffff);
+        const std::array<int, 9> codes{0, 64, 65, 66, 67, 128, 512, 940, 1023};
+        for (int row = 0; row < height; ++row)
+            for (int col = 0; col < width; ++col)
+                y[row * pitch / 2 + col] = static_cast<uint16_t>((codes[col % codes.size()] << 6) | 63);
+        for (int row = 0; row < (height + 1) / 2; ++row)
+            for (int col = 0; col < width; col += 2) {
+                uv[row * pitch / 2 + col] = static_cast<uint16_t>(((row == 0 ? 512 : 64 + col * 20) << 6) | 63);
+                uv[row * pitch / 2 + col + 1] = static_cast<uint16_t>(((row == 0 ? 512 : 940 - col * 20) << 6) | 63);
+            }
+        auto dy = Tensor::empty({y.size() * 2}, Device::GPU, DataType::UInt8);
+        auto duv = Tensor::empty({uv.size() * 2}, Device::GPU, DataType::UInt8);
+        auto rgb = Tensor::empty({width * height * 3 + 64}, Device::GPU, DataType::UInt8);
+        require(cudaMemcpy(dy.data_ptr(), y.data(), y.size() * 2, cudaMemcpyHostToDevice) == cudaSuccess, "P010 luma upload");
+        require(cudaMemcpy(duv.data_ptr(), uv.data(), uv.size() * 2, cudaMemcpyHostToDevice) == cudaSuccess, "P010 chroma upload");
+        AVCUDADeviceContext cuda{};
+        cuda.cuda_ctx = reinterpret_cast<CUcontext>(uintptr_t{1});
+        AVHWDeviceContext device{};
+        device.type = AV_HWDEVICE_TYPE_CUDA;
+        device.hwctx = &cuda;
+        AVHWFramesContext frames{};
+        frames.format = AV_PIX_FMT_CUDA;
+        frames.sw_format = AV_PIX_FMT_P010LE;
+        frames.device_ctx = &device;
+        AVBufferRef buffer{};
+        buffer.data = reinterpret_cast<uint8_t*>(&frames);
+        AVFrame frame{};
+        frame.format = AV_PIX_FMT_CUDA;
+        frame.width = width;
+        frame.height = height;
+        frame.hw_frames_ctx = &buffer;
+        frame.data[0] = static_cast<uint8_t*>(dy.data_ptr());
+        frame.data[1] = static_cast<uint8_t*>(duv.data_ptr());
+        frame.linesize[0] = frame.linesize[1] = pitch;
+        frame.chroma_location = AVCHROMA_LOC_LEFT;
+        int checked = 0;
+        for (const auto matrix : {AVCOL_SPC_SMPTE170M, AVCOL_SPC_BT709, AVCOL_SPC_BT2020_NCL}) {
+            frame.colorspace = matrix;
+            const double kr = matrix == AVCOL_SPC_BT709 ? .2126 : matrix == AVCOL_SPC_BT2020_NCL ? .2627
+                                                                                                 : .299;
+            const double kb = matrix == AVCOL_SPC_BT709 ? .0722 : matrix == AVCOL_SPC_BT2020_NCL ? .0593
+                                                                                                 : .114;
+            for (const bool full : {false, true}) {
+                frame.color_range = full ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
+                auto view = lfs::media::detail::cudaFrameView(&frame);
+                require(view.has_value() && view->layout == lfs::media::detail::CudaVideoLayout::P010, "P010 descriptor");
+                require(cudaMemset(rgb.data_ptr(), 0xcd, rgb.bytes()) == cudaSuccess, "P010 output sentinel");
+                lfs::io::video::semiplanarToRgbCuda(frame.data[0], frame.data[1], static_cast<uint8_t*>(rgb.data_ptr()),
+                                                    width, height, pitch, pitch, true, view->color, stream.value);
+                require(cudaStreamSynchronize(stream.value) == cudaSuccess, "P010 nondefault stream completion");
+                const auto actual = rgb.to_vector_uint8();
+                for (int row = 0; row < height; ++row)
+                    for (int col = 0; col < width; ++col) {
+                        const double yy = ((y[row * pitch / 2 + col] >> 6) - (full ? 0.0 : 64.0)) / (full ? 1023.0 : 876.0);
+                        const double sy = (row + .5) / 2 - .5;
+                        const int first = static_cast<int>(std::floor(sy));
+                        const double weight = sy - first;
+                        const auto chroma = [&](int channel) {
+                            const auto at = [&](int r) { return uv[std::clamp(r, 0, (height + 1) / 2 - 1) * pitch / 2 + (col / 2) * 2 + channel] >> 6; };
+                            return (at(first) * (1 - weight) + at(first + 1) * weight - 512.0) / (full ? 1023.0 : 896.0);
+                        };
+                        const double u = chroma(0), v = chroma(1);
+                        const std::array<double, 3> expected{yy + 2 * (1 - kr) * v,
+                                                             yy - 2 * (1 - kb) * kb / (1 - kr - kb) * u - 2 * (1 - kr) * kr / (1 - kr - kb) * v,
+                                                             yy + 2 * (1 - kb) * u};
+                        for (int channel = 0; channel < 3; ++channel) {
+                            const int byte = static_cast<int>(std::floor(std::clamp(expected[channel], 0.0, 1.0) * 255 + .5));
+                            require(std::abs(int(actual[(row * width + col) * 3 + channel]) - byte) <= 1, "P010 differs from scalar reference");
+                            ++checked;
+                        }
+                    }
+                if (!full)
+                    require(actual[4 * 3] == 1 && actual[4 * 3 + 1] == 1 && actual[4 * 3 + 2] == 1,
+                            "P010 lower two meaningful bits must survive until RGB quantization");
+                require(std::all_of(actual.begin() + width * height * 3, actual.end(), [](auto b) { return b == 0xcd; }), "P010 output bounds");
+            }
+        }
+        frame.linesize[0] = width;
+        require(!lfs::media::detail::cudaFrameView(&frame), "P010 rejects byte pitch sized for NV12");
+        frame.linesize[0] = pitch + 1;
+        require(!lfs::media::detail::cudaFrameView(&frame), "P010 rejects odd UINT16 pitch");
+        frame.linesize[0] = pitch;
+        frame.colorspace = AVCOL_SPC_BT2020_CL;
+        require(!lfs::media::detail::cudaFrameColorSupported(&frame, AVCOL_SPC_BT709), "constant-luminance matrix uses fallback");
+        int chroma_checks = 0, legacy_matrices = 0;
+        for (const auto layout : {AV_PIX_FMT_P010LE, AV_PIX_FMT_NV12}) {
+            frames.sw_format = layout;
+            for (int matrix = 0; matrix < AVCOL_SPC_NB; ++matrix) {
+                frame.colorspace = static_cast<AVColorSpace>(matrix);
+                const auto view = lfs::media::detail::cudaFrameView(&frame);
+                if (matrix == AVCOL_SPC_BT2020_CL) {
+                    require(!view, "constant-luminance matrix retains host fallback for both layouts");
+                    continue;
+                }
+                require(view.has_value(), "host-default matrices retain GPU conversion");
+                const bool legacy = layout == AV_PIX_FMT_NV12 && matrix != AVCOL_SPC_BT709 && matrix != AVCOL_SPC_BT2020_NCL;
+                require(view->legacy_bt601 == legacy, "NV12 default matrices must use the original integer kernel");
+                legacy_matrices += legacy;
+            }
+            frame.colorspace = AVCOL_SPC_BT709;
+            frame.chroma_location = AVCHROMA_LOC_LEFT;
+            const auto reference = lfs::media::detail::cudaFrameView(&frame);
+            require(reference.has_value(), "left chroma reference descriptor");
+            for (const auto location : {AVCHROMA_LOC_UNSPECIFIED, AVCHROMA_LOC_LEFT, AVCHROMA_LOC_CENTER,
+                                        AVCHROMA_LOC_TOPLEFT, AVCHROMA_LOC_TOP, AVCHROMA_LOC_BOTTOMLEFT, AVCHROMA_LOC_BOTTOM}) {
+                frame.chroma_location = location;
+                const auto view = lfs::media::detail::cudaFrameView(&frame);
+                require(view.has_value(), "all signalled chroma locations retain GPU conversion");
+                require(std::equal(std::begin(view->color.decode), std::end(view->color.decode), std::begin(reference->color.decode)) &&
+                            view->color.chroma_y_scale == reference->color.chroma_y_scale &&
+                            view->color.chroma_y_offset == reference->color.chroma_y_offset,
+                        "GPU chroma sampling must match the host's metadata-independent policy");
+                ++chroma_checks;
+            }
+        }
+        frame.chroma_location = AVCHROMA_LOC_LEFT;
+        frames.sw_format = AV_PIX_FMT_YUV420P10LE;
+        require(!lfs::media::detail::cudaFrameView(&frame), "planar ten-bit storage must not be read as P010");
+        return {{"success", true}, {"checked_components", checked}, {"checked_chroma_locations", chroma_checks}, {"legacy_matrix_fallbacks", legacy_matrices}, {"nondefault_stream", true}};
+    }
     nlohmann::json conversionContracts() {
         using namespace lfs::core;
         CudaStream stream;
@@ -151,6 +277,8 @@ namespace {
 
 nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     using namespace lfs;
+    if (request.at("operation") == "native-yuv-color")
+        return semiplanarColorContracts();
     if (request.at("operation") == "native-conversion")
         return conversionContracts();
     if (request.at("operation") == "native-encode-session") {

@@ -356,6 +356,37 @@ runtime reports it alongside configuration flags. There is no separate manifest
 or copied SDK license inventory in this revision. A replacement codec build or
 future dependency must undergo its own version/transitive/license review.
 
+## CUDA extraction color conversion
+
+Studio's JPEG extraction pipeline can consume decoded CUDA NV12 and P010
+frames directly when resizing and HDR tone mapping are not requested. P010
+samples retain their ten meaningful bits through color conversion before the
+final RGB8/JPEG quantization. Supported matrices are BT.601, BT.709 and
+BT.2020 nonconstant luminance, with limited or full range. Other matrix tags
+use the same BT.601 default as the host RGB8 converter; NV12 retains the
+original integer kernel for that default. BT.2020 constant-luminance and
+unsupported layouts retain the host path. Chroma-location tags do not gate
+GPU conversion: sampling follows the existing host swscale policy, which
+does not configure chroma position from those tags either.
+The existing NV12 BT.601 conversion keeps its original integer rounding.
+
+This path uses the existing decoder context, stream handoff and JPEG encoder;
+it does not install another codec. Rotation remains on the GPU. Sharpness
+may require an RGB readback; window selection, resizing, resumable extraction
+and requested HDR processing retain their existing routing contracts.
+
+Extraction metadata records `processing.color_conversion.backend` and counts
+for GPU/host conversion, actual NV12/P010 frames, hardware-frame readbacks
+and RGB readbacks. These describe work performed, rather than claiming a
+fully GPU pipeline merely because hardware decoding was requested. The input
+probe's pixel format can differ from the decoder's actual CUDA surface layout.
+Here `gpu_frames`, `nv12_frames` and `p010_frames` count only direct CUDA JPEG
+color conversions; the latter two are GPU-converted layout counts, not input
+inventory. A P010 source converted through the host route reports zero
+`p010_frames`. `host_frames` and backend `host` mean host-dispatched conversion,
+which can still invoke libplacebo/Vulkan HDR tone mapping or a tensor GPU linear
+renderer. They do not claim that all of that work executes on the CPU.
+
 ## MCP integration
 
 `media.capabilities` exposes the registered backends and codec build. `media.probe` is a synchronous read-only tool using the same inventory JSON as the CLI. `media.extract` accepts the facade's selection, geometry, sharpness, time range and backend options and starts the `media.extract` runtime job. It returns promptly; decoding and file writing run in a guarded worker. Only one extraction can run at a time.

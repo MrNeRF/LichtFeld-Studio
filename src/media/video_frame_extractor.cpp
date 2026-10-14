@@ -1537,8 +1537,13 @@ namespace lfs::io {
                 double cuda_upload_seconds = 0.0;
                 double jpeg_encode_seconds = 0.0;
                 bool used_gpu_encoding = false;
+                int gpu_nv12_frames = 0, gpu_p010_frames = 0;
+                int gpu_color_frames = 0, host_color_frames = 0, hardware_readback_frames = 0, rgb_readback_frames = 0;
                 double jpeg_write_seconds = 0.0;
                 const auto convert_frame_to_output = [&](AVFrame* source) {
+                    // Host dispatch can still invoke a Vulkan/tensor renderer;
+                    // these counts distinguish it from direct CUDA JPEG handoff.
+                    ++host_color_frames;
                     if (float_output) {
                         const auto converted = linear_converter->convert(*source, out_width, out_height, cpu_contiguous_buffer);
                         if (!converted) {
@@ -1608,7 +1613,7 @@ namespace lfs::io {
                 };
 
                 if (full_gpu_pipeline_available) {
-                    LOG_INFO("Full GPU pipeline available for NV12 frames: NVDEC decode → GPU color convert → GPU JPEG encode");
+                    LOG_INFO("Full GPU pipeline available for supported NV12/P010 frames: NVDEC decode → GPU color convert → GPU JPEG encode");
                 } else if (convert_hdr_to_sdr && gpu_encoding_enabled) {
                     LOG_INFO("HDR hybrid pipeline: {} decode -> libplacebo Vulkan tone map -> host readback -> CUDA JPEG batch",
                              dv_profile > 0 ? "FFmpeg Dolby Vision" : "CPU");
@@ -1880,20 +1885,29 @@ namespace lfs::io {
                         decoded_software_format = hw_sw_format;
                     }
                     const bool use_full_gpu_pipeline =
-                        full_gpu_pipeline_available && hw_sw_format == AV_PIX_FMT_NV12;
+                        full_gpu_pipeline_available && (hw_sw_format == AV_PIX_FMT_NV12 || hw_sw_format == AV_PIX_FMT_P010LE) &&
+                        hw_frame->width == src_width && hw_frame->height == src_height &&
+                        media::detail::cudaFrameColorSupported(hw_frame, source_colorspace);
 
                     if (full_gpu_pipeline_available && !use_full_gpu_pipeline &&
                         !logged_hw_format_fallback) {
-                        LOG_INFO("Hardware frame format is {}; using CPU transfer/color conversion",
-                                 pixelFormatName(hw_sw_format));
+                        LOG_INFO("Hardware frame format is {} (matrix={}, chroma={}); using CPU transfer/color conversion",
+                                 pixelFormatName(hw_sw_format), static_cast<int>(hw_frame->colorspace), static_cast<int>(hw_frame->chroma_location));
                         logged_hw_format_fallback = true;
                     }
 
                     if (use_full_gpu_pipeline) {
-                        const auto hardware_frame = media::detail::cudaFrameView(hw_frame, source_range == AVCOL_RANGE_JPEG);
+                        const auto hardware_frame = media::detail::cudaFrameView(hw_frame, source_range == AVCOL_RANGE_JPEG, source_colorspace);
                         if (!hardware_frame)
                             throw lfs::Exception(hardware_frame.error());
                         gpu_jpeg->convertHardware(*hardware_frame, params.sharpness.enabled ? cpu_contiguous_buffer : nullptr);
+                        ++gpu_color_frames;
+                        if (hw_sw_format == AV_PIX_FMT_P010LE)
+                            ++gpu_p010_frames;
+                        else
+                            ++gpu_nv12_frames;
+                        if (params.sharpness.enabled)
+                            ++rgb_readback_frames;
                         double frame_score = 0.0;
                         if (params.sharpness.enabled) {
                             frame_score = computeSharpnessScore(
@@ -1940,6 +1954,7 @@ namespace lfs::io {
                                     ffmpegError(transfer_result);
                             throw std::runtime_error(error);
                         }
+                        ++hardware_readback_frames;
                         const int props_result = av_frame_copy_props(sw_frame, hw_frame);
                         if (props_result < 0) {
                             av_frame_unref(sw_frame);
@@ -2643,6 +2658,15 @@ namespace lfs::io {
                                             {"name", codec && codec->name ? codec->name : "unknown"},
                                             {"threads", using_hw_decode ? 0 : codec_ctx->thread_count},
                                         }},
+                            {"color_conversion", {
+                                                     {"backend", gpu_color_frames > 0 ? (host_color_frames > 0 ? "mixed_cuda_host" : "cuda") : (host_color_frames > 0 ? "host" : "none")},
+                                                     {"gpu_frames", gpu_color_frames},
+                                                     {"nv12_frames", gpu_nv12_frames},
+                                                     {"p010_frames", gpu_p010_frames},
+                                                     {"host_frames", host_color_frames},
+                                                     {"rgb_readback_frames", rgb_readback_frames},
+                                                     {"hardware_readback_frames", hardware_readback_frames},
+                                                 }},
                             {"tone_mapping", {
                                                  {"backend", convert_hdr_to_sdr ? hdr_renderer->backendName() : std::string_view("none")},
                                                  {"enabled", convert_hdr_to_sdr},

@@ -15,6 +15,27 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 
+namespace lfs::io {
+    std::unique_ptr<media::detail::GpuJpegEncoder> createStudioJpegEncoder(const media::detail::JpegSettings&);
+}
+namespace {
+    // Test-only replay of the former hybrid path: keep NVDEC and the real
+    // CUDA JPEG encoder, but require host color conversion/readback.
+    class HostColorEncoder final : public lfs::media::detail::GpuJpegEncoder {
+        std::unique_ptr<lfs::media::detail::GpuJpegEncoder> encoder_;
+
+    public:
+        explicit HostColorEncoder(std::unique_ptr<lfs::media::detail::GpuJpegEncoder> encoder) : encoder_(std::move(encoder)) {}
+        std::size_t capacity() const noexcept override { return encoder_->capacity(); }
+        bool canConvertHardware() const noexcept override { return false; }
+        void convertHardware(const lfs::media::detail::CudaVideoFrame&, std::uint8_t*) override { throw std::logic_error("host color test unexpectedly converted hardware"); }
+        void finishHardware() override { encoder_->finishHardware(); }
+        void* queueHardware(std::size_t) override { throw std::logic_error("host color test unexpectedly queued hardware"); }
+        void* queueHost(std::size_t index, const std::uint8_t* bytes) override { return encoder_->queueHost(index, bytes); }
+        std::vector<std::vector<std::uint8_t>> encode(const std::vector<void*>& frames, int width, int height, int quality) override { return encoder_->encode(frames, width, height, quality); }
+    };
+} // namespace
+
 nlohmann::json runNativeVideoContracts(const nlohmann::json& request);
 
 int main(int argc, char** argv) {
@@ -46,15 +67,22 @@ int main(int argc, char** argv) {
         const auto caps = media::MediaIngest::capabilities();
         std::ifstream stream(core::utf8_to_path(argv[1]));
         const auto request = json::parse(stream);
+        if (request.value("verbose", false))
+            core::Logger::get().set_level(core::LogLevel::Info);
         if (request.value("disable_jpeg_provider", false))
             // Keep the registered host's decode capabilities unchanged while
             // simulating an encoder that cannot be allocated.
             media::detail::registerGpuJpegFactory(+[](const media::detail::JpegSettings&) -> std::unique_ptr<media::detail::GpuJpegEncoder> { return nullptr; });
         const auto operation = request.value("operation", "extract");
-        if (operation == "native-preview" || operation == "native-encode" || operation == "native-encode-session" || operation == "native-conversion") {
+        if (operation == "native-preview" || operation == "native-encode" || operation == "native-encode-session" || operation == "native-conversion" || operation == "native-yuv-color") {
             std::cout << runNativeVideoContracts(request).dump() << '\n';
             return 0;
         }
+        if (request.value("cpu_color", false))
+            media::detail::registerGpuJpegFactory(+[](const media::detail::JpegSettings& settings) -> std::unique_ptr<media::detail::GpuJpegEncoder> {
+                auto encoder = io::createStudioJpegEncoder(settings);
+                return encoder ? std::make_unique<HostColorEncoder>(std::move(encoder)) : nullptr;
+            });
         media::IngestRequest input;
         input.input = core::utf8_to_path(request.at("input").get<std::string>());
         input.selection.mode = media::SelectionMode::Interval;
