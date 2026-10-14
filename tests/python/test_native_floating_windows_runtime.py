@@ -47,6 +47,9 @@ class NativeWindowsClient:
         self.user32.SendMessageW.restype = ctypes.c_ssize_t
         self.user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
                                           ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        self.user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+        self.original_cursor = wintypes.POINT()
+        assert self.user32.GetCursorPos(ctypes.byref(self.original_cursor))
         self.rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
                                 "clientInfo": {"name": "native-window-tests", "version": "1"}})
         for uri in ("lichtfeld://runtime/catalog", "lichtfeld://runtime/state", "lichtfeld://ui/state",
@@ -74,6 +77,40 @@ class NativeWindowsClient:
         return result["result"]
 
     def call(self, name, **arguments):
+        if name == "ui_pointer" and name not in self.tools:
+            self._used_native_pointer = True
+            assert arguments.get("button", "left") == "left"
+            # Master has no synthetic-pointer MCP tool. Use real mouse input:
+            # posted messages do not update the physical held-button state used
+            # by drag handoff. Coordinates target this isolated app's main HWND.
+            main = next(window for window in self.windows()
+                        if window["title"].startswith("LichtFeld Studio"))
+            point = wintypes.POINT(int(arguments["x"]), int(arguments["y"]))
+            assert self.user32.ClientToScreen(main["hwnd"], ctypes.byref(point))
+            action = arguments["action"]
+            class MouseInput(ctypes.Structure):
+                _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                            ("mouseData", wintypes.DWORD), ("flags", wintypes.DWORD),
+                            ("time", wintypes.DWORD), ("extra", ctypes.c_size_t)]
+            class InputValue(ctypes.Union):
+                _fields_ = [("mouse", MouseInput)]
+            class Input(ctypes.Structure):
+                _fields_ = [("type", wintypes.DWORD), ("value", InputValue)]
+            self.user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int]
+            if action == "down":
+                self.user32.SetForegroundWindow(main["hwnd"])
+            assert self.user32.SetCursorPos(point.x, point.y)
+            if action == "down":
+                flags = 0x0002  # MOUSEEVENTF_LEFTDOWN
+            elif action == "up":
+                flags = 0x0004  # MOUSEEVENTF_LEFTUP
+            else:
+                assert action == "move", action
+                return {"success": True}
+            packet = Input(0, InputValue(mouse=MouseInput(flags=flags)))
+            assert self.user32.SendInput(1, ctypes.byref(packet), ctypes.sizeof(Input)) == 1
+            self._pointer_buttons = 1 if action == "down" else 0
+            return {"success": True}
         result = self.rpc("tools/call", {"name": name, "arguments": arguments})
         assert not result.get("isError"), result
         if "structuredContent" in result:
@@ -171,7 +208,14 @@ class NativeWindowsClient:
 
 @pytest.fixture(scope="module")
 def native_client():
-    return NativeWindowsClient()
+    client = NativeWindowsClient()
+    try:
+        yield client
+    finally:
+        if getattr(client, "_pointer_buttons", 0):
+            client.call("ui_pointer", action="up", button="left", x=0, y=0)
+        if getattr(client, "_used_native_pointer", False):
+            client.user32.SetCursorPos(client.original_cursor.x, client.original_cursor.y)
 
 
 def test_opening_embedded_panels_does_not_create_desktop_hosts(native_client):
