@@ -165,7 +165,7 @@ namespace lfs::core::image_codecs {
         const auto space = CGImageGetColorSpace(native.get());
         const bool packed10 = source_bits == 10 && bpc == 10 && bpp == 32 &&
                               (bitmap & kCGBitmapByteOrderMask) == kCGBitmapByteOrder32Little &&
-                              (bitmap & kCGBitmapPixelFormatInfoMask) == kCGImagePixelFormatRGB101010 && alpha == kCGImageAlphaNoneSkipFirst;
+                              (bitmap & kCGImagePixelFormatMask) == kCGImagePixelFormatRGB101010 && alpha == kCGImageAlphaNoneSkipFirst;
         const bool rgb8 = source_bits == 8 && bpc == 8 && bpp == 32 &&
                           (bitmap & kCGBitmapByteOrderMask) == kCGBitmapByteOrderDefault && alpha == kCGImageAlphaNoneSkipLast;
         if ((!rgb8 && !packed10) || !space || CGColorSpaceGetModel(space) != kCGColorSpaceModelRGB ||

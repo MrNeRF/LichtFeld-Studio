@@ -149,6 +149,47 @@ available. Linux discovery remains disabled. Full installer qualification,
 hosted CI and older OS versions remain outside these local results. No HEVC
 decoder is added to the bundled libheif configuration.
 
+## Additional local audit
+
+The production Mac entry point decodes the real iPhone photo at 4032x3024.
+Against the separately rendered ImageIO display reference, RGB8 maximum
+difference is one and mean absolute difference is 0.04799. Against the previous
+independent decoder reference the mean is 0.60190 and maximum is 62. These are
+diagnostics for one photo, not acceptance thresholds or universal equivalence.
+A second public sample, `examples/example.heic` from upstream libheif v1.21.2
+(SHA256 `7f8b363e4936c0666a25f64f3a92fda10bd8e5453be4592530b65a55dd98f3f2`),
+decodes at 1280x854 on Windows and Mac. Their mean absolute RGB8 difference is
+0.83824 and maximum is 76. Public photos remain in the private validation dossier,
+not in the committed fixtures. This is still a small real-photo corpus.
+
+An isolated Windows regression compiles the actual private adapter with COM
+factory creation returning `REGDB_E_CLASSNOTREG`. File, borrowed-memory and
+metadata calls fail explicitly without modifying the output. The substitution
+exists only in that test translation unit; production has no global test hook.
+This tests the adapter boundary, not a full loader running on an OS with the
+HEVC extension uninstalled. Extension availability is not changed on the host.
+
+Recursive PE import inspection of the built Windows app resolves 90 dependencies
+with none unresolved and no added libde265/x265/HEVC decoder. The isolated runtime
+stage also passes the existing generated-license coverage check for 78 vcpkg
+ports, including libheif, dav1d and lcms. The audit exposed an existing notice
+generator crash on platform-conditional FFmpeg feature objects; its fix reports
+conditions without reimplementing vcpkg expression evaluation and uses installed
+status for the license. This does not qualify runtime-loaded plugins or a full
+installer payload.
+
+Mac uses SDK 27 for validation and the project deployment target is 26. The
+adapter uses the historical CoreGraphics pixel-format mask name for SDK source
+compatibility. An actual macOS 26 runtime and SDK 26 are not available in this
+workspace, so neither is claimed as tested. Root-cache selection of Homebrew
+OpenJPH and the isolated libheif dependency originally built for 27 were found
+during the deployment audit. The private HEIF dependencies were rebuilt using
+the project's macOS 26 triplet, and the root cache now selects the existing
+vcpkg OpenJPH package. Standalone codec/export and app Metal/Vulkan/discovery
+groups pass again; the codec has no Homebrew OpenJPH runtime dependency and the
+affected builds no longer emit the newer-deployment warnings. This is build
+and dependency validation, not execution on macOS 26.
+
 Sources for API behavior:
 [Microsoft HEIF extension codec](https://learn.microsoft.com/en-us/windows/win32/wic/heif-codec),
 [WIC closest pixel format](https://learn.microsoft.com/en-us/windows/win32/api/wincodec/nf-wincodec-iwicbitmapsourcetransform-getclosestpixelformat),
