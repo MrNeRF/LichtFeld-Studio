@@ -195,7 +195,6 @@ namespace lfs::vis {
             glm::mat3 viewport_gizmo_camera_rotation_before_drag_{1.0f};
             bool viewport_gizmo_camera_snapshot_valid_ = false;
             bool show_viewport_gizmo_ = true;
-            static constexpr float VIEWPORT_GIZMO_SIZE = 95.0f;
             static constexpr float VIEWPORT_GIZMO_MARGIN_X = 10.0f;
             static constexpr float VIEWPORT_GIZMO_MARGIN_Y = 10.0f;
 

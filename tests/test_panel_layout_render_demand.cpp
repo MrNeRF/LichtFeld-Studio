@@ -21,9 +21,9 @@ namespace {
     TEST(ViewportGizmoGeometryTest, SmallScaledPanelsKeepNavigationClearOfTheToolRail) {
         using namespace lfs::vis::gui;
         for (const float scale : {1.0f, 1.5f, 2.0f}) {
-            EXPECT_TRUE(viewportGizmoFits(200.0f * scale, 150.0f * scale, scale));
-            EXPECT_FALSE(viewportGizmoFits(199.0f * scale, 150.0f * scale, scale));
-            EXPECT_FALSE(viewportGizmoFits(200.0f * scale, 149.0f * scale, scale));
+            EXPECT_TRUE(viewportGizmoFits(225.0f * scale, 180.0f * scale, scale));
+            EXPECT_FALSE(viewportGizmoFits(224.0f * scale, 180.0f * scale, scale));
+            EXPECT_FALSE(viewportGizmoFits(225.0f * scale, 179.0f * scale, scale));
             EXPECT_FALSE(viewportGizmoFits(100.0f * scale, 200.0f * scale, scale));
         }
     }

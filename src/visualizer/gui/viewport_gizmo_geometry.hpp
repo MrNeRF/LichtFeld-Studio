@@ -11,6 +11,10 @@
 
 namespace lfs::vis::gui {
 
+    inline constexpr float VIEWPORT_AXIS_WIDGET_SIZE = 120.0f;
+    inline constexpr float VIEWPORT_AXIS_MARKER_RADIUS = 0.18f;
+    inline constexpr float VIEWPORT_AXIS_MARKER_DISTANCE = 0.73f;
+
     struct ViewportGizmoMarker {
         int encoded_axis = -1;
         glm::vec2 screen_pos{0.0f};
@@ -45,7 +49,7 @@ namespace lfs::vis::gui {
         // Reserve room beside the two-column tool rail and below the axis widget
         // for its home/focus controls. Hidden widgets must not capture input.
         const float dpi = std::max(scale, 1.0f);
-        return width >= 200.0f * dpi && height >= 150.0f * dpi;
+        return width >= 225.0f * dpi && height >= 180.0f * dpi;
     }
 
 } // namespace lfs::vis::gui
