@@ -273,12 +273,24 @@ namespace lfs::vis::gui {
         rml_context_->Update();
         // data-for reuses options by index and data-value can write a stale
         // option back during that update. Keep the owner's selection authoritative.
+        bool corrected = false;
         if (active_tab_ != selected_tab_) {
             active_tab_ = selected_tab_;
             tab_model_.DirtyVariable("active_tab");
+            corrected = true;
         }
-        if (tab_picker_el_ && tab_picker_el_->GetValue() != selected_tab_)
-            tab_picker_el_->SetValue(selected_tab_);
+        if (tab_picker_el_) {
+            const auto* option = tab_picker_el_->GetOption(tab_picker_el_->GetSelection());
+            if (tab_picker_el_->GetValue() != selected_tab_ ||
+                !option || option->GetAttribute<Rml::String>("value", "") != selected_tab_) {
+                tab_picker_el_->SetValue(selected_tab_);
+                corrected = true;
+            }
+        }
+        // Publish the corrected value to the strip in this frame, without
+        // allowing programmatic changes to become user picks.
+        if (corrected)
+            rml_context_->Update();
         syncing_tab_picker_ = false;
     }
 
@@ -682,7 +694,7 @@ namespace lfs::vis::gui {
                                      layout.splitter_h != last_splitter_h_);
         const bool tabs_changed = syncTabData(tabs, active_tab);
 
-        const bool tooltip_changed = tooltip_.apply(document_->GetElementById("rp-body"),
+        const bool tooltip_changed = tooltip_.apply(document_,
                                                     static_cast<int>(prev_mouse_x_ - layout.pos.x),
                                                     static_cast<int>(prev_mouse_y_ - layout.pos.y), w, h);
         rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.hasActiveState());

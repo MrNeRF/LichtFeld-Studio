@@ -21,7 +21,6 @@ namespace lfs::vis::gui {
         static void sync(RmlRightPanel& panel, const std::vector<TabSnapshot>& tabs, const std::string& active) {
             panel.syncTabData(tabs, active);
             panel.updateTabModel();
-            panel.updateTabModel();
         }
         static bool tooltipPending(const RmlRightPanel& panel) { return panel.tooltip_.needsFrame(); }
         static std::string active(const RmlRightPanel& panel) { return panel.active_tab_; }
@@ -56,7 +55,7 @@ namespace {
             ASSERT_NE(context, nullptr);
             RmlRightPanelTestAccess::bind(panel, context);
             auto* doc = context->LoadDocumentFromMemory(
-                "<rml><body data-model='right_panel_tabs'><select id='tab-picker' data-value='active_tab' data-event-change='pick_tab'>"
+                "<rml><body data-model='right_panel_tabs'><div id='tab-strip'><div class='tab' data-for='tab : tabs' data-attr-id='tab.dom_id' data-class-active='tab.id == active_tab'>{{tab.label}}</div></div><select id='tab-picker' data-value='active_tab' data-event-change='pick_tab'>"
                 "<option data-for='tab : tabs' data-attr-value='tab.id'>{{tab.label}}</option></select></body></rml>");
             ASSERT_NE(doc, nullptr);
             RmlRightPanelTestAccess::attach(panel, doc);
@@ -73,7 +72,7 @@ namespace {
         static std::vector<TabSnapshot> tabs(std::initializer_list<const char*> ids) {
             std::vector<TabSnapshot> result;
             for (const char* id : ids)
-                result.push_back({.id = id, .label = id});
+                result.push_back({.id = id, .label = id, .dom_id = std::string("tab-") + id});
             return result;
         }
     };
@@ -85,8 +84,10 @@ namespace {
         RightPanelLayout layout;
         layout.size = {400, 600};
         PanelInputState input;
-        input.mouse_x = 8;
-        input.mouse_y = 8;
+        const auto position = picker->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = picker->GetBox().GetSize(Rml::BoxArea::Border);
+        input.mouse_x = position.x + size.x * 0.5f;
+        input.mouse_y = position.y + size.y * 0.5f;
         panel.processInput(layout, input);
         EXPECT_TRUE(RmlRightPanelTestAccess::tooltipPending(panel));
         picker->Click();
@@ -101,8 +102,31 @@ namespace {
             RmlRightPanelTestAccess::sync(panel, tabs({"A", "C", "D"}), active);
             EXPECT_EQ(picker->GetValue(), active);
             EXPECT_EQ(RmlRightPanelTestAccess::active(panel), active);
+            auto* strip = context->GetDocument(0)->GetElementById("tab-strip");
+            int highlighted = 0;
+            for (int i = 0; i < strip->GetNumChildren(); ++i) {
+                auto* tab = strip->GetChild(i);
+                if (tab->IsClassSet("active")) {
+                    ++highlighted;
+                    EXPECT_EQ(tab->GetId(), "tab-" + active);
+                }
+            }
+            EXPECT_EQ(highlighted, 1);
             EXPECT_TRUE(picks.empty());
         }
+    }
+
+    TEST_F(RightPanelTabPickerTest, ReorderingPreservesTheCheckedOptionAndNextUserPick) {
+        RmlRightPanelTestAccess::sync(panel, tabs({"A", "B", "C", "D"}), "A");
+        picker->Focus();
+        picker->Click();
+        RmlRightPanelTestAccess::sync(panel, tabs({"B", "A", "C", "D"}), "A");
+        ASSERT_NE(picker->GetOption(picker->GetSelection()), nullptr);
+        EXPECT_EQ(picker->GetOption(picker->GetSelection())->GetAttribute<Rml::String>("value", ""), "A");
+        EXPECT_TRUE(picks.empty());
+        context->ProcessKeyDown(Rml::Input::KI_DOWN, 0);
+        ASSERT_EQ(picks.size(), 1);
+        EXPECT_EQ(picks.front(), "C");
     }
 
     TEST_F(RightPanelTabPickerTest, InsertingEarlierTabPreservesActiveSelection) {
