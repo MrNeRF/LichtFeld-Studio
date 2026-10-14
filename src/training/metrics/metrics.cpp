@@ -15,6 +15,7 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
+#include "eval_image_labels.hpp"
 #include "eval_mask.hpp"
 #include "flip.cuh"
 #include "io/filesystem_utils.hpp"
@@ -2048,6 +2049,22 @@ namespace lfs::training {
                 const auto metadata = lfs::core::provenance_to_json(stamp);
                 auto gt_vis = image_as_float01(gt_image);
                 auto render_vis = r_output.image;
+                const size_t C = gt_vis.shape()[0], H = gt_vis.shape()[1], W = gt_vis.shape()[2];
+                const int tile_width = static_cast<int>(W);
+                const int band_height = caption_band_height(static_cast<int>(H));
+                const auto gap_column = lfs::core::Tensor::full({C, H, 4}, 1.0f, gt_vis.device());
+                const auto captioned_row = [&](const lfs::core::Tensor& left, const lfs::core::Tensor& right,
+                                               const std::string_view pixels) {
+                    const auto caption = [pixels](const std::string& image) {
+                        return pixels.empty() ? image : std::format("{}, {}", image, pixels);
+                    };
+                    const std::array captions{ImageCaption{0, caption(source.image_labels[0])},
+                                              ImageCaption{tile_width + 4, caption(source.image_labels[1])}};
+                    return lfs::core::Tensor::cat({caption_band(captions, 2 * tile_width + 4, band_height),
+                                                   lfs::core::Tensor::cat({left, gap_column, right}, 2)},
+                                                  1);
+                };
+                lfs::core::Tensor grid;
                 if (user_mask_applied) {
                     // Rows: as rendered, with the mask applied, with the inverted mask applied inside the valid view.
                     assert(mask.is_valid() && mask.ndim() == 2);
@@ -2056,18 +2073,14 @@ namespace lfs::training {
                                                                     : lfs::core::Tensor::full(scored.shape(), 1.0f,
                                                                                               scored.device());
                     const auto left_out = (scored * -1.0f + 1.0f) * valid;
-                    const size_t C = gt_vis.shape()[0], H = gt_vis.shape()[1], W = gt_vis.shape()[2];
-                    const auto gap_column = lfs::core::Tensor::full({C, H, 4}, 1.0f, gt_vis.device());
                     const auto gap_row = lfs::core::Tensor::full({C, 4, 2 * W + 4}, 1.0f, gt_vis.device());
-                    const auto row = [&](const lfs::core::Tensor& weight) {
+                    const auto row = [&](const lfs::core::Tensor& weight, const std::string_view pixels) {
                         const auto w = weight.unsqueeze(0).expand({(int)C, (int)H, (int)W});
-                        return lfs::core::Tensor::cat({gt_vis * w, gap_column, render_vis * w}, 2);
+                        return captioned_row(gt_vis * w, render_vis * w, pixels);
                     };
-                    const auto as_rendered = lfs::core::Tensor::cat({gt_vis, gap_column, render_vis}, 2);
-                    lfs::core::image_io::save_image_async(
-                        eval_dir / (stem + ".png"),
-                        lfs::core::Tensor::cat({as_rendered, gap_row, row(scored), gap_row, row(left_out)}, 1).contiguous(),
-                        metadata);
+                    grid = lfs::core::Tensor::cat({captioned_row(gt_vis, render_vis, "Unmasked"), gap_row,
+                                                   row(scored, "Mask"), gap_row, row(left_out, "Inverted")},
+                                                  1);
                 } else {
                     if (mask.is_valid()) {
                         const auto mask_3d = mask_as_float01(mask).unsqueeze(0).expand(
@@ -2075,11 +2088,9 @@ namespace lfs::training {
                         gt_vis = gt_vis * mask_3d;
                         render_vis = render_vis * mask_3d;
                     }
-                    lfs::core::image_io::save_images_async(eval_dir / (stem + ".png"), {gt_vis.clone(), render_vis.clone()},
-                                                           true, // horizontal
-                                                           4,    // separator width
-                                                           metadata);
+                    grid = captioned_row(gt_vis, render_vis, "");
                 }
+                lfs::core::image_io::save_image_async(eval_dir / (stem + ".png"), grid.contiguous(), metadata);
                 if (flip_map.is_valid()) {
                     lfs::core::image_io::save_image_async(
                         eval_dir / (stem + "_flip.png"),

@@ -15,6 +15,7 @@
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
 #include "training/dataset.hpp"
+#include "training/metrics/eval_image_labels.hpp"
 #include "training/metrics/eval_mask.hpp"
 #include "training/metrics/metrics.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -34,6 +35,7 @@
 #include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <numeric>
 #include <random>
 #include <string>
 #include <thread>
@@ -550,19 +552,21 @@ TEST(MetricsEvaluator, MaskedEvaluationSavesGridNamedAfterTheCamera) {
         EXPECT_FALSE(std::filesystem::exists(dir / "_DSC8679_unmasked.png"));
         EXPECT_FALSE(std::filesystem::exists(dir / "_DSC8679_metric_mask.png"));
         const auto saved = read_rgb(dir / "_DSC8679.png");
+        const int band = lfs::training::caption_band_height(height);
         ASSERT_EQ(saved.width, 2 * width + 4);
-        ASSERT_EQ(saved.height, masked ? 3 * height + 8 : height);
+        ASSERT_EQ(saved.height, masked ? 3 * (band + height) + 8 : band + height);
         if (!masked)
             continue;
 
         // Every pixel shows in exactly one of the two lower rows, unchanged, and the box splits the view.
+        const auto row_top = [&](const int row) { return row * (band + height + 4) + band; };
         size_t inside = 0, outside = 0, mismatches = 0;
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
                 for (const int half : {0, width + 4}) {
-                    const uint8_t* rendered = saved.at(half + x, y);
-                    const uint8_t* applied = saved.at(half + x, y + height + 4);
-                    const uint8_t* inverted = saved.at(half + x, y + 2 * (height + 4));
+                    const uint8_t* rendered = saved.at(half + x, y + row_top(0));
+                    const uint8_t* applied = saved.at(half + x, y + row_top(1));
+                    const uint8_t* inverted = saved.at(half + x, y + row_top(2));
                     const bool in_applied = applied[0] | applied[1] | applied[2];
                     const bool in_inverted = inverted[0] | inverted[1] | inverted[2];
                     inside += in_applied;
@@ -578,6 +582,51 @@ TEST(MetricsEvaluator, MaskedEvaluationSavesGridNamedAfterTheCamera) {
         EXPECT_EQ(mismatches, 0u);
     }
     std::filesystem::remove_all(tmp);
+}
+
+// Catches captions drawn outside the band's middle, a long caption running into the next tile's caption, and a missing
+// font that changes the band's size instead of leaving it empty.
+TEST(EvalImageCaptions, TextStaysInItsTileAndAMissingFontLeavesTheBandEmpty) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    const int height = lfs::training::caption_band_height(1000);
+    ASSERT_EQ(height, 50);
+    const auto font = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/assets/fonts/Inter-SemiBold.ttf";
+    const auto text_columns = [height](const std::vector<float>& band, const int width) {
+        std::vector<int> columns(static_cast<size_t>(width), 0);
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x)
+                columns[x] += band[static_cast<size_t>(y) * width + x] > band[0] + 0.25f;
+        return columns;
+    };
+
+    constexpr int kWide = 804;
+    const std::array wide{lfs::training::ImageCaption{0, "Ground Truth, Mask"},
+                          lfs::training::ImageCaption{404, "Render, Mask"}};
+    const auto band = lfs::training::caption_band(wide, kWide, height, font).cpu().to_vector();
+    ASSERT_EQ(band.size(), static_cast<size_t>(3 * height * kWide));
+    const auto wide_columns = text_columns(band, kWide);
+    EXPECT_GT(std::accumulate(wide_columns.begin(), wide_columns.begin() + 404, 0), 300);
+    EXPECT_GT(std::accumulate(wide_columns.begin() + 404, wide_columns.end(), 0), 300);
+    for (int y : {0, 1, height - 2, height - 1})
+        for (int x = 0; x < kWide; ++x)
+            ASSERT_EQ(band[static_cast<size_t>(y) * kWide + x], band[0]) << x << "," << y;
+
+    constexpr int kNarrow = 244;
+    const std::array narrow{lfs::training::ImageCaption{0, "Ground Truth, Inverted"},
+                            lfs::training::ImageCaption{122, "Render, Inverted"}};
+    const auto clipped = text_columns(lfs::training::caption_band(narrow, kNarrow, height, font).cpu().to_vector(),
+                                      kNarrow);
+    EXPECT_GT(std::accumulate(clipped.begin(), clipped.begin() + 100, 0), 100);
+    EXPECT_EQ(std::accumulate(clipped.begin() + 107, clipped.begin() + 137, 0), 0);
+    EXPECT_GT(std::accumulate(clipped.begin() + 137, clipped.end(), 0), 100);
+
+    const auto empty = lfs::training::caption_band(wide, kWide, height, font.parent_path() / "missing.ttf")
+                           .cpu()
+                           .to_vector();
+    ASSERT_EQ(empty.size(), band.size());
+    EXPECT_TRUE(std::ranges::all_of(empty, [&band](const float value) { return value == band[0]; }));
 }
 
 // Catches extra pixel sets that score anything but the evaluations they stand for: an unmasked set that keeps the mask

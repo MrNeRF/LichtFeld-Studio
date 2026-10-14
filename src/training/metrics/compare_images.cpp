@@ -465,7 +465,8 @@ namespace lfs::training {
                 return loaded;
             },
             .warp_supersample = 1,
-            .image_dir = image_dir};
+            .image_dir = image_dir,
+            .image_labels = {"Ground Truth", "Test"}};
         result.metrics = evaluator.evaluate_views(0, dataset, source, background, loader.get());
         for (const auto& [path, text] : {std::pair{report_path, format_compare_report(params, result)},
                                          std::pair{json_path, compare_json(params, result).dump(2)}}) {
