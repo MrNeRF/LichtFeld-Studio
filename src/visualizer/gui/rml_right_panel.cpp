@@ -24,6 +24,24 @@
 
 namespace lfs::vis::gui {
 
+    namespace {
+        std::optional<RmlRect> tabPickerPopupBounds(Rml::ElementDocument* document) {
+            auto* picker = document ? dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("tab-picker")) : nullptr;
+            if (!picker || !picker->IsSelectBoxVisible())
+                return std::nullopt;
+            for (int i = 0; i < picker->GetNumChildren(true); ++i) {
+                auto* child = picker->GetChild(i);
+                if (child->GetTagName() != "selectbox")
+                    continue;
+                const auto position = child->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto size = child->GetBox().GetSize(Rml::BoxArea::Border);
+                if (size.x > 0 && size.y > 0)
+                    return RmlRect{position.x, position.y, position.x + size.x, position.y + size.y};
+            }
+            return std::nullopt;
+        }
+    } // namespace
+
     void RmlRightPanel::init(RmlUIManager* mgr) {
         assert(mgr);
         rml_manager_ = mgr;
@@ -625,7 +643,8 @@ namespace lfs::vis::gui {
         if (rml_manager_) {
             rml_manager_->trackContextFrame(rml_context_,
                                             static_cast<int>(layout.pos.x - screen_x),
-                                            static_cast<int>(layout.pos.y - screen_y));
+                                            static_cast<int>(layout.pos.y - screen_y),
+                                            tabPickerPopupBounds(document_));
         }
 
         const bool theme_changed = updateTheme();
@@ -721,7 +740,8 @@ namespace lfs::vis::gui {
             .draw_height = static_cast<float>(h),
             .refresh = needs_render || direct_cache_.texture == 0 ||
                        direct_cache_.width != w || direct_cache_.height != h,
-            .foreground = false,
+            // The picker overlaps the independently rendered active panel.
+            .foreground = tabPickerPopupBounds(document_).has_value(),
             .clip_enabled = true,
             .clip = {
                 .x1 = x,
