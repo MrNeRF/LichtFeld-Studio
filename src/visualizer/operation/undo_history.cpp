@@ -1081,7 +1081,7 @@ namespace lfs::vis::op {
     std::optional<UndoEntryDescription> UndoHistory::describeItem(const bool undo_direction, const size_t steps, const uint64_t generation) const {
         std::lock_guard lock(mutex_);
         const auto& stack = undo_direction ? undo_stack_ : redo_stack_;
-        if (generation != generation_.load(std::memory_order_acquire) || steps == 0 || steps > stack.size())
+        if (playback_depth_ > 0 || generation != generation_.load(std::memory_order_acquire) || steps == 0 || steps > stack.size())
             return std::nullopt;
         const auto& entry = stack[stack.size() - steps];
         return UndoEntryDescription{entry->metadata(), entry->transformDetails(), entry->detailFields()};

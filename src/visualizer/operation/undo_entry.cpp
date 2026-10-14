@@ -5,6 +5,7 @@
 #include "undo_entry.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "gui/gui_manager.hpp"
@@ -946,6 +947,7 @@ namespace lfs::vis::op {
             std::vector<PreparedRestoreNode> nodes;
             lfs::core::SplatTensorAllocator combined_model_allocator;
             lfs::core::Scene::PerNodeSelectionSlices selection_slices;
+            lfs::core::Scene::PerNodeSelectionSlices point_cloud_selection_slices;
             bool restores_deferred_payload = false;
         };
 
@@ -971,18 +973,18 @@ namespace lfs::vis::op {
             return result;
         }
 
-        bool snapshotContainsSplat(const SceneGraphNodeSnapshot& snapshot) {
-            if (snapshot.type == lfs::core::NodeType::SPLAT) {
+        bool snapshotContainsType(const SceneGraphNodeSnapshot& snapshot, const lfs::core::NodeType type) {
+            if (snapshot.type == type) {
                 return true;
             }
-            return std::ranges::any_of(snapshot.children, [](const auto& child) {
-                return snapshotContainsSplat(child);
+            return std::ranges::any_of(snapshot.children, [type](const auto& child) {
+                return snapshotContainsType(child, type);
             });
         }
 
-        bool snapshotStateContainsSplat(const SceneGraphStateSnapshot& state) {
-            return std::ranges::any_of(state.roots, [](const auto& root) {
-                return snapshotContainsSplat(root);
+        bool snapshotStateContainsType(const SceneGraphStateSnapshot& state, const lfs::core::NodeType type) {
+            return std::ranges::any_of(state.roots, [type](const auto& root) {
+                return snapshotContainsType(root, type);
             });
         }
 
@@ -1137,10 +1139,10 @@ namespace lfs::vis::op {
                                         !existing || existing->type != snapshot.type);
 
                 if (snapshot.selection_slice) {
-                    if (snapshot.type != lfs::core::NodeType::SPLAT) {
+                    if (snapshot.type != lfs::core::NodeType::SPLAT && snapshot.type != lfs::core::NodeType::POINTCLOUD) {
                         throw HistoryCorruptionError(
                             "Cannot restore scene node '" + snapshot.name +
-                            "': non-SPLAT snapshot has a selection slice");
+                            "': snapshot type does not support selection slices");
                     }
                     if (!snapshot.selection_slice->is_valid()) {
                         throw HistoryCorruptionError(
@@ -1148,7 +1150,8 @@ namespace lfs::vis::op {
                             "': selection slice is invalid");
                     }
                     try {
-                        const auto [slice_it, inserted] = plan.selection_slices.emplace(
+                        auto& slices = snapshot.type == lfs::core::NodeType::POINTCLOUD ? plan.point_cloud_selection_slices : plan.selection_slices;
+                        const auto [slice_it, inserted] = slices.emplace(
                             snapshot.uuid, snapshot.selection_slice->clone());
                         (void)slice_it;
                         if (!inserted) {
@@ -3610,22 +3613,24 @@ namespace lfs::vis::op {
             }
         }
 
-        const std::function<bool(const lfs::core::SceneNode&)> tree_contains_splat =
-            [&](const lfs::core::SceneNode& node) {
-                if (node.type == lfs::core::NodeType::SPLAT) {
-                    return true;
-                }
-                return std::ranges::any_of(node.children, [&](const lfs::core::NodeId child_id) {
-                    const auto* child = scene.getNodeById(child_id);
-                    return child && tree_contains_splat(*child);
-                });
-            };
-
+        const auto tree_contains_type = [&](const auto& self, const lfs::core::SceneNode& node,
+                                            const lfs::core::NodeType type) -> bool {
+            if (node.type == type)
+                return true;
+            return std::ranges::any_of(node.children, [&](const lfs::core::NodeId child_id) {
+                const auto* child = scene.getNodeById(child_id);
+                return child && self(self, *child, type);
+            });
+        };
         lfs::core::Scene::PerNodeSelectionSlices selection_slices;
-        if (std::ranges::any_of(root_nodes, [&](const auto* root) {
-                return root && tree_contains_splat(*root);
-            })) {
-            selection_slices = scene.capturePerNodeSelectionSlices();
+        for (const auto [type, domain] : {std::pair{lfs::core::NodeType::SPLAT, lfs::core::SelectionDomain::Splat},
+                                        std::pair{lfs::core::NodeType::POINTCLOUD, lfs::core::SelectionDomain::PointCloud}}) {
+            if (std::ranges::any_of(root_nodes, [&](const auto* root) {
+                    return root && tree_contains_type(tree_contains_type, *root, type);
+                })) {
+                auto slices = scene.capturePerNodeSelectionSlices(domain);
+                selection_slices.merge(slices);
+            }
         }
 
         std::unordered_set<lfs::core::Uuid> payload_uuids;
@@ -3700,7 +3705,7 @@ namespace lfs::vis::op {
         for (const auto& root : desired.roots)
             collectSnapshotUuids(root, desired_uuids);
         const bool translates_selection =
-            snapshotStateContainsSplat(desired) || snapshotStateContainsSplat(current);
+            snapshotStateContainsType(desired, lfs::core::NodeType::SPLAT) || snapshotStateContainsType(current, lfs::core::NodeType::SPLAT);
         lfs::core::Scene::PerNodeSelectionSlices selection_slices;
         if (translates_selection) {
             selection_slices = scene.capturePerNodeSelectionSlices();
@@ -3710,6 +3715,20 @@ namespace lfs::vis::op {
             for (auto& [uuid, slice] : restore_plan.selection_slices) {
                 selection_slices.insert_or_assign(uuid, std::move(slice));
             }
+        }
+
+        const bool translates_point_selection =
+            snapshotStateContainsType(desired, lfs::core::NodeType::POINTCLOUD) ||
+            snapshotStateContainsType(current, lfs::core::NodeType::POINTCLOUD);
+        lfs::core::Scene::PerNodeSelectionSlices point_selection_slices;
+        if (translates_point_selection) {
+            point_selection_slices = scene.capturePerNodeSelectionSlices(lfs::core::SelectionDomain::PointCloud);
+            // Absent recorded slices mean no selection on those restored nodes.
+            // Keep live slices only for nodes outside the patch.
+            std::erase_if(point_selection_slices, [&](const auto& item) {
+                return uuids_to_remove.contains(item.first) || desired_uuids.contains(item.first);
+            });
+            point_selection_slices.merge(restore_plan.point_cloud_selection_slices);
         }
 
         {
@@ -3768,6 +3787,9 @@ namespace lfs::vis::op {
 
             if (translates_selection) {
                 scene.applyPerNodeSelectionSlices(selection_slices);
+            }
+            if (translates_point_selection) {
+                scene.applyPerNodeSelectionSlices(lfs::core::SelectionDomain::PointCloud, point_selection_slices);
             }
         }
         scene.invalidateTransformCache();
@@ -3941,7 +3963,7 @@ namespace lfs::vis::op {
         if (value.type() == typeid(const char*))
             return std::any_cast<const char*>(value);
         if (value.type() == typeid(std::filesystem::path))
-            return std::any_cast<const std::filesystem::path&>(value).string();
+            return lfs::core::path_to_utf8(std::any_cast<const std::filesystem::path&>(value));
         std::ostringstream out;
         out.imbue(std::locale::classic());
         out << std::setprecision(7);
@@ -4027,7 +4049,8 @@ namespace lfs::vis::op {
             appendChanged(result, target, "locked", before.locked, after.locked);
             appendChanged(result, target, "training_enabled", before.training_enabled, after.training_enabled);
             appendChanged(result, target, "order", before.order_index, after.order_index);
-            appendChanged(result, target, "source_path", before.source_path ? before.source_path->string() : std::string{}, after.source_path ? after.source_path->string() : std::string{});
+            if (before.source_path != after.source_path)
+                appendChanged(result, target, "source_path", before.source_path ? lfs::core::path_to_utf8(*before.source_path) : std::string{}, after.source_path ? lfs::core::path_to_utf8(*after.source_path) : std::string{});
         }
         UndoTransformDetail transformDetail(const std::string& target, const glm::mat4& before, const glm::mat4& after) {
             UndoTransformDetail result{.target = target, .before = {}, .after = {}};

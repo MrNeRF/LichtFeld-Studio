@@ -6,6 +6,7 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
@@ -4407,4 +4408,93 @@ TEST_F(UndoHistoryTest, PointCloudCropHandlesEmptyNoopLockedAndMixedTargets) {
     ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
     EXPECT_EQ(manager->getScene().getNode("cloud")->point_cloud->size(), 1);
     EXPECT_EQ(manager->getScene().getNode("splat")->model->visible_count(), 1u);
+}
+
+TEST_F(UndoHistoryTest, PointCloudCropRemapsSelectionAndUndoPreservesUnaffectedClouds) {
+    using lfs::core::SelectionDomain;
+    for (const bool ellipsoid : {false, true}) {
+        for (const int crop_case : {0, 1, 2}) {
+            const bool inverse = crop_case == 1;
+            const bool empty = crop_case == 2;
+            auto manager = std::make_unique<lfs::vis::SceneManager>();
+            lfs::vis::services().set(manager.get());
+            auto& scene = manager->getScene();
+            const auto cloud = scene.addPointCloud("crop", std::make_shared<lfs::core::PointCloud>(
+                Tensor::from_vector({0.f, 0.f, 0.f, 2.f, 0.f, 0.f, 3.f, 0.f, 0.f}, {3, 3}, Device::CUDA),
+                Tensor::ones({3, 3}, Device::CUDA)));
+            scene.addPointCloud("unaffected", std::make_shared<lfs::core::PointCloud>(
+                Tensor::zeros({2, 3}, Device::CUDA), Tensor::ones({2, 3}, Device::CUDA)));
+            const std::vector<uint8_t> before{0, 1, 1, 1, 0};
+            scene.setSelectionMask(SelectionDomain::PointCloud, std::make_shared<Tensor>(make_uint8_mask(before)));
+            if (ellipsoid) {
+                auto world_transform = glm::mat4(1.f);
+                if (empty)
+                    world_transform[3].x = 10.f;
+                lfs::core::events::cmd::CropPLYEllipsoid{.world_transform = world_transform, .radii = glm::vec3(.5f), .inverse = inverse, .target_node_id = cloud}.emit();
+            } else {
+                lfs::geometry::BoundingBox box;
+                box.setBounds(glm::vec3(empty ? 10.f : -.5f), glm::vec3(empty ? 11.f : .5f));
+                lfs::core::events::cmd::CropPLY{.crop_box = box, .inverse = inverse, .target_node_id = cloud}.emit();
+            }
+            const std::vector<uint8_t> after = empty ? std::vector<uint8_t>{1, 0} : inverse ? std::vector<uint8_t>{1, 1, 1, 0} : std::vector<uint8_t>{0, 1, 0};
+            auto selection = [&] { return scene.getSelectionMask(SelectionDomain::PointCloud)->cpu().to_vector_uint8(); };
+            EXPECT_EQ(selection(), after);
+            ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+            EXPECT_EQ(selection(), before);
+            ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+            EXPECT_EQ(selection(), after);
+            lfs::vis::op::undoHistory().clear();
+            lfs::vis::services().clear();
+            lfs::core::event::bus().clear_all();
+            lfs::event::EventBridge::instance().clear_all();
+        }
+    }
+}
+
+TEST_F(UndoHistoryTest, DeleteDetailsExcludeSelectionsOnHiddenNodes) {
+    lfs::vis::SceneManager manager;
+    lfs::vis::services().set(&manager);
+    auto& scene = manager.getScene();
+    scene.addSplat("visible", make_linear_test_splat(3));
+    scene.addSplat("hidden", make_linear_test_splat(2));
+    scene.setNodeVisibility("hidden", false);
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({1, 0, 0, 1, 1})));
+    ASSERT_TRUE(manager.deleteSelectedGaussiansWithHistory().has_value());
+    auto description = lfs::vis::op::undoHistory().describeItem(true, 1, lfs::vis::op::undoHistory().generation());
+    ASSERT_TRUE(description);
+    const auto field = std::ranges::find_if(description->fields, [](const auto& item) { return item.property == "history.field.affected_gaussians"; });
+    ASSERT_NE(field, description->fields.end());
+    EXPECT_EQ(field->after, "1");
+    EXPECT_EQ(scene.getNode("hidden")->model->visible_count(), 2u);
+}
+
+TEST_F(UndoHistoryTest, DetailPathsKeepNonAsciiUtf8) {
+    using lfs::core::utf8_to_path;
+    const std::string text = "scenes/日本語/é.lod";
+    EXPECT_EQ(lfs::vis::op::historyDetailValue(utf8_to_path(text)), text);
+}
+
+TEST_F(UndoHistoryTest, ConcurrentDetailLookupRejectsPlaybackBeforeGenerationChanges) {
+    auto& history = lfs::vis::op::undoHistory();
+    int value = 0;
+    history.push(std::make_unique<CountingEntry>("Older edit", value, 1));
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool started = false, released = false;
+    history.push(std::make_unique<BlockingUndoEntry>(mutex, cv, started, released));
+    const auto generation = history.generation();
+    auto playback = std::async(std::launch::async, [&] { return history.undo(); });
+    {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [&] { return started; });
+    }
+    EXPECT_EQ(history.generation(), generation);
+    EXPECT_FALSE(history.describeItem(true, 1, generation));
+    {
+        std::lock_guard lock(mutex);
+        released = true;
+    }
+    cv.notify_all();
+    EXPECT_TRUE(playback.get().success);
+    EXPECT_TRUE(history.describeItem(true, 1, history.generation()));
 }

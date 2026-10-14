@@ -4095,8 +4095,12 @@ namespace lfs::vis {
                     payload_uuids.push_back(volume->uuid);
                 history_options.payload_uuids = payload_uuids;
                 auto history_before = op::SceneGraphPatchEntry::captureStateByIds(*this, {node->id}, history_options);
+                auto point_selection = scene_.capturePerNodeSelectionSlices(core::SelectionDomain::PointCloud);
+                if (auto selected = point_selection.find(node->uuid); selected != point_selection.end())
+                    selected->second = selected->second.index_select(0, indices.to(selected->second.device()));
                 node->point_cloud = std::move(filtered);
                 node->gaussian_count.store(filtered_count, std::memory_order_release);
+                scene_.applyPerNodeSelectionSlices(core::SelectionDomain::PointCloud, point_selection);
                 scene_.markPayloadDiverged(node->id);
 
                 LOG_INFO("Cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
@@ -4281,8 +4285,12 @@ namespace lfs::vis {
                     payload_uuids.push_back(volume->uuid);
                 history_options.payload_uuids = payload_uuids;
                 auto history_before = op::SceneGraphPatchEntry::captureStateByIds(*this, {node->id}, history_options);
+                auto point_selection = scene_.capturePerNodeSelectionSlices(core::SelectionDomain::PointCloud);
+                if (auto selected = point_selection.find(node->uuid); selected != point_selection.end())
+                    selected->second = selected->second.index_select(0, indices.to(selected->second.device()));
                 node->point_cloud = std::move(filtered);
                 node->gaussian_count.store(filtered_count, std::memory_order_release);
+                scene_.applyPerNodeSelectionSlices(core::SelectionDomain::PointCloud, point_selection);
                 scene_.markPayloadDiverged(node->id);
                 pushSceneGraphHistoryEntryByIds(*this, "Crop Ellipsoid", std::move(history_before),
                                                 {node->id}, history_options, payload_uuids);
@@ -6092,6 +6100,7 @@ namespace lfs::vis {
                 }
 
                 const size_t selected_count = plan.selection_mask.slice(0, offset, node_end).count_nonzero();
+                plan.selected_count += selected_count;
                 if (selected_count == node_size) {
                     plan.removed_node_names.push_back(node->name);
                 } else if (selected_count > 0) {
@@ -6113,7 +6122,8 @@ namespace lfs::vis {
             }
         }
 
-        plan.selected_count = plan.selection_mask.count_nonzero();
+        if (plan.consolidated)
+            plan.selected_count = plan.selection_mask.count_nonzero();
         if (plan.selected_count == 0) {
             return std::unexpected("Nothing selected");
         }

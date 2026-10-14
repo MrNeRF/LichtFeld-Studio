@@ -175,3 +175,12 @@ def test_invalid_python_history_details_do_not_push(lf, details, exception):
     with pytest.raises(exception):
         lf.undo.push("Custom edit", lambda: None, lambda: None, details=details)
     assert not lf.undo.can_undo()
+
+
+def test_detail_lookup_rejects_displayed_generation_during_playback(lf):
+    seen = []
+    lf.undo.push("Older edit", lambda: None, lambda: None)
+    lf.undo.push("Newer edit", lambda: seen.append(lf.undo.details("undo", 1, generation)), lambda: None)
+    generation = lf.undo.generation()
+    assert lf.undo.undo()
+    assert seen == [None]

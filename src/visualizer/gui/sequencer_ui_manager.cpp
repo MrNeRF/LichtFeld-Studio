@@ -59,10 +59,10 @@ namespace lfs::vis::gui {
 
         std::string historyEasing(const sequencer::EasingType easing) {
             switch (easing) {
-            case sequencer::EasingType::LINEAR: return "history.value.linear";
-            case sequencer::EasingType::EASE_IN: return "history.value.ease_in";
-            case sequencer::EasingType::EASE_OUT: return "history.value.ease_out";
-            case sequencer::EasingType::EASE_IN_OUT: return "history.value.ease_in_out";
+            case sequencer::EasingType::LINEAR: return "@tr:history.value.linear";
+            case sequencer::EasingType::EASE_IN: return "@tr:history.value.ease_in";
+            case sequencer::EasingType::EASE_OUT: return "@tr:history.value.ease_out";
+            case sequencer::EasingType::EASE_IN_OUT: return "@tr:history.value.ease_in_out";
             }
             return std::to_string(static_cast<int>(easing));
         }
