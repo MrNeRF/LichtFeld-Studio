@@ -5,7 +5,7 @@
 
 #include "core/provenance.hpp"
 #include "io/video/video_reconstruction.hpp"
-#include "media/video_encode_session.hpp"
+#include "media/video_encode_codec.hpp"
 #include "media/video_output_extent.hpp"
 
 #include <cstdint>

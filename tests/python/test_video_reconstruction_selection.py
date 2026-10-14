@@ -27,6 +27,11 @@ def test_invalid_selection_raises_value_error_before_accessing_viewer(lf, backen
         lf.ui.set_video_reconstruction_selection(backend, preset, fallback)
 
 
+def test_invalid_video_codec_raises_value_error_before_accessing_viewer(lf):
+    with pytest.raises(ValueError, match="codec"):
+        lf.ui.export_video(1920, 1080, 30, 18, "unused.mp4", codec="h265")
+
+
 def test_unavailable_viewer_is_reported_without_dispatching_export(lf):
     try:
         lf.ui.get_video_reconstruction_selection()
