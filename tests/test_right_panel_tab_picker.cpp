@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/panel_layout.hpp"
 #include "gui/rml_right_panel.hpp"
 #include "gui/rmlui/elements/form_control_layout.hpp"
 #include <RmlUi/Core.h>
@@ -22,6 +23,7 @@ namespace lfs::vis::gui {
             panel.updateTabModel();
             panel.updateTabModel();
         }
+        static bool tooltipPending(const RmlRightPanel& panel) { return panel.tooltip_.needsFrame(); }
         static std::string active(const RmlRightPanel& panel) { return panel.active_tab_; }
     };
 } // namespace lfs::vis::gui
@@ -75,6 +77,23 @@ namespace {
             return result;
         }
     };
+
+    TEST_F(RightPanelTabPickerTest, PickerHoverPreparesHelpAndOpenPopupSuppressesIt) {
+        RmlRightPanelTestAccess::sync(panel, tabs({"A", "B"}), "A");
+        picker->SetAttribute("title", "All panels");
+        context->Update();
+        RightPanelLayout layout;
+        layout.size = {400, 600};
+        PanelInputState input;
+        input.mouse_x = 8;
+        input.mouse_y = 8;
+        panel.processInput(layout, input);
+        EXPECT_TRUE(RmlRightPanelTestAccess::tooltipPending(panel));
+        picker->Click();
+        input.mouse_wheel = 1;
+        panel.processInput(layout, input);
+        EXPECT_FALSE(RmlRightPanelTestAccess::tooltipPending(panel));
+    }
 
     TEST_F(RightPanelTabPickerTest, RemovingEarlierTabPreservesActiveSelection) {
         for (const std::string active : {"C", "D"}) {
