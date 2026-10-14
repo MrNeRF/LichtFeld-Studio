@@ -1034,6 +1034,60 @@ namespace lfs::vis {
         }
     } // namespace
 
+    // Shared raster fields for the live viewport and export. Callers then set positions,
+    // colors, content revisions, and the deleted mask. No allocation.
+    glm::mat4 fillPointCloudVulkanRequest(
+        PointCloudVulkanRenderer::RenderRequest& vk_req,
+        const lfs::rendering::PointCloudRenderRequest& pc_request,
+        const RenderSettings& frame_settings) {
+        const auto& frame = pc_request.frame_view;
+        const glm::mat4 view = frame.getViewMatrix();
+        const glm::mat4 projection = lfs::rendering::createProjectionMatrix(
+            frame.size, lfs::rendering::focalLengthToVFov(frame.focal_length_mm), frame.orthographic,
+            frame.ortho_scale, frame.near_plane, frame.far_plane);
+        // OpenGL NDC is Y-up; Vulkan NDC is Y-down. Same clip flip as the mesh pass.
+        glm::mat4 clip_y_flip(1.0f);
+        clip_y_flip[1][1] = -1.0f;
+        vk_req.model_transforms = pc_request.scene.model_transforms;
+        vk_req.transform_indices = pc_request.scene.transform_indices.get();
+        vk_req.node_visibility_mask = &pc_request.scene.node_visibility_mask;
+        vk_req.selection_mask = pc_request.overlay.selection_mask.get();
+        vk_req.preview_selection_mask = pc_request.overlay.transient_mask.mask;
+        vk_req.selection_colors = &pc_request.overlay.selection_colors;
+        vk_req.preview_selection_additive = pc_request.overlay.transient_mask.additive;
+        if (const auto& box = pc_request.filters.crop_box) {
+            vk_req.crop = PointCloudVulkanRenderer::CropBox{
+                .to_local = box->transform,
+                .min = box->min,
+                .max = box->max,
+                .inverse = pc_request.filters.crop_inverse,
+                .desaturate = pc_request.filters.crop_desaturate};
+        } else if (const auto& ellipsoid = pc_request.filters.crop_ellipsoid) {
+            vk_req.crop_ellipsoid = PointCloudVulkanRenderer::CropEllipsoid{
+                .to_local = ellipsoid->transform,
+                .radii = ellipsoid->radii,
+                .inverse = pc_request.filters.crop_inverse,
+                .desaturate = pc_request.filters.crop_desaturate};
+        }
+        vk_req.view = view;
+        vk_req.view_projection = clip_y_flip * projection * view;
+        vk_req.size = frame.size;
+        vk_req.background_color = frame.background_color;
+        vk_req.transparent_background = pc_request.transparent_background;
+        vk_req.orthographic = frame.orthographic;
+        vk_req.equirectangular = pc_request.render.equirectangular;
+        vk_req.ortho_scale = frame.ortho_scale;
+        vk_req.focal_y =
+            lfs::core::fov2focal(lfs::rendering::focalLengthToVFovRad(frame.focal_length_mm), frame.size.y);
+        vk_req.voxel_size = pc_request.render.voxel_size;
+        vk_req.scaling_modifier = pc_request.render.scaling_modifier;
+        vk_req.depth_view = frame_settings.depth_view;
+        vk_req.depth_view_min = frame_settings.depth_view_min;
+        vk_req.depth_view_max = frame_settings.depth_view_max;
+        vk_req.depth_visualization_mode = frame_settings.depth_visualization_mode;
+        return projection;
+    }
+
     std::shared_ptr<lfs::core::Tensor> RenderingManager::composeSplitViewCpu(
         const VulkanSplitViewParams& params, const glm::ivec2& output_size) {
         return composeSplitViewCpuImpl(params, output_size);
@@ -3989,34 +4043,13 @@ namespace lfs::vis {
                     colors_ptr = &frame_ctx.scene_state.point_cloud->colors;
                 }
 
-                const auto vp_data = frame_ctx.makeViewportData();
-                const glm::mat4 view = vp_data.getViewMatrix();
-                const glm::mat4 projection = lfs::rendering::createProjectionMatrix(
-                    pc_request.frame_view.size,
-                    lfs::rendering::focalLengthToVFov(pc_request.frame_view.focal_length_mm),
-                    pc_request.frame_view.orthographic,
-                    pc_request.frame_view.ortho_scale,
-                    pc_request.frame_view.near_plane,
-                    pc_request.frame_view.far_plane);
-                // glm::perspective/ortho emit OpenGL-NDC (Y up); Vulkan NDC has
-                // Y down. Apply the same clip-space flip the mesh pass does so
-                // the rendered image isn't upside-down vs. the screen quad's
-                // top-left UV origin.
-                glm::mat4 clip_y_flip(1.0f);
-                clip_y_flip[1][1] = -1.0f;
-                const glm::mat4 view_proj = clip_y_flip * projection * view;
-                const float focal_y = lfs::core::fov2focal(
-                    lfs::rendering::focalLengthToVFovRad(pc_request.frame_view.focal_length_mm),
-                    pc_request.frame_view.size.y);
-
                 PointCloudVulkanRenderer::RenderRequest vk_req{};
+                const glm::mat4 projection =
+                    fillPointCloudVulkanRequest(vk_req, pc_request, frame_settings);
                 vk_req.positions = positions_ptr;
                 vk_req.colors = colors_ptr;
                 vk_req.positions_revision = point_cloud_data_revision_;
                 vk_req.colors_revision = point_cloud_data_revision_;
-                vk_req.model_transforms = pc_request.scene.model_transforms;
-                vk_req.transform_indices = pc_request.scene.transform_indices.get();
-                vk_req.node_visibility_mask = &pc_request.scene.node_visibility_mask;
                 if (frame_settings.point_cloud_mode && has_visible_gaussian_model &&
                     model->has_deleted_mask() && model->deleted_mask_matches_size()) {
                     vk_req.deleted_mask = &model->deleted();
@@ -4025,43 +4058,8 @@ namespace lfs::vis {
                     // silent cache reuse after densify/compact.
                     vk_req.deleted_mask_revision = model->deleted_mask_version();
                 }
-                vk_req.selection_mask = pc_request.overlay.selection_mask.get();
-                vk_req.preview_selection_mask = pc_request.overlay.transient_mask.mask;
-                vk_req.selection_colors = &pc_request.overlay.selection_colors;
-                vk_req.preview_selection_additive = pc_request.overlay.transient_mask.additive;
                 vk_req.selection_revision = point_cloud_preview_selection_revision_;
                 vk_req.preview_selection_revision = point_cloud_preview_selection_revision_;
-                if (pc_request.filters.crop_box.has_value()) {
-                    PointCloudVulkanRenderer::CropBox crop{};
-                    crop.to_local = pc_request.filters.crop_box->transform;
-                    crop.min = pc_request.filters.crop_box->min;
-                    crop.max = pc_request.filters.crop_box->max;
-                    crop.inverse = pc_request.filters.crop_inverse;
-                    crop.desaturate = pc_request.filters.crop_desaturate;
-                    vk_req.crop = crop;
-                } else if (pc_request.filters.crop_ellipsoid.has_value()) {
-                    PointCloudVulkanRenderer::CropEllipsoid crop{};
-                    crop.to_local = pc_request.filters.crop_ellipsoid->transform;
-                    crop.radii = pc_request.filters.crop_ellipsoid->radii;
-                    crop.inverse = pc_request.filters.crop_inverse;
-                    crop.desaturate = pc_request.filters.crop_desaturate;
-                    vk_req.crop_ellipsoid = crop;
-                }
-                vk_req.view = view;
-                vk_req.view_projection = view_proj;
-                vk_req.size = pc_request.frame_view.size;
-                vk_req.background_color = pc_request.frame_view.background_color;
-                vk_req.transparent_background = pc_request.transparent_background;
-                vk_req.orthographic = pc_request.frame_view.orthographic;
-                vk_req.equirectangular = pc_request.render.equirectangular;
-                vk_req.ortho_scale = pc_request.frame_view.ortho_scale;
-                vk_req.focal_y = focal_y;
-                vk_req.voxel_size = pc_request.render.voxel_size;
-                vk_req.scaling_modifier = pc_request.render.scaling_modifier;
-                vk_req.depth_view = frame_settings.depth_view;
-                vk_req.depth_view_min = frame_settings.depth_view_min;
-                vk_req.depth_view_max = frame_settings.depth_view_max;
-                vk_req.depth_visualization_mode = frame_settings.depth_visualization_mode;
 
                 LOG_TIMER("renderVulkanFrame.point_cloud_vulkan");
                 auto render_result = point_cloud_vulkan_renderer_->render(
