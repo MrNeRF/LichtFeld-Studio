@@ -260,8 +260,8 @@ namespace lfs::vis::gui {
         root->SetProperty("left", "0px");
         root->SetProperty("top", "0px");
         context_->Update();
-        EXPECT_NEAR(strip->GetAbsoluteOffset().x, root->GetAbsoluteOffset().x, 0.1f);
-        EXPECT_NEAR(strip->GetAbsoluteOffset().y, root->GetAbsoluteOffset().y, 0.1f);
+        EXPECT_NEAR(strip->GetAbsoluteOffset(Rml::BoxArea::Border).x, root->GetAbsoluteOffset(Rml::BoxArea::Border).x, 0.1f);
+        EXPECT_NEAR(strip->GetAbsoluteOffset(Rml::BoxArea::Border).y, root->GetAbsoluteOffset(Rml::BoxArea::Border).y, 0.1f);
     }
 
     TEST_F(VramHudHeaderClickTest, DraggingCompactStripMovesItWithoutExpanding) {
