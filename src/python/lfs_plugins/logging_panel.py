@@ -21,6 +21,9 @@ __lfs_panel_ids__ = ["lfs.logging"]
 
 LEVELS = ("trace", "debug", "info", "performance", "warn", "error", "critical", "off")
 PAGE_SIZES = (100, 250, 500, 1000)
+# A row shows at most this much of a message; copy and export keep all of it.
+# RmlUi lays out a long unbroken message so slowly that the GUI stops presenting.
+ROW_MESSAGE_CHARS = 2048
 
 
 def merge_snapshot(previous, update):
@@ -73,6 +76,10 @@ def entries_text(entries):
     )
 
 
+def row_message(message):
+    return message if len(message) <= ROW_MESSAGE_CHARS else message[:ROW_MESSAGE_CHARS] + "\u2026"
+
+
 def entry_contents(entry):
     level = LEVELS[entry["level"]]
     label_key = f"scene.log_{level}"
@@ -82,7 +89,7 @@ def entry_contents(entry):
         f'<span class="log-level">{escape(lf.ui.tr(label_key))}</span>'
         f'<span class="log-source text-muted" title="{escape(location, quote=True)}">'
         f'{escape(location)}</span>'
-        f'<span class="log-message">{escape(entry["message"])}</span>'
+        f'<span class="log-message">{escape(row_message(entry["message"]))}</span>'
     )
 
 

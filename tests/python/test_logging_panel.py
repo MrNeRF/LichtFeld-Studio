@@ -222,6 +222,15 @@ def test_blank_or_out_of_range_retention_is_rejected(logging_module):
     assert applied == []
 
 
+def test_long_messages_are_cut_in_rows_but_copied_whole(logging_module):
+    message = "A" * 70000
+    long_entry = entry(1, message)
+    markup = logging_module.entry_contents(long_entry)
+    assert "A" * logging_module.ROW_MESSAGE_CHARS + "\u2026" in markup
+    assert len(markup) < logging_module.ROW_MESSAGE_CHARS + 1000
+    assert message in logging_module.entries_text([long_entry])
+
+
 def test_live_tail_reuses_unchanged_row_nodes(logging_module):
     panel, doc, snapshot = make_panel(logging_module)
     original_nodes = list(panel._row_nodes)
