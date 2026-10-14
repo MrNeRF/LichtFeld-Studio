@@ -51,7 +51,7 @@
         <button type="button" class="btn btn--ghost" data-event-click="clear" title="@tr:logging.clear_hint"><span>@tr:logging.clear_buffer</span></button>
     </div>
     <div class="log-column-header text-muted">
-        <span class="log-time">@tr:logging.time</span><span class="log-level">@tr:scene.log_level</span>
+        <span class="log-time">@tr:logging.time</span><span class="log-level">@tr:logging.level</span>
         <span class="log-source">@tr:logging.source_label</span><span class="log-message">@tr:logging.message</span>
     </div>
     <div id="log-scroll" tabindex="0">

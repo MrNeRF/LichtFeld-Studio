@@ -262,7 +262,8 @@ namespace lfs::vis {
         virtual lfs::Result<float> sampleDepthAtPixel(const DepthSampleRequest&) = 0;
         virtual bool takeRefinementRequest() { return false; }
         virtual std::expected<RenderResult, std::string> render(const RenderRequest&, RenderTargetId) = 0;
-        virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImage(RenderTargetId) = 0;
+        // rgba8 reads CPU UInt8 HWC, including a transparent clear. The default stays float RGB.
+        virtual std::expected<std::shared_ptr<core::Tensor>, std::string> readOutputImage(RenderTargetId, bool rgba8 = false) = 0;
         virtual lfs::Result<SceneRenderer::OutputTensors> readOutputTensors(RenderTargetId) const;
         virtual bool hasRenderTarget(RenderTargetId) const = 0;
         virtual bool releaseRenderTarget(RenderTargetId) = 0;

@@ -9,10 +9,13 @@ import time
 
 def run_command(command):
     output = []
+    # CMake writes UTF-8. A Windows console code page cannot show every character,
+    # so replace those instead of failing the configure step.
+    console = sys.stdout.encoding or "utf-8"
     with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          text=True, errors="replace") as process:
+                          encoding="utf-8", errors="replace") as process:
         for line in process.stdout:
-            print(line, end="", flush=True)
+            print(line.encode(console, errors="replace").decode(console), end="", flush=True)
             output.append(line)
         return process.wait(), "".join(output)
 

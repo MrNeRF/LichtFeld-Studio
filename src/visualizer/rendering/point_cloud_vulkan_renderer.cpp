@@ -2307,7 +2307,8 @@ namespace lfs::vis {
         std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& ctx,
             RenderTargetId target,
-            const PointCloudVulkanRenderer::DepthSampleRequest* depth_request = nullptr) {
+            const PointCloudVulkanRenderer::DepthSampleRequest* depth_request = nullptr,
+            bool uint8_rgba = false) {
             std::lock_guard<std::mutex> command_lock(command_mutex);
             if (!initialized || context == nullptr) {
                 return std::unexpected<std::string>("Point-cloud output readback requested before renderer initialization");
@@ -2598,6 +2599,17 @@ namespace lfs::vis {
             const int height = slot.size.y;
             const std::size_t pixel_count =
                 static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+            if (uint8_rgba) {
+                auto tensor = lfs::core::Tensor::empty(
+                    {static_cast<std::size_t>(height), static_cast<std::size_t>(width), std::size_t{4}},
+                    lfs::core::Device::CPU,
+                    lfs::core::DataType::UInt8);
+                if (!tensor.is_valid() || !tensor.is_contiguous()) {
+                    return std::unexpected<std::string>("Point-cloud output readback failed to allocate the image");
+                }
+                std::memcpy(tensor.ptr<std::uint8_t>(), rgba, pixel_count * 4u);
+                return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+            }
             std::vector<float> hwc(pixel_count * 3u);
             for (std::size_t i = 0; i < pixel_count; ++i) {
                 const std::size_t src = i * 4u;
@@ -2630,8 +2642,8 @@ namespace lfs::vis {
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
-    PointCloudVulkanRenderer::readOutputImage(VulkanContext& context, RenderTargetId target) {
-        return impl_->readOutputImage(context, target);
+    PointCloudVulkanRenderer::readOutputImage(VulkanContext& context, RenderTargetId target, bool uint8_rgba) {
+        return impl_->readOutputImage(context, target, nullptr, uint8_rgba);
     }
 
     bool PointCloudVulkanRenderer::hasRenderTarget(RenderTargetId target) const {

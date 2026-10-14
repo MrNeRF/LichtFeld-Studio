@@ -356,11 +356,12 @@ namespace lfs::vis {
                 return depth > 0.0f && depth < 1.0e9f ? depth : -1.0f;
             }
             bool takeRefinementRequest() override { return retry_->exchange(false, std::memory_order_acq_rel); }
-            auto readOutputImage(RenderTargetId t) -> std::expected<std::shared_ptr<core::Tensor>, std::string> override {
+            auto readOutputImage(RenderTargetId t, bool rgba8) -> std::expected<std::shared_ptr<core::Tensor>, std::string> override {
                 if (!hasRenderTarget(t))
                     return std::unexpected(std::format("Metal point output is unavailable (target={})", t.value));
                 const auto size = native_->size(t);
-                auto tensor = core::Tensor::empty({size_t(size.y), size_t(size.x), size_t(3)}, core::Device::CPU, core::DataType::Float32);
+                auto tensor = rgba8 ? core::Tensor::empty({size_t(size.y), size_t(size.x), size_t(4)}, core::Device::CPU, core::DataType::UInt8)
+                                    : core::Tensor::empty({size_t(size.y), size_t(size.x), size_t(3)}, core::Device::CPU, core::DataType::Float32);
                 auto ready = legacyMetalResult(native_->readColor(t, tensor, 0, 0));
                 if (!ready)
                     return std::unexpected(ready.error());

@@ -7,6 +7,7 @@ from bisect import bisect_left
 from html import escape
 from itertools import islice
 from pathlib import Path
+import re
 import time
 
 import lichtfeld as lf
@@ -21,6 +22,9 @@ __lfs_panel_ids__ = ["lfs.logging"]
 
 LEVELS = ("trace", "debug", "info", "performance", "warn", "error", "critical", "off")
 PAGE_SIZES = (100, 250, 500, 1000)
+# A row shows at most this much of a message; copy and export keep all of it.
+# RmlUi lays out a long unbroken message so slowly that the GUI stops presenting.
+ROW_MESSAGE_CHARS = 2048
 
 
 def merge_snapshot(previous, update):
@@ -73,6 +77,10 @@ def entries_text(entries):
     )
 
 
+def row_message(message):
+    return message if len(message) <= ROW_MESSAGE_CHARS else message[:ROW_MESSAGE_CHARS] + "\u2026"
+
+
 def entry_contents(entry):
     level = LEVELS[entry["level"]]
     label_key = f"scene.log_{level}"
@@ -82,7 +90,7 @@ def entry_contents(entry):
         f'<span class="log-level">{escape(lf.ui.tr(label_key))}</span>'
         f'<span class="log-source text-muted" title="{escape(location, quote=True)}">'
         f'{escape(location)}</span>'
-        f'<span class="log-message">{escape(entry["message"])}</span>'
+        f'<span class="log-message">{escape(row_message(entry["message"]))}</span>'
     )
 
 
@@ -104,6 +112,7 @@ class LoggingPanel(Panel):
         self._limit = "5000"
         self._last_buffer_limit = None
         self._editing_limit = False
+        self._escape_revert = w.EscapeRevertController()
         self._page_size = "250"
         self._paused = False
         self._wrap = True
@@ -154,6 +163,7 @@ class LoggingPanel(Panel):
         doc.get_element_by_id("log-scroll").add_event_listener("keydown", self._on_selection_key)
         w.bind_committed_text_input(
             doc.get_element_by_id("log-limit"), "limit", commit=self._commit_limit,
+            escape_revert=self._escape_revert, capture=lambda: self._limit, restore=self._restore_limit,
             on_focus=lambda key: setattr(self, "_editing_limit", True),
             on_blur=lambda key: setattr(self, "_editing_limit", False),
         )
@@ -202,15 +212,23 @@ class LoggingPanel(Panel):
         # Editing a number must not trim the buffer halfway through typing it.
         self._limit = str(value)
 
+    def _restore_limit(self, snapshot):
+        # Escape cancels the edit; the blur that follows commits the unchanged value.
+        self._limit = str(snapshot)
+        if self._handle:
+            self._handle.dirty("limit")
+
     def _commit_limit(self, *_):
-        try:
-            limit = int(self._limit.strip().replace(",", "") or "0")
-        except ValueError:
+        # Accept digit grouping in any locale ("50,000", "50.000", "50 000").
+        text = self._limit.strip()
+        number = re.fullmatch(r"\d+|\d{1,3}(?:[,.'\u00a0\u202f ]\d{3})+", text, re.ASCII)
+        limit = int(re.sub(r"\D", "", text, flags=re.ASCII)) if number else -1
+        # Blank, negative or too large input must not clear or trim the buffer.
+        if not 0 <= limit <= 50000:
             self._feedback = lf.ui.tr("logging.limit_error")
             self._feedback_deadline = 0.0
             self._invalidate()
             return
-        limit = max(0, min(50000, limit))
         lf.log.set_buffer_limit(limit)
         self._limit = str(limit)
         self._last_buffer_limit = limit

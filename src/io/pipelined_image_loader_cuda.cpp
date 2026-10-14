@@ -678,7 +678,7 @@ namespace lfs::io {
                                    tensor.dtype() == lfs::core::DataType::UInt8
                                        ? tensor.to(lfs::core::DataType::Float32) / 255.0f
                                        : tensor,
-                                   cuda_stream)
+                                   RgbLayout::CHW, cuda_stream)
                              : nvcodec.encode_to_jpeg(tensor, config_.cache_jpeg_quality, cuda_stream);
             put_in_jpeg_cache(cache_key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
         } catch (...) {
@@ -732,7 +732,7 @@ namespace lfs::io {
                     lfs::core::DataType::Float32);
                 const lfs::core::CUDAStreamGuard execution_scope(static_cast<cudaStream_t>(cuda_stream));
                 lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(tensor, hwc, lfs::gpu_ops::ImageConversion::NormalCHWToJ2KHWC, height, width, 3, {});
-                bytes = nvcodec.encode_to_jpeg2k(hwc, cuda_stream);
+                bytes = nvcodec.encode_to_jpeg2k(hwc, RgbLayout::HWC, cuda_stream);
             }
             put_in_jpeg_cache(item.cache_key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
         } catch (...) {

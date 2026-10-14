@@ -52,9 +52,11 @@ namespace lfs::vis {
             VulkanContext& context,
             const RenderRequest& request,
             RenderTargetId target);
+        // uint8_rgba copies the attachment. The default stays the float RGB readback.
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
-            RenderTargetId target);
+            RenderTargetId target,
+            bool uint8_rgba = false);
 
         [[nodiscard]] bool hasRenderTarget(RenderTargetId target) const;
         [[nodiscard]] bool releaseRenderTarget(RenderTargetId target);
