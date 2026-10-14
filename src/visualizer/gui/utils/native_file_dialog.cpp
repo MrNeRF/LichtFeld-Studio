@@ -414,6 +414,58 @@ namespace lfs::vis::gui {
             return !resultPath.empty();
         }
 
+        bool runMultiOpenDialog(const DialogRequest& request,
+                                std::vector<std::filesystem::path>& result_paths) {
+            result_paths.clear();
+            if (nativeFileDialogsBlocked()) {
+                native_dialog_block_attempted = true;
+                LOG_WARN("Native file dialog request blocked during an MCP GUI operation");
+                return false;
+            }
+            if (!ensureDialogBackendInitialized())
+                return false;
+
+            const FilterListStorage filters(request.filters);
+            const std::filesystem::path default_directory = normalizeDefaultDirectory(request.default_path);
+            const std::string default_directory_utf8 =
+                default_directory.empty() ? std::string{} : lfs::core::path_to_utf8(default_directory);
+            const nfdopendialogu8args_t args{
+                filters.data(), filters.size(),
+                default_directory_utf8.empty() ? nullptr : default_directory_utf8.c_str(),
+                currentParentWindowHandle(),
+            };
+            const nfdpathset_t* selected_paths = nullptr;
+            NFD_ClearError();
+            const nfdresult_t result = NFD_OpenDialogMultipleU8_With(&selected_paths, &args);
+            if (result == NFD_CANCEL) {
+                NFD_ClearError();
+                return false;
+            }
+            if (result != NFD_OKAY) {
+                const char* const error = NFD_GetError();
+                LOG_ERROR("Native multi-file dialog failed: {}", error ? error : "unknown error");
+                NFD_ClearError();
+                return false;
+            }
+
+            nfdpathsetsize_t count = 0;
+            if (NFD_PathSet_GetCount(selected_paths, &count) != NFD_OKAY) {
+                NFD_PathSet_Free(selected_paths);
+                LOG_ERROR("Native multi-file dialog returned an unreadable path set");
+                return false;
+            }
+            result_paths.reserve(static_cast<size_t>(count));
+            for (nfdpathsetsize_t i = 0; i < count; ++i) {
+                nfdu8char_t* path = nullptr;
+                if (NFD_PathSet_GetPathU8(selected_paths, i, &path) == NFD_OKAY && path != nullptr) {
+                    result_paths.push_back(lfs::core::utf8_to_path(path));
+                    NFD_PathSet_FreePathU8(path);
+                }
+            }
+            NFD_PathSet_Free(selected_paths);
+            return !result_paths.empty();
+        }
+
         [[nodiscard]] std::vector<DialogFilter> imageFilters() {
             return {makeFilter("Image Files",
                                {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tga", ".hdr", ".exr"})};
@@ -713,6 +765,12 @@ namespace lfs::vis::gui {
     std::filesystem::path OpenVideoFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(videoFilters(), defaultPath), result);
+        return result;
+    }
+
+    std::vector<std::filesystem::path> OpenVideoFilesDialog(const std::filesystem::path& defaultPath) {
+        std::vector<std::filesystem::path> result;
+        runMultiOpenDialog(makeOpenFileRequest(videoFilters(), defaultPath), result);
         return result;
     }
 

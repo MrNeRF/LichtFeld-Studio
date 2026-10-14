@@ -309,6 +309,43 @@ namespace lfs::gui {
         static void firstSourceFrameNumber(VideoExtractorDialog& dialog, const int value) {
             dialog.first_source_frame_number_ = value;
         }
+        static void configureBatch(VideoExtractorDialog& dialog,
+                                   const std::vector<std::filesystem::path>& videos,
+                                   const std::filesystem::path& output_root) {
+            dialog.batch_items_.clear();
+            for (const auto& video : videos)
+                dialog.batch_items_.push_back({.video_path = video});
+            dialog.output_dir_ = output_root;
+            dialog.batch_output_root_explicit_ = !output_root.empty();
+            dialog.selected_batch_item_.reset();
+            dialog.refreshBatchOutputDirectories();
+        }
+        static void batchItemSettings(VideoExtractorDialog& dialog, const std::size_t index,
+                                      const double start_time, const double end_time,
+                                      const int rotation, const double duration,
+                                      const double source_fps) {
+            auto& item = dialog.batch_items_.at(index);
+            item.start_time = start_time;
+            item.end_time = end_time;
+            item.end_time_is_auto = false;
+            item.rotation = rotation;
+            item.rotation_initialized = true;
+            item.duration = duration;
+            item.source_fps = source_fps;
+        }
+        static bool buildBatch(VideoExtractorDialog& dialog,
+                               std::vector<VideoExtractionParams>& params,
+                               std::string& error) {
+            return dialog.buildBatchParams(params, error);
+        }
+        static void batchProgress(VideoExtractorDialog& dialog, const int active_index,
+                                  const int current, const int total) {
+            dialog.extracting_.store(true);
+            dialog.active_batch_index_.store(active_index);
+            dialog.updateProgress(current, total);
+        }
+        static void syncBatchList(VideoExtractorDialog& dialog) { dialog.syncBatchList(); }
+        static void syncExtractionStatus(VideoExtractorDialog& dialog) { dialog.syncExtractionStatus(); }
         static bool attach(VideoExtractorDialog& dialog, Rml::ElementDocument* document) {
             dialog.document_ = document;
             dialog.cacheElements();
@@ -1590,6 +1627,64 @@ namespace {
         sync();
         EXPECT_NE(document->GetElementById("pattern-example")->GetInnerRML().find(".jpg"), std::string::npos);
         EXPECT_EQ(std::filesystem::file_size(output / "existing.png"), 1);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchParamsUseSeparateDirectoriesAndPerItemSettings) {
+        const auto root = std::filesystem::path("batch_output");
+        NamingAccess::configureBatch(*dialog,
+                                     {"capture_a/clip.mp4", "capture_b/clip.mp4"},
+                                     root);
+        NamingAccess::batchItemSettings(*dialog, 0, 1.25, 4.5, 90, 12.0, 24.0);
+        NamingAccess::batchItemSettings(*dialog, 1, 0.5, 3.0, 270, 8.0, 30.0);
+
+        std::vector<lfs::gui::VideoExtractionParams> params;
+        std::string error;
+        ASSERT_TRUE(NamingAccess::buildBatch(*dialog, params, error)) << error;
+        ASSERT_EQ(params.size(), 2u);
+        EXPECT_EQ(params[0].output_dir, root / "clip");
+        EXPECT_EQ(params[1].output_dir, root / "clip_2");
+        EXPECT_DOUBLE_EQ(params[0].start_time, 1.25);
+        EXPECT_DOUBLE_EQ(params[0].end_time, 4.5);
+        EXPECT_EQ(params[0].rotation, 90);
+        EXPECT_DOUBLE_EQ(params[1].start_time, 0.5);
+        EXPECT_DOUBLE_EQ(params[1].end_time, 3.0);
+        EXPECT_EQ(params[1].rotation, 270);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchRequiresAnExplicitOutputRoot) {
+        NamingAccess::configureBatch(*dialog, {"capture/clip.mp4"}, {});
+        std::vector<lfs::gui::VideoExtractionParams> params;
+        std::string error;
+        EXPECT_FALSE(NamingAccess::buildBatch(*dialog, params, error));
+        EXPECT_EQ(error, LOC("video_extractor.batch_no_output_root"));
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchRowsDisambiguateDuplicateNamesAndExposePaths) {
+        NamingAccess::configureBatch(*dialog,
+                                     {"capture_a/clip.mp4", "capture_b/clip.mp4"},
+                                     "batch_output");
+        NamingAccess::syncBatchList(*dialog);
+        const auto rows = document->GetElementById("batch-video-list")->GetInnerRML();
+        EXPECT_NE(rows.find("clip.mp4 (1)"), std::string::npos);
+        EXPECT_NE(rows.find("clip.mp4 (2)"), std::string::npos);
+        const auto* const first = document->GetElementById("batch-video-0");
+        ASSERT_NE(first, nullptr);
+        const auto tooltip = first->GetAttribute<Rml::String>("title", "");
+        EXPECT_NE(tooltip.find("capture_a/clip.mp4"), std::string::npos);
+        EXPECT_NE(tooltip.find("batch_output/clip"), std::string::npos);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchProgressIsGlobalAcrossVideos) {
+        NamingAccess::configureBatch(*dialog,
+                                     {"capture/a.mp4", "capture/b.mp4", "capture/c.mp4"},
+                                     "batch_output");
+        NamingAccess::batchProgress(*dialog, 1, 25, 100);
+        NamingAccess::syncExtractionStatus(*dialog);
+
+        const auto* const progress = document->GetElementById("progress-bar");
+        ASSERT_NE(progress, nullptr);
+        EXPECT_NEAR(std::stof(progress->GetAttribute<Rml::String>("value", "")), 1.25f / 3.0f, 1.0e-4f);
+        EXPECT_NE(document->GetElementById("progress-text")->GetInnerRML().find("2/3"), std::string::npos);
     }
 } // namespace
 

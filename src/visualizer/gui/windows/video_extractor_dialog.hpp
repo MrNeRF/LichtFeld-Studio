@@ -116,7 +116,31 @@ namespace lfs::gui {
             ExtractionStatusMessage status_message = ExtractionStatusMessage::None;
         };
 
+        enum class BatchItemStatus {
+            Pending,
+            Running,
+            Complete,
+            Failed,
+            Stopped,
+        };
+
+        struct BatchVideoItem {
+            std::filesystem::path video_path;
+            std::filesystem::path output_dir;
+            double start_time = 0.0;
+            double end_time = -1.0;
+            bool end_time_is_auto = true;
+            int rotation = 0;
+            bool rotation_initialized = false;
+            double source_fps = 0.0;
+            double duration = 0.0;
+            bool has_existing_output = false;
+            BatchItemStatus status = BatchItemStatus::Pending;
+            std::string error;
+        };
+
         void startExtraction(const VideoExtractionParams& params);
+        void startBatchExtraction(std::vector<VideoExtractionParams> params);
         void joinExtractionThread();
 
         void updateProgress(int current, int total, int discarded = 0);
@@ -153,6 +177,21 @@ namespace lfs::gui {
         void setTrimFromTimeline(TimelineDragTarget target, float mouse_x);
         void applyTextInput(const std::string& id);
         [[nodiscard]] bool resolveFilenamePattern(std::string& pattern, std::string& error) const;
+        [[nodiscard]] bool resolveFilenamePattern(const std::filesystem::path& video_path,
+                                                  std::string& pattern, std::string& error) const;
+        [[nodiscard]] bool buildBatchParams(std::vector<VideoExtractionParams>& params,
+                                            std::string& error);
+        void beginBatchExtractionFromUi();
+        void launchBatchExtraction(std::vector<VideoExtractionParams> params);
+        void addBatchVideos(const std::vector<std::filesystem::path>& paths);
+        void selectBatchItem(std::size_t index);
+        void saveSelectedBatchItem();
+        void refreshBatchOutputDirectories();
+        void syncBatchList();
+        void removeSelectedBatchItem();
+        void clearBatchVideos();
+        [[nodiscard]] std::string batchStatusLabel(const BatchVideoItem& item) const;
+        [[nodiscard]] bool removeExistingBatchOutput(const std::vector<VideoExtractionParams>& params);
         void beginExtractionFromUi();
         void launchExtraction(const VideoExtractionParams& params);
         void requestStopExtraction();
@@ -163,6 +202,17 @@ namespace lfs::gui {
 
         std::filesystem::path video_path_;
         std::filesystem::path output_dir_;
+        std::vector<BatchVideoItem> batch_items_;
+        std::optional<std::size_t> selected_batch_item_;
+        std::vector<VideoExtractionParams> pending_batch_params_;
+        bool pending_batch_metadata_will_be_replaced_ = false;
+        int pending_batch_conflict_count_ = 0;
+        bool continue_batch_on_failure_ = true;
+        bool batch_output_root_explicit_ = false;
+        std::atomic<int> active_batch_index_{-1};
+        std::atomic<int> completed_batch_items_{0};
+        std::atomic<int> failed_batch_items_{0};
+        mutable std::mutex batch_mutex_;
 
         int mode_selection_ = 0;
         float fps_ = 1.0f;
@@ -238,6 +288,10 @@ namespace lfs::gui {
         Rml::Element* trim_reset_el_ = nullptr;
         Rml::Element* estimated_frames_el_ = nullptr;
         Rml::Element* video_value_el_ = nullptr;
+        Rml::Element* batch_video_list_el_ = nullptr;
+        Rml::Element* batch_summary_el_ = nullptr;
+        Rml::Element* remove_video_el_ = nullptr;
+        Rml::Element* clear_videos_el_ = nullptr;
         Rml::Element* output_value_el_ = nullptr;
         Rml::Element* browse_video_el_ = nullptr;
         Rml::Element* browse_output_el_ = nullptr;
@@ -294,6 +348,7 @@ namespace lfs::gui {
         Rml::Element* window_candidates_select_el_ = nullptr;
         Rml::Element* window_candidates_readout_el_ = nullptr;
         Rml::Element* generate_metadata_el_ = nullptr;
+        Rml::Element* continue_batch_on_failure_el_ = nullptr;
         Rml::Element* hdr_to_sdr_el_ = nullptr;
         Rml::Element* hdr_to_sdr_row_el_ = nullptr;
         Rml::Element* overwrite_overlay_el_ = nullptr;
