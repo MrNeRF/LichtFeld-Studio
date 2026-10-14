@@ -3196,6 +3196,7 @@
     "clear_buffer": "Svuota buffer",
     "time": "Ora",
     "source_label": "Sorgente",
+    "level": "Livello",
     "message": "Messaggio",
     "no_matches": "Nessuna voce corrispondente",
     "newer": "Più recenti",

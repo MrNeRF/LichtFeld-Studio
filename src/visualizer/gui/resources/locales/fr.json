@@ -3196,6 +3196,7 @@
     "clear_buffer": "Vider le tampon",
     "time": "Heure",
     "source_label": "Source",
+    "level": "Niveau",
     "message": "Message",
     "no_matches": "Aucune entrée correspondante",
     "newer": "Plus récents",

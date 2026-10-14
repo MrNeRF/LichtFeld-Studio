@@ -3196,6 +3196,7 @@
     "clear_buffer": "Puffer leeren",
     "time": "Zeit",
     "source_label": "Quelle",
+    "level": "Stufe",
     "message": "Nachricht",
     "no_matches": "Keine passenden Protokolleinträge",
     "newer": "Neuere",

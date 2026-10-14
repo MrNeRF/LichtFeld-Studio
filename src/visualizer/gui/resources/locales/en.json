@@ -3196,6 +3196,7 @@
     "clear_buffer": "Clear buffer",
     "time": "Time",
     "source_label": "Source",
+    "level": "Level",
     "message": "Message",
     "no_matches": "No matching log entries",
     "newer": "Newer",

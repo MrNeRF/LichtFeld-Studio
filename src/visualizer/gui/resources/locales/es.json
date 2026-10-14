@@ -3196,6 +3196,7 @@
     "clear_buffer": "Vaciar búfer",
     "time": "Hora",
     "source_label": "Fuente",
+    "level": "Nivel",
     "message": "Mensaje",
     "no_matches": "No hay entradas coincidentes",
     "newer": "Más recientes",

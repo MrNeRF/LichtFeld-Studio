@@ -42,7 +42,7 @@
 #log-scroll { tab-index: auto; flex: 1; min-height: 0; min-width: 0; overflow: auto; }
 .log-row { padding: 5dp 12dp; border-bottom-width: 1dp; font-size: 12dp; line-height: 17dp; }
 .log-time { width: 98dp; min-width: 98dp; font-size: 11dp; }
-.log-level { width: 82dp; min-width: 82dp; font-size: 11dp; }
+.log-level { width: 82dp; min-width: 82dp; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11dp; }
 .log-source { width: 165dp; min-width: 165dp; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11dp; }
 .log-message { flex: 1; min-width: 180dp; white-space: pre-wrap; word-break: break-all; }
 .log-rows--nowrap .log-message { white-space: pre; }

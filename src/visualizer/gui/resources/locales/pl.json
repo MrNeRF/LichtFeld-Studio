@@ -3196,6 +3196,7 @@
     "clear_buffer": "Wyczyść bufor",
     "time": "Czas",
     "source_label": "Źródło",
+    "level": "Poziom",
     "message": "Wiadomość",
     "no_matches": "Brak pasujących wpisów",
     "newer": "Nowsze",

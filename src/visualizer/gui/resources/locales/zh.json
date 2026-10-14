@@ -3196,6 +3196,7 @@
     "clear_buffer": "清空缓冲区",
     "time": "时间",
     "source_label": "来源",
+    "level": "级别",
     "message": "消息",
     "no_matches": "没有匹配的日志",
     "newer": "更新",

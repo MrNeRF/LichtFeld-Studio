@@ -3196,6 +3196,7 @@
     "clear_buffer": "버퍼 지우기",
     "time": "시간",
     "source_label": "소스",
+    "level": "수준",
     "message": "메시지",
     "no_matches": "일치하는 로그가 없습니다",
     "newer": "최신",

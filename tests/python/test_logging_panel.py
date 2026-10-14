@@ -231,6 +231,17 @@ def test_long_messages_are_cut_in_rows_but_copied_whole(logging_module):
     assert message in logging_module.entries_text([long_entry])
 
 
+def test_grouped_retention_values_commit_in_any_locale(logging_module):
+    panel, doc, _snapshot = make_panel(logging_module)
+    applied = []
+    logging_module.lf.log.set_buffer_limit = applied.append
+    field = doc.elements["log-limit"]
+    for text in ("50.000", "1 000", "2,500", "1.0", "\u00b2"):
+        panel._set_limit(text)
+        field.listeners["blur"](None)
+    assert applied == [50000, 1000, 2500]
+
+
 def test_live_tail_reuses_unchanged_row_nodes(logging_module):
     panel, doc, snapshot = make_panel(logging_module)
     original_nodes = list(panel._row_nodes)

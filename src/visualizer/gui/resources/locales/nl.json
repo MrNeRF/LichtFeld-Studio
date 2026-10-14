@@ -3196,6 +3196,7 @@
     "clear_buffer": "Buffer wissen",
     "time": "Tijd",
     "source_label": "Bron",
+    "level": "Niveau",
     "message": "Bericht",
     "no_matches": "Geen overeenkomende logregels",
     "newer": "Nieuwer",

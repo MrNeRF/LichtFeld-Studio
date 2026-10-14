@@ -7,6 +7,7 @@ from bisect import bisect_left
 from html import escape
 from itertools import islice
 from pathlib import Path
+import re
 import time
 
 import lichtfeld as lf
@@ -218,10 +219,10 @@ class LoggingPanel(Panel):
             self._handle.dirty("limit")
 
     def _commit_limit(self, *_):
-        try:
-            limit = int(self._limit.strip().replace(",", ""))
-        except ValueError:
-            limit = -1
+        # Accept digit grouping in any locale ("50,000", "50.000", "50 000").
+        text = self._limit.strip()
+        number = re.fullmatch(r"\d+|\d{1,3}(?:[,.'\u00a0\u202f ]\d{3})+", text, re.ASCII)
+        limit = int(re.sub(r"\D", "", text, flags=re.ASCII)) if number else -1
         # Blank, negative or too large input must not clear or trim the buffer.
         if not 0 <= limit <= 50000:
             self._feedback = lf.ui.tr("logging.limit_error")

@@ -3196,6 +3196,7 @@
     "clear_buffer": "バッファを消去",
     "time": "時刻",
     "source_label": "ソース",
+    "level": "レベル",
     "message": "メッセージ",
     "no_matches": "一致するログがありません",
     "newer": "新しいログ",
