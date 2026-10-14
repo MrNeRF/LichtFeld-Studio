@@ -129,7 +129,7 @@ namespace lfs::vis::gui {
         std::optional<double> secondsUntilNativeGeometryFlush() const;
         void resetNativeWindowGeometry();
         bool processNativeWindowEvent(const SDL_Event& event);
-        bool requestNativeWindowCapture(const std::string& panel_id, std::function<void(lfs::Result<VulkanContext::WindowCapture>)> callback);
+        LFS_VIS_API bool requestNativeWindowCapture(const std::string& panel_id, std::function<void(lfs::Result<VulkanContext::WindowCapture>)> callback);
         LFS_VIS_API Rml::Context* getContext(const std::string& name);
         LFS_VIS_API void destroyContext(const std::string& name);
 
