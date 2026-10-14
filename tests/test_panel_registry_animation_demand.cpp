@@ -746,6 +746,7 @@ void checkAbandonedFloatingDrag(const bool suppress_poll) {
         info.panel = panel;
         ASSERT_TRUE(registry.register_panel(std::move(info)));
     }
+    registry.set_panel_enabled("test.abandoned", true);
     registry.set_panel_enabled("test.resize", false);
     ViewportLayout viewport;
     viewport.size = {1280, 720};
