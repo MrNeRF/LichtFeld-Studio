@@ -159,6 +159,7 @@ if(BUILD_VISUALIZER_TESTS)
         PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
+        lfs_io
         lfs_visualizer
         lfs_core
         lfs_python_runtime
