@@ -138,7 +138,10 @@ class NativeWindowsClient:
         existing = next((window for window in self.windows() if window["title"] == panel["label"]), None)
         if existing:
             return existing
-        state = self.until(lambda: self.call("ui_panel_describe", panel_id=panel_id)["panel"].get("floating_bounds"))
+        state = self.until(lambda: next((window for window in self.windows() if window["title"] == panel["label"]), None)
+                           or self.call("ui_panel_describe", panel_id=panel_id)["panel"].get("floating_bounds"))
+        if "hwnd" in state:
+            return state
         main = next(window for window in self.windows() if window["title"].startswith("LichtFeld Studio"))
         rect = wintypes.RECT()
         assert self.user32.GetClientRect(main["hwnd"], ctypes.byref(rect))

@@ -708,6 +708,8 @@ namespace lfs::vis::gui {
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         auto* document = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
         if (document) {
+            if (auto* focused = document->GetContext()->GetFocusElement())
+                focused->Blur();
             if (auto* content = document->GetElementById("content-wrap"))
                 desktop_reopen_scroll_ = content->GetScrollTop();
             callOnUnload(document);
