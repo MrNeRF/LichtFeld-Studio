@@ -614,6 +614,8 @@
       "bg_image_clear": "Borrar la imagen de fondo seleccionada",
       "eval_mask": "Selecciona los píxeles que se evalúan: una malla, una caja, la caja de recorte, una carpeta de máscaras, un rango de profundidad, puntos o un splat. El entrenamiento no cambia.",
       "eval_mask_invert": "Evalúa en su lugar los píxeles fuera de la máscara de evaluación.",
+      "eval_mask_report_unmasked": "Evalúa además todos los píxeles válidos de cada vista, como sin máscara, con el mismo renderizado.",
+      "eval_mask_report_inverted": "Evalúa además los píxeles válidos fuera de la máscara de evaluación, con el mismo renderizado.",
       "eval_mask_opacity": "Opacidad renderizada que necesita un píxel para contar como cubierto por una máscara splat. Más baja amplía la máscara más allá del contorno, más alta la contrae.",
       "eval_mask_browse": "Buscar una malla de evaluación",
       "eval_mask_clear": "Quitar la máscara de evaluación",
@@ -1053,7 +1055,10 @@
     "viewport_defaults_hint": "Estos valores se aplican a nuevos proyectos. Los existentes conservan sus valores guardados.",
     "viewport_style_defaults": "Estilo de guías y selección",
     "viewport_performance_defaults": "Límites de caché LOD",
-    "viewport_defaults_invalid": "Introduce un valor válido dentro del rango admitido."
+    "viewport_defaults_invalid": "Introduce un valor válido dentro del rango admitido.",
+    "sidebar_defaults_description": "Guarda el ancho de la barra lateral derecha, la división de la escena y la pestaña activa para iniciar la aplicación. Los proyectos .licht existentes restauran su propio espacio de trabajo. Un proyecto nuevo conserva el espacio de trabajo actual.",
+    "save_startup_sidebar": "Guardar barra lateral para el inicio",
+    "clear_startup_sidebar": "Borrar barra lateral de inicio"
   },
   "main_panel": {
     "console": "Consola",
@@ -1799,6 +1804,8 @@
     "eval_bit_depth": "Eval Bit Depth:",
     "eval_mask": "Máscara de evaluación:",
     "eval_mask_invert": "Invertir máscara:",
+    "eval_mask_report_unmasked": "Evaluar también sin máscara:",
+    "eval_mask_report_inverted": "Evaluar también invertida:",
     "eval_mask_opacity": "Opacidad de máscara splat:",
     "eval_mask_use_cropbox": "Usar caja de recorte",
     "eval_mask_folder": "Carpeta de máscaras",
@@ -2098,10 +2105,28 @@
     "overwrite_proceed": "Continuar (sobrescribir duplicados)",
     "overwrite_cancel": "Cancelar",
     "overwrite_delete_error": "No se pudo eliminar {}: {}",
+    "videos": "Videos:",
+    "add_videos": "Añadir vídeos...",
+    "remove_video": "Eliminar",
+    "clear_videos": "Limpiar",
+    "output_root": "Raíz de salida:",
+    "continue_batch_on_failure": "Continuar con los vídeos restantes si uno falla",
+    "batch_video_count": "{} vídeos seleccionados",
+    "batch_summary": "{} vídeos · {} completados · {} fallidos",
+    "batch_no_videos": "Añade al menos un vídeo antes de iniciar la extracción.",
+    "batch_no_output_root": "Selecciona una raíz de salida para este lote.",
+    "batch_pending": "Pendiente",
+    "batch_running": "Extrayendo",
+    "batch_complete": "Completado",
+    "batch_failed": "Fallido",
+    "batch_stopped": "Detenido",
+    "batch_existing_output": "Salida existente",
     "rotate_cw": "Rotar en sentido horario",
     "rotate_ccw": "Rotar en sentido antihorario",
     "discarded_format": " ({} descartados)",
-    "extracting": "Extrayendo: %d / %d fotogramas"
+    "extracting": "Extrayendo: %d / %d fotogramas",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "Campo de visión: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2604,7 +2629,8 @@
     "perf_collapse": "Contraer",
     "gt_metrics_training_required": "Las métricas de cámara necesitan una sesión de entrenamiento inicializada.",
     "gt_metrics_calculation_failed": "No se pudieron calcular las métricas de esta vista.",
-    "perf_hud_tooltip": "Mostrar u ocultar el HUD de rendimiento"
+    "perf_hud_tooltip": "Mostrar u ocultar el HUD de rendimiento",
+    "all_panel_tabs": "Todos los paneles"
   },
   "runtime": {
     "environment_map_failed": "No se pudo leer el mapa de entorno «{}». Se ha conservado el entorno anterior.",

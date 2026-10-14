@@ -60,6 +60,32 @@ TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
     EXPECT_FALSE((*parsed)->dataset.output_path_explicit);
 }
 
+// Catches input paths stored as typed: a project trained from paths relative to the launch folder could not find its
+// images or initial splats when evaluated or resumed from another folder.
+TEST(ArgumentParserTest, RelativeInputPathsAreStoredAbsolute) {
+    const auto launch = std::filesystem::path(make_test_path("lfs_arg_parser_relative_inputs"));
+    std::filesystem::create_directories(launch / "scene");
+    std::ofstream(launch / "scene" / "init.ply").put('\n');
+    std::ofstream(launch / "scene" / "extra.ply").put('\n');
+    const auto output = make_test_path("lfs_arg_parser_relative_inputs_output");
+
+    const auto previous = std::filesystem::current_path();
+    std::filesystem::current_path(launch);
+    const auto cwd = std::filesystem::current_path();
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "-d", "scene", "-o", output.c_str(),
+        "--init", "./scene/init.ply", "--add-splat", "scene/../scene/extra.ply"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    std::filesystem::current_path(previous);
+
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->dataset.data_path, cwd / "scene");
+    ASSERT_TRUE((*parsed)->init_path);
+    EXPECT_EQ(lfs::core::utf8_to_path(*(*parsed)->init_path), cwd / "scene" / "init.ply");
+    ASSERT_EQ((*parsed)->add_splat_paths.size(), 1u);
+    EXPECT_EQ((*parsed)->add_splat_paths[0], cwd / "scene" / "extra.ply");
+}
+
 TEST(ArgumentParserTest, RejectsUnknownLogLevels) {
     const auto data_path = make_test_path("lfs_arg_parser_log_level_data");
     const auto output_path = make_test_path("lfs_arg_parser_log_level_output");
@@ -2608,6 +2634,60 @@ TEST(ArgumentParserTest, EvalBoxMaskNormalizesSurvivesResumeAndRejectsMalformedB
         params.eval_mask = spec;
         EXPECT_FALSE(params.validate().empty()) << spec;
     }
+}
+
+// Catches mask report lists that select the wrong sets, are not stored in the project and the explicit overrides,
+// accept an entry they cannot score, or turn on without an evaluation; and compare ignoring the option.
+TEST(ArgumentParserTest, EvalMaskReportSelectsSetsSurvivesResumeAndRejectsBadLists) {
+    const auto parse = [](const char* report) {
+        const char* argv[] = {"LichtFeld-Studio", "--eval", "--eval-mask", "bbox:-1,-1,-1,1,1,1", report};
+        return lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    };
+    for (const auto& [report, unmasked, inverted] :
+         {std::tuple{"--eval-mask-report=mask", false, false},
+          std::tuple{"--eval-mask-report=inverted, mask", false, true},
+          std::tuple{"--eval-mask-report=mask,unmasked,inverted", true, true}}) {
+        SCOPED_TRACE(report);
+        const auto parsed = parse(report);
+        ASSERT_TRUE(parsed) << parsed.error();
+        EXPECT_EQ((*parsed)->optimization.eval_mask_report_unmasked, unmasked);
+        EXPECT_EQ((*parsed)->optimization.eval_mask_report_inverted, inverted);
+        const auto round_trip = lfs::core::param::OptimizationParameters::from_json((*parsed)->optimization.to_json());
+        EXPECT_EQ(round_trip.eval_mask_report_unmasked, unmasked);
+        EXPECT_EQ(round_trip.eval_mask_report_inverted, inverted);
+        lfs::core::param::TrainingParameters restored;
+        restored.optimization.eval_mask_report_unmasked = !unmasked;
+        restored.optimization.eval_mask_report_inverted = !inverted;
+        apply_explicit_training_overrides(restored, (*parsed)->overrides);
+        EXPECT_EQ(restored.optimization.eval_mask_report_unmasked, unmasked);
+        EXPECT_EQ(restored.optimization.eval_mask_report_inverted, inverted);
+    }
+
+    for (const char* bad : {"--eval-mask-report=unmasked", "--eval-mask-report=mask,background",
+                            "--eval-mask-report=mask,mask", "--eval-mask-report=mask,", "--eval-mask-report="}) {
+        const auto parsed = parse(bad);
+        ASSERT_FALSE(parsed) << bad;
+        EXPECT_NE(parsed.error().find("--eval-mask-report"), std::string::npos) << parsed.error();
+    }
+    const char* without_eval[] = {"LichtFeld-Studio", "--eval-mask-report=mask,unmasked"};
+    EXPECT_FALSE(lfs::core::args::parse_args_and_params(static_cast<int>(std::size(without_eval)), without_eval));
+
+    const auto directory = std::filesystem::path(make_test_path("lfs_arg_parser_compare_report"));
+    std::filesystem::create_directories(directory / "reference");
+    std::filesystem::create_directories(directory / "test");
+    const auto reference = (directory / "reference").string();
+    const auto test = (directory / "test").string();
+    const char* compare_argv[] = {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(),
+                                  "--eval-mask-report=mask,unmasked"};
+    const auto compared = lfs::core::args::parse_args(static_cast<int>(std::size(compare_argv)), compare_argv);
+    ASSERT_TRUE(compared) << compared.error();
+    const auto* mode = std::get_if<lfs::core::args::CompareMode>(&*compared);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_TRUE(mode->params.evaluation.eval_mask_report_unmasked);
+    EXPECT_FALSE(mode->params.evaluation.eval_mask_report_inverted);
+    const char* compare_bad[] = {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(),
+                                 "--eval-mask-report=inverted"};
+    EXPECT_FALSE(lfs::core::args::parse_args(static_cast<int>(std::size(compare_bad)), compare_bad));
 }
 
 // Catches a folder, depth or crop box source that is stored unnormalized or accepted when malformed, and

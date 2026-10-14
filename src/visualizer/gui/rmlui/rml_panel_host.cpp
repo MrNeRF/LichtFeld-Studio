@@ -321,9 +321,11 @@ namespace lfs::vis::gui {
             return false;
 
         const float scroll_top = scroll_el_ ? scroll_el_->GetScrollTop() : 0.0f;
-        // The live resize target belongs to the current document. Never retain
-        // it across UnloadDocument(), where it immediately becomes dangling.
+        // Element pointers belong to the current document. Never retain them
+        // across UnloadDocument(), where they immediately become dangling.
         live_inspector_resize_target_ = nullptr;
+        close_button_ = nullptr;
+        close_button_bound_ = false;
         resize_cursor_override_.clear();
         if (document_) {
             rml_context_->UnloadDocument(document_);
@@ -353,6 +355,8 @@ namespace lfs::vis::gui {
         manual_dropdown_mouse_captured_ = false;
         for (auto& captured : mouse_captured_)
             captured = false;
+        for (auto& pressed : pointer_press_target_)
+            pressed.reset();
 
         if (!loadDocument())
             return false;
@@ -1210,6 +1214,19 @@ namespace lfs::vis::gui {
                                   frame_el_->GetComputedValues().border_radius());
     }
 
+    void RmlPanelHost::CloseButtonListener::ProcessEvent(Rml::Event&) {
+        PanelRegistry::instance().set_panel_enabled(host_->context_name_, false);
+    }
+
+    void RmlPanelHost::bindCloseButton() {
+        if (close_button_bound_ || !document_)
+            return;
+        close_button_bound_ = true;
+        close_button_ = document_->GetElementById("close-btn");
+        if (close_button_)
+            close_button_->AddEventListener("click", &close_listener_);
+    }
+
     bool RmlPanelHost::forwardInput(float panel_x, float panel_y) {
         assert(rml_context_);
 
@@ -1222,6 +1239,7 @@ namespace lfs::vis::gui {
                 render_needed_ |= forwardInput(panel_x, panel_y);
                 input_ = saved; }, false, [this](float x, float y) { return !floating_ && PanelRegistry::instance().isPositionOverFloatingPanel(x, y); }))
             return false;
+        bindCloseButton();
         bool had_input = false;
         const auto& input = *input_;
         auto* const text_input_handler = manager_ ? manager_->getTextInputHandler() : nullptr;
@@ -1380,10 +1398,32 @@ namespace lfs::vis::gui {
         }
 
         const auto deliver_button_down = [&](const int button) {
+            auto* const pressed = rml_context_->GetHoverElement();
+            pointer_press_target_[button] =
+                pressed ? pressed->GetObserverPtr() : Rml::ObserverPtr<Rml::Element>{};
             rml_context_->ProcessMouseButtonDown(button, mods);
             mouse_captured_[button] = true;
         };
-        const auto deliver_button_up = [&](const int button) {
+        const auto deliver_button_up = [&](const int button, const int x, const int y) {
+            auto pressed = pointer_press_target_[button];
+            pointer_press_target_[button].reset();
+            // Mouseup goes to the hover element, and a click only when that hover
+            // is still the pressed element. Outside the panel the hover is empty,
+            // so deliver mouseup to the pressed element and leave the click out.
+            if (pressed && rml_context_->GetHoverElement() == nullptr) {
+                Rml::Dictionary parameters;
+                parameters["mouse_x"] = x;
+                parameters["mouse_y"] = y;
+                parameters["button"] = button;
+                parameters["ctrl_key"] = static_cast<int>((mods & Rml::Input::KM_CTRL) != 0);
+                parameters["shift_key"] = static_cast<int>((mods & Rml::Input::KM_SHIFT) != 0);
+                parameters["alt_key"] = static_cast<int>((mods & Rml::Input::KM_ALT) != 0);
+                parameters["meta_key"] = static_cast<int>((mods & Rml::Input::KM_META) != 0);
+                parameters["caps_lock_key"] = static_cast<int>((mods & Rml::Input::KM_CAPSLOCK) != 0);
+                parameters["num_lock_key"] = static_cast<int>((mods & Rml::Input::KM_NUMLOCK) != 0);
+                parameters["scroll_lock_key"] = static_cast<int>((mods & Rml::Input::KM_SCROLLLOCK) != 0);
+                pressed->DispatchEvent(Rml::EventId::Mouseup, parameters);
+            }
             rml_context_->ProcessMouseButtonUp(button, mods);
             mouse_captured_[button] = false;
             had_input = true;
@@ -1415,7 +1455,7 @@ namespace lfs::vis::gui {
             if (event.down)
                 deliver_button_down(event.button);
             else
-                deliver_button_up(event.button);
+                deliver_button_up(event.button, static_cast<int>(event_x), static_cast<int>(event_y));
             sync_text_focus();
             had_input = true;
         };
@@ -1490,7 +1530,7 @@ namespace lfs::vis::gui {
         for (int button = 0; button < 2; ++button) {
             if (mouse_captured_[button] &&
                 (input.mouse_released[button] || !input.mouse_down[button])) {
-                deliver_button_up(button);
+                deliver_button_up(button, rml_mx, rml_my);
             }
         }
 

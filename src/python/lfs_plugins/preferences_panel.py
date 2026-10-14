@@ -265,6 +265,8 @@ class PreferencesPanel(Panel):
         model.bind_event("accept_and_close", self._on_accept_and_close)
         model.bind_event("reset_current_section", self._on_reset_current_section)
         model.bind_event("reset_all_settings", self._on_reset_all_settings)
+        model.bind_event("save_startup_sidebar", lambda *_: lf.ui.save_startup_sidebar())
+        model.bind_event("clear_startup_sidebar", lambda *_: lf.ui.clear_startup_sidebar())
         model.bind_event("show_general", lambda *_: self._set_section("general"))
         model.bind_event("show_appearance", lambda *_: self._set_section("appearance"))
         model.bind_event("show_input", lambda *_: self._set_section("input"))
@@ -1634,6 +1636,7 @@ class PreferencesPanel(Panel):
             lf.set_camera_navigation_mode("orbit")
             lf.set_camera_view_snap_enabled(False)
         elif section == "interface":
+            lf.ui.clear_startup_sidebar()
             lf.ui.set_native_floating_windows(False)
             if not self._mcp_safe_mode:
                 lf.ui.set_scene_graph_selection_markers(False)

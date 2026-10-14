@@ -614,6 +614,8 @@
       "bg_image_clear": "選択した背景画像をクリア",
       "eval_mask": "評価するピクセルを選択します: メッシュ、ボックス、crop box、マスクフォルダー、深度範囲、ポイント、またはスプラット。学習には影響しません。",
       "eval_mask_invert": "代わりに評価マスクの外側のピクセルを評価します。",
+      "eval_mask_report_unmasked": "同じレンダリングから、マスクなしと同様に各ビューのすべての有効ピクセルも評価します。",
+      "eval_mask_report_inverted": "同じレンダリングから、評価マスクの外側の有効ピクセルも評価します。",
       "eval_mask_opacity": "スプラットマスクに含まれるとみなすピクセルのレンダリング不透明度です。低いとマスクが輪郭の外側に広がり、高いと内側に縮まります。",
       "eval_mask_browse": "評価メッシュを選択",
       "eval_mask_clear": "評価マスクをクリア",
@@ -1053,7 +1055,10 @@
     "viewport_defaults_hint": "新規プロジェクトに適用されます。既存のプロジェクトでは保存済みの値が維持されます。",
     "viewport_style_defaults": "ガイドと選択のスタイル",
     "viewport_performance_defaults": "LODキャッシュ上限",
-    "viewport_defaults_invalid": "対応範囲内の有効な値を入力してください。"
+    "viewport_defaults_invalid": "対応範囲内の有効な値を入力してください。",
+    "sidebar_defaults_description": "現在の右サイドバーの幅、シーンの分割位置、アクティブなタブをアプリ起動時の設定として保存します。既存の .licht プロジェクトでは、そのプロジェクトのワークスペースが復元されます。新規プロジェクトでは現在のワークスペースが維持されます。",
+    "save_startup_sidebar": "起動時のサイドバーを保存",
+    "clear_startup_sidebar": "起動時のサイドバー設定をクリア"
   },
   "main_panel": {
     "console": "コンソール",
@@ -1799,6 +1804,8 @@
     "eval_bit_depth": "Eval Bit Depth:",
     "eval_mask": "評価マスク:",
     "eval_mask_invert": "評価マスクを反転:",
+    "eval_mask_report_unmasked": "マスクなしでも評価:",
+    "eval_mask_report_inverted": "反転マスクでも評価:",
     "eval_mask_opacity": "スプラットマスク不透明度:",
     "eval_mask_use_cropbox": "crop box を使用",
     "eval_mask_folder": "マスクフォルダー",
@@ -2098,10 +2105,28 @@
     "overwrite_proceed": "続行（重複を上書き）",
     "overwrite_cancel": "キャンセル",
     "overwrite_delete_error": "{} を削除できませんでした: {}",
+    "videos": "動画:",
+    "add_videos": "動画を追加...",
+    "remove_video": "削除",
+    "clear_videos": "クリア",
+    "output_root": "出力ルート:",
+    "continue_batch_on_failure": "動画の抽出に失敗しても残りを続行する",
+    "batch_video_count": "{} 本の動画を選択",
+    "batch_summary": "{} 本 · 完了 {} · 失敗 {}",
+    "batch_no_videos": "抽出を開始する前に少なくとも1本の動画を追加してください。",
+    "batch_no_output_root": "このバッチの出力ルートを選択してください。",
+    "batch_pending": "待機中",
+    "batch_running": "抽出中",
+    "batch_complete": "完了",
+    "batch_failed": "失敗",
+    "batch_stopped": "停止",
+    "batch_existing_output": "既存の出力",
     "rotate_cw": "時計回りに回転",
     "rotate_ccw": "反時計回りに回転",
     "discarded_format": " ({} 破棄)",
-    "extracting": "抽出中：%d / %dフレーム"
+    "extracting": "抽出中：%d / %dフレーム",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "視野角: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2604,7 +2629,8 @@
     "perf_collapse": "折りたたむ",
     "gt_metrics_training_required": "カメラ指標には初期化済みのトレーニングセッションが必要です。",
     "gt_metrics_calculation_failed": "このビューの指標を計算できませんでした。",
-    "perf_hud_tooltip": "パフォーマンス HUD の表示/非表示"
+    "perf_hud_tooltip": "パフォーマンス HUD の表示/非表示",
+    "all_panel_tabs": "すべてのパネル"
   },
   "runtime": {
     "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",

@@ -182,57 +182,57 @@ namespace lfs::rendering {
             const int num_model_transforms,
             const uint8_t* __restrict__ node_visibility,
             const int node_visibility_count) {
-            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) {
-                return;
-            }
-
-            int transform_idx = transform_indices != nullptr ? transform_indices[idx] : 0;
-            if (node_visibility != nullptr && transform_indices != nullptr) {
-                if (transform_idx < 0 ||
-                    transform_idx >= node_visibility_count ||
-                    node_visibility[transform_idx] == 0) {
-                    writeInvalidScreenPosition(output, idx);
-                    return;
-                }
-            }
-
-            float3 pos = means[idx];
-            if (model_transforms != nullptr && num_model_transforms > 0) {
-                transform_idx = min(max(transform_idx, 0), num_model_transforms - 1);
-                const float* const m = model_transforms + transform_idx * 16;
-                pos = make_float3(
-                    m[0] * pos.x + m[1] * pos.y + m[2] * pos.z + m[3],
-                    m[4] * pos.x + m[5] * pos.y + m[6] * pos.z + m[7],
-                    m[8] * pos.x + m[9] * pos.y + m[10] * pos.z + m[11]);
-            }
-
-            const float dx = pos.x - translation.x;
-            const float dy = pos.y - translation.y;
-            const float dz = pos.z - translation.z;
-            const float view_x = view_row0.x * dx + view_row0.y * dy + view_row0.z * dz;
-            const float view_y = view_row1.x * dx + view_row1.y * dy + view_row1.z * dz;
-            const float view_z = view_row2.x * dx + view_row2.y * dy + view_row2.z * dz;
-            if (!isfinite(view_x) || !isfinite(view_y) || !isfinite(view_z) || view_z >= -1.0e-6f) {
-                writeInvalidScreenPosition(output, idx);
-                return;
-            }
-
+            // The host launch caps the grid at kCountMaxBlocks. Stride across the
+            // whole cloud so splats past the first 4096*256 still get a position.
             const float cx = static_cast<float>(width) * 0.5f;
             const float cy = static_cast<float>(height) * 0.5f;
-            if (orthographic) {
-                if (!isfinite(ortho_scale) || ortho_scale <= 0.0f) {
-                    writeInvalidScreenPosition(output, idx);
-                    return;
+            const int stride = blockDim.x * gridDim.x;
+            for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                int transform_idx = transform_indices != nullptr ? transform_indices[idx] : 0;
+                if (node_visibility != nullptr && transform_indices != nullptr) {
+                    if (transform_idx < 0 ||
+                        transform_idx >= node_visibility_count ||
+                        node_visibility[transform_idx] == 0) {
+                        writeInvalidScreenPosition(output, idx);
+                        continue;
+                    }
                 }
-                output[idx] = make_float2(cx + view_x * ortho_scale, cy - view_y * ortho_scale);
-                return;
-            }
 
-            const float depth = -view_z;
-            output[idx] = make_float2(
-                cx + view_x * pixel_focal_x / depth,
-                cy - view_y * pixel_focal_y / depth);
+                float3 pos = means[idx];
+                if (model_transforms != nullptr && num_model_transforms > 0) {
+                    transform_idx = min(max(transform_idx, 0), num_model_transforms - 1);
+                    const float* const m = model_transforms + transform_idx * 16;
+                    pos = make_float3(
+                        m[0] * pos.x + m[1] * pos.y + m[2] * pos.z + m[3],
+                        m[4] * pos.x + m[5] * pos.y + m[6] * pos.z + m[7],
+                        m[8] * pos.x + m[9] * pos.y + m[10] * pos.z + m[11]);
+                }
+
+                const float dx = pos.x - translation.x;
+                const float dy = pos.y - translation.y;
+                const float dz = pos.z - translation.z;
+                const float view_x = view_row0.x * dx + view_row0.y * dy + view_row0.z * dz;
+                const float view_y = view_row1.x * dx + view_row1.y * dy + view_row1.z * dz;
+                const float view_z = view_row2.x * dx + view_row2.y * dy + view_row2.z * dz;
+                if (!isfinite(view_x) || !isfinite(view_y) || !isfinite(view_z) || view_z >= -1.0e-6f) {
+                    writeInvalidScreenPosition(output, idx);
+                    continue;
+                }
+
+                if (orthographic) {
+                    if (!isfinite(ortho_scale) || ortho_scale <= 0.0f) {
+                        writeInvalidScreenPosition(output, idx);
+                        continue;
+                    }
+                    output[idx] = make_float2(cx + view_x * ortho_scale, cy - view_y * ortho_scale);
+                    continue;
+                }
+
+                const float depth = -view_z;
+                output[idx] = make_float2(
+                    cx + view_x * pixel_focal_x / depth,
+                    cy - view_y * pixel_focal_y / depth);
+            }
         }
 
         __device__ __forceinline__ bool betterPickCandidate(

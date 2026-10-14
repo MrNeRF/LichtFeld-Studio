@@ -70,6 +70,10 @@
     min-height: 20dp;
 }
 
+.ep-model-row.is-group .ep-model-name {
+    font-weight: bold;
+}
+
 .ep-model-row .setting-label {
     flex: 1;
     min-width: 0;

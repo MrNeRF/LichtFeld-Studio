@@ -614,6 +614,8 @@
       "bg_image_clear": "Wyczyść wybrany obraz tła",
       "eval_mask": "Wybiera piksele do ewaluacji: siatkę, prostopadłościan, crop box, folder masek, zakres głębi, punkty lub splat. Trening się nie zmienia.",
       "eval_mask_invert": "Ocenia zamiast tego piksele poza maską ewaluacji.",
+      "eval_mask_report_unmasked": "Ocenia też wszystkie prawidłowe piksele każdego widoku, jak bez maski, z tego samego renderu.",
+      "eval_mask_report_inverted": "Ocenia też prawidłowe piksele poza maską ewaluacji, z tego samego renderu.",
       "eval_mask_opacity": "Renderowane krycie, którego piksel potrzebuje, aby należeć do maski splat. Niższe poszerza maskę poza obrys, wyższe ją zawęża.",
       "eval_mask_browse": "Wybierz siatkę do oceny",
       "eval_mask_clear": "Wyczyść maskę ewaluacji",
@@ -1053,7 +1055,10 @@
     "viewport_defaults_hint": "Te wartości inicjują nowe projekty. Istniejące projekty zachowują zapisane wartości.",
     "viewport_style_defaults": "Styl prowadnic i zaznaczenia",
     "viewport_performance_defaults": "Limity pamięci podręcznej LOD",
-    "viewport_defaults_invalid": "Wprowadź prawidłową wartość z obsługiwanego zakresu."
+    "viewport_defaults_invalid": "Wprowadź prawidłową wartość z obsługiwanego zakresu.",
+    "sidebar_defaults_description": "Zapisz bieżącą szerokość prawego paska bocznego, podział sceny i aktywną kartę na potrzeby uruchamiania aplikacji. Istniejące projekty .licht przywracają własną przestrzeń roboczą. Nowy projekt zachowuje bieżącą przestrzeń roboczą.",
+    "save_startup_sidebar": "Zapisz pasek boczny na start",
+    "clear_startup_sidebar": "Wyczyść ustawienia startowe paska bocznego"
   },
   "main_panel": {
     "console": "Konsola",
@@ -1799,6 +1804,8 @@
     "eval_bit_depth": "Eval Bit Depth:",
     "eval_mask": "Maska ewaluacji:",
     "eval_mask_invert": "Odwróć maskę:",
+    "eval_mask_report_unmasked": "Oceń też bez maski:",
+    "eval_mask_report_inverted": "Oceń też odwrotność:",
     "eval_mask_opacity": "Krycie maski splat:",
     "eval_mask_use_cropbox": "Użyj crop boxa",
     "eval_mask_folder": "Folder masek",
@@ -2098,10 +2105,28 @@
     "overwrite_proceed": "Kontynuuj (nadpisz duplikaty)",
     "overwrite_cancel": "Anuluj",
     "overwrite_delete_error": "Nie udało się usunąć {}: {}",
+    "videos": "Wideo:",
+    "add_videos": "Dodaj wideo...",
+    "remove_video": "Usuń",
+    "clear_videos": "Wyczyść",
+    "output_root": "Katalog wyjściowy:",
+    "continue_batch_on_failure": "Kontynuuj pozostałe filmy, jeśli jeden się nie powiedzie",
+    "batch_video_count": "Wybrano {} filmów",
+    "batch_summary": "{} filmów · ukończono {} · niepowodzenia {}",
+    "batch_no_videos": "Dodaj co najmniej jeden film przed rozpoczęciem ekstrakcji.",
+    "batch_no_output_root": "Wybierz katalog wyjściowy dla tej partii.",
+    "batch_pending": "Oczekuje",
+    "batch_running": "Ekstrakcja",
+    "batch_complete": "Ukończono",
+    "batch_failed": "Niepowodzenie",
+    "batch_stopped": "Zatrzymano",
+    "batch_existing_output": "Istniejące dane wyjściowe",
     "rotate_cw": "Obróć w prawo",
     "rotate_ccw": "Obróć w lewo",
     "discarded_format": " ({} odrzuconych)",
-    "extracting": "Wyodrębnianie: %d / %d klatek"
+    "extracting": "Wyodrębnianie: %d / %d klatek",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "Pole widzenia: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2604,7 +2629,8 @@
     "perf_collapse": "Zwiń",
     "gt_metrics_training_required": "Metryki kamery wymagają zainicjowanej sesji treningowej.",
     "gt_metrics_calculation_failed": "Nie udało się obliczyć metryk dla tego widoku.",
-    "perf_hud_tooltip": "Pokaż lub ukryj HUD wydajności"
+    "perf_hud_tooltip": "Pokaż lub ukryj HUD wydajności",
+    "all_panel_tabs": "Wszystkie panele"
   },
   "runtime": {
     "environment_map_failed": "Nie można odczytać mapy środowiska „{}”. Zachowano poprzednie środowisko.",

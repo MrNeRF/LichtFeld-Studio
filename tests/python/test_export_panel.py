@@ -34,7 +34,7 @@ def _install_lf_stub(monkeypatch):
     )
     panel_height_mode = SimpleNamespace(FILL="fill", CONTENT="content")
     panel_option = SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED", HIDE_HEADER="HIDE_HEADER")
-    node_type = IntEnum("NodeType", {"SPLAT": 1, "MESH": 2})
+    node_type = IntEnum("NodeType", {"SPLAT": 1, "MESH": 2, "GROUP": 3})
     state = SimpleNamespace(
         language=["en"],
         nodes=[],
@@ -180,8 +180,10 @@ def test_export_panel_builds_format_and_model_records(export_panel_module):
         {"index": "7", "label": "export.format.colmap_sparse", "selected": False},
     ]
     assert panel._handle.records["models"] == [
-        {"name": "Tree", "selected": True, "count_text": "(128)"},
-        {"name": "House", "selected": False, "count_text": "(64)"},
+        {"name": "Tree", "selected": True, "count_text": "(128)",
+         "is_group": False, "partial": False, "indent": "4dp", "group_id": ""},
+        {"name": "House", "selected": False, "count_text": "(64)",
+         "is_group": False, "partial": False, "indent": "4dp", "group_id": ""},
     ]
     assert panel._has_models is True
     assert panel.update_policy == "dirty"
@@ -200,7 +202,10 @@ def test_export_panel_counts_only_splats_that_are_not_deleted(export_panel_modul
 
     panel._rebuild_model_records(state.nodes)
 
-    assert panel._handle.records["models"] == [{"name": "Tree", "selected": True, "count_text": "(96)"}]
+    assert panel._handle.records["models"] == [{
+        "name": "Tree", "selected": True, "count_text": "(96)",
+        "is_group": False, "partial": False, "indent": "4dp", "group_id": "",
+    }]
 
 
 def test_export_panel_seeds_selection_from_scene_nodes(export_panel_module):
@@ -568,3 +573,82 @@ def test_ssog_bundle_default_and_option_forwarding(export_panel_module, monkeypa
         assert calls[0][1]["lod_levels"] == 3
     else:
         assert not calls
+
+
+def _linked(node_type, name, count, node_id, parent_id=-1, children=()):
+    node = _make_node(node_type, name, count)
+    node.id, node.parent_id, node.children = node_id, parent_id, list(children)
+    degree = 1 if name == "A" else 3
+    node.splat_data = lambda n=node, d=degree: SimpleNamespace(max_sh_degree=d, visible_count=lambda: n.gaussian_count)
+    return node
+
+def _toggle(panel, name, checked, group_id=""):
+    attrs = {"type": "checkbox", "data-node-name": name}
+    if group_id:
+        attrs["data-group-id"] = group_id
+    element = SimpleNamespace(
+        tag_name="input", parent=lambda: None,
+        has_attribute=lambda attr: checked if attr == "checked" else attr in attrs,
+        get_attribute=lambda attr, default="": attrs.get(attr, default))
+    panel._on_model_toggle(SimpleNamespace(current_target=lambda: SimpleNamespace(), target=lambda: element))
+
+def test_export_panel_group_selects_nested_models(export_panel_module):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    splat, group = module.lf.scene.NodeType.SPLAT, module.lf.scene.NodeType.GROUP
+    panel._selected_nodes = {"Tree"}
+    state.nodes = [_make_node(splat, "Tree", 128), _make_node(splat, "House", 64)]
+    panel._rebuild_model_records(state.nodes)
+    flat = panel._handle.records["models"]
+    assert [(r["name"], r["selected"], r["count_text"]) for r in flat] == [
+        ("Tree", True, "(128)"), ("House", False, "(64)"),
+    ]
+    assert not any(r.get("is_group") for r in flat)
+
+    outer = _linked(group, "Outer", 0, 1, children=(2, 3))
+    nested = _linked(group, "Nested", 0, 2, 1, (4,))
+    model_a, model_b = _linked(splat, "A", 10, 4, 2), _linked(splat, "B", 20, 3, 1)
+    loose = _linked(splat, "Loose", 5, 6)
+    state.nodes = [model_a, loose, model_b, outer, nested, _linked(group, "Empty", 0, 9),
+                   _linked(module.lf.scene.NodeType.MESH, "Mesh", 0, 8)]
+    panel._selected_nodes = set()
+    _toggle(panel, "Outer", True, "1")
+    assert panel._selected_nodes == {"A", "B"}
+    by_name = {row["name"]: row for row in panel._handle.records["models"]}
+    assert list(by_name) == ["Loose", "Outer", "Nested", "A", "B"]
+    assert by_name["Outer"]["selected"] and not by_name["Outer"]["partial"] and by_name["A"]["indent"] != by_name["Loose"]["indent"]
+    _toggle(panel, "B", False)
+    partial = {row["name"]: row for row in panel._handle.records["models"]}
+    assert partial["Outer"]["partial"] and not partial["Outer"]["selected"] and partial["Nested"]["selected"] and not partial["Nested"]["partial"]
+    _toggle(panel, "Outer", False, "1")
+    assert panel._selected_nodes == set()
+
+    _toggle(panel, "Outer", True, "1")
+    panel._do_export()
+    grouped = (state.export_calls[-1][2], panel._get_export_label(),
+               panel._compute_max_export_sh_degree(state.nodes))
+    panel._ssog_folder_name, folder = "", panel._get_ssog_folder_name()
+    panel._exporting = False
+    panel._selected_nodes = set()
+    _toggle(panel, "A", True)
+    _toggle(panel, "B", True)
+    panel._do_export()
+    assert grouped[0] == state.export_calls[-1][2] == ("A", "B")
+    assert panel._get_export_label() == grouped[1] == "export_dialog.export_merged"
+    assert panel._compute_max_export_sh_degree(state.nodes) == grouped[2] == 1
+    panel._ssog_folder_name = ""
+    assert panel._get_ssog_folder_name() == folder == "A_ssog"
+
+    panel._exporting = False
+    panel._selection_seeded, panel._selected_nodes = True, {"A", "B", "Loose"}
+    panel._last_lang, panel._last_node_key = "en", None
+    panel._last_colmap_source_path = state.colmap_source_path
+    writes, base = [], panel._handle.update_record_list
+    panel._handle.update_record_list = lambda name, rows: (writes.append(name) if name == "models" else None, base(name, rows))
+    panel.on_update(None)
+    panel.on_update(None)
+    assert writes == ["models"]
+    loose.parent_id, outer.children = 1, [2, 3, 6]
+    panel.on_update(None)
+    assert writes == ["models", "models"]

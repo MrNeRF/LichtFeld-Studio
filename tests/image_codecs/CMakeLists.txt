@@ -29,6 +29,7 @@ endif()
 add_executable(lichtfeld_image_codec_tests
     ../test_exr_codecs.cpp
     ../test_image_codec_dependencies.cpp
+    ../test_tiff_orientation.cpp
     ${LFS_CODEC_ROOT}/src/core/image_codecs.cpp
     ${LFS_CODEC_ROOT}/src/core/image_exr.cpp)
 target_compile_features(lichtfeld_image_codec_tests PRIVATE cxx_std_20)

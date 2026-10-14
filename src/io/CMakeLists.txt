@@ -131,6 +131,8 @@ add_library(lfs_video STATIC
         video/color_convert.cu
         video/cuda_frame_handoff.hpp
         video/cuda_frame_handoff.cpp
+        video/video_metadata.hpp
+        video/video_metadata.cpp
         video_frame_extractor.hpp
         video_frame_extractor.cpp
         hdr_tonemap.hpp

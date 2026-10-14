@@ -40,6 +40,7 @@ def preferences_panel_module(monkeypatch):
 
     state = SimpleNamespace(
         language="it",
+        sidebar_clear_calls=[],
         set_language_calls=[],
         mcp_preferences={
             "enabled": True,
@@ -141,6 +142,7 @@ def preferences_panel_module(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
+        clear_startup_sidebar=lambda: state.sidebar_clear_calls.append(True),
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
         PanelHeightMode=SimpleNamespace(FILL="fill"),
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
@@ -1008,6 +1010,7 @@ def test_safe_mode_reset_does_not_stage_mcp_changes(preferences_panel_module):
     module.lf.set_camera_view_snap_enabled = lambda *_a, **_k: None
 
     panel._on_reset_all_settings(None, None, None)
+    assert state.sidebar_clear_calls == [True]
 
     assert state.set_mcp_calls == []
     assert state.render_settings.scene_upscaler == "native"
@@ -1329,11 +1332,12 @@ def test_interface_reset_disables_external_windows_without_resetting_input(prefe
     state.native_floating_windows = True
     calls = []
     module.lf.ui.reset_layout = lambda: calls.append('layout')
+    module.lf.ui.clear_startup_sidebar = lambda: calls.append('clear_sidebar')
     module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
     module.lf.keymap.reset_to_default = lambda: calls.append('input')
     panel._reset_section('interface')
     assert state.native_floating_windows is False
-    assert calls == ['layout']
+    assert calls == ['clear_sidebar', 'layout']
 
 
 def test_appearance_reset_preserves_native_window_mode(preferences_panel_module):

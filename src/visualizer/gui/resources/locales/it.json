@@ -614,6 +614,8 @@
       "bg_image_clear": "Rimuovi l'immagine di sfondo selezionata",
       "eval_mask": "Seleziona i pixel da valutare: una mesh, un box, il crop box, una cartella di maschere, un intervallo di profondità, punti o uno splat. L'addestramento non cambia.",
       "eval_mask_invert": "Valuta invece i pixel fuori dalla maschera di valutazione.",
+      "eval_mask_report_unmasked": "Valuta anche tutti i pixel validi di ogni vista, come senza maschera, dallo stesso rendering.",
+      "eval_mask_report_inverted": "Valuta anche i pixel validi fuori dalla maschera di valutazione, dallo stesso rendering.",
       "eval_mask_opacity": "Opacità renderizzata che un pixel deve raggiungere per essere coperto da una maschera splat. Più bassa allarga la maschera oltre il contorno, più alta la restringe.",
       "eval_mask_browse": "Scegli una mesh di valutazione",
       "eval_mask_clear": "Cancella la maschera di valutazione",
@@ -1053,7 +1055,10 @@
     "viewport_defaults_hint": "Questi valori inizializzano i nuovi progetti. I progetti esistenti conservano i valori salvati.",
     "viewport_style_defaults": "Stile guide e selezione",
     "viewport_performance_defaults": "Limiti cache LOD",
-    "viewport_defaults_invalid": "Inserisci un valore valido nell’intervallo supportato."
+    "viewport_defaults_invalid": "Inserisci un valore valido nell’intervallo supportato.",
+    "sidebar_defaults_description": "Salva larghezza, divisione Scene e scheda attiva della sidebar destra per l’avvio. I progetti .licht esistenti ripristinano il proprio workspace. Nuovo progetto mantiene il workspace corrente.",
+    "save_startup_sidebar": "Salva sidebar per l’avvio",
+    "clear_startup_sidebar": "Rimuovi sidebar di avvio"
   },
   "main_panel": {
     "console": "Console",
@@ -1799,6 +1804,8 @@
     "eval_bit_depth": "Eval Bit Depth:",
     "eval_mask": "Maschera di valutazione:",
     "eval_mask_invert": "Inverti maschera:",
+    "eval_mask_report_unmasked": "Valuta anche senza maschera:",
+    "eval_mask_report_inverted": "Valuta anche l'inverso:",
     "eval_mask_opacity": "Opacità maschera splat:",
     "eval_mask_use_cropbox": "Usa crop box",
     "eval_mask_folder": "Cartella maschere",
@@ -2098,10 +2105,28 @@
     "overwrite_proceed": "Procedi (sovrascrivi duplicati)",
     "overwrite_cancel": "Annulla",
     "overwrite_delete_error": "Impossibile rimuovere {}: {}",
+    "videos": "Video:",
+    "add_videos": "Aggiungi video...",
+    "remove_video": "Rimuovi",
+    "clear_videos": "Cancella",
+    "output_root": "Radice output:",
+    "continue_batch_on_failure": "Continua con i video rimanenti se uno non riesce",
+    "batch_video_count": "{} video selezionati",
+    "batch_summary": "{} video · {} completati · {} non riusciti",
+    "batch_no_videos": "Aggiungi almeno un video prima di iniziare l'estrazione.",
+    "batch_no_output_root": "Seleziona una radice di output per questo batch.",
+    "batch_pending": "In attesa",
+    "batch_running": "Estrazione",
+    "batch_complete": "Completato",
+    "batch_failed": "Non riuscito",
+    "batch_stopped": "Interrotto",
+    "batch_existing_output": "Output esistente",
     "rotate_cw": "Ruota in senso orario",
     "rotate_ccw": "Ruota in senso antiorario",
     "discarded_format": " ({} scartati)",
-    "extracting": "Estrazione: %d / %d fotogrammi"
+    "extracting": "Estrazione: %d / %d fotogrammi",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "Campo visivo: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2604,7 +2629,8 @@
     "perf_collapse": "Comprimi",
     "gt_metrics_training_required": "Le metriche della camera richiedono una sessione di addestramento inizializzata.",
     "gt_metrics_calculation_failed": "Impossibile calcolare le metriche di questa vista.",
-    "perf_hud_tooltip": "Mostra o nascondi l'HUD delle prestazioni"
+    "perf_hud_tooltip": "Mostra o nascondi l'HUD delle prestazioni",
+    "all_panel_tabs": "Tutti i pannelli"
   },
   "runtime": {
     "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",

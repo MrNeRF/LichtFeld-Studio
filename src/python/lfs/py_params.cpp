@@ -995,6 +995,16 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_mask_invert = v; }); },
                 "Scores the pixels outside the evaluation mask instead")
             .def_prop_rw(
+                "eval_mask_report_unmasked",
+                [](PyOptimizationParams& self) { return self.params().eval_mask_report_unmasked; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_mask_report_unmasked = v; }); },
+                "With an evaluation mask, also score every valid pixel of each view, as without the mask")
+            .def_prop_rw(
+                "eval_mask_report_inverted",
+                [](PyOptimizationParams& self) { return self.params().eval_mask_report_inverted; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_mask_report_inverted = v; }); },
+                "With an evaluation mask, also score the valid pixels outside the mask")
+            .def_prop_rw(
                 "eval_mask_opacity",
                 [](PyOptimizationParams& self) { return self.params().eval_mask_opacity; },
                 [](PyOptimizationParams& self, float v) { self.set("eval_mask_opacity", nb::cast(v)); },

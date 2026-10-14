@@ -720,9 +720,14 @@ namespace lichtfeld::Strings {
         inline constexpr const char* ESTIMATED_FRAMES = "video_extractor.estimated_frames";
         inline constexpr const char* INPUT_VIDEO = "video_extractor.input_video";
         inline constexpr const char* VIDEO = "video_extractor.video";
+        inline constexpr const char* VIDEOS = "video_extractor.videos";
+        inline constexpr const char* ADD_VIDEOS = "video_extractor.add_videos";
+        inline constexpr const char* REMOVE_VIDEO = "video_extractor.remove_video";
+        inline constexpr const char* CLEAR_VIDEOS = "video_extractor.clear_videos";
         inline constexpr const char* NO_FILE = "video_extractor.no_file";
         inline constexpr const char* BROWSE = "video_extractor.browse";
         inline constexpr const char* OUTPUT = "video_extractor.output";
+        inline constexpr const char* OUTPUT_ROOT = "video_extractor.output_root";
         inline constexpr const char* NO_DIR = "video_extractor.no_dir";
         inline constexpr const char* SELECT_FOLDER = "video_extractor.select_folder";
         inline constexpr const char* SETTINGS = "video_extractor.settings";
@@ -773,6 +778,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* OVERWRITE_DELETE = "video_extractor.overwrite_delete";
         inline constexpr const char* OVERWRITE_PROCEED = "video_extractor.overwrite_proceed";
         inline constexpr const char* OVERWRITE_DELETE_ERROR = "video_extractor.overwrite_delete_error";
+        inline constexpr const char* CONTINUE_BATCH_ON_FAILURE = "video_extractor.continue_batch_on_failure";
     } // namespace VideoExtractor
 
     namespace Mesh2Splat {

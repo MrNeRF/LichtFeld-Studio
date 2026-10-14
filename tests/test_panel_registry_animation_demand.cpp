@@ -89,8 +89,11 @@ namespace {
 
         bool poll(const lfs::vis::gui::PanelDrawContext&) override {
             ++poll_count;
-            if (poll_action)
-                poll_action();
+            // Poll callbacks may replace themselves. Keep the current callable
+            // alive until it returns, independent of allocator/test order.
+            const auto action = poll_action;
+            if (action)
+                action();
             return poll_result;
         }
 
@@ -722,6 +725,60 @@ TEST_F(PanelRegistryAnimationDemandTest, DesktopHostIsRequestedOnlyWhenDraggingB
     draw();
     EXPECT_EQ(panel->detach_count, 1);
     EXPECT_GT(panel->detach_x, 1280);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, HiddenDragDoesNotBlockAnotherPanelResize) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    for (const char* id : {"test.abandoned", "test.resize"}) {
+        auto panel = std::make_shared<RecordingPanel>();
+        panel->height = 200;
+        PanelInfo info;
+        info.id = id;
+        info.label = id;
+        info.space = PanelSpace::Floating;
+        info.initial_width = 400;
+        info.initial_height = 200;
+        info.is_native = false;
+        info.panel = panel;
+        ASSERT_TRUE(registry.register_panel(std::move(info)));
+    }
+    registry.set_panel_enabled("test.resize", false);
+    ViewportLayout viewport;
+    viewport.size = {1280, 720};
+    PanelDrawContext context;
+    context.viewport = &viewport;
+    context.scene_generation = 1;
+    PanelInputState input;
+    input.screen_w = 1280;
+    input.screen_h = 720;
+    auto draw = [&] {
+        registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating), .input = &input}, context);
+    };
+    auto state = [&](const std::string& id) {
+        const auto all = registry.capture_project_state();
+        return *std::ranges::find(all, id, &PanelProjectState::id);
+    };
+    draw();
+    const auto first = state("test.abandoned");
+    input.mouse_x = first.float_last_x + 80;
+    input.mouse_y = first.float_last_y + 15;
+    input.mouse_down[0] = input.mouse_clicked[0] = true;
+    draw();
+    ASSERT_TRUE(registry.has_active_floating_drag());
+    registry.set_panel_enabled("test.abandoned", false);
+    registry.set_panel_enabled("test.resize", true);
+    input.mouse_down[0] = input.mouse_clicked[0] = false;
+    draw();
+    const auto before = state("test.resize");
+    input.mouse_x = before.float_last_x + before.float_last_w;
+    input.mouse_y = before.float_last_y + before.float_last_h * 0.5f;
+    input.mouse_down[0] = input.mouse_clicked[0] = true;
+    draw();
+    input.mouse_clicked[0] = false;
+    input.mouse_x += 80;
+    draw();
+    EXPECT_NEAR(state("test.resize").float_last_w, before.float_last_w + 80, 1);
 }
 
 TEST_F(PanelRegistryAnimationDemandTest, MeasureReceivesPanelSpace) {

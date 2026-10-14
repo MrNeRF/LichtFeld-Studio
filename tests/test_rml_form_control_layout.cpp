@@ -6,7 +6,9 @@
 #include <RmlUi/Core/ElementInstancer.h>
 #include <RmlUi/Core/Factory.h>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 
 namespace {
     using namespace lfs::vis::gui;
@@ -55,6 +57,46 @@ namespace {
         }
     };
 
+    TEST_P(RmlFormControlLayoutTest, PanelPickerKeepsAllPluginTabsReachable) {
+        std::string markup = "<div id='tab-bar' class='with-scroll'><button class='tab-nav' id='tab-scroll-left'>&lt;</button>"
+                             "<div id='tab-strip-viewport'></div><button class='tab-nav' id='tab-scroll-right'>&gt;</button>"
+                             "<select id='tab-picker'>";
+        for (int i = 0; i < 40; ++i)
+            markup += "<option value='plugin-" + std::to_string(i) + "'>Plugin " + std::to_string(i) + "</option>";
+        auto* doc = load(markup + "</select></div>");
+        ASSERT_NE(doc, nullptr);
+        std::string css = "body { font-family: Inter; }";
+        for (const char* name : {"components.rcss", "panel_tabs.rcss", "right_panel.rcss"}) {
+            std::ifstream file(std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources" / name);
+            css.append(std::istreambuf_iterator<char>(file), {});
+        }
+        doc->SetStyleSheetContainer(Rml::Factory::InstanceStyleSheetString(css));
+        context->Update();
+        for (const char* id : {"tab-scroll-left", "tab-scroll-right", "tab-picker"}) {
+            const auto size = doc->GetElementById(id)->GetBox().GetSize(Rml::BoxArea::Border);
+            EXPECT_GE(size.x, 27.9f * GetParam());
+            EXPECT_GE(size.y, 27.9f * GetParam());
+        }
+        auto* picker = dynamic_cast<Rml::ElementFormControlSelect*>(doc->GetElementById("tab-picker"));
+        ASSERT_NE(picker, nullptr);
+        EXPECT_EQ(picker->GetNumOptions(), 40);
+        const auto picker_left = picker->GetAbsoluteOffset(Rml::BoxArea::Border).x;
+        auto* arrow = doc->GetElementById("tab-scroll-right");
+        const auto arrow_right = arrow->GetAbsoluteOffset(Rml::BoxArea::Border).x + arrow->GetBox().GetSize(Rml::BoxArea::Border).x;
+        EXPECT_GE(picker_left, arrow_right);
+        EXPECT_NEAR(picker->GetBox().GetSize(Rml::BoxArea::Border).x, 28 * GetParam(), 0.1f);
+        picker->Focus();
+        picker->Click();
+        context->Update();
+        context->Render();
+        for (int i = 0; i < 39; ++i)
+            context->ProcessKeyDown(Rml::Input::KI_DOWN, 0);
+        EXPECT_EQ(picker->GetValue(), "plugin-39");
+        for (int i = 0; i < 39; ++i)
+            context->ProcessKeyDown(Rml::Input::KI_UP, 0);
+        EXPECT_EQ(picker->GetValue(), "plugin-0");
+    }
+
     TEST_P(RmlFormControlLayoutTest, IntrinsicBoxesKeepTheEstablishedLayoutAtEveryScale) {
         auto* doc = load("<input id='range' type='range'/><input id='vertical' type='range' orientation='vertical'/>"
                          "<input id='checkbox' type='checkbox'/><input id='radio' type='radio'/>"
@@ -101,6 +143,52 @@ namespace {
         scroll->SetScrollTop(1000);
         EXPECT_FLOAT_EQ(scroll->GetScrollTop(), 0);
     }
+    TEST_P(RmlFormControlLayoutTest, PreferencesPopupCoversValuesInFollowingRows) {
+        auto* doc = load("<div class='preferences-row'><span class='preferences-label'>Navigation Mode</span>"
+                         "<select id='navigation' class='preferences-select' style='margin-left:0'><option>Orbit</option><option>Free Orbit</option>"
+                         "<option>Fly</option><option>Drone</option></select></div>"
+                         "<div class='setting-row setting-row--aligned'><span class='setting-row__label-col'>Zoom speed</span>"
+                         "<div class='setting-row__control-col setting-row__control-col--slider'>"
+                         "<div class='scrub-field'><div class='scrub-field-fill'></div><span id='number' class='scrub-field-display'>11</span></div></div></div>");
+        ASSERT_NE(doc, nullptr);
+        std::string css = "body { font-family: Inter; width: 600dp; }";
+        for (const char* name : {"components.rcss", "preferences.rcss"}) {
+            std::ifstream file(std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources" / name);
+            css.append(std::istreambuf_iterator<char>(file), {});
+        }
+        doc->SetStyleSheetContainer(Rml::Factory::InstanceStyleSheetString(css));
+        context->SetDimensions({int(800 * GetParam()), int(600 * GetParam())});
+        context->Update();
+        auto* select = doc->GetElementById("navigation");
+        const auto pos = select->GetAbsoluteOffset();
+        context->ProcessMouseMove(int(pos.x + 20 * GetParam()), int(pos.y + 8 * GetParam()), 0);
+        context->ProcessMouseButtonDown(0, 0);
+        context->ProcessMouseButtonUp(0, 0);
+        context->Update();
+        context->Render();
+        context->Update();
+        Rml::Element* popup = nullptr;
+        for (int i = 0; i < select->GetNumChildren(true); ++i)
+            if (select->GetChild(i)->GetTagName() == "selectbox")
+                popup = select->GetChild(i);
+        ASSERT_NE(popup, nullptr);
+        ASSERT_TRUE(popup->IsPseudoClassSet("checked"));
+        const auto number = doc->GetElementById("number")->GetAbsoluteOffset();
+        const auto popup_position = popup->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto popup_size = popup->GetBox().GetSize(Rml::BoxArea::Border);
+        const Rml::Vector2f probe{number.x + 5 * GetParam(), number.y + 5 * GetParam()};
+        ASSERT_GE(probe.x, popup_position.x);
+        ASSERT_GE(probe.y, popup_position.y);
+        ASSERT_LT(probe.x, popup_position.x + popup_size.x);
+        ASSERT_LT(probe.y, popup_position.y + popup_size.y);
+        auto* top = context->GetElementAtPoint(probe);
+        ASSERT_NE(top, nullptr);
+        SCOPED_TRACE(top->GetTagName() + " " + top->GetId());
+        while (top && top != popup)
+            top = top->GetParentNode();
+        EXPECT_EQ(top, popup);
+    }
+
     INSTANTIATE_TEST_SUITE_P(UiScales, RmlFormControlLayoutTest,
                              ::testing::Values(1.f, 1.25f, 1.5f, 1.75f, 2.f, 3.f));
 } // namespace

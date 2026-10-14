@@ -344,6 +344,50 @@ body {
     min-width: 0;
 }
 
+.batch-video-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2dp;
+    max-height: 150dp;
+    overflow-y: auto;
+    min-width: 0;
+}
+
+.batch-video-item {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    min-height: 24dp;
+    padding: 2dp 6dp;
+    background-color: rgba(49, 50, 68, 100);
+    border-width: 1dp;
+    border-color: rgba(88, 91, 112, 90);
+    color: #bac2de;
+    cursor: pointer;
+    text-align: left;
+}
+
+.batch-video-item:hover,
+.batch-video-item:focus-visible,
+.batch-video-item--selected {
+    background-color: rgba(137, 180, 250, 48);
+    border-color: rgba(137, 180, 250, 150);
+}
+
+.batch-video-item__name {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.batch-video-item__status {
+    color: #a6adc8;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
 .path-value {
     min-width: 0;
     max-width: 360dp;

@@ -614,6 +614,8 @@
       "bg_image_clear": "Ausgewähltes Hintergrundbild entfernen",
       "eval_mask": "Wählt die auszuwertenden Pixel: ein Mesh, eine Box, die Crop Box, einen Maskenordner, einen Tiefenbereich, Punkte oder einen Splat. Das Training bleibt unverändert.",
       "eval_mask_invert": "Wertet stattdessen die Pixel außerhalb der Auswertungsmaske aus.",
+      "eval_mask_report_unmasked": "Wertet zusätzlich alle gültigen Pixel jeder Ansicht aus, wie ohne Maske, aus demselben Rendering.",
+      "eval_mask_report_inverted": "Wertet zusätzlich die gültigen Pixel außerhalb der Auswertungsmaske aus, aus demselben Rendering.",
       "eval_mask_opacity": "Gerenderte Deckkraft, ab der ein Pixel als von der Splat-Maske bedeckt gilt. Niedriger erweitert die Maske über den Umriss hinaus, höher zieht sie nach innen.",
       "eval_mask_browse": "Nach einem Auswertungs-Mesh suchen",
       "eval_mask_clear": "Auswertungsmaske entfernen",
@@ -1053,7 +1055,10 @@
     "viewport_defaults_hint": "Diese Vorgaben gelten für neue Projekte. Bestehende Projekte behalten ihre gespeicherten Werte.",
     "viewport_style_defaults": "Hilfen und Auswahlstil",
     "viewport_performance_defaults": "LOD-Cache-Grenzen",
-    "viewport_defaults_invalid": "Geben Sie einen gültigen Wert im unterstützten Bereich ein."
+    "viewport_defaults_invalid": "Geben Sie einen gültigen Wert im unterstützten Bereich ein.",
+    "sidebar_defaults_description": "Die aktuelle Breite der rechten Seitenleiste, die Szenenaufteilung und den aktiven Tab für den Programmstart speichern. Bestehende .licht-Projekte stellen ihren eigenen Arbeitsbereich wieder her. Ein neues Projekt behält den aktuellen Arbeitsbereich bei.",
+    "save_startup_sidebar": "Seitenleiste für den Start speichern",
+    "clear_startup_sidebar": "Startlayout der Seitenleiste löschen"
   },
   "main_panel": {
     "console": "Konsole",
@@ -1799,6 +1804,8 @@
     "eval_bit_depth": "Eval Bit Depth:",
     "eval_mask": "Auswertungsmaske:",
     "eval_mask_invert": "Maske umkehren:",
+    "eval_mask_report_unmasked": "Auch ohne Maske werten:",
+    "eval_mask_report_inverted": "Auch invertiert werten:",
     "eval_mask_opacity": "Splat-Masken-Deckkraft:",
     "eval_mask_use_cropbox": "Crop Box verwenden",
     "eval_mask_folder": "Maskenordner",
@@ -2098,10 +2105,28 @@
     "overwrite_proceed": "Fortfahren (Duplikate überschreiben)",
     "overwrite_cancel": "Abbrechen",
     "overwrite_delete_error": "{} konnte nicht entfernt werden: {}",
+    "videos": "Videos:",
+    "add_videos": "Videos hinzufügen...",
+    "remove_video": "Entfernen",
+    "clear_videos": "Leeren",
+    "output_root": "Ausgabeordner:",
+    "continue_batch_on_failure": "Mit verbleibenden Videos fortfahren, wenn eines fehlschlägt",
+    "batch_video_count": "{} Videos ausgewählt",
+    "batch_summary": "{} Videos · {} abgeschlossen · {} fehlgeschlagen",
+    "batch_no_videos": "Fügen Sie vor dem Start mindestens ein Video hinzu.",
+    "batch_no_output_root": "Wählen Sie einen Ausgabeordner für diesen Batch.",
+    "batch_pending": "Ausstehend",
+    "batch_running": "Extrahieren",
+    "batch_complete": "Abgeschlossen",
+    "batch_failed": "Fehlgeschlagen",
+    "batch_stopped": "Angehalten",
+    "batch_existing_output": "Vorhandene Ausgabe",
     "rotate_cw": "Im Uhrzeigersinn drehen",
     "rotate_ccw": "Gegen Uhrzeigersinn drehen",
     "discarded_format": " ({} verworfen)",
-    "extracting": "Extrahiere: %d / %d Frames"
+    "extracting": "Extrahiere: %d / %d Frames",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "Sichtfeld: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2604,7 +2629,8 @@
     "perf_collapse": "Einklappen",
     "gt_metrics_training_required": "Kamerametriken benötigen eine initialisierte Trainingssitzung.",
     "gt_metrics_calculation_failed": "Metriken für diese Ansicht konnten nicht berechnet werden.",
-    "perf_hud_tooltip": "Leistungs-HUD ein- oder ausblenden"
+    "perf_hud_tooltip": "Leistungs-HUD ein- oder ausblenden",
+    "all_panel_tabs": "Alle Panels"
   },
   "runtime": {
     "environment_map_failed": "Die Umgebungskarte „{}“ konnte nicht gelesen werden. Die bisherige Umgebung wurde beibehalten.",

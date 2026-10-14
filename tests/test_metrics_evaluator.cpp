@@ -15,6 +15,7 @@
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
 #include "training/dataset.hpp"
+#include "training/metrics/eval_image_labels.hpp"
 #include "training/metrics/eval_mask.hpp"
 #include "training/metrics/metrics.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -34,6 +35,7 @@
 #include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <numeric>
 #include <random>
 #include <string>
 #include <thread>
@@ -550,19 +552,21 @@ TEST(MetricsEvaluator, MaskedEvaluationSavesGridNamedAfterTheCamera) {
         EXPECT_FALSE(std::filesystem::exists(dir / "_DSC8679_unmasked.png"));
         EXPECT_FALSE(std::filesystem::exists(dir / "_DSC8679_metric_mask.png"));
         const auto saved = read_rgb(dir / "_DSC8679.png");
+        const int band = lfs::training::caption_band_height(height);
         ASSERT_EQ(saved.width, 2 * width + 4);
-        ASSERT_EQ(saved.height, masked ? 3 * height + 8 : height);
+        ASSERT_EQ(saved.height, masked ? 3 * (band + height) + 8 : band + height);
         if (!masked)
             continue;
 
         // Every pixel shows in exactly one of the two lower rows, unchanged, and the box splits the view.
+        const auto row_top = [&](const int row) { return row * (band + height + 4) + band; };
         size_t inside = 0, outside = 0, mismatches = 0;
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
                 for (const int half : {0, width + 4}) {
-                    const uint8_t* rendered = saved.at(half + x, y);
-                    const uint8_t* applied = saved.at(half + x, y + height + 4);
-                    const uint8_t* inverted = saved.at(half + x, y + 2 * (height + 4));
+                    const uint8_t* rendered = saved.at(half + x, y + row_top(0));
+                    const uint8_t* applied = saved.at(half + x, y + row_top(1));
+                    const uint8_t* inverted = saved.at(half + x, y + row_top(2));
                     const bool in_applied = applied[0] | applied[1] | applied[2];
                     const bool in_inverted = inverted[0] | inverted[1] | inverted[2];
                     inside += in_applied;
@@ -576,6 +580,142 @@ TEST(MetricsEvaluator, MaskedEvaluationSavesGridNamedAfterTheCamera) {
         EXPECT_GT(inside, 0u);
         EXPECT_GT(outside, 0u);
         EXPECT_EQ(mismatches, 0u);
+    }
+    std::filesystem::remove_all(tmp);
+}
+
+// Catches captions drawn outside the band's middle, a long caption running into the next tile's caption, and a missing
+// font that changes the band's size instead of leaving it empty.
+TEST(EvalImageCaptions, TextStaysInItsTileAndAMissingFontLeavesTheBandEmpty) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    const int height = lfs::training::caption_band_height(1000);
+    ASSERT_EQ(height, 50);
+    const auto font = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/assets/fonts/Inter-SemiBold.ttf";
+    const auto text_columns = [height](const std::vector<float>& band, const int width) {
+        std::vector<int> columns(static_cast<size_t>(width), 0);
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x)
+                columns[x] += band[static_cast<size_t>(y) * width + x] > band[0] + 0.25f;
+        return columns;
+    };
+
+    constexpr int kWide = 804;
+    const std::array wide{lfs::training::ImageCaption{0, "Ground Truth, Mask"},
+                          lfs::training::ImageCaption{404, "Render, Mask"}};
+    const auto band = lfs::training::caption_band(wide, kWide, height, font).cpu().to_vector();
+    ASSERT_EQ(band.size(), static_cast<size_t>(3 * height * kWide));
+    const auto wide_columns = text_columns(band, kWide);
+    EXPECT_GT(std::accumulate(wide_columns.begin(), wide_columns.begin() + 404, 0), 300);
+    EXPECT_GT(std::accumulate(wide_columns.begin() + 404, wide_columns.end(), 0), 300);
+    for (int y : {0, 1, height - 2, height - 1})
+        for (int x = 0; x < kWide; ++x)
+            ASSERT_EQ(band[static_cast<size_t>(y) * kWide + x], band[0]) << x << "," << y;
+
+    constexpr int kNarrow = 244;
+    const std::array narrow{lfs::training::ImageCaption{0, "Ground Truth, Inverted"},
+                            lfs::training::ImageCaption{122, "Render, Inverted"}};
+    const auto clipped = text_columns(lfs::training::caption_band(narrow, kNarrow, height, font).cpu().to_vector(),
+                                      kNarrow);
+    EXPECT_GT(std::accumulate(clipped.begin(), clipped.begin() + 100, 0), 100);
+    EXPECT_EQ(std::accumulate(clipped.begin() + 107, clipped.begin() + 137, 0), 0);
+    EXPECT_GT(std::accumulate(clipped.begin() + 137, clipped.end(), 0), 100);
+
+    const auto empty = lfs::training::caption_band(wide, kWide, height, font.parent_path() / "missing.ttf")
+                           .cpu()
+                           .to_vector();
+    ASSERT_EQ(empty.size(), band.size());
+    EXPECT_TRUE(std::ranges::all_of(empty, [&band](const float value) { return value == band[0]; }));
+}
+
+// Catches extra pixel sets that score anything but the evaluations they stand for: an unmasked set that keeps the mask
+// or drops the valid view, an inverted set that is not the complement inside the valid view, or an SSIM map shared
+// across sets that belongs to another set. Scored once with every set, a box mask must give the same scores as
+// separate evaluations with the mask, without it and with it inverted, on a pinhole and on a distorted camera.
+TEST(MetricsEvaluator, MaskReportSetsMatchSeparateEvaluations) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_mask_report";
+    std::filesystem::remove_all(tmp);
+    const auto image_path = std::filesystem::path(TEST_DATA_DIR) / "bicycle" / "images_8" / "_DSC8679.JPG";
+    const auto [width, height, channels] = lfs::core::get_image_info(image_path);
+    ASSERT_GT(width, 0);
+    const auto lpips_weights = [] {
+        if (const char* env = std::getenv("LFS_LPIPS_WEIGHTS"); env && env[0])
+            return std::filesystem::path(env);
+        if (const char* home = std::getenv("HOME"); home && home[0])
+            return std::filesystem::path(home) / ".lichtfeld/onnx/lpips-vgg16-v0.1.lfw";
+        return std::filesystem::path{};
+    }();
+    auto splat = make_front_facing_splat();
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    const auto box = lfs::training::axis_aligned_box_corners({-1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f});
+
+    for (const bool distorted : {false, true}) {
+        SCOPED_TRACE(distorted ? "distorted" : "pinhole");
+        auto camera = distorted ? make_distorted_eval_camera(image_path, {}, width, height)
+                                : make_eval_camera(image_path, {}, width, height);
+        auto dataset = std::make_shared<CameraDataset>(std::vector<std::shared_ptr<Camera>>{camera}, DatasetConfig{},
+                                                       CameraDataset::Split::ALL);
+        const auto evaluate = [&](const std::optional<bool> invert, const bool report) {
+            auto params = make_eval_params(tmp / "out");
+            params.optimization.undistort = distorted;
+            params.optimization.eval_flip = true;
+            params.optimization.eval_mask_report_unmasked = report;
+            params.optimization.eval_mask_report_inverted = report;
+            MetricsEvaluator evaluator(params);
+            if (std::filesystem::is_regular_file(lpips_weights))
+                evaluator.set_lpips_weights_path(lpips_weights);
+            if (invert)
+                evaluator.set_eval_mesh(lfs::training::make_evaluation_box(box, *invert));
+            auto metrics = evaluator.evaluate(1, splat, dataset, background);
+            EXPECT_TRUE(metrics.valid);
+            EXPECT_EQ(metrics.views.size(), 1u);
+            return metrics;
+        };
+        const auto reported = evaluate(false, true);
+        const auto masked = evaluate(false, false);
+        const auto plain = evaluate(std::nullopt, false);
+        const auto inverted = evaluate(true, false);
+        ASSERT_TRUE(reported.valid && masked.valid && plain.valid && inverted.valid);
+
+        const auto& view = reported.views[0];
+        ASSERT_TRUE(view.unmasked && view.inverted);
+        EXPECT_FALSE(masked.views[0].unmasked || masked.views[0].inverted || masked.unmasked || masked.inverted);
+        const auto expect_same = [](const char* name, const auto& set, const lfs::training::ViewMetrics& separate) {
+            SCOPED_TRACE(name);
+            EXPECT_TRUE(set.skipped_reason.empty()) << set.skipped_reason;
+            EXPECT_EQ(set.psnr, separate.psnr);
+            EXPECT_EQ(set.ssim, separate.ssim);
+            // LPIPS convolutions are not bitwise reproducible between runs, even for the same inputs.
+            ASSERT_EQ(set.lpips.has_value(), separate.lpips.has_value());
+            if (set.lpips)
+                EXPECT_NEAR(*set.lpips, *separate.lpips, 1.0e-5f);
+            EXPECT_EQ(set.flip, separate.flip);
+            EXPECT_EQ(set.evaluated_pixel_fraction, separate.evaluated_pixel_fraction);
+        };
+        expect_same("mask", view, masked.views[0]);
+        expect_same("unmasked", *view.unmasked, plain.views[0]);
+        expect_same("inverted", *view.inverted, inverted.views[0]);
+        ASSERT_TRUE(view.flip);
+
+        EXPECT_GT(view.evaluated_pixel_fraction, 0.0f);
+        EXPECT_GT(view.inverted->evaluated_pixel_fraction, 0.0f);
+        EXPECT_NEAR(view.evaluated_pixel_fraction + view.inverted->evaluated_pixel_fraction,
+                    view.unmasked->evaluated_pixel_fraction, 1.0e-6f);
+        EXPECT_EQ(view.unmasked->evaluated_pixel_fraction < 1.0f, distorted);
+
+        ASSERT_TRUE(reported.unmasked && reported.inverted);
+        EXPECT_EQ(reported.unmasked->psnr, plain.psnr);
+        EXPECT_EQ(reported.unmasked->ssim, plain.ssim);
+        EXPECT_EQ(reported.inverted->psnr, inverted.psnr);
+        EXPECT_EQ(reported.inverted->ssim, inverted.ssim);
+        EXPECT_EQ(reported.psnr, masked.psnr);
+        EXPECT_EQ(reported.mask_set_summaries().size(), 2u);
     }
     std::filesystem::remove_all(tmp);
 }
@@ -1234,6 +1374,53 @@ TEST(MetricsEvaluator, SplatMaskSelectsTheRenderedCoverage) {
     std::filesystem::remove_all(tmp);
 }
 
+// Catches the splat mask render replacing the scored render: the rasterizer reuses its output buffers on every
+// render, so the scored image must still be the evaluated model's own render after the mask is rendered.
+TEST(MetricsEvaluator, SplatMaskKeepsTheScoredRender) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_splat_mask_scored_render";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 64;
+    constexpr int kH = 48;
+    const auto image_path = tmp / "gt.png";
+    write_rgb_png(image_path, 130, 130, 130, kH, kW);
+    auto camera = make_eval_camera(image_path, {}, kW, kH);
+    const float opaque = std::log(0.99f / 0.01f);
+    const auto make_splat = [opaque](const std::vector<float>& mean, const float sh_dc) {
+        return SplatData(0, Tensor::from_vector(mean, {1, 3}, Device::CUDA), Tensor::full({1, 1, 3}, sh_dc, Device::CUDA),
+                         Tensor::zeros({1, 0, 3}, Device::CUDA),
+                         Tensor::from_vector({-0.4f, -1.2f, -3.0f}, {1, 3}, Device::CUDA),
+                         Tensor::from_vector({0.92f, 0.0f, 0.0f, 0.39f}, {1, 4}, Device::CUDA),
+                         Tensor::full({1}, opaque, Device::CUDA), 1.0f);
+    };
+    auto scored = make_splat({-0.3f, 0.2f, 1.0f}, 1.0f);
+    const lfs::training::EvaluationSplat mask{.model = make_splat({0.3f, -0.2f, 1.0f}, 0.0f)};
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    const auto params = make_eval_params(tmp / "out");
+    const auto render = [&](Camera& render_camera,
+                            const float dilation_scale) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        return lfs::training::EvaluationRenderResult{
+            .output = lfs::training::fast_rasterize(render_camera, scored, background, params.optimization.mip_filter,
+                                                    {}, false, dilation_scale)};
+    };
+    const auto expected =
+        lfs::training::fast_rasterize(*camera, scored, background, params.optimization.mip_filter).image.cpu().to_vector();
+
+    const auto prepared = prepare_evaluation_view(*camera, params, render, nullptr, nullptr, {.splat = &mask});
+    ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
+    ASSERT_GT(prepared->metric_mask.to(DataType::Float32).sum().item<float>(), 0.0f);
+    const auto scored_image = prepared->output.image.cpu().to_vector();
+    ASSERT_EQ(scored_image.size(), expected.size());
+    // The scored render is put on the 8-bit grid of the reference.
+    for (size_t i = 0; i < expected.size(); ++i)
+        ASSERT_NEAR(scored_image[i], expected[i], 0.5f / 255.0f + 1.0e-6f) << i;
+    std::filesystem::remove_all(tmp);
+}
+
 TEST(MetricsEvaluatorUndistort, PointMaskFollowsTheNativeGutLens) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
@@ -1805,6 +1992,26 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
     EXPECT_TRUE(record.at("evaluations")[1].at("psnr").is_null());
     EXPECT_FLOAT_EQ(record.at("evaluations")[1].at("evaluated_pixel_fraction"), 0.0f);
     EXPECT_FALSE(record.at("evaluations")[1].at("validity_mask_applied"));
+}
+
+// Catches extra pixel sets written flat into the evaluation, where they would overwrite the mask's scores.
+TEST(ViewEvaluationJson, MaskSetsAreNestedUnderTheirNames) {
+    lfs::training::ViewMetrics view{.image_name = "frame.png", .psnr = 24.0f, .ssim = 0.8f, .flip = 0.1f};
+    view.unmasked = lfs::training::MaskSetMetrics{.psnr = 21.0f, .ssim = 0.7f, .flip = 0.2f, .evaluated_pixel_fraction = 1.0f};
+    view.inverted = lfs::training::MaskSetMetrics{.evaluated_pixel_fraction = 0.0f,
+                                                  .skipped_reason = "no pixel in this set"};
+    const auto document = lfs::training::add_view_evaluation({}, view, 7000, "test");
+    const auto& evaluation = document.at("frame.png").at("evaluations")[0];
+    EXPECT_FLOAT_EQ(evaluation.at("psnr"), 24.0f);
+    const auto& unmasked = evaluation.at("unmasked");
+    EXPECT_FLOAT_EQ(unmasked.at("psnr"), 21.0f);
+    EXPECT_FLOAT_EQ(unmasked.at("flip"), 0.2f);
+    EXPECT_TRUE(unmasked.at("lpips").is_null());
+    EXPECT_FLOAT_EQ(unmasked.at("evaluated_pixel_fraction"), 1.0f);
+    EXPECT_FALSE(unmasked.contains("skipped_reason"));
+    const auto& inverted = evaluation.at("inverted");
+    EXPECT_TRUE(inverted.at("psnr").is_null());
+    EXPECT_EQ(inverted.at("skipped_reason"), "no pixel in this set");
 }
 
 // Catches a depth mask that compares accumulated instead of expected depth, keeps faint pixels,

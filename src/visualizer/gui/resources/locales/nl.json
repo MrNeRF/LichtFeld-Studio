@@ -614,6 +614,8 @@
       "bg_image_clear": "Geselecteerde achtergrondafbeelding wissen",
       "eval_mask": "Kiest de pixels die worden geëvalueerd: een mesh, een box, de crop box, een maskermap, een dieptebereik, punten of een splat. De training verandert niet.",
       "eval_mask_invert": "Evalueert in plaats daarvan de pixels buiten het evaluatiemasker.",
+      "eval_mask_report_unmasked": "Evalueert ook alle geldige pixels van elke weergave, zoals zonder masker, uit dezelfde render.",
+      "eval_mask_report_inverted": "Evalueert ook de geldige pixels buiten het evaluatiemasker, uit dezelfde render.",
       "eval_mask_opacity": "Gerenderde dekking die een pixel nodig heeft om door een splat-masker gedekt te zijn. Lager verbreedt het masker voorbij de omtrek, hoger trekt het naar binnen.",
       "eval_mask_browse": "Bladeren naar een evaluatiemesh",
       "eval_mask_clear": "Evaluatiemasker wissen",
@@ -1053,7 +1055,10 @@
     "viewport_defaults_hint": "Deze waarden gelden voor nieuwe projecten. Bestaande projecten behouden hun opgeslagen waarden.",
     "viewport_style_defaults": "Hulplijnen en selectiestijl",
     "viewport_performance_defaults": "LOD-cachelimieten",
-    "viewport_defaults_invalid": "Voer een geldige waarde binnen het ondersteunde bereik in."
+    "viewport_defaults_invalid": "Voer een geldige waarde binnen het ondersteunde bereik in.",
+    "sidebar_defaults_description": "Sla de huidige breedte van de rechterzijbalk, de scèneverdeling en het actieve tabblad op voor het starten van de toepassing. Bestaande .licht-projecten herstellen hun eigen werkruimte. Een nieuw project behoudt de huidige werkruimte.",
+    "save_startup_sidebar": "Zijbalk opslaan voor opstarten",
+    "clear_startup_sidebar": "Opstartinstellingen van zijbalk wissen"
   },
   "main_panel": {
     "console": "Console",
@@ -1799,6 +1804,8 @@
     "eval_bit_depth": "Eval Bit Depth:",
     "eval_mask": "Evaluatiemasker:",
     "eval_mask_invert": "Masker omkeren:",
+    "eval_mask_report_unmasked": "Ook zonder masker evalueren:",
+    "eval_mask_report_inverted": "Ook omgekeerd evalueren:",
     "eval_mask_opacity": "Splat-maskerdekking:",
     "eval_mask_use_cropbox": "Crop box gebruiken",
     "eval_mask_folder": "Maskermap",
@@ -2098,10 +2105,28 @@
     "overwrite_proceed": "Doorgaan (duplicaten overschrijven)",
     "overwrite_cancel": "Annuleren",
     "overwrite_delete_error": "Kan {} niet verwijderen: {}",
+    "videos": "Video's:",
+    "add_videos": "Video's toevoegen...",
+    "remove_video": "Verwijderen",
+    "clear_videos": "Wissen",
+    "output_root": "Uitvoerbasis:",
+    "continue_batch_on_failure": "Doorgaan met resterende video's als er één mislukt",
+    "batch_video_count": "{} video's geselecteerd",
+    "batch_summary": "{} video's · {} voltooid · {} mislukt",
+    "batch_no_videos": "Voeg ten minste één video toe voordat u de extractie start.",
+    "batch_no_output_root": "Selecteer een uitvoerbasis voor deze batch.",
+    "batch_pending": "In wachtrij",
+    "batch_running": "Bezig met extraheren",
+    "batch_complete": "Voltooid",
+    "batch_failed": "Mislukt",
+    "batch_stopped": "Gestopt",
+    "batch_existing_output": "Bestaande uitvoer",
     "rotate_cw": "Met de klok mee draaien",
     "rotate_ccw": "Tegen de klok in draaien",
     "discarded_format": " ({} weggegooid)",
-    "extracting": "Extraheren: %d / %d frames"
+    "extracting": "Extraheren: %d / %d frames",
+    "batch_overwrite_prompt": "Existing generated output was found for {} videos. Choose how to continue for the whole batch.",
+    "batch_overwrite_prompt_metadata": "Existing generated output was found for {} videos. Existing extraction metadata will also be replaced where enabled. Choose how to continue for the whole batch."
   },
   "rendering_panel": {
     "fov_format": "Gezichtsveld: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -2604,7 +2629,8 @@
     "perf_collapse": "Inklappen",
     "gt_metrics_training_required": "Camerametrieken vereisen een geïnitialiseerde trainingssessie.",
     "gt_metrics_calculation_failed": "Metrieken voor deze weergave konden niet worden berekend.",
-    "perf_hud_tooltip": "Prestatie-HUD tonen of verbergen"
+    "perf_hud_tooltip": "Prestatie-HUD tonen of verbergen",
+    "all_panel_tabs": "Alle panelen"
   },
   "runtime": {
     "environment_map_failed": "Omgevingskaart ‘{}’ kon niet worden gelezen. De vorige omgeving is behouden.",

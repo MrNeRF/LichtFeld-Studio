@@ -600,6 +600,15 @@ void RenderInterface_VK::RenderToClipMask(Rml::ClipMaskOperation operation, Rml:
     if (m_p_current_command_buffer == nullptr || !geometry)
         return;
 
+    // The mask is the stencil shape. RmlUi does not reapply an unchanged mask, so this clear
+    // uses the context clip. A 20px row scissor would otherwise hide every later row.
+    // The effective content scissor (as in ResetDynamicRenderState) is restored for the
+    // caller's own draw. m_scissor alone is stale while no scissor region is specified.
+    const VkRect2D content_scissor = ClampToCacheCaptureArea(
+        IntersectContextClip(m_is_use_scissor_specified ? m_scissor : ContextClipScissor()));
+    const VkRect2D mask_scissor = ClampToCacheCaptureArea(ContextClipScissor());
+    vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &mask_scissor);
+
     VkClearDepthStencilValue clear_depth_stencil{};
     clear_depth_stencil.depth = 1.0f;
     clear_depth_stencil.stencil = operation == Rml::ClipMaskOperation::SetInverse ? 1 : 0;
@@ -632,6 +641,7 @@ void RenderInterface_VK::RenderToClipMask(Rml::ClipMaskOperation operation, Rml:
     m_is_use_stencil_pipeline = false;
     m_is_clip_mask_enabled = true;
     m_is_apply_to_regular_geometry_stencil = true;
+    vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &content_scissor);
 }
 
 Rml::LayerHandle RenderInterface_VK::PushLayer() {

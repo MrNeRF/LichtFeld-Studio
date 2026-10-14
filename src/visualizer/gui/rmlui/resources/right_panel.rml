@@ -32,6 +32,11 @@
                 data-class-hidden="!tabs_overflow"
                 data-class-disabled="!can_scroll_tabs_right"
                 data-event-click="scroll_tabs_right()">&gt;</button>
+        <select id="tab-picker" data-class-hidden="!tabs_overflow"
+                data-value="active_tab" data-event-change="pick_tab()"
+                data-tooltip="ui.all_panel_tabs">
+            <option data-for="tab : tabs" data-attr-value="tab.id">{{ tab.label }}</option>
+        </select>
     </div>
     <div id="tab-separator"></div>
 </body>

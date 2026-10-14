@@ -727,6 +727,54 @@ namespace lfs::vis {
         return result.dump();
     }
 
+    void UserPreferences::setSidebarDefaults(const float width, const float scene_ratio,
+                                             const std::string& active_tab) {
+        if (!std::isfinite(width) || width <= 0 || !std::isfinite(scene_ratio))
+            return;
+        std::lock_guard lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& saved = impl_->values["sidebar_defaults"];
+        if (!saved.is_object())
+            saved = json::object();
+        saved["right_panel_width"] = width;
+        saved["scene_panel_ratio"] = std::clamp(scene_ratio, 0.01f, 0.99f);
+        saved["active_tab"] = active_tab;
+        impl_->saveValuesLocked();
+    }
+
+    std::string UserPreferences::sidebarDefaults() {
+        std::lock_guard lock(impl_->mutex);
+        impl_->loadLocked();
+        json result = json::object();
+        const auto stored = impl_->values.find("sidebar_defaults");
+        if (stored != impl_->values.end() && stored->is_object()) {
+            for (const char* key : {"right_panel_width", "scene_panel_ratio"}) {
+                const auto field = stored->find(key);
+                if (field != stored->end() && field->is_number()) {
+                    const auto value = field->get<double>();
+                    if (std::isfinite(value) && value > 0 &&
+                        (std::string_view(key) != "scene_panel_ratio" || value < 1))
+                        result[key] = value;
+                }
+            }
+            if (const auto tab = stored->find("active_tab"); tab != stored->end() && tab->is_string())
+                result["active_tab"] = *tab;
+        }
+        return result.dump();
+    }
+
+    void UserPreferences::clearSidebarDefaults() {
+        std::lock_guard lock(impl_->mutex);
+        impl_->loadLocked();
+        auto saved = impl_->values.find("sidebar_defaults");
+        if (saved != impl_->values.end() && saved->is_object())
+            for (const char* key : {"right_panel_width", "scene_panel_ratio", "active_tab"})
+                // Explicit nulls replace these fields during the recursive
+                // settings merge, without deleting future/unknown children.
+                (*saved)[key] = nullptr;
+        impl_->saveValuesLocked();
+    }
+
     void UserPreferences::setThemeName(const std::string& value) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();

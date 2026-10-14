@@ -916,6 +916,9 @@ namespace lfs::vis::gui {
         applied_project_title_left_ = -1.0f;
         applied_project_title_width_ = -1.0f;
         toolbar_fits_ = true;
+        toolbar_squeezed_ = false;
+        toolbar_squeeze_screen_w_ = -1;
+        toolbar_squeeze_menus_right_ = -1.0f;
         bar_height_ = 30.0f;
         last_window_split_view_ = false;
         last_ui_hidden_ = false;
@@ -1076,6 +1079,10 @@ namespace lfs::vis::gui {
         if (rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, isOpen()))
             return;
         wants_input_ = false;
+        if (pointer_suspended_) {
+            wants_input_ = isOpen();
+            return;
+        }
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
@@ -1113,7 +1120,10 @@ namespace lfs::vis::gui {
             last_mouse_x_ = rml_mx;
             last_mouse_y_ = rml_my;
             render_needed_ = true;
-            rml_context_->ProcessMouseMove(rml_mx, rml_my, 0);
+            if (is_in_context)
+                rml_context_->ProcessMouseMove(rml_mx, rml_my, 0);
+            else
+                rml_context_->ProcessMouseLeave();
         }
 
         const int count = menu_items_->GetNumChildren();
@@ -1438,7 +1448,34 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    void RmlMenuBar::onWindowPointerEvent(const SDL_Event& event, const std::uint32_t main_window_id) {
+        if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE && event.window.windowID == main_window_id)
+            onPointerLeave();
+        else if ((event.type == SDL_EVENT_MOUSE_MOTION && event.motion.windowID == main_window_id) ||
+                 (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.windowID == main_window_id))
+            onPointerMotion();
+    }
+
+    void RmlMenuBar::onPointerMotion() {
+        if (pointer_suspended_) {
+            pointer_suspended_ = false;
+            mouse_pos_valid_ = false;
+        }
+    }
+
+    void RmlMenuBar::onPointerLeave() {
+        pointer_suspended_ = true;
+        if (rml_context_)
+            rml_context_->ProcessMouseLeave();
+        mouse_pos_valid_ = false;
+        last_hovered_label_ = -1;
+        last_toolbar_hovered_ = false;
+        tooltip_.setHover({}, nullptr);
+        render_needed_ = true;
+    }
+
     void RmlMenuBar::onWindowFocusLost() {
+        onPointerLeave();
         if (alt_pressed_)
             alt_chord_ = true;
         access_alt_held_ = false;
@@ -2202,50 +2239,94 @@ namespace lfs::vis::gui {
     void RmlMenuBar::updateToolbarLayout(const int screen_w, const float dp_ratio) {
         // Right-align the render/projection toolbar to the viewport edge, but
         // keep it clear of the window-control cluster when there is no dock panel.
-        if (menu_toolbar_) {
+        if (!menu_toolbar_)
+            return;
+
+        const auto measure = [&] {
+            struct Fit {
+                float min_right_px = 0;
+                float right_px = 0;
+                float menus_right_px = 0;
+                bool toolbar_fits = false;
+            };
             const float inset = 8.0f * dp_ratio;
             constexpr float kFallbackRightClusterReserveDp = 184.0f;
-            float min_right_px = kFallbackRightClusterReserveDp * dp_ratio;
+            Fit fit;
+            fit.min_right_px = kFallbackRightClusterReserveDp * dp_ratio;
             if (menu_window_controls_) {
                 const auto offset = menu_window_controls_->GetAbsoluteOffset(Rml::BoxArea::Border);
                 if (offset.x > 0.0f)
-                    min_right_px = static_cast<float>(screen_w) - offset.x + 4.0f * dp_ratio;
+                    fit.min_right_px = static_cast<float>(screen_w) - offset.x + 4.0f * dp_ratio;
             }
-            float right_px = min_right_px;
+            fit.right_px = fit.min_right_px;
             if (viewport_right_edge_ > 0.0f)
-                right_px = std::max(right_px, static_cast<float>(screen_w) - viewport_right_edge_ + inset);
+                fit.right_px = std::max(fit.right_px, static_cast<float>(screen_w) - viewport_right_edge_ + inset);
 
             // The toolbar is out of flow, so viewport alignment alone would let it slide over the
             // menu labels. Move it to a second row once even the cap collides.
-            const float menus_right_px =
-                menu_items_ ? menu_items_->GetAbsoluteOffset(Rml::BoxArea::Border).x +
-                                  menu_items_->GetOffsetWidth()
-                            : 0.0f;
+            fit.menus_right_px = menu_items_ ? menu_items_->GetAbsoluteOffset(Rml::BoxArea::Border).x +
+                                                   menu_items_->GetOffsetWidth()
+                                             : 0.0f;
             const float clear_of_menus_px = static_cast<float>(screen_w) -
-                                            menu_toolbar_->GetOffsetWidth() - menus_right_px -
+                                            menu_toolbar_->GetOffsetWidth() - fit.menus_right_px -
                                             12.0f * dp_ratio;
             // Asymmetric threshold so a window parked on the boundary cannot flicker.
             const float show_slack_px = toolbar_fits_ ? 0.0f : 8.0f * dp_ratio;
-            const bool toolbar_fits = clear_of_menus_px >= min_right_px + show_slack_px;
-            if (toolbar_fits)
-                right_px = std::min(right_px, clear_of_menus_px);
+            fit.toolbar_fits = clear_of_menus_px >= fit.min_right_px + show_slack_px;
+            if (fit.toolbar_fits)
+                fit.right_px = std::min(fit.right_px, clear_of_menus_px);
             else
-                right_px = inset;
+                fit.right_px = inset;
+            return fit;
+        };
 
-            if (toolbar_fits != toolbar_fits_) {
-                menu_toolbar_->SetClass("second-row", !toolbar_fits);
-                if (auto* row = document_->GetElementById("menu-row"))
-                    row->SetClass("two-rows", !toolbar_fits);
-                bar_height_ = toolbar_fits ? 30.0f : 60.0f;
-                toolbar_fits_ = toolbar_fits;
-                render_needed_ = true;
-                LOG_DEBUG("Menu toolbar {} at {} px", toolbar_fits ? "inline" : "second row", screen_w);
+        // The centred project title does not consume this gap. A long portal status does.
+        // Drop its words, keep the icon, and only then wrap the viewport tools.
+        auto fit = measure();
+        auto* body = document_->GetElementById("body");
+        const auto set_squeeze = [&](bool squeeze) {
+            if (!body || body->IsClassSet("toolbar-squeeze") == squeeze)
+                return;
+            body->SetClass("toolbar-squeeze", squeeze);
+            rml_context_->Update();
+            render_needed_ = true;
+        };
+        const bool content_changed = screen_w != toolbar_squeeze_screen_w_ ||
+                                     std::abs(fit.menus_right_px - toolbar_squeeze_menus_right_) > 0.5f;
+        if (!toolbar_squeezed_ && !fit.toolbar_fits) {
+            set_squeeze(true);
+            toolbar_squeezed_ = body && body->IsClassSet("toolbar-squeeze");
+            toolbar_squeeze_screen_w_ = screen_w;
+            toolbar_squeeze_menus_right_ = fit.menus_right_px;
+            fit = measure();
+        } else if (toolbar_squeezed_ && content_changed) {
+            set_squeeze(false);
+            toolbar_squeezed_ = false;
+            auto released = measure();
+            if (!released.toolbar_fits) {
+                set_squeeze(true);
+                toolbar_squeezed_ = body && body->IsClassSet("toolbar-squeeze");
+                toolbar_squeeze_screen_w_ = screen_w;
+                toolbar_squeeze_menus_right_ = released.menus_right_px;
+                fit = measure();
+            } else {
+                fit = released;
             }
-            if (std::abs(right_px - applied_toolbar_right_) > 0.5f) {
-                menu_toolbar_->SetProperty("right", std::format("{:.1f}px", right_px));
-                applied_toolbar_right_ = right_px;
-                render_needed_ = true;
-            }
+        }
+
+        if (fit.toolbar_fits != toolbar_fits_) {
+            menu_toolbar_->SetClass("second-row", !fit.toolbar_fits);
+            if (auto* row = document_->GetElementById("menu-row"))
+                row->SetClass("two-rows", !fit.toolbar_fits);
+            bar_height_ = fit.toolbar_fits ? 30.0f : 60.0f;
+            toolbar_fits_ = fit.toolbar_fits;
+            render_needed_ = true;
+            LOG_DEBUG("Menu toolbar {} at {} px", fit.toolbar_fits ? "inline" : "second row", screen_w);
+        }
+        if (std::abs(fit.right_px - applied_toolbar_right_) > 0.5f) {
+            menu_toolbar_->SetProperty("right", std::format("{:.1f}px", fit.right_px));
+            applied_toolbar_right_ = fit.right_px;
+            render_needed_ = true;
         }
     }
 

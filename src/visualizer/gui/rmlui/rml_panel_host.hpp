@@ -100,6 +100,19 @@ namespace lfs::vis::gui {
 
     private:
         friend class lfs::vis::WindowInputDispatchTest;
+
+        // Registered after Python on_mount. Panel-specific close handlers run
+        // first; this listener does not stop the click.
+        class CloseButtonListener final : public Rml::EventListener {
+        public:
+            explicit CloseButtonListener(RmlPanelHost* host) : host_(host) {}
+            void ProcessEvent(Rml::Event& event) override;
+
+        private:
+            RmlPanelHost* host_;
+        };
+
+        void bindCloseButton();
         bool scheduledUpdateDue() const {
             return next_update_at_ && std::chrono::steady_clock::now() >= *next_update_at_;
         }
@@ -188,8 +201,14 @@ namespace lfs::vis::gui {
         // Per-button capture so scrollbar drags continue when the cursor
         // leaves the panel and the matching Up always reaches RmlUI.
         bool mouse_captured_[3] = {false, false, false};
+        // Element that received the button press. RmlUi sends mouseup only to
+        // the current hover, which is empty once the cursor leaves the panel.
+        Rml::ObserverPtr<Rml::Element> pointer_press_target_[3];
         std::string resize_cursor_override_;
         Rml::Element* live_inspector_resize_target_ = nullptr;
+        CloseButtonListener close_listener_{this};
+        Rml::Element* close_button_ = nullptr;
+        bool close_button_bound_ = false;
         float live_inspector_resize_start_y_ = 0.0f;
         float live_inspector_resize_start_height_ = 0.0f;
         RmlTooltipController tooltip_;
