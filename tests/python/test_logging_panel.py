@@ -209,6 +209,19 @@ def test_escape_cancels_a_retention_edit(logging_module):
     assert 3 not in applied
 
 
+def test_blank_or_out_of_range_retention_is_rejected(logging_module):
+    panel, doc, _snapshot = make_panel(logging_module)
+    applied = []
+    logging_module.lf.log.set_buffer_limit = applied.append
+    field = doc.elements["log-limit"]
+    for text in ("", "-4", "50001"):
+        panel._feedback = ""
+        panel._set_limit(text)
+        field.listeners["blur"](None)
+        assert panel._feedback, text
+    assert applied == []
+
+
 def test_live_tail_reuses_unchanged_row_nodes(logging_module):
     panel, doc, snapshot = make_panel(logging_module)
     original_nodes = list(panel._row_nodes)

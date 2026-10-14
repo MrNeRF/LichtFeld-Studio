@@ -212,13 +212,15 @@ class LoggingPanel(Panel):
 
     def _commit_limit(self, *_):
         try:
-            limit = int(self._limit.strip().replace(",", "") or "0")
+            limit = int(self._limit.strip().replace(",", ""))
         except ValueError:
+            limit = -1
+        # Blank, negative or too large input must not clear or trim the buffer.
+        if not 0 <= limit <= 50000:
             self._feedback = lf.ui.tr("logging.limit_error")
             self._feedback_deadline = 0.0
             self._invalidate()
             return
-        limit = max(0, min(50000, limit))
         lf.log.set_buffer_limit(limit)
         self._limit = str(limit)
         self._last_buffer_limit = limit
