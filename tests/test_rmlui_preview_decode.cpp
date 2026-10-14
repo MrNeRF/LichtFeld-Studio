@@ -12,6 +12,7 @@
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -390,6 +391,67 @@ namespace {
             backend.ShutdownExternal();
         }
 
+        // Ends the frame and reads the color target. The clip-mask regression is whether later rows were drawn.
+        std::vector<unsigned char> FinishAndReadColor(RenderInterface_VK& backend, const image_t& color, VkExtent2D extent) {
+            const VkDeviceSize size = static_cast<VkDeviceSize>(extent.width) * extent.height * 4;
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            info.size = size;
+            info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            VmaAllocationCreateInfo allocation_info{};
+            allocation_info.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+            if (vmaCreateBuffer(allocator_, &info, &allocation_info, &buffer, &allocation, nullptr) != VK_SUCCESS)
+                return {};
+
+            backend.EndExternalFrame();
+            vkCmdEndRendering(command_buffer_);
+            VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = color.image;
+            barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            vkCmdPipelineBarrier(command_buffer_, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &barrier);
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {extent.width, extent.height, 1};
+            vkCmdCopyImageToBuffer(command_buffer_, color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
+            EXPECT_EQ(vkEndCommandBuffer(command_buffer_), VK_SUCCESS);
+            VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &command_buffer_;
+            EXPECT_EQ(vkQueueSubmit(queue_, 1, &submit, VK_NULL_HANDLE), VK_SUCCESS);
+            vkQueueWaitIdle(queue_);
+
+            void* mapped = nullptr;
+            std::vector<unsigned char> pixels(static_cast<std::size_t>(size));
+            if (allocation && vmaMapMemory(allocator_, allocation, &mapped) == VK_SUCCESS && mapped)
+                std::memcpy(pixels.data(), mapped, static_cast<std::size_t>(size));
+            if (mapped)
+                vmaUnmapMemory(allocator_, allocation);
+            vmaDestroyBuffer(allocator_, buffer, allocation);
+            backend.ShutdownExternal();
+            return pixels;
+        }
+
+        static Rml::CompiledGeometryHandle CompileSolid(RenderInterface_VK& backend, float x, float y, float w, float h,
+                                                        Rml::ColourbPremultiplied colour) {
+            Rml::Vertex vertices[4]{};
+            vertices[0].position = {x, y};
+            vertices[1].position = {x + w, y};
+            vertices[2].position = {x + w, y + h};
+            vertices[3].position = {x, y + h};
+            for (Rml::Vertex& vertex : vertices)
+                vertex.colour = colour;
+            static constexpr int indices[6] = {0, 1, 2, 0, 2, 3};
+            return backend.CompileGeometry({vertices, 4}, {indices, 6});
+        }
+
         static constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
         static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT_S8_UINT;
 
@@ -493,6 +555,59 @@ namespace {
         backend.EndCacheCapture();
 
         EndFrame(backend, panel_texture);
+    }
+
+    // A scene-graph rename input clips to its 20px row, then RmlUi reapplies the panel clip mask.
+    // The mask must cover the whole panel, or the rows under that input are not drawn.
+    TEST_F(RmlUiLayerFrameTest, ClipMaskClearIgnoresRowScissor) {
+        const VkExtent2D extent{160, 120};
+        const auto color = CreateImage(kColorFormat,
+                                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                       VK_IMAGE_ASPECT_COLOR_BIT, extent);
+        const auto depth = CreateImage(kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                       VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, extent);
+        RenderInterface_VK backend;
+        ASSERT_TRUE(BeginFrame(backend, extent, color, depth));
+
+        backend.SetContextClipRect(8.0f, 8.0f, 152.0f, 112.0f);
+        backend.EnableScissorRegion(true);
+        backend.SetScissorRegion(Rml::Rectanglei::FromPositionSize({12, 16}, {120, 20}));
+
+        const Rml::CompiledGeometryHandle mask = CompileSolid(backend, 8.0f, 8.0f, 144.0f, 104.0f, {255, 255, 255, 255});
+        ASSERT_NE(mask, 0u);
+        backend.RenderToClipMask(Rml::ClipMaskOperation::Set, mask, {});
+
+        // The caller's scissor is still the 20px row, so this tall quad must not paint the rows below it.
+        const Rml::CompiledGeometryHandle row = CompileSolid(backend, 8.0f, 8.0f, 144.0f, 104.0f, {0, 0, 255, 255});
+        ASSERT_NE(row, 0u);
+        backend.RenderGeometry(row, {}, {});
+
+        backend.SetScissorRegion(Rml::Rectanglei::FromPositionSize({12, 64}, {120, 20}));
+        const Rml::CompiledGeometryHandle below = CompileSolid(backend, 12.0f, 64.0f, 120.0f, 20.0f, {255, 0, 0, 255});
+        ASSERT_NE(below, 0u);
+        backend.RenderGeometry(below, {}, {});
+        backend.ReleaseGeometry(mask);
+        backend.ReleaseGeometry(row);
+        backend.ReleaseGeometry(below);
+
+        const std::vector<unsigned char> pixels = FinishAndReadColor(backend, color, extent);
+        ASSERT_EQ(pixels.size(), static_cast<std::size_t>(extent.width) * extent.height * 4);
+        const auto pixel = [&](int x, int y) {
+            return pixels.data() + (static_cast<std::size_t>(y) * extent.width + static_cast<std::size_t>(x)) * 4;
+        };
+        const unsigned char* rename_row = pixel(70, 26);
+        const unsigned char* later_row = pixel(70, 74);
+        const unsigned char* outside = pixel(2, 2);
+        EXPECT_EQ(rename_row[0], 0);
+        EXPECT_EQ(rename_row[1], 0);
+        EXPECT_EQ(rename_row[2], 255);
+        EXPECT_EQ(later_row[0], 255);
+        EXPECT_EQ(later_row[1], 0);
+        EXPECT_EQ(later_row[2], 0);
+        EXPECT_EQ(outside[0], 0);
+        EXPECT_EQ(outside[1], 0);
+        EXPECT_EQ(outside[2], 0);
     }
 
 } // namespace
