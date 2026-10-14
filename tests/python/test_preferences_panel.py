@@ -756,7 +756,6 @@ def test_mcp_port_is_drafted_until_explicit_confirmation(preferences_panel_modul
     panel._read_mcp_preferences()
 
     panel._set_mcp_port("50123")
-    assert state.sidebar_clear_calls == [True]
     assert state.set_mcp_calls == []
 
     assert panel._commit_mcp_port()
@@ -1011,6 +1010,7 @@ def test_safe_mode_reset_does_not_stage_mcp_changes(preferences_panel_module):
     module.lf.set_camera_view_snap_enabled = lambda *_a, **_k: None
 
     panel._on_reset_all_settings(None, None, None)
+    assert state.sidebar_clear_calls == [True]
 
     assert state.set_mcp_calls == []
     assert state.render_settings.scene_upscaler == "native"
