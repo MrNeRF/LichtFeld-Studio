@@ -2690,9 +2690,16 @@ namespace lfs::vis::gui {
         const float mx = event.GetParameter("mouse_x", 0.0f);
         const float my = event.GetParameter("mouse_y", 0.0f);
         if (type == Rml::EventId::Dragstart) {
+            const auto position = root_->GetAbsoluteOffset(Rml::BoxArea::Border) -
+                                  viewportOrigin(root_, viewport_origin_, has_viewport_geometry_);
+            const auto bounds = viewportSize(root_, document_, viewport_size_, has_viewport_geometry_);
+            const auto box = root_->GetBox().GetSize(Rml::BoxArea::Border);
+            pos_x_ = vram_hud_geometry::clampPosition(position.x, box.x, bounds.x);
+            pos_y_ = vram_hud_geometry::clampPosition(position.y, box.y, bounds.y);
+            snap_corner_ = 0;
+            applyDisplayedGeometry();
             dragging_resize_ = true;
             pointer_captured_ = true;
-            const auto box = root_->GetBox().GetSize(Rml::BoxArea::Border);
             drag_start_size_w_ = box.x;
             drag_start_size_h_ = box.y;
             drag_start_mouse_x_ = mx;
@@ -2703,12 +2710,10 @@ namespace lfs::vis::gui {
             const float dy = my - drag_start_mouse_y_;
             const auto bounds = viewportSize(
                 root_, document_, viewport_size_, has_viewport_geometry_);
-            const auto position = root_->GetAbsoluteOffset(Rml::BoxArea::Border) -
-                                  viewportOrigin(root_, viewport_origin_, has_viewport_geometry_);
             size_w_ = vram_hud_geometry::clampExtent(
-                drag_start_size_w_ + dx, kMinHudWidthPx, bounds.x, position.x);
+                drag_start_size_w_ + dx, kMinHudWidthPx, bounds.x, pos_x_);
             size_h_ = vram_hud_geometry::clampExtent(
-                drag_start_size_h_ + dy, kMinHudHeightPx, bounds.y, position.y);
+                drag_start_size_h_ + dy, kMinHudHeightPx, bounds.y, pos_y_);
             root_->SetProperty("width", std::format("{:.1f}px", size_w_));
             root_->SetProperty("height", std::format("{:.1f}px", size_h_));
             event.StopPropagation();

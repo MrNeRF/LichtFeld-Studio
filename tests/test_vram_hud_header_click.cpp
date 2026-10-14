@@ -84,6 +84,7 @@ namespace lfs::vis::gui {
             #perf-hud-card { display: block; width: 300px; height: 200px; }
             #vram-hud-header { display: block; position: relative; width: 300px; height: 20px; drag: drag; }
             #perf-hud-collapse { position: absolute; right: 0px; top: 0px; width: 20px; height: 20px; }
+            #vram-hud-resize { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; drag: drag; }
             #vram-hud-summary, .vram-hud-summary-row { display: block; } .hidden { display: none; }
         </style></head><body>
             <div id="vram-hud-overlay">
@@ -98,6 +99,7 @@ namespace lfs::vis::gui {
                     <div id="vram-hud-panel-overview"><div id="vram-hud-summary"></div></div>
                     <div id="vram-hud-panel-ledger" class="hidden"></div>
                 </div>
+                <div id="vram-hud-resize"></div>
             </div>
         </body></rml>)";
     } // namespace
@@ -248,6 +250,32 @@ namespace lfs::vis::gui {
         Rml::ElementDocument* document_ = nullptr;
         std::unique_ptr<VramHudOverlay> overlay_;
     };
+
+    TEST_F(VramHudHeaderClickTest, ResizingAfterBottomCornerSnapDoesNotShrinkEveryFrame) {
+        for (const bool right : {false, true}) {
+            setExpanded(false);
+            press(centerOf("perf-hud-strip-header"));
+            moveTo({right ? 2000 : -2000, 2000});
+            release();
+            setExpanded(true);
+            auto* root = document_->GetElementById("vram-hud-overlay");
+            const auto before = root->GetBox().GetSize(Rml::BoxArea::Border);
+            const auto from = centerOf("vram-hud-resize");
+            press(from);
+            for (int delta = 4; delta <= 40; delta += 4) {
+                moveTo({from.x + delta, from.y + delta});
+                (void)overlay_->initializeGeometryAfterLayout();
+                context_->Update();
+                const auto size = root->GetBox().GetSize(Rml::BoxArea::Border);
+                EXPECT_GE(size.x, before.x - 0.1f);
+                EXPECT_GE(size.y, before.y - 0.1f);
+            }
+            release();
+            LayoutState saved;
+            saved.load();
+            EXPECT_EQ(saved.vram_hud_snap_corner, 0);
+        }
+    }
 
     TEST_F(VramHudHeaderClickTest, BottomCornersSurviveExpansionAndViewportChanges) {
         for (const bool right : {false, true}) {
