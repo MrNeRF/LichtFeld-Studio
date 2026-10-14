@@ -60,6 +60,32 @@ TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
     EXPECT_FALSE((*parsed)->dataset.output_path_explicit);
 }
 
+// Catches input paths stored as typed: a project trained from paths relative to the launch folder could not find its
+// images or initial splats when evaluated or resumed from another folder.
+TEST(ArgumentParserTest, RelativeInputPathsAreStoredAbsolute) {
+    const auto launch = std::filesystem::path(make_test_path("lfs_arg_parser_relative_inputs"));
+    std::filesystem::create_directories(launch / "scene");
+    std::ofstream(launch / "scene" / "init.ply").put('\n');
+    std::ofstream(launch / "scene" / "extra.ply").put('\n');
+    const auto output = make_test_path("lfs_arg_parser_relative_inputs_output");
+
+    const auto previous = std::filesystem::current_path();
+    std::filesystem::current_path(launch);
+    const auto cwd = std::filesystem::current_path();
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "-d", "scene", "-o", output.c_str(),
+        "--init", "./scene/init.ply", "--add-splat", "scene/../scene/extra.ply"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    std::filesystem::current_path(previous);
+
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->dataset.data_path, cwd / "scene");
+    ASSERT_TRUE((*parsed)->init_path);
+    EXPECT_EQ(lfs::core::utf8_to_path(*(*parsed)->init_path), cwd / "scene" / "init.ply");
+    ASSERT_EQ((*parsed)->add_splat_paths.size(), 1u);
+    EXPECT_EQ((*parsed)->add_splat_paths[0], cwd / "scene" / "extra.ply");
+}
+
 TEST(ArgumentParserTest, RejectsUnknownLogLevels) {
     const auto data_path = make_test_path("lfs_arg_parser_log_level_data");
     const auto output_path = make_test_path("lfs_arg_parser_log_level_output");

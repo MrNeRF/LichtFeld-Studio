@@ -194,6 +194,14 @@ namespace {
 
     const std::set<std::string> VALID_STRATEGIES = {"mcmc", "mrnf", "mnrf", "lfs", "igs+"};
 
+    // Input paths are stored in projects and checkpoints, which may later be opened from another folder.
+    std::filesystem::path absolute_input_path(const std::string& value) {
+        const auto path = lfs::core::utf8_to_path(value);
+        std::error_code error;
+        auto absolute = std::filesystem::absolute(path, error);
+        return error ? path : absolute.lexically_normal();
+    }
+
     // Each --eval-steps value may hold several comma-separated iterations; the
     // result is sorted and free of duplicates.
     lfs::Result<std::vector<size_t>> parse_eval_steps(const std::vector<std::string>& values) {
@@ -1226,7 +1234,7 @@ namespace {
                 }
 
                 const auto path_str = ::args::get(init_path);
-                params.init_path = path_str;
+                params.init_path = lfs::core::path_to_utf8(absolute_input_path(path_str));
 
                 if (!std::filesystem::exists(lfs::core::utf8_to_path(path_str))) {
                     return std::unexpected(std::format("Initialization file does not exist: {}", path_str));
@@ -1244,7 +1252,7 @@ namespace {
                 }
                 for (size_t i = 0; i < add_splat_values.size(); ++i) {
                     const auto& path_str = add_splat_values[i];
-                    const auto splat_path = lfs::core::utf8_to_path(path_str);
+                    const auto splat_path = absolute_input_path(path_str);
                     if (!std::filesystem::exists(splat_path)) {
                         return std::unexpected(std::format("Added splat does not exist: {}", path_str));
                     }
@@ -1309,7 +1317,7 @@ namespace {
                     }
                     params.dataset_project = data_path_value;
                 } else {
-                    params.dataset.data_path = data_path_value;
+                    params.dataset.data_path = absolute_input_path(::args::get(data_path));
                 }
 
                 if (has_output_path) {
@@ -1332,7 +1340,7 @@ namespace {
             } else if (has_resume) {
                 // Resume mode: paths are optional (will be read from checkpoint)
                 if (has_data_path) {
-                    params.dataset.data_path = lfs::core::utf8_to_path(::args::get(data_path));
+                    params.dataset.data_path = absolute_input_path(::args::get(data_path));
                 }
                 if (has_output_path) {
                     params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
