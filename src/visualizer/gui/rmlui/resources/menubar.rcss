@@ -233,6 +233,9 @@ body {
 }
 
 .menu-window-btn {
+    /* This bar is cached between input events: a transition cannot finish
+       painting after the pointer leaves. */
+    transition: none;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -246,7 +249,6 @@ body {
     box-sizing: border-box;
     flex-shrink: 0;
     cursor: pointer;
-    transition: background-color 0.12s quadratic-out;
 }
 
 .menu-window-btn img {
@@ -309,6 +311,7 @@ body {
 .window-restore-front {
     left: 3dp;
     top: 5dp;
+    z-index: 1;
 }
 
 #menu-window-maximize.maximized .window-icon-maximize {

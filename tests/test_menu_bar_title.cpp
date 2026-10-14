@@ -1197,6 +1197,22 @@ namespace {
         ASSERT_TRUE(Rml::RemoveContext("menu_bar_title_viewport"));
     }
 
+    TEST_F(MenuBarTitleTest, LosingWindowFocusClearsPointerFeedback) {
+        auto* button = el("menu-window-close");
+        ASSERT_NE(button, nullptr);
+        const auto rect = bounds(button);
+        RmlMenuBarTestAccess::hover(bar_, (rect.left + rect.right) / 2,
+                                    (rect.top + rect.bottom) / 2, false);
+        context_->Update();
+        ASSERT_TRUE(button->IsPseudoClassSet("hover"));
+        RmlMenuBarTestAccess::setRenderNeeded(bar_, false);
+        RmlMenuBarTestAccess::windowFocusLost(bar_);
+        context_->Update();
+        EXPECT_FALSE(button->IsPseudoClassSet("hover"));
+        EXPECT_TRUE(RmlMenuBarTestAccess::renderNeeded(bar_));
+        EXPECT_FALSE(RmlMenuBarTestAccess::tooltip(bar_).needsFrame());
+    }
+
     TEST_F(MenuBarTitleTest, TooltipPreservesFullPathAsTextIncludingMarkupCharacters) {
         const std::filesystem::path path =
             std::filesystem::path{"/projects"} / "long folder" / "<b>scan &amp; capture.licht";

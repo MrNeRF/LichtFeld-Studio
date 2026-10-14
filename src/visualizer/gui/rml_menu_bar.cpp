@@ -1113,7 +1113,10 @@ namespace lfs::vis::gui {
             last_mouse_x_ = rml_mx;
             last_mouse_y_ = rml_my;
             render_needed_ = true;
-            rml_context_->ProcessMouseMove(rml_mx, rml_my, 0);
+            if (is_in_context)
+                rml_context_->ProcessMouseMove(rml_mx, rml_my, 0);
+            else
+                rml_context_->ProcessMouseLeave();
         }
 
         const int count = menu_items_->GetNumChildren();
@@ -1439,6 +1442,13 @@ namespace lfs::vis::gui {
     }
 
     void RmlMenuBar::onWindowFocusLost() {
+        if (rml_context_)
+            rml_context_->ProcessMouseLeave();
+        mouse_pos_valid_ = false;
+        last_hovered_label_ = -1;
+        last_toolbar_hovered_ = false;
+        tooltip_.setHover({}, nullptr);
+        render_needed_ = true;
         if (alt_pressed_)
             alt_chord_ = true;
         access_alt_held_ = false;

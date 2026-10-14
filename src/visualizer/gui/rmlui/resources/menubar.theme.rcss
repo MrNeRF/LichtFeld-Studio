@@ -143,6 +143,14 @@ body {
     border-color: @{text};
 }
 
+.window-restore-front {
+    background-color: @{menu.background};
+}
+
+.menu-window-btn:hover .window-restore-front {
+    background-color: @{menu.hover};
+}
+
 .menu-window-close:hover {
     background-color: #c42b1c;
 }
