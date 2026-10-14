@@ -291,8 +291,9 @@ namespace lfs::training {
                                     "drop --undistort",
                                     LFS_SOURCE_SITE_CURRENT());
 
-        const auto pairing =
-            pair_images_by_name(reference_set.images, test_set.images, reference_set.recursive || test_set.recursive);
+        // COLMAP image names can include folders, such as one folder per camera.
+        const auto pairing = pair_images_by_name(reference_set.images, test_set.images,
+                                                 reference_set.recursive || test_set.recursive || !reference_sparse.empty());
         CompareResult result{.unmatched = pairing.unmatched};
         for (const auto& path : pairing.unmatched)
             LOG_WARN("compare: no counterpart for {}", lfs::core::path_to_utf8(path));

@@ -164,6 +164,43 @@ TEST(CompareImages, PairsDatasetSubFoldersByRelativePath) {
     EXPECT_TRUE(lfs::training::pair_images_by_name(reference, test).pairs.empty());
 }
 
+// Catches plain folders with one subfolder per camera searched only at their top level when the COLMAP model passed
+// with --colmap names the images with their subfolders, so no image pairs.
+TEST(CompareImages, ColmapNamesWithFoldersPairCameraSubFolders) {
+    if (!torch::cuda::is_available())
+        GTEST_SKIP() << "CUDA not available";
+    install_image_loader();
+    const auto reference = fresh_directory("lfs_compare_camera_folders_reference");
+    const auto test = fresh_directory("lfs_compare_camera_folders_test");
+    const auto model = fresh_directory("lfs_compare_camera_folders_model");
+    {
+        std::ofstream cameras(model / "cameras.txt");
+        std::ofstream images(model / "images.txt");
+        for (size_t i = 0; i < NAMES.size(); ++i) {
+            const auto folder = "cam" + std::to_string(i);
+            const auto source = BICYCLE / "images_8" / (NAMES[i] + ".JPG");
+            for (const auto& root : {reference, test}) {
+                fs::create_directories(root / folder);
+                fs::copy_file(source, root / folder / source.filename());
+            }
+            const auto [width, height, channels] = lfs::core::get_image_info(source);
+            cameras << i + 1 << " PINHOLE " << width << ' ' << height << ' ' << width << ' ' << width << ' '
+                    << 0.5f * width << ' ' << 0.5f * height << '\n';
+            images << i + 1 << " 1 0 0 0 0 0 " << i << ' ' << i + 1 << ' ' << folder << '/' << NAMES[i] << ".JPG\n\n";
+        }
+    }
+    std::ofstream(model / "points3D.txt").put('\n');
+
+    auto params = compare(reference, test, fresh_directory("lfs_compare_camera_folders_output"));
+    params.colmap_path = model;
+    const auto result = lfs::training::compare_image_sets(params, std::nullopt);
+    ASSERT_TRUE(result) << result.error().detail();
+    ASSERT_EQ(result->metrics.views.size(), 2u);
+    EXPECT_TRUE(result->unmatched.empty());
+    EXPECT_EQ(result->metrics.views[0].image_name, "cam0/" + NAMES[0] + ".JPG");
+    EXPECT_FLOAT_EQ(result->metrics.psnr, 100.0f);
+}
+
 // Catches a COLMAP dataset folder read as a plain image folder, or a plain folder given cameras it has not.
 TEST(CompareImages, ResolvesDatasetsFoldersAndFiles) {
     const auto dataset = fresh_directory("lfs_compare_resolve_dataset");
