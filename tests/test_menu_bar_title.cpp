@@ -1201,8 +1201,8 @@ namespace {
         auto* button = el("menu-window-close");
         ASSERT_NE(button, nullptr);
         const auto rect = bounds(button);
-        RmlMenuBarTestAccess::hover(bar_, (rect.left + rect.right) / 2,
-                                    (rect.top + rect.bottom) / 2, false);
+        context_->ProcessMouseMove(static_cast<int>((rect.left + rect.right) / 2),
+                                   static_cast<int>((rect.top + rect.bottom) / 2), 0);
         context_->Update();
         ASSERT_TRUE(button->IsPseudoClassSet("hover"));
         RmlMenuBarTestAccess::setRenderNeeded(bar_, false);
