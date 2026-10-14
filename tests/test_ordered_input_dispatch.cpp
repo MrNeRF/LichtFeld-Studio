@@ -2178,6 +2178,78 @@ namespace lfs::vis {
         chart->RemoveEventListener("mouseup", &recorder);
     }
 
+    TEST_F(WindowInputDispatchTest, CapturedReleaseOutsidePanelEndsScrubDrag) {
+        // Body listeners match ScrubFieldController: press the field, move and release on the body.
+        struct Scrub final : Rml::EventListener {
+            bool active = false;
+            float value = 1.f, x = 0.f;
+            int ups = 0, clicks = 0;
+            void ProcessEvent(Rml::Event& event) override {
+                const float mx = event.GetParameter("mouse_x", 0.f);
+                if (event.GetId() == Rml::EventId::Mousedown) {
+                    active = true;
+                    x = mx;
+                } else if (event.GetId() == Rml::EventId::Mousemove && active) {
+                    value += (mx - x) * 0.01f;
+                    x = mx;
+                } else if (event.GetId() == Rml::EventId::Mouseup && active) {
+                    active = false;
+                    ++ups;
+                } else if (event.GetId() == Rml::EventId::Click) {
+                    ++clicks;
+                }
+            }
+        } scrub;
+        gui::RmlPanelHost host(&manager(), "test-scrub-release", "");
+        attachInputHost(host, 200, 160,
+                        "<rml><head><style>body{width:200px;height:160px;}"
+                        "#field{position:absolute;left:20px;top:40px;width:100px;height:28px;}"
+                        "</style></head><body id='body'><div id='field'/></body></rml>");
+        forwardHost(host, 0, 0);
+        auto* field = host.getDocument()->GetElementById("field");
+        auto* body = host.getDocument()->GetElementById("body");
+        ASSERT_NE(field, nullptr);
+        ASSERT_NE(body, nullptr);
+        field->AddEventListener(Rml::EventId::Mousedown, &scrub);
+        field->AddEventListener(Rml::EventId::Click, &scrub);
+        body->AddEventListener(Rml::EventId::Mousemove, &scrub);
+        body->AddEventListener(Rml::EventId::Mouseup, &scrub);
+        const auto at = [&](uint32_t type, float x, float y) {
+            SDL_Event event{};
+            event.type = type;
+            if (type == SDL_EVENT_MOUSE_MOTION) {
+                event.motion.x = x;
+                event.motion.y = y;
+            } else {
+                event.button.button = SDL_BUTTON_LEFT;
+                event.button.x = x;
+                event.button.y = y;
+            }
+            dispatch(event);
+        };
+        at(SDL_EVENT_MOUSE_BUTTON_DOWN, 70, 54);
+        at(SDL_EVENT_MOUSE_MOTION, 150, 54);
+        const float dragged = scrub.value;
+        ASSERT_GT(dragged, 1.f);
+        ASSERT_TRUE(scrub.active);
+        at(SDL_EVENT_MOUSE_MOTION, 320, 200);
+        ASSERT_FLOAT_EQ(scrub.value, dragged);
+        at(SDL_EVENT_MOUSE_BUTTON_UP, 320, 200);
+        at(SDL_EVENT_MOUSE_MOTION, 70, 54);
+        EXPECT_FALSE(scrub.active);
+        EXPECT_EQ(scrub.ups, 1);
+        EXPECT_FLOAT_EQ(scrub.value, dragged);
+        EXPECT_EQ(scrub.clicks, 0);
+        at(SDL_EVENT_MOUSE_BUTTON_DOWN, 70, 54);
+        at(SDL_EVENT_MOUSE_BUTTON_UP, 70, 54);
+        EXPECT_EQ(scrub.clicks, 1);
+        EXPECT_FALSE(scrub.active);
+        field->RemoveEventListener(Rml::EventId::Mousedown, &scrub);
+        field->RemoveEventListener(Rml::EventId::Click, &scrub);
+        body->RemoveEventListener(Rml::EventId::Mousemove, &scrub);
+        body->RemoveEventListener(Rml::EventId::Mouseup, &scrub);
+    }
+
     TEST_F(WindowInputDispatchTest, DispatchReusesEventStorage) {
         click();
         const FrameInputEvent* storage = nullptr;
