@@ -539,6 +539,8 @@ namespace lfs::vis {
         void shutdown();
         bool allowclose();
         void wakeMainLoop() const;
+        void updateVrSession();
+        void stopVrSession();
 
         // Frame exception boundary. Contains an OOM or other error escaping a
         // frame so the loop never aborts: OOM triggers one render-safe pressure
@@ -682,6 +684,9 @@ namespace lfs::vis {
 
         // Core components
         Viewport viewport_;
+        bool vr_started_ = false;
+        std::uint64_t vr_scene_generation_ = 0;
+        std::optional<RenderSettings> vr_saved_settings_;
         std::unique_ptr<WindowManager> window_manager_;
         std::unique_ptr<InputController> input_controller_;
         std::unique_ptr<RenderingManager> rendering_manager_;

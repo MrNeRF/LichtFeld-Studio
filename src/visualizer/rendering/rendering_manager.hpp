@@ -34,6 +34,7 @@
 #include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
 #include "visualizer/app_store.hpp"
+#include "vr/openxr_service.hpp"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -148,6 +149,10 @@ namespace lfs::vis {
 
         // Main render function
         VulkanFrameResult renderVulkanFrame(const RenderContext& context);
+        [[nodiscard]] std::expected<std::array<vr::EyeImage, 2>, std::string> renderVrEyes(
+            VulkanContext& context, SceneManager& scene,
+            const std::array<lfs::rendering::FrameView, 2>& views);
+        void releaseVrResources();
         [[nodiscard]] std::expected<void, std::string> ensureVksplatTrainingSharedScratchReady(
             VulkanContext& context,
             const lfs::core::SplatData& model,

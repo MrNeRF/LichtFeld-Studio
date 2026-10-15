@@ -634,6 +634,12 @@ namespace lfs::vis {
                 return "split_right";
             case VksplatViewportRenderer::OutputSlot::Preview:
                 return "preview";
+            case VksplatViewportRenderer::OutputSlot::VrLeft:
+                return "vr_left";
+            case VksplatViewportRenderer::OutputSlot::VrRight:
+                return "vr_right";
+            case VksplatViewportRenderer::OutputSlot::Count:
+                break;
             }
             return "unknown";
         }
@@ -863,18 +869,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] std::size_t outputSlotIndex(const VksplatViewportRenderer::OutputSlot slot) {
-            constexpr std::size_t kOutputSlotEnumCount =
-                static_cast<std::size_t>(VksplatViewportRenderer::OutputSlot::Preview) + 1;
-            const std::size_t index = static_cast<std::size_t>(slot);
-            if (index >= kOutputSlotEnumCount) [[unlikely]] {
-                throw std::out_of_range(std::format(
-                    "VkSplat output-slot enum is outside the output arrays (observed_enum_value={}, output_slot_count={}) ({}:{})",
-                    index,
-                    kOutputSlotEnumCount,
-                    __FILE__,
-                    __LINE__));
-            }
-            return index;
+            return vksplatOutputSlotIndex(slot);
         }
 
         [[nodiscard]] bool hasDeviceBuffer(const _VulkanBuffer& buffer) {
@@ -5792,6 +5787,11 @@ namespace lfs::vis {
                  gib(shared_scratch_bytes),
                  buffers_.num_indices,
                  top);
+    }
+
+    void VksplatViewportRenderer::releaseVrResources() {
+        releaseOutputSlot(OutputSlot::VrLeft, true);
+        releaseOutputSlot(OutputSlot::VrRight, true);
     }
 
     lfs::Status VksplatViewportRenderer::ensureOutputImages(

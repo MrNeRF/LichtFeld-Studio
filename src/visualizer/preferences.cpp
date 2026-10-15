@@ -798,6 +798,59 @@ namespace lfs::vis {
         const auto it = impl_->values.find("native_floating_windows");
         return it != impl_->values.end() && it->is_boolean() && it->get<bool>();
     }
+    void UserPreferences::setVrEnabled(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["vr_enabled"] = enabled;
+        impl_->saveLocked();
+    }
+    bool UserPreferences::vrEnabled() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        return lfs::core::persisted_settings::field<bool>(impl_->values, "vr_enabled", false);
+    }
+    void UserPreferences::setVrResolutionScale(const float value) {
+        if (!std::isfinite(value))
+            return;
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["vr_resolution_scale"] = std::clamp(value, 0.25f, 1.5f);
+        impl_->saveLocked();
+    }
+    float UserPreferences::vrResolutionScale() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const float value = lfs::core::persisted_settings::field<float>(impl_->values, "vr_resolution_scale", 0.7f);
+        return std::isfinite(value) ? std::clamp(value, 0.25f, 1.5f) : 0.7f;
+    }
+    void UserPreferences::setVrSceneScale(const float value) {
+        if (!std::isfinite(value))
+            return;
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["vr_scene_scale"] = std::clamp(value, 0.001f, 1000.0f);
+        impl_->saveLocked();
+    }
+    float UserPreferences::vrSceneScale() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const float value = lfs::core::persisted_settings::field<float>(impl_->values, "vr_scene_scale", 1.0f);
+        return std::isfinite(value) ? std::clamp(value, 0.001f, 1000.0f) : 1.0f;
+    }
+    void UserPreferences::setVrMoveSpeed(const float value) {
+        if (!std::isfinite(value))
+            return;
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["vr_move_speed"] = std::clamp(value, 0.1f, 10.0f);
+        impl_->saveLocked();
+    }
+    float UserPreferences::vrMoveSpeed() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const float value = lfs::core::persisted_settings::field<float>(impl_->values, "vr_move_speed", 1.5f);
+        return std::isfinite(value) ? std::clamp(value, 0.1f, 10.0f) : 1.5f;
+    }
     void UserPreferences::setFloatingWindowGeometry(const std::string& value) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();

@@ -1392,6 +1392,42 @@ namespace lfs::vis {
         EXPECT_NEAR(viewport.camera.t.z, 5.0f, 1e-5f);
     }
 
+    TEST_F(InputControllerFocusTest, VrViewingBlocksRelativeMouseLookAndRestoresItOnExit) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        viewport.camera.t = glm::vec3(0.0f, 0.0f, 5.0f);
+        viewport.camera.setPivot(glm::vec3(0.0f));
+        viewport.camera.R = glm::mat3(1.0f);
+        controller.setCameraNavigationMode(InputController::CameraNavigationMode::FPV);
+
+        const auto button = static_cast<int>(input::AppMouseButton::MIDDLE);
+        controller.handleMouseButton(button, input::ACTION_PRESS, 40.0, 50.0);
+        ASSERT_TRUE(controller.isCameraDragging());
+        controller.setVrViewing(true);
+        EXPECT_FALSE(controller.isCameraDragging());
+        const auto rotation = viewport.camera.R;
+        const auto position = viewport.camera.t;
+        const auto pivot = viewport.camera.getPivot();
+
+        controller.handleMouseButton(button, input::ACTION_PRESS, 40.0, 50.0);
+        controller.handleMouseMove(0.0, 50.0, glm::dvec2(-40.0, 0.0));
+        controller.handleMouseMove(40.0, 0.0);
+        EXPECT_EQ(viewport.camera.R, rotation);
+        EXPECT_EQ(viewport.camera.t, position);
+        EXPECT_EQ(viewport.camera.getPivot(), pivot);
+        EXPECT_FALSE(controller.isCameraDragging());
+
+        controller.setVrViewing(false);
+        controller.handleMouseButton(button, input::ACTION_PRESS, 40.0, 50.0);
+        controller.handleMouseMove(0.0, 50.0, glm::dvec2(-40.0, 0.0));
+        EXPECT_GT(glm::distance(lfs::rendering::cameraForward(viewport.camera.R),
+                                lfs::rendering::cameraForward(rotation)),
+                  0.01f);
+        EXPECT_EQ(viewport.camera.t, position);
+        controller.handleMouseButton(button, input::ACTION_RELEASE, 0.0, 50.0);
+        EXPECT_FALSE(controller.isCameraDragging());
+    }
+
     TEST_F(InputControllerFocusTest, TrackballModeAllowsPerfectTopView) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);

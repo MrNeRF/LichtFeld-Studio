@@ -48,6 +48,25 @@ TEST(OutputSlotRing, AcquireRoundRobinWraps) {
     EXPECT_EQ(ring.nextRingSlot(), 2u);
 }
 
+TEST(OutputSlotRing, VrEyeSlotsDoNotAliasDesktopOrPreview) {
+    OutputSlotRing ring;
+    ASSERT_GE(OutputSlotRing::kOutputSlotCount, 6u);
+    const auto left = lfs::vis::vksplatOutputSlotIndex(lfs::vis::VksplatOutputSlot::VrLeft);
+    const auto right = lfs::vis::vksplatOutputSlotIndex(lfs::vis::VksplatOutputSlot::VrRight);
+    ring.slotAt(0, 0) = makeSlot(0x10);
+    ring.slotAt(3, 0) = makeSlot(0x20);
+    ring.slotAt(left, 1) = makeSlot(0x30);
+    ring.slotAt(right, 2) = makeSlot(0x40);
+    ring.markLatest(left, 1);
+    ring.markLatest(right, 2);
+    EXPECT_EQ(ring.latestSlot(left).image.image, fakeImage(0x30));
+    EXPECT_EQ(ring.latestSlot(right).image.image, fakeImage(0x40));
+    ring.clearLogical(left, {});
+    EXPECT_EQ(ring.slotAt(0, 0).image.image, fakeImage(0x10));
+    EXPECT_EQ(ring.slotAt(3, 0).image.image, fakeImage(0x20));
+    EXPECT_EQ(ring.latestSlot(right).image.image, fakeImage(0x40));
+}
+
 TEST(OutputSlotRing, WaitNoOpOnZeroWatermark) {
     OutputSlotRing ring;
     bool complete_called = false;

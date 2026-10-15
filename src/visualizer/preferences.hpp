@@ -49,6 +49,14 @@ namespace lfs::vis {
         [[nodiscard]] float uiScale();
         void setNativeFloatingWindows(bool enabled);
         [[nodiscard]] bool nativeFloatingWindows();
+        void setVrEnabled(bool enabled);
+        [[nodiscard]] bool vrEnabled();
+        void setVrResolutionScale(float value);
+        [[nodiscard]] float vrResolutionScale();
+        void setVrSceneScale(float value);
+        [[nodiscard]] float vrSceneScale();
+        void setVrMoveSpeed(float value);
+        [[nodiscard]] float vrMoveSpeed();
         void setFloatingWindowGeometry(const std::string& value);
         [[nodiscard]] std::string floatingWindowGeometry();
         void setZoomSpeed(float value, bool persist = true);

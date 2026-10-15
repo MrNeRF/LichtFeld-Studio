@@ -57,6 +57,7 @@ namespace lfs::vis {
         ~InputController();
 
         void initialize();
+        void setVrViewing(bool enabled);
 
         // Set align tool
         void setAlignTool(std::shared_ptr<tools::AlignTool> tool) {
@@ -182,6 +183,7 @@ namespace lfs::vis {
         void resetHome();
 
     private:
+        bool vr_viewing_ = false;
         struct PanelInteractionState {
             SplitViewPanelId panel = SplitViewPanelId::Left;
             Viewport* viewport = nullptr;
