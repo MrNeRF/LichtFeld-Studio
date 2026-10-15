@@ -1018,7 +1018,9 @@ def test_safe_mode_reset_does_not_stage_mcp_changes(preferences_panel_module):
     module.lf.set_camera_navigation_mode = lambda *_a, **_k: None
     module.lf.set_camera_view_snap_enabled = lambda *_a, **_k: None
 
+    state.marketplace_preferences.update(view="card", git_checkout=True)
     panel._on_reset_all_settings(None, None, None)
+    assert state.marketplace_preferences == {"view": "list", "git_checkout": False}
     assert state.sidebar_clear_calls == [True]
 
     assert state.set_mcp_calls == []

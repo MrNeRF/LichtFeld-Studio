@@ -1599,7 +1599,7 @@ class PreferencesPanel(Panel):
                 return
             errors = [
                 self._reset_section(section)
-                for section in ("general", "appearance", "viewport", "input", "interface", "mcp")
+                for section in ("general", "appearance", "viewport", "input", "interface", "marketplace", "mcp")
             ]
             errors.append(lf.ui.reset_window_state())
             error = next((item for item in errors if item), None)
