@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/filesystem.hpp"
+
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -380,7 +382,7 @@ namespace lfs::core {
             return nullptr;
         }
         // Preserve fopen's read/write sharing without the deprecated CRT API.
-        return _wfsopen(path.c_str(), wide_mode.c_str(), _SH_DENYNO);
+        return _wfsopen(lfs::core::fs::native_path(path).c_str(), wide_mode.c_str(), _SH_DENYNO);
 #else
         return std::fopen(path.c_str(), mode);
 #endif
@@ -405,7 +407,7 @@ namespace lfs::core {
 #ifdef _WIN32
         // On Windows, explicitly use wstring to open with Unicode support
         // This ensures we bypass any narrow string conversion issues
-        stream.open(path.wstring(), mode);
+        stream.open(lfs::core::fs::native_path(path).wstring(), mode);
 #else
         // On Linux/Mac, standard ofstream works with UTF-8 paths
         stream.open(path, mode);
@@ -440,7 +442,7 @@ namespace lfs::core {
         std::ifstream& stream) {
 #ifdef _WIN32
         // On Windows, explicitly use wstring to open with Unicode support
-        stream.open(path.wstring(), mode);
+        stream.open(lfs::core::fs::native_path(path).wstring(), mode);
 #else
         // On Linux/Mac, standard ifstream works with UTF-8 paths
         stream.open(path, mode);

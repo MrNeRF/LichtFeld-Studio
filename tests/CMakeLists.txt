@@ -215,6 +215,7 @@ if(BUILD_UNICODE_TEST_ONLY)
     # Standalone Unicode path tests without CUDA runtime linkage
     add_executable(unicode_path_test
         test_unicode_paths_windows.cpp
+        test_native_filesystem.cpp
         test_project_save_as_paths.cpp
         test_weight_file_paths.cpp
         test_crash_handler.cpp
@@ -599,6 +600,7 @@ set(TEST_FILES
     test_usd_format.cpp
     test_nurec_usdz_format.cpp
     test_unicode_paths_windows.cpp
+    test_native_filesystem.cpp
     test_interleaved_slice_copy.cpp
     test_densification_tensor_ops.cpp
     test_tensor_zero_dimension.cpp
