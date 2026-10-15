@@ -118,6 +118,8 @@ namespace {
             if (Rml::GetContext("viewport_empty_state"))
                 Rml::RemoveContext("viewport_empty_state");
             Rml::RemoveContext("viewport_depth_layout");
+            // renderer_ dies with the fixture, so RmlUi must drop its render manager first.
+            Rml::ReleaseRenderManagers();
         }
 
         void layout(bool split, float scale = 1.0f, float divider = 0.5f, int width = 920, int height = 840) {
