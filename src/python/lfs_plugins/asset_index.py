@@ -2354,6 +2354,9 @@ class LibraryService:
     def list_projects(self) -> List[Project]:
         return self._call("list_projects")
 
+    def verify(self, asset_id: str) -> Optional[Project]:
+        return self._call("verify_asset", asset_id)
+
     def verify_projects_batch(
         self, asset_ids: List[str], *, cancel_event: Optional[threading.Event] = None
     ) -> int:
