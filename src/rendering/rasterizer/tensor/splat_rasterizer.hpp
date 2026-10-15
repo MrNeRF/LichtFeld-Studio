@@ -20,8 +20,11 @@ namespace lfs::rendering {
         std::array<uint32_t, 4> camera{}; // width, height, camera model, mip
         std::array<float, 4> panorama{};
         std::array<uint32_t, 4> mask_limits{}; // selection count, preview count, depth-batch instances
+        // Distance the orthographic raster eye moved back; depth stays relative to the viewport camera.
+        float depth_offset = 0;
+        std::array<uint32_t, 3> depth_offset_padding{};
     };
-    static_assert(sizeof(SplatRasterParameters) == 144);
+    static_assert(sizeof(SplatRasterParameters) == 160);
 
     // PresentParameters of splat_present.slang.
     struct SplatPresentParameters {

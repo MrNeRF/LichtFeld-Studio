@@ -48,13 +48,13 @@ namespace lfs::vis {
         lfs::Result<FrameDiagnostics> frameDiagnostics(RenderTargetId) const;
         void setLodSettings(size_t pool_splats, float vram_fraction, uint32_t fade_frames);
         static bool supportsSelection(const core::SplatData&, const SceneRenderer::SelectionMaskRequest&);
-        lfs::Result<core::Tensor> buildSelectionMask(MetalViewportPresentation&, const core::SplatData&, const SceneRenderer::SelectionMaskRequest&);
+        lfs::Result<core::Tensor> buildSelectionMask(MetalViewportPresentation&, const core::SplatData&, const SceneRenderer::SelectionMaskRequest&, bool content_changed = false);
         static bool supportsPoints(const PointSceneRenderer::RenderRequest&);
         lfs::Result<PointSceneRenderer::RenderResult> renderPoints(
             MetalViewportPresentation&, const PointSceneRenderer::RenderRequest&, RenderTargetId);
         lfs::Result<SceneRenderer::RenderResult> render(
             MetalViewportPresentation&, const core::SplatData&, const rendering::ViewportRenderRequest&,
-            RenderTargetId, bool expected_depth = false, bool wait_for_pages = false);
+            RenderTargetId, bool expected_depth = false, bool wait_for_pages = false, bool content_changed = false);
         glm::ivec2 size(RenderTargetId) const;
 #ifndef LFS_GRAPHICS_VULKAN
         // Copies the latest output into contiguous [H,W,4] UInt8 color and

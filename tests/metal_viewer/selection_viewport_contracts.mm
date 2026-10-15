@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <format>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <random>
@@ -96,6 +97,74 @@ namespace {
             }
         }
     }
+    void orthographic_eye_setback(vis::VulkanContext& context, vis::MetalViewportRenderer& renderer) {
+        core::SplatData model(0,
+                              Tensor::from_vector(std::vector<float>{-.5f, 0, 1, .5f, 0, -3}, {2, 3}, Device::GPU),
+                              Tensor::full({2, 1, 3}, 1.f, Device::GPU), {},
+                              Tensor::full({2, 3}, -2.f, Device::GPU),
+                              Tensor::from_vector(std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0}, {2, 4}, Device::GPU),
+                              Tensor::full({2, 1}, 4.f, Device::GPU), 1.f);
+        std::vector<glm::mat4> transforms{glm::translate(glm::mat4(1), glm::vec3(0, 0, 1))};
+        rendering::ViewportRenderRequest request;
+        request.frame_view.size = {64, 64};
+        request.frame_view.orthographic = true;
+        request.frame_view.ortho_scale = 24.f;
+        request.scene.model_transforms = &transforms;
+        request.sh_degree = 0;
+        request.frame_view.far_plane = 3.f;
+        rendering::BoundingBox volume;
+        volume.min = {-1, -1, -3};
+        volume.max = {1, 1, 3};
+        request.filters.view_volume = volume;
+        request.filters.screen_window = rendering::SelectionScreenWindow{.scale_x = 1.f, .scale_y = 1.f};
+        request.filters.cull_outside_view_volume = true;
+        const auto target = vis::RenderTargetId{901};
+        for (bool gut : {false, true})
+            for (bool expected_depth : {false, true}) {
+                request.gut = gut;
+                Adapter::SelectionMaskRequest selection;
+                selection.frame_view = request.frame_view;
+                selection.scene = request.scene;
+                selection.gut = gut;
+                selection.shape = Shape::Rectangle;
+                selection.primitives = {{0, 0, 64, 64}};
+                auto selected = renderer.buildSelectionMask(context, model, selection);
+                if (!selected)
+                    throw std::runtime_error(format_for_developer(selected.error()));
+                const auto mask = selected->cpu();
+                auto frame = renderer.render(context, model, request, target, expected_depth);
+                if (!frame)
+                    throw std::runtime_error(format_for_developer(frame.error()));
+                auto color = Tensor::empty({64, 64, 4}, Device::CPU);
+                if (auto read = renderer.readColor(target, color, 0, 0); !read)
+                    throw std::runtime_error(format_for_developer(read.error()));
+                auto depth = Tensor::empty({64, 64}, Device::CPU);
+                auto ticket = renderer.submitReadback(target, depth, 0, 0, true);
+                if (!ticket)
+                    throw std::runtime_error(format_for_developer(ticket.error()));
+                const auto ready = renderer.pollReadback(*ticket, true);
+                if (!ready)
+                    throw std::runtime_error(format_for_developer(ready.error()));
+                if (*ready != vis::SceneRenderer::ReadbackTicketStatus::Ready)
+                    throw std::runtime_error(std::format("Orthographic depth readback must complete (ticket={}, status={})", *ticket, int(*ready)));
+                for (size_t id = 0; id < 2; ++id) {
+                    const int x = id == 0 ? 20 : 44;
+                    const float expected = id == 0 ? -2.f : 2.f;
+                    const float expected_pick = id == 0 ? -1.f : 2.f;
+                    const float value = depth.ptr<float>()[32 * 64 + x];
+                    const float red = color.ptr<float>()[(32 * 64 + x) * 4];
+                    const auto picked = renderer.readDepth({.pixel = {x, 32}, .source_size = {64, 64}, .target = target});
+                    if (!mask.ptr<uint8_t>()[id] || !(red > .1f) || !(std::abs(value - expected) <= 1e-4f) ||
+                        !picked || !(std::abs(*picked - expected_pick) <= 1e-4f))
+                        throw std::runtime_error(std::format("Orthographic splats must render, select and retain viewport depth "
+                                                             "(id={}, gut={}, expected_depth={}, selected={}, red={}, depth={}, picked={}, expected={}, expected_pick={})",
+                                                             id, gut, expected_depth, mask.ptr<uint8_t>()[id], red, value, picked ? *picked : -1e10f, expected, expected_pick));
+                }
+            }
+        if (auto released = renderer.release(target); !released)
+            throw std::runtime_error(format_for_developer(released.error()));
+        std::printf("Orthographic eye setback: transformed splats behind/in front rendered and selected; median/expected depths preserved; picking rejects nonpositive depth (Gaussian/GUT).\n");
+    }
     void run(bool native_only, core::GpuBackend backend) {
         core::GpuBackendScope scope(backend);
         vis::VulkanGraphicsContext graphics;
@@ -138,6 +207,7 @@ namespace {
         auto native_adapter = vis::createSceneRenderer(graphics);
         auto reference_adapter = vis::createVulkanSceneRenderer(context);
         vis::MetalViewportRenderer native;
+        orthographic_eye_setback(context, native);
         precise_small_splats(context, native);
         size_t cases = 0, hits = 0, ring_hits = 0;
         for (bool half : {false, true}) {

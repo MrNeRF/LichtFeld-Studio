@@ -5,6 +5,7 @@
 #include "core/logger.hpp"
 #include "core/gpu_elapsed.hpp"
 #include "core/memory_pressure.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include "core/tensor_upload.hpp"
@@ -265,6 +266,35 @@ namespace lfs::vis {
             uint32_t nodes = 0, chunks = 0, roots = 0;
         };
         std::map<const core::SplatLodTree*, LodTree> lod_trees;
+        struct ModelBounds {
+            const void* means = nullptr;
+            std::size_t count = 0;
+            std::uint64_t deleted_version = 0;
+            bool valid = false;
+            bool has_bounds = false;
+            glm::vec3 min{0.0f};
+            glm::vec3 max{0.0f};
+        };
+        ModelBounds orthographic_bounds;
+        float orthographicEyeSetback(const rendering::FrameView& frame_view, const core::SplatData& model,
+                                    const rendering::GaussianSceneState& scene, bool equirectangular, bool content_changed) {
+            auto& bounds = orthographic_bounds;
+            if (content_changed)
+                bounds.valid = false;
+            if (!frame_view.orthographic || equirectangular)
+                return 0.0f;
+            const auto& means = model.means_raw();
+            if (!bounds.valid || bounds.means != means.data_ptr() || bounds.count != model.size() ||
+                bounds.deleted_version != model.deleted_mask_version()) {
+                bounds.has_bounds = core::compute_bounds(model, bounds.min, bounds.max);
+                bounds.means = means.data_ptr();
+                bounds.count = model.size();
+                bounds.deleted_version = model.deleted_mask_version();
+                bounds.valid = true;
+            }
+            return bounds.has_bounds ? rendering::orthographicEyeSetback(frame_view, bounds.min, bounds.max, scene.model_transforms)
+                                     : 0.0f;
+        }
         std::unique_ptr<rendering::SplatSelectionQuery> selection_query;
         core::GpuBackend selection_backend{};
         // Selection requests carry their own camera, not a render-target ID.
@@ -742,7 +772,7 @@ namespace lfs::vis {
                 indices->dtype() == core::DataType::Int32 && indices->bytes() >= size_t(model.size()) * 4);
     }
     lfs::Result<core::Tensor> MetalViewportRenderer::buildSelectionMask(MetalViewportPresentation& context, const core::SplatData& model,
-                                                                        const SceneRenderer::SelectionMaskRequest& request) {
+                                                                        const SceneRenderer::SelectionMaskRequest& request, bool content_changed) {
         try {
             auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
@@ -788,6 +818,7 @@ namespace lfs::vis {
             rendering::SplatSelectionParameters parameters;
             auto view = glm::mat4(glm::transpose(rendering::dataCameraToWorldFromVisualizerRotation(request.frame_view.rotation)));
             view[3] = glm::vec4(-glm::mat3(view) * request.frame_view.translation, 1);
+            view[3][2] += i.orthographicEyeSetback(request.frame_view, model, request.scene, request.equirectangular, content_changed);
             std::memcpy(parameters.world_to_camera.data(), glm::value_ptr(view), sizeof(parameters.world_to_camera));
             const auto intrinsics = request.frame_view.getCameraIntrinsics();
             parameters.intrinsics = {intrinsics.focal_x, intrinsics.focal_y, intrinsics.center_x, intrinsics.center_y};
@@ -1031,7 +1062,7 @@ namespace lfs::vis {
                 model.non_sh_attrs_f16());
     }
     lfs::Result<SceneRenderer::RenderResult> MetalViewportRenderer::render(
-        MetalViewportPresentation& context, const core::SplatData& model, const rendering::ViewportRenderRequest& request, Slot slot, bool expected_depth, bool wait_for_pages) {
+        MetalViewportPresentation& context, const core::SplatData& model, const rendering::ViewportRenderRequest& request, Slot slot, bool expected_depth, bool wait_for_pages, bool content_changed) {
         try {
             auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
@@ -1131,6 +1162,8 @@ namespace lfs::vis {
             store(projection.model_to_world, glm::mat4(1));
             auto view = glm::mat4(glm::transpose(rendering::dataCameraToWorldFromVisualizerRotation(request.frame_view.rotation)));
             view[3] = glm::vec4(-glm::mat3(view) * request.frame_view.translation, 1);
+            const float eye_setback = i.orthographicEyeSetback(request.frame_view, model, request.scene, request.equirectangular, content_changed);
+            view[3][2] += eye_setback;
             store(projection.world_to_camera, view);
             const auto camera = request.frame_view.translation;
             projection.camera_local = {camera.x, camera.y, camera.z, 1};
@@ -1185,9 +1218,12 @@ namespace lfs::vis {
             if (needs_overlay) {
                 static_assert(detail::ParamCount == 207);
                 static_assert(detail::ViewWindow == 206 && detail::SelectionFlags == 24 && detail::EmphasisFlags == 20);
-                const auto params = detail::buildOverlayParamsCpuFloats(request, selection_enabled, preview_enabled, scene_count > 0, node_count, false);
+                auto params = detail::buildOverlayParamsCpuFloats(request, selection_enabled, preview_enabled, scene_count > 0, node_count, false);
                 if (!params)
                     throw std::runtime_error(params.error());
+                // Screen-window depth limits use the shifted raster camera.
+                (*params)[detail::ViewMin * 4 + 2] -= eye_setback;
+                (*params)[detail::ViewMax * 4 + 2] -= eye_setback;
                 allocate(f.overlay_parameters, params->size() * sizeof(float));
                 std::memcpy(f.overlay_parameters.contents, params->data(), params->size() * sizeof(float));
                 allocate(f.overlay_nodes, node_count);
@@ -1347,6 +1383,7 @@ namespace lfs::vis {
             raster.render_origin = {render_origin[0], render_origin[1], 0, 0};
             raster.intrinsics = projection.intrinsics;
             raster.clip = {projection.clip_scale[0], expected_depth ? projection.rasterization[2] : projection.clip_scale[1], projection.clip_scale[2], projection.clip_scale[3]};
+            raster.depth_offset = eye_setback;
             raster.camera = projection.extent;
             raster.panorama = projection.panorama;
             const rendering::SplatRasterOverlay raster_overlay{&i.projector->overlay_parameters(), &i.projector->overlay_flags(),
