@@ -93,6 +93,10 @@ namespace {
                 EXPECT_LE(element->GetAbsoluteOffset(Rml::BoxArea::Border).x + size.x,
                           row->GetAbsoluteOffset(Rml::BoxArea::Border).x + row->GetBox().GetSize(Rml::BoxArea::Border).x + 1.0f);
             }
+            for (auto* element : {min, max}) {
+                EXPECT_EQ(element->GetComputedValues().text_align(), Rml::Style::TextAlign::Center);
+                EXPECT_NEAR(element->GetComputedValues().line_height().value, 22.0f * GetParam(), 1.0f);
+            }
             EXPECT_GE(min->GetBox().GetSize(Rml::BoxArea::Border).x, 72.0f * GetParam());
             EXPECT_GE(max->GetBox().GetSize(Rml::BoxArea::Border).x, 72.0f * GetParam());
         }
@@ -139,6 +143,13 @@ namespace {
             bins.push_back(document_->GetElementById("y-bin-input")->GetParentNode()->GetParentNode());
             for (auto* element : bins)
                 element->SetClass("hidden", !compare);
+            // The shared controller replaces each native range with this shell.
+            for (const auto* id : {"histogram-bin-input", "x-bin-input", "y-bin-input"}) {
+                auto* host = document_->GetElementById(id)->GetParentNode();
+                host->SetInnerRML("<div class=\"scrub-field\"><div class=\"scrub-field-fill\"></div>"
+                                  "<span class=\"scrub-field-display\">56</span>"
+                                  "<input class=\"scrub-field-input\" type=\"text\" value=\"56\"/></div>");
+            }
             document_->Show();
         }
 
@@ -215,6 +226,10 @@ namespace {
                 }
                 for (const auto* id : {"histogram-field", "histogram-compare-field"})
                     EXPECT_LE(document_->GetElementById(id)->GetBox().GetSize(Rml::BoxArea::Border).x, 128.0f * GetParam());
+                Rml::ElementList scrubs;
+                document_->QuerySelectorAll(scrubs, ".scrub-field-display, .scrub-field-input");
+                for (auto* element : scrubs)
+                    EXPECT_EQ(element->GetComputedValues().text_align(), Rml::Style::TextAlign::Center);
                 elements.clear();
                 document_->QuerySelectorAll(elements, ".histogram-stat");
                 for (auto* element : elements)

@@ -697,12 +697,12 @@ def test_histogram_rebin_does_not_expand_selected_samples(histogram_panel_module
     panel._sync_marked_range(apply_scene=False)
 
     assert panel._marked_count == 1
-    assert panel._marked_range_text == "0.0625 to 0.125"
+    assert panel._marked_range_text == "6.25e-2 to 1.25e-1"
 
     panel._set_histogram_bin_count(17)
 
     assert panel._marked_count == 1
-    assert panel._marked_range_text == "0.0625 to 0.125"
+    assert panel._marked_range_text == "6.25e-2 to 1.25e-1"
 
 
 def test_histogram_drag_can_expand_across_multiple_bins(histogram_panel_module, lf, numpy):
@@ -1561,30 +1561,57 @@ def test_histogram_panel_restores_bottom_dock(histogram_panel_module, lf, monkey
     assert len(moves) == (1 if saved_space == "FLOATING" else 0)
 
 
-@pytest.mark.parametrize("axis,attr,minimum,maximum", [
-    ("histogram", "_histogram_bin_count", 16, 128),
-    ("x", "_compare_x_bin_count", 8, 48),
-    ("y", "_compare_y_bin_count", 8, 48),
+@pytest.mark.parametrize("prop,minimum,maximum", [
+    ("histogram_bin_count", 16, 128),
+    ("compare_x_bin_count", 8, 48),
+    ("compare_y_bin_count", 8, 48),
 ])
-def test_bin_input_commits_on_enter_or_blur_and_steps(histogram_panel_module, axis, attr, minimum, maximum):
+def test_bin_scrub_drag_cancel_and_typed_value(histogram_panel_module, prop, minimum, maximum):
+    from unittest.mock import MagicMock
+    from lfs_plugins.scrub_fields import _ScrubFieldState
+    from lfs_plugins.rml_keys import KI_ESCAPE
+
     panel = histogram_panel_module.HistogramPanel()
-    original = getattr(panel, attr)
-    panel._bin_input_text[axis] = "3"
-    panel._on_submit_bins(None, SimpleNamespace(get_bool_parameter=lambda *args: False), [axis])
-    assert getattr(panel, attr) == original
-    panel._bin_input_text[axis] = "32"
-    panel._on_submit_bins(None, SimpleNamespace(get_bool_parameter=lambda *args: True), [axis])
-    assert getattr(panel, attr) == 32
-    assert axis not in panel._bin_input_text
-    panel._on_step_bins(None, None, [axis, 1])
-    assert getattr(panel, attr) == 33
-    for text, expected in [("bad", 33), ("", 33), ("999", maximum), ("-5", minimum)]:
-        panel._bin_input_text[axis] = text
-        panel._on_commit_bins(None, None, [axis])
-        assert getattr(panel, attr) == expected
-        assert axis not in panel._bin_input_text
-    panel._on_step_bins(None, None, [axis, -1])
-    assert getattr(panel, attr) == minimum
+    controller = panel._scrub_fields
+    attrs = {}
+    input_el = MagicMock()
+    input_el.get_attribute.side_effect = lambda name, default="": attrs.get(name, default)
+    input_el.set_attribute.side_effect = attrs.__setitem__
+    state = _ScrubFieldState(prop, controller._specs[prop], MagicMock(absolute_width=100.0),
+                             MagicMock(), MagicMock(), input_el)
+    controller._fields[prop] = state
+    initial = panel._get_bin_scrub_value(prop)
+
+    def event(**params):
+        return SimpleNamespace(get_parameter=lambda name, default: params.get(name, default),
+                               get_bool_parameter=lambda name, default: params.get(name, default),
+                               stop_propagation=lambda: None)
+
+    controller._on_field_mousedown(prop, event(mouse_x=0))
+    controller._on_body_mousemove(event(mouse_x=10))
+    assert panel._get_bin_scrub_value(prop) > initial
+    controller._on_keydown(event(key_identifier=KI_ESCAPE))
+    assert panel._get_bin_scrub_value(prop) == initial
+    controller._enter_edit(state)
+    attrs["value"] = "32"
+    controller._on_input_change(prop, event(linebreak=True))
+    controller._on_input_blur(prop, event())
+    assert panel._get_bin_scrub_value(prop) == 32
+    for value, expected in [(999, maximum), (-5, minimum)]:
+        controller._apply_value(state, value)
+        assert panel._get_bin_scrub_value(prop) == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    (0.0, "0"), (1e-4, "1e-4"), (-0.0001234, "-1.234e-4"),
+    (0.003531, "3.531e-3"), (0.9821, "9.821e-1"), (1234000.0, "1.234e6"),
+])
+def test_range_scientific_text_is_compact_and_parseable(histogram_panel_module, value, expected):
+    panel = histogram_panel_module.HistogramPanel()
+    text = panel._format_range_input(value)
+    assert text == expected
+    assert panel._parse_range_input(text) == pytest.approx(value, rel=5e-4)
+    assert len(text) <= 10
 
 
 # --- Snappiness / elite-UX regressions -------------------------------------------------
@@ -1954,11 +1981,11 @@ def test_range_reset_and_cached_commit_update_fields(pending_range_panel, axis):
     setter("0.")  # Reset intentionally discards pending text.
     reset(None, None, None)
     assert getattr(panel, f"{prefix}_min_value") is None
-    assert getattr(panel, f"{prefix}_min_str") == "0.1"
+    assert getattr(panel, f"{prefix}_min_str") == "1e-1"
     setter("0.35")
     commit()  # The same range is now in the result cache.
     assert not panel._computing
-    assert getattr(panel, f"{prefix}_min_str") == "0.4"
+    assert getattr(panel, f"{prefix}_min_str") == "4e-1"
     assert getattr(panel, f"{prefix}_min_value") == 0.35
 
 
@@ -2003,8 +2030,8 @@ def test_pending_metric_switch_cannot_commit_previous_metric(pending_range_panel
     assert getattr(panel, f"{prefix}_min_value") is None
     assert getattr(panel, f"{prefix}_max_value") is None
     deliver()
-    assert getattr(panel, f"{prefix}_min_str") == "-40"
-    assert getattr(panel, f"{prefix}_max_str") == "58"
+    assert getattr(panel, f"{prefix}_min_str") == "-4e1"
+    assert getattr(panel, f"{prefix}_max_str") == "5.8e1"
     assert not panel._computing
 
 
@@ -2035,14 +2062,14 @@ def test_editing_one_bound_preserves_other_typed_constraint(pending_range_panel,
     set_min("0.35")
     commit()
     deliver()
-    assert getattr(panel, f"{prefix}_min_str") == "0.4"
+    assert getattr(panel, f"{prefix}_min_str") == "4e-1"
     set_max("0.65")
     commit()
     deliver()
     assert getattr(panel, f"{prefix}_min_value") == 0.35
     assert getattr(panel, f"{prefix}_max_value") == 0.65
-    assert getattr(panel, f"{prefix}_min_str") == "0.4"
-    assert getattr(panel, f"{prefix}_max_str") == "0.6"
+    assert getattr(panel, f"{prefix}_min_str") == "4e-1"
+    assert getattr(panel, f"{prefix}_max_str") == "6e-1"
 
 
 @pytest.mark.parametrize("axis", ["primary", "compare_y"])
@@ -2057,8 +2084,8 @@ def test_outdated_metric_result_cannot_replace_current_range(pending_range_panel
     assert panel._computing
     deliver()
     assert not panel._computing
-    assert getattr(panel, f"{prefix}_min_str") == "-10"
-    assert getattr(panel, f"{prefix}_max_str") == "20"
+    assert getattr(panel, f"{prefix}_min_str") == "-1e1"
+    assert getattr(panel, f"{prefix}_max_str") == "2e1"
 
 
 def test_bin_count_change_rebins_loaded_snapshot_without_the_worker(histogram_panel_module, lf, numpy, monkeypatch):
