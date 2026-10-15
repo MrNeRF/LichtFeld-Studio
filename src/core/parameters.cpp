@@ -854,6 +854,12 @@ namespace lfs::core {
                 return std::format("max_cap must be nonnegative (got {})", max_cap);
             if (sh_degree < 0 || sh_degree > 3)
                 return std::format("sh_degree must be within [0, 3] (got {})", sh_degree);
+            if (sb_lobes < 0 || sb_lobes > 8)
+                return std::format("sb_lobes must be within [0, 8] (got {})", sb_lobes);
+            if (sb_lobes > 0 && canonical_strategy_name(strategy) == kStrategyIGSPlus)
+                return "sb_lobes requires the mcmc or mrnf strategy";
+            if (!std::isfinite(sb_params_lr) || sb_params_lr < 0.0f)
+                return std::format("sb_params_lr must be finite and nonnegative (got {})", sb_params_lr);
             if (sparsify_steps < 0)
                 return std::format("sparsify_steps must be nonnegative (got {})", sparsify_steps);
             if (enable_sparsity &&

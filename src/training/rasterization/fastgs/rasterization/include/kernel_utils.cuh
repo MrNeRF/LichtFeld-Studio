@@ -309,6 +309,111 @@ namespace fast_lfs::rasterization::kernels {
         return result;
     }
 
+    // Spherical Beta constants and evaluation helpers
+    constexpr uint32_t SB_PARAMS_PER_LOBE = 6;
+    constexpr float SB_SOFTPLUS_BETA = 6.931471805599453f; // 10 * ln(2)
+    constexpr float SB_SOFTPLUS_THRESHOLD = 20.0f;
+    constexpr float SB_MIN_DOT = 1e-6f;
+    constexpr float SB_BETA_MIN = -20.0f;
+    constexpr float SB_BETA_MAX = 20.0f;
+
+    __device__ __forceinline__ float sb_softplus(const float x) {
+        const float bx = SB_SOFTPLUS_BETA * x;
+        return bx > SB_SOFTPLUS_THRESHOLD ? x : log1pf(expf(bx)) / SB_SOFTPLUS_BETA;
+    }
+
+    __device__ __forceinline__ float sb_softplus_grad(const float x) {
+        const float bx = SB_SOFTPLUS_BETA * x;
+        return bx > SB_SOFTPLUS_THRESHOLD ? 1.0f : 1.0f / (1.0f + expf(-bx));
+    }
+
+    __device__ __forceinline__ float3 add_spherical_beta_color(
+        float3 color,
+        const float* __restrict__ sb_params,
+        const float3& view_dir,
+        const uint primitive_idx,
+        const uint num_lobes) {
+        const size_t row_offset = static_cast<size_t>(primitive_idx) * num_lobes * SB_PARAMS_PER_LOBE;
+        const float* params = sb_params + row_offset;
+        float r = 0.0f, g = 0.0f, b = 0.0f;
+        for (uint l = 0; l < num_lobes; ++l) {
+            const float* lobe = params + l * SB_PARAMS_PER_LOBE;
+            float st, ct, sp, cp;
+            __sincosf(lobe[3], &st, &ct);
+            __sincosf(lobe[4], &sp, &cp);
+            const float dx = st * cp;
+            const float dy = st * sp;
+            const float dz = ct;
+            const float dot_val = view_dir.x * dx + view_dir.y * dy + view_dir.z * dz;
+            if (dot_val <= 0.0f) {
+                continue;
+            }
+            const float t = fminf(dot_val, 1.0f);
+            const float beta = fminf(fmaxf(lobe[5], SB_BETA_MIN), SB_BETA_MAX);
+            const float a = 4.0f * expf(beta);
+            const float ell = logf(t);
+            const float u = -a * ell;
+            const float w = (u > 85.0f) ? 0.0f : expf(-u);
+            r += w * sb_softplus(lobe[0]);
+            g += w * sb_softplus(lobe[1]);
+            b += w * sb_softplus(lobe[2]);
+        }
+        return make_float3(color.x + r, color.y + g, color.z + b);
+    }
+
+    __device__ __forceinline__ void compute_spherical_beta_backward(
+        const float* __restrict__ sb_params,
+        const float3& view_dir,
+        const float3& g,
+        const uint primitive_idx,
+        const uint num_lobes,
+        float* __restrict__ sb_grads_out) {
+        const size_t row_offset = static_cast<size_t>(primitive_idx) * num_lobes * SB_PARAMS_PER_LOBE;
+        const float* params = sb_params + row_offset;
+        for (uint l = 0; l < num_lobes; ++l) {
+            const float* lobe = params + l * SB_PARAMS_PER_LOBE;
+            float* lobe_grad = sb_grads_out + l * SB_PARAMS_PER_LOBE;
+            float st, ct, sp, cp;
+            __sincosf(lobe[3], &st, &ct);
+            __sincosf(lobe[4], &sp, &cp);
+            const float dx = st * cp;
+            const float dy = st * sp;
+            const float dz = ct;
+            const float dot_val = view_dir.x * dx + view_dir.y * dy + view_dir.z * dz;
+            if (dot_val <= 0.0f) {
+                continue;
+            }
+            const float t = fminf(dot_val, 1.0f);
+            const float beta_raw = lobe[5];
+            const float beta = fminf(fmaxf(beta_raw, SB_BETA_MIN), SB_BETA_MAX);
+            const float a = 4.0f * expf(beta);
+            const float ell = logf(t);
+            const float u = -a * ell;
+            const float w = (u > 85.0f) ? 0.0f : expf(-u);
+            const float dw_dbeta = (u > 85.0f) ? 0.0f : -u * w;
+            const float r = sb_softplus(lobe[0]);
+            const float g_val = sb_softplus(lobe[1]);
+            const float b_val = sb_softplus(lobe[2]);
+            const float S = g.x * r + g.y * g_val + g.z * b_val;
+
+            lobe_grad[0] = g.x * w * sb_softplus_grad(lobe[0]);
+            lobe_grad[1] = g.y * w * sb_softplus_grad(lobe[1]);
+            lobe_grad[2] = g.z * w * sb_softplus_grad(lobe[2]);
+
+            // Angular derivatives: saturated clamp at dot >= 1.0 has 0 derivative
+            if (dot_val < 1.0f) {
+                const float tg = fmaxf(t, SB_MIN_DOT);
+                const float dw_dt = (u > 85.0f && a > 1.0f) ? 0.0f : a * powf(tg, a - 1.0f);
+                const float d_dot_d_theta = view_dir.x * ct * cp + view_dir.y * ct * sp - view_dir.z * st;
+                const float d_dot_d_phi   = -view_dir.x * st * sp + view_dir.y * st * cp;
+                lobe_grad[3] = S * dw_dt * d_dot_d_theta;
+                lobe_grad[4] = S * dw_dt * d_dot_d_phi;
+            }
+            const float d_beta_guard = (beta_raw >= SB_BETA_MIN && beta_raw <= SB_BETA_MAX) ? 1.0f : 0.0f;
+            lobe_grad[5] = S * dw_dbeta * d_beta_guard;
+        }
+    }
+
     // Max contiguous (non-shN) attributes per primitive (rotation = 4 is the largest).
     constexpr int MAX_FUSED_ADAM_ATTRIBUTES = 4;
 
@@ -318,7 +423,7 @@ namespace fast_lfs::rasterization::kernels {
     //
     // Frozen / crop-damped rows with zero lr skip the moment+param update but still
     // re-encode their current (u,log_s) under the new block bounds so codes stay valid.
-    template <int BITS>
+    template <int BITS, int MAX_ATTR = MAX_FUSED_ADAM_ATTRIBUTES>
     __device__ inline void adam_step_row_joint(
         const float* grads,
         const FusedAdamParam& param,
@@ -365,8 +470,8 @@ namespace fast_lfs::rasterization::kernels {
 
         float local_u_min = kInf, local_u_max = -kInf;
         float local_s_min = kInf, local_s_max = -kInf;
-        float us_u[MAX_FUSED_ADAM_ATTRIBUTES];
-        float us_s[MAX_FUSED_ADAM_ATTRIBUTES];
+        float us_u[MAX_ATTR];
+        float us_s[MAX_ATTR];
 
         if (touch) {
             for (uint i = 0; i < row; ++i) {
@@ -440,11 +545,13 @@ namespace fast_lfs::rasterization::kernels {
                              us_u[i], us_s[i], new_mm.x, new_mm.z, inv_u_range, inv_s_range);
             }
         }
+        __syncthreads();
     }
 
     // Joint (u, log_s) Adam step over a contiguous [n_attributes] row of one primitive
-    // (means / sh0 / scaling / rotation / opacity). Block-bounded; all threads must call
+    // (means / sh0 / scaling / rotation / opacity / sb_params). Block-bounded; all threads must call
     // when joint_bits != 0.
+    template <int MAX_ATTR = MAX_FUSED_ADAM_ATTRIBUTES>
     __device__ inline void adam_step_row(
         const float* grads,
         const FusedAdamParam& param,
@@ -454,11 +561,11 @@ namespace fast_lfs::rasterization::kernels {
         const float beta2,
         const float eps) {
         if (param.joint_bits == 16) {
-            adam_step_row_joint<16>(grads, param, primitive_idx, row_elements, beta1, beta2, eps);
+            adam_step_row_joint<16, MAX_ATTR>(grads, param, primitive_idx, row_elements, beta1, beta2, eps);
             return;
         }
         if (param.joint_bits == 8) {
-            adam_step_row_joint<8>(grads, param, primitive_idx, row_elements, beta1, beta2, eps);
+            adam_step_row_joint<8, MAX_ATTR>(grads, param, primitive_idx, row_elements, beta1, beta2, eps);
             return;
         }
         // Non-joint state is unsupported (joint is the only codec).

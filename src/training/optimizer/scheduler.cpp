@@ -40,7 +40,8 @@ namespace lfs::training {
             {ParamType::ShN, "shN"},
             {ParamType::Scaling, "scaling"},
             {ParamType::Rotation, "rotation"},
-            {ParamType::Opacity, "opacity"}};
+            {ParamType::Opacity, "opacity"},
+            {ParamType::SbParams, "sb_params"}};
 
         if (params_to_update_.empty()) {
             // Default behavior (MCMC): Update ONLY global LR (means uses this)
@@ -109,7 +110,8 @@ namespace lfs::training {
             {ParamType::ShN, "shN"},
             {ParamType::Scaling, "scaling"},
             {ParamType::Rotation, "rotation"},
-            {ParamType::Opacity, "opacity"}};
+            {ParamType::Opacity, "opacity"},
+            {ParamType::SbParams, "sb_params"}};
 
         if (params_to_update_.empty()) {
             // Default behavior: Update ONLY global LR
@@ -198,7 +200,7 @@ namespace lfs::training {
             throw std::runtime_error("Invalid ExponentialLR checkpoint: too many parameters");
         std::vector<ParamType> params_to_update;
         params_to_update.reserve(num_params);
-        std::array<bool, 6> seen{};
+        std::array<bool, AdamOptimizer::all_param_types().size()> seen{};
         for (uint32_t i = 0; i < num_params; ++i) {
             uint8_t param_val = 0;
             lfs::core::serialization_detail::read_exact(
@@ -281,7 +283,7 @@ namespace lfs::training {
             throw std::runtime_error("Invalid WarmupExponentialLR checkpoint: too many parameters");
         std::vector<ParamType> params_to_update;
         params_to_update.reserve(num_params);
-        std::array<bool, 6> seen{};
+        std::array<bool, AdamOptimizer::all_param_types().size()> seen{};
         for (uint32_t i = 0; i < num_params; ++i) {
             uint8_t param_val = 0;
             lfs::core::serialization_detail::read_exact(

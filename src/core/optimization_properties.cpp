@@ -41,6 +41,19 @@ namespace lfs::core::param {
             .precision(0)
             .ui_step(100)
             .all_strategies()
+            .int_prop(&OptimizationParameters::sb_lobes,
+                      "sb_lobes", "Spherical Beta Lobes", d.sb_lobes, 0, 8,
+                      "Spherical Beta specular lobes per splat, added on top of the SH color; 0 turns it off")
+            .flags(PROP_ADVANCED)
+            .strategies({"mcmc", "mrnf"})
+            .float_prop(&OptimizationParameters::sb_params_lr,
+                        "sb_params_lr", "Spherical Beta LR", d.sb_params_lr, 0.0f, 0.1f,
+                        "Learning rate for Spherical Beta lobe parameters")
+            .precision(4)
+            .ui_step(1e-4)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
+            .strategies({"mcmc", "mrnf"})
+            .all_strategies()
             .int_prop(&OptimizationParameters::max_cap,
                       "max_cap", "Max Gaussians", d.max_cap, 1000, 200000000,
                       "Maximum number of gaussians")

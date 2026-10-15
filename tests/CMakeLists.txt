@@ -589,6 +589,7 @@ set(TEST_FILES
     test_ply_error_taxonomy.cpp
     test_ply_io_throughput.cpp
     test_gsplat_rasterizer.cpp
+    test_spherical_beta.cpp
     test_spz_format.cpp
     test_provenance.cpp
     test_converter_usd.cpp

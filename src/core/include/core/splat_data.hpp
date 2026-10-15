@@ -338,6 +338,37 @@ namespace lfs::core {
         // swizzled buffer is allocated/resized to fit N with optional `capacity`.
         void shN_set_from_canonical(const Tensor& canonical, size_t capacity = 0);
 
+        // ========== Spherical Beta view-dependent color ==========
+        // Additive specular lobes on top of the SH base color (Beta Splatting, Liu et al.):
+        //   C = C_sh + sum_l softplus(rgb_l) * max(dot(v, dir(theta_l, phi_l)), 0)^(4 * exp(beta_l))
+        // _sb_params is dense [N, sb_lobes * 6], lobe-major, each lobe packing raw
+        // (r, g, b, theta, phi, beta). Empty when disabled.
+        static constexpr int SB_PARAMS_PER_LOBE = 6;
+        static constexpr int MAX_SB_LOBES = 8;
+        inline Tensor& sb_params() { return _sb_params; }
+        inline const Tensor& sb_params() const { return _sb_params; }
+        inline Tensor& sb_params_raw() { return _sb_params; }
+        inline const Tensor& sb_params_raw() const { return _sb_params; }
+        [[nodiscard]] int get_sb_lobes() const { return _sb_lobes; }
+        // True only when the lobe tensor is present and row-aligned with the splats, so
+        // consumers can index it with splat ids without a separate bounds check.
+        [[nodiscard]] bool has_spherical_beta() const {
+            return _sb_lobes > 0 && _sb_params.is_valid() && _means.is_valid() &&
+                   _sb_params.ndim() == 2 &&
+                   _sb_params.shape()[0] == _means.shape()[0] &&
+                   _sb_params.shape()[1] == static_cast<size_t>(_sb_lobes) * SB_PARAMS_PER_LOBE;
+        }
+        // Allocate lobe parameters for the current splat count: rgb/beta zero, directions
+        // spread uniformly over the sphere. sb_lobes <= 0 clears them.
+        void init_spherical_beta(int sb_lobes);
+        // Adopt an existing [N, sb_lobes * 6] tensor (PLY / checkpoint load).
+        void set_sb_params(Tensor sb_params, int sb_lobes);
+        void clear_spherical_beta();
+        // Grow the lobe tensor's reserved rows (append_gather needs headroom).
+        void reserve_spherical_beta(size_t capacity);
+        // Fresh lobe rows [n, sb_lobes * 6] on CUDA for newly created splats (no parent).
+        [[nodiscard]] static Tensor make_spherical_beta_rows(size_t n, int sb_lobes, uint32_t seed);
+
         // Number of "rest" SH coefficients implied by the current active SH degree
         // (0 / 3 / 8 / 15 for degree 0 / 1 / 2 / 3).
         size_t active_sh_coeffs_rest() const;
@@ -525,6 +556,9 @@ namespace lfs::core {
         Tensor _scaling;
         Tensor _rotation;
         Tensor _opacity;
+        // Spherical Beta lobes, dense [N, _sb_lobes * 6]; empty when disabled.
+        Tensor _sb_params;
+        int _sb_lobes = 0;
 
         // Soft deletion mask: bool tensor [N], true = hidden from rendering
         Tensor _deleted;

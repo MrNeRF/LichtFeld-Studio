@@ -666,6 +666,10 @@ namespace lfs::core {
             Tensor deleted = model.has_deleted_mask() ? model.deleted() : Tensor{};
             Tensor densification_info = model._densification_info;
             Tensor max_screen_share = model._max_screen_share;
+            // Spherical Beta lobes are training-only and stay outside the exportable block.
+            // Rows may briefly trail means when a densify append triggers this rebind.
+            const int sb_lobes = model.sb_params().is_valid() ? model.get_sb_lobes() : 0;
+            Tensor sb_params = sb_lobes > 0 ? model.sb_params() : Tensor{};
             // Preserve layout generation across the SplatData rebuild so
             // ensure_param_capacity's layout_changed signal stays monotonic.
             const std::uint64_t layout_gen = model.param_layout_generation();
@@ -803,6 +807,9 @@ namespace lfs::core {
                 rebound._max_screen_share = std::move(max_screen_share);
             }
             rebound.set_frozen_ranges(std::move(frozen_ranges));
+            if (sb_lobes > 0) {
+                rebound.set_sb_params(std::move(sb_params), sb_lobes);
+            }
             rebound.set_tensor_allocator(allocator);
             // capacity_ensure cannot be transferred here: rebind is often called
             // FROM inside the hook (growExportableForDensify), and moving the

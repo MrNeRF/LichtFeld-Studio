@@ -528,6 +528,8 @@ EXPECTED_SELECT_ROWS = {
 }
 
 EXPECTED_ADVANCED_IDS = (
+    "sb_lobes",
+    "sb_params_lr",
     "means_lr_end",
     "scaling_lr_end",
     "late_lr_anneal",
@@ -593,7 +595,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 97
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 99
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 

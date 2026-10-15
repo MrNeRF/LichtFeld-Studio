@@ -113,6 +113,10 @@ namespace {
     void applyShNUniforms(VulkanGSRendererUniforms& uniforms,
                           const VulkanGSPipelineBuffers& buffers,
                           const VkDeviceSize max_storage_buffer_range) {
+        const bool sb_enabled = buffers.sb_address != 0 && buffers.sb_lobes != 0;
+        uniforms.sb_address = sb_enabled ? buffers.sb_address : 0;
+        uniforms.sb_lobes = sb_enabled ? buffers.sb_lobes : 0u;
+        uniforms.sb_pad = 0u;
         if (buffers.shN_q16 || buffers.shN_f16) {
             uniforms.shN_address = buffers.shN_address;
             if (buffers.shN_address == 0) {

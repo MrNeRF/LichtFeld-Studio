@@ -492,6 +492,9 @@ namespace lfs::training::morton {
         permute_named_param(splat.scaling_raw(), result.permutation);
         permute_named_param(splat.rotation_raw(), result.permutation);
         permute_named_param(splat.opacity_raw(), result.permutation);
+        if (splat.has_spherical_beta()) {
+            permute_named_param(splat.sb_params(), result.permutation);
+        }
         permute_shN_impl(splat, result.permutation, stream, scratch);
 
         if (splat._densification_info.is_valid() && splat._densification_info.numel() > 0) {

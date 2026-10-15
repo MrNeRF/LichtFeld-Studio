@@ -383,6 +383,12 @@ namespace lfs::training {
                 lfs::training::sh_value::scatter_canonical_into_shN(
                     *_splat_data, dead_indices, staged);
             }
+
+            // Spherical Beta lobes follow their source splat into the dead slot.
+            if (_splat_data->has_spherical_beta() && dead_indices.numel() > 0) {
+                auto& sb = _splat_data->sb_params();
+                sb.index_put_(dead_indices, sb.index_select(0, sampled_idxs).contiguous());
+            }
         }
 
         // Update optimizer states for all parameters
@@ -394,6 +400,8 @@ namespace lfs::training {
             update_optimizer_for_relocate(sampled_idxs, dead_indices, ParamType::Scaling);
             update_optimizer_for_relocate(sampled_idxs, dead_indices, ParamType::Rotation);
             update_optimizer_for_relocate(sampled_idxs, dead_indices, ParamType::Opacity);
+            if (_splat_data->has_spherical_beta())
+                update_optimizer_for_relocate(sampled_idxs, dead_indices, ParamType::SbParams);
         }
 
         if (_splat_data->has_deleted_mask()) {
@@ -548,6 +556,12 @@ namespace lfs::training {
         // Use add_new_params_gather() to leverage reserved capacity
         {
             LOG_TIMER("add_new_append_gather");
+            // Captured before size() advances: has_spherical_beta() requires aligned rows.
+            const bool has_sb = _splat_data->has_spherical_beta();
+            if (has_sb) {
+                _splat_data->reserve_spherical_beta(std::max(
+                    _splat_data->means().capacity(), static_cast<size_t>(current_n) + n_new));
+            }
             // Gather and append parameters for new Gaussians (done after updating opacity/scaling)
             _optimizer->add_new_params_gather(ParamType::Means, sampled_idxs);
             _optimizer->add_new_params_gather(ParamType::Sh0, sampled_idxs);
@@ -555,6 +569,8 @@ namespace lfs::training {
             _optimizer->add_new_params_gather(ParamType::Rotation, sampled_idxs);
             _optimizer->add_new_params_gather(ParamType::Opacity, sampled_idxs);
             _optimizer->add_new_params_gather(ParamType::Scaling, sampled_idxs);
+            if (has_sb)
+                _optimizer->add_new_params_gather(ParamType::SbParams, sampled_idxs);
         }
 
         append_live_deleted_rows(*_splat_data);
@@ -671,6 +687,11 @@ namespace lfs::training {
         // Use fused append_gather() operation
         {
             LOG_TIMER("add_new_params_gather");
+            const bool has_sb = _splat_data->has_spherical_beta();
+            if (has_sb) {
+                _splat_data->reserve_spherical_beta(std::max(
+                    _splat_data->means().capacity(), required + static_cast<size_t>(n_new)));
+            }
             // Gather opacity/scaling after updating them
             _optimizer->add_new_params_gather(ParamType::Means, sampled_idxs_i64);
             _optimizer->add_new_params_gather(ParamType::Sh0, sampled_idxs_i64);
@@ -678,6 +699,8 @@ namespace lfs::training {
             _optimizer->add_new_params_gather(ParamType::Rotation, sampled_idxs_i64);
             _optimizer->add_new_params_gather(ParamType::Opacity, sampled_idxs_i64);
             _optimizer->add_new_params_gather(ParamType::Scaling, sampled_idxs_i64);
+            if (has_sb)
+                _optimizer->add_new_params_gather(ParamType::SbParams, sampled_idxs_i64);
         }
 
         append_live_deleted_rows(*_splat_data);
@@ -883,6 +906,8 @@ namespace lfs::training {
         zero_optimizer_state(*_optimizer, ParamType::Scaling, prune_indices);
         zero_optimizer_state(*_optimizer, ParamType::Rotation, prune_indices);
         zero_optimizer_state(*_optimizer, ParamType::Opacity, prune_indices);
+        if (_splat_data->has_spherical_beta())
+            zero_optimizer_state(*_optimizer, ParamType::SbParams, prune_indices);
 
         if (_error_score_max.is_valid() &&
             _error_score_max.ndim() == 1 &&
@@ -898,6 +923,8 @@ namespace lfs::training {
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
         if (_splat_data) {
             publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+            if (_optimizer && _splat_data->has_spherical_beta())
+                _optimizer->set_param_lr(ParamType::SbParams, params.sb_params_lr);
         }
     }
 

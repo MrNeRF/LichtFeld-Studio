@@ -1032,6 +1032,21 @@ void main(
         spark_rad_opacity_path,
         uniforms.splat_render_profile == 1u && !spark_rad_opacity_path);
   #endif
+  #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    // Spherical Beta lobes add a view-dependent specular term on top of SH. Lobe
+    // directions live in the model frame, like the SH view direction.
+    if (uniforms.sb_lobes != 0u && uniforms.sb_address != 0 && !lod_active &&
+        logical_idx < uniforms.model_num_splats) {
+        float3 sb_dir = view_direction_to_point(mean_ws, cam);
+        if (model_transform_enabled) {
+            float3 r0, r1, r2;
+            if (extract_rotation_rows(model_transforms, model_transform_base, r0, r1, r2)) {
+                sb_dir = safe_normalize(transpose_mul_rows(r0, r1, r2, sb_dir));
+            }
+        }
+        splat.rgb += compute_spherical_beta_color(uniforms.sb_address, uniforms.sb_lobes, logical_idx, sb_dir);
+    }
+  #endif
     if (rasterization_scale != 1.0f) {
         const float variance_scale = rasterization_scale * rasterization_scale;
         splat.xyz_vs.xy = (splat.xyz_vs.xy + 0.5f) * rasterization_scale - 0.5f;

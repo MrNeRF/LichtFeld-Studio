@@ -277,7 +277,7 @@ namespace gsplat_lfs {
         float* means2d;           // [C, N, 2]
         float* depths;            // [C, N]
         float* colors;            // [C, N, channels]
-        float* dirs;              // [C, N, 3] viewing directions for SH
+        float* dirs;              // [C, N, 3] viewing directions for SH / Spherical Beta
         float* conics;            // [C, N, 3] covariance matrices
         int32_t* tiles_per_gauss; // [C, N]
         int32_t* tile_offsets;    // [C, tile_height, tile_width]
@@ -329,6 +329,9 @@ namespace gsplat_lfs {
         const float* radial_coeffs,     // optional
         const float* tangential_coeffs, // optional
         const float* thin_prism_coeffs, // optional
+        // Spherical Beta lobes added to the SH color; sb_lobes == 0 disables
+        const float* sb_params, // [N, sb_lobes * 6] optional
+        uint32_t sb_lobes,
         // outputs (result struct with pre-allocated buffers)
         RasterizeWithSHResult& result,
         cudaStream_t stream = nullptr);
@@ -371,6 +374,8 @@ namespace gsplat_lfs {
         const float* radial_coeffs,
         const float* tangential_coeffs,
         const float* thin_prism_coeffs,
+        const float* sb_params, // [N, sb_lobes * 6] optional
+        uint32_t sb_lobes,
         // saved from forward
         const float* render_alphas,  // [C, H, W, 1]
         const int32_t* last_ids,     // [C, H, W]
@@ -392,6 +397,7 @@ namespace gsplat_lfs {
         float* v_scales,                      // [N, 3]
         float* v_opacities,                   // [N]
         float* v_sh_coeffs,                   // [N, K, 3]
+        float* v_sb_params,                   // [N, sb_lobes * 6] accumulated, or nullptr
         float* densification_info,            // [2, N] flattened or nullptr
         const float* densification_error_map, // [H, W] or nullptr
         const float* edge_weight_map,         // [H, W] or nullptr

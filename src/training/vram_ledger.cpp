@@ -50,6 +50,7 @@ namespace lfs::training {
         ledger.params_bytes += tensor_logical_bytes(splat.scaling_raw());
         ledger.params_bytes += tensor_logical_bytes(splat.rotation_raw());
         ledger.params_bytes += tensor_logical_bytes(splat.opacity_raw());
+        ledger.params_bytes += tensor_logical_bytes(splat.sb_params());
 
         // --- densify aux ---
         ledger.densify_aux_bytes += tensor_logical_bytes(splat._densification_info);
@@ -91,6 +92,7 @@ namespace lfs::training {
         bytes += tensor_reserved_bytes(splat.scaling_raw());
         bytes += tensor_reserved_bytes(splat.rotation_raw());
         bytes += tensor_reserved_bytes(splat.opacity_raw());
+        bytes += tensor_reserved_bytes(splat.sb_params());
         bytes += tensor_reserved_bytes(splat._densification_info);
         bytes += tensor_reserved_bytes(splat.deleted());
         if (optimizer != nullptr) {

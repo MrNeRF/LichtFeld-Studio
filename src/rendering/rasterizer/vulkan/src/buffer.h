@@ -184,6 +184,10 @@ struct VulkanGSPipelineBuffers {
     // (ImportedBlock device_address + vkOffset). Zero when unused.
     uint64_t shN_address = 0;
     size_t shN_committed_bytes = 0;
+    // Spherical Beta lobes copied per frame into an interop buffer; read through
+    // its device address. Zero address / lobes disables the additive term.
+    uint64_t sb_address = 0;
+    uint32_t sb_lobes = 0;
 
     // projection outputs
     Buffer<int32_t> tiles_touched;    // (N,) legacy; aliases index_buffer_offset after apply_depth_ordering

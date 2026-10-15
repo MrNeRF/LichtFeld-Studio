@@ -379,6 +379,8 @@ namespace lfs::training {
                 screen_share_max_, screen_share_n_, screen_share_limit_, screen_share_penalty_);
         }
         step_param(ParamType::ShN, iteration);
+        // Spherical Beta rows can exceed the batched kernel's attribute width.
+        step_param(ParamType::SbParams, iteration);
     }
 
     size_t AdamOptimizer::compute_state_growth(ParamType type, size_t n_new) const {
@@ -478,12 +480,17 @@ namespace lfs::training {
         case ParamType::Scaling: return splat_data_.scaling_raw();
         case ParamType::Rotation: return splat_data_.rotation_raw();
         case ParamType::Opacity: return splat_data_.opacity_raw();
+        case ParamType::SbParams: return splat_data_.sb_params_raw();
         }
         throw std::runtime_error("Invalid ParamType");
     }
 
     lfs::core::Tensor& AdamOptimizer::get_grad(ParamType type) {
         const auto name = param_name(type);
+        // Spherical Beta is optional; without lobes its gradient is an empty tensor.
+        if (type == ParamType::SbParams && !get_param(type).is_valid()) {
+            return states_[name].grad;
+        }
         const auto it = states_.find(name);
         if (it == states_.end()) {
             init_state(type, false);
@@ -500,6 +507,7 @@ namespace lfs::training {
         case ParamType::Scaling: return "scaling";
         case ParamType::Rotation: return "rotation";
         case ParamType::Opacity: return "opacity";
+        case ParamType::SbParams: return "sb_params";
         }
         return "unknown";
     }
@@ -1088,13 +1096,17 @@ namespace lfs::training {
         fused.scaling.screen_share_penalty = screen_share_penalty_;
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);
         fused.opacity = prepare_param(ParamType::Opacity, 1, true);
+        const int sb_lobes = splat_data_.get_sb_lobes();
+        const bool sb_enabled = splat_data_.has_spherical_beta() && sb_lobes > 0 && sb_lobes <= 2;
+        fused.sb_params = prepare_param(ParamType::SbParams, sb_lobes * 6, sb_enabled);
         fused.per_splat_mean_step = per_splat_mean_step_;
         fused.mean_step_median_extent = mean_step_median_extent_;
         fused.mean_step_far_mask = mean_step_far_mask_;
         fused.mean_step_far_mask_n = mean_step_far_mask_n_;
 
         fused.enabled = fused.means.enabled || fused.sh0.enabled || fused.shN.enabled ||
-                        fused.scaling.enabled || fused.rotation.enabled || fused.opacity.enabled;
+                        fused.scaling.enabled || fused.rotation.enabled || fused.opacity.enabled ||
+                        fused.sb_params.enabled;
         return fused;
     }
 
@@ -1104,12 +1116,17 @@ namespace lfs::training {
         // but the old commit still advanced its counter → first real shN update
         // ran with t≈1001 bias correction instead of t=1.
         const auto active_rest = splat_data_.active_sh_coeffs_rest();
+        const auto sb_lobes = splat_data_.get_sb_lobes();
         for (const auto type : all_param_types()) {
             auto& param = get_param(type);
             if (!param.is_valid() || param.numel() == 0)
                 continue;
             if (type == ParamType::ShN &&
                 (iteration <= SH_WARMUP_ITERATIONS || active_rest == 0)) {
+                continue;
+            }
+            if (type == ParamType::SbParams &&
+                (!splat_data_.has_spherical_beta() || sb_lobes <= 0 || sb_lobes > 2)) {
                 continue;
             }
             const auto name = param_name(type);
@@ -1980,6 +1997,8 @@ namespace lfs::training {
                 return ParamType::Rotation;
             if (name == "opacity")
                 return ParamType::Opacity;
+            if (name == "sb_params")
+                return ParamType::SbParams;
             return std::nullopt;
         };
 

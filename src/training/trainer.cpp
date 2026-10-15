@@ -115,6 +115,16 @@
 namespace lfs::training {
 
     namespace {
+        // Spherical Beta lobes <= 2 are supported by both FastGS and gsplat.
+        // Lobes > 2 are evaluated only by the gsplat rasterizer.
+        void require_gsplat_for_spherical_beta(lfs::core::param::OptimizationParameters& opt) {
+            if (opt.sb_lobes > 2 && !opt.gut) {
+                LOG_INFO("Spherical Beta with > 2 lobes ({}) requires the gsplat rasterizer; enabling --gut",
+                         opt.sb_lobes);
+                opt.gut = true;
+            }
+        }
+
         [[nodiscard]] float camera_derived_frame_scale(
             const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
             std::vector<lfs::core::CameraPoseForScale> poses;
@@ -693,6 +703,7 @@ namespace lfs::training {
             add_tensor_entry(entries, "scaling", splat.scaling_raw());
             add_tensor_entry(entries, "rotation", splat.rotation_raw());
             add_tensor_entry(entries, "opacity", splat.opacity_raw());
+            add_tensor_entry(entries, "sb_params", splat.sb_params());
             add_tensor_entry(entries, "deleted", splat.deleted());
             add_tensor_entry(entries, "densification_info", splat._densification_info);
             record_vram_entries("model.gaussians", entries);
@@ -713,6 +724,7 @@ namespace lfs::training {
                     : type == ParamType::ShN      ? "shN"
                     : type == ParamType::Scaling  ? "scaling"
                     : type == ParamType::Rotation ? "rotation"
+                    : type == ParamType::SbParams ? "sb_params"
                                                   : "opacity";
                 record_vram_tensor("optimizer.adam", prefix + ".grad", state->grad);
                 record_vram_tensor("optimizer.adam", prefix + ".exp_avg", state->exp_avg);
@@ -2850,6 +2862,7 @@ namespace lfs::training {
 
         try {
             params_ = params;
+            require_gsplat_for_spherical_beta(params_.optimization);
 
             // Wire CLI instruments (replaces former env flags).
             PerfBenchCollector::configure(
@@ -3001,6 +3014,20 @@ namespace lfs::training {
                 lfs::core::random_choose(splat, max_cap);
                 syncTrainingSceneTopology(scene_, splat);
             }
+
+            // Spherical Beta: models without lobes (point cloud from an older build, plain
+            // PLY) get fresh ones; models that already carry lobes keep them.
+            if (splat.has_spherical_beta()) {
+                if (params_.optimization.sb_lobes != splat.get_sb_lobes()) {
+                    LOG_INFO("Training the model's existing {} Spherical Beta lobes (requested {})",
+                             splat.get_sb_lobes(), params_.optimization.sb_lobes);
+                }
+                params_.optimization.sb_lobes = splat.get_sb_lobes();
+            } else if (params_.optimization.sb_lobes > 0) {
+                splat.init_spherical_beta(params_.optimization.sb_lobes);
+                LOG_INFO("Spherical Beta color: {} lobes per splat", params_.optimization.sb_lobes);
+            }
+            require_gsplat_for_spherical_beta(params_.optimization);
 
             // Re-initialize strategy with new parameters
             strategy_->set_training_dataset(train_dataset_);
@@ -3728,15 +3755,21 @@ namespace lfs::training {
         training_complete_ = false;
     }
 
-    void Trainer::setParams(const lfs::core::param::TrainingParameters& params) {
-        if (const auto validation_error = params.validate(); !validation_error.empty()) {
+    void Trainer::setParams(const lfs::core::param::TrainingParameters& requested) {
+        if (const auto validation_error = requested.validate(); !validation_error.empty()) {
             LOG_ERROR("Rejected invalid training parameter update: {}", validation_error);
             return;
         }
 
+        auto params = requested;
         bool bg_image_path_changed = false;
         {
             std::lock_guard<std::mutex> lock(params_mutex_);
+            // The lobe count is fixed once the model carries Spherical Beta parameters.
+            if (initialized_.load() && params_.optimization.sb_lobes > 0) {
+                params.optimization.sb_lobes = params_.optimization.sb_lobes;
+            }
+            require_gsplat_for_spherical_beta(params.optimization);
             if (is_running_.load(std::memory_order_acquire)) {
                 pending_params_ = params;
                 return;

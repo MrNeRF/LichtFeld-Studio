@@ -713,6 +713,10 @@ namespace lfs::vis {
 
         static constexpr std::size_t kInputRingSize = kFrameRingSize;
         std::array<CudaDeletedMaskSlot, kInputRingSize> cuda_deleted_mask_copies_{};
+        // Spherical Beta lobes change every training step; each frame copies them
+        // into an interop buffer read by the projection shader via its address.
+        std::array<CudaDeletedMaskSlot, kInputRingSize> cuda_sb_copies_{};
+        bool sb_copy_failure_logged_ = false;
         std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
         CudaSelectionQuerySlot cuda_selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};

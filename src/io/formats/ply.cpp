@@ -84,6 +84,10 @@ namespace lfs::io {
     namespace ply_constants {
         constexpr int MAX_DC_COMPONENTS = 48;
         constexpr int MAX_REST_COMPONENTS = 135;
+        // Spherical Beta lobes: 6 channels (r, g, b, theta, phi, beta) per lobe, stored
+        // channel-major (column = channel * lobes + lobe) as in Beta Splatting / SuperSplat.
+        constexpr int SB_PARAMS_CHANNELS = SplatData::SB_PARAMS_PER_LOBE;
+        constexpr int MAX_SB_PARAMS_COMPONENTS = SplatData::MAX_SB_LOBES * SB_PARAMS_CHANNELS;
         constexpr int COLOR_CHANNELS = 3;
         constexpr int POSITION_DIMS = 3;
         constexpr int SCALE_DIMS = 3;
@@ -122,6 +126,7 @@ namespace lfs::io {
         constexpr auto REST_PREFIX = "f_rest_"sv;
         constexpr auto SCALE_PREFIX = "scale_"sv;
         constexpr auto ROT_PREFIX = "rot_"sv;
+        constexpr auto SB_PARAMS_PREFIX = "sb_params_"sv;
     } // namespace ply_constants
 
     namespace {
@@ -440,11 +445,13 @@ namespace lfs::io {
         size_t rot_offsets[4] = {SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX};
         size_t dc_offsets[ply_constants::MAX_DC_COMPONENTS];
         size_t rest_offsets[ply_constants::MAX_REST_COMPONENTS];
-        int dc_count = 0, rest_count = 0;
+        size_t sb_params_offsets[ply_constants::MAX_SB_PARAMS_COMPONENTS];
+        int dc_count = 0, rest_count = 0, sb_params_count = 0;
 
         FastPropertyLayout() {
             std::fill(std::begin(dc_offsets), std::end(dc_offsets), SIZE_MAX);
             std::fill(std::begin(rest_offsets), std::end(rest_offsets), SIZE_MAX);
+            std::fill(std::begin(sb_params_offsets), std::end(sb_params_offsets), SIZE_MAX);
         }
 
         [[nodiscard]] bool has_positions() const {
@@ -866,6 +873,18 @@ namespace lfs::io {
                                 lfs::SmallFields{}.add("property_name", std::string(prop_name)));
                         }
                         layout.rot_offsets[idx] = layout.vertex_stride;
+                    } else if (prop_name.starts_with(ply_constants::SB_PARAMS_PREFIX)) {
+                        // Spherical Beta lobe columns; unparseable or out-of-range indices
+                        // are left as unknown properties and the lobes are dropped later.
+                        int idx = 0;
+                        if (parse_property_index(prop_name, ply_constants::SB_PARAMS_PREFIX,
+                                                 ply_constants::MAX_SB_PARAMS_COMPONENTS, idx)) {
+                            layout.sb_params_offsets[idx] = layout.vertex_stride;
+                            if (layout.sb_params_count >= 0 && idx >= layout.sb_params_count)
+                                layout.sb_params_count = idx + 1;
+                        } else {
+                            layout.sb_params_count = -1;
+                        }
                     }
                 }
 
@@ -1494,6 +1513,50 @@ namespace lfs::io {
         parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_LARGE, [&](const size_t output_row, const size_t source_row) {
             output[output_row] = read_unaligned_float32(vertex_data + source_row * stride + property_offset);
         });
+    }
+
+    // Number of Spherical Beta lobes the layout carries completely, 0 when absent or unusable.
+    [[nodiscard]] int spherical_beta_lobes(const FastPropertyLayout& layout) {
+        const int count = layout.sb_params_count;
+        if (count <= 0 || count % ply_constants::SB_PARAMS_CHANNELS != 0)
+            return 0;
+        for (int i = 0; i < count; ++i) {
+            if (layout.sb_params_offsets[i] == SIZE_MAX)
+                return 0;
+        }
+        return count / ply_constants::SB_PARAMS_CHANNELS;
+    }
+
+    // Reorder channel-major PLY lobe columns into SplatData's lobe-major [N, lobes * 6].
+    // Non-finite values become 0 (a neutral sharpness / direction) and are counted.
+    size_t extract_sb_params_to_host(const char* vertex_data,
+                                     const FastPropertyLayout& layout,
+                                     const std::span<const size_t> rows,
+                                     const int lobes,
+                                     float* output) {
+        const size_t stride = layout.vertex_stride;
+        const auto channels = static_cast<size_t>(ply_constants::SB_PARAMS_CHANNELS);
+        const auto n_lobes = static_cast<size_t>(lobes);
+        const size_t row_values = n_lobes * channels;
+        std::atomic<size_t> repaired{0};
+        parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_LARGE, [&](const size_t output_row, const size_t source_row) {
+            const char* const p = vertex_data + source_row * stride;
+            float* const out = output + output_row * row_values;
+            size_t local_repaired = 0;
+            for (size_t l = 0; l < n_lobes; ++l) {
+                for (size_t c = 0; c < channels; ++c) {
+                    float value = read_unaligned_float32(p + layout.sb_params_offsets[c * n_lobes + l]);
+                    if (!std::isfinite(value)) {
+                        value = 0.0f;
+                        ++local_repaired;
+                    }
+                    out[l * channels + c] = value;
+                }
+            }
+            if (local_repaired > 0)
+                repaired.fetch_add(local_repaired, std::memory_order_relaxed);
+        });
+        return repaired.load(std::memory_order_relaxed);
     }
 
     void extract_opacity_to_host(const char* vertex_data,
@@ -2273,6 +2336,29 @@ namespace lfs::io {
             }
 
             splat_data.set_tensor_allocator(options.splat_tensor_allocator);
+
+            if (const int sb_lobes = spherical_beta_lobes(layout); sb_lobes > 0) {
+                const size_t cols = static_cast<size_t>(sb_lobes) * ply_constants::SB_PARAMS_CHANNELS;
+                Tensor sb_host = Tensor::empty({N, cols}, Device::CPU, DataType::Float32);
+                const std::span<const size_t> sb_rows =
+                    validation.invalid_count > 0 ? std::span<const size_t>(validation.valid_rows)
+                                                 : std::span<const size_t>{};
+                const size_t repaired = extract_sb_params_to_host(
+                    vertex_data, layout, sb_rows, sb_lobes, sb_host.ptr<float>());
+                if (repaired > 0) {
+                    LOG_WARN("PLY: replaced {} non-finite Spherical Beta value(s) with 0", repaired);
+                }
+                splat_data.set_sb_params(sb_host.cuda(), sb_lobes);
+                LOG_INFO("PLY: loaded Spherical Beta color ({} lobes)", sb_lobes);
+            } else if (layout.sb_params_count != 0) {
+                LOG_WARN("PLY: ignoring incomplete Spherical Beta columns (sb_params_*)");
+                warnings.push_back(Diagnostic{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .message = "PLY Spherical Beta columns (sb_params_*) are incomplete and were ignored",
+                    .fields = lfs::SmallFields{}.add(
+                        "sb_params_count", static_cast<std::int64_t>(layout.sb_params_count)),
+                });
+            }
 
             // One-shot pool trim after the model is fully in SplatData / exportable
             // storage. q16 encode and H2D staging otherwise leave reserved_not_used
@@ -4037,10 +4123,33 @@ namespace lfs::io {
         return attrs;
     }
 
+    namespace {
+        // Spherical Beta lobes as channel-major sb_params_* columns, the layout Beta
+        // Splatting and SuperSplat read: column = channel * lobes + lobe.
+        std::optional<PlyAttributeBlock> make_spherical_beta_attribute_block(const SplatData& splat_data) {
+            if (!splat_data.has_spherical_beta())
+                return std::nullopt;
+            const auto lobes = static_cast<size_t>(splat_data.get_sb_lobes());
+            const auto channels = static_cast<size_t>(ply_constants::SB_PARAMS_CHANNELS);
+            const auto n = static_cast<size_t>(splat_data.size());
+            PlyAttributeBlock block;
+            block.values = splat_data.sb_params()
+                               .reshape(TensorShape({n, lobes, channels}))
+                               .transpose(1, 2)
+                               .contiguous()
+                               .reshape(TensorShape({n, channels * lobes}));
+            block.names = make_ply_extra_attribute_names("sb_params", channels * lobes);
+            return block;
+        }
+    } // namespace
+
     Result<void> save_ply(const SplatData& splat_data, const PlySaveOptions& options_in) {
         PlySaveOptions options = options_in;
         if (!options.provenance) {
             options.provenance = core::make_minimal_provenance_stamp();
+        }
+        if (auto sb_block = make_spherical_beta_attribute_block(splat_data)) {
+            options.extra_attributes.push_back(std::move(*sb_block));
         }
 
         if (!report_export_progress(options.progress_callback, 0.0f, "Preparing PLY"))

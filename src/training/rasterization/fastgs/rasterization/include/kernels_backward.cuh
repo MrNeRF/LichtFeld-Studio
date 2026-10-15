@@ -73,7 +73,9 @@ namespace fast_lfs::rasterization::kernels::backward {
         // path; reading sh_coefficients_rest must always use these.
         const float2* __restrict__ shN_value_bounds,
         const uint shN_value_n_cells,
-        const uint shN_value_bits) {
+        const uint shN_value_bits,
+        const float* __restrict__ sb_params = nullptr,
+        const uint num_sb_lobes = 0) {
         (void)cx;
         (void)cy;
         auto primitive_idx = cg::this_grid().thread_rank();
@@ -164,6 +166,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         float sh0_grads[3] = {0.0f, 0.0f, 0.0f};
         float scale_grads[3] = {0.0f, 0.0f, 0.0f};
         float opacity_grads[1] = {0.0f};
+        float sb_grads[12] = {0.0f};
         float3 dL_dmean3d_from_color = make_float3(0.0f, 0.0f, 0.0f);
 
         const uint work_idx = in_range ? primitive_work_indices[primitive_idx] : 0u;
@@ -199,12 +202,17 @@ namespace fast_lfs::rasterization::kernels::backward {
         if constexpr (!DISABLED_FEATURES) {
             if (!visible && in_range && fused_adam.sh0.param != nullptr &&
                 (fused_adam.dc_reg_weight > 0.0f || fused_adam.sh_rest_reg_weight > 0.0f)) {
-                const float3 colour = convert_sh_to_color(
+                float3 colour = convert_sh_to_color(
                     reinterpret_cast<const float3*>(fused_adam.sh0.param), sh_coefficients_rest,
                     means[primitive_idx], cam_position[0], primitive_idx, ACTIVE_SH_BASES,
                     sh_layout_slots, shN_value_bounds,
                     shN_value_bounds != nullptr ? shN_value_n_cells : 0u,
                     shN_value_bits == 16u ? 16u : 0u);
+                if (sb_params != nullptr && num_sb_lobes > 0) {
+                    const float3 view_dir = safe_normalize(means[primitive_idx] - cam_position[0]);
+                    colour = add_spherical_beta_color(
+                        colour, sb_params, view_dir, primitive_idx, num_sb_lobes);
+                }
                 colour_reg_mask = (colour.x >= 0.0f ? 1u : 0u) |
                                   (colour.y >= 0.0f ? 2u : 0u) |
                                   (colour.z >= 0.0f ? 4u : 0u);
@@ -237,6 +245,12 @@ namespace fast_lfs::rasterization::kernels::backward {
                 shN_value_bounds,
                 shN_value_bounds != nullptr ? shN_value_n_cells : 0u,
                 shN_value_bits == 16u ? 16u : 0u);
+            if (sb_params != nullptr && num_sb_lobes > 0) {
+                const float3 view_dir = safe_normalize(mean3d - cam_position[0]);
+                compute_spherical_beta_backward(
+                    sb_params, view_dir, grad_color_helper[work_idx],
+                    primitive_idx, num_sb_lobes, sb_grads);
+            }
         } // close visible — SH Adam next kills shN live range before geometry
 
         if constexpr (!DISABLED_FEATURES)
@@ -276,7 +290,11 @@ namespace fast_lfs::rasterization::kernels::backward {
                 fused_adam, primitive_idx, sh_layout_slots,
                 sh_mean, sh_cam, sh_gc, visible, colour_reg_mask);
         }
-        // sh0 / streamed shN Adam state is dead from here on (compiler can free it).
+        if (num_sb_lobes > 0) {
+            adam_step_row<12>(sb_grads, fused_adam.sb_params, primitive_idx, num_sb_lobes * 6,
+                              fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        }
+        // sh0 / streamed shN / sb_params Adam state is dead from here on (compiler can free it).
 
         // Re-enter the visible-only path for covariance, EWA, and geometry gradients.
         if (visible) {

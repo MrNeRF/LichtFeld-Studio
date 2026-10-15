@@ -144,6 +144,9 @@ namespace lfs::training {
         config.param_lrs["scaling"] = params.scaling_lr;
         config.param_lrs["rotation"] = params.rotation_lr;
         config.param_lrs["opacity"] = params.opacity_lr;
+        if (splat_data.has_spherical_beta()) {
+            config.param_lrs["sb_params"] = params.sb_params_lr;
+        }
 
         // Pre-allocate optimizer state capacity to avoid reallocations during training
         // This dramatically reduces peak memory usage by avoiding double-buffering during growth
@@ -159,6 +162,9 @@ namespace lfs::training {
         LOG_DEBUG("  scaling: {:.2e}", config.param_lrs["scaling"]);
         LOG_DEBUG("  rotation: {:.2e}", config.param_lrs["rotation"]);
         LOG_DEBUG("  opacity: {:.2e}", config.param_lrs["opacity"]);
+        if (splat_data.has_spherical_beta()) {
+            LOG_DEBUG("  sb_params: {:.2e}", config.param_lrs["sb_params"]);
+        }
 
         auto optimizer = std::make_unique<AdamOptimizer>(splat_data, config);
 
@@ -608,11 +614,7 @@ namespace lfs::training {
         if (!indices.is_valid() || indices.numel() == 0)
             return;
 
-        const ParamType types[] = {
-            ParamType::Means, ParamType::Sh0, ParamType::ShN,
-            ParamType::Scaling, ParamType::Rotation, ParamType::Opacity};
-
-        for (ParamType pt : types) {
+        for (ParamType pt : AdamOptimizer::all_param_types()) {
             auto* state = optimizer.get_state_mutable(pt);
             if (!state || !state->grad.is_valid() || state->grad.numel() == 0)
                 continue;

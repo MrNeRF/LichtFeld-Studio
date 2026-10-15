@@ -19,6 +19,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <limits>
+#include <numbers>
 #include <numeric>
 #include <optional>
 #include <random>
@@ -318,6 +319,39 @@ namespace lfs::core {
             return true;
         }
 
+        // Spherical Beta lobes store world-space directions as (theta, phi); carry them
+        // through the linear part of the transform and re-normalize.
+        void rotate_spherical_beta_lobes(SplatData& splat_data, const glm::mat3& linear) {
+            if (!splat_data.has_spherical_beta() || splat_data.size() == 0) {
+                return;
+            }
+            Tensor& sb = splat_data.sb_params();
+            Tensor host = sb.cpu().contiguous();
+            float* const p = host.ptr<float>();
+            const size_t lobes = static_cast<size_t>(splat_data.size()) *
+                                 static_cast<size_t>(splat_data.get_sb_lobes());
+            constexpr float kTwoPi = 2.0f * std::numbers::pi_v<float>;
+            for (size_t i = 0; i < lobes; ++i) {
+                float* const lobe = p + i * SplatData::SB_PARAMS_PER_LOBE;
+                const float st = std::sin(lobe[3]);
+                const glm::vec3 dir = linear * glm::vec3(st * std::cos(lobe[4]),
+                                                         st * std::sin(lobe[4]),
+                                                         std::cos(lobe[3]));
+                const float len = glm::length(dir);
+                if (!(len > 1e-12f)) {
+                    continue;
+                }
+                const glm::vec3 d = dir / len;
+                lobe[3] = std::acos(std::clamp(d.z, -1.0f, 1.0f));
+                float phi = std::atan2(d.y, d.x);
+                if (phi < 0.0f) {
+                    phi += kTwoPi;
+                }
+                lobe[4] = phi;
+            }
+            sb.copy_from(host.to(sb.device()));
+        }
+
     } // namespace
 
     SplatData& transform(SplatData& splat_data, const glm::mat4& transform_matrix) {
@@ -441,6 +475,9 @@ namespace lfs::core {
         if (changes_sh && scale.x > 1e-8f && scale.y > 1e-8f && scale.z > 1e-8f &&
             !rotate_sh_coefficients(splat_data, rot_mat)) {
             throw std::runtime_error("SH transformation is only supported up to degree 3.");
+        }
+        if (changes_sh && scale.x > 1e-8f && scale.y > 1e-8f && scale.z > 1e-8f) {
+            rotate_spherical_beta_lobes(splat_data, rot_mat);
         }
 
         // 4. Transform scaling
@@ -610,6 +647,10 @@ namespace lfs::core {
             new_scene_scale);
 
         cropped_splat.set_active_sh_degree(splat_data._active_sh_degree);
+        if (splat_data.has_spherical_beta()) {
+            cropped_splat.set_sb_params(splat_data._sb_params.index_select(0, indices).contiguous(),
+                                        splat_data._sb_lobes);
+        }
 
         if (splat_data._densification_info.is_valid() && splat_data._densification_info.size(0) == num_points) {
             cropped_splat._densification_info =
@@ -718,6 +759,10 @@ namespace lfs::core {
         const size_t old_capacity = splat_data._means.is_valid()
                                         ? splat_data._means.capacity()
                                         : static_cast<size_t>(num_points);
+        const bool had_spherical_beta = splat_data.has_spherical_beta();
+        if (!had_spherical_beta) {
+            splat_data.clear_spherical_beta();
+        }
 
         std::vector<int> all_indices(num_points);
         std::iota(all_indices.begin(), all_indices.end(), 0);
@@ -819,6 +864,10 @@ namespace lfs::core {
         splat_data._scaling = splat_data._scaling.index_select(0, indices_tensor).contiguous();
         splat_data._rotation = splat_data._rotation.index_select(0, indices_tensor).contiguous();
         splat_data._opacity = splat_data._opacity.index_select(0, indices_tensor).contiguous();
+        if (had_spherical_beta) {
+            splat_data._sb_params = splat_data._sb_params.index_select(0, indices_tensor).contiguous();
+            splat_data._sb_params.set_name("splat.sb_params");
+        }
         if (splat_data._tensor_allocator) {
             const size_t dest_cap = std::max(static_cast<size_t>(num_required_splat), old_capacity);
             const auto home = [&](Tensor& tensor, std::string_view name) {
@@ -1039,6 +1088,10 @@ namespace lfs::core {
             splat_data._opacity.index_select(0, indices).contiguous(),
             splat_data._scene_scale);
         result.set_active_sh_degree(splat_data._active_sh_degree);
+        if (splat_data.has_spherical_beta()) {
+            result.set_sb_params(splat_data._sb_params.index_select(0, indices).contiguous(),
+                                 splat_data._sb_lobes);
+        }
 
         // If the mask keeps every gaussian, preserve the LOD tree unchanged.
         if (count == static_cast<int>(splat_data.size()) && splat_data.lod_tree) {

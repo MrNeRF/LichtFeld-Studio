@@ -1468,8 +1468,11 @@ TEST_F(GsplatRasterizerTest, TileBatchesPreserveShRestAlphaAndDensificationGradi
             reference_alpha = result->first.alpha.clone();
             reference_scores = scores.clone();
             reference_densification = model._densification_info.clone();
-            for (auto param : AdamOptimizer::all_param_types())
+            for (auto param : AdamOptimizer::all_param_types()) {
+                if (param == ParamType::SbParams)
+                    continue; // no Spherical Beta lobes in this model
                 gradients.push_back(opt.get_grad(param).clone());
+            }
         } else {
             EXPECT_EQ(max_abs_diff_tensors(reference_image, result->first.image), 0.f);
             EXPECT_EQ(max_abs_diff_tensors(reference_alpha, result->first.alpha), 0.f);
@@ -1477,6 +1480,8 @@ TEST_F(GsplatRasterizerTest, TileBatchesPreserveShRestAlphaAndDensificationGradi
             EXPECT_LT(max_rel_diff_tensors(reference_densification, model._densification_info), 1e-4f);
             size_t i = 0;
             for (auto param : AdamOptimizer::all_param_types()) {
+                if (param == ParamType::SbParams)
+                    continue;
                 EXPECT_LT(max_rel_diff_tensors(gradients[i++], opt.get_grad(param)), 1e-4f);
             }
         }

@@ -231,7 +231,9 @@ namespace fast_lfs::rasterization {
         unsigned int sh_value_n_cells,
         unsigned int sh_value_bits,
         float* max_screen_share_ptr,
-        float dilation_scale) {
+        float dilation_scale,
+        const float* sb_params_ptr,
+        int sb_lobes) {
 
         if (stream == nullptr) {
             stream = lfs::core::getCurrentCUDAStream();
@@ -330,7 +332,7 @@ namespace fast_lfs::rasterization {
 
             // Call the actual forward implementation
             ForwardResult forward_result = forward(per_primitive_buffers_func, [phase_arena](size_t size) { phase_arena->begin_phase(
-                                                                                                                FastGSPhaseArena::Phase::Forward, size); }, phase_forward_allocator, [phase_arena](const void* source, size_t size) { return phase_arena->retain_prefix(source, size); }, per_tile_buffers_func, reinterpret_cast<const float3*>(means_ptr), reinterpret_cast<const float3*>(scales_raw_ptr), reinterpret_cast<const float4*>(rotations_raw_ptr), opacities_raw_ptr, reinterpret_cast<const float3*>(sh_coefficients_0_ptr), reinterpret_cast<const float4*>(sh_coefficients_rest_ptr), reinterpret_cast<const float2*>(sh_value_bounds_ptr), sh_value_n_cells, sh_value_bits, reinterpret_cast<const float4*>(w2c_ptr), reinterpret_cast<const float3*>(cam_position_ptr), image_ptr, alpha_ptr, depth_ptr, normal_ptr, bg_color_ptr, bg_image_ptr, n_primitives, active_sh_bases, sh_layout_bases, width, height, focal_x, focal_y, center_x, center_y, near_plane, far_plane, mip_filter, stream, max_screen_share_ptr, dilation_scale);
+                                                                                                                FastGSPhaseArena::Phase::Forward, size); }, phase_forward_allocator, [phase_arena](const void* source, size_t size) { return phase_arena->retain_prefix(source, size); }, per_tile_buffers_func, reinterpret_cast<const float3*>(means_ptr), reinterpret_cast<const float3*>(scales_raw_ptr), reinterpret_cast<const float4*>(rotations_raw_ptr), opacities_raw_ptr, reinterpret_cast<const float3*>(sh_coefficients_0_ptr), reinterpret_cast<const float4*>(sh_coefficients_rest_ptr), reinterpret_cast<const float2*>(sh_value_bounds_ptr), sh_value_n_cells, sh_value_bits, reinterpret_cast<const float4*>(w2c_ptr), reinterpret_cast<const float3*>(cam_position_ptr), image_ptr, alpha_ptr, depth_ptr, normal_ptr, bg_color_ptr, bg_image_ptr, n_primitives, active_sh_bases, sh_layout_bases, width, height, focal_x, focal_y, center_x, center_y, near_plane, far_plane, mip_filter, stream, max_screen_share_ptr, dilation_scale, sb_params_ptr, sb_lobes);
 
             // Verify allocations happened
             if (forward_result.n_instances > 0 && !forward_result.sorted_primitive_indices) {
@@ -392,6 +394,8 @@ namespace fast_lfs::rasterization {
             ctx.grad_color_helper = grad_color_helper;
             ctx.primitive_normals = forward_result.primitive_normals;
             ctx.primitive_work_indices = forward_result.primitive_work_indices;
+            ctx.sb_params = sb_params_ptr;
+            ctx.sb_lobes = sb_lobes;
             ctx.phase_allocator = phase_backward_allocator;
             ctx.phase_arena = phase_arena;
             ctx.success = true;
@@ -477,11 +481,18 @@ namespace fast_lfs::rasterization {
         unsigned shN_value_n_cells,
         unsigned shN_value_bits,
         const float* edge_weight_map,
-        float* edge_score_out) {
+        float* edge_score_out,
+        const float* sb_params_ptr,
+        int sb_lobes) {
 
         // The forward chose the stream and chained the arena frame on it; the
         // backward shares the same context/arena frame and must match.
         const cudaStream_t stream = forward_ctx.stream;
+
+        if (sb_params_ptr == nullptr && forward_ctx.sb_params != nullptr) {
+            sb_params_ptr = forward_ctx.sb_params;
+            sb_lobes = forward_ctx.sb_lobes;
+        }
 
         BackwardOutputs outputs;
         outputs.success = false;
@@ -541,6 +552,9 @@ namespace fast_lfs::rasterization {
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_w2c_ptr, "grad_w2c_ptr");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(edge_weight_map, "edge_weight_map");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(edge_score_out, "edge_score_out");
+            if (sb_lobes > 0) {
+                LFS_VALIDATE_CUDA_DEVICE_POINTER(sb_params_ptr, "sb_params_ptr");
+            }
         } catch (const std::exception& e) {
             release_forward_context(forward_ctx);
             last_backward_error = e.what();
@@ -671,7 +685,9 @@ namespace fast_lfs::rasterization {
                 shN_value_bits,
                 edge_weight_map,
                 edge_score_out,
-                stream);
+                stream,
+                sb_params_ptr,
+                sb_lobes);
 
             // Mark frame as complete
             release_forward_context(forward_ctx);
