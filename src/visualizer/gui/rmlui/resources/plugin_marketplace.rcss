@@ -257,7 +257,7 @@ input.mp-url-input[type="text"] {
     width: 100%;
     height: auto;
     min-width: 0;
-    min-height: 250dp;
+    min-height: 232dp;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -386,7 +386,7 @@ input.mp-url-input[type="text"] {
     display: flex;
     align-items: center;
     min-height: 20dp;
-    margin-top: 5dp;
+    margin-top: 3.5dp;
 }
 
 .card-startup-row label,
@@ -528,7 +528,7 @@ input.mp-url-input[type="text"] {
     flex-direction: column;
     gap: 0;
     min-width: 0;
-    padding: 2dp 11dp 6dp 38dp;
+    padding: 1.4dp 11dp 6dp 38dp;
     border-top-width: 1dp;
     overflow: hidden;
 }
