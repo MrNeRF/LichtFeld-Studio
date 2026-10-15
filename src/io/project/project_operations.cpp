@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "io/project_operations.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
@@ -988,8 +988,8 @@ namespace lfs::io::project {
                 temporary += ".repair-" + lfs::core::generate_uuid_v4().to_string() + ".tmp";
                 std::error_code copy_error;
                 if (!lfs::core::fs::copy_file(path, temporary,
-                                                std::filesystem::copy_options::none,
-                                                copy_error)) {
+                                              std::filesystem::copy_options::none,
+                                              copy_error)) {
                     return fail<RepairCandidate>(
                         lfs::ErrorCode::PermissionDenied, temporary,
                         "The repair staging file could not be created.", copy_error.message(),
@@ -1081,7 +1081,7 @@ namespace lfs::io::project {
                 };
                 {
                     lfs::core::fs::fstream output(temporary,
-                                        std::ios::binary | std::ios::in | std::ios::out);
+                                                  std::ios::binary | std::ios::in | std::ios::out);
                     if (!output) {
                         lfs::core::fs::remove(temporary);
                         return fail<RepairCandidate>(
@@ -1825,7 +1825,7 @@ namespace lfs::io::project {
         if (auto available = refuse_existing_destination(destination); !available)
             return std::move(available).error();
         const auto temporary = detail::project_artifact_path(destination,
-            ".clean-" + lfs::core::generate_uuid_v4().to_string() + ".tmp");
+                                                             ".clean-" + lfs::core::generate_uuid_v4().to_string() + ".tmp");
         struct Cleanup {
             std::filesystem::path path;
             ~Cleanup() {

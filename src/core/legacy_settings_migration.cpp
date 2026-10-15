@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "core/legacy_settings_migration.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/environment.hpp"
 #include "core/logger.hpp"

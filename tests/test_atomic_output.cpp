@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "io/atomic_output.hpp"
 #include "core/filesystem.hpp"
+#include "io/atomic_output.hpp"
 
 #include <array>
 #include <filesystem>

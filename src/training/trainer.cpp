@@ -2,7 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "trainer.hpp"
 #include "backward.h" // BWD-A T_eff hist arm/flush
 #include "components/bilateral_grid.hpp"
@@ -25,6 +24,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/exif.hpp"
+#include "core/filesystem.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/number_format.hpp"

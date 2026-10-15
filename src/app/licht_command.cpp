@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "app/licht_command.hpp"
+#include "core/filesystem.hpp"
 
 #include "app/terminal_progress_bar.hpp"
 #include "core/path_utils.hpp"

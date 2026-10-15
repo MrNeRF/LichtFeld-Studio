@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "core/path_utils.hpp"
 #include "core/alloc_counter.hpp"
 #include "core/camera.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include <algorithm>

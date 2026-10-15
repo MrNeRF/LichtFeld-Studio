@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "gui/gallery_scene_publication.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -421,7 +421,7 @@ namespace lfs::vis::gui {
             throw std::runtime_error("The gallery preparation directory already exists.");
         request.created_directory = true;
         lfs::core::fs::permissions(request.path, std::filesystem::perms::owner_all,
-                                     std::filesystem::perm_options::replace);
+                                   std::filesystem::perm_options::replace);
         auto nodes = nlohmann::json::array();
         std::vector<std::pair<core::Uuid, std::filesystem::path>> embedded_files;
         namespace pj = lfs::io::project;

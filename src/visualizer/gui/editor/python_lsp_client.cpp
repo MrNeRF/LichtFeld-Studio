@@ -2,9 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/path_utils.hpp"
-#include "core/filesystem.hpp"
 #include "python_lsp_client.hpp"
+#include "core/filesystem.hpp"
+#include "core/path_utils.hpp"
 
 #include "stdio_process.hpp"
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plugin dependency installer using uv."""
-from _lfs_path_io import native_path, open
+from _lfs_path_io import native_path, open, executable_kwargs
 
 from collections import deque
 from dataclasses import asdict, dataclass
@@ -200,6 +200,7 @@ def _run_cancellable_process(
         "env": env,
     }
     popen_kwargs.update(_process_group_popen_kwargs())
+    popen_kwargs.update(executable_kwargs(cmd))
 
     proc = subprocess.Popen(cmd, **popen_kwargs)
     output_queue: queue.Queue[Optional[str]] = queue.Queue()
@@ -1227,6 +1228,7 @@ def update_plugin(
 
     result = subprocess.run(
         [git, "pull", "--ff-only"],
+        **executable_kwargs([git]),
         cwd=plugin_dir,
         capture_output=True,
         text=True,

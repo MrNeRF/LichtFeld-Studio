@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "gui/panel_layout.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/rml_viewport_overlay.hpp"

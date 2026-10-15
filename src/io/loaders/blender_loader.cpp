@@ -2,10 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "io/loaders/blender_loader.hpp"
 #include "core/camera.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/filesystem.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"

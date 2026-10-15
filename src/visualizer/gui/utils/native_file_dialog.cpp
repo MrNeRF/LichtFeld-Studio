@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "core/filesystem.hpp"
 #include "gui/utils/file_dialog_path.hpp"
 
 #include "core/logger.hpp"

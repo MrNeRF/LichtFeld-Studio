@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "rad.hpp"
+#include "core/filesystem.hpp"
 #include "rad_dequant_math.hpp"
 
 #include "io/cuda/rad_encode_quant.hpp"

@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "core/crash_handler.hpp"
+#include "core/filesystem.hpp"
 
 #ifndef LFS_UNICODE_TEST_STANDALONE
 #include "core/cuda/memory_arena.hpp"

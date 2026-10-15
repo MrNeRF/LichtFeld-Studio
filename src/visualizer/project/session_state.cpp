@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "core/filesystem.hpp"
 #include "project/session_state.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/error.hpp"
 #include "core/error_bus.hpp"

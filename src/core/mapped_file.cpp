@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "core/mapped_file.hpp"
+#include "core/filesystem.hpp"
 
 #include <utility>
 

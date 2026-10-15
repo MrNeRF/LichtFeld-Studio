@@ -6,4 +6,4 @@
 namespace lfs::io {
     // Returning false requests cancellation before publication.
     using ExportProgressCallback = std::function<bool(float progress, const std::string& stage)>;
-}
+} // namespace lfs::io

@@ -2,10 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "ply.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
@@ -3071,7 +3071,7 @@ namespace lfs::io {
         Result<void> replace_output_file(const std::filesystem::path& temp_path,
                                          const std::filesystem::path& output_path) {
 #ifdef _WIN32
-            if (!MoveFileExW(lfs::core::fs::native_path(temp_path.wstring().c_str()).c_str(),lfs::core::fs::native_path(output_path.wstring().c_str()).c_str(),
+            if (!MoveFileExW(lfs::core::fs::native_path(temp_path.wstring().c_str()).c_str(), lfs::core::fs::native_path(output_path.wstring().c_str()).c_str(),
                              MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   std::format("Cannot replace output file: Windows error {}", GetLastError()),

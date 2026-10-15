@@ -2,9 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/path_utils.hpp"
-#include "core/filesystem.hpp"
 #include "gui/vram_hud_overlay.hpp"
+#include "core/filesystem.hpp"
+#include "core/path_utils.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"

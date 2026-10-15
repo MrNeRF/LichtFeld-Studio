@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "crate.hpp"
+#include "core/filesystem.hpp"
 #include "core/path_utils.hpp"
 #include "half.hpp"
 #include <algorithm>

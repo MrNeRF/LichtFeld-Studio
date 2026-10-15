@@ -2,13 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "scene/scene_manager.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/editor_context.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/mesh_data.hpp"

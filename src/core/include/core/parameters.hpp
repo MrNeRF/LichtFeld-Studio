@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "core/path_utils.hpp"
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/mesh2splat.hpp"
+#include "core/path_utils.hpp"
 
 #include <algorithm>
 #include <array>

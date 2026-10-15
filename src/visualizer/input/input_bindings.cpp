@@ -2,10 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "input/input_bindings.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/source_site.hpp"

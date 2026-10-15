@@ -2,9 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "video_extractor_dialog.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/filesystem.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/number_format.hpp"
 #include "core/path_utils.hpp"

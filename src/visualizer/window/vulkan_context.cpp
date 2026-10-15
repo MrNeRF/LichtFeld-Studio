@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "vulkan_context.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"

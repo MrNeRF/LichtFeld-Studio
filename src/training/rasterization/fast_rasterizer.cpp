@@ -2,9 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "fast_rasterizer.hpp"
 #include "core/crash_handler.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"

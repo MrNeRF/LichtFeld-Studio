@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "runner.hpp"
+#include "core/filesystem.hpp"
 #include "package_manager.hpp"
 #include "python_buffer_analysis.hpp"
 

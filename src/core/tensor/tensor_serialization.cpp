@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "internal/tensor_serialization.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/contiguous_streambuf.hpp"
 #include "core/cuda_error.hpp"

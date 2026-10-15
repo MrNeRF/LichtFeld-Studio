@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "core/filesystem.hpp"
 #include "io/embedded_dataset.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -272,7 +272,7 @@ namespace lfs::io::project {
                 "The caller requested cancellation");
         }
         lfs::core::fs::ofstream complete_marker(marker,
-                                      std::ios::binary | std::ios::trunc);
+                                                std::ios::binary | std::ios::trunc);
         if (!complete_marker) {
             return embed_error(
                 lfs::ErrorCode::PermissionDenied,

@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "vulkan_environment_pass.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/image_io.hpp"
 #include "core/logger.hpp"

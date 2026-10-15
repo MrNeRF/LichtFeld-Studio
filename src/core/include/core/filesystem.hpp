@@ -41,8 +41,10 @@ namespace lfs::core::fs {
     namespace detail {
         inline bool dos_device_name(std::wstring_view value) {
             value = value.substr(0, value.find(L'.'));
-            while (!value.empty() && (value.back() == L' ' || value.back() == L'.')) value.remove_suffix(1);
-            if (value.size() != 3 && value.size() != 4) return false;
+            while (!value.empty() && (value.back() == L' ' || value.back() == L'.'))
+                value.remove_suffix(1);
+            if (value.size() != 3 && value.size() != 4)
+                return false;
             const auto at = [&](size_t i) { auto ch = value[i]; return ch >= L'a' && ch <= L'z' ? wchar_t(ch - (L'a' - L'A')) : ch; };
             if (value.size() == 3)
                 return (at(0) == L'C' && at(1) == L'O' && at(2) == L'N') ||
@@ -63,14 +65,17 @@ namespace lfs::core::fs {
                 const auto end = name.find_first_of(L"\\/", begin);
                 const auto part = name.substr(begin, end == name.npos ? name.npos : end - begin);
                 if (!part.empty() && part != L"." && part != L".." &&
-                    (part.back() == L'.' || part.back() == L' ' || dos_device_name(part))) return true;
-                if (end == name.npos) break;
+                    (part.back() == L'.' || part.back() == L' ' || dos_device_name(part)))
+                    return true;
+                if (end == name.npos)
+                    break;
                 begin = end + 1;
             }
             return false;
         }
         inline path absolute_preserving_names(const path& value, std::error_code& error) {
-            if (value.is_absolute()) return display_path(value);
+            if (value.is_absolute())
+                return display_path(value);
             if (value.has_root_name() && !value.has_root_directory()) {
                 const auto base = display_path(std::filesystem::absolute(value.root_name() / L".", error));
                 return error ? path{} : base / value.relative_path();
@@ -78,7 +83,7 @@ namespace lfs::core::fs {
             const auto base = display_path(std::filesystem::current_path(error));
             return error ? path{} : base / value;
         }
-    }
+    } // namespace detail
 #endif
 
     // This representation belongs only at an OS I/O boundary, never in persisted
@@ -453,8 +458,7 @@ namespace lfs::core::fs {
         basic_directory_iterator() = default;
         template <typename... Args>
         explicit basic_directory_iterator(const fs::path& value, Args&&... args)
-            : logical_root_(display_path(value)), native_root_(native_path(value, true)),
-              iterator_(native_root_, std::forward<Args>(args)...) {}
+            : logical_root_(display_path(value)), native_root_(native_path(value, true)), iterator_(native_root_, std::forward<Args>(args)...) {}
         reference operator*() const {
             entry_ = directory_entry(*iterator_, logical_root_ / iterator_->path().lexically_relative(native_root_));
             return entry_;

@@ -8,11 +8,11 @@
 #endif
 #endif
 
-#include "core/filesystem.hpp"
 #include "sogs.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error_reporter.hpp"
 #include "core/file_extensions.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
@@ -1394,7 +1394,7 @@ namespace lfs::io {
                 // Use wide-character API on Windows for proper Unicode path handling
                 int result;
 #ifdef _WIN32
-                result = archive_write_open_filename_w(a_,lfs::core::fs::native_path(output_path_.wstring().c_str()).c_str());
+                result = archive_write_open_filename_w(a_, lfs::core::fs::native_path(output_path_.wstring().c_str()).c_str());
 #else
                 result = archive_write_open_filename(a_, output_path_.c_str());
 #endif

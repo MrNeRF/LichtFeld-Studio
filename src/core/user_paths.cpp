@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "core/user_paths.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/environment.hpp"
 #include "path_utils.hpp"
@@ -146,7 +146,7 @@ namespace lfs::core {
             }
 
 #ifdef _WIN32
-            if (!MoveFileExW(lfs::core::fs::native_path(temporary.c_str()).c_str(),lfs::core::fs::native_path(destination.c_str()).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            if (!MoveFileExW(lfs::core::fs::native_path(temporary.c_str()).c_str(), lfs::core::fs::native_path(destination.c_str()).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
                 const auto message = std::system_category().message(static_cast<int>(GetLastError()));
                 lfs::core::fs::remove(temporary, error);
                 return failStatus(

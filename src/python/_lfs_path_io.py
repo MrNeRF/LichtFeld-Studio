@@ -128,3 +128,12 @@ def temporary_prefix(source):
     if _component_units(prefix) > 220:
         prefix = ".lfs-temp-" + hashlib.sha256(source.name.encode("utf-8", errors="surrogatepass")).hexdigest()[:32] + "."
     return prefix
+
+
+def executable_kwargs(command):
+    """Adapt an explicit executable filename without changing argv or PATH lookup."""
+    if os.name == "nt" and command:
+        executable = os.fsdecode(os.fspath(command[0]))
+        if ntpath.dirname(executable):
+            return {"executable": native_path(executable)}
+    return {}

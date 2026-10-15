@@ -9,8 +9,8 @@
 #endif
 #endif
 
-#include "core/filesystem.hpp"
 #include "formats/nurec_usdz.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
@@ -432,7 +432,7 @@ namespace lfs::io {
             archive_read_support_filter_all(archive);
 
 #ifdef _WIN32
-            const int open_result = archive_read_open_filename_w(archive,lfs::core::fs::native_path(filepath.wstring().c_str()).c_str(), 10240);
+            const int open_result = archive_read_open_filename_w(archive, lfs::core::fs::native_path(filepath.wstring().c_str()).c_str(), 10240);
 #else
             const int open_result = archive_read_open_filename(archive, filepath.c_str(), 10240);
 #endif
@@ -487,7 +487,7 @@ namespace lfs::io {
                 archive_write_set_options(archive_, "zip:compression=store");
 
 #ifdef _WIN32
-                const int open_result = archive_write_open_filename_w(archive_,lfs::core::fs::native_path(output_path.wstring().c_str()).c_str());
+                const int open_result = archive_write_open_filename_w(archive_, lfs::core::fs::native_path(output_path.wstring().c_str()).c_str());
 #else
                 const int open_result = archive_write_open_filename(archive_, output_path.c_str());
 #endif

@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "core/path_utils.hpp"
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "io/loader.hpp"
 #include <algorithm>

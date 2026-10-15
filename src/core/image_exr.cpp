@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "image_exr.hpp"
+#include "core/filesystem.hpp"
 #include "core/path_utils.hpp"
 
 #include <OpenEXR/openexr.h>

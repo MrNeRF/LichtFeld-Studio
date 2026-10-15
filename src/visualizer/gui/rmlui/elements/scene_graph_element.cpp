@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
+#include "core/filesystem.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/rmlui/elements/scene_graph_drop_target.hpp"
 #include "gui/scene_graph_context_actions.hpp"

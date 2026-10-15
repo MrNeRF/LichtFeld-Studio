@@ -2,7 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "app/application.hpp"
 #include "app/headless_recovery_document.hpp"
 #include "app/headless_run_coordinator.hpp"
@@ -14,6 +13,7 @@
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
+#include "core/filesystem.hpp"
 #include "core/image_loader.hpp"
 #include "core/legacy_settings_migration.hpp"
 #include "core/logger.hpp"

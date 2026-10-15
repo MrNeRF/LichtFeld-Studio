@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"

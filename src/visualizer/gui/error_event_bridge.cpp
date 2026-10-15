@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "gui/error_event_bridge.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/error.hpp"
 #include "core/error_bus.hpp"

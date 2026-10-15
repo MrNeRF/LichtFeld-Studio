@@ -76,7 +76,10 @@ namespace {
     }
     TEST_F(NativeFilesystemTest, DirectoryEntryEqualityUsesLogicalPaths) {
         const auto path = root_ / "short.bin";
-        { fs::ofstream output(path, std::ios::binary); output << "short"; }
+        {
+            fs::ofstream output(path, std::ios::binary);
+            output << "short";
+        }
         bool found = false;
         for (const auto& entry : fs::directory_iterator(root_)) {
             if (entry.path().filename() == "short.bin") {
@@ -89,7 +92,11 @@ namespace {
     TEST_F(NativeFilesystemTest, Utf8StringStreamArgumentsDoNotRoundTripThroughTheWindowsCodePage) {
         const auto path = deep_ / lfs::core::utf8_to_path("stream_\u6e2c\u8a66.bin");
         const auto name = lfs::core::path_to_utf8(path);
-        { fs::ofstream output(name, std::ios::binary); ASSERT_TRUE(output); output << "unicode"; }
+        {
+            fs::ofstream output(name, std::ios::binary);
+            ASSERT_TRUE(output);
+            output << "unicode";
+        }
         fs::ifstream input(name, std::ios::binary);
         ASSERT_TRUE(input);
         EXPECT_EQ(std::string(std::istreambuf_iterator<char>(input), {}), "unicode");
@@ -147,17 +154,33 @@ namespace {
 
     TEST_F(NativeFilesystemTest, RelativePathsAndRecursiveCopyWork) {
         const auto previous = fs::current_path();
-        struct Restore { fs::path value; ~Restore(){ std::error_code ec; fs::current_path(value, ec); } } restore{previous};
+        struct Restore {
+            fs::path value;
+            ~Restore() {
+                std::error_code ec;
+                fs::current_path(value, ec);
+            }
+        } restore{previous};
         fs::current_path(root_.parent_path());
         const auto relative = fs::relative(deep_, fs::current_path());
         ASSERT_FALSE(relative.empty());
-        { fs::ofstream file(relative / "relative.bin", std::ios::binary); ASSERT_TRUE(file); file << "payload"; }
+        {
+            fs::ofstream file(relative / "relative.bin", std::ios::binary);
+            ASSERT_TRUE(file);
+            file << "payload";
+        }
         for (const auto& entry : fs::directory_iterator(relative)) {
             EXPECT_EQ(entry.path(), relative / "relative.bin");
             EXPECT_EQ(entry, fs::directory_entry(relative / "relative.bin"));
         }
         const auto copy = root_.parent_path() / (root_.filename().string() + "-copy");
-        struct Cleanup { fs::path value; ~Cleanup(){ std::error_code ec; fs::remove_all(value, ec); } } cleanup{copy};
+        struct Cleanup {
+            fs::path value;
+            ~Cleanup() {
+                std::error_code ec;
+                fs::remove_all(value, ec);
+            }
+        } cleanup{copy};
         fs::copy(root_, copy, fs::copy_options::recursive);
         EXPECT_EQ(fs::file_size(copy / deep_.lexically_relative(root_) / "relative.bin"), 7u);
         std::error_code ec;
@@ -169,13 +192,38 @@ namespace {
         const auto drive = root_.root_name().native();
         if (drive.size() != 2 || drive[1] != L':')
             GTEST_SKIP() << "Temporary root is not on a drive-backed local volume";
-        const fs::path share(L"\\\\localhost\\" + drive.substr(0, 1) + L"$" + root_.native().substr(2));
+        fs::path share(L"\\\\localhost\\" + drive.substr(0, 1) + L"$" + root_.native().substr(2));
+        fs::path cleanup_root;
+        const auto size = GetEnvironmentVariableW(L"LFS_TEST_UNC_ROOT", nullptr, 0);
+        if (size) {
+            std::wstring configured(size, L'\0');
+            configured.resize(GetEnvironmentVariableW(L"LFS_TEST_UNC_ROOT", configured.data(), size));
+            share = fs::path(configured) / root_.filename();
+            cleanup_root = share;
+            fs::create_directories(share / deep_.lexically_relative(root_));
+        }
+        struct Cleanup {
+            fs::path value;
+            ~Cleanup() {
+                if (!value.empty()) {
+                    std::error_code ec;
+                    fs::remove_all(value, ec);
+                }
+            }
+        } cleanup{cleanup_root};
         std::error_code ec;
-        if (!fs::is_directory(share, ec))
+        if (!fs::is_directory(share, ec)) {
+            if (GetEnvironmentVariableW(L"LFS_TEST_REQUIRE_UNC", nullptr, 0))
+                FAIL() << "Required UNC share unavailable: " << ec.message();
             GTEST_SKIP() << "Local administrative share unavailable: " << ec.message();
+        }
         const auto network_deep = share / deep_.lexically_relative(root_);
         const auto file = network_deep / "network.bin";
-        { fs::ofstream output(file, std::ios::binary); ASSERT_TRUE(output); output << "network"; }
+        {
+            fs::ofstream output(file, std::ios::binary);
+            ASSERT_TRUE(output);
+            output << "network";
+        }
         EXPECT_EQ(fs::file_size(file), 7u);
         const auto renamed = network_deep / "renamed.bin";
         fs::rename(file, renamed);
@@ -186,11 +234,15 @@ namespace {
         EXPECT_EQ(missing.filename().string(), "file.bin");
         size_t files = 0;
         for (const auto& entry : fs::directory_iterator(network_deep))
-            if (entry.is_regular_file()) ++files;
+            if (entry.is_regular_file())
+                ++files;
         EXPECT_EQ(files, 1u);
     }
     TEST_F(NativeFilesystemTest, RelativeSymlinkTargetsRemainRelative) {
-        { fs::ofstream output(deep_ / "target.bin", std::ios::binary); output << "target"; }
+        {
+            fs::ofstream output(deep_ / "target.bin", std::ios::binary);
+            output << "target";
+        }
         std::error_code ec;
         fs::create_symlink(fs::path("target.bin"), deep_ / "link.bin", ec);
         if (ec == std::error_code(ERROR_PRIVILEGE_NOT_HELD, std::system_category()))
@@ -201,10 +253,17 @@ namespace {
     }
     TEST_F(NativeFilesystemTest, VerbatimNamesDoNotAliasOrdinaryFiles) {
         const auto ordinary = root_ / "name";
-        { fs::ofstream output(ordinary, std::ios::binary); output << "ordinary"; }
+        {
+            fs::ofstream output(ordinary, std::ios::binary);
+            output << "ordinary";
+        }
         for (const auto* name : {"name.", "name ", "CON.licht"}) {
             const auto path = root_ / name;
-            { fs::ofstream output(path, std::ios::binary); ASSERT_TRUE(output); output << "verbatim"; }
+            {
+                fs::ofstream output(path, std::ios::binary);
+                ASSERT_TRUE(output);
+                output << "verbatim";
+            }
             fs::ifstream input(path, std::ios::binary);
             EXPECT_EQ(std::string(std::istreambuf_iterator<char>(input), {}), "verbatim");
             input.close();
@@ -217,14 +276,24 @@ namespace {
     }
     TEST_F(NativeFilesystemTest, LongCurrentDirectoryStillSupportsRelativeIo) {
         const auto previous = fs::current_path();
-        struct Restore { fs::path value; ~Restore(){ std::error_code ec; fs::current_path(value, ec); } } restore{previous};
+        struct Restore {
+            fs::path value;
+            ~Restore() {
+                std::error_code ec;
+                fs::current_path(value, ec);
+            }
+        } restore{previous};
         std::error_code ec;
         fs::current_path(deep_, ec);
         if (ec.value() == ERROR_FILENAME_EXCED_RANGE)
             GTEST_SKIP() << "SetCurrentDirectoryW rejects long working directories without process opt-in; absolute file I/O is tested separately";
         ASSERT_FALSE(ec) << ec.message();
         EXPECT_TRUE(fs::equivalent(fs::current_path(), deep_));
-        { fs::ofstream output("relative.bin", std::ios::binary); ASSERT_TRUE(output); output << "long-cwd"; }
+        {
+            fs::ofstream output("relative.bin", std::ios::binary);
+            ASSERT_TRUE(output);
+            output << "long-cwd";
+        }
         EXPECT_EQ(fs::file_size(deep_ / "relative.bin"), 8u);
         for (const auto& entry : fs::directory_iterator(fs::path(".")))
             EXPECT_EQ(entry.path(), fs::path(".") / "relative.bin");
@@ -232,12 +301,21 @@ namespace {
     TEST_F(NativeFilesystemTest, LongTemporaryDirectoryDoesNotFallBackToProfile) {
         class EnvironmentGuard {
         public:
-            explicit EnvironmentGuard(const wchar_t* key): key_(key) {
+            explicit EnvironmentGuard(const wchar_t* key) : key_(key) {
                 const auto size = GetEnvironmentVariableW(key_, nullptr, 0);
-                if (size) { value_.resize(size); const auto length = GetEnvironmentVariableW(key_, value_.data(), size); value_.resize(length); present_ = true; }
+                if (size) {
+                    value_.resize(size);
+                    const auto length = GetEnvironmentVariableW(key_, value_.data(), size);
+                    value_.resize(length);
+                    present_ = true;
+                }
             }
-            ~EnvironmentGuard(){ SetEnvironmentVariableW(key_, present_ ? value_.c_str() : nullptr); }
-        private: const wchar_t* key_; std::wstring value_; bool present_ = false;
+            ~EnvironmentGuard() { SetEnvironmentVariableW(key_, present_ ? value_.c_str() : nullptr); }
+
+        private:
+            const wchar_t* key_;
+            std::wstring value_;
+            bool present_ = false;
         } tmp(L"TMP"), temp(L"TEMP");
         ASSERT_TRUE(SetEnvironmentVariableW(L"TMP", deep_.c_str()));
         ASSERT_TRUE(SetEnvironmentVariableW(L"TEMP", deep_.c_str()));

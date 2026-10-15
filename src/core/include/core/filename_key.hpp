@@ -8,40 +8,40 @@ namespace lfs::core::detail {
     // before the source exists. Case-sensitive directories keep distinct keys.
     [[nodiscard]] inline fs::path artifact_filename_key(const fs::path& source) {
 #ifdef _WIN32
-            auto directory = source.parent_path();
-            if (directory.empty())
-                directory = fs::current_path();
-            std::error_code error;
-            while (!fs::exists(directory, error) && !error && directory.has_relative_path())
-                directory = directory.parent_path();
-            bool case_sensitive = false;
-            if (directory.empty())
-                directory = fs::current_path();
-            const auto handle = CreateFileW(fs::native_path(directory).c_str(), FILE_READ_ATTRIBUTES,
-                                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-            if (handle != INVALID_HANDLE_VALUE) {
-                FILE_CASE_SENSITIVE_INFO info{};
-                if (GetFileInformationByHandleEx(handle, FileCaseSensitiveInfo, &info, sizeof(info)))
-                    case_sensitive = (info.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR) != 0;
-                CloseHandle(handle);
-            }
-            if (!case_sensitive) {
-                auto units = source.filename().native();
-                using Upcase = WCHAR(NTAPI*)(WCHAR);
-                const auto upcase = reinterpret_cast<Upcase>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlUpcaseUnicodeChar"));
-                for (auto& unit : units) {
-                    if (upcase)
-                        unit = upcase(unit);
-                    else {
-                        wchar_t mapped = unit;
-                        if (LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, &unit, 1, &mapped, 1, nullptr, nullptr, 0) == 1)
-                            unit = mapped;
-                    }
+        auto directory = source.parent_path();
+        if (directory.empty())
+            directory = fs::current_path();
+        std::error_code error;
+        while (!fs::exists(directory, error) && !error && directory.has_relative_path())
+            directory = directory.parent_path();
+        bool case_sensitive = false;
+        if (directory.empty())
+            directory = fs::current_path();
+        const auto handle = CreateFileW(fs::native_path(directory).c_str(), FILE_READ_ATTRIBUTES,
+                                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                        nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (handle != INVALID_HANDLE_VALUE) {
+            FILE_CASE_SENSITIVE_INFO info{};
+            if (GetFileInformationByHandleEx(handle, FileCaseSensitiveInfo, &info, sizeof(info)))
+                case_sensitive = (info.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR) != 0;
+            CloseHandle(handle);
+        }
+        if (!case_sensitive) {
+            auto units = source.filename().native();
+            using Upcase = WCHAR(NTAPI*)(WCHAR);
+            const auto upcase = reinterpret_cast<Upcase>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlUpcaseUnicodeChar"));
+            for (auto& unit : units) {
+                if (upcase)
+                    unit = upcase(unit);
+                else {
+                    wchar_t mapped = unit;
+                    if (LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, &unit, 1, &mapped, 1, nullptr, nullptr, 0) == 1)
+                        unit = mapped;
                 }
-                return fs::path(units);
             }
+            return fs::path(units);
+        }
 #endif
         return source.filename();
     }
-}
+} // namespace lfs::core::detail

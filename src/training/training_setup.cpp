@@ -2,11 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "training_setup.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
 #include "core/events.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"

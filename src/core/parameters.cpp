@@ -2,9 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "core/parameters.hpp"
 #include "core/file_extensions.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "core/filesystem.hpp"
 #include "project_lifecycle.hpp"
+#include "core/filesystem.hpp"
 #include "core/resource_messages.hpp"
 #include "io/project_operations.hpp"
 #include "io/sfm_observation_chapter.hpp"

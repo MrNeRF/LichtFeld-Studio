@@ -2,11 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
-#include "gui/rmlui/rml_file_interface.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "config.h"
 #include "core/environment.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -22,6 +21,7 @@
 #include "gui/rmlui/elements/viewport_select.hpp"
 #include "gui/rmlui/elements/vram_timeline_element.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
+#include "gui/rmlui/rml_file_interface.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"

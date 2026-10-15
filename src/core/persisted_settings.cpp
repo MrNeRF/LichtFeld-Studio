@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/path_utils.hpp"
-#include "core/filesystem.hpp"
 #include "core/persisted_settings.hpp"
+#include "core/filesystem.hpp"
+#include "core/path_utils.hpp"
 
 #include "core/logger.hpp"
 #include "core/user_paths.hpp"

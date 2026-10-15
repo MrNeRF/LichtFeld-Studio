@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "core/filename_key.hpp"
+#include "core/filesystem.hpp"
 #include "io/project_container.hpp"
 
 #include "project_container_internal.hpp"
@@ -1008,7 +1008,8 @@ namespace lfs::io::project::detail {
         auto name = lfs::core::path_to_utf8(source.filename());
         // Reserve room for this artifact's writer lock as well.
         if (source.filename().native().size() + lfs::core::utf8_to_path(std::string(suffix)).native().size() +
-                (suffix == ".lock" ? 0 : 5) > 255) {
+                (suffix == ".lock" ? 0 : 5) >
+            255) {
             name = lfs::core::path_to_utf8(lfs::core::detail::artifact_filename_key(source));
             const auto key = XXH3_128bits(name.data(), name.size());
             name = std::format(".lfs-artifact-{:016x}{:016x}", key.high64, key.low64);

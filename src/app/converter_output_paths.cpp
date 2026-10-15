@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "app/converter_output_paths.hpp"
+#include "core/filesystem.hpp"
 
 namespace lfs::app {
 

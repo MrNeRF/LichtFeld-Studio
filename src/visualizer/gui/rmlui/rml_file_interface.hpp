@@ -32,6 +32,7 @@ namespace lfs::vis::gui {
 #endif
             return offset < 0 ? 0 : static_cast<size_t>(offset);
         }
+
     private:
         static std::FILE* file(Rml::FileHandle handle) { return reinterpret_cast<std::FILE*>(handle); }
     };

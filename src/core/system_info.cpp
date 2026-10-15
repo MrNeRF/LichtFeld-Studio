@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "core/system_info.hpp"
+#include "core/filesystem.hpp"
 
 #include <cuda_runtime.h>
 

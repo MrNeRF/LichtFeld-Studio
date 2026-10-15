@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "core/filesystem.hpp"
 #include "io/project_document.hpp"
+#include "core/filesystem.hpp"
 #include "io/sfm_observation_chapter.hpp"
 
 #include "core/logger.hpp"
@@ -2925,7 +2925,7 @@ namespace lfs::io::project {
             lfs::core::fs::remove(destination, ignored);
             lfs::core::fs::rename(temporary, destination);
             lfs::core::fs::permissions(destination, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-                                         std::filesystem::perm_options::replace);
+                                       std::filesystem::perm_options::replace);
             return destination;
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): return the failure as a typed embedded-asset error after cleanup.

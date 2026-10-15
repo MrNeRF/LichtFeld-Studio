@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "vksplat_viewport_renderer.hpp"
+#include "core/filesystem.hpp"
 #include "rendering/rasterizer/vulkan/src/display_color.h"
 
 #include "lod_page_dequant_cuda.hpp"

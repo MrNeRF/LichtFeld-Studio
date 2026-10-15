@@ -2,9 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "stdio_process.hpp"
 #include "core/filesystem.hpp"
 #include "core/path_utils.hpp"
-#include "stdio_process.hpp"
 
 #include <core/logger.hpp>
 

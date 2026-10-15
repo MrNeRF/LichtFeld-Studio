@@ -3876,8 +3876,10 @@ namespace {
     TEST(ProjectContainerWriter, ValidUnicodeArtifactNamesKeepTheirExistingSpelling) {
         LongPathTemporaryDirectory temporary;
         auto master = temporary.path / fs::path(std::wstring(100, L'\u6e2c') + L".licht");
-        auto expected_lock = master; expected_lock += ".lock";
-        auto expected_sidecar = master; expected_sidecar += ".autosave";
+        auto expected_lock = master;
+        expected_lock += ".lock";
+        auto expected_sidecar = master;
+        expected_sidecar += ".autosave";
         EXPECT_EQ(detail::project_lock_path(master), expected_lock);
         EXPECT_EQ(autosave_sidecar_path(master), expected_sidecar);
         create_single_chunk_fixture(master, 7921, 7922, 7923, fixed_key("PROJ", 7924), R"({"master":"unicode"})");

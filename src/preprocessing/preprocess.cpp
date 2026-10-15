@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "preprocessing/preprocess.hpp"
+#include "core/filesystem.hpp"
 #include "preprocessing/lens_priors.hpp"
 
 #include "core/camera.hpp"

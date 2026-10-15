@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "core/image_codecs.hpp"
 #include "core/filesystem.hpp"
+#include "core/image_codecs.hpp"
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -96,11 +96,13 @@ namespace {
 #endif
         TemporaryDirectory temporary;
         auto directory = temporary.path;
-        for (int i = 0; i < 12; ++i) directory /= fs::path(u8"directory_\u6e2c\u8a66_01234567890123456789");
+        for (int i = 0; i < 12; ++i)
+            directory /= fs::path(u8"directory_\u6e2c\u8a66_01234567890123456789");
         fs::create_directories(directory);
         constexpr int width = 19, height = 17, channels = 3;
         std::vector<std::uint8_t> pixels(width * height * channels);
-        for (size_t i = 0; i < pixels.size(); ++i) pixels[i] = static_cast<std::uint8_t>(i * 17);
+        for (size_t i = 0; i < pixels.size(); ++i)
+            pixels[i] = static_cast<std::uint8_t>(i * 17);
         for (const auto* extension : {".png", ".jpg", ".tif"}) {
             SCOPED_TRACE(extension);
             auto path = directory / fs::path(u8"image_\u6e2c\u8a66");
@@ -114,8 +116,11 @@ namespace {
                 ASSERT_TRUE(codec::write_tiff(path, pixels.data(), width, height, channels, error)) << error;
             codec::Image image;
             ASSERT_TRUE(codec::decode(path, image, error)) << error;
-            EXPECT_EQ(image.width, width); EXPECT_EQ(image.height, height); EXPECT_EQ(image.channels, channels);
-            if (std::string(extension) != ".jpg") EXPECT_EQ(image.data, pixels);
+            EXPECT_EQ(image.width, width);
+            EXPECT_EQ(image.height, height);
+            EXPECT_EQ(image.channels, channels);
+            if (std::string(extension) != ".jpg")
+                EXPECT_EQ(image.data, pixels);
         }
     }
     TEST(ProductionPng, AllChannelsAndDepthsRoundTripWithCommentsAndUnicodePaths) {

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "core/filesystem.hpp"
 #include "io/project_chapters.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/path_utils.hpp"
 
@@ -1037,7 +1037,7 @@ namespace lfs::io::project {
         }
         const FingerprintKind observed_kind =
             lfs::core::fs::is_regular_file(status) ? FingerprintKind::File
-                                                     : FingerprintKind::Directory;
+                                                   : FingerprintKind::Directory;
         if ((!lfs::core::fs::is_regular_file(status) &&
              !lfs::core::fs::is_directory(status)) ||
             observed_kind != expected.kind) {

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "core/filesystem.hpp"
 #include "io/project_recovery.hpp"
+#include "core/filesystem.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -932,7 +932,7 @@ namespace lfs::io::project {
                     .time_since_epoch())
                 .count();
         const auto aside = detail::project_artifact_path(source, std::format(
-            ".corrupt-{}", unix_seconds));
+                                                                     ".corrupt-{}", unix_seconds));
         constexpr int kMaxDisambiguators = 32;
         for (int attempt = 0;
              attempt <= kMaxDisambiguators;

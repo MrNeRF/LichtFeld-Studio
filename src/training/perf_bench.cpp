@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/path_utils.hpp"
-#include "core/filesystem.hpp"
 #include "lfs/training/perf_bench.hpp"
+#include "core/filesystem.hpp"
+#include "core/path_utils.hpp"
 
 #include "core/alloc_counter.hpp"
 #include "core/logger.hpp"

@@ -6,7 +6,9 @@ import os
 import shutil
 import tempfile
 import unittest
-from _lfs_path_io import Path, native_path, logical_path, open, walk, TemporaryDirectory
+import subprocess
+import sys
+from _lfs_path_io import Path, native_path, logical_path, open, walk, TemporaryDirectory, executable_kwargs
 
 
 class NativePathIo(unittest.TestCase):
@@ -21,6 +23,18 @@ class NativePathIo(unittest.TestCase):
         for _ in range(12):
             self.deep /= "directory_\u6e2c\u8a66_01234567890123456789"
         self.deep.mkdir(parents=True)
+
+    @unittest.skipUnless(os.name == "nt", "Windows executable boundary")
+    def test_launch_executable_from_long_directory(self):
+        source = Path(sys.executable)
+        target = self.deep / "python.exe"
+        shutil.copyfile(source, target)
+        dll_name = f"python{sys.version_info.major}{sys.version_info.minor}.dll"
+        shutil.copyfile(source.parent / dll_name, self.deep / dll_name)
+        command = [str(target), "--version"]
+        result = subprocess.run(command, **executable_kwargs(command), capture_output=True, text=True, check=True)
+        self.assertIn("Python", result.stdout)
+        self.assertEqual(executable_kwargs(["python", "--version"]), {})
 
     def test_open_stat_replace_and_persisted_names(self):
         file = self.deep / "project_\u6e2c\u8a66.json"

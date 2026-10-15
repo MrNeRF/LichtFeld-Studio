@@ -2,9 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "core/camera.hpp"
 #include "core/executable_path.hpp"
+#include "core/filesystem.hpp"
 #include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"

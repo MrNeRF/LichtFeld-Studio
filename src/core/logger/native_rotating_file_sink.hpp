@@ -2,14 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
-#include "core/filesystem.hpp"
 #include "core/filename_key.hpp"
+#include "core/filesystem.hpp"
 #include "core/path_utils.hpp"
-#include <spdlog/sinks/base_sink.h>
-#include <xxhash.h>
 #include <cstdio>
 #include <format>
 #include <mutex>
+#include <spdlog/sinks/base_sink.h>
+#include <xxhash.h>
 
 namespace lfs::core {
     // spdlog's installed narrow-filename ABI cannot open Unicode Windows paths.
@@ -29,7 +29,10 @@ namespace lfs::core {
                 spdlog::throw_spdlog_ex("Cannot stat log: " + path_to_utf8(path_));
             }
         }
-        ~NativeRotatingFileSink() override { if (file_) std::fclose(file_); }
+        ~NativeRotatingFileSink() override {
+            if (file_)
+                std::fclose(file_);
+        }
 
         static fs::path rotated_path(const fs::path& path, size_t index) {
             if (!index)
@@ -44,6 +47,7 @@ namespace lfs::core {
             }
             return path.parent_path() / name;
         }
+
     protected:
         void sink_it_(const spdlog::details::log_msg& message) override {
             spdlog::memory_buf_t formatted;
@@ -58,6 +62,7 @@ namespace lfs::core {
             if (!file_ || std::fflush(file_) != 0)
                 spdlog::throw_spdlog_ex("Cannot flush log: " + path_to_utf8(path_));
         }
+
     private:
         void open(bool truncate) {
             if (!path_.parent_path().empty())

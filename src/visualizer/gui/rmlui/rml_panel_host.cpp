@@ -2,10 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/path_utils.hpp"
-#include "core/filesystem.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"

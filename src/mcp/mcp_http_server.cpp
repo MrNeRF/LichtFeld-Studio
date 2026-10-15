@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "mcp_http_server.hpp"
+#include "core/filesystem.hpp"
 #include "mcp_server.hpp"
 
 #include "core/environment.hpp"

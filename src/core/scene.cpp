@@ -2,7 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/filesystem.hpp"
 #include "core/scene.hpp"
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
@@ -10,6 +9,7 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"

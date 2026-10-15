@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "core/path_utils.hpp"
-#include "core/filesystem.hpp"
 #include "ssog.hpp"
 #include "core/file_extensions.hpp"
+#include "core/filesystem.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "io/atomic_output.hpp"
 #include "io/splat_decimate.hpp"
 #include "sogs.hpp"
