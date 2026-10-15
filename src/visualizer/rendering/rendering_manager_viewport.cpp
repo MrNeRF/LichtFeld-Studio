@@ -1273,6 +1273,85 @@ namespace lfs::vis {
         return {};
     }
 
+    void RenderingManager::releaseVrResources() {
+        if (vksplat_viewport_renderer_)
+            vksplat_viewport_renderer_->releaseVrResources();
+    }
+
+    std::expected<std::array<vr::EyeImage, 2>, std::string> RenderingManager::renderVrEyes(
+        VulkanContext& context, SceneManager& scene,
+        const std::array<lfs::rendering::FrameView, 2>& views) {
+        const auto* trainer = scene.getTrainerManager();
+        if (trainer && (trainer->isTrainingActive() || trainer->isCompletionPending()))
+            return std::unexpected("VR rendering is unavailable while training owns the model.");
+        if (context.rendererTerminalState() != RendererTerminalState::Running)
+            return std::unexpected("VR rendering stopped after a GPU failure.");
+        last_vulkan_context_ = &context;
+        // Retire previous desktop mirror reads before transitioning/reusing eyes.
+        if (!context.waitForSubmittedFrames())
+            return std::unexpected("Could not retire the desktop VR mirror.");
+        auto snapshot = scene.buildRenderState({.current_geometry = true});
+        if (!hasRenderableGaussians(snapshot.combined_model))
+            return std::unexpected("VR requires a visible Gaussian model in edit mode.");
+        // RAD/LoD files contain internal hierarchy nodes as well as renderable
+        // leaves. Never rasterize the hierarchy or borrow a desktop-only selection.
+        const auto leaves = lodLeafRenderView(*snapshot.combined_model);
+        const auto& model = leaves ? *leaves : *snapshot.combined_model;
+        if (!vksplat_viewport_renderer_)
+            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+        vksplat_viewport_renderer_->setLiveSubmitCallback({});
+        auto settings = getSettings();
+        settings.split_view_mode = SplitViewMode::Disabled;
+        settings.orthographic = false;
+        settings.equirectangular = false;
+        settings.show_rings = settings.show_center_markers = false;
+        settings.desaturate_unselected = false;
+        settings.show_camera_frustums = false;
+        settings.depth_view = false;
+        std::array<vr::EyeImage, 2> images{};
+        for (size_t i = 0; i < 2; ++i) {
+            Viewport viewport(size_t(views[i].size.x), size_t(views[i].size.y));
+            viewport.setViewMatrix(views[i].rotation, views[i].translation);
+            FrameContext frame{
+                .viewport = viewport,
+                .scene_manager = &scene,
+                .model = &model,
+                .scene_state = snapshot,
+                .settings = settings,
+                .render_size = views[i].size,
+                .viewport_pos = {0, 0},
+                .gaussian_selection_visible = false,
+                .cursor_preview = {},
+                .gizmo = {},
+                .view_panels = {},
+            };
+            auto request = buildViewportRenderRequest(frame, views[i].size);
+            request.frame_view = views[i];
+            request.frame_view.background_color = settings.background_color;
+            request.overlay = {};
+            request.transparent_background = false;
+            request.require_exact_depth = false;
+            request.raster_backend = lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
+            request.gut = lfs::rendering::isGutBackend(request.raster_backend);
+            auto result = vksplat_viewport_renderer_->render(
+                context, model, request, false,
+                i == 0 ? VksplatViewportRenderer::OutputSlot::VrLeft : VksplatViewportRenderer::OutputSlot::VrRight);
+            if (!result)
+                return std::unexpected(result.error());
+            images[i] = {.image = result->image,
+                         .view = result->image_view,
+                         .layout = result->image_layout,
+                         .ready = result->completion_semaphore,
+                         .ready_value = result->completion_value,
+                         .generation = result->generation,
+                         .size = result->size,
+                         .alloc_size = result->alloc_size,
+                         .flip_y = result->flip_y};
+        }
+        retainVksplatScratch();
+        return images;
+    }
+
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageWithState(
         SceneManager* const scene_manager,
         const lfs::core::SplatData& model,

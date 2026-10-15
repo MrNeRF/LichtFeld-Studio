@@ -25,6 +25,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         core/job_registry.cpp
         core/parameter_manager.cpp
         core/services.cpp
+        vr/openxr_service.cpp
 
         # Project session chapters
         project/session_state.cpp
@@ -228,6 +229,11 @@ if(MSVC)
 endif()
 
 # Set include directories
+if(LFS_ENABLE_OPENXR)
+    find_package(OpenXR CONFIG REQUIRED)
+    target_link_libraries(lfs_visualizer PRIVATE OpenXR::openxr_loader)
+    target_compile_definitions(lfs_visualizer PRIVATE LFS_ENABLE_OPENXR=1)
+endif()
 target_include_directories(lfs_visualizer
         PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

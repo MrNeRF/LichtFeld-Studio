@@ -21,6 +21,8 @@
 #include <exception>
 #include <expected>
 #include <format>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -45,6 +47,9 @@
 struct SDL_Window;
 
 namespace lfs::vis {
+    namespace vr {
+        class OpenXrService;
+    }
 
     class VulkanContext {
         friend struct VulkanContextTestAccess;
@@ -55,13 +60,14 @@ namespace lfs::vis {
             Exact,
         };
 
-        VulkanContext() = default;
+        LFS_VIS_API VulkanContext();
         LFS_VIS_API ~VulkanContext();
 
         VulkanContext(const VulkanContext&) = delete;
         VulkanContext& operator=(const VulkanContext&) = delete;
 
-        LFS_VIS_API bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height);
+        LFS_VIS_API bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height, bool allow_vr = true);
+        LFS_VIS_API int32_t withGraphicsQueue(const std::function<int32_t()>& operation);
         void setSceneRuntimeOwnership(bool owns) { owns_scene_runtimes_ = owns; }
         LFS_VIS_API void shutdown();
         void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
@@ -203,6 +209,7 @@ namespace lfs::vis {
         };
 
         [[nodiscard]] VkInstance instance() const { return instance_; }
+        [[nodiscard]] LFS_VIS_API vr::OpenXrService& vr();
         [[nodiscard]] VkPhysicalDevice physicalDevice() const { return physical_device_; }
         [[nodiscard]] VkDevice device() const { return device_; }
         [[nodiscard]] VkQueue graphicsQueue() const { return graphics_queue_; }
@@ -488,6 +495,7 @@ namespace lfs::vis {
         [[nodiscard]] VkFormat chooseDepthStencilFormat() const;
         [[nodiscard]] uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) const;
         [[nodiscard]] std::string makeAllocationDiagnosticLabel(std::string_view label);
+        std::unique_ptr<vr::OpenXrService> vr_;
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;

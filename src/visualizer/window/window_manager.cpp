@@ -13,6 +13,7 @@
 #include "input/sdl_key_mapping.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "vr/openxr_service.hpp"
 #include "vulkan_context.hpp"
 #include "vulkan_loader_probe.hpp"
 #include "window_state_utils.hpp"
@@ -807,7 +808,16 @@ namespace lfs::vis {
         framebuffer_size_ = glm::ivec2(fb_w, fb_h);
 
         vulkan_context_ = std::make_unique<VulkanContext>();
-        if (!vulkan_context_->init(window_, framebuffer_size_.x, framebuffer_size_.y)) {
+        bool graphics_ready = vulkan_context_->init(window_, framebuffer_size_.x, framebuffer_size_.y);
+        if (!graphics_ready && vulkan_context_->vr().prepared()) {
+            const auto vr_error = vulkan_context_->lastError();
+            LOG_WARN("VR graphics initialization failed; retrying desktop mode: {}", vr_error);
+            vulkan_context_.reset();
+            vulkan_context_ = std::make_unique<VulkanContext>();
+            graphics_ready = vulkan_context_->init(window_, framebuffer_size_.x, framebuffer_size_.y, false);
+            vulkan_context_->vr().reportUnavailable("VR unavailable: " + vr_error);
+        }
+        if (!graphics_ready) {
             std::cerr << "Failed to initialize Vulkan context: " << vulkan_context_->lastError() << std::endl;
             vulkan_context_.reset();
             SDL_DestroyWindow(window_);

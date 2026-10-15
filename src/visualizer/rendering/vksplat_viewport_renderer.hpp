@@ -109,12 +109,7 @@ namespace lfs::vis {
             Ring = 3,
         };
 
-        enum class OutputSlot : std::size_t {
-            Main = 0,
-            SplitLeft = 1,
-            SplitRight = 2,
-            Preview = 3,
-        };
+        using OutputSlot = VksplatOutputSlot;
 
         struct SelectionMaskRequest {
             lfs::rendering::FrameView frame_view;
@@ -288,6 +283,7 @@ namespace lfs::vis {
             bool force_input_upload);
 
         void releasePreviewResources();
+        void releaseVrResources();
         void releaseSplitOutputResources();
         void retainPublishedSplitImages(VkImageView left, VkImageView right);
         void releaseSceneResources();

@@ -40,6 +40,9 @@
 #include "visualizer/preferences.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
+#include "vr/openxr_service.hpp"
+#include "window/vulkan_context.hpp"
+#include "window/window_manager.hpp"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keyboard.h>
 #include <algorithm>
@@ -518,6 +521,15 @@ namespace lfs::vis {
         }
     }
 
+    void InputController::setVrViewing(const bool enabled) {
+        vr_viewing_ = enabled;
+        clearViewportDragState();
+        clearWasdMomentumViewport();
+        viewport_.camera.clearTransientMotion();
+        onWindowFocusLost();
+        std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);
+    }
+
     void InputController::initialize() {
         instance_ = this;
         applyNewProjectNavigationDefaults();
@@ -769,6 +781,8 @@ namespace lfs::vis {
 
     // Core handlers
     void InputController::handleMouseButton(int button, int action, double x, double y) {
+        if (vr_viewing_)
+            return;
         decayHeldDragMomentum();
         LOG_PERF("InputController::handleMouseButton button={} action={} pos=({},{}) drag_mode={}",
                  button, action, x, y, static_cast<int>(drag_mode_));
@@ -1410,6 +1424,8 @@ namespace lfs::vis {
     }
 
     void InputController::handleMouseMove(double x, double y) {
+        if (vr_viewing_)
+            return;
         decayHeldDragMomentum();
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
@@ -1650,6 +1666,8 @@ namespace lfs::vis {
     }
 
     void InputController::handleScroll([[maybe_unused]] double xoff, double yoff) {
+        if (vr_viewing_)
+            return;
         // Capture mode (input settings panel) consumes scroll first so the user
         // can rebind scroll-only actions like Camera Zoom or chord-style Roll.
         if (bindings_.isCapturing()) {
@@ -1767,6 +1785,15 @@ namespace lfs::vis {
 
     void InputController::handleKey(const int physical_key, const int logical_key,
                                     const int scancode, int action, int mods, const bool owned_release, const bool gui_consumed) {
+        if (vr_viewing_) {
+            if (logical_key == input::KEY_ESCAPE && action == input::ACTION_PRESS) {
+                if (auto* window = services().windowOrNull()) {
+                    if (auto* context = window->getVulkanContext())
+                        context->vr().request(false);
+                }
+            }
+            return;
+        }
         // Track modifier keys (always, even if GUI has focus)
         if (physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL) {
             key_ctrl_pressed_ = (action != input::ACTION_RELEASE);
@@ -2385,6 +2412,8 @@ namespace lfs::vis {
     }
 
     void InputController::update(float delta_time) {
+        if (vr_viewing_)
+            return;
         decayHeldDragMomentum();
         // Refresh once per input frame; mouse-move events can then query the
         // divider without taking RenderingManager's settings mutex repeatedly.
