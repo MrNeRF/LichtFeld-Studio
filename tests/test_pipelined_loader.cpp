@@ -25,6 +25,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -37,6 +38,10 @@
 #include <process.h>
 #else
 #include <unistd.h>
+#endif
+#ifdef __linux__
+#include <linux/magic.h>
+#include <sys/vfs.h>
 #endif
 
 using namespace lfs::core;
@@ -366,6 +371,67 @@ TEST_F(PipelinedImageLoaderTest, ReleaseHostCacheSpillsLeastRecentImagesFirst) {
 
     for (size_t i = 0; i < paths.size(); ++i)
         EXPECT_EQ(load(paths.size() + i, paths[i]), first_pass[i]) << paths[i];
+}
+
+// Fails if the run spill writes past its free-space reserve, keeps released images in RAM, or loses
+// pixels when a released image is decoded again from its file.
+TEST_F(PipelinedImageLoaderTest, ReleaseHostCacheDropsImagesWhenSpillReserveIsUnavailable) {
+    std::vector<std::filesystem::path> paths;
+    for (const auto& entry : std::filesystem::directory_iterator(image_path_.parent_path())) {
+        if (entry.path().extension() == ".JPG")
+            paths.push_back(entry.path());
+    }
+    std::ranges::sort(paths);
+    ASSERT_GE(paths.size(), 2u);
+    paths.resize(2);
+
+    auto settings = config();
+    settings.spill_reserve_bytes = std::numeric_limits<size_t>::max();
+    PipelinedImageLoader loader(settings);
+    const auto load = [&loader](const size_t sequence_id, const std::filesystem::path& path) {
+        ImageRequest input;
+        input.sequence_id = sequence_id;
+        input.path = path;
+        input.params.resize_factor = 1;
+        input.params.max_width = 0;
+        input.params.output_uint8 = true;
+        loader.prefetch({input});
+        const auto ready = loader.get();
+        EXPECT_TRUE(ready.error.empty()) << ready.error;
+        return ready.tensor.to(DataType::Float32).cpu().to_vector();
+    };
+
+    std::vector<std::vector<float>> first_pass;
+    for (size_t i = 0; i < paths.size(); ++i)
+        first_pass.push_back(load(i, paths[i]));
+    const auto cached = loader.get_stats();
+    ASSERT_EQ(cached.jpeg_cache_entries, paths.size());
+
+    EXPECT_EQ(loader.release_host_cache(cached.jpeg_cache_bytes), cached.jpeg_cache_bytes);
+    const auto released = loader.get_stats();
+    EXPECT_EQ(released.jpeg_cache_bytes, 0u);
+    EXPECT_EQ(released.spill_cache_entries, cached.spill_cache_entries);
+    const auto spill = loader.run_spill_directory();
+    EXPECT_TRUE(spill.empty() || std::filesystem::is_empty(spill));
+
+    for (size_t i = 0; i < paths.size(); ++i)
+        EXPECT_EQ(load(paths.size() + i, paths[i]), first_pass[i]) << paths[i];
+}
+
+// Fails if the run spill sits on tmpfs or ramfs, where spilled images still take up RAM.
+TEST_F(PipelinedImageLoaderTest, RunSpillIsNotHeldInRam) {
+#ifdef __linux__
+    PipelinedImageLoader loader(config());
+    const auto spill = loader.run_spill_directory();
+    if (spill.empty())
+        return;
+    struct statfs fs {};
+    ASSERT_EQ(statfs(spill.c_str(), &fs), 0) << spill;
+    EXPECT_NE(fs.f_type, TMPFS_MAGIC) << spill;
+    EXPECT_NE(fs.f_type, RAMFS_MAGIC) << spill;
+#else
+    GTEST_SKIP() << "tmpfs and ramfs are Linux file systems";
+#endif
 }
 
 TEST_F(PipelinedImageLoaderTest, TrainingStartupOnlyPrefetchesBoundedBatch) {
