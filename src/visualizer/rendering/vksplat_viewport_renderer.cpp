@@ -20,6 +20,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
@@ -1516,7 +1517,8 @@ namespace lfs::vis {
             const std::size_t model_num_splats,
             const bool equirectangular,
             const bool gut,
-            const bool mip_filter) {
+            const bool mip_filter,
+            const float eye_setback = 0.0f) {
             uniforms = {};
             uniforms.image_width = static_cast<std::uint32_t>(frame_view.size.x);
             uniforms.image_height = static_cast<std::uint32_t>(frame_view.size.y);
@@ -1559,7 +1561,8 @@ namespace lfs::vis {
             }
             row_major_view[3] = translation.x;
             row_major_view[7] = translation.y;
-            row_major_view[11] = translation.z;
+            row_major_view[11] = translation.z + eye_setback;
+            uniforms.depth_offset = eye_setback;
             for (int row = 0; row < 4; ++row) {
                 for (int col = 0; col < 4; ++col) {
                     uniforms.world_view_transform[4 * row + col] =
@@ -7101,6 +7104,28 @@ namespace lfs::vis {
         return depth;
     }
 
+    float VksplatViewportRenderer::orthographicEyeSetback(const lfs::rendering::FrameView& frame_view,
+                                                          const lfs::core::SplatData& splat_data,
+                                                          const lfs::rendering::GaussianSceneState& scene,
+                                                          const bool content_changed) {
+        if (!frame_view.orthographic) {
+            return 0.0f;
+        }
+        const auto& means = splat_data.means_raw();
+        auto& bounds = orthographic_bounds_;
+        if (content_changed || !bounds.valid || bounds.means != means.data_ptr() ||
+            bounds.count != splat_data.size() || bounds.deleted_version != splat_data.deleted_mask_version()) {
+            bounds.has_bounds = lfs::core::compute_bounds(splat_data, bounds.min, bounds.max);
+            bounds.means = means.data_ptr();
+            bounds.count = splat_data.size();
+            bounds.deleted_version = splat_data.deleted_mask_version();
+            bounds.valid = true;
+        }
+        return bounds.has_bounds ? lfs::rendering::orthographicEyeSetback(frame_view, bounds.min, bounds.max,
+                                                                          scene.model_transforms)
+                                 : 0.0f;
+    }
+
     std::expected<lfs::core::Tensor, std::string> VksplatViewportRenderer::buildSelectionMask(
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
@@ -7507,7 +7532,11 @@ namespace lfs::vis {
                                       num_splats,
                                       request.equirectangular,
                                       request.gut,
-                                      request.mip_filter);
+                                      request.mip_filter,
+                                      request.equirectangular
+                                          ? 0.0f
+                                          : orthographicEyeSetback(request.frame_view, splat_data, request.scene,
+                                                                   force_input_upload));
         VulkanGSSelectionMaskUniforms selection_uniforms{};
         selection_uniforms.num_splats = static_cast<std::uint32_t>(num_splats);
         selection_uniforms.primitive_count = static_cast<std::uint32_t>(request.primitives.size());
@@ -7829,7 +7858,11 @@ namespace lfs::vis {
                                           buffers_.num_splats,
                                           request.equirectangular,
                                           request.gut,
-                                          request.mip_filter);
+                                          request.mip_filter,
+                                          request.equirectangular
+                                              ? 0.0f
+                                              : orthographicEyeSetback(request.frame_view, splat_data, request.scene,
+                                                                       false));
             uniforms.color_exposure = std::isfinite(request.color_exposure) ? std::clamp(request.color_exposure, 0.1f, 8.0f) : 1.0f;
             uniforms.color_tonemapping = static_cast<std::uint32_t>(std::clamp(request.color_tonemapping, 0, 6));
             uniforms.splat_render_profile = request.splat_render_profile == 1 ? 1u : 0u;
@@ -8577,7 +8610,11 @@ namespace lfs::vis {
                                           buffers_.num_splats,
                                           request.equirectangular,
                                           request.gut,
-                                          request.mip_filter);
+                                          request.mip_filter,
+                                          request.equirectangular
+                                              ? 0.0f
+                                              : orthographicEyeSetback(request.frame_view, splat_data, request.scene,
+                                                                       force_input_upload));
             uniforms.color_exposure = std::isfinite(request.color_exposure) ? std::clamp(request.color_exposure, 0.1f, 8.0f) : 1.0f;
             uniforms.color_tonemapping = static_cast<std::uint32_t>(std::clamp(request.color_tonemapping, 0, 6));
             uniforms.splat_render_profile = request.splat_render_profile == 1 ? 1u : 0u;

@@ -35,6 +35,7 @@ namespace lfs::vis::tools {
     }
 
     void AlignTool::shutdown() {
+        setEnabled(false);
         if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
             op::operators().cancelModalOperator();
         }
@@ -610,6 +611,8 @@ namespace lfs::vis::tools {
     }
 
     void AlignTool::onEnabledChanged(bool enabled) {
+        if (tool_context_ && tool_context_->getRenderingManager())
+            tool_context_->getRenderingManager()->setExactSurfacePicking(enabled);
         if (enabled) {
             forceGridOn();
         } else {

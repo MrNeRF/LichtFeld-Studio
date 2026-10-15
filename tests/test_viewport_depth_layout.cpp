@@ -4,6 +4,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_viewport_overlay.hpp"
+#include "gui/viewport_gizmo_geometry.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "visualizer/app_store.hpp"
 #include <RmlUi/Core.h>
@@ -15,9 +16,11 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -53,6 +56,11 @@ namespace {
             return true;
         }
     };
+
+    // RmlUi parses a document source as a URL, so a Windows drive colon takes its '|' form.
+    std::string rmlSourceUrl(const std::filesystem::path& path) {
+        return Rml::StringUtilities::Replace(path.generic_string(), ':', '|');
+    }
 
     class DepthLayoutRenderer final : public Rml::RenderInterface {
     public:
@@ -98,9 +106,13 @@ namespace {
             document_->Show();
         }
         void TearDown() override {
+            if (Rml::GetContext("viewport_depth_layout_real"))
+                Rml::RemoveContext("viewport_depth_layout_real");
             if (Rml::GetContext("viewport_empty_state"))
                 Rml::RemoveContext("viewport_empty_state");
             Rml::RemoveContext("viewport_depth_layout");
+            // renderer_ dies with the fixture, so RmlUi must drop its render manager first.
+            Rml::ReleaseRenderManagers();
         }
 
         void layout(bool split, float scale = 1.0f, float divider = 0.5f, int width = 920, int height = 840) {
@@ -121,11 +133,11 @@ namespace {
             const auto pos = panel()->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto size = panel()->GetBox().GetSize(Rml::BoxArea::Border);
             const float right = width_ * scale_ * divider_ - 10 * scale_;
-            const float left = right - 95 * scale_;
+            const float left = right - lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE * scale_;
             EXPECT_TRUE(pos.x + size.x <= left || pos.x >= right ||
-                        pos.y >= 105 * scale_ || pos.y + size.y <= 10 * scale_);
+                        pos.y >= (10 + lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE) * scale_ || pos.y + size.y <= 10 * scale_);
             // The top (+Y) circle must fall through to the viewport, not the depth field.
-            EXPECT_NE(context_->GetElementAtPoint({right - 47.5f * scale_, 25 * scale_}), panel());
+            EXPECT_NE(context_->GetElementAtPoint({right - lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE * 0.5f * scale_, 25 * scale_}), panel());
         }
         // RmlUi retains render-interface resources until Shutdown, even after
         // the individual context has been removed.
@@ -194,13 +206,13 @@ namespace {
         }
     }
 
-    TEST_F(ViewportDepthLayoutTest, SingleViewPlacementIsUnchanged) {
+    TEST_F(ViewportDepthLayoutTest, SingleViewDepthReservesTheAxisCorner) {
         for (const float scale : {1.0f, 1.5f, 2.0f}) {
             layout(false, scale);
             EXPECT_FLOAT_EQ(top(), 5 * scale);
             const auto pos = panel()->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto size = panel()->GetBox().GetSize(Rml::BoxArea::Border);
-            EXPECT_NEAR(pos.x + size.x * 0.5f, 460 * scale, 1.0f);
+            EXPECT_NEAR(pos.x + size.x * 0.5f, 405.5f * scale, 1.0f);
         }
     }
 
@@ -269,6 +281,116 @@ namespace {
             const auto toolbar_size = toolbar->GetBox().GetSize(Rml::BoxArea::Border);
             EXPECT_GE(panel()->GetAbsoluteOffset(Rml::BoxArea::Border).x,
                       toolbar->GetAbsoluteOffset(Rml::BoxArea::Border).x + toolbar_size.x + 8.0f * scale);
+        }
+    }
+
+    TEST_F(ViewportDepthLayoutTest, AllTopBarsReserveTheAxisCornerAtEveryWidth) {
+        auto* bar = document_->GetElementById("depth-view-block");
+        for (const char* classes : {"viewport-transform-overlay", "viewport-selection-overlay", "viewport-depth-overlay", "viewport-depth-overlay viewport-export-overlay"}) {
+            SCOPED_TRACE(classes);
+            bar->SetClassNames(classes);
+            for (const float scale : {1.0f, 1.5f, 2.0f}) {
+                context_->SetDensityIndependentPixelRatio(scale);
+                for (const int width : {920, 1099, 1100, 1101, 1240, 1600, 1920}) {
+                    SCOPED_TRACE(std::format("width={} scale={}", width, scale));
+                    context_->SetDimensions({width, 840});
+                    context_->Update();
+                    const auto position = bar->GetAbsoluteOffset(Rml::BoxArea::Border);
+                    const auto size = bar->GetBox().GetSize(Rml::BoxArea::Border);
+                    const float inset = width - position.x - size.x;
+                    EXPECT_NEAR(inset, 121 * scale, 0.1f);
+                    EXPECT_GE(inset - (10 + lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE) * scale, 6.9f * scale);
+                }
+            }
+        }
+    }
+
+    TEST_F(ViewportDepthLayoutTest, LocalizedDepthControlsStayOutsideTheAxisCorner) {
+        const auto resources = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui";
+        const auto path = resources / "rmlui/resources/viewport_overlay.rml";
+        std::ifstream input(path);
+        const std::string original((std::istreambuf_iterator<char>(input)), {});
+        for (const char* locale : {"en", "de", "pl", "es", "fr", "it", "ja", "ko", "zh", "nl"}) {
+            SCOPED_TRACE(locale);
+            std::ifstream translations(resources / "resources/locales" / (std::string(locale) + ".json"));
+            ASSERT_TRUE(translations);
+            const auto labels = nlohmann::json::parse(translations);
+            std::string markup = original;
+            markup.replace(markup.find("<head>"), 6, "<head><link type=\"text/rcss\" href=\"components.rcss\"/>");
+            for (const auto& [binding, key] : std::array{
+                     std::pair{"depth_view_tool_label", "toolbar.depth_map"},
+                     std::pair{"ui_color_label", "ui.color"}, std::pair{"ui_gray_label", "ui.gray"},
+                     std::pair{"ui_near_label", "ui.near"}, std::pair{"ui_far_label", "ui.far"}}) {
+                const std::string full_key(key);
+                const auto dot = full_key.find('.');
+                const auto text = labels.at(full_key.substr(0, dot)).at(full_key.substr(dot + 1)).get<std::string>();
+                const std::string token = "{{" + std::string(binding) + "}}";
+                for (size_t pos = 0; (pos = markup.find(token, pos)) != std::string::npos; pos += text.size())
+                    markup.replace(pos, token.size(), text);
+            }
+            auto* const real_context = Rml::CreateContext("viewport_depth_layout_real", {1240, 900}, &renderer_);
+            ASSERT_TRUE(real_context);
+            auto* doc = real_context->LoadDocumentFromMemory(markup, rmlSourceUrl(path));
+            ASSERT_TRUE(doc);
+            doc->Show();
+            auto* bar = doc->GetElementById("depth-view-block");
+            bar->SetClass("hidden", false);
+            auto* rail = doc->GetElementById("view-utility-toolbar");
+            ASSERT_TRUE(rail);
+            // Default side-panel layout: reserve the actual rail plus its gap.
+            rail->GetParentNode()->SetProperty("left", "329dp");
+            for (const float scale : {1.0f, 1.5f, 2.0f}) {
+                real_context->SetDensityIndependentPixelRatio(scale);
+                for (const int width : {920, 1100, 1240, 1600, 1920}) {
+                    SCOPED_TRACE(std::format("width={} scale={}", width, scale));
+                    real_context->SetDimensions({int(width * scale), int(900 * scale)});
+                    real_context->Update();
+                    lfs::vis::gui::ViewportDepthLayoutTestAccess::attach(overlay_, doc);
+                    (void)lfs::vis::gui::ViewportDepthLayoutTestAccess::updateOverlayPanels(overlay_);
+                    real_context->Update();
+                    Rml::ElementList controls;
+                    bar->QuerySelectorAll(controls, "button, input, select, .viewport-transform-meta__tool, .viewport-transform-axis-label");
+                    ASSERT_FALSE(controls.empty());
+                    for (auto* control : controls) {
+                        if (!control->IsVisible(true))
+                            continue;
+                        const auto position = control->GetAbsoluteOffset(Rml::BoxArea::Border);
+                        const auto size = control->GetBox().GetSize(Rml::BoxArea::Border);
+                        EXPECT_LE(position.x + size.x, (width - 114) * scale) << control->GetTagName();
+                        auto* panel = bar->QuerySelector(".viewport-transform-panel");
+                        ASSERT_TRUE(panel);
+                        const auto pp = panel->GetAbsoluteOffset(Rml::BoxArea::Border);
+                        const auto ps = panel->GetBox().GetSize(Rml::BoxArea::Border);
+                        EXPECT_GE(position.x, pp.x - 0.1f);
+                        EXPECT_LE(position.x + size.x, pp.x + ps.x + 0.1f);
+                        EXPECT_GE(position.y, pp.y - 0.1f);
+                        EXPECT_LE(position.y + size.y, pp.y + ps.y + 0.1f);
+                    }
+                }
+            }
+            lfs::vis::gui::ViewportDepthLayoutTestAccess::attach(overlay_, document_);
+            Rml::RemoveContext("viewport_depth_layout_real");
+        }
+    }
+
+    TEST_F(ViewportDepthLayoutTest, AlignToolbarReservesTheWholeAxisCornerAtEveryWidth) {
+        auto wrapper = document_->CreateElement("div");
+        wrapper->SetClassNames("toolbar-hcenter align-active");
+        auto bar = document_->CreateElement("div");
+        bar->SetClassNames("toolbar-container toolbar-row align-toolbar");
+        bar->SetProperty("width", "100%");
+        bar->SetProperty("height", "40dp");
+        auto* panel = wrapper->AppendChild(std::move(bar));
+        document_->GetElementById("viewport-content")->AppendChild(std::move(wrapper));
+        for (const float scale : {1.0f, 1.5f, 2.0f}) {
+            context_->SetDensityIndependentPixelRatio(scale);
+            for (const int width : {720, 920, 1240, 1600}) {
+                context_->SetDimensions({int(width * scale), int(840 * scale)});
+                context_->Update();
+                const auto p = panel->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto s = panel->GetBox().GetSize(Rml::BoxArea::Border);
+                EXPECT_LE(p.x + s.x, (width - 121) * scale + 0.1f);
+            }
         }
     }
 
@@ -371,7 +493,7 @@ namespace {
         const auto body = markup.find(opener);
         ASSERT_NE(body, std::string::npos);
         markup.replace(body, opener.size(), "<body id=\"overlay-body\" data-model=\"test_empty\">");
-        auto* const bound = empty_context->LoadDocumentFromMemory(markup, path.string());
+        auto* const bound = empty_context->LoadDocumentFromMemory(markup, rmlSourceUrl(path));
         ASSERT_NE(bound, nullptr);
         bound->Show();
         empty_context->Update();

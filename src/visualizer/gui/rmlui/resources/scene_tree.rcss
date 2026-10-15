@@ -45,37 +45,18 @@ body {
 .scene-tab {
     display: inline-block;
     min-width: 0;
-    padding: 5dp 6dp 6dp;
-    flex-grow: 1;
-    flex-shrink: 1;
-    flex-basis: 0;
+    padding: 5dp 12dp 6dp;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: #a6adc8;
-    background-color: rgba(49, 50, 68, 140);
-    border-width: 1dp;
-    border-color: #45475a;
-    border-bottom-width: 2dp;
-    border-bottom-color: transparent;
-    border-top-left-radius: 4dp;
-    border-top-right-radius: 4dp;
-    cursor: pointer;
-    transition: border-color background-color color 0.12s quadratic-out;
-}
-
-.scene-tab:hover,
-.scene-tab:focus-visible {
-    color: #f5f7ff;
-    border-color: rgba(137, 180, 250, 110);
-    background-color: rgba(137, 180, 250, 24);
-}
-
-.scene-tab.active {
     color: #f5f7ff;
     background-color: rgba(137, 180, 250, 28);
+    border-width: 1dp;
     border-color: rgba(137, 180, 250, 132);
+    border-bottom-width: 2dp;
     border-bottom-color: rgba(137, 180, 250, 255);
+    border-top-left-radius: 4dp;
+    border-top-right-radius: 4dp;
 }
 
 .scene-chip-row {
@@ -189,16 +170,6 @@ scene-graph,
     height: 24dp;
     margin: 0;
     border-top-width: 0;
-}
-
-#history-container {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 8dp;
-    padding-top: 4dp;
 }
 
 

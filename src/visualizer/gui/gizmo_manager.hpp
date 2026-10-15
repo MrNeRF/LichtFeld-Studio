@@ -47,7 +47,7 @@ namespace lfs::vis {
 
         class GizmoManager {
         public:
-            explicit GizmoManager(VisualizerImpl* viewer);
+            LFS_VIS_API explicit GizmoManager(VisualizerImpl* viewer);
 
             LFS_VIS_API void setupEvents();
             LFS_VIS_API void updateToolState(const UIContext& ctx, bool ui_hidden);
@@ -93,6 +93,16 @@ namespace lfs::vis {
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();
             [[nodiscard]] ViewId viewportGizmoDragView() const { return viewport_gizmo_dragging_ ? viewport_gizmo_view_ : kNoView; }
+            [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }
+            // The view whose axis widget is pressed or dragged, and the pressed marker (-1 for the sphere).
+            struct ViewportGizmoPress {
+                ViewId view = kNoView;
+                int axis = -1;
+            };
+            [[nodiscard]] std::optional<ViewportGizmoPress> viewportGizmoPress() const;
+            // What the axis widget shows under the pointer: -1 off every sphere,
+            // otherwise the view and hovered marker, so a change needs a redraw.
+            [[nodiscard]] int viewportGizmoHover(double x, double y) const;
             [[nodiscard]] bool isPositionInViewportGizmo(double x, double y) const;
             [[nodiscard]] ToolType getCurrentToolMode() const;
 
@@ -123,6 +133,9 @@ namespace lfs::vis {
             };
 
             VisualizerImpl* viewer_;
+            void beginViewportGizmoOrbit(::Viewport& viewport, const glm::vec2& mouse, float time);
+            void orbitViewportGizmo(::Viewport& viewport, float time);
+            void releaseViewportGizmoPointer();
             [[nodiscard]] std::optional<core::NodeId> selectedCropVolumeNodeId(core::NodeId target_id) const;
             [[nodiscard]] bool ensureCropVolumeForCurrentSelection();
 
@@ -188,6 +201,11 @@ namespace lfs::vis {
 
             // Viewport gizmo
             bool viewport_gizmo_dragging_ = false;
+            bool viewport_gizmo_pressed_ = false;
+            int viewport_gizmo_pressed_axis_ = -1;
+            glm::vec2 viewport_gizmo_press_pos_{0.0f};
+            // Orbit input accumulates relative motion, so the window edge never stops a drag.
+            glm::vec2 viewport_gizmo_drag_pos_{0.0f};
             std::uint64_t viewport_gizmo_epoch_ = 0;
             ViewId viewport_gizmo_view_ = kNoView;
             ViewId transform_gizmo_view_ = kNoView;
@@ -197,9 +215,6 @@ namespace lfs::vis {
             glm::mat3 viewport_gizmo_camera_rotation_before_drag_{1.0f};
             bool viewport_gizmo_camera_snapshot_valid_ = false;
             bool show_viewport_gizmo_ = true;
-            static constexpr float VIEWPORT_GIZMO_SIZE = 95.0f;
-            static constexpr float VIEWPORT_GIZMO_MARGIN_X = 10.0f;
-            static constexpr float VIEWPORT_GIZMO_MARGIN_Y = 10.0f;
 
             void triggerCropFlash();
 

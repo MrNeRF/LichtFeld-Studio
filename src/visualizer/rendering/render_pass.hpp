@@ -91,6 +91,8 @@ namespace lfs::vis {
         bool training_active = false;
         bool depth_window_drag_preview = false;
         bool gaussian_selection_visible = true;
+        // Surface tools must not unproject HiGS batch-approximate depth.
+        bool exact_surface_picking = false;
 
         CursorPreviewState cursor_preview;
         GizmoState gizmo;

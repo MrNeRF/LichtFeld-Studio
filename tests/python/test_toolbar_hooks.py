@@ -443,7 +443,6 @@ def test_shortcut_buttons_declare_actions_without_cached_text(toolbar_module):
     assert 'data-keymap-action="asset_gallery_copy_link"' in projects
     scene = (resources / "scene_tree.rml").read_text(encoding="utf-8")
     assert 'data-keymap-action="toggle_scene_selection_training"' in scene
-    assert 'data-tooltip="common.undo" data-action="undo"' in scene
     assert 'data-keymap-action="toggle_grid"' in (resources / "rendering.rml").read_text(encoding="utf-8")
     assert 'data-keymap-action="toggle_camera_frustums"' in (resources / "rendering.rml").read_text(encoding="utf-8")
     assert 'data-keymap-action="toggle_ui"' in (resources / "menubar.rml").read_text(encoding="utf-8")
@@ -1676,10 +1675,10 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "width: 64dp;" in rcss
     assert "width: 24dp;" in rcss
     assert ".toolbar-vertical .icon-btn {\n    position: relative;\n    display: flex;" in rcss
-    assert ".viewport-gizmo-controls {\n    position: absolute;\n    top: 108dp;\n    right: 10dp;" in rcss
-    assert "flex-direction: column;\n    align-items: center;\n    width: 95dp;" in rcss
+    assert ".viewport-gizmo-controls {\n    position: absolute;\n    top: 117dp;\n    right: 10dp;" in rcss
+    assert "flex-direction: column;\n    align-items: center;\n    width: 104dp;" in rcss
     assert ".viewport-gizmo-control-row {\n    display: flex;\n    flex-direction: row;" in rcss
-    assert "justify-content: center;\n    width: 95dp;\n    gap: 3dp;" in rcss
+    assert "justify-content: center;\n    width: 104dp;\n    gap: 3dp;" in rcss
     assert ".viewport-gizmo-controls .icon-btn {\n    position: relative;\n    display: flex;" in rcss
     gizmo_button_start = rcss.index(".viewport-gizmo-controls .icon-btn {")
     gizmo_button_end = rcss.index(".viewport-gizmo-controls .icon-btn:hover")

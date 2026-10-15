@@ -530,6 +530,10 @@ namespace lfs::vis {
             markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
     }
 
+    void RenderingManager::configureSurfacePicking(FrameContext& frame) const {
+        frame.exact_surface_picking = exact_surface_picking_;
+    }
+
     ViewportFrameResult RenderingManager::renderFrame(const RenderContext& context) {
         auto* const vulkan_context = vulkanContextOrNull(context.graphics_context);
         auto& view_state = viewState(context.view);
@@ -1414,7 +1418,7 @@ namespace lfs::vis {
 
         view_state.framerate_controller_.beginFrame();
 
-        const FrameContext frame_ctx{
+        FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
             .render_lock_held = render_lock.has_value(),
@@ -1436,6 +1440,7 @@ namespace lfs::vis {
             .view_panels = {},
             .scene_jitter_pixels = applied_temporal_jitter_pixels,
         };
+        configureSurfacePicking(frame_ctx);
 
         const auto complete_temporal_convergence_frame =
             [this, temporal_camera_cut_generation, &view_state]() {

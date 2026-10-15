@@ -43,6 +43,7 @@ namespace {
 
         void TearDown() override {
             lfs::vis::gui::PanelRegistry::instance().unregister_all_non_native();
+            lfs::event::LocalizationManager::getInstance().reset();
         }
 
         static void registerPanel(std::string id,

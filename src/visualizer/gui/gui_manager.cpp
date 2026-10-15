@@ -17,6 +17,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
+#include "gui/guide_segment_clipping.hpp"
 #include "gui/import_error.hpp"
 #include "gui/rmlui/elements/node_canvas_element.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
@@ -1238,20 +1239,16 @@ namespace lfs::vis::gui {
                 return std::nullopt;
             }
 
-            struct ViewClipPlane {
-                glm::vec3 normal;
-                float offset;
-            };
-            const std::array<ViewClipPlane, 5> clip_planes =
+            const std::array<GuideClipPlane, 5> clip_planes =
                 settings.orthographic
-                    ? std::array<ViewClipPlane, 5>{{
+                    ? std::array<GuideClipPlane, 5>{{
                           {{0.0f, 0.0f, -1.0f}, kMinViewZ},
                           {{ortho_scale, 0.0f, 0.0f}, cx},
                           {{-ortho_scale, 0.0f, 0.0f}, cx},
                           {{0.0f, -ortho_scale, 0.0f}, cy},
                           {{0.0f, ortho_scale, 0.0f}, cy},
                       }}
-                    : std::array<ViewClipPlane, 5>{{
+                    : std::array<GuideClipPlane, 5>{{
                           {{0.0f, 0.0f, -1.0f}, kMinViewZ},
                           {{fx, 0.0f, -cx}, 0.0f},
                           {{-fx, 0.0f, -cx}, 0.0f},
@@ -1259,25 +1256,11 @@ namespace lfs::vis::gui {
                           {{0.0f, fy, -cy}, 0.0f},
                       }};
 
-            float t_enter = 0.0f;
-            float t_exit = 1.0f;
-            for (const auto& plane : clip_planes) {
-                const float distance_a = glm::dot(plane.normal, view_a) + plane.offset;
-                const float distance_b = glm::dot(plane.normal, view_b) + plane.offset;
-                if (distance_a < 0.0f && distance_b < 0.0f) {
-                    return std::nullopt;
-                }
-                if (distance_a < 0.0f) {
-                    t_enter = std::max(t_enter, distance_a / (distance_a - distance_b));
-                } else if (distance_b < 0.0f) {
-                    t_exit = std::min(t_exit, distance_a / (distance_a - distance_b));
-                }
-            }
-            if (t_enter >= t_exit) {
+            const auto clipped = clipGuideSegment(view_a, view_b, clip_planes);
+            if (!clipped) {
                 return std::nullopt;
             }
-            const glm::vec3 clipped_a = glm::mix(view_a, view_b, t_enter);
-            const glm::vec3 clipped_b = glm::mix(view_a, view_b, t_exit);
+            const auto& [clipped_a, clipped_b] = *clipped;
 
             const auto project_view = [&](const glm::vec3& view) -> std::optional<glm::vec2> {
                 if (settings.orthographic) {
@@ -1368,37 +1351,11 @@ namespace lfs::vis::gui {
             out.push_back(overlay);
         }
 
-        struct VulkanViewportGizmoMarker {
-            int encoded_axis = -1;
-            int axis = 0;
-            bool negative = false;
-            glm::vec2 screen_pos{0.0f};
-            float radius = 0.0f;
-            float depth = 0.0f;
-            bool visible = false;
-        };
-
-        struct VulkanViewportGizmoLayout {
-            glm::vec2 top_left{0.0f};
-            glm::vec2 center{0.0f};
-            float size = 0.0f;
-            std::array<VulkanViewportGizmoMarker, 6> markers{};
-        };
-
         constexpr std::array<glm::vec3, 3> kViewportGizmoAxisColors = {
             glm::vec3{0.89f, 0.15f, 0.21f},
             glm::vec3{0.54f, 0.86f, 0.20f},
             glm::vec3{0.17f, 0.48f, 0.87f}};
-        constexpr float kViewportGizmoSize = 95.0f;
-        constexpr float kViewportGizmoMarginX = 10.0f;
-        constexpr float kViewportGizmoMarginY = 10.0f;
-        constexpr float kViewportGizmoDistance = 2.8f;
-        constexpr float kViewportGizmoFovDegrees = 38.0f;
-        constexpr float kViewportGizmoSphereRadius = 0.198f;
-        constexpr float kViewportGizmoLabelDistance = 0.63f;
-        constexpr float kViewportGizmoHoverScale = 1.2f;
         constexpr float kViewportGizmoHoverBrightness = 1.3f;
-        constexpr float kViewportGizmoHitRadiusScale = 2.5f;
         constexpr float kViewportGizmoRingInnerRadius = 0.55f;
 
         [[nodiscard]] glm::vec4 viewportGizmoAxisColor(const int axis,
@@ -1407,80 +1364,6 @@ namespace lfs::vis::gui {
             const glm::vec3 c = glm::clamp(kViewportGizmoAxisColors[static_cast<size_t>(axis)] * brightness,
                                            glm::vec3(0.0f), glm::vec3(1.0f));
             return {c.r, c.g, c.b, std::clamp(alpha, 0.0f, 1.0f)};
-        }
-
-        [[nodiscard]] std::optional<VulkanViewportGizmoLayout> buildViewportGizmoLayout(
-            const VulkanGuideView& guide_view,
-            const float size,
-            const float margin_x,
-            const float margin_y) {
-            if (!guide_view.valid() || size <= 0.0f ||
-                !viewportGizmoFits(guide_view.size.x, guide_view.size.y, size / kViewportGizmoSize)) {
-                return std::nullopt;
-            }
-
-            VulkanViewportGizmoLayout layout;
-            layout.size = size;
-            layout.top_left = {
-                guide_view.pos.x + guide_view.size.x - size - margin_x,
-                guide_view.pos.y + margin_y,
-            };
-            layout.center = layout.top_left + glm::vec2(size * 0.5f);
-
-            glm::mat4 view = lfs::rendering::makeViewMatrix(guide_view.viewport->getRotationMatrix(), glm::vec3(0.0f));
-            view[3][2] = -kViewportGizmoDistance;
-            const glm::mat4 proj =
-                glm::perspective(glm::radians(kViewportGizmoFovDegrees), 1.0f, 0.1f, 10.0f);
-            const float projected_marker_radius =
-                kViewportGizmoSphereRadius *
-                (1.0f / std::tan(glm::radians(kViewportGizmoFovDegrees) * 0.5f)) /
-                kViewportGizmoDistance *
-                size * 0.5f;
-
-            const auto project_marker = [&](const int axis, const bool negative) {
-                VulkanViewportGizmoMarker marker;
-                marker.axis = axis;
-                marker.negative = negative;
-                marker.encoded_axis = axis + (negative ? 3 : 0);
-
-                glm::vec3 position(0.0f);
-                position[axis] = negative ? -kViewportGizmoLabelDistance : kViewportGizmoLabelDistance;
-
-                const glm::vec4 clip = proj * view * glm::vec4(position, 1.0f);
-                if (clip.w <= 0.0f) {
-                    return marker;
-                }
-
-                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-                const float local_x = (ndc.x * 0.5f + 0.5f) * size;
-                const float local_y = (1.0f - (ndc.y * 0.5f + 0.5f)) * size;
-                marker.screen_pos = layout.top_left + glm::vec2(local_x, local_y);
-                marker.radius = projected_marker_radius;
-                marker.depth = clip.z / clip.w;
-                marker.visible = true;
-                return marker;
-            };
-
-            for (int axis = 0; axis < 3; ++axis) {
-                layout.markers[static_cast<size_t>(axis)] = project_marker(axis, false);
-                layout.markers[static_cast<size_t>(axis + 3)] = project_marker(axis, true);
-            }
-            return layout;
-        }
-
-        [[nodiscard]] int hitTestViewportGizmoLayout(const VulkanViewportGizmoLayout& layout,
-                                                     const glm::vec2& mouse_pos) {
-            for (const auto& marker : layout.markers) {
-                if (!marker.visible) {
-                    continue;
-                }
-                const glm::vec2 delta = mouse_pos - marker.screen_pos;
-                const float radius = marker.radius * kViewportGizmoHitRadiusScale;
-                if (glm::dot(delta, delta) <= radius * radius) {
-                    return marker.encoded_axis;
-                }
-            }
-            return -1;
         }
 
         void appendViewportGizmoLabel(std::vector<ViewportShapeOverlayVertex>& out,
@@ -1513,12 +1396,12 @@ namespace lfs::vis::gui {
 
         void appendViewportGizmoLayout(std::vector<ViewportShapeOverlayVertex>& out,
                                        const ViewportFrameDesc& params,
-                                       const VulkanViewportGizmoLayout& layout,
+                                       const ViewportGizmoLayout& layout,
                                        const int hovered_axis) {
             const auto& t = theme();
-            const float ui_scale = std::max(layout.size / kViewportGizmoSize, 0.01f);
+            const float ui_scale = std::max(layout.size / VIEWPORT_AXIS_WIDGET_SIZE, 0.01f);
 
-            std::vector<const VulkanViewportGizmoMarker*> draw_order;
+            std::vector<const ViewportGizmoMarker*> draw_order;
             draw_order.reserve(layout.markers.size());
             for (const auto& marker : layout.markers) {
                 if (marker.visible) {
@@ -1531,22 +1414,22 @@ namespace lfs::vis::gui {
                       });
 
             for (const auto& marker : layout.markers) {
-                if (!marker.visible || marker.negative) {
+                if (!marker.visible || marker.negative()) {
                     continue;
                 }
                 appendShapeOverlayLine(out, params, layout.center, marker.screen_pos,
-                                       viewportGizmoAxisColor(marker.axis, 0.72f), 3.0f * ui_scale);
+                                       viewportGizmoAxisColor(marker.axis(), 0.72f), 3.0f * ui_scale);
             }
 
             for (const auto* const marker_ptr : draw_order) {
                 const auto& marker = *marker_ptr;
                 const bool hovered = hovered_axis == marker.encoded_axis;
-                const float radius = marker.radius * (hovered ? kViewportGizmoHoverScale : 1.0f);
+                const float radius = marker.radius * (hovered ? VIEWPORT_AXIS_MARKER_HOVER_SCALE : 1.0f);
                 const float brightness = hovered ? kViewportGizmoHoverBrightness : 1.0f;
-                const glm::vec4 color = viewportGizmoAxisColor(marker.axis,
-                                                               marker.negative ? 0.88f : 1.0f,
+                const glm::vec4 color = viewportGizmoAxisColor(marker.axis(),
+                                                               marker.negative() ? 0.88f : 1.0f,
                                                                brightness);
-                if (marker.negative) {
+                if (marker.negative()) {
                     const float ring_center_radius =
                         radius * (1.0f + kViewportGizmoRingInnerRadius) * 0.5f;
                     const float ring_thickness =
@@ -1557,7 +1440,7 @@ namespace lfs::vis::gui {
                     appendShapeOverlayCircle(out, params, marker.screen_pos, radius, color);
                     appendShapeOverlayCircleOutline(out, params, marker.screen_pos, radius,
                                                     guideColor(t.palette.background, 0.55f), 1.0f * ui_scale);
-                    appendViewportGizmoLabel(out, params, marker.screen_pos, marker.axis, radius, ui_scale);
+                    appendViewportGizmoLabel(out, params, marker.screen_pos, marker.axis(), radius, ui_scale);
                 }
             }
         }
@@ -1567,62 +1450,47 @@ namespace lfs::vis::gui {
                                               const Viewport& camera,
                                               const ViewportLayout& viewport_layout,
                                               const float ui_scale,
-                                              const bool dragging) {
+                                              const std::optional<GizmoManager::ViewportGizmoPress>& press) {
             if (params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
                 return;
             }
 
             const auto views = collectVulkanGuideViews(camera, viewport_layout);
-            if (views.empty()) {
-                return;
-            }
-            const float gizmo_scale = std::max(1.0f, ui_scale);
-            const float gizmo_size = kViewportGizmoSize * gizmo_scale;
-            const float gizmo_margin_x = kViewportGizmoMarginX * gizmo_scale;
-            const float gizmo_margin_y = kViewportGizmoMarginY * gizmo_scale;
-
-            int hovered_axis = -1;
-            bool has_hovered_view = false;
-            if (!guiFocusState().want_capture_mouse) {
+            std::optional<glm::vec2> mouse;
+            if (!press && !guiFocusState().want_capture_mouse) {
                 if (auto* const window_manager = viewer.getWindowManager()) {
                     const auto& frame_input = window_manager->frameInput();
-                    const glm::vec2 mouse(frame_input.mouse_x, frame_input.mouse_y);
-                    for (const auto& guide_view : views) {
-                        const float gizmo_x = guide_view.pos.x + guide_view.size.x -
-                                              gizmo_size - gizmo_margin_x;
-                        const float gizmo_y = guide_view.pos.y + gizmo_margin_y;
-                        const bool mouse_in_gizmo = mouse.x >= gizmo_x &&
-                                                    mouse.x <= gizmo_x + gizmo_size &&
-                                                    mouse.y >= gizmo_y &&
-                                                    mouse.y <= gizmo_y + gizmo_size;
-                        if (!mouse_in_gizmo) {
-                            continue;
-                        }
-                        if (const auto layout = buildViewportGizmoLayout(
-                                guide_view, gizmo_size, gizmo_margin_x, gizmo_margin_y)) {
-                            hovered_axis = hitTestViewportGizmoLayout(*layout, mouse);
-                        }
-                        has_hovered_view = true;
-                        break;
-                    }
+                    mouse = glm::vec2(frame_input.mouse_x, frame_input.mouse_y);
                 }
             }
 
+            bool hover_taken = false;
             for (const auto& guide_view : views) {
-                if (const auto layout = buildViewportGizmoLayout(
-                        guide_view, gizmo_size, gizmo_margin_x, gizmo_margin_y)) {
-                    appendViewportGizmoLayout(params.ui_shape_overlay_triangles,
-                                              params,
-                                              *layout,
-                                              has_hovered_view ? hovered_axis : -1);
-                    if (dragging) {
-                        appendShapeOverlayCircle(params.ui_shape_overlay_triangles,
-                                                 params,
-                                                 layout->center,
-                                                 layout->size * 0.46f,
-                                                 guideColor(theme().overlay.text_dim, 0.20f));
-                    }
+                if (!guide_view.valid()) {
+                    continue;
                 }
+                const auto layout = buildViewportGizmoLayout(guide_view.viewport->getRotationMatrix(),
+                                                             guide_view.pos, guide_view.size, ui_scale);
+                if (!layout) {
+                    continue;
+                }
+                // The sphere shows while the pointer is over it and while it is held,
+                // and a hovered or pressed marker lights up.
+                const bool held = press && press->view == viewport_layout.view;
+                const bool hovered = !hover_taken && mouse && layout->discContains(*mouse);
+                hover_taken = hover_taken || hovered;
+                if (held || hovered) {
+                    const auto& tone = theme().overlay.text_dim;
+                    appendShapeOverlayCircle(params.ui_shape_overlay_triangles, params, layout->center,
+                                             layout->discRadius(), guideColor(tone, held ? 0.24f : 0.16f));
+                    appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params, layout->center,
+                                                    layout->discRadius(), guideColor(tone, held ? 0.55f : 0.40f),
+                                                    std::max(ui_scale, 1.0f));
+                }
+                const int highlighted_axis = held      ? press->axis
+                                             : hovered ? hitTestViewportGizmoMarkers(layout->markers, *mouse)
+                                                       : -1;
+                appendViewportGizmoLayout(params.ui_shape_overlay_triangles, params, *layout, highlighted_axis);
             }
         }
 
@@ -4114,18 +3982,6 @@ namespace lfs::vis::gui {
         SDL_ShowCursor();
     }
 
-    std::string GuiManager::scenePanelActiveTab() const {
-        return native_scene_panel_
-                   ? native_scene_panel_->projectActiveTab()
-                   : "scene";
-    }
-
-    void GuiManager::setScenePanelActiveTab(
-        const std::string_view tab) {
-        if (native_scene_panel_)
-            native_scene_panel_->setProjectActiveTab(tab);
-    }
-
     void GuiManager::notifyCameraThumbnailReady(const bool defer) {
         const auto now = std::chrono::steady_clock::now();
         const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -5662,7 +5518,7 @@ namespace lfs::vis::gui {
                 appendVulkanViewportGizmoOverlay(params,
                                                  *viewer_, camera, layout,
                                                  current_ui_scale_,
-                                                 gizmo_manager_.viewportGizmoDragView() == id);
+                                                 gizmo_manager_.viewportGizmoPress());
             }
         }
 
@@ -7250,6 +7106,12 @@ namespace lfs::vis::gui {
                 // Mark the due refresh consumed before buildViewportFrameDesc
                 // can re-arm the timer for a partial upload batch.
                 static_cast<void>(consumeCameraThumbnailRefresh());
+                if (window_manager) {
+                    const auto& input = window_manager->frameInput();
+                    drawn_viewport_gizmo_hover_ = gizmo_manager_.viewportGizmoPress()
+                                                      ? -1
+                                                      : gizmo_manager_.viewportGizmoHover(input.mouse_x, input.mouse_y);
+                }
                 bool viewport_pass_ready = false;
                 for (auto id : visible_views) {
                     auto& view = rendering->viewState(id);
@@ -8271,6 +8133,10 @@ namespace lfs::vis::gui {
         if (isTransformGizmoOverOrUsing())
             return true;
 
+        // The axis widget shows its sphere and marker under the pointer at once.
+        if (gizmo_manager_.viewportGizmoHover(mouse_x, mouse_y) != drawn_viewport_gizmo_hover_)
+            return true;
+
         if (!guiFocusState().want_capture_mouse && isPositionInViewport(mouse_x, mouse_y)) {
             if (const auto* const scene_manager = viewer_ ? viewer_->getSceneManager() : nullptr;
                 scene_manager && scene_manager->modifierManager().paintModeActive()) {
@@ -8729,7 +8595,6 @@ namespace lfs::vis::gui {
         registry.apply_panel_payloads({});
         registry.set_panel_enabled("lfs.preferences", true);
         resetSceneTreeChrome();
-        setScenePanelActiveTab("scene");
         setTabStripScroll(0.0f);
 
         applyDefaultWindowStates(window_states_);

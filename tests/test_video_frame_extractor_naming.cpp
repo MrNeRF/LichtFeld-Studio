@@ -298,12 +298,37 @@ namespace lfs::gui {
         }
         static void addBatch(VideoExtractorDialog& dialog,
                              const std::vector<std::filesystem::path>& videos) {
-            dialog.addBatchVideos(videos);
+            (void)queueBatch(dialog, videos);
+            ASSERT_TRUE(waitForBatchProbes(dialog));
+        }
+        static bool queueBatch(VideoExtractorDialog& dialog,
+                               const std::vector<std::filesystem::path>& videos) {
+            return dialog.addBatchVideos(videos);
         }
         static void addFromBrowse(VideoExtractorDialog& dialog,
                                   std::vector<std::filesystem::path> videos) {
             dialog.addVideosFromBrowse(std::move(videos));
+            ASSERT_TRUE(waitForBatchProbes(dialog));
         }
+        static bool waitForBatchProbes(VideoExtractorDialog& dialog) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            for (;;) {
+                dialog.applyCompletedBatchProbes();
+                if (!dialog.batch_probe_active_.load() && !dialog.batch_probe_results_ready_.load())
+                    return true;
+                if (std::chrono::steady_clock::now() >= deadline)
+                    return false;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+        static std::size_t batchItemCount(const VideoExtractorDialog& dialog) {
+            return dialog.batch_items_.size();
+        }
+        static void batchProbeState(VideoExtractorDialog& dialog, const bool active, const bool results_ready) {
+            dialog.batch_probe_active_.store(active);
+            dialog.batch_probe_results_ready_.store(results_ready);
+        }
+        static bool hasDynamicState(const VideoExtractorDialog& dialog) { return dialog.hasDynamicState(); }
         static void outputRoot(VideoExtractorDialog& dialog, const std::filesystem::path& output_root) {
             dialog.output_dir_ = output_root;
             dialog.batch_output_root_explicit_ = true;
@@ -1746,6 +1771,24 @@ namespace {
         EXPECT_GT(params[1].end_time, 0.0);
     }
 
+    TEST_F(VideoExtractorNamingUiTest, BatchProbesPublishOnlyAfterTheWorkerCompletes) {
+        TempDir temp("batch_probe_async_publish");
+        const auto first = temp.path / "first.mp4";
+        const auto second = temp.path / "second.mp4";
+        ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+        ASSERT_TRUE(writeProbedVideoWithRate(second, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
+
+        ASSERT_TRUE(NamingAccess::queueBatch(*dialog, {first, second}));
+        EXPECT_EQ(NamingAccess::batchItemCount(*dialog), 0u);
+        ASSERT_TRUE(NamingAccess::waitForBatchProbes(*dialog));
+        EXPECT_EQ(NamingAccess::batchItemCount(*dialog), 2u);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchProbeDoesNotRequireContinuousRedraw) {
+        NamingAccess::batchProbeState(*dialog, true, true);
+        EXPECT_FALSE(NamingAccess::hasDynamicState(*dialog));
+    }
+
     TEST_F(VideoExtractorNamingUiTest, BatchAddReportsTheNumberOfUnreadableVideos) {
         TempDir temp("batch_unreadable_videos");
 
@@ -1782,6 +1825,7 @@ namespace {
         NamingAccess::addBatch(*dialog, {first});
         NamingAccess::outputRoot(*dialog, output_root);
         ASSERT_TRUE(dialog->openVideoPath(dropped));
+        ASSERT_TRUE(NamingAccess::waitForBatchProbes(*dialog));
         EXPECT_EQ(NamingAccess::outputPath(*dialog), output_root);
 
         std::vector<lfs::gui::VideoExtractionParams> params;
@@ -1801,7 +1845,8 @@ namespace {
         ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
         ASSERT_TRUE(writeProbedVideoWithRate(second, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
 
-        ASSERT_TRUE(dialog->openVideoPath(first));
+        const auto first_with_dot_segment = first.parent_path() / "." / first.filename();
+        ASSERT_TRUE(dialog->openVideoPath(first_with_dot_segment));
         NamingAccess::sharedOutputSettings(*dialog, 800, 600, false);
         NamingAccess::addFromBrowse(*dialog, {second});
         NamingAccess::outputRoot(*dialog, output_root);

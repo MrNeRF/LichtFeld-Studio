@@ -86,6 +86,7 @@ namespace lfs::vis {
 
     class SceneManager;
     struct SceneRenderState;
+    struct FrameContext;
     class TrainerManager;
 
     enum class SceneUpscalerPresetUpdate : std::uint8_t {
@@ -634,6 +635,14 @@ namespace lfs::vis {
         [[nodiscard]] SelectionPreviewMode getSelectionPreviewMode() const {
             return this->state().viewport_overlay_service_.selectionPreviewMode();
         }
+        void setExactSurfacePicking(const bool enabled) {
+            if (exact_surface_picking_ == enabled)
+                return;
+            exact_surface_picking_ = enabled;
+            markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
+        }
+        void configureSurfacePicking(FrameContext& frame) const;
+
         void setGaussianSelectionVisible(const bool visible) {
             if (gaussian_selection_visible_ == visible)
                 return;
@@ -1147,6 +1156,7 @@ namespace lfs::vis {
 
         GizmoState gizmo_state_;
         bool gaussian_selection_visible_ = true;
+        bool exact_surface_picking_ = false;
 
         lfs::event::ScopedHandler event_handlers_;
 
@@ -1159,6 +1169,7 @@ namespace lfs::vis {
         friend class RenderingManagerGTComparisonGenerationTest_SplitLeftGenerationRemainsMonotonicAcrossInvalidations_Test;
         friend class RenderingManagerGTComparisonReviewTest;
         friend class SceneManager;
+        friend class AlignDepthIntegrationTest;
     };
 
 } // namespace lfs::vis

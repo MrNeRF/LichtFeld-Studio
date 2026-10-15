@@ -723,12 +723,15 @@ TEST_F(PanelRegistryAnimationDemandTest, DesktopHostIsRequestedOnlyWhenDraggingB
     EXPECT_GT(panel->detach_x, 1280);
 }
 
-TEST_F(PanelRegistryAnimationDemandTest, HiddenDragDoesNotBlockAnotherPanelResize) {
+void checkAbandonedFloatingDrag(const bool suppress_poll) {
     using namespace lfs::vis::gui;
     auto& registry = PanelRegistry::instance();
+    std::shared_ptr<RecordingPanel> abandoned;
     for (const char* id : {"test.abandoned", "test.resize"}) {
         auto panel = std::make_shared<RecordingPanel>();
         panel->height = 200;
+        if (std::string(id) == "test.abandoned")
+            abandoned = panel;
         PanelInfo info;
         info.id = id;
         info.label = id;
@@ -739,6 +742,7 @@ TEST_F(PanelRegistryAnimationDemandTest, HiddenDragDoesNotBlockAnotherPanelResiz
         info.panel = panel;
         ASSERT_TRUE(registry.register_panel(std::move(info)));
     }
+    registry.set_panel_enabled("test.abandoned", true);
     registry.set_panel_enabled("test.resize", false);
     ViewportLayout viewport;
     viewport.size = {1280, 720};
@@ -762,9 +766,17 @@ TEST_F(PanelRegistryAnimationDemandTest, HiddenDragDoesNotBlockAnotherPanelResiz
     input.mouse_down[0] = input.mouse_clicked[0] = true;
     draw();
     ASSERT_TRUE(registry.has_active_floating_drag());
-    registry.set_panel_enabled("test.abandoned", false);
+    if (suppress_poll) {
+        abandoned->poll_result = false;
+        registry.invalidate_poll_cache();
+    } else {
+        registry.set_panel_enabled("test.abandoned", false);
+    }
+    input.mouse_clicked[0] = false;
+    draw();
+    EXPECT_FALSE(registry.has_active_floating_drag());
     registry.set_panel_enabled("test.resize", true);
-    input.mouse_down[0] = input.mouse_clicked[0] = false;
+    input.mouse_clicked[0] = false;
     draw();
     const auto before = state("test.resize");
     input.mouse_x = before.float_last_x + before.float_last_w;
@@ -775,6 +787,16 @@ TEST_F(PanelRegistryAnimationDemandTest, HiddenDragDoesNotBlockAnotherPanelResiz
     input.mouse_x += 80;
     draw();
     EXPECT_NEAR(state("test.resize").float_last_w, before.float_last_w + 80, 1);
+    input.mouse_down[0] = false;
+    draw();
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, HiddenDragDoesNotBlockAnotherPanelResize) {
+    checkAbandonedFloatingDrag(false);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, PollSuppressedDragDoesNotBlockAnotherPanelResize) {
+    checkAbandonedFloatingDrag(true);
 }
 
 TEST_F(PanelRegistryAnimationDemandTest, MeasureReceivesPanelSpace) {

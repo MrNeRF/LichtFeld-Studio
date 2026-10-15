@@ -204,8 +204,6 @@ namespace lfs::vis {
             getWindowStates() const {
                 return window_states_;
             }
-            [[nodiscard]] std::string scenePanelActiveTab() const;
-            void setScenePanelActiveTab(std::string_view tab);
             [[nodiscard]] bool selectAllSceneNodesIfFocused();
             [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
             [[nodiscard]] bool toggleSceneSelectionTrainingIfFocused();
@@ -536,6 +534,8 @@ namespace lfs::vis {
             uint64_t last_ui_layout_panel_visibility_revision_ = 0;
             std::optional<bool> console_flag_seen_;
             std::optional<bool> sequencer_flag_seen_;
+            // Axis widget hover in the last drawn frame (see GizmoManager::viewportGizmoHover).
+            int drawn_viewport_gizmo_hover_ = -1;
             bool dock_resize_interaction_active_ = false;
             std::uint64_t last_pre_scene_panel_sync_generation_ = 0;
 

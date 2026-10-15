@@ -2083,7 +2083,6 @@ namespace lfs::vis::project {
                 {"VIEW", "tools.multi_transform_mode", strings({"selection", "individual"}), "selection"},
                 {"VIEW", "tools.crop_shape", strings({"box", "ellipsoid"}), "box"},
                 {"VIEW", "tools.crop_operation", strings({"translate", "rotate", "scale"}), "translate"},
-                {"GUIL", "panel_registry.active_tabs.scene_panel", strings({"scene", "history", "logging"}), "scene"},
                 {"SEQR", "loop_mode", strings({"once", "loop", "ping_pong"}), "once"},
                 {"SEQR", "preferences.preset", string_parser([](const std::string_view value) {
                      return video_preset_from_name(value).has_value();
@@ -2487,9 +2486,6 @@ namespace lfs::vis::project {
              {
                  {"main_panel",
                   std::string{}},
-                 {"scene_panel",
-                  gui_manager
-                      ->scenePanelActiveTab()},
              }},
         };
         if (!panel_payloads.empty())
@@ -3426,14 +3422,6 @@ namespace lfs::vis::project {
                         return panel.id == layout.active_tab_id;
                     }))
                     layout.active_tab_id = main_tabs.empty() ? std::string{} : main_tabs.front().id;
-                if (const auto scene_tab =
-                        scalar<std::string>(
-                            *active_tabs,
-                            "scene_panel")) {
-                    gui_manager
-                        ->setScenePanelActiveTab(
-                            *scene_tab);
-                }
             }
             const Json& chrome_root =
                 has_screen ? screen_payload : fixed;

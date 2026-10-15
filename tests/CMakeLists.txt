@@ -289,7 +289,11 @@ target_include_directories(lichtfeld_file_dialog_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/geometry/include
     ${CMAKE_SOURCE_DIR}/src/visualizer
 )
-target_link_libraries(lichtfeld_file_dialog_tests PRIVATE GTest::gtest_main)
+# scene_export_path.hpp includes the core event declarations and geometry headers.
+# Declare their header dependencies here, independently of the Linux GTK adapter.
+target_link_libraries(lichtfeld_file_dialog_tests PRIVATE
+    GTest::gtest_main glm::glm nlohmann_json::nlohmann_json
+)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET lfs_visualizer AND TARGET PkgConfig::LFS_GTK3)
     target_sources(lichtfeld_file_dialog_tests PRIVATE
         test_native_save_dialog.cpp
@@ -327,6 +331,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_summary_labels.cpp
         test_menu_bar_title.cpp
         test_point_cloud_updates.cpp
+        test_guide_segment_clipping.cpp
 
         test_viewport_depth_layout.cpp
         test_right_panel_tab_picker.cpp
@@ -423,8 +428,9 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         # This aggregate runs hundreds of cases, including repeated real-time
         # tooltip reveal delays across locales and scales. Allow slower CI hosts
-        # to finish without changing individual contracts or disabling coverage.
-        TIMEOUT 120
+        # and the assert-enabled Windows Debug build to finish without changing
+        # individual contracts or disabling coverage.
+        TIMEOUT 300
     )
     if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_PANEL_LAYOUT_TESTS AND NOT BUILD_TEMPORAL_CPU_TESTS)
         return()
@@ -1388,6 +1394,7 @@ set(TEST_FILES
     test_vram_hud_header_click.cpp
     test_ui_visibility_transition.cpp
     test_menu_bar_title.cpp
+    test_guide_segment_clipping.cpp
     test_status_bar_mining.cpp
     test_right_panel_tab_picker.cpp
     test_rotated_sh_correctness.cpp

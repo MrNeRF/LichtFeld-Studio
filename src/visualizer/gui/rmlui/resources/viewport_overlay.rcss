@@ -251,12 +251,12 @@ body {
 
 .viewport-gizmo-controls {
     position: absolute;
-    top: 108dp;
+    top: 117dp;
     right: 10dp;
     display: flex;
     flex-direction: column;
     align-items: center;
-    width: 95dp;
+    width: 104dp;
     gap: 3dp;
     pointer-events: none;
     z-index: 8;
@@ -271,7 +271,7 @@ body {
     flex-direction: row;
     align-items: center;
     justify-content: center;
-    width: 95dp;
+    width: 104dp;
     gap: 3dp;
     pointer-events: auto;
 }
@@ -435,6 +435,7 @@ body {
 #viewport-content.split-view .viewport-transform-overlay {
     top: auto;
     bottom: 5dp;
+    right: 12dp;
 }
 
 .viewport-depth-header {
@@ -1084,14 +1085,12 @@ body {
     overflow: visible;
 }
 
-/* The overlay context is the viewport plus the left dock, so this is about
-   920px at a 1280 window and about 1240px at 1600. The corner axis widget
-   occupies the viewport's right 105px. Inset only the narrower context;
-   a fixed inset would shift the one-row bar at 1600. */
-@media (max-width: 1100px) {
-    .viewport-depth-overlay.viewport-export-overlay {
-        right: 112dp;
-    }
+/* Reserve the full 114dp axis corner plus a 7dp gap at every width.
+   A centered single-row bar can reach this corner above the old breakpoint. */
+.viewport-transform-overlay,
+.viewport-selection-overlay,
+.viewport-depth-overlay {
+    right: 121dp;
 }
 
 .viewport-transform-header {
@@ -2428,7 +2427,7 @@ body {
 /* Leave room for the tool strip and corner axis control in each pane. */
 .toolbar-hcenter.align-active {
     padding-left: 44dp;
-    padding-right: 90dp;
+    padding-right: 121dp;
     box-sizing: border-box;
 }
 
@@ -2456,7 +2455,7 @@ body {
     z-index: 20;
     top: 24dp;
     left: 84dp;
-    right: 102dp;
+    right: 121dp;
     display: flex;
     justify-content: center;
     pointer-events: none;
@@ -2476,3 +2475,17 @@ body {
     pointer-events: none;
 }
 .node-preview-banner.hidden { display: none; }
+
+/* Depth keeps its controls inside the reserved span, including narrow views. */
+#depth-view-block .viewport-depth-header {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 4dp;
+}
+
+#depth-view-block .viewport-depth-fields {
+    flex-wrap: wrap;
+    flex-shrink: 1;
+    justify-content: center;
+    row-gap: 4dp;
+}
