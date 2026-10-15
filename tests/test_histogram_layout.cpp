@@ -60,7 +60,7 @@ namespace {
             document_ = context_->LoadDocumentFromMemory(
                 "<rml><head><link type=\"text/rcss\" href=\"components.rcss\"/>"
                 "<link type=\"text/rcss\" href=\"histogram_panel.rcss\"/></head>"
-                "<body class=\"docked-panel\"><div id=\"histogram-shell\" class=\"is-floating\">"
+                "<body class=\"docked-panel\"><div id=\"histogram-shell\" >"
                 "<div id=\"histogram-card\">" +
                     row + "</div></div></body></rml>",
                 (resources / "histogram_layout_test.rml").string());
@@ -69,8 +69,8 @@ namespace {
         }
         void TearDown() override { ASSERT_TRUE(Rml::RemoveContext("histogram_layout")); }
 
-        void resize(const int width) {
-            context_->SetDimensions({static_cast<int>(width * GetParam()), static_cast<int>(1000 * GetParam())});
+        void resize(const int width, const int height = 300) {
+            context_->SetDimensions({static_cast<int>(width * GetParam()), static_cast<int>(height * GetParam())});
             context_->Update();
         }
         void checkControls() {
@@ -96,7 +96,7 @@ namespace {
             EXPECT_GE(min->GetBox().GetSize(Rml::BoxArea::Border).x, 72.0f * GetParam());
             EXPECT_GE(max->GetBox().GetSize(Rml::BoxArea::Border).x, 72.0f * GetParam());
         }
-        void loadPanel(const bool compare, const bool floating) {
+        void loadPanel(const bool compare) {
             document_->Close();
             context_->Update();
             const auto resources = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources";
@@ -129,18 +129,16 @@ namespace {
             ASSERT_NE(document_, nullptr);
             document_->SetProperty("height", "100%");
             document_->SetProperty("width", "100%");
-            document_->GetElementById("histogram-shell")->SetClass("is-floating", floating);
-            document_->GetElementById("histogram-floating-header")->SetClass("hidden", !floating);
             document_->GetElementById("histogram-empty")->SetClass("hidden", true);
             document_->GetElementById("histogram-card")->SetClass("hidden", compare);
             document_->GetElementById("compare-card")->SetClass("hidden", !compare);
             document_->GetElementById("compare-content")->SetClass("hidden", false);
-            document_->QuerySelector(".histogram-toolbar-item--slider")->SetClass("hidden", compare);
+            document_->GetElementById("histogram-bin-input")->GetParentNode()->GetParentNode()->SetClass("hidden", compare);
             Rml::ElementList bins;
-            document_->QuerySelectorAll(bins, ".histogram-toolbar-item--compare-bins");
+            bins.push_back(document_->GetElementById("x-bin-input")->GetParentNode()->GetParentNode());
+            bins.push_back(document_->GetElementById("y-bin-input")->GetParentNode()->GetParentNode());
             for (auto* element : bins)
                 element->SetClass("hidden", !compare);
-            document_->QuerySelector(".histogram-toolbar-item--action")->SetClass("hidden", floating);
             document_->Show();
         }
 
@@ -194,39 +192,46 @@ namespace {
         }
     }
 
-    TEST_P(HistogramLayoutTest, SharedToolbarAndStatisticsFitDockedAndFloatingPanels) {
-        for (const bool floating : {false, true}) {
-            for (const bool compare : {false, true}) {
-                loadPanel(compare, floating);
-                for (const int width : {1800, 860, 360, 860}) {
-                    SCOPED_TRACE(::testing::Message() << "width=" << width << " floating=" << floating << " compare=" << compare);
-                    resize(width);
-                    auto* toolbar = document_->GetElementById("histogram-toolbar");
-                    auto* content = document_->GetElementById("histogram-content");
-                    auto* stats = document_->GetElementById("histogram-stats");
-                    EXPECT_LE(toolbar->GetAbsoluteOffset(Rml::BoxArea::Border).y + toolbar->GetBox().GetSize(Rml::BoxArea::Border).y,
-                              content->GetAbsoluteOffset(Rml::BoxArea::Border).y);
-                    EXPECT_GE(stats->GetAbsoluteOffset(Rml::BoxArea::Border).y,
-                              content->GetAbsoluteOffset(Rml::BoxArea::Border).y + content->GetBox().GetSize(Rml::BoxArea::Border).y);
-                    Rml::ElementList elements;
-                    document_->QuerySelectorAll(elements, ".histogram-toolbar-item");
-                    for (auto* element : elements) {
-                        if (!element->IsClassSet("hidden"))
-                            checkInside(element, toolbar);
-                    }
-                    elements.clear();
-                    document_->QuerySelectorAll(elements, ".histogram-stat");
-                    for (auto* element : elements)
-                        checkInside(element, stats);
-                    if (compare) {
-                        for (const auto* id : {"compare-range-x-min-input", "compare-range-x-max-input", "compare-range-y-min-input", "compare-range-y-max-input"}) {
-                            auto* element = document_->GetElementById(id);
-                            checkInside(element, document_->GetElementById("compare-range-of-interest"));
-                            EXPECT_LE(element->GetBox().GetSize(Rml::BoxArea::Border).x, 96.0f * GetParam());
-                        }
-                    } else {
-                        checkControls();
-                    }
+    TEST_P(HistogramLayoutTest, BottomPanelFitsWithoutScrollbarsAtPracticalDockHeights) {
+        for (const bool compare : {false, true}) {
+            loadPanel(compare);
+            for (const auto& [width, height] : {std::pair{1800, 220}, {1000, 300}, {860, 220}, {600, 300}, {360, 400}, {1000, 300}}) {
+                SCOPED_TRACE(::testing::Message() << "size=" << width << "x" << height << " compare=" << compare);
+                resize(width, height);
+                auto* toolbar = document_->GetElementById("histogram-toolbar");
+                auto* content = document_->GetElementById("histogram-content");
+                auto* stats = document_->GetElementById("histogram-stats");
+                EXPECT_LE(toolbar->GetAbsoluteOffset(Rml::BoxArea::Border).y + toolbar->GetBox().GetSize(Rml::BoxArea::Border).y,
+                          content->GetAbsoluteOffset(Rml::BoxArea::Border).y);
+                EXPECT_GE(stats->GetAbsoluteOffset(Rml::BoxArea::Border).y,
+                          content->GetAbsoluteOffset(Rml::BoxArea::Border).y + content->GetBox().GetSize(Rml::BoxArea::Border).y);
+                EXPECT_LE(stats->GetAbsoluteOffset(Rml::BoxArea::Border).y + stats->GetBox().GetSize(Rml::BoxArea::Border).y,
+                          height * GetParam());
+                Rml::ElementList elements;
+                document_->QuerySelectorAll(elements, ".histogram-toolbar-item");
+                for (auto* element : elements) {
+                    if (!element->IsClassSet("hidden"))
+                        checkInside(element, toolbar);
+                }
+                for (const auto* id : {"histogram-field", "histogram-compare-field"})
+                    EXPECT_LE(document_->GetElementById(id)->GetBox().GetSize(Rml::BoxArea::Border).x, 128.0f * GetParam());
+                elements.clear();
+                document_->QuerySelectorAll(elements, ".histogram-stat");
+                for (auto* element : elements)
+                    checkInside(element, stats);
+                for (const auto* id : {"histogram-shell", "histogram-content", "histogram-stats"}) {
+                    auto* element = document_->GetElementById(id);
+                    EXPECT_LE(element->GetScrollWidth(), element->GetClientWidth() + 1.0f) << id;
+                    EXPECT_LE(element->GetScrollHeight(), element->GetClientHeight() + 1.0f) << id;
+                }
+                auto* chart = document_->GetElementById(compare ? "compare-chart" : "histogram-chart");
+                EXPECT_GE(chart->GetBox().GetSize(Rml::BoxArea::Border).y, 32.0f * GetParam());
+                if (compare) {
+                    EXPECT_LE(document_->GetElementById("compare-y-axis")->GetBox().GetSize(Rml::BoxArea::Border).x, 52.0f * GetParam());
+                    for (const auto* id : {"compare-range-x-min-input", "compare-range-x-max-input", "compare-range-y-min-input", "compare-range-y-max-input"})
+                        checkInside(document_->GetElementById(id), document_->GetElementById("compare-range-of-interest"));
+                } else {
+                    checkControls();
                 }
             }
         }

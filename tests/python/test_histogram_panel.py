@@ -1541,42 +1541,50 @@ def test_histogram_owned_modifier_selection_survives_two_follow_up_updates(histo
     assert panel._histogram_overlay_bounds == (5, 5)
 
 
-def test_histogram_panel_can_toggle_between_bottom_dock_and_floating(histogram_panel_module, lf):
+@pytest.mark.parametrize("saved_space", ["FLOATING", "BOTTOM_DOCK"])
+def test_histogram_panel_restores_bottom_dock(histogram_panel_module, lf, monkeypatch, saved_space):
     panel = histogram_panel_module.HistogramPanel()
-    state = {"space": lf.ui.PanelSpace.BOTTOM_DOCK}
+    state = {"space": getattr(lf.ui.PanelSpace, saved_space)}
+    moves = []
+    monkeypatch.setattr(lf.ui, "get_panel", lambda panel_id: SimpleNamespace(space=state["space"]))
 
-    def _get_panel(panel_id):
+    def set_space(panel_id, space):
         assert panel_id == panel.id
-        return SimpleNamespace(space=state["space"])
-
-    def _set_panel_space(panel_id, space):
-        assert panel_id == panel.id
+        moves.append(space)
         state["space"] = space
         return True
 
-    original_get_panel = lf.ui.get_panel
-    original_set_panel_space = lf.ui.set_panel_space
-    try:
-        lf.ui.get_panel = _get_panel
-        lf.ui.set_panel_space = _set_panel_space
+    monkeypatch.setattr(lf.ui, "set_panel_space", set_space)
+    assert panel._sync_panel_space_state() is (saved_space == "FLOATING")
+    assert state["space"] == lf.ui.PanelSpace.BOTTOM_DOCK
+    assert panel._sync_panel_space_state() is False
+    assert len(moves) == (1 if saved_space == "FLOATING" else 0)
 
-        assert panel._sync_panel_space_state() is False
-        assert panel._is_floating is False
-        assert panel._dock_toggle_label() == "Undock"
 
-        panel._on_toggle_dock_mode(None, None, None)
-
-        assert state["space"] == lf.ui.PanelSpace.FLOATING
-        assert panel._is_floating is True
-        assert panel._dock_toggle_label() == "Dock"
-
-        panel._on_toggle_dock_mode(None, None, None)
-
-        assert state["space"] == lf.ui.PanelSpace.BOTTOM_DOCK
-        assert panel._is_floating is False
-    finally:
-        lf.ui.get_panel = original_get_panel
-        lf.ui.set_panel_space = original_set_panel_space
+@pytest.mark.parametrize("axis,attr,minimum,maximum", [
+    ("histogram", "_histogram_bin_count", 16, 128),
+    ("x", "_compare_x_bin_count", 8, 48),
+    ("y", "_compare_y_bin_count", 8, 48),
+])
+def test_bin_input_commits_on_enter_or_blur_and_steps(histogram_panel_module, axis, attr, minimum, maximum):
+    panel = histogram_panel_module.HistogramPanel()
+    original = getattr(panel, attr)
+    panel._bin_input_text[axis] = "3"
+    panel._on_submit_bins(None, SimpleNamespace(get_bool_parameter=lambda *args: False), [axis])
+    assert getattr(panel, attr) == original
+    panel._bin_input_text[axis] = "32"
+    panel._on_submit_bins(None, SimpleNamespace(get_bool_parameter=lambda *args: True), [axis])
+    assert getattr(panel, attr) == 32
+    assert axis not in panel._bin_input_text
+    panel._on_step_bins(None, None, [axis, 1])
+    assert getattr(panel, attr) == 33
+    for text, expected in [("bad", 33), ("", 33), ("999", maximum), ("-5", minimum)]:
+        panel._bin_input_text[axis] = text
+        panel._on_commit_bins(None, None, [axis])
+        assert getattr(panel, attr) == expected
+        assert axis not in panel._bin_input_text
+    panel._on_step_bins(None, None, [axis, -1])
+    assert getattr(panel, attr) == minimum
 
 
 # --- Snappiness / elite-UX regressions -------------------------------------------------

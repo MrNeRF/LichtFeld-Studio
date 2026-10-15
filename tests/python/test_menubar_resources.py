@@ -386,7 +386,7 @@ def test_theme_auto_visibility_and_variant_button_width_are_capability_driven():
     assert "SDL_SYSTEM_THEME_DARK" in theme_cpp
 
 
-def test_all_optional_theme_gradients_reach_rml_consumers():
+def test_optional_theme_gradients_remain_supported_and_active_consumers_resolve():
     theme_cpp = (
         PROJECT_ROOT / "src" / "visualizer" / "theme" / "theme.cpp"
     ).read_text(encoding="utf-8")
@@ -452,48 +452,23 @@ def test_all_optional_theme_gradients_reach_rml_consumers():
         assert f"hashGradient(seed, gradients.{gradient})" in rml_theme_cpp
         assert f"t.gradients.{gradient}" in rml_theme_cpp
         resource = (resources / resource_name).read_text(encoding="utf-8")
-        assert f"@{{{token}}}" in resource
+        # Legacy histogram gradients still parse and hash, but charts now use
+        # solid semantic colors rather than consuming these decorators.
+        if not gradient.startswith("histogram_"):
+            assert f"@{{{token}}}" in resource
 
 
-def test_histogram_history_icons_follow_theme_contrast():
-    resources = (
-        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
-    )
-    histogram_theme = (resources / "histogram_panel.theme.rcss").read_text(
-        encoding="utf-8"
-    )
-    rml_theme_cpp = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "rml_theme.cpp"
-    ).read_text(encoding="utf-8")
-
-    assert (
-        ".histogram-history-icon {\n"
-        "    image-color: @{text};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        ".histogram-history-btn:hover .histogram-history-icon {\n"
-        "    image-color: @{primary};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        ".histogram-history-btn:disabled .histogram-history-icon {\n"
-        "    image-color: @{panel.histogram_history_icon_disabled};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        '{"panel.histogram_history_icon_disabled", '
-        "colorToRmlAlpha(p.text_dim, is_light ? 0.68f : 0.52f)}"
-        in rml_theme_cpp
-    )
+def test_histogram_controls_and_chart_follow_semantic_theme_colors():
+    resources = PROJECT_ROOT / "src/visualizer/gui/rmlui/resources"
+    theme = (resources / "histogram_panel.theme.rcss").read_text(encoding="utf-8")
+    rml = (resources / "histogram_panel.rml").read_text(encoding="utf-8")
+    assert "histogram-history-icon" not in rml
+    assert "vertical-gradient" not in theme
+    assert "@{panel.histogram_fill_decor}" not in theme
+    assert "background-color: @{primary};" in theme
+    assert "background-color: @{warning};" in theme
+    assert "#histogram-close:hover" in theme
+    assert "border-color: @{primary};" in theme
 
 
 def test_signal_family_keeps_a_distinct_visual_language():
