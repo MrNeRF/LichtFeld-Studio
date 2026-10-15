@@ -2927,6 +2927,18 @@ namespace {
         EXPECT_NE(prepared.unsupported_settings[0].value, prepared.unsupported_settings[1].value);
     }
 
+    TEST(P5SessionChapterTest, SavedActiveSubmodesRestoreWithoutNewerSettingWarning) {
+        UnknownSessionValueFixture test;
+        (void)test.restore("active-submodes");
+        for (const char* value : {"", "centers", "rectangle", "polygon", "lasso", "rings", "color", "box", "sphere"}) {
+            lfs::vis::UnifiedToolRegistry::instance().setActiveSubmode(value);
+            auto captured = require_result(captureGuiSession(*test.viewer, ProjectSessionChapters{}, test.bookmarks));
+            EXPECT_EQ(json_root(captured.view.dom())["tools"]["active_submode_id"], value);
+            const auto prepared = require_result(prepareGuiSessionRestore(std::move(captured)));
+            EXPECT_TRUE(prepared.unsupported_settings.empty()) << "active_submode_id=\"" << value << '"';
+        }
+    }
+
     TEST(P5SessionChapterTest, DeprecatedScenePanelTabIsIgnoredAndNoLongerWritten) {
         UnknownSessionValueFixture test;
         for (const char* value : {"history", "logging", "future_tab"}) {
