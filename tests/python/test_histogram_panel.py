@@ -2298,3 +2298,17 @@ def test_compare_records_cache_selection_and_invalidation(histogram_panel_module
     panel._clear_compare_cache()
     assert panel._build_compare_bin_records() == []
     assert panel._static_compare_records_value is None
+
+
+def test_histogram_bar_color_is_constant_while_heatmap_encodes_density(histogram_panel_module):
+    panel = histogram_panel_module.HistogramPanel()
+    for log in [False, True]:
+        panel._log_scale_enabled = log
+        bars = list(panel._build_bin_records([0, 100, 500, 1000], [0, 1, 2, 3, 4]))
+        assert [bar["opacity_style"] for bar in bars] == ["0.000", "1.000", "1.000", "1.000"]
+        assert len({bar["height_style"] for bar in bars}) == 4
+        panel._compare_x_bin_count, panel._compare_y_bin_count = 2, 2
+        panel._compare_counts = [0, 1, 10, 1000]
+        panel._compare_x_edges = panel._compare_y_edges = [0, 1, 2]
+        heatmap = panel._build_compare_bin_records()
+        assert len({cell["opacity_style"] for cell in heatmap}) == 4

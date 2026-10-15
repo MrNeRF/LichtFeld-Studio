@@ -291,7 +291,11 @@ descriptions in tooltips,
 editable bounds beside the chart, and summary statistics in a flat strip below
 it. Let the chart shrink with the panel height rather than adding nested
 scrollbars. Comparison axes need only a compact numeric gutter; the field
-selectors already identify both axes. Chart fills use solid semantic colors.
+selectors already identify both axes. Size closed selectors to the active label,
+while their popup menus retain enough width for the longer localized options.
+Bar fills use a constant semantic color and opacity; only 2D cell intensity
+encodes density. Cache heatmap geometry, density, and tooltip records separately
+from selection flags so dragging does not rebuild the entire heatmap.
 
 #### Sections and settings
 

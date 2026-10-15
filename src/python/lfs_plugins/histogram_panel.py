@@ -63,6 +63,7 @@ class HistogramPanel(Panel):
         self._chart_el = None
         self._compare_chart_el = None
         self._handle = None
+        self._metric_select_geometry_key = None
 
         self._metric_id = METRICS[0].id
         self._compare_metric_id = ""
@@ -437,6 +438,7 @@ class HistogramPanel(Panel):
         del doc
 
         scrubs_changed = self._scrub_fields.sync_all()
+        scrubs_changed |= self._sync_metric_select_widths()
         space_changed = self._sync_panel_space_state()
         scene_generation = lf.get_scene_generation()
         data_generation = self._scene_data_generation_value()
@@ -507,6 +509,7 @@ class HistogramPanel(Panel):
 
     def on_unmount(self, doc):
         self._scrub_fields.unmount()
+        self._metric_select_geometry_key = None
         self._cancel_histogram_compute()
         self._unsubscribe_reactive_state()
         self._clear_owned_scene_selection()
@@ -1215,6 +1218,30 @@ class HistogramPanel(Panel):
             if metric.id != self._metric_id
         )
         self._handle.update_record_list("compare_metric_options", options)
+        self._sync_metric_select_widths()
+
+    def _sync_metric_select_widths(self) -> bool:
+        """Fit closed selectors to their labels, not the longest menu option."""
+        if self._doc is None:
+            return False
+        field = self._doc.get_element_by_id("histogram-field")
+        compare = self._doc.get_element_by_id("histogram-compare-field")
+        if field is None or compare is None:
+            return False
+        # Measured padding scales with the font/DPI along with the label.
+        padding = field.measure_text("MMM")
+        key = (self._metric_id, self._compare_metric_id, getattr(self, "_last_lang", None), padding)
+        if key == self._metric_select_geometry_key:
+            return False
+        off_label = _tr("histogram.compare.off", "Off")
+        for element, label in (
+            (field, METRIC_BY_ID[self._metric_id].label()),
+            (compare, METRIC_BY_ID[self._compare_metric_id].label() if self._compare_metric_id else off_label),
+        ):
+            width = math.ceil(element.measure_text(label) + padding)
+            element.set_property("width", f"{width}px")
+        self._metric_select_geometry_key = key
+        return True
 
     def _refresh(self, view_only: bool = False):
         if not self._handle:
@@ -1946,7 +1973,7 @@ class HistogramPanel(Panel):
         for index, count in enumerate(counts):
             ratio = display_counts[index] / peak
             height_pct = 0.0 if count <= 0 else max(3.0, ratio * 100.0)
-            alpha = 0.16 if count <= 0 else (0.34 + ratio * 0.66)
+            alpha = 0.0 if count <= 0 else 1.0
             records.append({
                 "height_style": f"{height_pct:.2f}%",
                 "opacity_style": f"{alpha:.3f}",

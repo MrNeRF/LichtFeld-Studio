@@ -60,11 +60,20 @@
 }
 
 .histogram-select {
-    flex: 0 0 128dp;
-    width: 128dp;
+    flex: 0 0 auto;
+    width: 88dp;
     min-width: 0;
     height: 24dp;
     box-sizing: border-box;
+}
+
+/* The popup is independent of the compact selected-value control. */
+.histogram-select selectbox {
+    min-width: 180dp;
+}
+
+#histogram-compare-field {
+    width: 56dp;
 }
 
 .histogram-bin-scrub {

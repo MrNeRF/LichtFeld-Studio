@@ -5,6 +5,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <RmlUi/Core/RenderInterface.h>
 #include <filesystem>
 #include <fstream>
@@ -250,6 +251,34 @@ namespace {
                 }
             }
         }
+    }
+
+    TEST_P(HistogramLayoutTest, CompactDropdownKeepsLongOptionsReadable) {
+        loadPanel(false);
+        resize(860);
+        auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(document_->GetElementById("histogram-compare-field"));
+        ASSERT_NE(select, nullptr);
+        select->RemoveAll();
+        select->SetInnerRML("<option value=\"\">Off</option><option value=\"erank\">Effective Rank</option>"
+                            "<option value=\"world_distance\">World Distance</option>"
+                            "<option value=\"world_es\">Distancia en espacio mundo</option>");
+        select->SetProperty("width", "48dp");
+        select->ShowSelectBox();
+        context_->Update();
+        context_->Render();
+        context_->Update();
+        Rml::Element* popup = nullptr;
+        for (int index = 0; index < select->GetNumChildren(true); ++index) {
+            auto* child = select->GetChild(index);
+            if (child->GetTagName() == "selectbox")
+                popup = child;
+        }
+        ASSERT_NE(popup, nullptr);
+        EXPECT_LE(select->GetBox().GetSize(Rml::BoxArea::Border).x, 48.0f * GetParam());
+        EXPECT_GE(popup->GetBox().GetSize(Rml::BoxArea::Border).x, 180.0f * GetParam());
+        EXPECT_LE(popup->GetScrollWidth(), popup->GetClientWidth() + 1.0f);
+        EXPECT_EQ(popup->GetNumChildren(), 4);
+        select->HideSelectBox();
     }
 
     INSTANTIATE_TEST_SUITE_P(UiScales, HistogramLayoutTest, ::testing::Values(1.0f, 1.5f, 2.0f));
