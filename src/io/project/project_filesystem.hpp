@@ -4,6 +4,7 @@
 #pragma once
 
 #include <filesystem>
+#include <system_error>
 #include <utility>
 
 namespace lfs::io::project::detail::project_fs {
@@ -84,8 +85,35 @@ namespace lfs::io::project::detail::project_fs {
         return std::filesystem::last_write_time(native_path(path), std::forward<Args>(args)...);
     }
 
+    // Resolves the deepest existing ancestor as a whole and appends the missing remainder.
+    // std::filesystem::weakly_canonical walks down from the root instead; MSVC parses \\?\ as
+    // the root of \\?\UNC\server\share, so that walk opens the network redirector device itself
+    // and fails with ERROR_INVALID_FUNCTION for every long network path.
     inline std::filesystem::path weakly_canonical(const std::filesystem::path& path, std::error_code& error) {
-        return display_path(std::filesystem::weakly_canonical(native_path(path), error));
+        auto existing = native_path(std::filesystem::absolute(path, error));
+        if (error) {
+            return {};
+        }
+        std::filesystem::path missing;
+        while (!std::filesystem::exists(existing, error)) {
+            if (error) {
+                return {};
+            }
+            if (!existing.has_relative_path()) {
+                error = std::make_error_code(std::errc::no_such_file_or_directory);
+                return {};
+            }
+            missing = missing.empty() ? existing.filename() : existing.filename() / missing;
+            existing = existing.parent_path();
+        }
+        auto resolved = std::filesystem::canonical(existing, error);
+        if (error) {
+            return {};
+        }
+        if (!missing.empty()) {
+            resolved /= missing;
+        }
+        return display_path(resolved.lexically_normal());
     }
 
     template <typename... Args>

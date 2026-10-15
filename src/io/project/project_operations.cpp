@@ -19,6 +19,7 @@
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
 #include "project_container_internal.hpp"
+#include "project_filesystem.hpp"
 #include "span_streambuf.hpp"
 
 #include <stb_image_write.h>
@@ -134,10 +135,9 @@ namespace lfs::io::project {
                        const std::filesystem::path& rhs) {
             std::error_code lhs_error;
             std::error_code rhs_error;
-            const auto left = std::filesystem::weakly_canonical(lhs, lhs_error);
-            const auto right = std::filesystem::weakly_canonical(rhs, rhs_error);
-            return !lhs_error && !rhs_error &&
-                   left.lexically_normal() == right.lexically_normal();
+            const auto left = detail::project_fs::weakly_canonical(lhs, lhs_error);
+            const auto right = detail::project_fs::weakly_canonical(rhs, rhs_error);
+            return !lhs_error && !rhs_error && left == right;
         }
 
         lfs::Result<void> refuse_existing_destination(
