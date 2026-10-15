@@ -877,7 +877,7 @@ class PluginMarketplacePanel(Panel):
 
         return (
             '<div class="plugin-list-summary">'
-            f'<button type="button" class="plugin-list-disclosure" data-action="toggle-expand" data-card-id="{esc("card_id")}">{disclosure}</button>'
+            f'<button type="button" class="plugin-list-disclosure" id="disclosure-{esc("card_id")}" data-action="toggle-expand" data-card-id="{esc("card_id")}">{disclosure}</button>'
             '<div class="plugin-list-title-row">'
             f'{self._build_project_title_markup(record, "plugin-list-name")}'
             f'{version_span}'
@@ -887,7 +887,7 @@ class PluginMarketplacePanel(Panel):
             f'{self._build_star_count_markup(record)}'
             '</div>'
             '</div>'
-            f'<div class="plugin-list-details{expanded_class}">'
+            f'<div class="plugin-list-details{expanded_class}" id="details-{esc("card_id")}">'
             f'{detail_meta}'
             f'{detail_text}'
             f'{self._build_feedback_markup(record, extra_class="plugin-list-feedback")}'
@@ -1060,6 +1060,7 @@ class PluginMarketplacePanel(Panel):
             installed_names,
         )
         if record == self._cached_card_records[idx]:
+            self._sync_list_row_expansion(doc, card_id)
             return
         self._cached_card_records[idx] = record
 
@@ -1088,6 +1089,7 @@ class PluginMarketplacePanel(Panel):
                 installed_lookup, installed_versions, installed_names,
             )
             if record == self._cached_card_records[idx]:
+                self._sync_list_row_expansion(doc, card_id)
                 continue
             self._cached_card_records[idx] = record
             card_el = doc.get_element_by_id(f"card-{card_id}")
@@ -1457,6 +1459,19 @@ class PluginMarketplacePanel(Panel):
         self._entries_dirty = True
         self._last_grid_signature = None
         self._request_model_update()
+
+    def _sync_list_row_expansion(self, doc, card_id: str):
+        """Expansion can change without a metadata change when an error expires."""
+        if self._view_mode != _VIEW_MODE_LIST:
+            return
+        details = doc.get_element_by_id(f"details-{card_id}")
+        disclosure = doc.get_element_by_id(f"disclosure-{card_id}")
+        if details is None or disclosure is None:
+            return
+        expanded = self._is_list_row_expanded(card_id)
+        if details.is_class_set("hidden") != (not expanded):
+            details.set_class("hidden", not expanded)
+            disclosure.set_text("▼" if expanded else "▶")
 
     def _is_list_row_expanded(self, card_id: str) -> bool:
         if card_id in self._expanded_list_rows:

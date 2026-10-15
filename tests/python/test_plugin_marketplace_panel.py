@@ -1125,3 +1125,56 @@ def test_marketplace_refresh_preserves_unchanged_card_dom(plugin_marketplace_mod
     panel._refresh_card_record(doc, "changed", manager)
     assert same.set_inner_rml_count == 0
     assert changed.set_inner_rml_count == 1
+
+
+@pytest.mark.parametrize("bulk_refresh", [False, True])
+@pytest.mark.parametrize("explicit_expansion", [False, True])
+def test_equal_list_record_syncs_expansion_when_error_expires(
+    plugin_marketplace_module, monkeypatch, bulk_refresh, explicit_expansion,
+):
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    panel._view_mode = "list"
+    card_id = "sample-card"
+    entry = module.MarketplacePluginEntry(
+        source_url="https://github.com/owner/repo", github_url="https://github.com/owner/repo",
+        owner="owner", repo="repo", name="Sample", description="Description",
+    )
+    manager = SimpleNamespace(discover=lambda: [])
+    panel._card_ops[card_id] = module.CardOpState(
+        phase=module.CardOpPhase.ERROR, message="Failed", finished_at=10.0,
+    )
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.0)
+    if explicit_expansion:
+        panel._set_list_row_expanded(card_id, False, rerender=False)
+        panel._set_list_row_expanded(card_id, True, rerender=False)
+    record = panel._build_card_record(entry, card_id, manager, {}, {}, set())
+    panel._cached_entries = [entry]
+    panel._cached_card_ids = [card_id]
+    panel._cached_card_records = [record]
+    card, details, disclosure = _ElementStub(), _ElementStub(), _ElementStub()
+    card.set_inner_rml(panel._build_list_inner_markup(record))
+    assert 'class="plugin-list-details hidden"' not in card.inner_rml
+    details.set_class("hidden", False)
+    disclosure.set_text("▼")
+    doc = _DocStub({
+        f"card-{card_id}": card, f"details-{card_id}": details,
+        f"disclosure-{card_id}": disclosure,
+    })
+    panel._doc = doc
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.0 + module.ERROR_DISMISS_SEC + 0.1)
+    if bulk_refresh:
+        panel._refresh_all_card_records(doc, manager)
+    else:
+        panel._refresh_card_record(doc, card_id, manager)
+    assert panel._cached_card_records == [record]
+    assert panel._is_list_row_expanded(card_id) is explicit_expansion
+    assert details.is_class_set("hidden") is not explicit_expansion
+    assert disclosure.text == ("▼" if explicit_expansion else "▶")
+    assert card.set_inner_rml_count == 1
+    panel._toggle_list_row(card_id)
+    assert panel._is_list_row_expanded(card_id) is not explicit_expansion
+    assert ('class="plugin-list-details hidden"' in card.inner_rml) is explicit_expansion
+    panel._toggle_list_row(card_id)
+    assert panel._is_list_row_expanded(card_id) is explicit_expansion
+    assert ('class="plugin-list-details hidden"' in card.inner_rml) is not explicit_expansion
