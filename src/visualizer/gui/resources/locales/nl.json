@@ -1061,7 +1061,7 @@
     "console": "Console",
     "color": "Kleur",
     "show_coord_axes": "Toon Coördinaat Assen",
-    "axes_size": "Lengte van coördinaatassen",
+    "axes_size": "Aslengte",
     "show_pivot": "Toon Draaipunt",
     "show_grid": "Toon Raster",
     "grid_opacity": "Raster Dekking",

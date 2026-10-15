@@ -1061,7 +1061,7 @@
     "console": "Consola",
     "color": "Color",
     "show_coord_axes": "Mostrar Ejes de Coordenadas",
-    "axes_size": "Longitud de los ejes de coordenadas",
+    "axes_size": "Longitud de ejes",
     "show_pivot": "Mostrar Punto de Pivote",
     "show_grid": "Mostrar Cuadrícula",
     "grid_opacity": "Opacidad de la Cuadrícula",

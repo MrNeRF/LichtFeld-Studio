@@ -1061,7 +1061,7 @@
     "console": "コンソール",
     "color": "色",
     "show_coord_axes": "座標軸を表示",
-    "axes_size": "座標軸の長さ",
+    "axes_size": "軸の長さ",
     "show_pivot": "ピボットポイントを表示",
     "show_grid": "グリッドを表示",
     "grid_opacity": "グリッドの透明度",

@@ -1061,7 +1061,7 @@
     "console": "Console",
     "color": "Colore",
     "show_coord_axes": "Mostra Assi Coordinati",
-    "axes_size": "Lunghezza degli assi di coordinate",
+    "axes_size": "Lunghezza assi",
     "show_pivot": "Mostra Punto Pivot",
     "show_grid": "Mostra Griglia",
     "grid_opacity": "Opacità Griglia",

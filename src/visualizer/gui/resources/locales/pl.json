@@ -1061,7 +1061,7 @@
     "console": "Konsola",
     "color": "Kolor",
     "show_coord_axes": "Pokaż Osie Współrzędnych",
-    "axes_size": "Długość osi współrzędnych",
+    "axes_size": "Długość osi",
     "show_pivot": "Pokaż Punkt Obrotu",
     "show_grid": "Pokaż Siatkę",
     "grid_opacity": "Przezroczystość Siatki",

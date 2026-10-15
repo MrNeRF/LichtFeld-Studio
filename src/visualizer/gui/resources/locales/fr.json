@@ -1061,7 +1061,7 @@
     "console": "Console",
     "color": "Couleur",
     "show_coord_axes": "Afficher les Axes de Coordonnées",
-    "axes_size": "Longueur des axes de coordonnées",
+    "axes_size": "Longueur des axes",
     "show_pivot": "Afficher le Point de Pivot",
     "show_grid": "Afficher la Grille",
     "grid_opacity": "Opacité de la Grille",

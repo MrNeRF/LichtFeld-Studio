@@ -1057,7 +1057,7 @@
     "console": "Console",
     "color": "Color",
     "show_coord_axes": "Show Coordinate Axes",
-    "axes_size": "Coordinate Axis Length",
+    "axes_size": "Axis Length",
     "show_pivot": "Show Pivot Point",
     "show_grid": "Show Grid",
     "grid_opacity": "Grid Opacity",

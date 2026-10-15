@@ -1061,7 +1061,7 @@
     "console": "控制台",
     "color": "颜色",
     "show_coord_axes": "显示坐标轴",
-    "axes_size": "坐标轴长度",
+    "axes_size": "轴长度",
     "show_pivot": "显示枢轴点",
     "show_grid": "显示网格",
     "grid_opacity": "网格不透明度",

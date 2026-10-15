@@ -380,10 +380,9 @@ body.floating-panel {
 .preferences-project-folder-details > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preferences-project-folder-actions { display: flex; gap: 8dp; padding: 8dp 0; }
 
-/* Long translated project actions must fit narrow Preferences windows. */
+/* Keep intrinsic flex sizing: percentage max-width collapses in this layout. */
 .preferences-apply-defaults {
     box-sizing: border-box;
-    max-width: 100%;
     min-width: 0;
     white-space: normal;
     word-break: break-word;

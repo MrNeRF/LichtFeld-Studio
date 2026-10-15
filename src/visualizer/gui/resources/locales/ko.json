@@ -1061,7 +1061,7 @@
     "console": "콘솔",
     "color": "색상",
     "show_coord_axes": "좌표축 표시",
-    "axes_size": "좌표축 길이",
+    "axes_size": "축 길이",
     "show_pivot": "피벗 포인트 표시",
     "show_grid": "그리드 표시",
     "grid_opacity": "그리드 불투명도",

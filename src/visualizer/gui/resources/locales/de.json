@@ -1061,7 +1061,7 @@
     "console": "Konsole",
     "color": "Farbe",
     "show_coord_axes": "Koordinatenachsen anzeigen",
-    "axes_size": "Länge der Koordinatenachsen",
+    "axes_size": "Achsenlänge",
     "show_pivot": "Drehpunkt anzeigen",
     "show_grid": "Gitter anzeigen",
     "grid_opacity": "Gitter-Opazität",
