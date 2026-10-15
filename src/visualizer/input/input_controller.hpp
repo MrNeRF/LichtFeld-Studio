@@ -178,6 +178,8 @@ namespace lfs::vis {
         void handleFileDrop(const std::vector<std::string>& paths);
         void onWindowFocusLost();
         bool focusSelection();
+        // Restores the default home of the active viewport and moves there.
+        void resetHome();
 
     private:
         struct PanelInteractionState {

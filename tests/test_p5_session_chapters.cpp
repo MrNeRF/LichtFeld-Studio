@@ -2795,8 +2795,9 @@ namespace {
             view["tools"]["active_submode_id"] = "future_active";
         });
         EXPECT_EQ(test.viewer->getGuiManager()->gizmo().getSelectionSubMode(), lfs::vis::SelectionSubMode::Centers);
-        ASSERT_EQ(prepared.unsupported_settings.size(), 2u);
-        EXPECT_NE(prepared.unsupported_settings[0].value, prepared.unsupported_settings[1].value);
+        // The active submode belongs to whichever tool was active, so only the selection mode is checked.
+        ASSERT_EQ(prepared.unsupported_settings.size(), 1u);
+        EXPECT_EQ(prepared.unsupported_settings[0].value, "future_selection");
     }
 
     TEST(P5SessionChapterTest, DeprecatedScenePanelTabIsIgnoredAndNoLongerWritten) {
@@ -2810,6 +2811,32 @@ namespace {
         auto captured = require_result(captureGuiSession(*test.viewer, ProjectSessionChapters{}, test.bookmarks));
         const auto gui = json_root(captured.gui_layout.dom());
         EXPECT_FALSE(gui["layouts"][0]["areas"][0]["spaces"][1]["opaque_payload"]["active_tabs"].contains("scene_panel"));
+    }
+
+    // Fails if a submode this version saves, from any tool or none, reads back as a newer-version setting.
+    TEST(P5SessionChapterTest, SavedToolSubmodesAreNotReportedAsNewerSettings) {
+        UnknownSessionValueFixture test;
+        for (const char* value : {"", "local", "x", "plugin.paint"}) {
+            auto prepared = test.restore(std::string("submode_") + value, [&](Json& view, Json&, Json&) {
+                view["tools"]["active_submode_id"] = value;
+            });
+            EXPECT_TRUE(prepared.unsupported_settings.empty()) << value;
+        }
+    }
+
+    // Fails if a plugin's tool or tab, missing only because the plugin is not loaded,
+    // reads back as a newer-version setting.
+    TEST(P5SessionChapterTest, ItemsFromUnloadedPluginsAreNotReportedAsNewerSettings) {
+        UnknownSessionValueFixture test;
+        const auto restore = [&](const char* name, const char* tool, const char* tab) {
+            return test.restore(name, [&](Json& view, Json& gui, Json&) {
+                view["tools"]["active_tool_id"] = tool;
+                gui["layouts"][0]["areas"][0]["spaces"][1]["opaque_payload"]["active_tabs"]["main_panel"] = tab;
+            });
+        };
+        EXPECT_TRUE(restore("plugin", "camera_selector.pick", "lfs_plugins.camera_selector.Panel")
+                        .unsupported_settings.empty());
+        EXPECT_EQ(restore("builtin", "builtin.future_tool", "lfs.future_panel").unsupported_settings.size(), 2u);
     }
 
     TEST(P5SessionChapterTest, UnknownValuesSurviveCaptureAndResave) {

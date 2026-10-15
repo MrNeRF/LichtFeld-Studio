@@ -140,8 +140,8 @@ namespace lfs::rendering::pcraster {
                 const float dy = view_y / len;
                 const float dz = view_z / len;
                 const auto uv = envmath::equirectUvForDirection({dx, dy, dz});
-                pixel_x = uv.u * static_cast<float>(params.width - 1);
-                pixel_y = uv.v * static_cast<float>(params.height - 1);
+                pixel_x = uv.u * static_cast<float>(params.camera_width - 1) - static_cast<float>(params.origin_x);
+                pixel_y = uv.v * static_cast<float>(params.camera_height - 1) - static_cast<float>(params.origin_y);
                 if (!isfinite(pixel_x) || !isfinite(pixel_y) ||
                     pixel_x < 0.0f || pixel_x >= static_cast<float>(params.width) ||
                     pixel_y < 0.0f || pixel_y >= static_cast<float>(params.height)) {
@@ -166,8 +166,10 @@ namespace lfs::rendering::pcraster {
                     ndc_z < 0.0f || ndc_z > 1.0f) {
                     return;
                 }
-                pixel_x = (ndc_x * 0.5f + 0.5f) * static_cast<float>(params.width - 1);
-                pixel_y = (0.5f - ndc_y * 0.5f) * static_cast<float>(params.height - 1);
+                pixel_x = (ndc_x * 0.5f + 0.5f) * static_cast<float>(params.camera_width - 1) -
+                          static_cast<float>(params.origin_x);
+                pixel_y = (0.5f - ndc_y * 0.5f) * static_cast<float>(params.camera_height - 1) -
+                          static_cast<float>(params.origin_y);
                 depth = params.orthographic ? -view_z : fmaxf(-view_z, 0.0f);
                 if (depth <= 0.0f && !params.orthographic) {
                     return;
@@ -178,7 +180,7 @@ namespace lfs::rendering::pcraster {
             int radius = 1;
             if (params.orthographic) {
                 const float pixels_per_world =
-                    static_cast<float>(params.height) / fmaxf(params.ortho_scale, 1e-5f);
+                    static_cast<float>(params.camera_height) / fmaxf(params.ortho_scale, 1e-5f);
                 radius = max(1, static_cast<int>(ceilf(voxel * pixels_per_world * 0.5f)));
             } else {
                 radius = max(1, static_cast<int>(ceilf(voxel * params.focal_y / fmaxf(depth, 1e-4f))));
@@ -261,7 +263,12 @@ namespace lfs::rendering::pcraster {
 
     } // namespace
 
-    cudaError_t launchPointCloudRaster(const LaunchParams& params) {
+    cudaError_t launchPointCloudRaster(const LaunchParams& request) {
+        LaunchParams params = request;
+        if (params.camera_width <= 0 || params.camera_height <= 0) {
+            params.camera_width = params.width;
+            params.camera_height = params.height;
+        }
         if (params.width <= 0 || params.height <= 0 || params.n_points == 0 ||
             (params.channels != 3 && params.channels != 4) ||
             !params.image || !params.depth) {

@@ -534,8 +534,9 @@ namespace lfs::rendering {
             }
 
             const glm::mat4 view = request.frame_view.getViewMatrix();
+            const glm::ivec2 camera_size = request.frame_view.cameraSize();
             const glm::mat4 projection = createProjectionMatrix(
-                request.frame_view.size,
+                camera_size,
                 focalLengthToVFov(request.frame_view.focal_length_mm),
                 request.frame_view.orthographic,
                 request.frame_view.ortho_scale,
@@ -592,13 +593,17 @@ namespace lfs::rendering {
             std::copy_n(glm::value_ptr(view_proj), 16, params.view_proj);
             params.width = width;
             params.height = height;
+            params.camera_width = camera_size.x;
+            params.camera_height = camera_size.y;
+            params.origin_x = request.frame_view.subregion_origin.x;
+            params.origin_y = request.frame_view.subregion_origin.y;
             params.channels = channels;
             params.equirectangular = request.render.equirectangular;
             params.orthographic = request.frame_view.orthographic;
             params.ortho_scale = request.frame_view.ortho_scale;
             params.focal_y = lfs::core::fov2focal(
                 focalLengthToVFovRad(request.frame_view.focal_length_mm),
-                request.frame_view.size.y);
+                camera_size.y);
             params.voxel_size = request.render.voxel_size;
             params.scaling_modifier = request.render.scaling_modifier;
             params.far_plane = request.frame_view.far_plane;

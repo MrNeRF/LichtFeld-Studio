@@ -318,6 +318,11 @@ namespace fast_lfs::rasterization {
             const size_t aligned = align_allocation_size(size);
             LFS_ASSERT_MSG(aligned <= cursor_, "FastGS retained prefix exceeds the phase high-water");
             if (size > 0 && source != base_) {
+                const auto source_address = reinterpret_cast<std::uintptr_t>(source);
+                const auto destination_address = reinterpret_cast<std::uintptr_t>(base_);
+                LFS_ASSERT_MSG(source_address >= destination_address &&
+                                   source_address - destination_address >= size,
+                               "FastGS retained prefix overlaps its source");
                 LFS_CUDA_CHECK_MSG(
                     cudaMemcpyAsync(base_, source, size, cudaMemcpyDeviceToDevice, stream_),
                     "cudaMemcpyAsync(FastGS retained sorted indices)");

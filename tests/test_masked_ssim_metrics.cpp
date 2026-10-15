@@ -141,6 +141,35 @@ TEST_F(MaskedSSIMMetricTest, UnmaskedAndAllSupportedScoresRetainTheirValues) {
     }
 }
 
+TEST_F(MaskedSSIMMetricTest, AllSupportedMapsMatchUnmaskedMaps) {
+    const auto data = generated_image();
+    auto shifted = data;
+    for (auto& value : shifted)
+        value = std::min(1.0f, value + 0.07f);
+    const auto pred = image(data);
+    for (const auto target_type : {DataType::Float32, DataType::UInt8}) {
+        SCOPED_TRACE(static_cast<int>(target_type));
+        const auto target = target_type == DataType::UInt8
+                                ? (image(shifted) * 255.0f).to(target_type)
+                                : image(shifted);
+        const auto reference = lfs::training::kernels::ssim_forward_map(pred, target, false)
+                                   .ssim_map.to(Device::CPU)
+                                   .contiguous();
+        for (const auto mask_type : {DataType::Float32, DataType::UInt8, DataType::Bool}) {
+            SCOPED_TRACE(static_cast<int>(mask_type));
+            const auto mask = Tensor::ones({H, W}, Device::CUDA).to(mask_type);
+            const auto actual = lfs::training::kernels::masked_ssim_map_forward(pred, target, mask)
+                                    .to(Device::CPU)
+                                    .contiguous();
+            ASSERT_EQ(actual.shape(), reference.shape());
+            for (size_t i = 0; i < actual.numel(); ++i)
+                ASSERT_EQ(std::bit_cast<uint32_t>(actual.ptr<float>()[i]),
+                          std::bit_cast<uint32_t>(reference.ptr<float>()[i]))
+                    << "element=" << i;
+        }
+    }
+}
+
 TEST_F(MaskedSSIMMetricTest, ByteMaskMagnitudeDoesNotChangeBorderWindows) {
     lfs::training::SSIM ssim;
     for (const auto [height, width] : {std::pair{1, 1}, std::pair{7, 9}, std::pair{H, W}}) {

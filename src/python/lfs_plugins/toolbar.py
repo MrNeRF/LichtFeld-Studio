@@ -1271,6 +1271,9 @@ class _UtilityToolbarController:
                 tooltip_text="Focus Selection",
                 action_id=self._PRIMARY_ACTIONS["focus_selection"],
             ),
+            _button_record("util-reset-home", "reset_home", "", _icon_src("home-reset"),
+                           tooltip_key="toolbar.reset_home",
+                           tooltip_text="Reset Home"),
         ]
 
         utility_extra_buttons = [
@@ -1344,6 +1347,9 @@ class _UtilityToolbarController:
             return
         if action == "focus_selection":
             lf.focus_selection()
+            return
+        if action == "reset_home":
+            lf.reset_home()
             return
         if action == "toggle_histogram":
             if not histogram_mode_available(lf.ui.context()):

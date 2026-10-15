@@ -28,6 +28,7 @@
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/selection_tool.hpp"
@@ -85,6 +86,29 @@ namespace lfs::vis {
                 const glm::vec3 world_pt = glm::vec3(world_xform * glm::vec4(corner, 1.0f));
                 world_min = glm::min(world_min, world_pt);
                 world_max = glm::max(world_max, world_pt);
+            }
+        }
+
+        [[nodiscard]] bool isGeometryContainer(const core::SceneNode& node) {
+            return node.type == core::NodeType::GROUP || node.type == core::NodeType::PLY_SEQUENCE ||
+                   node.type == core::NodeType::DATASET ||
+                   node.type == core::NodeType::CAMERA_GROUP ||
+                   node.type == core::NodeType::IMAGE_GROUP;
+        }
+
+        // Like expandNodeWorldBounds, but hidden nodes and hidden children of a
+        // container add nothing: framing follows what the viewport shows.
+        void expandVisibleNodeWorldBounds(const core::Scene& scene, const core::SceneNode& node,
+                                          glm::vec3& world_min, glm::vec3& world_max) {
+            if (!scene.isNodeEffectivelyVisible(node.id))
+                return;
+            if (!isGeometryContainer(node)) {
+                expandNodeWorldBounds(scene, node, world_min, world_max);
+                return;
+            }
+            for (const auto child_id : node.children) {
+                if (const auto* const child = scene.getNodeById(child_id))
+                    expandVisibleNodeWorldBounds(scene, *child, world_min, world_max);
             }
         }
 
@@ -1990,7 +2014,7 @@ namespace lfs::vis {
                     rendering && (rendering->isGTComparisonActive() || rendering->hasGTComparisonAvailable())) {
                     cmd::ToggleGTComparison{}.emit();
                 } else if (const auto* const scene_manager = services().sceneOrNull();
-                           scene_manager && scene_manager->getScene().getVisibleSplatNodeSlots().size() >= 2) {
+                           scene_manager && plyComparisonNodes(scene_manager->getScene()).size() >= 2) {
                     cmd::ToggleSplitView{}.emit();
                 }
                 return;
@@ -3020,9 +3044,11 @@ namespace lfs::vis {
         } else {
             for (const auto& name : selected) {
                 if (const auto* node = scene.getNode(name))
-                    expandNodeWorldBounds(scene, *node, total_min, total_max);
+                    expandVisibleNodeWorldBounds(scene, *node, total_min, total_max);
             }
             has_bounds = total_min.x <= total_max.x;
+            if (!has_bounds)
+                has_bounds = computeWholeSceneBounds(total_min, total_max);
         }
 
         if (has_bounds) {
@@ -3033,8 +3059,8 @@ namespace lfs::vis {
         return false;
     }
 
-    // Whole-scene world AABB, skipping container nodes that carry no geometry.
-    // use_percentile yields the trimmed (outlier-excluding) box.
+    // World AABB of the visible scene, skipping container nodes that carry no
+    // geometry. use_percentile yields the trimmed (outlier-excluding) box.
     bool InputController::computeWholeSceneBounds(glm::vec3& out_min, glm::vec3& out_max,
                                                   const bool use_percentile) const {
         if (!tool_context_)
@@ -3048,10 +3074,7 @@ namespace lfs::vis {
         out_max = glm::vec3(std::numeric_limits<float>::lowest());
 
         for (const auto* node : scene.getNodes()) {
-            if (node->type == core::NodeType::GROUP || node->type == core::NodeType::PLY_SEQUENCE ||
-                node->type == core::NodeType::DATASET ||
-                node->type == core::NodeType::CAMERA_GROUP ||
-                node->type == core::NodeType::IMAGE_GROUP)
+            if (isGeometryContainer(*node) || !scene.isNodeEffectivelyVisible(node->id))
                 continue;
             expandNodeWorldBounds(scene, *node, out_min, out_max, use_percentile);
         }
@@ -3103,6 +3126,16 @@ namespace lfs::vis {
 
     bool InputController::focusSelection() {
         return handleFocusSelection(activeKeyboardViewport());
+    }
+
+    void InputController::resetHome() {
+        auto& target = activeKeyboardViewport();
+        target.camera.resetHomePosition();
+        resetViewportToHome(target, viewport_);
+        publishCameraMove(&target);
+        if (auto* const viewer = lfs::python::get_visualizer()) {
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+        }
     }
 
     // Helpers

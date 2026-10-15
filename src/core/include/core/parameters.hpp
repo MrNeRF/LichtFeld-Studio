@@ -76,6 +76,27 @@ namespace lfs::core {
             Float,
         };
 
+        // Pixel sets scored with an evaluation mask: the mask, every valid pixel, the valid pixels outside the mask.
+        enum class EvalPixelSet : uint8_t {
+            Mask,
+            Unmasked,
+            Inverted,
+        };
+        inline constexpr std::array kEvalPixelSets{EvalPixelSet::Mask, EvalPixelSet::Unmasked, EvalPixelSet::Inverted};
+
+        // The set's name in eval_mask_report.
+        [[nodiscard]] inline constexpr std::string_view eval_pixel_set_name(const EvalPixelSet set) noexcept {
+            switch (set) {
+            case EvalPixelSet::Mask:
+                return "mask";
+            case EvalPixelSet::Unmasked:
+                return "unmasked";
+            case EvalPixelSet::Inverted:
+                return "inverted";
+            }
+            return "mask";
+        }
+
         [[nodiscard]] inline constexpr std::string_view eval_bit_depth_name(const EvalBitDepth depth) noexcept {
             switch (depth) {
             case EvalBitDepth::Auto:
@@ -263,9 +284,7 @@ namespace lfs::core {
             EvalSpace eval_space = EvalSpace::Distorted;       // Reference image space used for evaluation
             EvalBitDepth eval_bit_depth = EvalBitDepth::Auto;  // Grid the render is quantized to for evaluation
             std::string eval_mask = "";                        // Mesh path, bbox:..., cropbox, masks:<folder>, depth:near,far, points:radius,close or points:<file>; empty disables
-            bool eval_mask_invert = false;                     // Score the pixels outside the evaluation mask instead
-            bool eval_mask_report_unmasked = false;            // With a mask, also score every valid pixel
-            bool eval_mask_report_inverted = false;            // With a mask, also score the valid pixels outside it
+            std::string eval_mask_report = "";                 // Pixel sets scored with the mask, comma list of mask, unmasked and inverted; the first is the headline. Empty: the mask
             float eval_mask_opacity = 0.85f;                   // Rendered opacity a pixel needs to count as covered by a splat mask
             bool enable_save_eval_images = true;               // Save during evaluation images
             bool headless = false;                             // Disable visualization during training
@@ -424,6 +443,8 @@ namespace lfs::core {
         [[nodiscard]] LFS_CORE_API std::optional<std::string_view> eval_mask_splat_file(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::optional<std::array<float, 6>> parse_eval_mask_box(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::string normalize_eval_mask(std::string_view spec);
+        // The sets of an eval_mask_report list in order, the first being the headline set; empty for an empty list.
+        [[nodiscard]] LFS_CORE_API lfs::Result<std::vector<EvalPixelSet>> parse_eval_pixel_sets(std::string_view list);
 
         struct LFS_CORE_API LoadingParams {
             bool use_cpu_memory = true;

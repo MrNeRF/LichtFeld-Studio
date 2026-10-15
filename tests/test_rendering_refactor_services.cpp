@@ -1911,6 +1911,33 @@ namespace lfs::vis {
         EXPECT_FALSE(scene.hasPreparedCombinedModel());
     }
 
+    TEST_F(SceneManagerRenderStateTest, PlyComparisonPairsVisibleMeshesAfterSplats) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        auto mesh = std::make_shared<lfs::core::MeshData>();
+        mesh->vertices = lfs::core::Tensor::from_vector(
+            std::vector<float>{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f}, {3, 3}, lfs::core::Device::CPU);
+        mesh->indices = lfs::core::Tensor::from_vector(
+            std::vector<int32_t>{0, 1, 2}, {1, 3}, lfs::core::Device::CPU);
+        const auto mesh_id = scene.addMesh("mesh", mesh);
+        scene.setNodeVisibility(scene.addMesh("hidden", mesh), false);
+        const auto splat_id = scene.addSplat("splat", makeTestSplat(0.0f));
+
+        const auto nodes = plyComparisonNodes(scene);
+        ASSERT_EQ(nodes.size(), 2u);
+        EXPECT_EQ(nodes[0].node->id, splat_id);
+        EXPECT_TRUE(nodes[0].splat_slot.has_value());
+        EXPECT_EQ(nodes[1].node->id, mesh_id);
+        EXPECT_FALSE(nodes[1].splat_slot.has_value());
+
+        const auto right = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Right);
+        ASSERT_NE(right.node, nullptr);
+        EXPECT_EQ(right.node->id, mesh_id);
+        EXPECT_EQ(right.model, nullptr);
+        EXPECT_EQ(right.visible_index, -1);
+    }
+
     TEST_F(SceneManagerRenderStateTest, PlyComparisonConsolidatedUsesPreparedCombinedWithoutRebuild) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
