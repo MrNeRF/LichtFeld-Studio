@@ -68,29 +68,30 @@
     box-sizing: border-box;
 }
 
-.histogram-stepper {
+.histogram-bin-scrub {
     display: flex;
     align-items: center;
+    width: 64dp;
     height: 24dp;
 }
 
-.histogram-bin-input[type="text"] {
-    flex: 0 0 36dp;
-    width: 36dp;
+.histogram-bin-scrub .setting-slider,
+.histogram-bin-scrub .scrub-field {
+    width: 64dp;
+    min-width: 64dp;
     height: 24dp;
+    margin: 0;
+}
+
+.histogram-bin-scrub .scrub-field-display,
+.histogram-bin-scrub .scrub-field-input {
     text-align: center;
-    border-left-width: 0;
-    border-right-width: 0;
+    line-height: 22dp;
 }
 
-.histogram-step-button {
-    width: 22dp;
-    height: 24dp;
+.histogram-bin-scrub .scrub-field-input[type="text"] {
+    height: 22dp;
     padding: 0;
-    font-size: 14dp;
-    text-align: center;
-    border-width: 1dp;
-    box-sizing: border-box;
 }
 
 .histogram-log-control input[type="checkbox"] {
@@ -208,6 +209,9 @@
     width: 88dp;
     min-width: 72dp;
     height: 24dp;
+    padding: 0 4dp;
+    line-height: 22dp;
+    text-align: center;
 }
 
 .range-separator,

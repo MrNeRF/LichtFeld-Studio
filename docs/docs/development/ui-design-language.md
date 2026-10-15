@@ -283,7 +283,9 @@ the content region. Preserve that hierarchy even if the toolbar is simplified
 for a narrower panel.
 
 The Histogram is a horizontal bottom panel with a compact wrapping toolbar,
-explicit numeric bin counts, and a labeled log-scale checkbox. It uses the same
+the shared Rendering scrub control for bin counts, and a labeled log-scale
+checkbox. Range and statistic values use compact scientific notation; numeric
+range inputs and bin scrub text are centered. It uses the same
 small close glyph as the Project Manager. Keep field descriptions in tooltips,
 editable bounds beside the chart, and summary statistics in a flat strip below
 it. Let the chart shrink with the panel height rather than adding nested

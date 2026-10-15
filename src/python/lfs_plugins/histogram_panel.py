@@ -18,6 +18,7 @@ from .histogram_support import METRICS, METRIC_BY_ID, histogram_mode_available, 
 from . import rml_widgets as w
 from .types import Panel
 from .panels import panel_class
+from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["HistogramPanel"]
@@ -67,7 +68,6 @@ class HistogramPanel(Panel):
         self._compare_metric_id = ""
         self._log_scale_enabled = False
         self._histogram_bin_count = DEFAULT_HISTOGRAM_BIN_COUNT
-        self._bin_input_text: dict[str, str] = {}
         self._compare_x_bin_count = DEFAULT_COMPARE_X_BIN_COUNT
         self._compare_y_bin_count = DEFAULT_COMPARE_Y_BIN_COUNT
         self._scene_generation = -1
@@ -150,6 +150,15 @@ class HistogramPanel(Panel):
         self._compare_y_sorted_sample: tuple[int, list[float]] | None = None
         self._static_bin_records_value: list[dict[str, object]] | None = None
         self._finish_histogram_init()
+        self._scrub_fields = ScrubFieldController(
+            {
+                "histogram_bin_count": ScrubFieldSpec(MIN_HISTOGRAM_BIN_COUNT, MAX_HISTOGRAM_BIN_COUNT, 1, "%d", int),
+                "compare_x_bin_count": ScrubFieldSpec(MIN_COMPARE_BIN_COUNT, MAX_COMPARE_BIN_COUNT, 1, "%d", int),
+                "compare_y_bin_count": ScrubFieldSpec(MIN_COMPARE_BIN_COUNT, MAX_COMPARE_BIN_COUNT, 1, "%d", int),
+            },
+            self._get_bin_scrub_value,
+            self._set_bin_scrub_value,
+        )
 
     def capture_chrome(self):
         return {
@@ -174,7 +183,6 @@ class HistogramPanel(Panel):
         self._compare_y_bin_count = DEFAULT_COMPARE_Y_BIN_COUNT
         self._reset_custom_range()
         self._reset_compare_y_custom_range()
-        self._bin_input_text.clear()
         if isinstance(payload, dict):
             metric = payload.get("metric_id")
             if isinstance(metric, str) and metric in METRIC_BY_ID:
@@ -360,14 +368,6 @@ class HistogramPanel(Panel):
         model.bind("histogram_bin_count", lambda: self._histogram_bin_count, self._set_histogram_bin_count)
         model.bind("compare_x_bin_count", lambda: self._compare_x_bin_count, self._set_compare_x_bin_count)
         model.bind("compare_y_bin_count", lambda: self._compare_y_bin_count, self._set_compare_y_bin_count)
-        for axis, attr in (("histogram", "_histogram_bin_count"),
-                           ("x", "_compare_x_bin_count"), ("y", "_compare_y_bin_count")):
-            model.bind(f"{axis}_bins_str",
-                       lambda axis=axis, attr=attr: self._bin_input_text.get(axis, str(getattr(self, attr))),
-                       lambda value, axis=axis: self._bin_input_text.__setitem__(axis, str(value)))
-        model.bind_event("commit_bins", self._on_commit_bins)
-        model.bind_event("submit_bins", self._on_submit_bins)
-        model.bind_event("step_bins", self._on_step_bins)
         model.bind_func("has_marked_range", lambda: self._marked_count > 0)
         model.bind_func("range_inputs_ready", self._range_inputs_ready)
         model.bind_func("compare_y_range_inputs_ready", self._compare_y_range_inputs_ready)
@@ -401,6 +401,7 @@ class HistogramPanel(Panel):
         self._chart_el = doc.get_element_by_id("histogram-bars")
         self._compare_chart_el = doc.get_element_by_id("compare-cells")
         self._sync_panel_space_state()
+        self._scrub_fields.mount(doc)
         if self._chart_el:
             self._chart_el.add_event_listener("mousedown", self._on_chart_mousedown)
             self._chart_el.add_event_listener("mousescroll", self._on_chart_mousescroll)
@@ -435,6 +436,7 @@ class HistogramPanel(Panel):
     def on_update(self, doc):
         del doc
 
+        scrubs_changed = self._scrub_fields.sync_all()
         space_changed = self._sync_panel_space_state()
         scene_generation = lf.get_scene_generation()
         data_generation = self._scene_data_generation_value()
@@ -459,7 +461,7 @@ class HistogramPanel(Panel):
                 not data_changed and
                 not selection_changed and
                 not space_changed):
-            return False
+            return scrubs_changed
 
         if (self._dragging_mark or self._dragging_compare_mark) and not (data_changed or nodes_changed):
             self._scene_generation = scene_generation
@@ -504,6 +506,7 @@ class HistogramPanel(Panel):
             self._cancel_histogram_compute()
 
     def on_unmount(self, doc):
+        self._scrub_fields.unmount()
         self._cancel_histogram_compute()
         self._unsubscribe_reactive_state()
         self._clear_owned_scene_selection()
@@ -680,12 +683,7 @@ class HistogramPanel(Panel):
     def _format_range_input(value: float) -> str:
         if not math.isfinite(value):
             return ""
-        magnitude = abs(value)
-        if magnitude == 0.0:
-            return "0"
-        if magnitude < 0.01 or magnitude >= 1e6:
-            return f"{value:.4g}"
-        return f"{value:.4f}".rstrip("0").rstrip(".") or "0"
+        return HistogramPanel._format_scientific(value, precision=3)
 
     def _refresh_after_range_change(self):
         # Drop any active selection — bin indices change with the range.
@@ -1143,43 +1141,11 @@ class HistogramPanel(Panel):
         self._reset_compare_y_custom_range()
         self._refresh_after_range_change()
 
-    def _bin_control(self, axis):
-        if axis == "histogram":
-            return (self._histogram_bin_count, MIN_HISTOGRAM_BIN_COUNT,
-                    MAX_HISTOGRAM_BIN_COUNT, self._set_histogram_bin_count)
-        if axis == "x":
-            return (self._compare_x_bin_count, MIN_COMPARE_BIN_COUNT,
-                    MAX_COMPARE_BIN_COUNT, self._set_compare_x_bin_count)
-        if axis == "y":
-            return (self._compare_y_bin_count, MIN_COMPARE_BIN_COUNT,
-                    MAX_COMPARE_BIN_COUNT, self._set_compare_y_bin_count)
-        return None
+    def _get_bin_scrub_value(self, prop):
+        return getattr(self, f"_{prop}")
 
-    def _commit_bin_input(self, axis, delta=0):
-        control = self._bin_control(axis)
-        if control is None:
-            return
-        current, minimum, maximum, setter = control
-        text = self._bin_input_text.pop(axis, str(current))
-        try:
-            value = int(text.strip())
-        except (ValueError, TypeError):
-            value = current
-        setter(max(minimum, min(maximum, value + delta)))
-        if self._handle:
-            self._handle.dirty_all()
-
-    def _on_commit_bins(self, _handle, _event, args):
-        if args:
-            self._commit_bin_input(str(args[0]))
-
-    def _on_submit_bins(self, handle, event, args):
-        if event.get_bool_parameter("linebreak", False):
-            self._on_commit_bins(handle, event, args)
-
-    def _on_step_bins(self, _handle, _event, args):
-        if len(args) == 2:
-            self._commit_bin_input(str(args[0]), int(args[1]))
+    def _set_bin_scrub_value(self, prop, value):
+        getattr(self, f"_set_{prop}")(value)
 
     def _set_histogram_bin_count(self, value):
         bin_count = self._clamp_int(value, MIN_HISTOGRAM_BIN_COUNT, MAX_HISTOGRAM_BIN_COUNT)
@@ -4147,19 +4113,17 @@ class HistogramPanel(Panel):
         return mask
 
     @staticmethod
-    def _format_value(value: float) -> str:
-        abs_value = abs(value)
-        if abs_value == 0.0:
+    def _format_scientific(value: float, precision: int = 2) -> str:
+        if value == 0.0:
             return "0"
-        if abs_value >= 10000.0 or abs_value < 1e-4:
-            return f"{value:.2e}"
-        if abs_value >= 100.0:
-            return f"{value:.1f}"
-        if abs_value >= 10.0:
-            return f"{value:.2f}"
-        if abs_value >= 1.0:
-            return f"{value:.3f}".rstrip("0").rstrip(".")
-        return f"{value:.4f}".rstrip("0").rstrip(".")
+        mantissa, exponent = f"{value:.{precision}e}".split("e")
+        return f"{mantissa.rstrip('0').rstrip('.')}e{int(exponent)}"
+
+    @staticmethod
+    def _format_value(value: float) -> str:
+        if not math.isfinite(value):
+            return "--"
+        return HistogramPanel._format_scientific(value)
 
     def _format_range_text(self, range_min: float, range_max: float) -> str:
         return _trf(

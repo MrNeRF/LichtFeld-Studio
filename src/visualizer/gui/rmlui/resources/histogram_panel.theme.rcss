@@ -47,20 +47,32 @@
     background-color: @{panel.histogram_selection_fill};
 }
 
-.histogram-step-button,
 #histogram-close {
     background-color: @{surface_bright};
     border-color: @{border};
     color: @{text};
 }
 
-.histogram-step-button:hover,
 #histogram-close:hover {
     background-color: @{lighten(surface_bright,0.06)};
 }
 
-.histogram-step-button:active,
 #histogram-close:active {
     background-color: @{alpha(primary,0.32)};
     border-color: @{primary};
+}
+
+.histogram-bin-scrub .scrub-field {
+    decorator: none;
+    background-color: @{surface_bright};
+}
+
+.histogram-bin-scrub .scrub-field-fill {
+    decorator: none;
+    background-color: @{alpha(primary,0.4)};
+}
+
+.histogram-bin-scrub .scrub-field:hover .scrub-field-fill,
+.histogram-bin-scrub .scrub-field.is-dragging .scrub-field-fill {
+    background-color: @{alpha(primary,0.55)};
 }
