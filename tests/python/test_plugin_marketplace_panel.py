@@ -995,6 +995,41 @@ def test_plugin_marketplace_unload_failure_sets_dismissable_error(plugin_marketp
     assert op_state.finished_at > 0.0
 
 
+@pytest.mark.parametrize(
+    "detail",
+    ["uv executable unavailable"],
+)
+def test_plugin_marketplace_missing_uv_error_uses_localized_message(
+    plugin_marketplace_module,
+    monkeypatch,
+    detail,
+):
+    module, state = plugin_marketplace_module
+    state.translations["plugin_marketplace.uv_not_found"] = "Localized uv missing"
+    panel = module.PluginMarketplacePanel()
+    monkeypatch.setattr(panel, "_schedule_model_update", lambda: None)
+    monkeypatch.setattr(panel, "_schedule_card_dismiss", lambda *_args: None)
+    monkeypatch.setattr(panel, "_invalidate_discover_cache", lambda: None)
+
+    class InlineThread:
+        def __init__(self, target, daemon):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(module.threading, "Thread", InlineThread)
+
+    from lfs_plugins.installer import MissingUvError
+
+    def fail_without_uv(_on_progress, _should_cancel):
+        raise MissingUvError(detail)
+
+    panel._run_async("sample-card", fail_without_uv, "Installed", "Install failed")
+
+    assert panel._card_ops["sample-card"].message == "Localized uv missing"
+
+
 def test_plugin_marketplace_error_state_auto_dismisses_and_collapses_row(
     plugin_marketplace_module,
     monkeypatch,

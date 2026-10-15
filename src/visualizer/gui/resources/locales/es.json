@@ -2282,6 +2282,7 @@
     "cancel": "Cancelar",
     "cancelling": "Cancelando...",
     "installation_cancelled": "Instalación cancelada",
+    "uv_not_found": "No se encontró uv. Instálalo o añádelo a PATH y vuelve a intentarlo.",
     "local_install": "Instalación local",
     "install_as_git_checkout": "Instalar como checkout de git",
     "confirm_uninstall_message": "¿Seguro que quieres desinstalar \"{name}\"?",

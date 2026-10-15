@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "package_manager.hpp"
+#include "uv_path_resolver.hpp"
 #include "windows_process_utils.hpp"
 
 #include <core/cuda_version.hpp>
@@ -13,9 +14,12 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <regex>
 #include <sstream>
+#include <string_view>
+#include <system_error>
 #include <vector>
 
 #ifdef _WIN32
@@ -252,18 +256,17 @@ namespace lfs::python {
         searched = true;
 
         const auto exe_dir = get_executable_dir();
-        bool bundled = false;
-
-        if (const auto p = exe_dir / "bin" / UV_BINARY; std::filesystem::exists(p)) {
-            cached = p;
-            bundled = true;
-        } else if (const auto p = exe_dir / UV_BINARY; std::filesystem::exists(p)) {
-            cached = p;
-            bundled = true;
-        }
+        const std::vector<std::filesystem::path> bundled_candidates = {exe_dir / "bin" / UV_BINARY,
+                                                                       exe_dir / UV_BINARY};
+        const char* path_value = std::getenv("PATH");
+        cached = detail::resolve_uv_path(bundled_candidates, path_value ? path_value : "");
+        const bool bundled = std::find(bundled_candidates.begin(), bundled_candidates.end(), cached) !=
+                             bundled_candidates.end();
+        if (!cached.empty() && !bundled)
+            LOG_INFO("Using uv from PATH: {}", lfs::core::path_to_utf8(cached));
 
         if (cached.empty())
-            LOG_WARN("Bundled uv not found");
+            LOG_WARN("uv not found beside executable or on PATH");
         else if (bundled)
             LOG_INFO("Using bundled uv: {}", lfs::core::path_to_utf8(cached));
 

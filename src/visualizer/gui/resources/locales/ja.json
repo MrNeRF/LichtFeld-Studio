@@ -2282,6 +2282,7 @@
     "cancel": "キャンセル",
     "cancelling": "キャンセル中...",
     "installation_cancelled": "インストールをキャンセルしました",
+    "uv_not_found": "uv が見つかりません。uv をインストールするか PATH に追加してから、もう一度お試しください。",
     "local_install": "ローカルインストール",
     "install_as_git_checkout": "Git チェックアウトとしてインストール",
     "confirm_uninstall_message": "「{name}」を本当にアンインストールしますか？",

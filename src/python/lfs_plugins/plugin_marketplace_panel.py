@@ -1760,12 +1760,16 @@ class PluginMarketplacePanel(Panel):
                 self._schedule_model_update()
             except Exception as e:
                 from .errors import PluginLoadCancelled
+                from .installer import MissingUvError
 
                 detail = str(e).strip()
                 with self._lock:
                     if isinstance(e, PluginLoadCancelled):
                         state.message = lf.ui.tr("plugin_marketplace.installation_cancelled")
                         state.phase = CardOpPhase.CANCELLED
+                    elif isinstance(e, MissingUvError):
+                        state.message = lf.ui.tr("plugin_marketplace.uv_not_found")
+                        state.phase = CardOpPhase.ERROR
                     elif detail:
                         state.message = f"{error_prefix}: {detail}"
                         state.phase = CardOpPhase.ERROR
