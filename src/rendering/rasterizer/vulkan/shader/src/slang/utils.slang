@@ -1169,7 +1169,7 @@ struct Uniforms {
     // 0 = median depth; > 0 = alpha-weighted (expected) depth, far bound = value.
     float expected_far;
     // Explicit padding to keep dist_coeffs 16-byte aligned; mirrors the C++
-    // struct exactly (208 bytes total). shN_address occupies the former
+    // struct exactly (224 bytes total). shN_address occupies the former
     // uniforms_pad1/pad2 (offset 104, 8-byte aligned).
     uint depth_wave;
     uint64_t shN_address;
@@ -1179,6 +1179,11 @@ struct Uniforms {
     uint color_tonemapping;
     uint splat_render_profile;
     float rasterization_scale;
+    // Distance the orthographic eye was moved back; subtracted from every depth output.
+    float depth_offset;
+    uint depth_offset_pad0;
+    uint depth_offset_pad1;
+    uint depth_offset_pad2;
 }
 
 // mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1),

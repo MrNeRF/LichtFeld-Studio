@@ -719,6 +719,21 @@ namespace lfs::vis {
         int current_input_sh_degree_ = -1;
         std::size_t last_vram_report_signature_ = 0;
 
+        struct ModelBounds {
+            const void* means = nullptr;
+            std::size_t count = 0;
+            std::uint64_t deleted_version = 0;
+            bool valid = false;
+            bool has_bounds = false;
+            glm::vec3 min{0.0f};
+            glm::vec3 max{0.0f};
+        };
+        ModelBounds orthographic_bounds_;
+        [[nodiscard]] float orthographicEyeSetback(const lfs::rendering::FrameView& frame_view,
+                                                   const lfs::core::SplatData& splat_data,
+                                                   const lfs::rendering::GaussianSceneState& scene,
+                                                   bool content_changed);
+
         struct SharedScratchArena {
             std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer imported_buffer{};

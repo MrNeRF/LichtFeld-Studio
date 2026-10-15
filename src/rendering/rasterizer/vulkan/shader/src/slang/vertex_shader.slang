@@ -1205,7 +1205,7 @@ void main(
     }
 
     out_xy_vs[out_idx] = splat.xyz_vs.xy;
-    out_depths[out_idx] = splat.xyz_vs.z;
+    out_depths[out_idx] = splat.xyz_vs.z - uniforms.depth_offset;
     out_inv_cov_vs[out_idx] = splat.inv_cov_vs_opac;
     if (uniforms.splat_render_profile == 1u && !spark_rad_opacity_path) {
         splat.rgb = lfsPortalCompactColor(splat.rgb);
