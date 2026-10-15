@@ -3787,18 +3787,6 @@ namespace lfs::vis::gui {
         SDL_ShowCursor();
     }
 
-    std::string GuiManager::scenePanelActiveTab() const {
-        return native_scene_panel_
-                   ? native_scene_panel_->projectActiveTab()
-                   : "scene";
-    }
-
-    void GuiManager::setScenePanelActiveTab(
-        const std::string_view tab) {
-        if (native_scene_panel_)
-            native_scene_panel_->setProjectActiveTab(tab);
-    }
-
     std::unordered_set<int> GuiManager::visibleCameraUids() const {
         return native_scene_panel_ ? native_scene_panel_->visibleCameraUids()
                                    : std::unordered_set<int>{};
@@ -8903,7 +8891,6 @@ namespace lfs::vis::gui {
         registry.apply_panel_payloads({});
         registry.set_panel_enabled("lfs.preferences", true);
         resetSceneTreeChrome();
-        setScenePanelActiveTab("scene");
         setTabStripScroll(0.0f);
 
         applyDefaultWindowStates(window_states_);

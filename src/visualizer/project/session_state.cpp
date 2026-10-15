@@ -2401,9 +2401,8 @@ namespace lfs::vis::project {
              {
                  {"main_panel",
                   layout.active_tab_id},
-                 {"scene_panel",
-                  gui_manager
-                      ->scenePanelActiveTab()},
+                 // Kept for the .licht layout; the scene panel has a single view now.
+                 {"scene_panel", "scene"},
              }},
         };
         if (!panel_payloads.empty())
@@ -3291,14 +3290,6 @@ namespace lfs::vis::project {
                         return panel.id == layout.active_tab_id;
                     }))
                     layout.active_tab_id = main_tabs.empty() ? std::string{} : main_tabs.front().id;
-                if (const auto scene_tab =
-                        scalar<std::string>(
-                            *active_tabs,
-                            "scene_panel")) {
-                    gui_manager
-                        ->setScenePanelActiveTab(
-                            *scene_tab);
-                }
             }
             const auto bottom_tabs = gui::PanelRegistry::instance()
                                          .get_panels_for_space(

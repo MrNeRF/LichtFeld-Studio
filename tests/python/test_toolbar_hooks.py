@@ -421,7 +421,6 @@ def test_shortcut_buttons_declare_actions_without_cached_text(toolbar_module):
     assert 'data-keymap-action="asset_gallery_copy_link"' in projects
     scene = (resources / "scene_tree.rml").read_text(encoding="utf-8")
     assert 'data-keymap-action="toggle_scene_selection_training"' in scene
-    assert 'data-tooltip="common.undo" data-action="undo"' in scene
     assert 'data-keymap-action="toggle_grid"' in (resources / "rendering.rml").read_text(encoding="utf-8")
     assert 'data-keymap-action="toggle_camera_frustums"' in (resources / "rendering.rml").read_text(encoding="utf-8")
     assert 'data-keymap-action="toggle_ui"' in (resources / "menubar.rml").read_text(encoding="utf-8")

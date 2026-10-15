@@ -259,15 +259,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* PLY_SEQUENCE_LABEL = "scene.ply_sequence_label";
         inline constexpr const char* KEYFRAME_NODE_LABEL = "scene.keyframe_node_label";
         inline constexpr const char* SAVE_TO_DISK = "scene.save_to_disk";
-        inline constexpr const char* HISTORY = "scene.history";
         inline constexpr const char* LOGGING = "scene.logging";
-        inline constexpr const char* HISTORY_SHARED = "scene.history_shared";
-        inline constexpr const char* HISTORY_EMPTY = "scene.history_empty";
-        inline constexpr const char* HISTORY_NOTE = "scene.history_note";
-        inline constexpr const char* UNDO_STACK = "scene.undo_stack";
-        inline constexpr const char* REDO_STACK = "scene.redo_stack";
-        inline constexpr const char* NOTHING_RECORDED = "scene.nothing_recorded";
-        inline constexpr const char* NO_ENTRIES_IN_STACK = "scene.no_entries_in_stack";
         inline constexpr const char* LOG_LEVEL = "scene.log_level";
         inline constexpr const char* LOG_TRACE = "scene.log_trace";
         inline constexpr const char* LOG_DEBUG = "scene.log_debug";
@@ -598,7 +590,6 @@ namespace lichtfeld::Strings {
     } // namespace InputSettings
 
     namespace DebugInfo {
-        inline constexpr const char* CLEAR_HISTORY = "debug_info.clear_history";
     } // namespace DebugInfo
 
     namespace TrainingParams {

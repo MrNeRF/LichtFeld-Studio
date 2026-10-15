@@ -886,7 +886,6 @@ def test_scene_tree_delete_key_uses_selection_gated_confirmation_path():
     assert "requestDeleteSceneSelectionIfAvailable" in gui_manager
     assert "requestDeleteSelectionIfAvailable" in scene_panel
     assert "tree_el_->selectedCount() == 0" in scene_panel
-    assert "if (active_tab_ == Tab::Scene)" in scene_panel
     assert "tree_el_->requestDeleteSelection();" in scene_panel
     assert "return true;" in scene_panel.split(
         "bool NativeScenePanel::requestDeleteSelectionIfAvailable()", 1

@@ -1,8 +1,4 @@
-/* Scene tree and history theme overrides. */
-
-.history-summary__label, .history-empty {
-    color: @{text_dim};
-}
+/* Scene tree theme overrides. */
 
 body {
     border-color: @{right_panel.border};
@@ -139,9 +135,10 @@ body {
 }
 
 .scene-tab {
-    color: @{text_dim};
-    background-color: @{panel.tab_inactive_bg};
-    border-color: @{border};
+    color: @{text};
+    background-color: @{panel.tab_active_bg};
+    border-color: @{panel.tab_active_border};
+    border-bottom-color: @{primary};
 }
 
 .selection-action-bar {
@@ -182,20 +179,6 @@ body {
     image-color: @{text_dim};
 }
 
-.scene-tab:hover,
-.scene-tab:focus-visible {
-    color: @{text};
-    border-color: @{panel.tab_hover_border};
-    background-color: @{panel.tab_hover_bg};
-}
-
-.scene-tab.active {
-    color: @{text};
-    background-color: @{panel.tab_active_bg};
-    border-color: @{panel.tab_active_border};
-    border-bottom-color: @{primary};
-}
-
 .scene-chip {
     color: @{text};
     background-color: @{surface_bright};
@@ -228,40 +211,4 @@ body {
 
 .tree-row.selection-partial {
     background-color: @{alpha(primary,0.10)};
-}
-
-
-
-.btn.history-row {
-    background-color: @{surface_bright};
-    border-color: @{alpha(warning,0.33)} @{alpha(warning,0.33)} @{alpha(warning,0.33)}
-        @{alpha(warning,0.67)};
-}
-
-.history-row:hover {
-    background-color: @{blend(surface_bright,warning,0.08)};
-    border-color: @{alpha(warning,0.59)} @{alpha(warning,0.59)} @{alpha(warning,0.59)}
-        @{alpha(warning,0.86)};
-}
-
-.history-row.is-next {
-    background-color: @{alpha(warning,0.20)};
-    border-color: @{alpha(warning,0.86)} @{alpha(warning,0.86)} @{alpha(warning,0.86)}
-        @{warning};
-}
-
-.history-row--redo {
-    border-color: @{alpha(success,0.35)} @{alpha(success,0.35)} @{alpha(success,0.35)}
-        @{alpha(success,0.69)};
-}
-
-.history-row--redo:hover {
-    border-color: @{alpha(success,0.59)} @{alpha(success,0.59)} @{alpha(success,0.59)}
-        @{alpha(success,0.86)};
-}
-
-.history-row--redo.is-next {
-    background-color: @{alpha(success,0.18)};
-    border-color: @{alpha(success,0.86)} @{alpha(success,0.86)} @{alpha(success,0.86)}
-        @{success};
 }

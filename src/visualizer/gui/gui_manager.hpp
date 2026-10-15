@@ -198,9 +198,7 @@ namespace lfs::vis {
             getWindowStates() const {
                 return window_states_;
             }
-            [[nodiscard]] std::string scenePanelActiveTab() const;
             [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
-            void setScenePanelActiveTab(std::string_view tab);
             [[nodiscard]] bool selectAllSceneNodesIfFocused();
             [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
             [[nodiscard]] bool toggleSceneSelectionTrainingIfFocused();

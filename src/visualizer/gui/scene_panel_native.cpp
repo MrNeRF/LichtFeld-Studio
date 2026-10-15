@@ -13,7 +13,6 @@
 #include "gui/string_keys.hpp"
 #include "gui/utils/summary_labels.hpp"
 #include "internal/resource_paths.hpp"
-#include "operation/undo_history.hpp"
 #include "preferences.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/services.hpp"
@@ -22,8 +21,6 @@
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 
-#include <algorithm>
-#include <array>
 #include <cmath>
 #include <format>
 #include <limits>
@@ -37,24 +34,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::string tr(const char* key) {
             const std::string value = LOC(key);
             return value.empty() ? std::string(key) : value;
-        }
-
-        [[nodiscard]] std::string replaceUnderscores(std::string value) {
-            std::replace(value.begin(), value.end(), '_', ' ');
-            return value;
-        }
-
-        [[nodiscard]] std::string formatBytes(const size_t value) {
-            constexpr std::array units{"B", "KB", "MB", "GB"};
-            double amount = static_cast<double>(value);
-            size_t unit_index = 0;
-            while (amount >= 1024.0 && unit_index + 1 < units.size()) {
-                amount /= 1024.0;
-                ++unit_index;
-            }
-            if (unit_index == 0)
-                return std::format("{} {}", static_cast<int>(amount), units[unit_index]);
-            return std::format("{:.1f} {}", amount, units[unit_index]);
         }
 
         [[nodiscard]] std::string cacheAttrName(std::string_view kind, std::string_view name) {
@@ -148,91 +127,6 @@ namespace lfs::vis::gui {
             return true;
         }
 
-        [[nodiscard]] std::string formatHistorySummary(const op::UndoHistory& history) {
-            const auto undo_items = history.undoItems();
-            const auto redo_items = history.redoItems();
-            const size_t total_bytes = history.totalBytes();
-            const size_t total_gpu_bytes = history.totalMemory().gpu_bytes;
-
-            if (undo_items.empty() && redo_items.empty())
-                return LOC(lichtfeld::Strings::Scene::HISTORY_EMPTY);
-
-            if (total_gpu_bytes < total_bytes) {
-                return LOCF("runtime.history_summary_gpu", lfs::core::format_count(undo_items.size()), lfs::core::format_count(redo_items.size()),
-                            formatBytes(total_bytes), formatBytes(total_gpu_bytes));
-            }
-
-            return LOCF("runtime.history_summary", lfs::core::format_count(undo_items.size()), lfs::core::format_count(redo_items.size()),
-                        formatBytes(total_bytes));
-        }
-
-        [[nodiscard]] std::string formatHistoryTransaction(const op::UndoHistory& history) {
-            if (!history.hasActiveTransaction())
-                return {};
-
-            const std::string name = history.activeTransactionName().empty()
-                                         ? LOC("runtime.grouped_changes")
-                                         : history.activeTransactionName();
-            return LOCF("runtime.transaction_active", name, history.transactionDepth());
-        }
-
-        [[nodiscard]] std::string historyRowsHtml(const std::vector<op::UndoStackItem>& items,
-                                                  std::string_view kind) {
-            std::string html;
-            html.reserve(items.size() * 256);
-
-            for (size_t index = 0; index < items.size(); ++index) {
-                const auto& item = items[index];
-                const size_t estimated_bytes = item.estimated_bytes;
-                const size_t gpu_bytes = item.gpu_bytes;
-                const std::string size_meta = gpu_bytes < estimated_bytes
-                                                  ? std::format("{} · GPU {}",
-                                                                formatBytes(estimated_bytes),
-                                                                formatBytes(gpu_bytes))
-                                                  : formatBytes(estimated_bytes);
-                const std::string scope = replaceUnderscores(
-                    item.metadata.scope.empty() ? std::string("general") : item.metadata.scope);
-                const std::string source =
-                    item.metadata.source.empty() ? std::string("system") : item.metadata.source;
-                const std::string label =
-                    item.metadata.label.empty() ? LOC("runtime.untitled_change") : item.metadata.label;
-                const bool is_next = index == 0;
-                const std::string stack_line = is_next
-                                                   ? LOCF("runtime.history_next",
-                                                          kind == "undo" ? LOC(lichtfeld::Strings::Common::UNDO)
-                                                                         : LOC(lichtfeld::Strings::Common::REDO))
-                                                   : std::format("{} · {}", scope, source);
-                const std::string detail_line = is_next
-                                                    ? LOCF("runtime.history_detail", scope, source, size_meta)
-                                                    : LOCF("runtime.history_size", size_meta);
-                const std::string row_classes = std::format(
-                    "btn btn--ghost history-row{}{}",
-                    kind == "redo" ? " history-row--redo" : "",
-                    is_next ? " is-next" : "");
-
-                html += std::format(
-                    R"(<button type="button" class="{}" data-kind="{}" data-steps="{}"><span class="history-row__line history-row__line--primary text-default">&#9679; {}</span><br /><span class="history-row__line history-row__line--stack text-muted">{}</span><br /><span class="history-row__line history-row__line--secondary text-muted">{}</span></button>)",
-                    row_classes,
-                    kind,
-                    index + 1,
-                    Rml::StringUtilities::EncodeRml(label),
-                    Rml::StringUtilities::EncodeRml(stack_line),
-                    Rml::StringUtilities::EncodeRml(detail_line));
-            }
-
-            return html;
-        }
-
-        [[nodiscard]] Rml::Element* findHistoryActionTarget(Rml::Element* target) {
-            while (target) {
-                const auto kind = target->GetAttribute<Rml::String>("data-kind", "");
-                if (!kind.empty())
-                    return target;
-                target = target->GetParentNode();
-            }
-            return nullptr;
-        }
-
         [[nodiscard]] int optionalMetricMilli(const std::optional<float>& value) {
             if (!value || !std::isfinite(*value))
                 return std::numeric_limits<int>::min();
@@ -258,7 +152,6 @@ namespace lfs::vis::gui {
         : manager_(manager),
           host_(manager, "scene_panel_native", "rmlui/scene_tree.rml") {
         listener_.owner = this;
-        last_history_generation_ = std::numeric_limits<uint64_t>::max();
     }
 
     bool NativeScenePanel::needsAnimationFrame() const {
@@ -280,7 +173,6 @@ namespace lfs::vis::gui {
             manager_->setActiveSceneGraphElement(nullptr);
         tree_el_ = nullptr;
         scene_tab_el_ = nullptr;
-        history_tab_el_ = nullptr;
         chip_row_el_ = nullptr;
         summary_model_chip_el_ = nullptr;
         summary_node_chip_el_ = nullptr;
@@ -304,20 +196,6 @@ namespace lfs::vis::gui {
         empty_state_el_ = nullptr;
         empty_primary_el_ = nullptr;
         empty_secondary_el_ = nullptr;
-        history_container_el_ = nullptr;
-        history_summary_label_el_ = nullptr;
-        history_summary_value_el_ = nullptr;
-        history_transaction_el_ = nullptr;
-        history_undo_btn_el_ = nullptr;
-        history_redo_btn_el_ = nullptr;
-        history_clear_btn_el_ = nullptr;
-        history_note_el_ = nullptr;
-        history_undo_title_el_ = nullptr;
-        history_redo_title_el_ = nullptr;
-        history_undo_list_el_ = nullptr;
-        history_redo_list_el_ = nullptr;
-        history_empty_undo_el_ = nullptr;
-        history_empty_redo_el_ = nullptr;
     }
 
     void NativeScenePanel::reloadRmlResources() {
@@ -326,7 +204,6 @@ namespace lfs::vis::gui {
         document_ = nullptr;
         clearElementCache();
         last_language_.clear();
-        last_history_generation_ = std::numeric_limits<uint64_t>::max();
         last_prepare_frame_ = 0;
         has_last_sync_stamp_ = false;
     }
@@ -478,7 +355,6 @@ namespace lfs::vis::gui {
         if (manager_)
             manager_->setActiveSceneGraphElement(tree_el_);
         scene_tab_el_ = document_->GetElementById("scene-tab");
-        history_tab_el_ = document_->GetElementById("history-tab");
         chip_row_el_ = document_->GetElementById("scene-chip-row");
         summary_model_chip_el_ = document_->GetElementById("summary-model-chip");
         summary_node_chip_el_ = document_->GetElementById("summary-node-chip");
@@ -498,20 +374,6 @@ namespace lfs::vis::gui {
         empty_state_el_ = document_->GetElementById("empty-state");
         empty_primary_el_ = document_->GetElementById("empty-primary");
         empty_secondary_el_ = document_->GetElementById("empty-secondary");
-        history_container_el_ = document_->GetElementById("history-container");
-        history_summary_label_el_ = document_->GetElementById("history-summary-label");
-        history_summary_value_el_ = document_->GetElementById("history-summary-value");
-        history_transaction_el_ = document_->GetElementById("history-transaction");
-        history_undo_btn_el_ = document_->GetElementById("history-undo-btn");
-        history_redo_btn_el_ = document_->GetElementById("history-redo-btn");
-        history_clear_btn_el_ = document_->GetElementById("history-clear-btn");
-        history_note_el_ = document_->GetElementById("history-note");
-        history_undo_title_el_ = document_->GetElementById("history-undo-title");
-        history_redo_title_el_ = document_->GetElementById("history-redo-title");
-        history_undo_list_el_ = document_->GetElementById("history-undo-list");
-        history_redo_list_el_ = document_->GetElementById("history-redo-list");
-        history_empty_undo_el_ = document_->GetElementById("history-empty-undo");
-        history_empty_redo_el_ = document_->GetElementById("history-empty-redo");
 
         if (auto* search_icon = document_->GetElementById("search-icon")) {
             const std::string search_icon_source = resolveRmlImageSource("icon/scene/search.png");
@@ -544,7 +406,7 @@ namespace lfs::vis::gui {
                 icon->SetAttribute("src", source);
         }
 
-        if (!tree_el_ || !scene_tab_el_ || !history_tab_el_ || !chip_row_el_ ||
+        if (!tree_el_ || !scene_tab_el_ || !chip_row_el_ ||
             !summary_model_chip_el_ || !summary_node_chip_el_ ||
             !summary_filter_chip_el_ || !scene_view_el_ || !search_container_el_ ||
             !filter_input_el_ || !filter_clear_el_ || !selection_action_bar_el_ ||
@@ -552,28 +414,17 @@ namespace lfs::vis::gui {
             !selection_visibility_el_ || !selection_visibility_icon_el_ ||
             !selection_training_el_ || !selection_training_icon_el_ ||
             !selection_delete_el_ || !empty_state_el_ || !empty_primary_el_ ||
-            !empty_secondary_el_ || !history_container_el_ || !history_summary_label_el_ ||
-            !history_summary_value_el_ || !history_transaction_el_ || !history_undo_btn_el_ ||
-            !history_redo_btn_el_ || !history_clear_btn_el_ || !history_note_el_ ||
-            !history_undo_title_el_ || !history_redo_title_el_ || !history_undo_list_el_ ||
-            !history_redo_list_el_ || !history_empty_undo_el_ || !history_empty_redo_el_) {
+            !empty_secondary_el_) {
             LOG_ERROR("NativeScenePanel: missing required DOM elements");
             return;
         }
 
-        scene_tab_el_->AddEventListener(Rml::EventId::Click, &listener_);
-        history_tab_el_->AddEventListener(Rml::EventId::Click, &listener_);
         filter_clear_el_->AddEventListener(Rml::EventId::Click, &listener_);
         filter_input_el_->AddEventListener("input", &listener_);
         selection_visibility_el_->AddEventListener(Rml::EventId::Click, &listener_);
         selection_clear_el_->AddEventListener(Rml::EventId::Click, &listener_);
         selection_training_el_->AddEventListener(Rml::EventId::Click, &listener_);
         selection_delete_el_->AddEventListener(Rml::EventId::Click, &listener_);
-        history_undo_btn_el_->AddEventListener(Rml::EventId::Click, &listener_);
-        history_redo_btn_el_->AddEventListener(Rml::EventId::Click, &listener_);
-        history_clear_btn_el_->AddEventListener(Rml::EventId::Click, &listener_);
-        history_undo_list_el_->AddEventListener(Rml::EventId::Click, &listener_);
-        history_redo_list_el_->AddEventListener(Rml::EventId::Click, &listener_);
         filter_input_revert_.bind(filter_input_el_, [this](Rml::Element&) {
             applyFilterInputValue();
         });
@@ -598,8 +449,6 @@ namespace lfs::vis::gui {
         current_ctx.scene_generation = app_store().scene_generation.get();
         changed |= syncLocale();
         changed |= syncSceneState(current_ctx);
-        changed |= syncHistoryState();
-        changed |= syncTabState();
         changed |= syncSummaryChips();
         changed |= syncSelectionActions();
         changed |= syncSceneVisibility();
@@ -621,7 +470,6 @@ namespace lfs::vis::gui {
 
     NativeScenePanel::SyncStamp NativeScenePanel::makeSyncStamp() const {
         SyncStamp stamp;
-        stamp.active_tab = active_tab_;
         stamp.scene_graph_selection_markers = loadSceneGraphSelectionMarkersPreference();
         auto& store = app_store();
         stamp.language_generation = store.language_generation.get();
@@ -629,21 +477,17 @@ namespace lfs::vis::gui {
                                    ? static_cast<int>(std::lround(manager_->getDpRatio() * 1000.0f))
                                    : 1000;
 
-        if (active_tab_ == Tab::Scene) {
-            stamp.scene_generation = store.scene_generation.get();
-            stamp.selection_generation = store.selection_generation.get();
-            stamp.render_settings_generation = store.render_settings_generation.get();
-            if (auto* params = services().paramsOrNull())
-                stamp.invert_masks = params->getActiveParams().invert_masks;
+        stamp.scene_generation = store.scene_generation.get();
+        stamp.selection_generation = store.selection_generation.get();
+        stamp.render_settings_generation = store.render_settings_generation.get();
+        if (auto* params = services().paramsOrNull())
+            stamp.invert_masks = params->getActiveParams().invert_masks;
 
-            stamp.num_gaussians = store.num_gaussians.get();
-            stamp.training_running = store.training_running.get();
-            stamp.training_state = store.training_state.get();
-            stamp.eval_psnr_milli = optionalMetricMilli(store.eval_psnr.get());
-            stamp.eval_ssim_milli = optionalMetricMilli(store.eval_ssim.get());
-        } else if (active_tab_ == Tab::History) {
-            stamp.history_generation = op::undoHistory().generation();
-        }
+        stamp.num_gaussians = store.num_gaussians.get();
+        stamp.training_running = store.training_running.get();
+        stamp.training_state = store.training_state.get();
+        stamp.eval_psnr_milli = optionalMetricMilli(store.eval_psnr.get());
+        stamp.eval_ssim_milli = optionalMetricMilli(store.eval_ssim.get());
 
         return stamp;
     }
@@ -660,49 +504,6 @@ namespace lfs::vis::gui {
         return tree_el_->syncFromScene(ctx);
     }
 
-    bool NativeScenePanel::syncHistoryState() {
-        auto& history = op::undoHistory();
-        const uint64_t generation = history.generation();
-        if (generation == last_history_generation_)
-            return false;
-
-        last_history_generation_ = generation;
-
-        const auto undo_items = history.undoItems();
-        const auto redo_items = history.redoItems();
-        const bool has_undo = !undo_items.empty();
-        const bool has_redo = !redo_items.empty();
-        const bool can_clear = has_undo || has_redo || history.hasActiveTransaction();
-
-        bool changed = false;
-        changed |= setCachedText(history_summary_value_el_, formatHistorySummary(history));
-        changed |= setCachedText(history_transaction_el_, formatHistoryTransaction(history));
-        changed |= setCachedProperty(history_transaction_el_, "display",
-                                     history.hasActiveTransaction() ? "block" : "none");
-        changed |= setCachedText(history_undo_btn_el_,
-                                 has_undo ? std::format("{}: {}", LOC(lichtfeld::Strings::Common::UNDO),
-                                                        undo_items.front().metadata.label)
-                                          : LOC(lichtfeld::Strings::Common::UNDO));
-        changed |= setCachedText(history_redo_btn_el_,
-                                 has_redo ? std::format("{}: {}", LOC(lichtfeld::Strings::Common::REDO),
-                                                        redo_items.front().metadata.label)
-                                          : LOC(lichtfeld::Strings::Common::REDO));
-        changed |= setCachedDisabled(history_undo_btn_el_, !has_undo);
-        changed |= setCachedDisabled(history_redo_btn_el_, !has_redo);
-        changed |= setCachedDisabled(history_clear_btn_el_, !can_clear);
-        changed |= setCachedInnerRml(history_undo_list_el_, historyRowsHtml(undo_items, "undo"));
-        changed |= setCachedInnerRml(history_redo_list_el_, historyRowsHtml(redo_items, "redo"));
-        changed |= setCachedProperty(history_empty_undo_el_, "display", has_undo ? "none" : "block");
-        changed |= setCachedProperty(history_empty_redo_el_, "display", has_redo ? "none" : "block");
-        changed |= setCachedText(history_empty_undo_el_,
-                                 has_undo || has_redo ? LOC(lichtfeld::Strings::Scene::NO_ENTRIES_IN_STACK)
-                                                      : LOC(lichtfeld::Strings::Scene::NOTHING_RECORDED));
-        changed |= setCachedText(history_empty_redo_el_,
-                                 has_undo || has_redo ? LOC(lichtfeld::Strings::Scene::NO_ENTRIES_IN_STACK)
-                                                      : LOC(lichtfeld::Strings::Scene::NOTHING_RECORDED));
-        return changed;
-    }
-
     bool NativeScenePanel::syncLocale() {
         const std::string language = lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
         if (language == last_language_)
@@ -712,29 +513,9 @@ namespace lfs::vis::gui {
 
         bool changed = false;
         changed |= setCachedText(scene_tab_el_, tr("window.scene"));
-        changed |= setCachedText(history_tab_el_, tr("scene.history"));
         changed |= setCachedAttribute(filter_input_el_, "placeholder", tr("scene.search"));
         changed |= setCachedText(empty_primary_el_, tr("scene.no_data_loaded"));
         changed |= setCachedText(empty_secondary_el_, tr("scene.use_file_menu"));
-        changed |= setCachedText(history_summary_label_el_, LOC(lichtfeld::Strings::Scene::HISTORY_SHARED));
-        changed |= setCachedText(history_note_el_, LOC(lichtfeld::Strings::Scene::HISTORY_NOTE));
-        changed |= setCachedText(history_undo_title_el_, LOC(lichtfeld::Strings::Scene::UNDO_STACK));
-        changed |= setCachedText(history_redo_title_el_, LOC(lichtfeld::Strings::Scene::REDO_STACK));
-        changed |= setCachedText(history_undo_btn_el_, LOC(lichtfeld::Strings::Common::UNDO));
-        changed |= setCachedText(history_redo_btn_el_, LOC(lichtfeld::Strings::Common::REDO));
-        changed |= setCachedText(history_clear_btn_el_, tr(lichtfeld::Strings::DebugInfo::CLEAR_HISTORY));
-        last_history_generation_ = std::numeric_limits<uint64_t>::max();
-        return changed;
-    }
-
-    bool NativeScenePanel::syncTabState() {
-        bool changed = false;
-        changed |= setCachedClass(scene_tab_el_, "active", active_tab_ == Tab::Scene);
-        changed |= setCachedClass(history_tab_el_, "active", active_tab_ == Tab::History);
-        changed |= setCachedProperty(scene_view_el_, "display",
-                                     active_tab_ == Tab::Scene ? "flex" : "none");
-        changed |= setCachedProperty(history_container_el_, "display",
-                                     active_tab_ == Tab::History ? "flex" : "none");
         return changed;
     }
 
@@ -743,7 +524,7 @@ namespace lfs::vis::gui {
             return false;
 
         const auto state = tree_el_->selectionActionState();
-        const bool visible = active_tab_ == Tab::Scene && state.count > 0;
+        const bool visible = state.count > 0;
         bool changed = false;
         changed |= setCachedProperty(selection_action_bar_el_, "display", visible ? "flex" : "none");
         if (!visible)
@@ -781,7 +562,7 @@ namespace lfs::vis::gui {
                                  show_filter ? LOCF("runtime.scene_filter", tree_el_->filterText()) : std::string{});
         changed |= setCachedProperty(summary_filter_chip_el_, "display", show_filter ? "inline-block" : "none");
         changed |= setCachedProperty(chip_row_el_, "display",
-                                     active_tab_ == Tab::Scene && tree_el_->hasNodes() ? "flex" : "none");
+                                     tree_el_->hasNodes() ? "flex" : "none");
         return changed;
     }
 
@@ -790,14 +571,13 @@ namespace lfs::vis::gui {
             return false;
 
         const bool show_tree = tree_el_->hasNodes();
-        const bool show_scene = active_tab_ == Tab::Scene;
         const bool show_filter_clear = !tree_el_->filterText().empty();
 
         bool changed = false;
         changed |= setCachedProperty(empty_state_el_, "display",
-                                     show_scene && !show_tree ? "block" : "none");
+                                     !show_tree ? "block" : "none");
         changed |= setCachedProperty(tree_el_, "display",
-                                     show_scene && show_tree ? "block" : "none");
+                                     show_tree ? "block" : "none");
         changed |= setCachedProperty(filter_clear_el_, "display",
                                      show_filter_clear ? "inline-block" : "none");
         return changed;
@@ -820,16 +600,6 @@ namespace lfs::vis::gui {
 
         const Rml::String id = target->GetId();
         const Rml::String current_id = current ? current->GetId() : "";
-        if (id == "scene-tab") {
-            setTab(Tab::Scene);
-            event.StopPropagation();
-            return true;
-        }
-        if (id == "history-tab") {
-            setTab(Tab::History);
-            event.StopPropagation();
-            return true;
-        }
         if (id == "filter-clear" || current_id == "filter-clear") {
             if (auto* input = dynamic_cast<Rml::ElementFormControlInput*>(filter_input_el_))
                 input->SetValue("");
@@ -863,40 +633,6 @@ namespace lfs::vis::gui {
             event.StopPropagation();
             return true;
         }
-        if (id == "history-undo-btn") {
-            if (op::undoHistory().canUndo())
-                op::undoHistory().undo();
-            last_history_generation_ = std::numeric_limits<uint64_t>::max();
-            event.StopPropagation();
-            return true;
-        }
-        if (id == "history-redo-btn") {
-            if (op::undoHistory().canRedo())
-                op::undoHistory().redo();
-            last_history_generation_ = std::numeric_limits<uint64_t>::max();
-            event.StopPropagation();
-            return true;
-        }
-        if (id == "history-clear-btn") {
-            op::undoHistory().clear();
-            last_history_generation_ = std::numeric_limits<uint64_t>::max();
-            event.StopPropagation();
-            return true;
-        }
-        if (auto* action_target = findHistoryActionTarget(target)) {
-            const std::string kind = action_target->GetAttribute<Rml::String>("data-kind", "");
-            const int steps = action_target->GetAttribute<int>("data-steps", 0);
-            if (steps > 0) {
-                if (kind == "undo")
-                    op::undoHistory().undoMultiple(static_cast<size_t>(steps));
-                else if (kind == "redo")
-                    op::undoHistory().redoMultiple(static_cast<size_t>(steps));
-                last_history_generation_ = std::numeric_limits<uint64_t>::max();
-                event.StopPropagation();
-                return true;
-            }
-        }
-
         return false;
     }
 
@@ -908,30 +644,6 @@ namespace lfs::vis::gui {
         syncSelectionActions();
         syncSceneVisibility();
         host_.markContentDirty();
-    }
-
-    void NativeScenePanel::setTab(const Tab tab) {
-        if (active_tab_ == tab)
-            return;
-        active_tab_ = tab;
-        host_.markContentDirty();
-    }
-
-    std::string NativeScenePanel::projectActiveTab() const {
-        switch (active_tab_) {
-        case Tab::Scene: return "scene";
-        case Tab::History: return "history";
-        }
-        return "scene";
-    }
-
-    void NativeScenePanel::setProjectActiveTab(
-        const std::string_view tab) {
-        if (tab == "history") {
-            setTab(Tab::History);
-        } else {
-            setTab(Tab::Scene);
-        }
     }
 
     std::unordered_set<int> NativeScenePanel::visibleCameraUids() const {
@@ -973,28 +685,26 @@ namespace lfs::vis::gui {
     }
 
     bool NativeScenePanel::selectAllIfFocused() {
-        return active_tab_ == Tab::Scene && tree_el_ && tree_el_->selectAllIfFocused();
+        return tree_el_ && tree_el_->selectAllIfFocused();
     }
 
     bool NativeScenePanel::toggleSelectionVisibilityIfFocused() {
-        return active_tab_ == Tab::Scene && tree_el_ && tree_el_->toggleSelectedVisibilityIfFocused();
+        return tree_el_ && tree_el_->toggleSelectedVisibilityIfFocused();
     }
 
     bool NativeScenePanel::toggleSelectionTrainingIfFocused() {
-        return active_tab_ == Tab::Scene && tree_el_ && tree_el_->toggleSelectedTrainingIfFocused();
+        return tree_el_ && tree_el_->toggleSelectedTrainingIfFocused();
     }
 
     bool NativeScenePanel::groupSelectedNodesIfFocused() {
-        if (active_tab_ != Tab::Scene || !tree_el_ ||
-            !tree_el_->IsPseudoClassSet("focus") || tree_el_->selectedCount() < 2)
+        if (!tree_el_ || !tree_el_->IsPseudoClassSet("focus") || tree_el_->selectedCount() < 2)
             return false;
         (void)tree_el_->executeContextMenuAction("scene_panel:group_selected");
         return true;
     }
 
     bool NativeScenePanel::ungroupSelectedNodeIfFocused() {
-        if (active_tab_ != Tab::Scene || !tree_el_ ||
-            !tree_el_->IsPseudoClassSet("focus") || tree_el_->selectedCount() != 1)
+        if (!tree_el_ || !tree_el_->IsPseudoClassSet("focus") || tree_el_->selectedCount() != 1)
             return false;
         (void)tree_el_->executeContextMenuAction("scene_panel:ungroup_selected");
         return true;
@@ -1003,8 +713,7 @@ namespace lfs::vis::gui {
     bool NativeScenePanel::requestDeleteSelectionIfAvailable() {
         if (!tree_el_ || tree_el_->selectedCount() == 0)
             return false;
-        if (active_tab_ == Tab::Scene)
-            tree_el_->requestDeleteSelection();
+        tree_el_->requestDeleteSelection();
         return true;
     }
 

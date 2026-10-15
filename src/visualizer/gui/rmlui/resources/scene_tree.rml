@@ -1,14 +1,12 @@
 <rml>
 <head>
     <link type="text/rcss" href="scene_tree.rcss"/>
-    <link type="text/rcss" href="history_shared.rcss"/>
 </head>
 <body id="body">
     <div class="scene-header">
         <div class="scene-header-row">
             <div class="scene-tab-bar">
-                <button id="scene-tab" type="button" class="scene-tab"></button>
-                <button id="history-tab" type="button" class="scene-tab"></button>
+                <div id="scene-tab" class="scene-tab"></div>
             </div>
         </div>
         <div id="scene-chip-row" class="scene-chip-row">
@@ -50,51 +48,5 @@
                     data-tooltip="scene.delete"><img id="selection-delete-icon" /></button>
         </div>
     </div>
-
-    <div id="history-container">
-        <div class="history-summary">
-            <div id="history-summary-label" class="history-summary__label text-muted"></div>
-            <div id="history-summary-value" class="history-summary__value text-default"></div>
-        </div>
-
-        <div id="history-transaction" class="history-transaction status-info"></div>
-
-        <div class="history-actions">
-            <button id="history-undo-btn"
-                    class="btn btn--primary history-action"
-                    data-tooltip="common.undo" data-action="undo"
-                    type="button"></button>
-            <button id="history-redo-btn"
-                    class="btn btn--secondary history-action"
-                    data-tooltip="common.redo" data-action="redo"
-                    type="button"></button>
-            <button id="history-clear-btn"
-                    class="btn btn--ghost history-action history-action--clear"
-                    type="button"></button>
-        </div>
-
-        <div id="history-note" class="history-note text-muted"></div>
-
-        <div class="separator"></div>
-
-        <div class="history-section">
-            <span id="history-undo-title" class="history-section__title text-accent"></span>
-            <div class="history-list">
-                <span id="history-empty-undo" class="history-empty text-muted"></span>
-                <div id="history-undo-list" class="history-stack-item"></div>
-            </div>
-        </div>
-
-        <div class="separator"></div>
-
-        <div class="history-section">
-            <span id="history-redo-title" class="history-section__title text-accent"></span>
-            <div class="history-list">
-                <span id="history-empty-redo" class="history-empty text-muted"></span>
-                <div id="history-redo-list" class="history-stack-item"></div>
-            </div>
-        </div>
-    </div>
-
 </body>
 </rml>
