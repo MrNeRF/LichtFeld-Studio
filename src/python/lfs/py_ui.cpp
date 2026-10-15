@@ -5292,6 +5292,29 @@ namespace lfs::python {
             } }, "Explicitly apply user defaults to the current project; other rendering fields are preserved.");
 
         m.def(
+            "get_marketplace_preferences",
+            [] {
+                auto& preferences = vis::UserPreferences::instance();
+                nb::dict result;
+                result["view"] = preferences.marketplaceView();
+                result["git_checkout"] = preferences.marketplaceGitCheckout();
+                return result;
+            },
+            "Get Marketplace preferences from the canonical user preferences store");
+        m.def(
+            "set_marketplace_view",
+            [](const std::string& view) { vis::UserPreferences::instance().setMarketplaceView(view); },
+            nb::arg("view"), "Set the Marketplace layout (card or list)");
+        m.def(
+            "set_marketplace_git_checkout",
+            [](bool enabled) { vis::UserPreferences::instance().setMarketplaceGitCheckout(enabled); },
+            nb::arg("enabled"), "Set whether Marketplace installs use Git checkouts");
+        m.def(
+            "reset_marketplace_preferences",
+            [] { vis::UserPreferences::instance().resetMarketplacePreferences(); },
+            "Reset Marketplace layout and installation preferences");
+
+        m.def(
             "get_project_manager_preferences",
             [] {
                 auto& preferences = vis::UserPreferences::instance();
