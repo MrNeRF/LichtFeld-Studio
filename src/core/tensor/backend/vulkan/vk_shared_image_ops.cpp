@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -255,9 +256,13 @@ namespace lfs::core {
             dispatch(4, p, {}, writes, value.numel());
         }
 
+        // A coefficient row starts with the first and the end input index it covers. The shader reads
+        // them instead of working the range out again, which the GPU could round differently.
+        constexpr uint32_t LANCZOS_ROW_HEADER = 2;
+
         uint32_t lanczos_stride(const int input, const int output, const int kernel) {
             const long double support = 2.0L * kernel * input / output;
-            const long double stride = std::ceil(support) + 1.0L;
+            const long double stride = std::ceil(support) + 1.0L + LANCZOS_ROW_HEADER;
             if (!std::isfinite(stride) || stride > std::numeric_limits<uint32_t>::max())
                 throw std::invalid_argument("Lanczos coefficient table size exceeds uint32 indexing");
             return static_cast<uint32_t>(stride);
@@ -265,21 +270,24 @@ namespace lfs::core {
 
         Tensor lanczos_coefficients(const int input, const int output, const int kernel,
                                     const uint32_t stride) {
-            std::vector<float> values(static_cast<size_t>(output) * stride, 0.0f);
+            std::vector<float> values(static_cast<size_t>(output) * stride, std::numeric_limits<float>::quiet_NaN());
             for (int out = 0; out < output; ++out) {
                 const float scale = static_cast<float>(input) / static_cast<float>(output);
                 const float center = (static_cast<float>(out) + 0.5f) * scale;
                 const int lo = std::max(static_cast<int>(center - static_cast<float>(kernel) * scale + 0.5f), 0);
                 const int hi = std::min(static_cast<int>(center + static_cast<float>(kernel) * scale + 0.5f), input);
+                float* const row = values.data() + static_cast<size_t>(out) * stride;
+                row[0] = std::bit_cast<float>(static_cast<uint32_t>(lo));
+                row[1] = std::bit_cast<float>(static_cast<uint32_t>(hi));
                 float sum = 0.0f;
                 for (int at = lo; at < hi; ++at) {
                     const float x = (static_cast<float>(at) + 0.5f - center) / scale;
                     const float value = std::abs(x) < 1e-12f ? 1.0f : (x <= -kernel || x >= kernel ? 0.0f : (std::sin(3.14159265358979323846f * x) / (3.14159265358979323846f * x)) * (std::sin(3.14159265358979323846f * (x / kernel)) / (3.14159265358979323846f * (x / kernel))));
-                    values[static_cast<size_t>(out) * stride + at - lo] = value;
+                    row[LANCZOS_ROW_HEADER + at - lo] = value;
                     sum += value;
                 }
                 for (int at = lo; at < hi; ++at)
-                    values[static_cast<size_t>(out) * stride + at - lo] /= sum;
+                    row[LANCZOS_ROW_HEADER + at - lo] /= sum;
             }
             GpuBackendScope scope(GpuBackend::Vulkan);
             return Tensor::from_vector(values, {values.size()}, Device::GPU);

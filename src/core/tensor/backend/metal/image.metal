@@ -233,7 +233,12 @@ kernel void shared_image_lanczos_coefficients(constant SharedImageLanczosCoefPar
     const float center = (float(index) + 0.5f) * scale;
     const int lo = max(int(center - float(p.kernel_size) * scale + 0.5f), 0);
     const int hi = min(int(center + float(p.kernel_size) * scale + 0.5f), p.input_size);
-    device float* values = p.coefficients + index * p.stride;
+    // The row starts with the input range it covers. The resample kernel reads it instead of
+    // working it out again, which fast math could round differently.
+    device float* row = p.coefficients + index * p.stride;
+    ((device uint*)row)[0] = uint(lo);
+    ((device uint*)row)[1] = uint(hi);
+    device float* values = row + 2;
     float norm = 0.0f;
     for (int i = lo; i < hi; ++i) {
         const float value = shared_image_lanczos((float(i) + 0.5f - center) / scale, float(p.kernel_size));
@@ -242,6 +247,8 @@ kernel void shared_image_lanczos_coefficients(constant SharedImageLanczosCoefPar
     }
     for (int i = lo; i < hi; ++i)
         values[i - lo] /= norm;
+    for (uint i = uint(hi - lo) + 2; i < p.stride; ++i)
+        row[i] = as_type<float>(0x7fffffffu);
 }
 
 // Layouts: 0 HWC RGB (uint8 divided by 255, or float), 1 HW gray (uint8 times
@@ -260,22 +267,20 @@ kernel void shared_image_lanczos_resample(constant SharedImageLanczosParams& p [
     if (int(index) >= p.output_h * p.output_w)
         return;
     const int px = int(index) % p.output_w, py = int(index) / p.output_w;
-    const float scale_h = 1.0f * float(p.input_h) / float(p.output_h);
-    const float scale_w = 1.0f * float(p.input_w) / float(p.output_w);
-    const float cx = (float(px) + 0.5f) * scale_w, cy = (float(py) + 0.5f) * scale_h;
-    const int lx = max(int(cx - float(p.kernel_size) * scale_w + 0.5f), 0);
-    const int ly = max(int(cy - float(p.kernel_size) * scale_h + 0.5f), 0);
-    const int rx = min(int(cx + float(p.kernel_size) * scale_w + 0.5f), p.input_w);
-    const int ry = min(int(cy + float(p.kernel_size) * scale_h + 0.5f), p.input_h);
+    // Each coefficient row starts with the input range it covers.
+    device const float* row_x = p.coef_x + uint(px) * p.stride_x;
+    device const float* row_y = p.coef_y + uint(py) * p.stride_y;
+    const int lx = int(((device const uint*)row_x)[0]), rx = int(((device const uint*)row_x)[1]);
+    const int ly = int(((device const uint*)row_y)[0]), ry = int(((device const uint*)row_y)[1]);
     const int channels = p.layout == 1 ? 1 : int(p.channels);
     const uint input_plane = uint(p.input_h * p.input_w);
     device const float* f32 = (device const float*)p.input;
     float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     for (int y = ly; y < ry; ++y) {
-        const float ky = p.coef_y[uint(py) * p.stride_y + uint(y - ly)];
+        const float ky = row_y[2 + uint(y - ly)];
         for (int x = lx; x < rx; ++x) {
             const uint pixel = uint(p.input_w * y + x);
-            const float k = ky * p.coef_x[uint(px) * p.stride_x + uint(x - lx)];
+            const float k = ky * row_x[2 + uint(x - lx)];
             for (int ch = 0; ch < channels; ++ch) {
                 float v;
                 if (p.layout == 2)

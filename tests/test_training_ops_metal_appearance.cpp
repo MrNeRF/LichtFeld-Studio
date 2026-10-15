@@ -21,6 +21,7 @@
 #include <cstring>
 #include <format>
 #include <functional>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -1221,6 +1222,49 @@ namespace {
             expect_close(cuda, expected, 1e-4, 1e-4, "CUDA undistort");
         }
     }
+    // Fails if the resample kernel works out a pixel's input range itself and lands one tap away
+    // from the range its coefficient row covers.
+    TEST_P(PortableAppearance, LanczosResampleWeightsTheRangeItsCoefficientsCover) {
+        const auto* table = this->table().shared_image;
+        ASSERT_NE(table, nullptr);
+        constexpr int KERNEL = 3;
+        constexpr size_t HEIGHT = 2;
+        for (const int input_w : {129, 301, 822}) {
+            std::vector<float> row(static_cast<size_t>(input_w));
+            for (size_t i = 0; i < row.size(); ++i)
+                row[i] = static_cast<float>((i * 2654435761u) % 1000u) / 1000.0f;
+            std::vector<float> values;
+            for (size_t y = 0; y < HEIGHT; ++y)
+                values.insert(values.end(), row.begin(), row.end());
+            const auto source = Tensor::from_vector(values, {HEIGHT, static_cast<size_t>(input_w)}, Device::CPU)
+                                    .to(Device::GPU);
+            for (int output_w = input_w / 4; output_w < input_w; ++output_w) {
+                const auto actual = table->resize(source, static_cast<int>(HEIGHT), output_w,
+                                                  lfs::gpu_ops::Resample::LanczosGray, KERNEL)
+                                        .cpu()
+                                        .to_vector();
+                const float scale = static_cast<float>(input_w) / static_cast<float>(output_w);
+                for (int out = 0; out < output_w; ++out) {
+                    const float center = (static_cast<float>(out) + 0.5f) * scale;
+                    const float reach = static_cast<float>(KERNEL) * scale;
+                    const int lo = std::max(static_cast<int>(center - reach + 0.5f), 0);
+                    const int hi = std::min(static_cast<int>(center + reach + 0.5f), input_w);
+                    double sum = 0.0, weighted = 0.0;
+                    for (int at = lo; at < hi; ++at) {
+                        const double x = (at + 0.5 - center) / scale;
+                        const double sinc = std::abs(x) < 1e-12 ? 1.0 : std::sin(std::numbers::pi * x) / (std::numbers::pi * x);
+                        const double taper = std::abs(x) < 1e-12 ? 1.0 : std::sin(std::numbers::pi * x / KERNEL) / (std::numbers::pi * x / KERNEL);
+                        const double weight = std::abs(x) >= KERNEL ? 0.0 : sinc * taper;
+                        sum += weight;
+                        weighted += weight * row[static_cast<size_t>(at)];
+                    }
+                    ASSERT_NEAR(actual[static_cast<size_t>(out)], weighted / sum, 1e-4)
+                        << input_w << " -> " << output_w << " column " << out;
+                }
+            }
+        }
+    }
+
     INSTANTIATE_TEST_SUITE_P(Backends, PortableAppearance, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
                              [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
 
