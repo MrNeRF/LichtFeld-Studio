@@ -94,13 +94,13 @@ namespace lfs::vis {
         public:
             explicit MetalSceneRenderer(MetalViewportPresentation& context) : context_(context) {}
             std::expected<RenderResult, std::string> render(const core::SplatData& m,
-                                                            const rendering::ViewportRenderRequest& r, bool, RenderTargetId t, bool = false, bool deterministic = false) override {
+                                                            const rendering::ViewportRenderRequest& r, bool content_changed, RenderTargetId t, bool = false, bool deterministic = false) override {
                 if (!t.valid() || released_.contains(t))
                     return std::unexpected(std::format("Invalid or released Metal render target (target={})", t.value));
                 try {
                     auto& n = native();
                     n.setLodSettings(pool_, fraction_, fade_);
-                    auto result = legacyMetalResult(n.render(context_, m, r, t, expected_, deterministic || capture_));
+                    auto result = legacyMetalResult(n.render(context_, m, r, t, expected_, deterministic || capture_, content_changed));
                     if (!result)
                         return result;
                     if (deterministic || capture_) {
@@ -170,9 +170,9 @@ namespace lfs::vis {
                     native_->abandonReadback(t);
             }
             ReadbackStats readbackStats() const override { return {native_ ? native_->outstandingReadbacks() : 0, 0, 0}; }
-            auto buildSelectionMask(const core::SplatData& m, const SelectionMaskRequest& r, bool) -> std::expected<core::Tensor, std::string> override {
+            auto buildSelectionMask(const core::SplatData& m, const SelectionMaskRequest& r, bool content_changed) -> std::expected<core::Tensor, std::string> override {
                 try {
-                    return legacyMetalResult(native().buildSelectionMask(context_, m, r));
+                    return legacyMetalResult(native().buildSelectionMask(context_, m, r, content_changed));
                 } catch (const std::exception& e) { return std::unexpected(e.what()); }
             }
 #ifndef LFS_GRAPHICS_VULKAN

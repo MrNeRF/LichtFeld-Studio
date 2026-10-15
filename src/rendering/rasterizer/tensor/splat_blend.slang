@@ -345,7 +345,7 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                     }
                     const float remaining = median_transmittance * (1.f - exact_alpha);
                     if (remaining <= .5f)
-                        median = means[j].z;
+                        median = means[j].z - r.depth_offset;
                     median_transmittance = remaining;
                 }
                 const bool half_footprint = (kRasterFlags & 16384u) == 0u && ((kRasterFlags & 2048u) == 0u || separate_median) &&
@@ -400,6 +400,8 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                 } else {
                     alpha = c.w * exp(-.5f * q);
                 }
+                if (splat_depth < 1e10f)
+                    splat_depth -= r.depth_offset;
                 if ((kRasterFlags & 16u) != 0u && kRasterMode != 1u) {
                     const float opacity = kRasterMode == 3u ? geometry[j].mean_opacity.w : c.w;
                     const float value = clamp(alpha / max(opacity, 1e-8f), 0.f, 1.f);
@@ -686,6 +688,8 @@ void tile_depth_compose(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThre
                         continue;
                     alpha = min(c.w * exp(-.5f * q), .999f);
                 }
+                if (splat_depth < 1e10f)
+                    splat_depth -= r.depth_offset;
                 if (alpha < .5f / 255.f)
                     continue;
                 if (replay_color) {

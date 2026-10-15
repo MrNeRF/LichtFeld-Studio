@@ -20,6 +20,8 @@ struct RasterParameters {
     uint4 camera;
     float4 panorama;
     uint4 mask_limits;
+    float depth_offset;
+    uint depth_offset_pad0, depth_offset_pad1, depth_offset_pad2;
 };
 
 struct RasterStatus {
