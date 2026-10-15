@@ -339,6 +339,18 @@ class StudioBackends(unittest.TestCase):
         self.assertIn("[  PASSED  ] 2 tests.", log)
         self.assertNotIn("[  SKIPPED ]", log)
 
+    def test_nvenc_accepts_upper_quality_values_without_software_fallback(self):
+        for codec in ("h264", "hevc"):
+            for crf in (48, 49, 51):
+                with self.subTest(codec=codec, crf=crf):
+                    path = self.root / f"nvenc-{codec}-{crf}.mp4"
+                    self.invoke(operation="native-encode-session", output=str(path),
+                                hevc=codec == "hevc", crf=crf)
+                    probe = json.loads(subprocess.check_output(
+                        [FFPROBE, "-v", "error", "-show_streams", "-show_frames", "-of", "json", str(path)]))
+                    self.assertEqual(probe["streams"][0]["codec_name"], codec)
+                    self.assertEqual(len(probe["frames"]), 12)
+
     def test_native_session_preserves_distinct_queued_cuda_frames(self):
         path = self.root / "cuda-session.mp4"
         actual, _ = self.invoke(operation="native-encode-session", output=str(path))

@@ -284,6 +284,7 @@ nlohmann::json runNativeVideoContracts(const nlohmann::json& request) {
     if (request.at("operation") == "native-encode-session") {
         media::VideoEncodeSession session;
         media::VideoEncodeOptions options{.width = 320, .height = 240, .framerate = 10, .preferred_backend = media::VideoEncodeBackend::Cuda};
+        options.crf = request.value("crf", options.crf);
         options.width = request.value("width", options.width);
         options.height = request.value("height", options.height);
         options.spherical_video = request.value("spherical", false);

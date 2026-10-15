@@ -232,10 +232,23 @@ namespace lfs::media {
             codec_ctx_->colorspace = static_cast<AVColorSpace>(opts.matrix);
             codec_ctx_->color_range = static_cast<AVColorRange>(opts.range);
 
-            av_opt_set(codec_ctx_->priv_data, "preset", "p4", 0);
-            av_opt_set(codec_ctx_->priv_data, "tune", "hq", 0);
-            av_opt_set(codec_ctx_->priv_data, "rc", "constqp", 0);
-            av_opt_set_int(codec_ctx_->priv_data, "qp", opts.crf + NVENC_QP_OFFSET, 0);
+            // Do not silently encode with defaults if a dependency update
+            // removes or rejects a requested option.
+            const auto checked_option = [&](int status, const char* name) {
+                if (status >= 0)
+                    return true;
+                hardware_open_error_ = std::format("{} option '{}' failed: {}", codec->name, name, avErrorText(status));
+                LOG_DEBUG("{}", hardware_open_error_);
+                cleanupHwContexts();
+                return false;
+            };
+            // The public quality range is 0..51; the legacy +3 mapping must
+            // stay inside NVENC's 0..51 QP range at its upper end.
+            if (!checked_option(av_opt_set(codec_ctx_->priv_data, "preset", "p4", 0), "preset") ||
+                !checked_option(av_opt_set(codec_ctx_->priv_data, "tune", "hq", 0), "tune") ||
+                !checked_option(av_opt_set(codec_ctx_->priv_data, "rc", "constqp", 0), "rc") ||
+                !checked_option(av_opt_set_int(codec_ctx_->priv_data, "qp", std::min(opts.crf + NVENC_QP_OFFSET, 51), 0), "qp"))
+                return false;
 
             if (fmt_ctx_->oformat->flags & AVFMT_GLOBALHEADER) {
                 codec_ctx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;

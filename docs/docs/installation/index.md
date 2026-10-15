@@ -8,6 +8,20 @@ Windows binaries are available from the project's [GitHub Releases](https://gith
 
 For source builds and platform-specific instructions, see the [Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/) and the repo-local docs in [docs/README.md](../../README.md).
 
+## NVIDIA video export
+
+Builds using the repository's FFmpeg 9.0.2 and NVENC API 13.0 headers require
+NVIDIA driver **570.0 or newer on Windows and Linux** for NVENC H.264/HEVC
+video export. The GPU must support the selected codec and resolution; CUDA or
+the GPU model may require a newer driver. WSL uses the Windows host driver.
+This is the codec API's existing driver minimum, not an additional increase
+introduced by FFmpeg 9. macOS exports use VideoToolbox instead.
+
+H.264 retains a software fallback when available. HEVC export fails explicitly
+when its provider is unavailable; it does not silently switch to H.264.
+Custom builds using newer NVIDIA codec headers can require newer drivers; see
+the [pinned NVIDIA codec header requirements](https://github.com/FFmpeg/nv-codec-headers/blob/n13.0.19.0/README).
+
 ## Windows Defender detections
 
 If Defender quarantines a binary such as `lfs_core.dll`, record the detection name,
