@@ -816,7 +816,7 @@ class PluginMarketplacePanel(Panel):
         return (
             '<div class="card-info">'
             '<div class="card-title-row">'
-            f'<span class="card-name">{esc("name")}</span>'
+            f'{self._build_project_title_markup(record, "card-name")}'
             f'{version_span}'
             '</div>'
             f'{repo_span}'
@@ -828,7 +828,6 @@ class PluginMarketplacePanel(Panel):
             f'{description}'
             '<div class="separator"></div>'
             '</div>'
-            f'{self._build_project_link_markup(record)}'
             f'{self._build_feedback_markup(record)}'
             f'{self._build_git_row(record)}'
             f'{self._build_startup_row(record)}'
@@ -895,10 +894,10 @@ class PluginMarketplacePanel(Panel):
         return (
             '<div class="plugin-list-summary">'
             f'<button type="button" class="plugin-list-disclosure" data-action="toggle-expand" data-card-id="{esc("card_id")}">{disclosure}</button>'
-            f'<button type="button" class="plugin-list-name-btn" data-action="toggle-expand" data-card-id="{esc("card_id")}">'
-            f'<span class="plugin-list-name">{esc("name")}</span>'
+            '<div class="plugin-list-title-row">'
+            f'{self._build_project_title_markup(record, "plugin-list-name")}'
             f'{version_span}'
-            '</button>'
+            '</div>'
             '<div class="plugin-list-summary-right">'
             f'{summary_status}'
             '</div>'
@@ -906,7 +905,6 @@ class PluginMarketplacePanel(Panel):
             f'<div class="plugin-list-details{expanded_class}">'
             f'{detail_meta}'
             f'{detail_text}'
-            f'{self._build_project_link_markup(record)}'
             f'{self._build_feedback_markup(record, extra_class="plugin-list-feedback")}'
             f'<div class="plugin-list-options">'
             f'<div class="plugin-list-buttons" id="btns-{esc("card_id")}">{self._build_action_buttons_markup(record)}</div>'
@@ -927,15 +925,15 @@ class PluginMarketplacePanel(Panel):
         )
 
     @staticmethod
-    def _build_project_link_markup(record: Dict[str, object]) -> str:
+    def _build_project_title_markup(record: Dict[str, object], name_class: str) -> str:
+        label = escape(str(record.get("name", "")))
         url = str(record.get("github_url") or "")
         if not url:
-            return ""
+            return f'<span class="{name_class}">{label}</span>'
         escaped_url = escape(url, quote=True)
-        label = escape(lf.ui.tr("plugin_marketplace.project_link"))
         return (
-            f'<a class="mp-project-link" href="{escaped_url}" '
-            f'data-action="open-url" data-url="{escaped_url}">{label}</a>'
+            f'<a class="{name_class} mp-project-link" href="{escaped_url}" '
+            f'title="{escaped_url}" data-action="open-url" data-url="{escaped_url}">{label}</a>'
         )
 
     def _build_action_buttons_markup(self, record: Dict[str, object]) -> str:

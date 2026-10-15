@@ -2261,7 +2261,6 @@
     "error.invalid_digest": "Skrót SHA-256 musi zawierać dokładnie 64 znaki szesnastkowe.",
     "error.digest_requires_archive": "Weryfikacja SHA-256 wymaga instalacji z archiwum.",
     "warning_body": "OSTRZEŻENIE: Lichtfeld Studio nie udziela bezpośredniej rekomendacji ani nie ponosi odpowiedzialności. Używasz na własne ryzyko.",
-    "project_link": "Link do projektu",
     "filter_label": "Filtr",
     "sort_label": "Sortuj według",
     "filter.all": "Wszystkie",

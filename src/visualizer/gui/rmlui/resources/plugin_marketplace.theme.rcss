@@ -201,14 +201,11 @@
     border-top-color: @{alpha(border,0.65)};
 }
 
-.plugin-list-disclosure,
-.plugin-list-name-btn {
+.plugin-list-disclosure {
     color: @{text_dim};
 }
 
 .plugin-list-disclosure:hover,
-.plugin-list-name-btn:hover,
-.plugin-list-name-btn:focus-visible,
 .plugin-list-disclosure:focus-visible {
     color: @{text};
     background-color: @{alpha(primary,0.10)};

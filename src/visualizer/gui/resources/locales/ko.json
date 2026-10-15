@@ -2261,7 +2261,6 @@
     "error.invalid_digest": "SHA-256 다이제스트는 정확히 64개의 16진수 문자여야 합니다.",
     "error.digest_requires_archive": "SHA-256 검증에는 아카이브 설치 방식이 필요합니다.",
     "warning_body": "경고: Lichtfeld Studio는 직접 보증하지 않으며 책임을 지지 않습니다. 사용은 본인 책임입니다.",
-    "project_link": "프로젝트 링크",
     "filter_label": "필터",
     "sort_label": "정렬 기준",
     "filter.all": "전체",

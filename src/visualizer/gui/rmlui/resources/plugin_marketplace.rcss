@@ -506,7 +506,7 @@
     cursor: pointer;
 }
 
-.plugin-list-name-btn {
+.plugin-list-title-row {
     display: flex;
     align-items: baseline;
     gap: 7dp;
@@ -517,7 +517,6 @@
     border-width: 0;
     background-color: transparent;
     text-align: left;
-    cursor: pointer;
 }
 
 .plugin-list-name {
@@ -587,19 +586,11 @@
 
 .mp-project-link {
     display: block;
-    flex-shrink: 0;
-    margin-top: 6dp;
-    font-size: 12dp;
-    line-height: 18dp;
+    flex: 0 1 auto;
+    max-width: 100%;
     text-decoration: underline;
     cursor: pointer;
     tab-index: auto;
-}
-
-/* Keep the description against its metadata; space links and actions explicitly. */
-.plugin-list-details .mp-project-link {
-    margin-top: 2dp;
-    line-height: 15dp;
 }
 
 .plugin-list-description,

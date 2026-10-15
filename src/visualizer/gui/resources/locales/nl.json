@@ -2261,7 +2261,6 @@
     "error.invalid_digest": "De SHA-256-digest moet precies 64 hexadecimale tekens bevatten.",
     "error.digest_requires_archive": "Voor SHA-256-verificatie is installatie via een archief vereist.",
     "warning_body": "WAARSCHUWING: Lichtfeld Studio keurt niet direct goed en neemt geen verantwoordelijkheid. Gebruik op eigen risico.",
-    "project_link": "Link naar project",
     "filter_label": "Filter",
     "sort_label": "Sorteren op",
     "filter.all": "Alle",

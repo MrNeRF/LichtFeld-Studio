@@ -2259,7 +2259,6 @@
     "error.invalid_digest": "The SHA-256 digest must contain exactly 64 hexadecimal characters.",
     "error.digest_requires_archive": "SHA-256 verification requires archive install transport.",
     "warning_body": "WARNING: Lichtfeld Studio does not directly endorse or assume responsibility. Use at your own risk.",
-    "project_link": "Link to project",
     "filter_label": "Filter",
     "sort_label": "Sort By",
     "filter.all": "All",

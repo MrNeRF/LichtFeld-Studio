@@ -2261,7 +2261,6 @@
     "error.invalid_digest": "Der SHA-256-Prüfwert muss genau 64 hexadezimale Zeichen enthalten.",
     "error.digest_requires_archive": "Die SHA-256-Prüfung erfordert die Archiv-Installationsart.",
     "warning_body": "WARNUNG: Lichtfeld Studio spricht keine direkte Empfehlung aus und übernimmt keine Verantwortung. Nutzung auf eigenes Risiko.",
-    "project_link": "Link zum Projekt",
     "filter_label": "Filter",
     "sort_label": "Sortieren nach",
     "filter.all": "Alle",
