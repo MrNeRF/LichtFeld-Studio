@@ -2256,7 +2256,6 @@
       "updating": "Mise à jour de {name}...",
       "updated": "{name} mis à jour"
     },
-    "title_line": "Parcourez les plugins installables depuis le registre de plugins.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "Avertissement : cette source de plugin n'a pas d'empreinte SHA-256 ; son archive n'est pas vérifiée.",
     "error.checksum_mismatch": "La vérification SHA-256 de l'archive du plugin a échoué.",

@@ -2256,7 +2256,6 @@
       "updating": "Actualizando {name}...",
       "updated": "Se actualizó {name}"
     },
-    "title_line": "Explora los complementos instalables desde el registro de complementos.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "Advertencia: esta fuente del complemento no tiene un resumen SHA-256; el archivo no está verificado.",
     "error.checksum_mismatch": "Falló la verificación SHA-256 del archivo del complemento.",

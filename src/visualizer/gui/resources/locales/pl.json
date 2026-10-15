@@ -2256,7 +2256,6 @@
       "updating": "Aktualizowanie {name}...",
       "updated": "Zaktualizowano {name}"
     },
-    "title_line": "Przeglądaj instalowalne wtyczki z rejestru wtyczek.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "Ostrzeżenie: to źródło wtyczki nie ma skrótu SHA-256; archiwum nie jest zweryfikowane.",
     "error.checksum_mismatch": "Weryfikacja SHA-256 archiwum wtyczki nie powiodła się.",

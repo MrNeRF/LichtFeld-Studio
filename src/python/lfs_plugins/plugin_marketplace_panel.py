@@ -29,7 +29,6 @@ from .ui import RuntimeState
 __lfs_panel_classes__ = ["PluginMarketplacePanel"]
 __lfs_panel_ids__ = ["lfs.plugin_marketplace"]
 
-MAX_OUTPUT_LINES = 100
 SUCCESS_DISMISS_SEC = 3.0
 ERROR_DISMISS_SEC = 5.0
 _CARD_GAP_DP = 12
@@ -69,7 +68,6 @@ class CardOpState:
     message: str = ""
     warning: str = ""
     progress: float = 0.0
-    output_lines: List[str] = field(default_factory=list)
     finished_at: float = 0.0
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     cancellable: bool = False
@@ -107,9 +105,6 @@ class PluginMarketplacePanel(Panel):
         self._cached_entries: List[MarketplacePluginEntry] = []
         self._cached_card_records: List[Dict[str, object]] = []
         self._cached_card_ids: List[str] = []
-        self._cached_installed_lookup: Dict[str, str] = {}
-        self._cached_installed_versions: Dict[str, str] = {}
-        self._cached_installed_names: Set[str] = set()
         self._formats_open = False
         self._manual_open = False
         self._expanded_list_rows: Set[str] = set()
@@ -203,7 +198,6 @@ class PluginMarketplacePanel(Panel):
         self._last_card_phases.clear()
         self._last_grid_signature = None
         self._last_catalog_status_signature = None
-        self._stable_layout_width = None
         self._pending_scroll_restore = None
         self._escape_revert.clear()
 
@@ -420,9 +414,6 @@ class PluginMarketplacePanel(Panel):
                 for i, entry in enumerate(entries)
             ]
             self._cached_card_ids = card_ids
-            self._cached_installed_lookup = installed_lookup
-            self._cached_installed_versions = installed_versions
-            self._cached_installed_names = installed_names
             self._last_card_phases.clear()
             self._render_entry_layout(doc, records, force=True)
 
@@ -439,11 +430,7 @@ class PluginMarketplacePanel(Panel):
             self._refresh_all_card_records(doc, mgr)
             self._installed_state_dirty = False
 
-        self._update_card_states(
-            doc, self._cached_entries, self._cached_card_ids, mgr,
-            self._cached_installed_lookup, self._cached_installed_versions,
-            self._cached_installed_names,
-        )
+        self._update_card_states(doc, self._cached_card_ids, mgr)
         self._update_manual_feedback(doc)
 
     # ── Card record building ──────────────────────────────────
@@ -1026,8 +1013,7 @@ class PluginMarketplacePanel(Panel):
             '</label></div>'
         )
 
-    def _update_card_states(self, doc, entries, card_ids, mgr,
-                            installed_lookup, installed_versions, installed_names):
+    def _update_card_states(self, doc, card_ids, mgr):
         import lichtfeld as lf
 
         tr = lf.ui.tr
@@ -1065,10 +1051,6 @@ class PluginMarketplacePanel(Panel):
         installed_versions = self._get_installed_plugin_versions(mgr)
         installed_names = set(installed_lookup.values())
 
-        self._cached_installed_lookup = installed_lookup
-        self._cached_installed_versions = installed_versions
-        self._cached_installed_names = installed_names
-
         record = self._build_card_record(
             entry,
             card_id,
@@ -1077,6 +1059,8 @@ class PluginMarketplacePanel(Panel):
             installed_versions,
             installed_names,
         )
+        if record == self._cached_card_records[idx]:
+            return
         self._cached_card_records[idx] = record
 
         card_el = doc.get_element_by_id(f"card-{card_id}")
@@ -1097,15 +1081,14 @@ class PluginMarketplacePanel(Panel):
         installed_lookup = self._get_installed_plugin_lookup(mgr)
         installed_versions = self._get_installed_plugin_versions(mgr)
         installed_names = set(installed_lookup.values())
-        self._cached_installed_lookup = installed_lookup
-        self._cached_installed_versions = installed_versions
-        self._cached_installed_names = installed_names
 
         for idx, card_id in enumerate(self._cached_card_ids):
             record = self._build_card_record(
                 self._cached_entries[idx], card_id, mgr,
                 installed_lookup, installed_versions, installed_names,
             )
+            if record == self._cached_card_records[idx]:
+                continue
             self._cached_card_records[idx] = record
             card_el = doc.get_element_by_id(f"card-{card_id}")
             if not card_el:
@@ -1475,11 +1458,6 @@ class PluginMarketplacePanel(Panel):
         self._last_grid_signature = None
         self._request_model_update()
 
-    @staticmethod
-    def _set_attribute_if_changed(element, name: str, value: str):
-        if element.get_attribute(name, "") != value:
-            element.set_attribute(name, value)
-
     def _is_list_row_expanded(self, card_id: str) -> bool:
         if card_id in self._expanded_list_rows:
             return True
@@ -1592,13 +1570,11 @@ class PluginMarketplacePanel(Panel):
                     state.phase = CardOpPhase.IDLE
                     state.message = ""
                     state.progress = 0.0
-                    state.output_lines.clear()
                     state.finished_at = 0.0
             return CardOpState(
                 phase=state.phase,
                 message=state.message,
                 progress=state.progress,
-                output_lines=list(state.output_lines),
                 finished_at=state.finished_at,
                 cancellable=state.cancellable,
             )
@@ -1695,9 +1671,6 @@ class PluginMarketplacePanel(Panel):
                 state.message = msg
                 if msg == unverified_warning:
                     state.warning = msg
-                state.output_lines.append(msg)
-                if len(state.output_lines) > MAX_OUTPUT_LINES:
-                    state.output_lines = state.output_lines[-MAX_OUTPUT_LINES:]
             self._schedule_model_update()
 
         def worker():

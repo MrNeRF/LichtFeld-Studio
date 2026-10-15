@@ -85,6 +85,7 @@ class _ElementStub:
         self.attributes = {}
         self.inner_rml = ""
         self.client_width = client_width
+        self.set_inner_rml_count = 0
         self.set_text_count = 0
         self.set_attribute_count = 0
         self._parent = None
@@ -112,6 +113,7 @@ class _ElementStub:
         return name in self.attributes
 
     def set_inner_rml(self, value):
+        self.set_inner_rml_count += 1
         self.inner_rml = value
 
     def parent(self):
@@ -769,8 +771,6 @@ def test_plugin_marketplace_keeps_git_preference_out_of_both_views(plugin_market
         "name": "Sample Plugin",
         "show_install": True,
         "is_installed": False,
-        "show_git_checkout": True,
-        "git_checkout_selected": False,
     }
 
     for markup in (panel._build_card_markup(record), panel._build_list_markup(record)):
@@ -815,7 +815,7 @@ def test_plugin_marketplace_install_uses_git_transport_when_selected(plugin_mark
     assert calls["transport"] == "git"
 
 
-def test_plugin_marketplace_refresh_rerenders_git_option(plugin_marketplace_module):
+def test_plugin_marketplace_refresh_updates_available_actions(plugin_marketplace_module):
     module, _state = plugin_marketplace_module
 
     panel = module.PluginMarketplacePanel()
@@ -833,8 +833,7 @@ def test_plugin_marketplace_refresh_rerenders_git_option(plugin_marketplace_modu
     panel._cached_card_ids = ["sample-card"]
     panel._cached_card_records = [{
         "card_id": "sample-card",
-        "show_git_checkout": True,
-        "git_checkout_selected": False,
+        "show_install": True,
     }]
     card = _ElementStub()
     card.inner_rml = panel._build_list_markup(panel._cached_card_records[0])
@@ -849,7 +848,7 @@ def test_plugin_marketplace_refresh_rerenders_git_option(plugin_marketplace_modu
     )
     panel._refresh_card_record(doc, "sample-card", _ManagerStub())
 
-    assert 'data-action="git-checkout"' not in card.inner_rml
+    assert 'data-action="install"' not in card.inner_rml
 
 
 def test_plugin_marketplace_applies_saved_layout_changes(plugin_marketplace_module):
@@ -904,8 +903,6 @@ def test_plugin_marketplace_renders_list_markup(plugin_marketplace_module):
         "show_uninstall": True,
         "show_startup": True,
         "startup_checked": True,
-        "show_git_checkout": True,
-        "git_checkout_selected": True,
     })
 
     assert 'class="plugin-list-row"' in markup
@@ -946,7 +943,6 @@ def test_plugin_marketplace_collapsed_list_row_marks_details_hidden(plugin_marke
         "show_update": False,
         "show_uninstall": False,
         "show_startup": False,
-        "show_git_checkout": False,
     })
 
     assert 'class="plugin-list-details hidden"' in markup
@@ -1104,3 +1100,28 @@ def test_marketplace_loads_star_metadata_for_alphabetical_sort(plugin_marketplac
     panel._sort_idx = 2
     panel._ensure_loaded()
     assert calls == [{"require_github_enrichment": True}]
+
+
+def test_marketplace_refresh_preserves_unchanged_card_dom(plugin_marketplace_module):
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    panel._cached_entries = ["same", "changed"]
+    panel._cached_card_ids = ["same", "changed"]
+    panel._cached_card_records = [
+        {"card_id": "same", "name": "Same"},
+        {"card_id": "changed", "name": "Old"},
+    ]
+    panel._build_card_record = lambda entry, *_args: {
+        "card_id": entry, "name": "Same" if entry == "same" else "New",
+    }
+    same, changed = _ElementStub(), _ElementStub()
+    doc = _DocStub({"card-same": same, "card-changed": changed})
+    manager = SimpleNamespace(discover=lambda: [])
+    panel._refresh_all_card_records(doc, manager)
+    assert same.set_inner_rml_count == 0
+    assert changed.set_inner_rml_count == 1
+    assert "New" in changed.inner_rml
+    panel._refresh_all_card_records(doc, manager)
+    panel._refresh_card_record(doc, "changed", manager)
+    assert same.set_inner_rml_count == 0
+    assert changed.set_inner_rml_count == 1

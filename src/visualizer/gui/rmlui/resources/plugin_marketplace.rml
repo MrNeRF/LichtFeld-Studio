@@ -34,7 +34,7 @@
 
     <!-- Manual URL install -->
     <div class="mp-manual-section">
-      <button type="button" id="manual-header" class="mp-collapse-toggle mp-manual-header">
+      <button type="button" id="manual-header" class="mp-collapse-toggle">
         <span class="section-arrow" id="manual-arrow">&#x25B6;</span>
         <span class="mp-section-title">@tr:plugin_manager.github_url_or_shorthand</span>
       </button>

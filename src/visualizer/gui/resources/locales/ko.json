@@ -2256,7 +2256,6 @@
       "updating": "{name} 업데이트 중...",
       "updated": "{name} 업데이트됨"
     },
-    "title_line": "플러그인 레지스트리에서 설치 가능한 플러그인을 찾아보세요.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "경고: 이 플러그인 소스에는 SHA-256 다이제스트가 없어 아카이브가 검증되지 않았습니다.",
     "error.checksum_mismatch": "플러그인 아카이브 SHA-256 검증에 실패했습니다.",

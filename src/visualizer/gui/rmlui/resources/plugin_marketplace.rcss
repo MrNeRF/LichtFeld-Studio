@@ -136,10 +136,6 @@
     font-weight: 600;
 }
 
-.mp-section-hint {
-    font-size: 12dp;
-}
-
 .mp-manual-row {
     display: flex;
     align-items: center;

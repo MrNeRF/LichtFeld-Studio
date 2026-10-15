@@ -2256,7 +2256,6 @@
       "updating": "正在更新 {name}...",
       "updated": "已更新 {name}"
     },
-    "title_line": "浏览可从插件源安装的插件",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "警告：此插件来源没有 SHA-256 摘要；其归档文件未经验证。",
     "error.checksum_mismatch": "插件归档文件的 SHA-256 验证失败。",

@@ -2256,7 +2256,6 @@
       "updating": "Aggiornamento di {name}...",
       "updated": "Aggiornato {name}"
     },
-    "title_line": "Sfoglia i plugin installabili dal registro dei plugin.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "Avviso: questa fonte del plugin non include un digest SHA-256; l'archivio non è verificato.",
     "error.checksum_mismatch": "Verifica SHA-256 dell'archivio del plugin non riuscita.",

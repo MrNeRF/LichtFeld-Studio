@@ -2254,7 +2254,6 @@
       "updating": "Updating {name}...",
       "updated": "Updated {name}"
     },
-    "title_line": "Browse installable plugins from the plugin registry.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "Warning: this plugin source has no SHA-256 digest; its archive is unverified.",
     "error.checksum_mismatch": "Plugin archive SHA-256 verification failed.",
