@@ -189,10 +189,11 @@ namespace lfs::core::internal {
             uint32_t stride_x, stride_y, layout, bytes, channels;
         };
 
-        // Taps of one output along an axis: the box of 2 * kernel_size * scale plus one.
+        // One output's row along an axis: its input range (two entries), then the taps of
+        // the box of 2 * kernel_size * scale plus one.
         uint32_t coefficient_stride(const int input_size, const int output_size, const int kernel_size) {
             const long double support = 2.0L * kernel_size * input_size / output_size;
-            const long double stride = std::ceil(support) + 1.0L;
+            const long double stride = std::ceil(support) + 1.0L + 2.0L;
             if (!std::isfinite(stride) ||
                 stride * output_size > static_cast<long double>(std::numeric_limits<uint32_t>::max()))
                 throw std::invalid_argument(std::format("Lanczos {} -> {} with kernel {} overflows its coefficient table",

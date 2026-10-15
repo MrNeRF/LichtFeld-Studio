@@ -236,24 +236,22 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Push push) {
         const uint pixels = p.outputHeight * p.outputWidth;
         if (i >= pixels) return;
         const uint px = i % p.outputWidth, py = i / p.outputWidth;
-        const float scaleX = float(p.inputWidth) / float(p.outputWidth);
-        const float scaleY = float(p.inputHeight) / float(p.outputHeight);
-        const float centerX = (float(px) + 0.5) * scaleX;
-        const float centerY = (float(py) + 0.5) * scaleY;
-        const int left = max(int(centerX - float(p.kernelSize) * scaleX + 0.5), 0);
-        const int top = max(int(centerY - float(p.kernelSize) * scaleY + 0.5), 0);
-        const int right = min(int(centerX + float(p.kernelSize) * scaleX + 0.5), int(p.inputWidth));
-        const int bottom = min(int(centerY + float(p.kernelSize) * scaleY + 0.5), int(p.inputHeight));
+        // Each coefficient row starts with the input range it covers, as the host computed it.
+        const uint rowX = px * p.strideX, rowY = py * p.strideY;
+        Ptr<uint, Access.Read> rangeX = (Ptr<uint, Access.Read>)p.coefficientX;
+        Ptr<uint, Access.Read> rangeY = (Ptr<uint, Access.Read>)p.coefficientY;
+        const int left = int(rangeX[rowX]), right = int(rangeX[rowX + 1]);
+        const int top = int(rangeY[rowY]), bottom = int(rangeY[rowY + 1]);
         const uint channels = p.channels;
         const uint inputPlane = p.inputHeight * p.inputWidth;
         Ptr<float, Access.Read> cx = (Ptr<float, Access.Read>)p.coefficientX;
         Ptr<float, Access.Read> cy = (Ptr<float, Access.Read>)p.coefficientY;
         float4 accum = 0.0;
         for (int y = top; y < bottom; ++y) {
-            const float wy = cy[py * p.strideY + uint(y - top)];
+            const float wy = cy[rowY + 2 + uint(y - top)];
             for (int x = left; x < right; ++x) {
                 const uint pixel = uint(y) * p.inputWidth + uint(x);
-                const float weight = wy * cx[px * p.strideX + uint(x - left)];
+                const float weight = wy * cx[rowX + 2 + uint(x - left)];
                 for (uint c = 0; c < channels; ++c) {
                     float value;
                     if (p.layout == 2) value = f32[c * inputPlane + pixel];
