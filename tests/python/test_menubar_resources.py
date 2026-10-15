@@ -467,8 +467,6 @@ def test_histogram_controls_and_chart_follow_semantic_theme_colors():
     assert "@{panel.histogram_fill_decor}" not in theme
     assert "background-color: @{primary};" in theme
     assert "background-color: @{warning};" in theme
-    assert "#histogram-close:hover" in theme
-    assert "border-color: @{primary};" in theme
 
 
 def test_signal_family_keeps_a_distinct_visual_language():

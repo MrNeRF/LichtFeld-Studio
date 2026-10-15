@@ -47,21 +47,6 @@
     background-color: @{panel.histogram_selection_fill};
 }
 
-#histogram-close {
-    background-color: @{surface_bright};
-    border-color: @{border};
-    color: @{text};
-}
-
-#histogram-close:hover {
-    background-color: @{lighten(surface_bright,0.06)};
-}
-
-#histogram-close:active {
-    background-color: @{alpha(primary,0.32)};
-    border-color: @{primary};
-}
-
 .histogram-bin-scrub .scrub-field {
     decorator: none;
     background-color: @{surface_bright};

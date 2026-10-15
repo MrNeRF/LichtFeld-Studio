@@ -42,7 +42,6 @@
           <span class="control-label">{{ log_scale_label }}</span>
         </label>
       </div>
-      <button id="histogram-close" type="button" data-event-click="close_panel()" data-tooltip="common.close" data-attr-title="close_label" aria-label="{{ close_label }}">&#215;</button>
     </div>
 
     <div id="histogram-empty" data-class-hidden="!show_empty_state">

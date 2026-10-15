@@ -297,7 +297,6 @@ class HistogramPanel(Panel):
         model.bind_func("field_label", lambda: _tr("histogram.field", "Field"))
         model.bind_func("compare_with_label", lambda: _tr("histogram.compare_with", "Compare With"))
         model.bind_func("log_scale_label", lambda: _tr("histogram.log_scale", "Log Scale"))
-        model.bind_func("close_label", lambda: _tr("common.close", "Close"))
         model.bind_func("samples_label", lambda: _tr("histogram.samples", "Samples"))
         model.bind_func("range_label", lambda: _tr("histogram.range", "Range"))
         model.bind_func("mean_label", lambda: _tr("histogram.mean", "Mean"))
@@ -386,7 +385,6 @@ class HistogramPanel(Panel):
         model.bind_func("compare_has_custom_range", self._has_any_custom_range)
         model.bind_event("reset_range", self._on_reset_range)
         model.bind_event("reset_compare_range", self._on_reset_compare_range)
-        model.bind_event("close_panel", self._on_close_panel)
         model.bind_record_list("metric_options")
         model.bind_record_list("compare_metric_options")
         model.bind_record_list("bins")
@@ -4039,14 +4037,6 @@ class HistogramPanel(Panel):
         except Exception:
             pass
         return False
-
-    def _on_close_panel(self, _handle, _event, _args):
-        self._clear_owned_scene_selection()
-        try:
-            lf.selection.clear_preview()
-        except Exception:
-            pass
-        lf.ui.set_panel_enabled(self.id, False)
 
     def _format_compare_bin_count_text(self) -> str:
         return _trf(
