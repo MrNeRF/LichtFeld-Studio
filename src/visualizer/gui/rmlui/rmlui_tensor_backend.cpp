@@ -130,7 +130,6 @@ namespace lfs::vis::gui {
         std::optional<Module::Scissor> context_clip;
         std::optional<Module::Scissor> capture_area;
         bool mask_enabled = false;
-        bool transformed_scissor = false;
         std::vector<Rml::LayerHandle> layer_stack{0};
         std::unordered_map<Rml::LayerHandle, std::unique_ptr<Layer>> layers;
         Rml::LayerHandle next_layer = 1;
@@ -198,7 +197,7 @@ namespace lfs::vis::gui {
             Module::Scissor rect{0, 0, width, height};
             if (context_clip)
                 rect = intersect(rect, *context_clip);
-            if (rml_scissor_enabled && !transformed_scissor)
+            if (rml_scissor_enabled)
                 rect = intersect(rect, rml_scissor);
             if (capture_area)
                 rect = intersect(rect, *capture_area);
@@ -288,7 +287,7 @@ namespace lfs::vis::gui {
                 return false;
             if (pending_target != &destination || clear)
                 flush();
-            const bool masked = fragment == "uiFragment" && (mask_enabled || transformed_scissor) && ensureMask();
+            const bool masked = fragment == "uiFragment" && mask_enabled && ensureMask();
             PendingDraw entry;
             auto& parameters = entry.parameters;
             const auto matrix = Rml::Matrix4f::ProjectOrtho(
@@ -436,7 +435,6 @@ namespace lfs::vis::gui {
         impl_->context_offset = {0, 0};
         impl_->context_clip.reset();
         impl_->rml_scissor_enabled = false;
-        impl_->transformed_scissor = false;
         impl_->mask_enabled = false;
     }
     void TensorRmlUiRenderer::setContextOffset(float x, float y) {
@@ -558,37 +556,13 @@ namespace lfs::vis::gui {
             impl_->texture_bytes -= std::min(impl_->texture_bytes, texture->image->bytes());
     }
 
-    void TensorRmlUiRenderer::EnableScissorRegion(bool enable) {
-        impl_->rml_scissor_enabled = enable;
-        if (!enable)
-            impl_->transformed_scissor = false;
-    }
+    void TensorRmlUiRenderer::EnableScissorRegion(bool enable) { impl_->rml_scissor_enabled = enable; }
+    // RmlUi 6 passes the scissor in window space and clips transformed elements
+    // with clip masks, so the scissor stays a rectangle under any transform.
     void TensorRmlUiRenderer::SetScissorRegion(Rml::Rectanglei region) {
-        if (!impl_->rml_scissor_enabled)
-            return;
-        if (!impl_->transform_enabled) {
-            impl_->transformed_scissor = false;
-            impl_->rml_scissor = impl_->clampedRect(
-                float(region.Left()) + impl_->context_offset.x, float(region.Top()) + impl_->context_offset.y,
-                float(region.Right()) + impl_->context_offset.x, float(region.Bottom()) + impl_->context_offset.y);
-            return;
-        }
-        // A transformed region is a quad, not a rectangle. Like the Vulkan
-        // stencil path it replaces the clip mask with the region's coverage.
-        std::array<Rml::Vertex, 4> vertices{};
-        vertices[0].position = Rml::Vector2f(region.TopLeft());
-        vertices[1].position = Rml::Vector2f(region.TopRight());
-        vertices[2].position = Rml::Vector2f(region.BottomRight());
-        vertices[3].position = Rml::Vector2f(region.BottomLeft());
-        constexpr std::array indices{0, 2, 1, 0, 3, 2};
-        impl_->transformed_scissor = false;
-        const bool mask_enabled = impl_->mask_enabled;
-        if (const auto geometry = CompileGeometry({vertices.data(), vertices.size()}, {indices.data(), indices.size()})) {
-            RenderToClipMask(Rml::ClipMaskOperation::Set, geometry, {});
-            ReleaseGeometry(geometry);
-        }
-        impl_->mask_enabled = mask_enabled;
-        impl_->transformed_scissor = true;
+        impl_->rml_scissor = impl_->clampedRect(
+            float(region.Left()) + impl_->context_offset.x, float(region.Top()) + impl_->context_offset.y,
+            float(region.Right()) + impl_->context_offset.x, float(region.Bottom()) + impl_->context_offset.y);
     }
     void TensorRmlUiRenderer::EnableClipMask(bool enable) { impl_->mask_enabled = enable; }
 
