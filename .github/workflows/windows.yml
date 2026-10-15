@@ -203,19 +203,35 @@ jobs:
         shell: cmd
         run: ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^lichtfeld\.python_runtime_state$"
 
+      - name: Provision a network share for path tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $local = Join-Path $env:RUNNER_TEMP 'lfs-unc-share'
+          New-Item -ItemType Directory -Force -Path $local | Out-Null
+          Start-Service LanmanServer
+          New-SmbShare -Name 'lfs-unc-tests' -Path $local -FullAccess "$env:USERDOMAIN\$env:USERNAME" | Out-Null
+          $network = '\\localhost\lfs-unc-tests'
+          Set-Content -Path (Join-Path $network 'probe.txt') -Value 'probe'
+          if (-not (Test-Path (Join-Path $local 'probe.txt'))) { throw "Share $network does not expose $local" }
+          Remove-Item (Join-Path $local 'probe.txt')
+          "LFS_TEST_UNC_ROOT=$network" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LFS_TEST_UNC_LOCAL=$local" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LFS_TEST_REQUIRE_UNC=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Build and run CPU-only format tests
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake --build %BUILD_DIR% --target lichtfeld_format_tests -j %NUMBER_OF_PROCESSORS%
-          ctest --test-dir %BUILD_DIR% --output-on-failure -R "^lichtfeld_format_tests$"
+          ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^lichtfeld_format_tests$"
 
       - name: Build and run EXR image codec tests
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake --build %BUILD_DIR% --target lichtfeld_image_codec_tests -j %NUMBER_OF_PROCESSORS%
-          ctest --test-dir %BUILD_DIR% --output-on-failure -R "^lichtfeld_image_codec_tests$"
+          ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^lichtfeld_image_codec_tests$"
 
       - name: Build and run CPU-only Unicode path tests
         shell: cmd
