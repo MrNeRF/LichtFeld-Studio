@@ -39,6 +39,10 @@
 #else
 #include <unistd.h>
 #endif
+#ifdef __linux__
+#include <linux/magic.h>
+#include <sys/vfs.h>
+#endif
 
 using namespace lfs::core;
 using namespace lfs::io;
@@ -394,10 +398,27 @@ TEST_F(PipelinedImageLoaderTest, ReleaseHostCacheDropsImagesWhenSpillReserveIsUn
     const auto released = loader.get_stats();
     EXPECT_EQ(released.jpeg_cache_bytes, 0u);
     EXPECT_EQ(released.spill_cache_entries, cached.spill_cache_entries);
-    EXPECT_TRUE(std::filesystem::is_empty(loader.run_spill_directory()));
+    const auto spill = loader.run_spill_directory();
+    EXPECT_TRUE(spill.empty() || std::filesystem::is_empty(spill));
 
     for (size_t i = 0; i < paths.size(); ++i)
         EXPECT_EQ(load(paths.size() + i, paths[i]), first_pass[i]) << paths[i];
+}
+
+// Fails if the run spill sits on tmpfs or ramfs, where spilled images still take up RAM.
+TEST_F(PipelinedImageLoaderTest, RunSpillIsNotHeldInRam) {
+#ifdef __linux__
+    PipelinedImageLoader loader(config());
+    const auto spill = loader.run_spill_directory();
+    if (spill.empty())
+        return;
+    struct statfs fs {};
+    ASSERT_EQ(statfs(spill.c_str(), &fs), 0) << spill;
+    EXPECT_NE(fs.f_type, TMPFS_MAGIC) << spill;
+    EXPECT_NE(fs.f_type, RAMFS_MAGIC) << spill;
+#else
+    GTEST_SKIP() << "tmpfs and ramfs are Linux file systems";
+#endif
 }
 
 TEST_F(PipelinedImageLoaderTest, TrainingStartupOnlyPrefetchesBoundedBatch) {

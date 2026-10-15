@@ -48,6 +48,10 @@
 #include <csignal>
 #include <unistd.h>
 #endif
+#ifdef __linux__
+#include <linux/magic.h>
+#include <sys/vfs.h>
+#endif
 #ifdef __GLIBC__
 #include <malloc.h>
 #endif
@@ -293,8 +297,9 @@ namespace lfs::io {
                 temp = std::getenv("TMP");
             return temp ? std::filesystem::path(temp) : std::filesystem::path("C:/Temp");
 #else
+            // /tmp is tmpfs on many distributions; /var/tmp stays on disk.
             const char* temp = std::getenv("TMPDIR");
-            return temp && *temp ? std::filesystem::path(temp) : std::filesystem::path("/tmp");
+            return temp && *temp ? std::filesystem::path(temp) : std::filesystem::path("/var/tmp");
 #endif
         }
 
@@ -322,6 +327,17 @@ namespace lfs::io {
 
         [[nodiscard]] std::filesystem::path run_spill_base() {
             return get_temp_folder() / "LichtFeld" / "pipeline_runs";
+        }
+
+        // A spill on tmpfs or ramfs keeps the released images in RAM.
+        [[nodiscard]] bool is_held_in_ram(const std::filesystem::path& path) {
+#ifdef __linux__
+            struct statfs fs {};
+            return statfs(path.c_str(), &fs) == 0 && (fs.f_type == TMPFS_MAGIC || fs.f_type == RAMFS_MAGIC);
+#else
+            (void)path;
+            return false;
+#endif
         }
 
         void remove_stale_run_spill_directories() {
@@ -695,7 +711,11 @@ namespace lfs::io {
             const auto base = run_spill_base();
             std::error_code ec;
             std::filesystem::create_directories(base, ec);
-            if (!ec) {
+            if (!ec && is_held_in_ram(base)) {
+                LOG_INFO("[PipelinedImageLoader] Run spill off: {} is held in RAM; images released from RAM are "
+                         "decoded again from their files",
+                         lfs::core::path_to_utf8(base));
+            } else if (!ec) {
                 run_spill_folder_ = base /
                                     ("ppl_run_" + std::to_string(current_process_id()) + "_" +
                                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
