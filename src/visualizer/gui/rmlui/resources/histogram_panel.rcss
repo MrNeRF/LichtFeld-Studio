@@ -45,10 +45,15 @@
 }
 
 .histogram-dock-toggle.btn {
-    flex-shrink: 0;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
     margin-left: auto;
+    min-width: 64dp;
     height: 24dp;
-    padding: 0 8dp;
+    padding: 0 12dp;
 }
 
 .histogram-toolbar-item {
