@@ -2774,7 +2774,9 @@ def apply_rendering_defaults() -> None:
     """
 
 def get_marketplace_preferences() -> dict:
-    """Get saved Marketplace layout and installation preferences"""
+    """
+    Get Marketplace preferences from the canonical user preferences store
+    """
 
 def set_marketplace_view(view: str) -> None:
     """Set the Marketplace layout (card or list)"""
