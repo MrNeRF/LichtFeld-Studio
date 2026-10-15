@@ -1469,7 +1469,7 @@ namespace lfs::io {
                                                    const std::string& cache_key,
                                                    void* cuda_stream,
                                                    const LoadParams& params) {
-        const bool lossless = decodes_16bit(params) || params.undistort;
+        const bool lossless = decodes_16bit(params);
         if (lossless && !jpeg2k_cache_available_.load(std::memory_order_relaxed))
             return;
 

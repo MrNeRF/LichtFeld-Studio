@@ -217,7 +217,8 @@ TEST_F(PipelinedImageLoaderTest, OriginalJpegUsesDirectDecodeWithoutColdReencodi
     }
 }
 
-TEST_F(PipelinedImageLoaderTest, UndistortedTrainingImageIsIdenticalForImmediateColdAndHit) {
+// Undistorted 8-bit images are cached as JPEG like resized ones: a hit matches the cold load to JPEG accuracy.
+TEST_F(PipelinedImageLoaderTest, UndistortedTrainingImageHitMatchesColdToJpegAccuracy) {
     const auto [width, height, channels] = lfs::core::get_image_info(image_path_);
     ASSERT_GT(width, 0);
     ASSERT_GT(height, 0);
@@ -262,7 +263,19 @@ TEST_F(PipelinedImageLoaderTest, UndistortedTrainingImageIsIdenticalForImmediate
         EXPECT_EQ(std::memcmp(lhs_cpu.data_ptr(), rhs_cpu.data_ptr(), lhs_cpu.bytes()), 0);
     };
     expect_identical(immediate, cold.tensor);
-    expect_identical(cold.tensor, hit.tensor);
+
+    ASSERT_EQ(cold.tensor.shape(), hit.tensor.shape());
+    const auto cold_values = cold.tensor.cpu().to_vector_uint8();
+    const auto hit_values = hit.tensor.cpu().to_vector_uint8();
+    double squared = 0.0;
+    for (size_t i = 0; i < cold_values.size(); ++i) {
+        const double difference = double(cold_values[i]) - double(hit_values[i]);
+        squared += difference * difference;
+    }
+    const double mse = squared / double(cold_values.size());
+    EXPECT_GT(mse, 0.0) << "an undistorted 8-bit cache hit should come from the JPEG cache";
+    // JPEG q95 of this 128 px image measures 39 dB.
+    EXPECT_GT(10.0 * std::log10(255.0 * 255.0 / std::max(mse, 1e-12)), 36.0);
 }
 
 // Catches decode-ahead changing what a load returns: with the image decoded ahead on the host, every CPU decode
