@@ -328,7 +328,7 @@ namespace {
             }
             real_context_ = Rml::CreateContext("viewport_depth_layout_real", {1240, 900}, &renderer_);
             ASSERT_TRUE(real_context_);
-            auto* doc = real_context_->LoadDocumentFromMemory(markup, path.string());
+            auto* doc = real_context_->LoadDocumentFromMemory(markup, rmlSourceUrl(path));
             ASSERT_TRUE(doc);
             doc->Show();
             auto* bar = doc->GetElementById("depth-view-block");
