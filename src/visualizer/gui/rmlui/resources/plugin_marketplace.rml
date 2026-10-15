@@ -6,7 +6,6 @@
 <body template="floating-window" data-model="plugin_marketplace">
   <div id="main-area">
     <div class="mp-intro">
-      <span class="mp-title status-info">@tr:plugin_marketplace.title_line</span>
       <span class="mp-warning-note">@tr:plugin_marketplace.warning_body</span>
     </div>
 
@@ -45,7 +44,7 @@
       <form id="manual-install-form">
         <div class="mp-manual-row">
           <input type="text" id="manual-url-input" class="mp-url-input" data-value="manual_url" />
-          <button id="btn-install-url" type="button" class="btn btn--success mp-install-btn" data-event-click="do_install_url">@tr:plugin_manager.button.install_plugin</button>
+          <button id="btn-install-url" type="button" class="btn btn--success mp-install-btn" data-event-click="do_install_url"><span>@tr:plugin_manager.button.install_plugin</span></button>
         </div>
         <div id="manual-feedback" class="card-feedback hidden">
           <progress id="manual-feedback-progress" class="card-progress hidden" max="1" value="0" />
@@ -91,8 +90,8 @@
       <span id="confirm-message" class="confirm-message"></span>
       <div class="separator"></div>
       <div class="confirm-buttons">
-        <button class="btn btn--secondary" data-event-click="confirm_no">@tr:plugin_marketplace.confirm_uninstall_no</button>
-        <button class="btn btn--error" data-event-click="confirm_yes">@tr:plugin_marketplace.confirm_uninstall_yes</button>
+        <button class="btn btn--secondary" data-event-click="confirm_no"><span>@tr:plugin_marketplace.confirm_uninstall_no</span></button>
+        <button class="btn btn--error" data-event-click="confirm_yes"><span>@tr:plugin_marketplace.confirm_uninstall_yes</span></button>
       </div>
     </div>
   </div>

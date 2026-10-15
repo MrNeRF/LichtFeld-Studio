@@ -539,7 +539,6 @@ class PluginMarketplacePanel(Panel):
             "has_error": bool(entry.error),
             "description": description,
             "card_description": card_description,
-            "info_action": "open-url" if has_github else "",
             "github_url": entry.github_url or "",
             "plugin_name": plugin_name or "",
             "show_install": (not buttons_busy) and not is_installed and not is_local_only and not entry.error,
@@ -774,13 +773,6 @@ class PluginMarketplacePanel(Panel):
         def text_span(condition_key: str, body: str) -> str:
             return body if record.get(condition_key) else ""
 
-        info_attrs = []
-        if record.get("info_action"):
-            info_attrs.append(f'data-action="{esc("info_action")}"')
-        if record.get("github_url"):
-            info_attrs.append(f'data-url="{esc("github_url")}"')
-        info_attr_text = (" " + " ".join(info_attrs)) if info_attrs else ""
-
         status_span = ""
         if record.get("is_installed"):
             status_span = (
@@ -824,7 +816,7 @@ class PluginMarketplacePanel(Panel):
         )
 
         return (
-            f'<div class="card-info"{info_attr_text}>'
+            '<div class="card-info">'
             '<div class="card-title-row">'
             f'<span class="card-name">{esc("name")}</span>'
             f'{version_span}'
@@ -838,6 +830,7 @@ class PluginMarketplacePanel(Panel):
             f'{description}'
             '<div class="separator"></div>'
             '</div>'
+            f'{self._build_project_link_markup(record)}'
             f'{self._build_feedback_markup(record)}'
             f'{self._build_git_row(record)}'
             f'{self._build_startup_row(record)}'
@@ -880,12 +873,7 @@ class PluginMarketplacePanel(Panel):
 
         detail_meta_parts: List[str] = []
         if record.get("has_repo"):
-            if record.get("github_url"):
-                detail_meta_parts.append(
-                    f'<button type="button" class="plugin-list-link" data-action="open-url" data-url="{esc("github_url")}">{esc("repo_label")}</button>'
-                )
-            else:
-                detail_meta_parts.append(f'<span class="plugin-list-meta-item text-disabled">{esc("repo_label")}</span>')
+            detail_meta_parts.append(f'<span class="plugin-list-meta-item text-disabled">{esc("repo_label")}</span>')
         if record.get("has_metrics"):
             detail_meta_parts.append(f'<span class="plugin-list-meta-item mp-warning-note">{esc("metrics_text")}</span>')
         if record.get("has_tags"):
@@ -914,6 +902,7 @@ class PluginMarketplacePanel(Panel):
             f'{version_span}'
             '</button>'
             '<div class="plugin-list-summary-right">'
+            f'{self._build_project_link_markup(record)}'
             f'{summary_status}'
             f'<span class="plugin-list-marker {esc("summary_marker_class")}">{esc("summary_marker")}</span>'
             '</div>'
@@ -940,6 +929,18 @@ class PluginMarketplacePanel(Panel):
             '</div>'
         )
 
+    @staticmethod
+    def _build_project_link_markup(record: Dict[str, object]) -> str:
+        url = str(record.get("github_url") or "")
+        if not url:
+            return ""
+        escaped_url = escape(url, quote=True)
+        label = escape(lf.ui.tr("plugin_marketplace.project_link"))
+        return (
+            f'<a class="mp-project-link" href="{escaped_url}" '
+            f'data-action="open-url" data-url="{escaped_url}">{label}</a>'
+        )
+
     def _build_action_buttons_markup(self, record: Dict[str, object]) -> str:
         tr = lf.ui.tr
 
@@ -950,37 +951,37 @@ class PluginMarketplacePanel(Panel):
         if record.get("show_cancel"):
             buttons.append(
                 f'<button class="btn btn--warning" data-action="cancel" data-card-id="{esc("card_id")}">'
-                f'{escape(tr("plugin_marketplace.cancel"))}</button>'
+                f'<span>{escape(tr("plugin_marketplace.cancel"))}</span></button>'
             )
         if record.get("show_install"):
             buttons.append(
                 f'<button class="btn btn--success" data-action="install" data-card-id="{esc("card_id")}">'
-                f'{escape(tr("plugin_marketplace.button.install"))}</button>'
+                f'<span>{escape(tr("plugin_marketplace.button.install"))}</span></button>'
             )
         if record.get("show_load"):
             buttons.append(
                 f'<button class="btn btn--success" data-action="load" data-card-id="{esc("card_id")}" '
-                f'data-plugin="{esc("plugin_name")}">{escape(tr("plugin_manager.button.load"))}</button>'
+                f'data-plugin="{esc("plugin_name")}"><span>{escape(tr("plugin_manager.button.load"))}</span></button>'
             )
         if record.get("show_unload"):
             buttons.append(
                 f'<button class="btn btn--warning" data-action="unload" data-card-id="{esc("card_id")}" '
-                f'data-plugin="{esc("plugin_name")}">{escape(tr("plugin_manager.button.unload"))}</button>'
+                f'data-plugin="{esc("plugin_name")}"><span>{escape(tr("plugin_manager.button.unload"))}</span></button>'
             )
         if record.get("show_reload"):
             buttons.append(
                 f'<button class="btn btn--primary" data-action="reload" data-card-id="{esc("card_id")}" '
-                f'data-plugin="{esc("plugin_name")}">{escape(tr("plugin_manager.button.reload"))}</button>'
+                f'data-plugin="{esc("plugin_name")}"><span>{escape(tr("plugin_manager.button.reload"))}</span></button>'
             )
         if record.get("show_update"):
             buttons.append(
                 f'<button class="btn btn--primary" data-action="update" data-card-id="{esc("card_id")}" '
-                f'data-plugin="{esc("plugin_name")}">{escape(tr("plugin_manager.button.update"))}</button>'
+                f'data-plugin="{esc("plugin_name")}"><span>{escape(tr("plugin_manager.button.update"))}</span></button>'
             )
         if record.get("show_uninstall"):
             buttons.append(
                 f'<button class="btn btn--error" data-action="uninstall" data-card-id="{esc("card_id")}" '
-                f'data-plugin="{esc("plugin_name")}">{escape(tr("plugin_manager.button.uninstall"))}</button>'
+                f'data-plugin="{esc("plugin_name")}"><span>{escape(tr("plugin_manager.button.uninstall"))}</span></button>'
             )
         return "".join(buttons)
 
@@ -1322,9 +1323,14 @@ class PluginMarketplacePanel(Panel):
                 focus()
 
     def _on_keydown(self, event):
-        if not self._confirm_is_open:
-            return
         key = int(event.get_parameter("key_identifier", "0"))
+        if not self._confirm_is_open:
+            target = event.target()
+            if key == KI_RETURN and target is not None and target.tag_name == "a":
+                if target.get_attribute("data-action", "") == "open-url":
+                    self._on_card_click(event)
+                    event.stop_propagation()
+            return
         if key in (KI_ESCAPE, KI_RETURN):
             # Enter is consumed as a safe no-op; it must never turn keyboard
             # focus into an implicit destructive uninstall confirmation.

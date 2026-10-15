@@ -6,7 +6,8 @@
 /* ── Window layout ───────────────────────────────────────── */
 
 #content-wrap {
-    padding: 0;
+    /* Keep scrollbars clear of the floating window's 6dp resize zone. */
+    padding: 0 8dp 8dp;
     overflow: hidden;
     min-width: 0;
     min-height: 0;
@@ -40,13 +41,6 @@
     flex-direction: column;
     gap: 4dp;
     margin-bottom: 12dp;
-}
-
-.mp-title {
-    display: block;
-    font-size: 13dp;
-    font-weight: 600;
-    line-height: 18dp;
 }
 
 .mp-intro > .mp-warning-note {
@@ -111,12 +105,15 @@
 }
 
 .mp-view-btn {
-    width: 28dp;
-    min-width: 28dp;
-    height: 24dp;
-    min-height: 24dp;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30dp;
+    min-width: 30dp;
+    height: 30dp;
+    min-height: 30dp;
     padding: 0;
-    line-height: 22dp;
     text-align: center;
 }
 
@@ -192,15 +189,8 @@
     flex: 1;
     min-width: 120dp;
     box-sizing: border-box;
-    height: 24dp;
-    min-height: 24dp;
-}
-
-.mp-install-btn {
-    flex-shrink: 0;
-    box-sizing: border-box;
-    height: 24dp;
-    min-height: 24dp;
+    height: 30dp;
+    min-height: 30dp;
 }
 
 .mp-formats-header {
@@ -307,9 +297,9 @@
 .plugin-card {
     box-sizing: border-box;
     width: 100%;
-    height: 220dp;
+    height: auto;
     min-width: 0;
-    min-height: 0;
+    min-height: 250dp;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -326,7 +316,6 @@
     min-height: 0;
     min-width: 0;
     overflow: hidden;
-    cursor: pointer;
 }
 
 .card-title-row {
@@ -415,11 +404,7 @@
 
 .card-buttons .btn {
     flex: 1 1 auto;
-    min-width: 64dp;
-    height: 24dp;
-    min-height: 24dp;
-    padding: 2dp 6dp;
-    font-size: 11dp;
+    min-width: 76dp;
 }
 
 .card-startup-row,
@@ -608,17 +593,20 @@
     line-height: 15dp;
 }
 
-.plugin-list-link {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
-    padding: 0;
-    border-width: 0;
-    background-color: transparent;
-    font-size: 11dp;
+.mp-project-link {
+    display: block;
+    flex-shrink: 0;
+    margin-top: 6dp;
+    font-size: 12dp;
+    line-height: 18dp;
+    text-decoration: underline;
     cursor: pointer;
+    tab-index: auto;
+}
+
+.plugin-list-summary .mp-project-link {
+    margin-top: 0;
+    white-space: nowrap;
 }
 
 .plugin-list-description,
@@ -658,11 +646,25 @@
 }
 
 .plugin-list-buttons .btn {
-    min-width: 64dp;
-    height: 24dp;
-    min-height: 24dp;
-    padding: 2dp 6dp;
-    font-size: 11dp;
+    min-width: 76dp;
+}
+
+/* Labels live in spans so RmlUi measures them as flex items. */
+.card-buttons .btn,
+.plugin-list-buttons .btn,
+.mp-install-btn,
+.confirm-buttons .btn {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    height: 30dp;
+    min-height: 30dp;
+    padding: 0 12dp;
+    font-size: 13dp;
+    line-height: 18dp;
+    text-align: center;
 }
 
 /* ── Catalog status ───────────────────────────────────────── */
@@ -749,6 +751,4 @@
 
 .confirm-buttons .btn {
     min-width: 76dp;
-    height: 26dp;
-    min-height: 26dp;
 }

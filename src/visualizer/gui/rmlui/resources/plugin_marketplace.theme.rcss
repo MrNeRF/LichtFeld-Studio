@@ -2,10 +2,6 @@
 
 /* ── Intro and controls ──────────────────────────────────── */
 
-.mp-title {
-    color: @{text};
-}
-
 .mp-warning-note {
     color: @{warning};
 }
@@ -142,14 +138,17 @@
     color: @{info};
 }
 
-.card-repo,
-.plugin-list-link {
+.card-repo {
     color: @{text_dim};
 }
 
-.plugin-list-link:hover {
+.mp-project-link {
     color: @{primary};
-    text-decoration: underline;
+}
+
+.mp-project-link:hover,
+.mp-project-link:focus-visible {
+    background-color: @{alpha(primary,0.12)};
 }
 
 .card-metrics {
