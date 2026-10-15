@@ -552,13 +552,6 @@
     text-align: right;
 }
 
-.plugin-list-marker {
-    width: 12dp;
-    min-width: 12dp;
-    font-size: 12dp;
-    text-align: center;
-}
-
 .plugin-list-details {
     display: flex;
     flex-direction: column;
@@ -602,11 +595,6 @@
     text-decoration: underline;
     cursor: pointer;
     tab-index: auto;
-}
-
-.plugin-list-summary .mp-project-link {
-    margin-top: 0;
-    white-space: nowrap;
 }
 
 .plugin-list-description,

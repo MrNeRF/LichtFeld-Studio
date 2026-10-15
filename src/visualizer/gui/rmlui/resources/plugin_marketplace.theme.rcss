@@ -226,14 +226,6 @@
     color: @{text_dim};
 }
 
-.plugin-list-marker--local {
-    color: @{text_dim};
-}
-
-.plugin-list-marker--remote {
-    color: @{primary};
-}
-
 /* ── Catalog status ───────────────────────────────────────── */
 
 #status-bar {

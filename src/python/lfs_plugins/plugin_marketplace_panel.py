@@ -559,8 +559,6 @@ class PluginMarketplacePanel(Panel):
             "show_startup": show_startup,
             "startup_checked": startup_checked,
             "summary_status_text": status_text,
-            "summary_marker": "●" if (is_local and not has_github) else "★",
-            "summary_marker_class": "plugin-list-marker--local" if (is_local and not has_github) else "plugin-list-marker--remote",
         }
 
     def _render_entry_layout(self, doc, records: List[Dict[str, object]], force: bool = False):
@@ -902,14 +900,13 @@ class PluginMarketplacePanel(Panel):
             f'{version_span}'
             '</button>'
             '<div class="plugin-list-summary-right">'
-            f'{self._build_project_link_markup(record)}'
             f'{summary_status}'
-            f'<span class="plugin-list-marker {esc("summary_marker_class")}">{esc("summary_marker")}</span>'
             '</div>'
             '</div>'
             f'<div class="plugin-list-details{expanded_class}">'
             f'{detail_meta}'
             f'{detail_text}'
+            f'{self._build_project_link_markup(record)}'
             f'{self._build_feedback_markup(record, extra_class="plugin-list-feedback")}'
             f'<div class="plugin-list-options">'
             f'<div class="plugin-list-buttons" id="btns-{esc("card_id")}">{self._build_action_buttons_markup(record)}</div>'
