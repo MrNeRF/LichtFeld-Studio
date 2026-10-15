@@ -1,5 +1,51 @@
 # Shared Media Ingest module and optional CLI
 
+## Original image EXIF
+
+`media-ingest source-exif INPUT` explicitly reads JPEG APP1 EXIF before the first
+SOS marker, or the Exif items associated with a HEIF container's primary image.
+It does not decode pixels, require an HEVC pixel decoder, change training
+exposure/orientation/color, write files, or inspect auxiliary HEIF images.
+`MediaIngest::sourceExif(path)` provides the owning C++ result;
+`lichtfeld.media.MediaIngest.source_exif_json(path)` returns the shared JSON
+representation, also used by the `media.source_exif` MCP query.
+
+Collection and interpretation have separate statuses. `collected` means original
+blocks were retained, not that their EXIF structure is valid. `parsed` describes
+supported classic TIFF directories and values only; it does not mean every
+vendor-specific structure has been interpreted. Unsupported, malformed and
+limited interpretations retain the original blocks. An `io_error` collection
+status is distinct from absent EXIF. A successful inspection response can thus
+contain an unsuccessful collection or interpretation status; consumers must
+inspect those fields.
+
+JSON binary fields use hexadecimal strings (`binary_encoding: "hex"`), including
+the complete JPEG `Exif\0\0` envelope or HEIF offset prefix. Ordered entries
+retain original ID/type/count, IFD offset, entry ordinal and directory path
+(root ordinal followed by parent entry ordinals). Duplicate IDs do not overwrite
+one another. ASCII retains raw bytes, including NUL and invalid UTF-8. Unsigned
+RATIONAL and signed SRATIONAL retain exact numerator/denominator, including zero
+denominators. Nonfinite floating values use `nan`, `+inf`, or `-inf`; their
+original bit patterns remain in the retained block. No orientation, GPS or date
+normalization is applied.
+
+MakerNotes remain opaque. A private parse copy masks their tag ID while FFmpeg
+decodes their bytes, preventing vendor-IFD guessing; the adapter restores the
+original ID by ordinal. Root IFDs are parsed separately to avoid FFmpeg synthetic
+extra-IFD IDs overwriting real tags. Originals are never rewritten. A structural
+guard checks ranges, overlapping directory/value storage, directory visits,
+depth and aggregate value allocation before FFmpeg. BigTIFF, repeated directory
+offsets, chained nested IFDs, zero-count values and unsupported directory-pointer
+representations are retained without a typed interpretation.
+
+Defaults: JPEG header window 1 MiB, original block 1 MiB, original bytes 4 MiB,
+64 blocks; typed interpretation across all blocks 4096 entries, 64 directories
+and an 8 MiB decoded-value storage charge. Per-directory FFmpeg limits and depth
+are also respected. Collection limits do not bound libheif's container parsing
+allocations or promise a hard process/time ceiling. No complete-file metadata
+archive, vendor MakerNote relocation, export metadata writing or sidecar support
+is implied by this API.
+
 ## Production ownership
 
 `src/media/CMakeLists.txt` defines the shared C++23 `lfs_media` target in the

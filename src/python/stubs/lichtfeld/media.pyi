@@ -726,6 +726,12 @@ class MediaIngest:
     def capabilities() -> IngestCapabilities: ...
 
     @staticmethod
+    def source_exif_json(path: str | os.PathLike) -> str:
+        """
+        Read original JPEG/primary HEIF EXIF and typed entries as JSON; binary values are hex, MakerNotes opaque.
+        """
+
+    @staticmethod
     def codec_build_info() -> CodecBuildInfo: ...
 
     @staticmethod

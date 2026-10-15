@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "py_media.hpp"
 #include "media/media_ingest.hpp"
+#include "media/media_json.hpp"
 #include <exception>
 #include <memory>
 #include <nanobind/stl/array.h>
@@ -121,6 +122,11 @@ namespace lfs::python {
                 if (!*result) throw Exception(result->error()); }, nb::arg("path"), nb::arg("frame"), nb::arg("options") = Tiff16OutputOptions{}, nb::arg("cancelled") = nb::none());
         nb::class_<MediaIngest>(m, "MediaIngest")
             .def_static("capabilities", &MediaIngest::capabilities)
+            .def_static("source_exif_json", [](const std::filesystem::path& path) {
+                nb::gil_scoped_release release;
+                const auto result = MediaIngest::sourceExif(path);
+                if (!result) throw Exception(result.error());
+                return json_detail::sourceExif(*result).dump(); }, nb::arg("path"), "Read original JPEG/primary HEIF EXIF and typed entries as JSON; binary values are hex, MakerNotes opaque.")
             .def_static("codec_build_info", &MediaIngest::codecBuildInfo)
             .def_static("probe", [](const std::filesystem::path& path, bool headers_only, std::int64_t timeout_ms) {
                 ProbeOptions options;

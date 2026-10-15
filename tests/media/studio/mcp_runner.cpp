@@ -29,6 +29,10 @@ int main(int argc, char** argv) {
         }
         mcp::ToolRegistry registry;
         app::register_media_tools(registry);
+        if (input.value("operation", "") == "source-exif") {
+            std::cout << registry.call_tool("media.source_exif", input.at("arguments")).dump() << std::endl;
+            return 0;
+        }
         json output;
         output["capabilities"] = registry.call_tool("media.capabilities", json::object());
         output["probe"] = registry.call_tool("media.probe", {{"input", input.at("request").at("input")}});
