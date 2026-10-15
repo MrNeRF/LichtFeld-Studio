@@ -1171,6 +1171,7 @@
     "mirror_z": "Z轴镜像",
     "home": "主页",
     "focus_selection": "聚焦选择",
+    "reset_home": "重置主页",
     "projects": "项目",
     "splat_rendering": "Splat渲染",
     "point_cloud": "点云",

@@ -1171,6 +1171,7 @@
     "mirror_z": "Z軸ミラー",
     "home": "ホーム",
     "focus_selection": "選択にフォーカス",
+    "reset_home": "ホームをリセット",
     "projects": "プロジェクト",
     "splat_rendering": "スプラットレンダリング",
     "point_cloud": "ポイントクラウド",

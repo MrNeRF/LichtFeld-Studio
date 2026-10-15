@@ -3128,6 +3128,16 @@ namespace lfs::vis {
         return handleFocusSelection(activeKeyboardViewport());
     }
 
+    void InputController::resetHome() {
+        auto& target = activeKeyboardViewport();
+        target.camera.resetHomePosition();
+        resetViewportToHome(target, viewport_);
+        publishCameraMove(&target);
+        if (auto* const viewer = lfs::python::get_visualizer()) {
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+        }
+    }
+
     // Helpers
     bool InputController::isInViewport(double x, double y) const {
         return x >= viewport_bounds_.x &&

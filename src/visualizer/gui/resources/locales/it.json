@@ -1171,6 +1171,7 @@
     "mirror_z": "Specchia Z",
     "home": "Home",
     "focus_selection": "Focalizza selezione",
+    "reset_home": "Ripristina home",
     "projects": "Progetti",
     "splat_rendering": "Rendering Splat",
     "point_cloud": "Nuvola di Punti",

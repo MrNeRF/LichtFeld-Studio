@@ -1171,6 +1171,7 @@
     "mirror_z": "Z축 미러",
     "home": "홈",
     "focus_selection": "선택 항목에 초점",
+    "reset_home": "홈 초기화",
     "projects": "프로젝트",
     "splat_rendering": "스플랫 렌더링",
     "point_cloud": "포인트 클라우드",

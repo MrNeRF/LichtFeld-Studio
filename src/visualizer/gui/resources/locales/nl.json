@@ -1171,6 +1171,7 @@
     "mirror_z": "Spiegel Z",
     "home": "Start",
     "focus_selection": "Selectie focussen",
+    "reset_home": "Start herstellen",
     "projects": "Projecten",
     "splat_rendering": "Splat-rendering",
     "point_cloud": "Puntenwolk",

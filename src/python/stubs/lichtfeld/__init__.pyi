@@ -623,6 +623,11 @@ def focus_selection() -> bool:
     Focus the active viewport on the selection, or the whole scene when nothing is selected
     """
 
+def reset_home() -> None:
+    """
+    Restore the default home view of the active viewport and move the camera there
+    """
+
 def get_camera_navigation_mode() -> str:
     """
     Get the active camera navigation mode ('orbit', 'trackball', 'fpv', or 'drone')

@@ -1169,6 +1169,7 @@
     "mirror_z": "Mirror Z",
     "home": "Home",
     "focus_selection": "Focus Selection",
+    "reset_home": "Reset Home",
     "projects": "Projects",
     "splat_rendering": "Splat Rendering",
     "point_cloud": "Point Cloud",

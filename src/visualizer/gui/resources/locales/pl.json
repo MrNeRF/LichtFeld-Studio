@@ -1171,6 +1171,7 @@
     "mirror_z": "Odbicie Z",
     "home": "Start",
     "focus_selection": "Skupienie na zaznaczeniu",
+    "reset_home": "Przywróć start",
     "projects": "Projekty",
     "splat_rendering": "Renderowanie Splat",
     "point_cloud": "Chmura Punktów",
