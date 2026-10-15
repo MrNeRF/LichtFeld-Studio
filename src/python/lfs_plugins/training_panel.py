@@ -47,6 +47,21 @@ def _eval_mask_display(params):
     return os.path.basename(params.eval_mask)
 
 
+EVAL_PIXEL_SETS = ("mask", "unmasked", "inverted")
+
+
+def _eval_report_sets(params):
+    """The pixel sets eval_mask_report lists, headline first; the mask alone for an empty list."""
+    if not (params and params.has_params() and params.eval_mask_report):
+        return ["mask"]
+    return [entry.strip() for entry in params.eval_mask_report.split(",")]
+
+
+def _eval_report_value(headline, also_scored):
+    sets = [headline] + [s for s in EVAL_PIXEL_SETS if s != headline and s in also_scored]
+    return "" if sets == ["mask"] else ",".join(sets)
+
+
 class IterationRateTracker:
     WINDOW_SECONDS = 5.0
 
@@ -407,6 +422,16 @@ class TrainingPanel(Panel):
         model.bind_func("label_use_cropbox", lambda: tr("training_params.eval_mask_use_cropbox"))
         model.bind_func("label_mask_folder", lambda: tr("training_params.eval_mask_folder"))
         model.bind_func("label_eval_mask_spec", lambda: tr("training_params.eval_mask_spec"))
+        model.bind_func("label_eval_mask_headline", lambda: tr("training_params.eval_mask_report"))
+        for pixel_set in EVAL_PIXEL_SETS:
+            model.bind_func(
+                f"label_eval_set_{pixel_set}",
+                lambda pixel_set=pixel_set: tr(f"training.options.eval_mask_set.{pixel_set}"),
+            )
+            model.bind_func(
+                f"label_eval_also_{pixel_set}",
+                lambda pixel_set=pixel_set: tr(f"training_params.eval_mask_report_{pixel_set}"),
+            )
         model.bind_func(
             "label_bg_browse", lambda: tr("training_params.bg_image_browse")
         )
@@ -904,6 +929,25 @@ class TrainingPanel(Panel):
             self._text_bufs["eval_mask_spec_str"] = str(v)
 
         model.bind("eval_mask_spec_str", eval_mask_spec_getter, eval_mask_spec_setter)
+        model.bind(
+            "eval_mask_headline_str",
+            lambda: _eval_report_sets(p())[0],
+            lambda v: self._set_eval_report(str(v), _eval_report_sets(p())[1:]),
+        )
+        for pixel_set in EVAL_PIXEL_SETS:
+            model.bind(
+                f"eval_also_{pixel_set}",
+                lambda pixel_set=pixel_set: pixel_set in _eval_report_sets(p())[1:],
+                lambda v, pixel_set=pixel_set: self._set_eval_also_scored(pixel_set, bool(v)),
+            )
+            model.bind_func(
+                f"show_eval_also_{pixel_set}",
+                lambda pixel_set=pixel_set: p() is not None
+                and p().has_params()
+                and p().enable_eval
+                and bool(p().eval_mask)
+                and _eval_report_sets(p())[0] != pixel_set,
+            )
 
         self._text_bufs["max_width_str"] = None
 
@@ -1925,6 +1969,24 @@ class TrainingPanel(Panel):
             self._handle.dirty_all()
         return True
 
+    def _set_eval_report(self, headline, also_scored):
+        params = lf.optimization_params()
+        if not params or not params.has_params() or headline not in EVAL_PIXEL_SETS:
+            return
+        value = _eval_report_value(headline, also_scored)
+        if value == params.eval_mask_report:
+            return
+        params.eval_mask_report = value
+        if self._handle:
+            self._handle.dirty_all()
+
+    def _set_eval_also_scored(self, pixel_set, scored):
+        sets = _eval_report_sets(lf.optimization_params())
+        also_scored = set(sets[1:]) - {pixel_set}
+        if scored:
+            also_scored.add(pixel_set)
+        self._set_eval_report(sets[0], also_scored)
+
     def _set_depth_loss_mode(self, val_str):
         params = lf.optimization_params()
         if not params or not params.has_params():
@@ -2567,11 +2629,7 @@ class TrainingPanel(Panel):
             params = lf.optimization_params()
             if params and params.has_params():
                 params.eval_mask = ""
-                invert_binding = self._pv_binding_by_prop.get("eval_mask_invert")
-                if invert_binding is not None:
-                    invert_binding.set_value("eval_mask_invert", False)
-                else:
-                    params.eval_mask_invert = False
+                params.eval_mask_report = ""
                 if self._handle:
                     self._handle.dirty_all()
         elif action == "clear_ppisp_sidecar":

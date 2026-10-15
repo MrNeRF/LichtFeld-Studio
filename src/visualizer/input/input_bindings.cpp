@@ -3120,9 +3120,6 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_RIGHT:
         case Action::CAMERA_MOVE_UP:
         case Action::CAMERA_MOVE_DOWN:
-        case Action::CAMERA_RESET_HOME:
-        case Action::CAMERA_SET_HOME:
-        case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_SET_PIVOT:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:
@@ -3134,7 +3131,7 @@ namespace lfs::vis::input {
             return ShortcutScope::Viewport;
 
         default:
-            // Scene, tool, and edit key shortcuts yield to a focused text widget.
+            // Scene, tool, edit, framing and home shortcuts yield to a focused text widget.
             return ShortcutScope::GlobalWhenNotTextEditing;
         }
     }

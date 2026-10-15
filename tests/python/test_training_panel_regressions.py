@@ -109,7 +109,7 @@ class _ParamsStub:
         self.ppisp_controller_activation_step = 5678
         self.enable_eval = False
         self.eval_mask = ""
-        self.eval_mask_invert = False
+        self.eval_mask_report = ""
         self.save_steps = [7000]
         self.eval_steps = []
         self.bg_color = (0.0, 0.0, 0.0)
@@ -1027,8 +1027,8 @@ def test_browse_background_image_uses_current_image_dialog(training_panel_module
     assert panel._handle.dirty_all_count == 1
 
 
-# Catches a cleared path leaving inversion active or a browse action ignoring its start directory.
-def test_eval_mesh_browser_sets_path_and_clear_resets_invert(
+# Catches a cleared path leaving pixel sets listed or a browse action ignoring its start directory.
+def test_eval_mesh_browser_sets_path_and_clear_resets_the_report(
     training_panel_module, monkeypatch, tmp_path
 ):
     panel = training_panel_module.TrainingPanel()
@@ -1038,7 +1038,7 @@ def test_eval_mesh_browser_sets_path_and_clear_resets_invert(
     current_dir.mkdir()
     params.eval_mask = str(current_dir / "mask.obj")
     selected_path = str(tmp_path / "new" / "mask.ply")
-    params.eval_mask_invert = True
+    params.eval_mask_report = "inverted,mask"
     calls = []
 
     def open_mesh_file_dialog(start_dir):
@@ -1060,8 +1060,31 @@ def test_eval_mesh_browser_sets_path_and_clear_resets_invert(
 
     panel._on_action(None, None, ["clear_eval_mask"])
     assert params.eval_mask == ""
-    assert params.eval_mask_invert is False
+    assert params.eval_mask_report == ""
     assert panel._handle.dirty_all_count == 2
+
+
+# Catches the headline select or the also-score checkboxes writing a list that loses the headline, keeps the headline
+# as an extra set, or stores the plain mask as a report.
+def test_eval_report_headline_and_also_scored_sets(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    params.eval_mask = "cropbox"
+    monkeypatch.setattr(training_panel_module, "lf", SimpleNamespace(optimization_params=lambda: params))
+
+    panel._set_eval_also_scored("inverted", True)
+    assert params.eval_mask_report == "mask,inverted"
+    panel._set_eval_also_scored("unmasked", True)
+    assert params.eval_mask_report == "mask,unmasked,inverted"
+    panel._set_eval_report("inverted", training_panel_module._eval_report_sets(params)[1:])
+    assert params.eval_mask_report == "inverted,unmasked"
+    panel._set_eval_also_scored("mask", True)
+    assert params.eval_mask_report == "inverted,mask,unmasked"
+    assert training_panel_module._eval_report_sets(params)[0] == "inverted"
+    panel._set_eval_report("mask", ["unmasked"])
+    panel._set_eval_also_scored("unmasked", False)
+    assert params.eval_mask_report == ""
 
 
 def test_training_panel_no_longer_uses_removed_image_dialog_alias():

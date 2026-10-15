@@ -149,6 +149,22 @@ namespace lfs::vis {
 #endif
             }
         };
+
+        // Two Gaussians at x +/- 1 around `x`, so framing has a nonzero box.
+        std::unique_ptr<lfs::core::SplatData> makeTwoGaussianSplat(const float x) {
+            using lfs::core::DataType;
+            using lfs::core::Device;
+            using lfs::core::Tensor;
+            return std::make_unique<lfs::core::SplatData>(
+                0,
+                Tensor::from_vector({x - 1.0f, 0.0f, 0.0f, x + 1.0f, 0.0f, 0.0f}, {size_t{2}, size_t{3}}, Device::CPU),
+                Tensor::zeros({size_t{2}, size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::zeros({size_t{2}, size_t{0}, size_t{3}}, Device::CPU, DataType::Float32),
+                Tensor::zeros({size_t{2}, size_t{3}}, Device::CPU),
+                Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f}, {size_t{2}, size_t{4}}, Device::CPU),
+                Tensor::zeros({size_t{2}, size_t{1}}, Device::CPU),
+                1.0f);
+        }
     } // namespace
 
     TEST_F(InputControllerFocusTest, NavigationModeChangesRequestGuiRedraw) {
@@ -889,6 +905,71 @@ namespace lfs::vis {
         op::operators().unregisterOperator(id);
     }
 
+    TEST_F(InputControllerFocusTest, FocusFramesOnlyVisibleModels) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        SceneManager scene_manager;
+        ToolContext tool_context(nullptr, &scene_manager, &viewport, nullptr);
+        controller.setToolContext(&tool_context);
+
+        auto& scene = scene_manager.getScene();
+        const auto group = scene.addGroup("group");
+        scene.addSplat("near", makeTwoGaussianSplat(0.0f), group);
+        scene.setNodeVisibility(scene.addSplat("far", makeTwoGaussianSplat(100.0f), group), false);
+
+        const auto expect_framed_near = [&](const char* selection) {
+            SCOPED_TRACE(selection);
+            viewport.camera.pivot = glm::vec3(7.0f);
+            ASSERT_TRUE(controller.focusSelection());
+            EXPECT_LT(glm::length(viewport.camera.getPivot()), 1e-3f);
+        };
+        expect_framed_near("nothing");
+        scene_manager.selectNode("group");
+        expect_framed_near("group with a hidden child");
+        scene_manager.selectNode("far");
+        expect_framed_near("hidden node");
+    }
+
+    TEST_F(InputControllerFocusTest, FrameAndHomeKeysWorkWhileAPanelHasKeyboardFocus) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        SceneManager scene_manager;
+        ToolContext tool_context(nullptr, &scene_manager, &viewport, nullptr);
+        controller.setToolContext(&tool_context);
+        scene_manager.getScene().addSplat("model", makeTwoGaussianSplat(10.0f));
+
+        // A row clicked in the scene panel holds keyboard focus.
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.any_item_active = true;
+        ASSERT_FALSE(router.isViewportKeyboardFocused());
+
+        // A key the panel handled itself stays there (the image preview uses F).
+        controller.handleKey(input::KEY_F, input::KEY_F, 0, input::ACTION_PRESS, input::KEYMOD_NONE, false, true);
+        EXPECT_LT(glm::length(viewport.camera.getPivot()), 1e-3f);
+
+        controller.handleKey(input::KEY_F, input::ACTION_PRESS, input::KEYMOD_NONE);
+        const glm::vec3 framed = viewport.camera.getPivot();
+        EXPECT_NEAR(glm::length(framed), 10.0f, 1e-3f);
+
+        controller.handleKey(input::KEY_H, input::ACTION_PRESS, input::KEYMOD_SHIFT);
+        viewport.camera.pivot = glm::vec3(7.0f);
+        controller.handleKey(input::KEY_H, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(viewport.camera.getPivot(), framed);
+
+        const decltype(viewport.camera) defaults{};
+        controller.resetHome();
+        EXPECT_EQ(viewport.camera.home_t, defaults.home_t);
+        EXPECT_EQ(viewport.camera.getPivot(), defaults.home_pivot);
+
+        focus.want_text_input = true;
+        controller.handleKey(input::KEY_F, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(viewport.camera.getPivot(), defaults.home_pivot);
+    }
+
     TEST_F(InputControllerFocusTest, DeleteNodeShortcutFiresWhenViewportFocused) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
@@ -1283,6 +1364,32 @@ namespace lfs::vis {
         EXPECT_NEAR(viewport.camera.t.z, 5.0f, 1e-5f);
         EXPECT_GT(forward.y, 0.0f);
         EXPECT_NEAR(glm::dot(forward, to_pivot), 1.0f, 1e-4f);
+    }
+
+    // Fails if mouse look stops while the locked pointer rests at the window edge.
+    TEST_F(InputControllerFocusTest, FpvLookKeepsTurningWhileThePointerRestsAtTheEdge) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        viewport.camera.t = glm::vec3(0.0f, 0.0f, 5.0f);
+        viewport.camera.setPivot(glm::vec3(0.0f));
+        viewport.camera.R = glm::mat3(1.0f);
+        controller.setCameraNavigationMode(InputController::CameraNavigationMode::FPV);
+        const glm::vec3 start = lfs::rendering::cameraForward(viewport.camera.R);
+
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, 40.0, 50.0);
+        controller.handleMouseMove(0.0, 50.0, glm::dvec2(-40.0, 0.0));
+        const glm::vec3 first = lfs::rendering::cameraForward(viewport.camera.R);
+        controller.handleMouseMove(0.0, 50.0, glm::dvec2(-40.0, 0.0));
+        const glm::vec3 second = lfs::rendering::cameraForward(viewport.camera.R);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_RELEASE, 0.0, 50.0);
+
+        const float first_turn = std::acos(glm::clamp(glm::dot(start, first), -1.0f, 1.0f));
+        const float second_turn = std::acos(glm::clamp(glm::dot(first, second), -1.0f, 1.0f));
+        EXPECT_GT(first_turn, 0.01f);
+        EXPECT_NEAR(second_turn, first_turn, 1e-3f);
+        EXPECT_NEAR(viewport.camera.t.z, 5.0f, 1e-5f);
     }
 
     TEST_F(InputControllerFocusTest, TrackballModeAllowsPerfectTopView) {

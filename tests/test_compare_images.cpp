@@ -315,7 +315,7 @@ TEST(CompareImages, ScoresRealImagesAndResizesTheTestSet) {
     EXPECT_TRUE(fs::exists(output / "larger" / "compare_report.txt"));
     EXPECT_FALSE(fs::exists(output / "larger" / "metrics.csv"));
     EXPECT_TRUE(fs::exists(output / "larger" / "compare_images" / (NAMES[0] + ".png")));
-    EXPECT_TRUE(fs::exists(output / "larger" / "compare_images" / (NAMES[0] + "_flip.png")));
+    EXPECT_TRUE(fs::exists(output / "larger" / "compare_images" / "flip" / (NAMES[0] + ".png")));
 
     params.evaluation.enable_save_eval_images = false;
     ASSERT_TRUE(lfs::training::compare_image_sets(params, std::nullopt));
@@ -534,4 +534,38 @@ TEST(CompareImages, MasksAndShapeMismatch) {
     EXPECT_FALSE(mismatch->metrics.valid);
     for (const auto& view : mismatch->metrics.views)
         EXPECT_NE(view.skipped_reason.find("but its reference is"), std::string::npos) << view.skipped_reason;
+}
+
+// Catches the mask's scores left flat beside the extra pixel sets, or nested without them.
+TEST(CompareImages, JsonNestsEveryPixelSetUnderItsName) {
+    const auto keys = [](const nlohmann::ordered_json& object) {
+        std::vector<std::string> names;
+        for (const auto& item : object.items())
+            names.push_back(item.key());
+        return names;
+    };
+    lfs::training::CompareResult result;
+    result.metrics.valid = true;
+    result.metrics.psnr = 30.0f;
+    auto& view = result.metrics.views.emplace_back(
+        lfs::training::ViewMetrics{.image_name = "a.exr", .width = 8, .height = 4, .psnr = 30.0f, .evaluated_pixel_fraction = 0.25f});
+    const CompareParameters params;
+
+    const auto flat = lfs::training::compare_json(params, result);
+    EXPECT_EQ(keys(flat.at("images").at("a.exr")),
+              (std::vector<std::string>{"width", "height", "bit_depth", "evaluated_pixel_fraction", "psnr", "ssim", "lpips", "flip"}));
+    EXPECT_EQ(keys(flat.at("mean")), (std::vector<std::string>{"psnr", "ssim", "lpips", "flip"}));
+
+    using lfs::core::param::EvalPixelSet;
+    view.sets[EvalPixelSet::Mask] = lfs::training::MaskSetMetrics{.psnr = 30.0f, .evaluated_pixel_fraction = 0.25f};
+    view.sets[EvalPixelSet::Unmasked] = lfs::training::MaskSetMetrics{.psnr = 28.0f, .evaluated_pixel_fraction = 1.0f};
+    result.metrics.sets = view.sets;
+    const auto nested = lfs::training::compare_json(params, result);
+    const auto& image = nested.at("images").at("a.exr");
+    EXPECT_EQ(keys(image), (std::vector<std::string>{"width", "height", "bit_depth", "masked", "unmasked"}));
+    EXPECT_FLOAT_EQ(image.at("masked").at("psnr"), 30.0f);
+    EXPECT_FLOAT_EQ(image.at("masked").at("evaluated_pixel_fraction"), 0.25f);
+    EXPECT_FLOAT_EQ(image.at("unmasked").at("psnr"), 28.0f);
+    EXPECT_EQ(keys(nested.at("mean")), (std::vector<std::string>{"masked", "unmasked"}));
+    EXPECT_FLOAT_EQ(nested.at("mean").at("masked").at("psnr"), 30.0f);
 }

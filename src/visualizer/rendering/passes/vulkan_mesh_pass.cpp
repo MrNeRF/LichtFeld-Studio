@@ -2670,9 +2670,7 @@ namespace lfs::vis {
             viewport.height = static_cast<float>(viewport_rect.extent.height);
             viewport.minDepth = 0.0f;
             viewport.maxDepth = 1.0f;
-            VkRect2D scissor{};
-            scissor.offset = viewport_rect.offset;
-            scissor.extent = viewport_rect.extent;
+            const VkRect2D scissor = params.scissor.value_or(viewport_rect);
             vkCmdSetViewport(cb, 0, 1, &viewport);
             vkCmdSetScissor(cb, 0, 1, &scissor);
 
@@ -2692,7 +2690,7 @@ namespace lfs::vis {
             transparent_draws.clear();
             for (std::size_t item_index = 0; item_index < params.items.size(); ++item_index) {
                 const auto& item = params.items[item_index];
-                if (!item.mesh)
+                if (!item.mesh || params.draw_group >= 32 || !((item.panel_mask >> params.draw_group) & 1u))
                     continue;
                 auto it = mesh_cache.find(item.mesh->id());
                 if (it == mesh_cache.end() || it->second.vertex_buffer == VK_NULL_HANDLE) {

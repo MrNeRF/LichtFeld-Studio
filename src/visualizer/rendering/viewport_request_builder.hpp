@@ -8,6 +8,8 @@
 #include "core/scene.hpp"
 #include "passes/vulkan_mesh_pass.hpp"
 #include "render_pass.hpp"
+#include <optional>
+#include <vector>
 
 namespace lfs::vis {
 
@@ -44,8 +46,17 @@ namespace lfs::vis {
         const RenderSettings& settings,
         const glm::vec3& camera_backward);
 
-    // Visible splat node shown in a PLY-comparison panel, or null when the
-    // scene has fewer than two visible splat slots.
+    struct PlyComparisonNode {
+        const core::SceneNode* node = nullptr;
+        // Combined-model slot of a splat node; empty for a mesh, which the mesh pass draws.
+        std::optional<size_t> splat_slot;
+    };
+
+    // Nodes the PLY comparison pairs, in pair order: visible splat slots, then visible meshes.
+    [[nodiscard]] LFS_VIS_API std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene);
+
+    // Visible splat or mesh node shown in a PLY-comparison panel, or null when
+    // the scene has fewer than two of them.
     [[nodiscard]] LFS_VIS_API const core::SceneNode* plyComparisonNodeForPanel(
         const core::Scene& scene,
         size_t split_view_offset,

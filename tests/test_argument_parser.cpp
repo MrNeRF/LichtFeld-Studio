@@ -195,7 +195,6 @@ TEST(ArgumentParserTest, CompareSubcommandParsesAndRejectsTrainedModelMasks) {
              {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(), "--eval-mask", "points:2,3"},
              {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(), "--eval-mask", splat_spec.c_str(),
               "--eval-mask-opacity", "1.5"},
-             {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(), "--eval-mask-invert"},
              {"LichtFeld-Studio", "compare", reference.c_str(), splat.c_str()}}) {
         EXPECT_FALSE(lfs::core::args::parse_args(static_cast<int>(bad.size()), bad.data())) << bad.back();
     }
@@ -2589,7 +2588,6 @@ TEST(ArgumentParserTest, EvalMeshMaskStoresAbsolutePathAndSurvivesResume) {
         "--eval",
         "--eval-mask",
         spec.c_str(),
-        "--eval-mask-invert",
     };
     const auto parsed = lfs::core::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
@@ -2597,21 +2595,16 @@ TEST(ArgumentParserTest, EvalMeshMaskStoresAbsolutePathAndSurvivesResume) {
     const auto expected = lfs::core::path_to_utf8(
         std::filesystem::weakly_canonical(mesh));
     EXPECT_EQ((*parsed)->optimization.eval_mask, expected);
-    EXPECT_TRUE((*parsed)->optimization.eval_mask_invert);
     EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_mask"));
-    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_mask_invert"));
 
     const auto round_trip = lfs::core::param::OptimizationParameters::from_json(
         (*parsed)->optimization.to_json());
     EXPECT_EQ(round_trip.eval_mask, expected);
-    EXPECT_TRUE(round_trip.eval_mask_invert);
 
     lfs::core::param::TrainingParameters restored;
     restored.optimization.eval_mask.clear();
-    restored.optimization.eval_mask_invert = false;
     apply_explicit_training_overrides(restored, (*parsed)->overrides);
     EXPECT_EQ(restored.optimization.eval_mask, expected);
-    EXPECT_TRUE(restored.optimization.eval_mask_invert);
 }
 
 // Catches a box spec that is stored unnormalized, lost on resume, or accepted when malformed.
@@ -2636,55 +2629,54 @@ TEST(ArgumentParserTest, EvalBoxMaskNormalizesSurvivesResumeAndRejectsMalformedB
     }
 }
 
-// Catches mask report lists that select the wrong sets, are not stored in the project and the explicit overrides,
-// accept an entry they cannot score, or turn on without an evaluation; and compare ignoring the option.
-TEST(ArgumentParserTest, EvalMaskReportSelectsSetsSurvivesResumeAndRejectsBadLists) {
+// Catches report lists that lose their order, are not stored in the project and the explicit overrides, accept an
+// entry they cannot score or turn on without an evaluation or a mask; and compare ignoring the option.
+TEST(ArgumentParserTest, EvalMaskReportKeepsTheOrderSurvivesResumeAndRejectsBadLists) {
     const auto parse = [](const char* report) {
         const char* argv[] = {"LichtFeld-Studio", "--eval", "--eval-mask", "bbox:-1,-1,-1,1,1,1", report};
         return lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     };
-    for (const auto& [report, unmasked, inverted] :
-         {std::tuple{"--eval-mask-report=mask", false, false},
-          std::tuple{"--eval-mask-report=inverted, mask", false, true},
-          std::tuple{"--eval-mask-report=mask,unmasked,inverted", true, true}}) {
+    for (const auto& [report, stored] : {std::pair{"--eval-mask-report=mask", "mask"},
+                                         std::pair{"--eval-mask-report=inverted, mask", "inverted,mask"},
+                                         std::pair{"--eval-mask-report=unmasked,inverted,mask", "unmasked,inverted,mask"}}) {
         SCOPED_TRACE(report);
         const auto parsed = parse(report);
         ASSERT_TRUE(parsed) << parsed.error();
-        EXPECT_EQ((*parsed)->optimization.eval_mask_report_unmasked, unmasked);
-        EXPECT_EQ((*parsed)->optimization.eval_mask_report_inverted, inverted);
-        const auto round_trip = lfs::core::param::OptimizationParameters::from_json((*parsed)->optimization.to_json());
-        EXPECT_EQ(round_trip.eval_mask_report_unmasked, unmasked);
-        EXPECT_EQ(round_trip.eval_mask_report_inverted, inverted);
+        EXPECT_EQ((*parsed)->optimization.eval_mask_report, stored);
+        EXPECT_EQ(lfs::core::param::OptimizationParameters::from_json((*parsed)->optimization.to_json()).eval_mask_report,
+                  stored);
         lfs::core::param::TrainingParameters restored;
-        restored.optimization.eval_mask_report_unmasked = !unmasked;
-        restored.optimization.eval_mask_report_inverted = !inverted;
         apply_explicit_training_overrides(restored, (*parsed)->overrides);
-        EXPECT_EQ(restored.optimization.eval_mask_report_unmasked, unmasked);
-        EXPECT_EQ(restored.optimization.eval_mask_report_inverted, inverted);
+        EXPECT_EQ(restored.optimization.eval_mask_report, stored);
     }
 
-    for (const char* bad : {"--eval-mask-report=unmasked", "--eval-mask-report=mask,background",
-                            "--eval-mask-report=mask,mask", "--eval-mask-report=mask,", "--eval-mask-report="}) {
+    for (const char* bad : {"--eval-mask-report=mask,background", "--eval-mask-report=mask,mask",
+                            "--eval-mask-report=mask,", "--eval-mask-report="}) {
         const auto parsed = parse(bad);
         ASSERT_FALSE(parsed) << bad;
         EXPECT_NE(parsed.error().find("--eval-mask-report"), std::string::npos) << parsed.error();
     }
     const char* without_eval[] = {"LichtFeld-Studio", "--eval-mask-report=mask,unmasked"};
     EXPECT_FALSE(lfs::core::args::parse_args_and_params(static_cast<int>(std::size(without_eval)), without_eval));
+    const char* without_mask[] = {"LichtFeld-Studio", "--eval", "--eval-mask-report=inverted"};
+    const auto unmasked_run = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(without_mask)), without_mask);
+    ASSERT_FALSE(unmasked_run);
+    EXPECT_NE(unmasked_run.error().find("needs --eval-mask"), std::string::npos) << unmasked_run.error();
 
     const auto directory = std::filesystem::path(make_test_path("lfs_arg_parser_compare_report"));
     std::filesystem::create_directories(directory / "reference");
     std::filesystem::create_directories(directory / "test");
+    std::filesystem::create_directories(directory / "masks");
     const auto reference = (directory / "reference").string();
     const auto test = (directory / "test").string();
+    const auto masks = "masks:" + (directory / "masks").string();
     const char* compare_argv[] = {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(),
-                                  "--eval-mask-report=mask,unmasked"};
+                                  "--eval-mask", masks.c_str(), "--eval-mask-report=inverted,unmasked"};
     const auto compared = lfs::core::args::parse_args(static_cast<int>(std::size(compare_argv)), compare_argv);
     ASSERT_TRUE(compared) << compared.error();
     const auto* mode = std::get_if<lfs::core::args::CompareMode>(&*compared);
     ASSERT_NE(mode, nullptr);
-    EXPECT_TRUE(mode->params.evaluation.eval_mask_report_unmasked);
-    EXPECT_FALSE(mode->params.evaluation.eval_mask_report_inverted);
+    EXPECT_EQ(mode->params.evaluation.eval_mask_report, "inverted,unmasked");
     const char* compare_bad[] = {"LichtFeld-Studio", "compare", reference.c_str(), test.c_str(),
                                  "--eval-mask-report=inverted"};
     EXPECT_FALSE(lfs::core::args::parse_args(static_cast<int>(std::size(compare_bad)), compare_bad));
@@ -2717,10 +2709,10 @@ TEST(ArgumentParserTest, EvalFolderDepthAndCropBoxMasksParseAndValidate) {
     ASSERT_TRUE(parsed_none) << parsed_none.error();
     lfs::core::param::TrainingParameters resumed;
     resumed.optimization.eval_mask = "points:2,3";
-    resumed.optimization.eval_mask_invert = true;
+    resumed.optimization.eval_mask_report = "inverted";
     apply_explicit_training_overrides(resumed, (*parsed_none)->overrides);
     EXPECT_TRUE(resumed.optimization.eval_mask.empty());
-    EXPECT_FALSE(resumed.optimization.eval_mask_invert);
+    EXPECT_TRUE(resumed.optimization.eval_mask_report.empty());
 
     const char* cropbox[] = {"LichtFeld-Studio", "--eval", "--eval-mask", "cropbox"};
     const auto parsed_cropbox = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(cropbox)), cropbox);
@@ -2812,9 +2804,7 @@ TEST(ArgumentParserTest, EvalMeshMaskRejectsInvalidSourceFileAndFlagCombinations
         {{"LichtFeld-Studio", "--eval", "--eval-mask", missing_spec.c_str()},
          "does not exist"},
         {{"LichtFeld-Studio", "--eval-mask", mesh_spec.c_str()},
-         "need --eval"},
-        {{"LichtFeld-Studio", "--eval", "--eval-mask-invert"},
-         "needs --eval-mask"},
+         "needs --eval"},
     };
     for (const auto& [arguments, expected] : cases) {
         const auto parsed = lfs::core::args::parse_args_and_params(

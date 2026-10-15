@@ -71,16 +71,19 @@ class TestOptimizationParams:
         mesh.write_text("v 0 0 1\n", encoding="utf-8")
         params = lf.optimization_params()
         original_path = params.eval_mask
-        original_invert = params.eval_mask_invert
+        original_report = params.eval_mask_report
         try:
             monkeypatch.chdir(tmp_path)
             params.eval_mask = "mask.obj"
-            params.eval_mask_invert = True
+            params.eval_mask_report = "inverted,mask"
             assert params.eval_mask == str(mesh.resolve())
-            assert params.eval_mask_invert is True
+            assert params.eval_mask_report == "inverted,mask"
+            with pytest.raises(ValueError):
+                params.eval_mask_report = "inverted,background"
+            assert params.eval_mask_report == "inverted,mask"
         finally:
             params.eval_mask = original_path
-            params.eval_mask_invert = original_invert
+            params.eval_mask_report = original_report
 
     def test_depth_loss_properties_are_editable(self, lf):
         """Depth loading/loss controls should be exposed through Python params."""

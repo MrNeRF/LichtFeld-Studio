@@ -1759,6 +1759,12 @@ namespace lfs::vis {
             const auto& scene = scene_manager_->getScene();
             const auto sample = resolvePlyComparisonDepthSample(
                 scene, settings.split_view_offset, context.panel);
+            if (sample.node && sample.node->type == core::NodeType::MESH) {
+                // A mesh panel shows no Gaussians to pick.
+                viewport_screen_positions_[panel_index].reset();
+                viewport_screen_position_keys_[panel_index] = {};
+                return nullptr;
+            }
             ScreenPositionCacheKey key{
                 .valid = true,
                 .signature = makeScreenPositionCacheSignature(

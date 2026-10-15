@@ -482,7 +482,7 @@ TEST(MetricsEvaluator, FlipIsReportedAndSavedOnlyWhenEnabled) {
         const auto metrics = evaluator.evaluate(1, splat, dataset, background);
         ASSERT_TRUE(metrics.valid);
         ASSERT_EQ(metrics.views.size(), 1u);
-        const auto flip_png = params.dataset.output_path / "eval_step_1" / "_DSC8679_flip.png";
+        const auto flip_png = params.dataset.output_path / "eval_step_1" / "flip" / "_DSC8679.png";
         EXPECT_EQ(metrics.views[0].flip.has_value(), enabled);
         EXPECT_EQ(metrics.flip.has_value(), enabled);
         EXPECT_EQ(std::filesystem::exists(flip_png), enabled);
@@ -629,10 +629,11 @@ TEST(EvalImageCaptions, TextStaysInItsTileAndAMissingFontLeavesTheBandEmpty) {
     EXPECT_TRUE(std::ranges::all_of(empty, [&band](const float value) { return value == band[0]; }));
 }
 
-// Catches extra pixel sets that score anything but the evaluations they stand for: an unmasked set that keeps the mask
-// or drops the valid view, an inverted set that is not the complement inside the valid view, or an SSIM map shared
-// across sets that belongs to another set. Scored once with every set, a box mask must give the same scores as
-// separate evaluations with the mask, without it and with it inverted, on a pinhole and on a distorted camera.
+// Catches pixel sets that score anything but the evaluations they stand for: an unmasked set that keeps the mask or
+// drops the valid view, an inverted set that is not the complement inside the valid view, an SSIM map shared across
+// sets that belongs to another set, or headline scores that are not the first listed set's. In every order, a box
+// mask must give the same scores as separate evaluations with the mask, without it and with it inverted, on a pinhole
+// and on a distorted camera.
 TEST(MetricsEvaluator, MaskReportSetsMatchSeparateEvaluations) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
@@ -661,12 +662,11 @@ TEST(MetricsEvaluator, MaskReportSetsMatchSeparateEvaluations) {
                                 : make_eval_camera(image_path, {}, width, height);
         auto dataset = std::make_shared<CameraDataset>(std::vector<std::shared_ptr<Camera>>{camera}, DatasetConfig{},
                                                        CameraDataset::Split::ALL);
-        const auto evaluate = [&](const std::optional<bool> invert, const bool report) {
+        const auto evaluate = [&](const std::optional<bool> invert, const std::string& report) {
             auto params = make_eval_params(tmp / "out");
             params.optimization.undistort = distorted;
             params.optimization.eval_flip = true;
-            params.optimization.eval_mask_report_unmasked = report;
-            params.optimization.eval_mask_report_inverted = report;
+            params.optimization.eval_mask_report = report;
             MetricsEvaluator evaluator(params);
             if (std::filesystem::is_regular_file(lpips_weights))
                 evaluator.set_lpips_weights_path(lpips_weights);
@@ -677,45 +677,55 @@ TEST(MetricsEvaluator, MaskReportSetsMatchSeparateEvaluations) {
             EXPECT_EQ(metrics.views.size(), 1u);
             return metrics;
         };
-        const auto reported = evaluate(false, true);
-        const auto masked = evaluate(false, false);
-        const auto plain = evaluate(std::nullopt, false);
-        const auto inverted = evaluate(true, false);
-        ASSERT_TRUE(reported.valid && masked.valid && plain.valid && inverted.valid);
-
-        const auto& view = reported.views[0];
-        ASSERT_TRUE(view.unmasked && view.inverted);
-        EXPECT_FALSE(masked.views[0].unmasked || masked.views[0].inverted || masked.unmasked || masked.inverted);
-        const auto expect_same = [](const char* name, const auto& set, const lfs::training::ViewMetrics& separate) {
-            SCOPED_TRACE(name);
+        const auto masked = evaluate(false, "");
+        const auto plain = evaluate(std::nullopt, "");
+        const auto inverted = evaluate(true, "");
+        ASSERT_TRUE(masked.valid && plain.valid && inverted.valid);
+        EXPECT_FALSE(masked.sets.any() || masked.views[0].sets.any());
+        const std::array separate{&masked, &plain, &inverted};
+        const auto expect_same = [](const auto& set, const lfs::training::ViewMetrics& alone) {
             EXPECT_TRUE(set.skipped_reason.empty()) << set.skipped_reason;
-            EXPECT_EQ(set.psnr, separate.psnr);
-            EXPECT_EQ(set.ssim, separate.ssim);
+            EXPECT_EQ(set.psnr, alone.psnr);
+            EXPECT_EQ(set.ssim, alone.ssim);
             // LPIPS convolutions are not bitwise reproducible between runs, even for the same inputs.
-            ASSERT_EQ(set.lpips.has_value(), separate.lpips.has_value());
+            ASSERT_EQ(set.lpips.has_value(), alone.lpips.has_value());
             if (set.lpips)
-                EXPECT_NEAR(*set.lpips, *separate.lpips, 1.0e-5f);
-            EXPECT_EQ(set.flip, separate.flip);
-            EXPECT_EQ(set.evaluated_pixel_fraction, separate.evaluated_pixel_fraction);
+                EXPECT_NEAR(*set.lpips, *alone.lpips, 1.0e-5f);
+            EXPECT_EQ(set.flip, alone.flip);
+            EXPECT_EQ(set.evaluated_pixel_fraction, alone.evaluated_pixel_fraction);
         };
-        expect_same("mask", view, masked.views[0]);
-        expect_same("unmasked", *view.unmasked, plain.views[0]);
-        expect_same("inverted", *view.inverted, inverted.views[0]);
-        ASSERT_TRUE(view.flip);
 
-        EXPECT_GT(view.evaluated_pixel_fraction, 0.0f);
-        EXPECT_GT(view.inverted->evaluated_pixel_fraction, 0.0f);
-        EXPECT_NEAR(view.evaluated_pixel_fraction + view.inverted->evaluated_pixel_fraction,
-                    view.unmasked->evaluated_pixel_fraction, 1.0e-6f);
-        EXPECT_EQ(view.unmasked->evaluated_pixel_fraction < 1.0f, distorted);
+        for (const std::string report : {"mask,unmasked,inverted", "inverted,mask,unmasked", "unmasked,inverted"}) {
+            SCOPED_TRACE(report);
+            const auto listed = *lfs::core::param::parse_eval_pixel_sets(report);
+            const auto reported = evaluate(false, report);
+            ASSERT_TRUE(reported.valid);
+            const auto& view = reported.views[0];
+            const auto& headline = *separate[static_cast<size_t>(listed.front())];
+            EXPECT_EQ(reported.headline, listed.front());
+            expect_same(view, headline.views[0]);
+            EXPECT_EQ(reported.psnr, headline.psnr);
+            EXPECT_EQ(reported.ssim, headline.ssim);
+            for (const auto set : lfs::core::param::kEvalPixelSets) {
+                SCOPED_TRACE(lfs::core::param::eval_pixel_set_name(set));
+                const bool scored = std::ranges::find(listed, set) != listed.end();
+                ASSERT_EQ(view.sets[set].has_value(), scored);
+                ASSERT_EQ(reported.sets[set].has_value(), scored);
+                if (!scored)
+                    continue;
+                const auto& alone = *separate[static_cast<size_t>(set)];
+                expect_same(*view.sets[set], alone.views[0]);
+                EXPECT_EQ(reported.sets[set]->psnr, alone.psnr);
+                EXPECT_EQ(reported.sets[set]->ssim, alone.ssim);
+            }
+            EXPECT_EQ(reported.mask_set_summaries().size(), listed.size() - 1);
+        }
 
-        ASSERT_TRUE(reported.unmasked && reported.inverted);
-        EXPECT_EQ(reported.unmasked->psnr, plain.psnr);
-        EXPECT_EQ(reported.unmasked->ssim, plain.ssim);
-        EXPECT_EQ(reported.inverted->psnr, inverted.psnr);
-        EXPECT_EQ(reported.inverted->ssim, inverted.ssim);
-        EXPECT_EQ(reported.psnr, masked.psnr);
-        EXPECT_EQ(reported.mask_set_summaries().size(), 2u);
+        EXPECT_GT(masked.views[0].evaluated_pixel_fraction, 0.0f);
+        EXPECT_GT(inverted.views[0].evaluated_pixel_fraction, 0.0f);
+        EXPECT_NEAR(masked.views[0].evaluated_pixel_fraction + inverted.views[0].evaluated_pixel_fraction,
+                    plain.views[0].evaluated_pixel_fraction, 1.0e-6f);
+        EXPECT_EQ(plain.views[0].evaluated_pixel_fraction < 1.0f, distorted);
     }
     std::filesystem::remove_all(tmp);
 }
@@ -1311,8 +1321,7 @@ TEST(MetricsEvaluatorUndistort, ThinMaskFallsBackToPartialSsimWindows) {
 // Catches geometric masks projected through a pinhole when GUT renders a distorted camera natively,
 // without --undistort: they must select the same pixels as the source-lens path of --undistort.
 // Catches the splat mask scoring anything but what the splat covers when rendered with all its information:
-// the mask must equal the pixels whose rendered opacity reaches the cutoff, a higher cutoff a part of it, and the
-// inverse the rest.
+// the mask must equal the pixels whose rendered opacity reaches the cutoff, and a higher cutoff a part of it.
 TEST(MetricsEvaluator, SplatMaskSelectsTheRenderedCoverage) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
@@ -1367,10 +1376,6 @@ TEST(MetricsEvaluator, SplatMaskSelectsTheRenderedCoverage) {
     ASSERT_GT(covered, 0);
     ASSERT_LT(covered, std::ranges::count(wide, uint8_t{1}));
     EXPECT_EQ(mask_of(), expected);
-    splat.invert = true;
-    const auto inverted = mask_of();
-    for (size_t i = 0; i < expected.size(); ++i)
-        ASSERT_EQ(inverted[i], 1 - expected[i]) << i;
     std::filesystem::remove_all(tmp);
 }
 
@@ -1706,10 +1711,10 @@ TEST(ViewEvaluationJson, AddsStepsInOrderAndReplacesARepeatedStep) {
         .image_name = "a.png",
         .skipped_reason = "failed to load ground truth image: gone"};
 
-    auto document = lfs::training::add_view_evaluation({}, measured, 7000, "test");
-    document = lfs::training::add_view_evaluation(std::move(document), skipped, 3000, "test");
-    document = lfs::training::add_view_evaluation(std::move(document), remeasured, 7000, "test");
-    document = lfs::training::add_view_evaluation(std::move(document), measured, 7000, "train");
+    auto document = lfs::training::add_view_evaluation({}, measured, 7000, "test", false);
+    document = lfs::training::add_view_evaluation(std::move(document), skipped, 3000, "test", false);
+    document = lfs::training::add_view_evaluation(std::move(document), remeasured, 7000, "test", false);
+    document = lfs::training::add_view_evaluation(std::move(document), measured, 7000, "train", false);
 
     ASSERT_EQ(document.size(), 1u);
     const auto& record = document.at("a.png");
@@ -1966,8 +1971,8 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
         .index = 3,
         .image_name = "cam/frame.png",
         .skipped_reason = "failed to load mask: gone"};
-    auto document = lfs::training::add_view_evaluation({}, measured, 7000, "test");
-    document = lfs::training::add_view_evaluation(std::move(document), skipped, 30000, "test");
+    auto document = lfs::training::add_view_evaluation({}, measured, 7000, "test", false);
+    document = lfs::training::add_view_evaluation(std::move(document), skipped, 30000, "test", false);
 
     const auto keys = [](const nlohmann::json& object) {
         std::vector<std::string> names;
@@ -1994,15 +1999,39 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
     EXPECT_FALSE(record.at("evaluations")[1].at("validity_mask_applied"));
 }
 
-// Catches extra pixel sets written flat into the evaluation, where they would overwrite the mask's scores.
-TEST(ViewEvaluationJson, MaskSetsAreNestedUnderTheirNames) {
-    lfs::training::ViewMetrics view{.image_name = "frame.png", .psnr = 24.0f, .ssim = 0.8f, .flip = 0.1f};
-    view.unmasked = lfs::training::MaskSetMetrics{.psnr = 21.0f, .ssim = 0.7f, .flip = 0.2f, .evaluated_pixel_fraction = 1.0f};
-    view.inverted = lfs::training::MaskSetMetrics{.evaluated_pixel_fraction = 0.0f,
-                                                  .skipped_reason = "no pixel in this set"};
-    const auto document = lfs::training::add_view_evaluation({}, view, 7000, "test");
-    const auto& evaluation = document.at("frame.png").at("evaluations")[0];
-    EXPECT_FLOAT_EQ(evaluation.at("psnr"), 24.0f);
+// Catches extra pixel sets written flat into the evaluation, where they would overwrite the mask's scores, and
+// a mask set left flat beside them.
+TEST(ViewEvaluationJson, PixelSetsAreNestedUnderTheirNames) {
+    using lfs::core::param::EvalPixelSet;
+    lfs::training::ViewMetrics view{.image_name = "frame.png", .flip = 0.1f};
+    view.sets[EvalPixelSet::Mask] =
+        lfs::training::MaskSetMetrics{.psnr = 24.0f, .ssim = 0.8f, .flip = 0.1f, .evaluated_pixel_fraction = 0.25f};
+    view.sets[EvalPixelSet::Unmasked] =
+        lfs::training::MaskSetMetrics{.psnr = 21.0f, .ssim = 0.7f, .flip = 0.2f, .evaluated_pixel_fraction = 1.0f};
+    view.sets[EvalPixelSet::Inverted] =
+        lfs::training::MaskSetMetrics{.evaluated_pixel_fraction = 0.0f, .skipped_reason = "no pixel in this set"};
+    const lfs::training::ViewMetrics skipped{.image_name = "frame.png", .skipped_reason = "failed to load mask: gone"};
+    lfs::training::ViewMetrics inverted_only{.image_name = "frame.png"};
+    inverted_only.sets[EvalPixelSet::Inverted] = lfs::training::MaskSetMetrics{.psnr = 22.0f, .evaluated_pixel_fraction = 0.75f};
+    auto document = lfs::training::add_view_evaluation({}, view, 7000, "test", true);
+    document = lfs::training::add_view_evaluation(std::move(document), skipped, 30000, "test", true);
+    document = lfs::training::add_view_evaluation(std::move(document), inverted_only, 40000, "test", true);
+
+    const auto keys = [](const nlohmann::json& object) {
+        std::vector<std::string> names;
+        for (const auto& item : object.items())
+            names.push_back(item.key());
+        return names;
+    };
+    const auto& evaluations = document.at("frame.png").at("evaluations");
+    ASSERT_EQ(evaluations.size(), 3u);
+    const auto& evaluation = evaluations[0];
+    EXPECT_EQ(keys(evaluation), (std::vector<std::string>{"bit_depth", "inverted", "masked", "split", "step", "unmasked", "validity_mask_applied"}));
+    const auto& masked = evaluation.at("masked");
+    EXPECT_EQ(keys(masked), (std::vector<std::string>{"evaluated_pixel_fraction", "flip", "lpips", "psnr", "ssim"}));
+    EXPECT_FLOAT_EQ(masked.at("psnr"), 24.0f);
+    EXPECT_FLOAT_EQ(masked.at("flip"), 0.1f);
+    EXPECT_FLOAT_EQ(masked.at("evaluated_pixel_fraction"), 0.25f);
     const auto& unmasked = evaluation.at("unmasked");
     EXPECT_FLOAT_EQ(unmasked.at("psnr"), 21.0f);
     EXPECT_FLOAT_EQ(unmasked.at("flip"), 0.2f);
@@ -2012,10 +2041,13 @@ TEST(ViewEvaluationJson, MaskSetsAreNestedUnderTheirNames) {
     const auto& inverted = evaluation.at("inverted");
     EXPECT_TRUE(inverted.at("psnr").is_null());
     EXPECT_EQ(inverted.at("skipped_reason"), "no pixel in this set");
+    EXPECT_EQ(keys(evaluations[1]), (std::vector<std::string>{"bit_depth", "skipped_reason", "split", "step", "validity_mask_applied"}));
+    EXPECT_EQ(keys(evaluations[2]), (std::vector<std::string>{"bit_depth", "inverted", "split", "step", "validity_mask_applied"}));
+    EXPECT_FLOAT_EQ(evaluations[2].at("inverted").at("psnr"), 22.0f);
 }
 
 // Catches a depth mask that compares accumulated instead of expected depth, keeps faint pixels,
-// excludes the range bounds, or loses inversion.
+// or excludes the range bounds.
 TEST(MetricsEvaluator, DepthMaskSelectsSolidPixelsInsideTheRange) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
@@ -2050,16 +2082,12 @@ TEST(MetricsEvaluator, DepthMaskSelectsSolidPixelsInsideTheRange) {
 
     for (const bool gut : {false, true}) {
         params.optimization.gut = gut;
-        for (const bool invert : {false, true}) {
-            params.optimization.eval_mask_invert = invert;
-            const auto prepared = prepare_evaluation_view(*camera, params, render);
-            ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
-            const auto mask = prepared->metric_mask.cpu().contiguous().to_vector_uint8();
-            ASSERT_EQ(mask.size(), static_cast<size_t>(kW) * kH);
-            for (size_t i = 0; i < mask.size(); ++i)
-                EXPECT_EQ(mask[i], invert ? 1 - expected_row[i % kW] : expected_row[i % kW])
-                    << i << " invert " << invert << " gut " << gut;
-        }
+        const auto prepared = prepare_evaluation_view(*camera, params, render);
+        ASSERT_TRUE(prepared.has_value()) << prepared.error().detail();
+        const auto mask = prepared->metric_mask.cpu().contiguous().to_vector_uint8();
+        ASSERT_EQ(mask.size(), static_cast<size_t>(kW) * kH);
+        for (size_t i = 0; i < mask.size(); ++i)
+            EXPECT_EQ(mask[i], expected_row[i % kW]) << i << " gut " << gut;
     }
     std::filesystem::remove_all(tmp);
 }

@@ -990,20 +990,14 @@ namespace lfs::python {
                 },
                 "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected")
             .def_prop_rw(
-                "eval_mask_invert",
-                [](PyOptimizationParams& self) { return self.params().eval_mask_invert; },
-                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_mask_invert = v; }); },
-                "Scores the pixels outside the evaluation mask instead")
-            .def_prop_rw(
-                "eval_mask_report_unmasked",
-                [](PyOptimizationParams& self) { return self.params().eval_mask_report_unmasked; },
-                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_mask_report_unmasked = v; }); },
-                "With an evaluation mask, also score every valid pixel of each view, as without the mask")
-            .def_prop_rw(
-                "eval_mask_report_inverted",
-                [](PyOptimizationParams& self) { return self.params().eval_mask_report_inverted; },
-                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_mask_report_inverted = v; }); },
-                "With an evaluation mask, also score the valid pixels outside the mask")
+                "eval_mask_report",
+                [](PyOptimizationParams& self) { return self.params().eval_mask_report; },
+                [](PyOptimizationParams&, const std::string& v) {
+                    if (const auto sets = lfs::core::param::parse_eval_pixel_sets(v); !sets)
+                        throw std::invalid_argument(std::format("eval_mask_report: {}", sets.error().user_message()));
+                    modify_params([v](auto& p) { p.eval_mask_report = v; });
+                },
+                "Pixel sets scored with the evaluation mask, comma list of mask, unmasked and inverted; the first is the headline set, whose scores go to metrics.csv, the log and the training panel. Empty: the mask")
             .def_prop_rw(
                 "eval_mask_opacity",
                 [](PyOptimizationParams& self) { return self.params().eval_mask_opacity; },
