@@ -2166,3 +2166,135 @@ def test_sampled_sorted_snapping_matches_the_full_scan_on_many_values(histogram_
     assert sample[0] > 1
     expected = panel_type._snap_bounds_to_data(tensor, *bounds)
     assert panel_type._snap_sorted_bounds_to_data(tensor, *bounds, sample=sample) == expected
+
+
+@pytest.mark.parametrize("grid", [(8, 8), (8, 48), (48, 8), (24, 32), (48, 48)])
+@pytest.mark.parametrize("mode", ["replace", "add", "remove", "intersect"])
+@pytest.mark.parametrize("seed", [5, 23, 42, 99])
+def test_compare_selection_seeded_drag_fuzz(histogram_panel_module, lf, numpy, monkeypatch, grid, mode, seed):
+    """Exercise real press/move/release handlers against a per-point oracle."""
+    rng = numpy.random.default_rng(seed)
+    x_count, y_count = grid
+    size = 521
+    domain = rng.random(size) > 0.15
+    xs = rng.integers(0, x_count, size, dtype=numpy.int32)
+    ys = rng.integers(0, y_count, size, dtype=numpy.int32)
+    # Dense cells and partially selected cells catch count shortcuts that only
+    # work when the previous selection covers every point in each touched cell.
+    xs[:200], ys[:200] = 0, 0
+    xs[~domain], ys[~domain] = -1, -1
+    xs[200:220], ys[200:220] = -1, -1  # Finite points outside the zoomed view.
+    in_view = domain & (xs >= 0) & (ys >= 0)
+    base = (rng.random(size) < 0.35) & domain
+    scene = _SceneSelectionStub(lf.Tensor.from_numpy(base))
+    monkeypatch.setattr(lf, "get_scene", lambda: scene)
+    panel = histogram_panel_module.HistogramPanel()
+    values = lf.Tensor.from_numpy(numpy.zeros(size, dtype=numpy.float32))
+    panel._primary_values = panel._compare_values = values
+    panel._primary_finite_mask = panel._compare_finite_mask = lf.Tensor.from_numpy(domain)
+    panel._compare_x_bin_indices = lf.Tensor.from_numpy(xs)
+    panel._compare_y_bin_indices = lf.Tensor.from_numpy(ys)
+    panel._compare_x_bin_count, panel._compare_y_bin_count = grid
+    panel._compare_x_edges = numpy.linspace(0, 1, x_count + 1).tolist()
+    panel._compare_y_edges = numpy.linspace(0, 1, y_count + 1).tolist()
+    panel._compare_counts = numpy.bincount((ys[in_view] * x_count + xs[in_view]), minlength=x_count*y_count).tolist()
+    panel._show_chart = panel._show_compare_chart = True
+    panel._compare_chart_el = SimpleNamespace(absolute_left=0, absolute_top=0,
+                                              absolute_width=x_count*10, absolute_height=y_count*10,
+                                              focus=lambda: None)
+    panel._handle = _UpdateHandleStub()
+    start = (0, 0)
+    modifiers = {"shift": mode == "add", "ctrl": mode == "remove", "alt": mode == "intersect"}
+
+    def event(cell):
+        return _MouseEventStub(mouse_x=(cell[0]+0.5)*10,
+                               mouse_y=(y_count-cell[1]-0.5)*10, **modifiers)
+
+    panel._on_compare_chart_mousedown(event(start))
+    endpoints = [(x_count-1, y_count-1), (0, 0)] + [tuple(rng.integers([0, 0], grid)) for _ in range(10)]
+    for end in endpoints:
+        panel._on_document_mousemove(event(end))
+        swept = in_view & (xs <= end[0]) & (ys <= end[1])
+        expected = {"replace": swept, "add": base | swept,
+                    "remove": base & ~swept, "intersect": base & swept}[mode]
+        numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), expected)
+        assert panel._marked_count == int(expected.sum()), (grid, mode, seed, end)
+        assert panel._marked_count == int(panel._panel_selection_mask.count_nonzero())
+    panel._on_document_mouseup(event(endpoints[-1]))
+    assert scene.commit_preview_calls == 1
+    assert not panel._dragging_compare_mark
+
+
+@pytest.mark.parametrize("seed", [5, 23, 42, 99])
+@pytest.mark.parametrize("mode", ["replace", "add", "remove", "intersect"])
+def test_histogram_partial_selection_count_fuzz(histogram_panel_module, lf, numpy, monkeypatch, seed, mode):
+    rng = numpy.random.default_rng(seed)
+    panel = histogram_panel_module.HistogramPanel()
+    size, bins = 521, 16
+    domain = rng.random(size) > 0.15
+    indices = rng.integers(0, bins, size, dtype=numpy.int32)
+    indices[:200] = 0
+    indices[~domain] = -1
+    indices[200:220] = -1  # Finite points outside the zoomed view.
+    in_view = domain & (indices >= 0)
+    base = (rng.random(size) < 0.35) & domain
+    scene = _SceneSelectionStub(lf.Tensor.from_numpy(base))
+    monkeypatch.setattr(lf, "get_scene", lambda: scene)
+    panel._primary_values = lf.Tensor.from_numpy(numpy.zeros(size, dtype=numpy.float32))
+    panel._primary_finite_mask = lf.Tensor.from_numpy(domain)
+    panel._selection_bin_indices = lf.Tensor.from_numpy(indices)
+    panel._histogram_bin_count = bins
+    panel._hist_counts = numpy.bincount(indices[in_view], minlength=bins).tolist()
+    panel._hist_prefix_counts = panel._prefix_counts(panel._hist_counts)
+    panel._hist_edges = numpy.linspace(0, 1, bins+1).tolist()
+    panel._show_chart = True
+    panel._chart_el = SimpleNamespace(absolute_left=0, absolute_width=160, focus=lambda: None)
+    modifiers = {"shift": mode == "add", "ctrl": mode == "remove", "alt": mode == "intersect"}
+    def event(index):
+        left, width = panel._histogram_selection_geometry(index, index)
+        return _MouseEventStub(mouse_x=left+width/2, **modifiers)
+    panel._on_chart_mousedown(event(0))
+    for end in [15, 0] + rng.integers(0, bins, 10).tolist():
+        panel._on_document_mousemove(event(end))
+        swept = in_view & (indices <= end)
+        expected = {"replace": swept, "add": base | swept,
+                    "remove": base & ~swept, "intersect": base & swept}[mode]
+        numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), expected)
+        assert panel._marked_count == int(expected.sum())
+    panel._on_document_mouseup(event(end))
+    assert scene.commit_preview_calls == 1
+
+
+def test_compare_records_cache_selection_and_invalidation(histogram_panel_module, monkeypatch):
+    module = histogram_panel_module
+    panel = module.HistogramPanel()
+    panel._compare_x_bin_count, panel._compare_y_bin_count = 8, 9
+    panel._compare_counts = list(range(72))
+    panel._compare_x_edges = list(range(9))
+    panel._compare_y_edges = list(range(10))
+    calls = []
+    original = panel._format_range_text
+    monkeypatch.setattr(panel, "_format_range_text", lambda lo, hi: (calls.append((lo, hi)), original(lo, hi))[1])
+    first = panel._build_compare_bin_records()
+    assert len(calls) == 17  # Each axis range is formatted once, not per cell.
+    for selected in [{(0, 0)}, {(7, 8)}, {(0, 0), (7, 8)}]:
+        panel._selected_compare_cells = selected
+        records = panel._build_compare_bin_records()
+        assert len(calls) == 17
+        assert [record["selected"] for record in records] == [
+            (index % 8, 8-index//8) in selected for index in range(72)]
+        assert [{k: v for k, v in record.items() if k != "selected"} for record in records] == [
+            {k: v for k, v in record.items() if k != "selected"} for record in first]
+    assert not any(record["selected"] for record in first)
+    for change in [lambda: panel._compare_counts.__setitem__(0, 300),
+                   lambda: panel._compare_x_edges.__setitem__(0, -1),
+                   lambda: panel._compare_y_edges.__setitem__(0, -2),
+                   lambda: setattr(panel, "_log_scale_enabled", True),
+                   lambda: setattr(panel, "_last_lang", "de")]:
+        previous = panel._static_compare_records_value
+        change()
+        panel._build_compare_bin_records()
+        assert panel._static_compare_records_value is not previous
+    panel._clear_compare_cache()
+    assert panel._build_compare_bin_records() == []
+    assert panel._static_compare_records_value is None
