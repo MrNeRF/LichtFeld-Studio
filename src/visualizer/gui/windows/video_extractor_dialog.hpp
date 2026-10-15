@@ -13,10 +13,13 @@
 #include <RmlUi/Core/EventListener.h>
 #include <array>
 #include <atomic>
+#include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <vector>
@@ -149,6 +152,22 @@ namespace lfs::gui {
             std::string error;
         };
 
+        struct QueuedBatchProbe {
+            std::filesystem::path video_path;
+            uint64_t generation = 0;
+        };
+
+        struct BatchProbeFailure {
+            std::filesystem::path video_path;
+            std::string error;
+            uint64_t generation = 0;
+        };
+
+        struct CompletedBatchProbe {
+            BatchVideoItem item;
+            uint64_t generation = 0;
+        };
+
         void startExtraction(const VideoExtractionParams& params);
         void startBatchExtraction(std::vector<VideoExtractionParams> params);
         void joinExtractionThread();
@@ -194,7 +213,10 @@ namespace lfs::gui {
         void beginBatchExtractionFromUi();
         void launchBatchExtraction(std::vector<VideoExtractionParams> params);
         void addVideosFromBrowse(std::vector<std::filesystem::path> paths);
-        void addBatchVideos(const std::vector<std::filesystem::path>& paths);
+        [[nodiscard]] bool addBatchVideos(const std::vector<std::filesystem::path>& paths);
+        void runBatchProbeWorker(std::stop_token stop_token);
+        void applyCompletedBatchProbes();
+        void joinBatchProbeThread();
         void selectBatchItem(std::size_t index);
         void saveSelectedBatchItem();
         [[nodiscard]] bool probeBatchVideo(BatchVideoItem& item, std::string& error) const;
@@ -226,6 +248,16 @@ namespace lfs::gui {
         std::atomic<int> completed_batch_items_{0};
         std::atomic<int> failed_batch_items_{0};
         mutable std::mutex batch_mutex_;
+
+        std::optional<std::jthread> batch_probe_thread_;
+        std::deque<QueuedBatchProbe> queued_batch_probes_;
+        std::vector<std::filesystem::path> scheduled_batch_probe_paths_;
+        std::vector<CompletedBatchProbe> completed_batch_probe_items_;
+        std::vector<BatchProbeFailure> completed_batch_probe_failures_;
+        mutable std::mutex batch_probe_mutex_;
+        std::atomic<bool> batch_probe_active_{false};
+        std::atomic<bool> batch_probe_results_ready_{false};
+        uint64_t batch_probe_generation_ = 0;
 
         int mode_selection_ = 0;
         float fps_ = 1.0f;
