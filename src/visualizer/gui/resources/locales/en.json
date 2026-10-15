@@ -2110,6 +2110,7 @@
     "overwrite_delete_error": "Failed to remove {}: {}",
     "continue_batch_on_failure": "Continue with remaining videos if one fails",
     "batch_video_count": "{} videos selected",
+    "batch_reading": "Reading {} videos…",
     "batch_summary": "{} videos · {} complete · {} failed",
     "batch_no_videos": "Add at least one video before starting extraction.",
     "batch_no_output_root": "Select an output root for this batch.",

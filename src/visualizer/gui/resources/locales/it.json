@@ -2112,6 +2112,7 @@
     "output_root": "Radice output:",
     "continue_batch_on_failure": "Continua con i video rimanenti se uno non riesce",
     "batch_video_count": "{} video selezionati",
+    "batch_reading": "Lettura di {} video…",
     "batch_summary": "{} video · {} completati · {} non riusciti",
     "batch_no_videos": "Aggiungi almeno un video prima di iniziare l'estrazione.",
     "batch_no_output_root": "Seleziona una radice di output per questo batch.",

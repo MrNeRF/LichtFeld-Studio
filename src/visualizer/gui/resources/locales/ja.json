@@ -2112,6 +2112,7 @@
     "output_root": "出力ルート:",
     "continue_batch_on_failure": "動画の抽出に失敗しても残りを続行する",
     "batch_video_count": "{} 本の動画を選択",
+    "batch_reading": "{} 本の動画を読み込み中…",
     "batch_summary": "{} 本 · 完了 {} · 失敗 {}",
     "batch_no_videos": "抽出を開始する前に少なくとも1本の動画を追加してください。",
     "batch_no_output_root": "このバッチの出力ルートを選択してください。",

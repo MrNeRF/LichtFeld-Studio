@@ -2112,6 +2112,7 @@
     "output_root": "Racine de sortie :",
     "continue_batch_on_failure": "Continuer avec les vidéos restantes si l'une échoue",
     "batch_video_count": "{} vidéos sélectionnées",
+    "batch_reading": "Lecture de {} vidéos…",
     "batch_summary": "{} vidéos · {} terminées · {} en échec",
     "batch_no_videos": "Ajoutez au moins une vidéo avant de lancer l'extraction.",
     "batch_no_output_root": "Sélectionnez une racine de sortie pour ce lot.",

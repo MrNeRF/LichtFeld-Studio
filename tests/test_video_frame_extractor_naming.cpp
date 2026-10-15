@@ -351,6 +351,11 @@ namespace lfs::gui {
         static std::size_t batchItemCount(const VideoExtractorDialog& dialog) {
             return dialog.batch_items_.size();
         }
+        static void batchProbeState(VideoExtractorDialog& dialog, const bool active, const bool results_ready) {
+            dialog.batch_probe_active_.store(active);
+            dialog.batch_probe_results_ready_.store(results_ready);
+        }
+        static bool hasDynamicState(const VideoExtractorDialog& dialog) { return dialog.hasDynamicState(); }
         static void outputRoot(VideoExtractorDialog& dialog, const std::filesystem::path& output_root) {
             dialog.output_dir_ = output_root;
             dialog.batch_output_root_explicit_ = true;
@@ -1734,6 +1739,11 @@ namespace {
         EXPECT_EQ(NamingAccess::batchItemCount(*dialog), 2u);
     }
 
+    TEST_F(VideoExtractorNamingUiTest, BatchProbeDoesNotRequireContinuousRedraw) {
+        NamingAccess::batchProbeState(*dialog, true, true);
+        EXPECT_FALSE(NamingAccess::hasDynamicState(*dialog));
+    }
+
     TEST_F(VideoExtractorNamingUiTest, BatchAddReportsTheNumberOfUnreadableVideos) {
         TempDir temp("batch_unreadable_videos");
 
@@ -1790,7 +1800,8 @@ namespace {
         ASSERT_TRUE(writeProbedVideoWithRate(first, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
         ASSERT_TRUE(writeProbedVideoWithRate(second, "mp4", AV_CODEC_ID_MPEG4, 4, 0, 30, 1));
 
-        ASSERT_TRUE(dialog->openVideoPath(first));
+        const auto first_with_dot_segment = first.parent_path() / "." / first.filename();
+        ASSERT_TRUE(dialog->openVideoPath(first_with_dot_segment));
         NamingAccess::sharedOutputSettings(*dialog, 800, 600, false);
         NamingAccess::addFromBrowse(*dialog, {second});
         NamingAccess::outputRoot(*dialog, output_root);

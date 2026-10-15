@@ -14,6 +14,7 @@
 #include "gui/ui_context.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/video/video_metadata.hpp"
+#include "python/python_runtime.hpp"
 #include <cctype>
 
 #include <RmlUi/Core.h>
@@ -836,7 +837,8 @@ namespace lfs::gui {
             return;
         saveSelectedBatchItem();
         const bool preserve_shared_settings = selected_batch_item_.has_value() ||
-                                              (player_->isOpen() && video_path_ == batch_items_[index].video_path);
+                                              (player_->isOpen() &&
+                                               video_path_.lexically_normal() == batch_items_[index].video_path);
         const std::filesystem::path output_root = output_dir_;
         const int custom_width = custom_width_;
         const int custom_height = custom_height_;
@@ -928,14 +930,20 @@ namespace lfs::gui {
     void VideoExtractorDialog::runBatchProbeWorker(const std::stop_token stop_token) {
         for (;;) {
             QueuedBatchProbe request;
+            bool finished = false;
             {
                 std::lock_guard lock(batch_probe_mutex_);
                 if (stop_token.stop_requested() || queued_batch_probes_.empty()) {
                     batch_probe_active_.store(false);
-                    return;
+                    finished = true;
+                } else {
+                    request = std::move(queued_batch_probes_.front());
+                    queued_batch_probes_.pop_front();
                 }
-                request = std::move(queued_batch_probes_.front());
-                queued_batch_probes_.pop_front();
+            }
+            if (finished) {
+                lfs::python::request_redraw();
+                return;
             }
 
             BatchVideoItem item{.video_path = request.video_path};
@@ -1027,21 +1035,10 @@ namespace lfs::gui {
         }
 
         // A second browse selection promotes the existing single source to a batch item rather
-        // than replacing it. Keep the output settings the user already configured for the first
-        // clip; they become the shared batch settings.
-        const int custom_width = custom_width_;
-        const int custom_height = custom_height_;
-        const bool hdr_to_sdr = hdr_to_sdr_;
+        // than replacing it. selectBatchItem() preserves the shared output settings when the
+        // completed probe selects this same source again.
         paths.insert(paths.begin(), video_path_);
         (void)addBatchVideos(paths);
-        if (!batch_items_.empty()) {
-            custom_width_ = custom_width;
-            custom_height_ = custom_height;
-            hdr_to_sdr_ = hdr_to_sdr;
-            player_->setHdrToSdr(hdr_to_sdr_ && player_->isHdrConversionSupported());
-            controls_dirty_ = true;
-            markContentDirty();
-        }
     }
 
     void VideoExtractorDialog::removeSelectedBatchItem() {
@@ -1101,6 +1098,11 @@ namespace lfs::gui {
     void VideoExtractorDialog::syncBatchList() {
         if (!batch_video_list_el_ || !batch_list_dirty_.exchange(false))
             return;
+        int probing_count = 0;
+        if (batch_probe_active_.load()) {
+            std::lock_guard lock(batch_probe_mutex_);
+            probing_count = static_cast<int>(scheduled_batch_probe_paths_.size());
+        }
         std::string rows;
         int completed = 0;
         int failed = 0;
@@ -1144,7 +1146,11 @@ namespace lfs::gui {
             rows = std::format("<span class=\"inline-note\">{}</span>", LOC(VideoExtractor::NO_FILE));
         const bool changed = setCachedInnerRml(batch_video_list_el_, rows);
         const int total = static_cast<int>(batch_items_.size());
-        const std::string summary = total == 0 ? std::string{} : LOCF("video_extractor.batch_summary", total, completed, failed);
+        const std::string summary = probing_count > 0
+                                        ? LOCF("video_extractor.batch_reading", probing_count)
+                                        : total == 0
+                                              ? std::string{}
+                                              : LOCF("video_extractor.batch_summary", total, completed, failed);
         if (setCachedText(batch_summary_el_, summary) || changed)
             markContentDirty();
     }
@@ -2812,8 +2818,6 @@ namespace lfs::gui {
     bool VideoExtractorDialog::hasDynamicState() const {
         return extracting_.load() ||
                extraction_status_dirty_.load() ||
-               batch_probe_active_.load() ||
-               batch_probe_results_ready_.load() ||
                timeline_drag_target_ != TimelineDragTarget::None ||
                (player_ && player_->isPlaying());
     }

@@ -2112,6 +2112,7 @@
     "output_root": "输出根目录：",
     "continue_batch_on_failure": "一个视频失败时继续处理其余视频",
     "batch_video_count": "已选择 {} 个视频",
+    "batch_reading": "正在读取 {} 个视频…",
     "batch_summary": "{} 个视频 · 完成 {} · 失败 {}",
     "batch_no_videos": "开始提取前请至少添加一个视频。",
     "batch_no_output_root": "请选择此批处理的输出根目录。",

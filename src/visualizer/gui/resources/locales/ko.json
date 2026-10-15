@@ -2112,6 +2112,7 @@
     "output_root": "출력 루트:",
     "continue_batch_on_failure": "하나가 실패해도 남은 비디오 계속 처리",
     "batch_video_count": "{}개 비디오 선택됨",
+    "batch_reading": "{}개의 비디오를 읽는 중…",
     "batch_summary": "{}개 · 완료 {} · 실패 {}",
     "batch_no_videos": "추출을 시작하기 전에 비디오를 하나 이상 추가하세요.",
     "batch_no_output_root": "이 일괄 처리의 출력 루트를 선택하세요.",

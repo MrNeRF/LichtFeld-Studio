@@ -2112,6 +2112,7 @@
     "output_root": "Uitvoerbasis:",
     "continue_batch_on_failure": "Doorgaan met resterende video's als er één mislukt",
     "batch_video_count": "{} video's geselecteerd",
+    "batch_reading": "{} video's worden gelezen…",
     "batch_summary": "{} video's · {} voltooid · {} mislukt",
     "batch_no_videos": "Voeg ten minste één video toe voordat u de extractie start.",
     "batch_no_output_root": "Selecteer een uitvoerbasis voor deze batch.",

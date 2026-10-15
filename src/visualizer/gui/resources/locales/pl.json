@@ -2112,6 +2112,7 @@
     "output_root": "Katalog wyjściowy:",
     "continue_batch_on_failure": "Kontynuuj pozostałe filmy, jeśli jeden się nie powiedzie",
     "batch_video_count": "Wybrano {} filmów",
+    "batch_reading": "Odczytywanie {} filmów…",
     "batch_summary": "{} filmów · ukończono {} · niepowodzenia {}",
     "batch_no_videos": "Dodaj co najmniej jeden film przed rozpoczęciem ekstrakcji.",
     "batch_no_output_root": "Wybierz katalog wyjściowy dla tej partii.",

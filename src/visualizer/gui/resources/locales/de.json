@@ -2112,6 +2112,7 @@
     "output_root": "Ausgabeordner:",
     "continue_batch_on_failure": "Mit verbleibenden Videos fortfahren, wenn eines fehlschlägt",
     "batch_video_count": "{} Videos ausgewählt",
+    "batch_reading": "{} Videos werden gelesen…",
     "batch_summary": "{} Videos · {} abgeschlossen · {} fehlgeschlagen",
     "batch_no_videos": "Fügen Sie vor dem Start mindestens ein Video hinzu.",
     "batch_no_output_root": "Wählen Sie einen Ausgabeordner für diesen Batch.",
