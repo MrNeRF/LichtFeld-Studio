@@ -10,6 +10,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -95,6 +96,63 @@ namespace {
             EXPECT_GE(min->GetBox().GetSize(Rml::BoxArea::Border).x, 72.0f * GetParam());
             EXPECT_GE(max->GetBox().GetSize(Rml::BoxArea::Border).x, 72.0f * GetParam());
         }
+        void loadPanel(const bool compare, const bool floating) {
+            document_->Close();
+            context_->Update();
+            const auto resources = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources";
+            std::ifstream input(resources / "histogram_panel.rml");
+            std::string source{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+            source = source.substr(source.find("  <div id=\"histogram-shell\""));
+            source = source.substr(0, source.find("</body>"));
+            source = std::regex_replace(source, std::regex(R"re( data-[a-z-]+="[^"]*")re"), "");
+            for (const auto& [binding, label] : {
+                     std::pair{"{{ range_of_interest_label }}", "Range of Interest:"},
+                     std::pair{"{{ reset_range_label }}", "Reset"},
+                     std::pair{"{{ field_label }}", "Field"},
+                     std::pair{"{{ compare_with_label }}", "Compare With"},
+                     std::pair{"{{ metric_description }}", "Activated Gaussian opacity in [0, 1]"},
+                     std::pair{"{{ range_text }}", "0.0031 to 0.9998"},
+                     std::pair{"{{ sample_count }}", "904,850"},
+                     std::pair{"{{ marked_range_text }}", "No marked range"},
+                     std::pair{"{{ marked_count_text }}", "0 Gaussians"}}) {
+                size_t pos;
+                while ((pos = source.find(binding)) != std::string::npos)
+                    source.replace(pos, std::string(binding).size(), label);
+            }
+            source = std::regex_replace(source, std::regex(R"(\{\{[^}]+\}\})"), "Value");
+            document_ = context_->LoadDocumentFromMemory(
+                "<rml><head><link type=\"text/rcss\" href=\"components.rcss\"/>"
+                "<link type=\"text/rcss\" href=\"histogram_panel.rcss\"/></head>"
+                "<body class=\"docked-panel\">" +
+                    source + "</body></rml>",
+                (resources / "histogram_layout_test.rml").string());
+            ASSERT_NE(document_, nullptr);
+            document_->SetProperty("height", "100%");
+            document_->SetProperty("width", "100%");
+            document_->GetElementById("histogram-shell")->SetClass("is-floating", floating);
+            document_->GetElementById("histogram-floating-header")->SetClass("hidden", !floating);
+            document_->GetElementById("histogram-empty")->SetClass("hidden", true);
+            document_->GetElementById("histogram-card")->SetClass("hidden", compare);
+            document_->GetElementById("compare-card")->SetClass("hidden", !compare);
+            document_->GetElementById("compare-content")->SetClass("hidden", false);
+            document_->QuerySelector(".histogram-toolbar-item--slider")->SetClass("hidden", compare);
+            Rml::ElementList bins;
+            document_->QuerySelectorAll(bins, ".histogram-toolbar-item--compare-bins");
+            for (auto* element : bins)
+                element->SetClass("hidden", !compare);
+            document_->QuerySelector(".histogram-toolbar-item--action")->SetClass("hidden", floating);
+            document_->Show();
+        }
+
+        void checkInside(Rml::Element* element, Rml::Element* parent) {
+            ASSERT_NE(element, nullptr);
+            ASSERT_NE(parent, nullptr);
+            EXPECT_GE(element->GetAbsoluteOffset(Rml::BoxArea::Border).x,
+                      parent->GetAbsoluteOffset(Rml::BoxArea::Border).x);
+            EXPECT_LE(element->GetAbsoluteOffset(Rml::BoxArea::Border).x + element->GetBox().GetSize(Rml::BoxArea::Border).x,
+                      parent->GetAbsoluteOffset(Rml::BoxArea::Border).x + parent->GetBox().GetSize(Rml::BoxArea::Border).x + 1.0f);
+        }
+
         inline static HistogramRenderInterface renderer_;
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
@@ -126,23 +184,51 @@ namespace {
         EXPECT_FLOAT_EQ(min->GetBox().GetSize(Rml::BoxArea::Border).x,
                         document_->GetElementById("range-max-input")->GetBox().GetSize(Rml::BoxArea::Border).x);
 
-        // Compare the wide layout against the original ungrouped controls.
-        auto* controls = document_->QuerySelector(".histogram-range-controls");
-        if (controls) {
-            const auto geometry = [&] {
-                std::vector<float> values;
-                for (const auto* selector : {".range-of-interest-label", "#range-min-input", "#range-max-input", ".range-reset"}) {
-                    auto* element = document_->QuerySelector(selector);
-                    const auto offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
-                    const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
-                    values.insert(values.end(), {offset.x, offset.y, size.x, size.y});
+        // Numeric bounds should stay compact even when the dock spans a monitor.
+        for (const int width : {860, 1800}) {
+            resize(width);
+            for (const auto* id : {"range-min-input", "range-max-input"}) {
+                EXPECT_LE(document_->GetElementById(id)->GetBox().GetSize(Rml::BoxArea::Border).x,
+                          96.0f * GetParam());
+            }
+        }
+    }
+
+    TEST_P(HistogramLayoutTest, SharedToolbarAndStatisticsFitDockedAndFloatingPanels) {
+        for (const bool floating : {false, true}) {
+            for (const bool compare : {false, true}) {
+                loadPanel(compare, floating);
+                for (const int width : {1800, 860, 360, 860}) {
+                    SCOPED_TRACE(::testing::Message() << "width=" << width << " floating=" << floating << " compare=" << compare);
+                    resize(width);
+                    auto* toolbar = document_->GetElementById("histogram-toolbar");
+                    auto* content = document_->GetElementById("histogram-content");
+                    auto* stats = document_->GetElementById("histogram-stats");
+                    EXPECT_LE(toolbar->GetAbsoluteOffset(Rml::BoxArea::Border).y + toolbar->GetBox().GetSize(Rml::BoxArea::Border).y,
+                              content->GetAbsoluteOffset(Rml::BoxArea::Border).y);
+                    EXPECT_GE(stats->GetAbsoluteOffset(Rml::BoxArea::Border).y,
+                              content->GetAbsoluteOffset(Rml::BoxArea::Border).y + content->GetBox().GetSize(Rml::BoxArea::Border).y);
+                    Rml::ElementList elements;
+                    document_->QuerySelectorAll(elements, ".histogram-toolbar-item");
+                    for (auto* element : elements) {
+                        if (!element->IsClassSet("hidden"))
+                            checkInside(element, toolbar);
+                    }
+                    elements.clear();
+                    document_->QuerySelectorAll(elements, ".histogram-stat");
+                    for (auto* element : elements)
+                        checkInside(element, stats);
+                    if (compare) {
+                        for (const auto* id : {"compare-range-x-min-input", "compare-range-x-max-input", "compare-range-y-min-input", "compare-range-y-max-input"}) {
+                            auto* element = document_->GetElementById(id);
+                            checkInside(element, document_->GetElementById("compare-range-of-interest"));
+                            EXPECT_LE(element->GetBox().GetSize(Rml::BoxArea::Border).x, 96.0f * GetParam());
+                        }
+                    } else {
+                        checkControls();
+                    }
                 }
-                return values;
-            };
-            const auto grouped = geometry();
-            document_->GetElementById("histogram-range-of-interest")->SetInnerRML("<span class=\"range-of-interest-label\">" + label->GetInnerRML() + "</span>" + controls->GetInnerRML());
-            context_->Update();
-            EXPECT_EQ(geometry(), grouped);
+            }
         }
     }
 

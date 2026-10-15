@@ -145,6 +145,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_rml_drag_payload.cpp
         test_sdl_rml_key_mapping.cpp
         test_rml_form_control_layout.cpp
+        test_histogram_layout.cpp
     )
     target_compile_features(lichtfeld_rmlui_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_rmlui_tests PRIVATE

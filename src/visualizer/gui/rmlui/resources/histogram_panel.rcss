@@ -333,12 +333,6 @@
     align-items: center;
 }
 
-#compare-card {
-    flex: 1;
-    min-height: 320dp;
-    border-width: 1dp;
-}
-
 #compare-empty {
     min-height: 220dp;
 }
