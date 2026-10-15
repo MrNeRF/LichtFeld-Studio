@@ -38,6 +38,15 @@ namespace {
         std::string error;
         require(write_jpeg(path, pixel, 1, 1, 3, 95, {}, error), error);
         require(read_source_exif(path).status == MetadataStatus::Absent, "JPEG without EXIF is absent");
+        MetadataLimits jpeg_limits;
+        jpeg_limits.jpeg_header_bytes = 0;
+        require(read_source_exif(path, jpeg_limits).status == MetadataStatus::Limited,
+                "JPEG still rejects an invalid JPEG header budget");
+        jpeg_limits = {};
+        jpeg_limits.png_scan_bytes = 0;
+        jpeg_limits.png_chunks = 0;
+        require(read_source_exif(path, jpeg_limits).status == MetadataStatus::Absent,
+                "JPEG collection does not depend on unrelated PNG budgets");
         std::ifstream input(path, std::ios::binary);
         const std::vector<uint8_t> jpeg{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
         input.close();
@@ -165,6 +174,10 @@ namespace {
                     png_metadata.scope == "png-chunks-through-iend" && png_metadata.blocks[0].bytes == tiff &&
                     png_metadata.blocks[0].envelope == ExifEnvelope::PngExif,
                 "PNG is signature detected and retains bare TIFF without decoding pixels");
+        limits = {};
+        limits.jpeg_header_bytes = 0;
+        require(read_source_exif(path, limits).status == MetadataStatus::Collected,
+                "PNG collection does not depend on the unrelated JPEG header budget");
         limits = {};
         limits.png_scan_bytes = png.size() - 3;
         require(read_source_exif(path, limits).status == MetadataStatus::Collected,

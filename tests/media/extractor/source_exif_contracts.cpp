@@ -54,6 +54,14 @@ namespace {
 } // namespace
 
 int runSourceExifContracts() {
+    auto unknown = values(true);
+    unknown.envelope = static_cast<ExifEnvelope>(-1);
+    ImageExifDescription unknown_description;
+    unknown_description.original.blocks.push_back(unknown);
+    unknown_description.interpretations.push_back(interpretExif(unknown));
+    require(unknown_description.interpretations[0].status == ExifParseStatus::Unsupported &&
+                json_detail::sourceExif(unknown_description).at("blocks")[0].at("envelope") == "unknown",
+            "unknown EXIF envelopes are never serialized as HEIF");
     ImageExifDescription diagnostics;
     diagnostics.original.diagnostic = "bad\xff box";
     diagnostics.original.blocks.emplace_back();

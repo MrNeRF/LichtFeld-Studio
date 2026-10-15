@@ -1726,9 +1726,7 @@ namespace lfs::core::image_codecs {
 
     SourceExif read_source_exif(const std::filesystem::path& path, const MetadataLimits& limits) {
         SourceExif result;
-        // Keep caller-controlled window allocations bounded independently of file size.
-        if (!limits.jpeg_header_bytes || limits.jpeg_header_bytes > 4 * 1024 * 1024 ||
-            !limits.blocks || limits.blocks > 4096 || !limits.block_bytes || !limits.total_bytes) {
+        if (!limits.blocks || limits.blocks > 4096 || !limits.block_bytes || !limits.total_bytes) {
             result.status = MetadataStatus::Limited;
             result.diagnostic = "Invalid EXIF collection limits";
             return result;
@@ -1770,6 +1768,13 @@ namespace lfs::core::image_codecs {
             return result;
         }
         result.scope = "jpeg-before-sos";
+        // Validate the JPEG-only window after detecting the source format;
+        // unrelated collection budgets must not reject PNG or HEIF metadata.
+        if (!limits.jpeg_header_bytes || limits.jpeg_header_bytes > 4 * 1024 * 1024) {
+            result.status = MetadataStatus::Limited;
+            result.diagnostic = "Invalid JPEG collection limits";
+            return result;
+        }
         input.clear();
         input.seekg(0);
         std::vector<uint8_t> window(limits.jpeg_header_bytes);
