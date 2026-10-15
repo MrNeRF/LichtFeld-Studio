@@ -446,6 +446,8 @@ void main(
 
               #if LFS_3DGUT_RASTERIZE
                 splat_depth = gut_splat_view_depth(g, ray_origin, ray_direction, cam);
+                if (splat_depth < FAR_DEPTH)
+                    splat_depth -= uniforms.depth_offset;
               #endif
 
             #else
