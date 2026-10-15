@@ -2799,6 +2799,19 @@ namespace {
         EXPECT_NE(prepared.unsupported_settings[0].value, prepared.unsupported_settings[1].value);
     }
 
+    TEST(P5SessionChapterTest, DeprecatedScenePanelTabIsIgnoredAndNoLongerWritten) {
+        UnknownSessionValueFixture test;
+        for (const char* value : {"history", "logging", "future_tab"}) {
+            auto prepared = test.restore(value, [&](Json&, Json& gui, Json&) {
+                gui["layouts"][0]["areas"][0]["spaces"][1]["opaque_payload"]["active_tabs"]["scene_panel"] = value;
+            });
+            EXPECT_TRUE(prepared.unsupported_settings.empty()) << value;
+        }
+        auto captured = require_result(captureGuiSession(*test.viewer, ProjectSessionChapters{}, test.bookmarks));
+        const auto gui = json_root(captured.gui_layout.dom());
+        EXPECT_FALSE(gui["layouts"][0]["areas"][0]["spaces"][1]["opaque_payload"]["active_tabs"].contains("scene_panel"));
+    }
+
     TEST(P5SessionChapterTest, UnknownValuesSurviveCaptureAndResave) {
         UnknownSessionValueFixture test;
         auto prepared = test.restore("preserve", [&](Json& view, Json& gui, Json& sequencer) {

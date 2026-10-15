@@ -83,6 +83,9 @@ crashes happen, and files outlive programs.
   layout, sequencer, camera, …); each chapter is the single source of truth for its fields.
 - The `PROJ` chapter may optionally carry a `license` object with a non-empty `identifier` and an
   optional `notice`; omitted `license` means that no project license is declared.
+- Deprecated: the `GUIL` panel registry's `active_tabs.scene_panel` (the former Scene/History
+  tab). LichtFeld Studio no longer writes it and ignores it when reading; projects saved by
+  earlier versions may still carry it.
 - **Autosave & recovery.** A periodic autosave writes to a separate `<project>.licht.autosave`
   sidecar. Recovery validates that sidecar against the master head and can materialize it into a
   retained recovery session before the next durable save. Compaction and recovery publication
