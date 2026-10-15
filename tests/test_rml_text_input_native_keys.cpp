@@ -109,6 +109,8 @@ namespace {
             document_->Close();
             const auto resource_path = std::filesystem::path(PROJECT_ROOT_PATH) /
                                        "src/visualizer/gui/rmlui/resources/test.rml";
+            // RmlUi parses the source as a URL, so a Windows drive colon takes its '|' form.
+            const auto source_url = Rml::StringUtilities::Replace(resource_path.generic_string(), ':', '|');
             document_ = context_->LoadDocumentFromMemory(R"RML(
 <rml><head><link type="text/rcss" href="components.rcss"/></head><body>
     <input id="search" type="text"/>
@@ -121,7 +123,7 @@ namespace {
     </div>
     <input id="after" type="text"/>
 </body></rml>)RML",
-                                                         resource_path.string());
+                                                         source_url);
             ASSERT_NE(document_, nullptr);
             context_->SetDimensions({640, 480});
             document_->Show();

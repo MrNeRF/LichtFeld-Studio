@@ -1470,8 +1470,7 @@ namespace {
         EXPECT_FALSE(RmlMenuBarTestAccess::accessVisible(bar_));
         RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_ESCAPE);
 
-        Rml::SetRenderInterface(&renderer_);
-        auto* text_context = manager_.createContext("menu-access-text", 200, 80);
+        auto* text_context = Rml::CreateContext("menu-access-text", {200, 80}, &renderer_);
         ASSERT_NE(text_context, nullptr);
         auto* text_document = text_context->LoadDocumentFromMemory(
             "<rml><head><style>body { font-family: Inter; font-size: 14px; } input { width: 120px; height: 24px; }</style></head>"
@@ -1488,6 +1487,8 @@ namespace {
         EXPECT_FALSE(RmlMenuBarTestAccess::letterKey(bar_, SDLK_F, SDL_KMOD_LALT));
         EXPECT_FALSE(bar_.isOpen());
         manager_.deactivateInput(text_context);
+        manager_.shutdown();
+        EXPECT_TRUE(Rml::RemoveContext("menu-access-text"));
     }
 
     TEST_F(MenuBarTitleTest, AccessKeyAssignment) {
