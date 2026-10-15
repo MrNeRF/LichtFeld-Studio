@@ -33,6 +33,20 @@ namespace lfs::vis::gui {
             host.chrome_model_.DirtyVariable("areas");
             host.reconcileTabPickerSelection();
         }
+        static void showAreas(ScreenHost& host, const int count) {
+            host.chrome_areas_.clear();
+            for (int i = 0; i < count; ++i) {
+                ChromeArea area;
+                area.id = i + 1;
+                area.left = std::to_string(i * 50) + "px";
+                area.top = "0px";
+                area.width = "50px";
+                area.height = "300px";
+                area.header_height = "24px";
+                host.chrome_areas_.push_back(std::move(area));
+            }
+            host.chrome_model_.DirtyVariable("areas");
+        }
         static bool tooltipPending(const ScreenHost& host) { return host.chrome_tooltip_.needsFrame(); }
         static std::string active(const ScreenHost& host) {
             return host.chrome_areas_.empty() ? std::string{} : std::string(host.chrome_areas_.front().active_tab);
@@ -203,6 +217,57 @@ namespace {
         context->ProcessKeyDown(Rml::Input::KI_DOWN, 0);
         ASSERT_EQ(picks.size(), 1);
         EXPECT_EQ(picks.front(), "D");
+    }
+
+    class InlineStyleErrorLog final : public Rml::SystemInterface {
+    public:
+        bool LogMessage(const Rml::Log::Type, const Rml::String& message) override {
+            if (message.find("inline property declaration") != Rml::String::npos)
+                errors.push_back(message);
+            return true;
+        }
+        std::vector<std::string> errors;
+    };
+
+    class ScreenChromeAreasTest : public ::testing::Test {
+    protected:
+        PickerRenderer renderer;
+        InlineStyleErrorLog log;
+        lfs::vis::screen::ScreenService screens;
+        ScreenHost host;
+        Rml::Context* context = nullptr;
+
+        ScreenChromeAreasTest() : host(screens) {}
+
+        void SetUp() override {
+            Rml::SetSystemInterface(&log);
+            ASSERT_TRUE(Rml::Initialise());
+            context = Rml::CreateContext("screen-chrome-areas", {800, 600}, &renderer);
+            ASSERT_NE(context, nullptr);
+            PropertiesTabPickerTestAccess::bind(host, context);
+            auto* const doc = context->LoadDocument(PROJECT_ROOT_PATH "/src/visualizer/gui/rmlui/resources/screen_chrome.rml");
+            ASSERT_NE(doc, nullptr);
+            PropertiesTabPickerTestAccess::attach(host, doc);
+            doc->Show();
+        }
+        void TearDown() override {
+            PropertiesTabPickerTestAccess::release(host);
+            Rml::RemoveContext("screen-chrome-areas");
+            Rml::Shutdown();
+        }
+    };
+
+    // RmlUi updates a data-for view and the views on the elements it repeats in
+    // one unordered pass, so geometry bound there could be read from a removed
+    // area and written as "left: ;" when a project restores fewer areas.
+    TEST_F(ScreenChromeAreasTest, RemovedAreasNeverWriteEmptyGeometry) {
+        for (int round = 0; round < 20; ++round) {
+            PropertiesTabPickerTestAccess::showAreas(host, 8);
+            context->Update();
+            PropertiesTabPickerTestAccess::showAreas(host, 1);
+            context->Update();
+        }
+        EXPECT_EQ(log.errors, std::vector<std::string>{});
     }
 
 } // namespace

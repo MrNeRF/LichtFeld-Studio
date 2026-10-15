@@ -2063,7 +2063,8 @@ namespace lfs::vis::project {
                  }),
                  "centers"},
                 {"VIEW", "tools.active_submode_id", string_parser([](const std::string_view value) {
-                     return selection_submode_from_name(value).has_value();
+                     // Saved as-is from the tool registry, which is "" when no submode is active.
+                     return value.empty() || selection_submode_from_name(value).has_value();
                  }),
                  "centers"},
                 {"VIEW", "tools.active_tool_id", string_parser([](const std::string_view value) {
