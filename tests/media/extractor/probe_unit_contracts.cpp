@@ -244,6 +244,55 @@ namespace {
         const auto skipped = read_source_exif(path, limits);
         require(skipped.status == MetadataStatus::Collected && skipped.blocks.size() == 1 && skipped.blocks[0].bytes == tiff,
                 "large PNG pixel payload does not consume the metadata examination budget or require a valid pixel CRC");
+        for (const bool with_exif : {false, true}) {
+            png.assign(valid_png.begin(), valid_png.begin() + 33);
+            if (with_exif)
+                append("eXIf", tiff);
+            for (int i = 0; i < 5000; ++i)
+                append("IDAT", {});
+            append("IEND", {});
+            write(png);
+            limits = {};
+            limits.png_chunks = with_exif ? 3 : 2;
+            limits.png_scan_bytes = png.size();
+            const auto segmented = read_source_exif(path, limits);
+            require(segmented.status == (with_exif ? MetadataStatus::Collected : MetadataStatus::Absent) &&
+                        segmented.blocks.size() == (with_exif ? 1 : 0),
+                    "pixel segmentation does not consume the non-IDAT chunk budget");
+            --limits.png_scan_bytes;
+            require(read_source_exif(path, limits).status == MetadataStatus::Limited,
+                    "even empty IDAT headers and CRC bytes consume the scan budget");
+            limits.png_scan_bytes = png.size();
+            --limits.png_chunks;
+            require(read_source_exif(path, limits).status == MetadataStatus::Limited,
+                    "non-IDAT chunks still enforce the independent count budget");
+        }
+        auto damaged_text = chunk("tEXt", {'k', 0, 'v'});
+        damaged_text.back() ^= 1;
+        png.assign(valid_png.begin(), valid_png.begin() + 33);
+        for (int i = 0; i < 16; ++i)
+            png.insert(png.end(), damaged_text.begin(), damaged_text.end());
+        append("eXIf", tiff);
+        append("IDAT", {});
+        append("IEND", {});
+        write(png);
+        const auto recovered = read_source_exif(path);
+        require(recovered.status == MetadataStatus::Malformed && recovered.blocks.size() == 1 && recovered.blocks[0].bytes == tiff,
+                "damaged ancillary CRCs do not hide later intact EXIF");
+        require(recovered.diagnostic == "PNG chunk CRC mismatch", "repeated ancillary CRC failures do not grow diagnostics");
+        png[32] ^= 1;
+        write(png);
+        require(read_source_exif(path).status == MetadataStatus::Malformed && read_source_exif(path).blocks.empty(),
+                "damaged critical CRC remains terminal");
+        png.assign(valid_png.begin(), valid_png.begin() + 33);
+        png.insert(png.end(), damaged_text.begin(), damaged_text.end());
+        png.insert(png.end(), {0, 0, 0, 0, '!', 'X', 'I', 'f', 0, 0, 0, 0});
+        append("eXIf", tiff);
+        append("IDAT", {});
+        append("IEND", {});
+        write(png);
+        require(read_source_exif(path).status == MetadataStatus::Malformed && read_source_exif(path).blocks.empty(),
+                "ancillary recovery never searches past invalid next-chunk framing");
     }
 } // namespace
 

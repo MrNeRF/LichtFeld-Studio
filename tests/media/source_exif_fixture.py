@@ -7,7 +7,7 @@ import zlib
 from pathlib import Path
 
 
-def write_png(path, *, post_idat=False, duplicate=False):
+def write_png(path, *, post_idat=False, duplicate=False, idat_chunks=1, damaged_ancillary=False, include_exif=True):
     tiff = b"II" + struct.pack("<HIH", 42, 8, 1)
     tiff += struct.pack("<HHIHHI", 0x112, 3, 1, 6, 0, 0)
 
@@ -15,9 +15,12 @@ def write_png(path, *, post_idat=False, duplicate=False):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
     header = chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
-    pixels = chunk(b"IDAT", zlib.compress(b"\0\x14\x50\xa0"))
-    metadata = chunk(b"eXIf", tiff) * (2 if duplicate else 1)
-    path.write_bytes(b"\x89PNG\r\n\x1a\n" + header + (pixels + metadata if post_idat else metadata + pixels) + chunk(b"IEND", b""))
+    pixels = chunk(b"IDAT", b"") * (idat_chunks - 1) + chunk(b"IDAT", zlib.compress(b"\0\x14\x50\xa0"))
+    metadata = chunk(b"eXIf", tiff) * (2 if duplicate else 1) if include_exif else b""
+    ancillary = bytearray(chunk(b"tEXt", b"key\0value")) if damaged_ancillary else bytearray()
+    if ancillary:
+        ancillary[-1] ^= 1
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + header + ancillary + (pixels + metadata if post_idat else metadata + pixels) + chunk(b"IEND", b""))
     return tiff
 
 

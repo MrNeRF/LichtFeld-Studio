@@ -18,6 +18,20 @@ _exif_spec.loader.exec_module(source_exif_fixture)
 
 
 class McpMedia(unittest.TestCase):
+    def test_png_idat_segmentation_and_ancillary_crc_recovery(self):
+        path = self.root / "review PNG.png"
+        request = self.root / "review-png.json"
+        for options, count, status in (({"idat_chunks": 5000}, 1, "collected"),
+                                        ({"idat_chunks": 5000, "include_exif": False}, 0, "absent"),
+                                        ({"damaged_ancillary": True}, 1, "malformed")):
+            with self.subTest(options=options):
+                payload = source_exif_fixture.write_png(path, **options)
+                request.write_text(json.dumps({"operation": "source-exif", "arguments": {"input": str(path)}}), encoding="utf-8")
+                result = subprocess.run([str(RUNNER), str(request)], capture_output=True, check=True, timeout=30)
+                value = json.loads(result.stdout)
+                self.assertTrue(value["success"])
+                source_exif_fixture.check_png(self, value["exif"], payload, count=count, status=status)
+
     def test_png_source_exif_shared_representation(self):
         path = self.root / "PNG EXIF é 日本語.png"
         payload = source_exif_fixture.write_png(path)

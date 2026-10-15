@@ -29,6 +29,7 @@ namespace lfs::core::image_codecs {
         std::size_t blocks = 64;
         // PNG bytes examined; IDAT payloads are skipped without decoding/CRC.
         std::size_t png_scan_bytes = 64 * 1024 * 1024;
+        // Non-IDAT chunks; all chunk headers/CRC bytes still count above.
         std::size_t png_chunks = 4096;
     };
     struct ExifBlock {

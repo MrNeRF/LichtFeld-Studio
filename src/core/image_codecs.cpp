@@ -1606,9 +1606,11 @@ namespace lfs::core::image_codecs {
             auto fail = [&](MetadataStatus status, const char* text) {
                 if (result.status != MetadataStatus::Malformed || status == MetadataStatus::IoError)
                     result.status = status;
-                if (!result.diagnostic.empty())
-                    result.diagnostic += "; ";
-                result.diagnostic += text;
+                if (result.diagnostic.find(text) == std::string::npos) {
+                    if (!result.diagnostic.empty())
+                        result.diagnostic += "; ";
+                    result.diagnostic += text;
+                }
             };
             auto read = [&](uint8_t* data, size_t size) {
                 if (position > source_size || size > source_size - position) {
@@ -1634,21 +1636,27 @@ namespace lfs::core::image_codecs {
             };
             std::array<uint8_t, 8192> buffer{};
             for (;;) {
-                if (chunks == limits.png_chunks) {
-                    fail(MetadataStatus::Limited, "PNG chunk count budget exhausted");
-                    return result;
-                }
                 std::array<uint8_t, 8> header{};
                 if (!read(header.data(), header.size()))
                     return result;
                 const size_t length = u32(header.data());
                 const auto* type = header.data() + 4;
-                ++chunks;
+                const bool first = position == kPngSignature.size() + header.size();
+                const bool is_idat = !std::memcmp(type, "IDAT", 4);
+                // Pixel segmentation is an encoder detail, not metadata work.
+                // IDAT headers and CRC bytes still consume the scan budget.
+                if (!is_idat) {
+                    if (chunks == limits.png_chunks) {
+                        fail(MetadataStatus::Limited, "PNG non-IDAT chunk count budget exhausted");
+                        return result;
+                    }
+                    ++chunks;
+                }
                 if (length > 0x7fffffff ||
                     std::any_of(type, type + 4, [](uint8_t c) { return !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')); }) ||
                     (type[2] & 32) ||
-                    (chunks == 1 && (std::memcmp(type, "IHDR", 4) || length != 13)) ||
-                    (chunks != 1 && !std::memcmp(type, "IHDR", 4))) {
+                    (first && (std::memcmp(type, "IHDR", 4) || length != 13)) ||
+                    (!first && !std::memcmp(type, "IHDR", 4))) {
                     fail(MetadataStatus::Malformed, "Invalid PNG chunk framing");
                     return result;
                 }
@@ -1664,7 +1672,7 @@ namespace lfs::core::image_codecs {
                     fail(MetadataStatus::Malformed, "Truncated PNG chunk");
                     return result;
                 }
-                if (!std::memcmp(type, "IDAT", 4)) {
+                if (is_idat) {
                     // Pixel payloads are outside this metadata-only operation.
                     // Check their source extent, then skip them without reading
                     // or inflating. Their CRC is intentionally not validated.
@@ -1716,7 +1724,11 @@ namespace lfs::core::image_codecs {
                 }
                 if (crc != u32(checksum.data())) {
                     fail(MetadataStatus::Malformed, "PNG chunk CRC mismatch");
-                    return result;
+                    // Ancillary CRC damage does not erase later intact EXIF.
+                    // Trust no resynchronization: the next framing is checked
+                    // normally, and damaged critical chunks remain terminal.
+                    if (!(type[0] & 32))
+                        return result;
                 }
                 if (is_end)
                     return result;
