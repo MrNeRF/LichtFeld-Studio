@@ -284,7 +284,8 @@ for a narrower panel.
 
 The Histogram is a horizontal bottom panel with a compact wrapping toolbar,
 the shared Rendering scrub control for bin counts, and a labeled log-scale
-checkbox. Range and statistic values use compact scientific notation; numeric
+checkbox. Keep a Dock/Undock toggle in the toolbar and preserve the selected
+panel location. Range and statistic values use compact scientific notation; numeric
 range inputs and bin scrub text are centered. Use the bottom-dock title bar
 close button without adding a second close control to the toolbar. Keep field
 descriptions in tooltips,

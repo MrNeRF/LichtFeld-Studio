@@ -41,6 +41,8 @@
           <input id="histogram-log-scale" type="checkbox" data-checked="log_scale_enabled" />
           <span class="control-label">{{ log_scale_label }}</span>
         </label>
+        <button id="histogram-dock-toggle" class="btn btn--secondary histogram-dock-toggle"
+                data-event-click="toggle_dock_mode()"><span class="btn-label">{{ dock_toggle_label }}</span></button>
       </div>
     </div>
 

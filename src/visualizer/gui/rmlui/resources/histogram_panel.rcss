@@ -44,6 +44,13 @@
     min-width: 0;
 }
 
+.histogram-dock-toggle.btn {
+    flex-shrink: 0;
+    margin-left: auto;
+    height: 24dp;
+    padding: 0 8dp;
+}
+
 .histogram-toolbar-item {
     display: flex;
     align-items: center;

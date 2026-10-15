@@ -63,6 +63,8 @@ class HistogramPanel(Panel):
         self._chart_el = None
         self._compare_chart_el = None
         self._handle = None
+        self._panel_space = lf.ui.PanelSpace.BOTTOM_DOCK
+        self._is_floating = False
         self._metric_select_geometry_key = None
 
         self._metric_id = METRICS[0].id
@@ -299,6 +301,7 @@ class HistogramPanel(Panel):
         model.bind_func("analysis_label", lambda: _tr("histogram.title_eyebrow", "Gaussian Analysis"))
         model.bind_func("field_label", lambda: _tr("histogram.field", "Field"))
         model.bind_func("compare_with_label", lambda: _tr("histogram.compare_with", "Compare With"))
+        model.bind_func("dock_toggle_label", self._dock_toggle_label)
         model.bind_func("log_scale_label", lambda: _tr("histogram.log_scale", "Log Scale"))
         model.bind_func("samples_label", lambda: _tr("histogram.samples", "Samples"))
         model.bind_func("range_label", lambda: _tr("histogram.range", "Range"))
@@ -386,6 +389,7 @@ class HistogramPanel(Panel):
         model.bind_func("reset_range_label", lambda: _tr("histogram.reset", "Reset"))
         model.bind_func("has_custom_range", self._has_custom_range)
         model.bind_func("compare_has_custom_range", self._has_any_custom_range)
+        model.bind_event("toggle_dock_mode", self._on_toggle_dock_mode)
         model.bind_event("reset_range", self._on_reset_range)
         model.bind_event("reset_compare_range", self._on_reset_compare_range)
         model.bind_record_list("metric_options")
@@ -4065,15 +4069,34 @@ class HistogramPanel(Panel):
         except Exception:
             return -1
 
+    def _dock_toggle_label(self) -> str:
+        return "Dock" if self._is_floating else "Undock"
+
     def _sync_panel_space_state(self) -> bool:
-        """Migrate older saved floating layouts back to the bottom panel."""
+        info = None
         try:
             info = lf.ui.get_panel(self.id)
-            if info is not None and info.space != lf.ui.PanelSpace.BOTTOM_DOCK:
-                return bool(lf.ui.set_panel_space(self.id, lf.ui.PanelSpace.BOTTOM_DOCK))
         except Exception:
-            pass
-        return False
+            info = None
+
+        panel_space = getattr(info, "space", self._panel_space)
+        is_floating = panel_space == lf.ui.PanelSpace.FLOATING
+        changed = panel_space != self._panel_space or is_floating != self._is_floating
+        self._panel_space = panel_space
+        self._is_floating = is_floating
+        return changed
+
+    def _on_toggle_dock_mode(self, _handle, _event, _args):
+        target_space = lf.ui.PanelSpace.BOTTOM_DOCK if self._is_floating else lf.ui.PanelSpace.FLOATING
+        try:
+            changed = bool(lf.ui.set_panel_space(self.id, target_space))
+        except Exception:
+            changed = False
+        if not changed:
+            return
+        self._sync_panel_space_state()
+        if self._handle:
+            self._handle.dirty_all()
 
     def _format_compare_bin_count_text(self) -> str:
         return _trf(

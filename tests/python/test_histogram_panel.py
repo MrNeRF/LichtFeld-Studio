@@ -1542,7 +1542,7 @@ def test_histogram_owned_modifier_selection_survives_two_follow_up_updates(histo
 
 
 @pytest.mark.parametrize("saved_space", ["FLOATING", "BOTTOM_DOCK"])
-def test_histogram_panel_restores_bottom_dock(histogram_panel_module, lf, monkeypatch, saved_space):
+def test_histogram_panel_preserves_and_toggles_saved_space(histogram_panel_module, lf, monkeypatch, saved_space):
     panel = histogram_panel_module.HistogramPanel()
     state = {"space": getattr(lf.ui.PanelSpace, saved_space)}
     moves = []
@@ -1556,9 +1556,29 @@ def test_histogram_panel_restores_bottom_dock(histogram_panel_module, lf, monkey
 
     monkeypatch.setattr(lf.ui, "set_panel_space", set_space)
     assert panel._sync_panel_space_state() is (saved_space == "FLOATING")
-    assert state["space"] == lf.ui.PanelSpace.BOTTOM_DOCK
+    assert state["space"] == getattr(lf.ui.PanelSpace, saved_space)
     assert panel._sync_panel_space_state() is False
-    assert len(moves) == (1 if saved_space == "FLOATING" else 0)
+    assert moves == []
+    assert panel._dock_toggle_label() == ("Dock" if saved_space == "FLOATING" else "Undock")
+
+    for _ in range(2):
+        previous = state["space"]
+        panel._on_toggle_dock_mode(None, None, None)
+        assert state["space"] != previous
+        assert panel._is_floating == (state["space"] == lf.ui.PanelSpace.FLOATING)
+        assert panel._sync_panel_space_state() is False
+    assert state["space"] == getattr(lf.ui.PanelSpace, saved_space)
+    assert len(moves) == 2
+
+
+def test_histogram_failed_dock_toggle_preserves_state(histogram_panel_module, lf, monkeypatch):
+    panel = histogram_panel_module.HistogramPanel()
+    monkeypatch.setattr(lf.ui, "get_panel", lambda _: SimpleNamespace(space=lf.ui.PanelSpace.BOTTOM_DOCK))
+    monkeypatch.setattr(lf.ui, "set_panel_space", lambda *_: False)
+    panel._on_toggle_dock_mode(None, None, None)
+    assert panel._dock_toggle_label() == "Undock"
+    assert not panel._is_floating
+
 
 
 @pytest.mark.parametrize("prop,minimum,maximum", [
