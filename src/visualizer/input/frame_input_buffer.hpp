@@ -57,6 +57,10 @@ namespace lfs::vis {
         uint64_t serial = 0;
         float mouse_x = 0;
         float mouse_y = 0;
+        // Pointer motion this frame. It keeps counting in relative mouse mode,
+        // where SDL clamps mouse_x/mouse_y to the window.
+        float mouse_dx = 0;
+        float mouse_dy = 0;
         bool mouse_down[3] = {};
         bool mouse_clicked[3] = {};
         bool mouse_released[3] = {};
@@ -87,6 +91,8 @@ namespace lfs::vis {
             mouse_released[0] = mouse_released[1] = mouse_released[2] = false;
             mouse_wheel = 0;
             mouse_wheel_x = 0;
+            mouse_dx = 0;
+            mouse_dy = 0;
             mouse_button_events.clear();
             input_events.clear();
             keys_pressed.clear();
@@ -110,6 +116,8 @@ namespace lfs::vis {
             switch (event.type) {
             case SDL_EVENT_MOUSE_MOTION:
                 mouse_moved = true;
+                mouse_dx += event.motion.xrel;
+                mouse_dy += event.motion.yrel;
                 break;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
             case SDL_EVENT_MOUSE_BUTTON_UP: {
@@ -171,6 +179,8 @@ namespace lfs::vis {
             int w = 0, h = 0;
             SDL_GetWindowSizeInPixels(window, &w, &h);
             const auto scale = input::windowPixelScale(window);
+            mouse_dx *= scale.x;
+            mouse_dy *= scale.y;
             for (auto& event : mouse_button_events) {
                 event.x *= scale.x;
                 event.y *= scale.y;

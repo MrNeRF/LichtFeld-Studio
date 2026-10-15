@@ -551,6 +551,8 @@ namespace lfs::vis {
             RightPanelPointerRegion right_panel_pointer_capture_region_ =
                 RightPanelPointerRegion::None;
             bool right_panel_resize_edge_was_hovered_ = false;
+            // Axis widget hover in the last drawn frame (see GizmoManager::viewportGizmoHover).
+            int drawn_viewport_gizmo_hover_ = -1;
             bool bottom_dock_pointer_live_capture_ = false;
             bool left_dock_pointer_live_capture_ = false;
             bool dock_resize_interaction_active_ = false;

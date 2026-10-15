@@ -218,7 +218,7 @@ namespace {
             EXPECT_FLOAT_EQ(top(), 5 * scale);
             const auto pos = panel()->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto size = panel()->GetBox().GetSize(Rml::BoxArea::Border);
-            EXPECT_NEAR(pos.x + size.x * 0.5f, 397.5f * scale, 1.0f);
+            EXPECT_NEAR(pos.x + size.x * 0.5f, 405.5f * scale, 1.0f);
         }
     }
 
@@ -279,7 +279,7 @@ namespace {
                     const auto position = bar->GetAbsoluteOffset(Rml::BoxArea::Border);
                     const auto size = bar->GetBox().GetSize(Rml::BoxArea::Border);
                     const float inset = width - position.x - size.x;
-                    EXPECT_NEAR(inset, 137 * scale, 0.1f);
+                    EXPECT_NEAR(inset, 121 * scale, 0.1f);
                     EXPECT_GE(inset - (10 + lfs::vis::gui::VIEWPORT_AXIS_WIDGET_SIZE) * scale, 6.9f * scale);
                 }
             }
@@ -298,7 +298,7 @@ namespace {
                 EXPECT_NEAR(position.x, 12 * scale, 0.1f);
                 EXPECT_NEAR(1240 * scale - position.x - size.x, 12 * scale, 0.1f);
                 layout(false, scale, 0.5f, 1240);
-                EXPECT_NEAR(1240 * scale - bar->GetAbsoluteOffset(Rml::BoxArea::Border).x - bar->GetBox().GetSize(Rml::BoxArea::Border).x, 137 * scale, 0.1f);
+                EXPECT_NEAR(1240 * scale - bar->GetAbsoluteOffset(Rml::BoxArea::Border).x - bar->GetBox().GetSize(Rml::BoxArea::Border).x, 121 * scale, 0.1f);
             }
         }
     }
@@ -354,7 +354,7 @@ namespace {
                             continue;
                         const auto position = control->GetAbsoluteOffset(Rml::BoxArea::Border);
                         const auto size = control->GetBox().GetSize(Rml::BoxArea::Border);
-                        EXPECT_LE(position.x + size.x, (width - 130) * scale) << control->GetTagName();
+                        EXPECT_LE(position.x + size.x, (width - 114) * scale) << control->GetTagName();
                         auto* panel = bar->QuerySelector(".viewport-transform-panel");
                         ASSERT_TRUE(panel);
                         const auto pp = panel->GetAbsoluteOffset(Rml::BoxArea::Border);
@@ -388,7 +388,7 @@ namespace {
                 context_->Update();
                 const auto p = panel->GetAbsoluteOffset(Rml::BoxArea::Border);
                 const auto s = panel->GetBox().GetSize(Rml::BoxArea::Border);
-                EXPECT_LE(p.x + s.x, (width - 137) * scale + 0.1f);
+                EXPECT_LE(p.x + s.x, (width - 121) * scale + 0.1f);
             }
         }
     }
@@ -462,8 +462,8 @@ namespace {
                             if (!split && std::string(id) != "gt-compare-mode-block") {
                                 const auto p = panel->GetAbsoluteOffset(Rml::BoxArea::Border);
                                 const auto s = panel->GetBox().GetSize(Rml::BoxArea::Border);
-                                if (p.y < 130 * scale && p.y + s.y > 10 * scale)
-                                    EXPECT_LE(p.x + s.x, (width - 130) * scale) << id;
+                                if (p.y < 114 * scale && p.y + s.y > 10 * scale)
+                                    EXPECT_LE(p.x + s.x, (width - 114) * scale) << id;
                             }
                             if (split)
                                 EXPECT_FALSE(intersects(panel, secondary)) << id;

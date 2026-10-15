@@ -21,9 +21,9 @@ namespace {
     TEST(ViewportGizmoGeometryTest, SmallScaledPanelsKeepNavigationClearOfTheToolRail) {
         using namespace lfs::vis::gui;
         for (const float scale : {1.0f, 1.5f, 2.0f}) {
-            EXPECT_TRUE(viewportGizmoFits(225.0f * scale, 180.0f * scale, scale));
-            EXPECT_FALSE(viewportGizmoFits(224.0f * scale, 180.0f * scale, scale));
-            EXPECT_FALSE(viewportGizmoFits(225.0f * scale, 179.0f * scale, scale));
+            EXPECT_TRUE(viewportGizmoFits(209.0f * scale, 164.0f * scale, scale));
+            EXPECT_FALSE(viewportGizmoFits(208.0f * scale, 164.0f * scale, scale));
+            EXPECT_FALSE(viewportGizmoFits(209.0f * scale, 163.0f * scale, scale));
             EXPECT_FALSE(viewportGizmoFits(100.0f * scale, 200.0f * scale, scale));
         }
     }
@@ -81,7 +81,7 @@ namespace {
                 int hits = 0;
                 for (const auto& marker : markers) {
                     const auto delta = mouse - marker.screen_pos;
-                    const float radius = marker.radius * 2.5f;
+                    const float radius = marker.radius * VIEWPORT_AXIS_MARKER_HOVER_SCALE;
                     if (marker.visible && glm::dot(delta, delta) <= radius * radius) {
                         if (first == -1)
                             first = marker.encoded_axis;
@@ -103,18 +103,29 @@ namespace {
         EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {0.0f, 0.0f}), -1);
         markers[0] = {0, {0.0f, 0.0f}, 8.0f, true};
         markers[1] = {1, {20.0f, 0.0f}, 8.0f, false};
-        EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {20.0f, 0.0f}), 0);
-        EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {20.01f, 0.0f}), -1);
+        EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {9.6f, 0.0f}), 0);
+        EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {11.0f, 0.0f}), -1);
         markers[1].visible = true;
-        EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {20.01f, 0.0f}), 1);
+        EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {11.0f, 0.0f}), 1);
+    }
+
+    TEST(ViewportGizmoGeometryTest, PickingMatchesTheDrawnFrontMarker) {
+        using namespace lfs::vis::gui;
+        std::array<ViewportGizmoMarker, 6> markers{};
+        markers[0] = {0, {100.0f, 100.0f}, 10.0f, true, 0.5f};
+        markers[4] = {4, {108.0f, 100.0f}, 10.0f, true, 0.2f};
+        // Both circles cover the point; the front one is drawn on top.
+        EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {101.0f, 100.0f}), 4);
+        // Beyond a marker's hovered edge the sphere stays free to drag.
+        EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {100.0f, 112.5f}), -1);
     }
 
     TEST(ViewportGizmoGeometryTest, EqualDistanceAndCoincidentMarkersKeepFirstHitOrder) {
         using namespace lfs::vis::gui;
         std::array<ViewportGizmoMarker, 6> markers{};
         markers[0] = {2, {0.0f, 0.0f}, 8.0f, true};
-        markers[1] = {5, {20.0f, 0.0f}, 8.0f, true};
-        EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {10.0f, 0.0f}), 2);
+        markers[1] = {5, {16.0f, 0.0f}, 8.0f, true};
+        EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {8.0f, 0.0f}), 2);
         markers[1].screen_pos = markers[0].screen_pos;
         EXPECT_EQ(hitTestViewportGizmoMarkers(markers, {0.0f, 0.0f}), 2);
     }

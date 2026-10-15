@@ -270,12 +270,12 @@ body {
 
 .viewport-gizmo-controls {
     position: absolute;
-    top: 133dp;
+    top: 117dp;
     right: 10dp;
     display: flex;
     flex-direction: column;
     align-items: center;
-    width: 120dp;
+    width: 104dp;
     gap: 3dp;
     pointer-events: none;
     z-index: 8;
@@ -290,7 +290,7 @@ body {
     flex-direction: row;
     align-items: center;
     justify-content: center;
-    width: 120dp;
+    width: 104dp;
     gap: 3dp;
     pointer-events: auto;
 }
@@ -783,12 +783,12 @@ body {
     overflow: visible;
 }
 
-/* Reserve the full 130dp axis corner plus a 7dp gap at every width.
+/* Reserve the full 114dp axis corner plus a 7dp gap at every width.
    A centered single-row bar can reach this corner above the old breakpoint. */
 .viewport-transform-overlay,
 .viewport-selection-overlay,
 .viewport-depth-overlay {
-    right: 137dp;
+    right: 121dp;
 }
 
 .viewport-transform-header {
@@ -2184,7 +2184,7 @@ body {
 /* Leave room for the tool strip and corner axis control in each pane. */
 .toolbar-hcenter.align-active {
     padding-left: 44dp;
-    padding-right: 137dp;
+    padding-right: 121dp;
     box-sizing: border-box;
 }
 

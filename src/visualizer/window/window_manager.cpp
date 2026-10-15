@@ -1613,6 +1613,8 @@ namespace lfs::vis {
         frame_input_.mouse_released[2] = false;
         frame_input_.mouse_wheel = 0.0f;
         frame_input_.mouse_wheel_x = 0.0f;
+        frame_input_.mouse_dx = 0.0f;
+        frame_input_.mouse_dy = 0.0f;
         frame_input_.mouse_button_events.clear();
         frame_input_.mouse_moved = false;
     }
