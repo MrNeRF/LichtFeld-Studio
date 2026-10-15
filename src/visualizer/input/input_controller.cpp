@@ -28,6 +28,7 @@
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/selection_tool.hpp"
@@ -1990,7 +1991,7 @@ namespace lfs::vis {
                     rendering && (rendering->isGTComparisonActive() || rendering->hasGTComparisonAvailable())) {
                     cmd::ToggleGTComparison{}.emit();
                 } else if (const auto* const scene_manager = services().sceneOrNull();
-                           scene_manager && scene_manager->getScene().getVisibleSplatNodeSlots().size() >= 2) {
+                           scene_manager && plyComparisonNodes(scene_manager->getScene()).size() >= 2) {
                     cmd::ToggleSplitView{}.emit();
                 }
                 return;

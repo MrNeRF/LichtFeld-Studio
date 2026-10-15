@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -44,6 +45,8 @@ namespace lfs::vis {
         // Shadow map: depth-only pre-pass per mesh, then sampler2DShadow read in main shader.
         bool shadow_enabled = false;
         int shadow_map_resolution = 2048;
+        // Bit i set: drawn in viewport panel i (split view sides compare different meshes).
+        std::uint32_t panel_mask = ~0u;
     };
 
     struct VulkanMeshViewportPanel {
@@ -55,6 +58,8 @@ namespace lfs::vis {
         glm::vec3 camera_position{0.0f};
         glm::vec3 camera_backward{0.0f, 0.0f, 1.0f};
         bool equirectangular = false;
+        // The projection spans the whole viewport; the panel range only clips.
+        bool full_viewport_projection = false;
     };
 
     struct VulkanMeshPassParams {
@@ -67,6 +72,8 @@ namespace lfs::vis {
         bool depth_grayscale = false;
         std::vector<VulkanMeshDrawItem> items;
         std::span<const VulkanMeshViewportPanel> panels;
+        // Clip rect inside the viewport rect passed to record(); defaults to all of it.
+        std::optional<VkRect2D> scissor;
         std::size_t frame_slot = 0;
         std::size_t draw_group = 0;
         std::size_t draw_group_count = 1;
