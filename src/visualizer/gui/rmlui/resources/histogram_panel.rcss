@@ -1,4 +1,4 @@
-/* Bottom panel: fixed controls and statistics, chart fills the remaining height. */
+/* Fixed controls and statistics surround a scrollable chart region. */
 #content-wrap {
     padding: 0;
     overflow: hidden;
@@ -143,6 +143,8 @@
 }
 
 #histogram-content {
+    overflow-x: hidden;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -152,7 +154,7 @@
 
 #histogram-card,
 #compare-card {
-    flex: 1;
+    flex: 1 0 auto;
     min-width: 0;
     min-height: 0;
     display: flex;
@@ -233,7 +235,7 @@
 #histogram-chart {
     position: relative;
     flex: 1;
-    min-height: 32dp;
+    min-height: 128dp;
     border-width: 1dp;
     border-radius: 4dp;
     overflow: hidden;
@@ -317,15 +319,15 @@
     display: flex;
     flex-direction: column;
     gap: 6dp;
-    flex: 1;
+    flex: 1 0 auto;
     min-height: 0;
 }
 
 #compare-chart-shell {
     display: flex;
     gap: 6dp;
-    flex: 1;
-    min-height: 0;
+    flex: 1 0 auto;
+    min-height: 260dp;
 }
 
 #compare-y-axis {
@@ -352,7 +354,7 @@
 #compare-chart {
     position: relative;
     flex: 1;
-    min-height: 32dp;
+    min-height: 240dp;
     border-width: 1dp;
     border-radius: 4dp;
     overflow: hidden;

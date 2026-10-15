@@ -204,7 +204,7 @@ namespace {
         }
     }
 
-    TEST_P(HistogramLayoutTest, BottomPanelFitsWithoutScrollbarsAtPracticalDockHeights) {
+    TEST_P(HistogramLayoutTest, BottomPanelKeepsControlsAndStatisticsVisible) {
         for (const bool compare : {false, true}) {
             loadPanel(compare);
             for (const auto& [width, height] : {std::pair{1800, 220}, {1000, 300}, {860, 220}, {600, 300}, {360, 400}, {1000, 300}}) {
@@ -235,7 +235,7 @@ namespace {
                 document_->QuerySelectorAll(elements, ".histogram-stat");
                 for (auto* element : elements)
                     checkInside(element, stats);
-                for (const auto* id : {"histogram-shell", "histogram-content", "histogram-stats"}) {
+                for (const auto* id : {"histogram-shell", "histogram-stats"}) {
                     auto* element = document_->GetElementById(id);
                     EXPECT_LE(element->GetScrollWidth(), element->GetClientWidth() + 1.0f) << id;
                     EXPECT_LE(element->GetScrollHeight(), element->GetClientHeight() + 1.0f) << id;
@@ -248,6 +248,43 @@ namespace {
                         checkInside(document_->GetElementById(id), document_->GetElementById("compare-range-of-interest"));
                 } else {
                     checkControls();
+                }
+            }
+        }
+    }
+
+    TEST_P(HistogramLayoutTest, ShortPanelScrollsChartsWithoutCollapsingAxes) {
+        for (const bool compare : {false, true}) {
+            for (const bool floating : {false, true}) {
+                loadPanel(compare);
+                document_->GetElementById("histogram-shell")->SetClass("is-floating", floating);
+                for (const int width : {360, 1000}) {
+                    for (const int height : {220, 160, 1000, 220}) {
+                        SCOPED_TRACE(::testing::Message() << width << "x" << height << " compare=" << compare << " floating=" << floating);
+                        auto* content = document_->GetElementById("histogram-content");
+                        content->SetScrollTop(0);
+                        resize(width, height);
+                        auto* chart = document_->GetElementById(compare ? "compare-chart" : "histogram-chart");
+                        auto* axis = document_->GetElementById(compare ? "compare-axis" : "histogram-axis");
+                        auto* card = document_->GetElementById(compare ? "compare-card" : "histogram-card");
+                        auto* stats = document_->GetElementById("histogram-stats");
+                        const auto bottom = [](Rml::Element* element) {
+                            return element->GetAbsoluteOffset(Rml::BoxArea::Border).y + element->GetBox().GetSize(Rml::BoxArea::Border).y;
+                        };
+                        EXPECT_GE(chart->GetBox().GetSize(Rml::BoxArea::Border).y, (compare ? 240.0f : 128.0f) * GetParam());
+                        EXPECT_GE(axis->GetAbsoluteOffset(Rml::BoxArea::Border).y, bottom(chart));
+                        EXPECT_LE(bottom(axis), bottom(card) + 1.0f);
+                        EXPECT_LE(bottom(content), stats->GetAbsoluteOffset(Rml::BoxArea::Border).y);
+                        if (height <= 220) {
+                            EXPECT_GT(content->GetScrollHeight(), content->GetClientHeight());
+                            EXPECT_EQ(content->GetComputedValues().overflow_y(), Rml::Style::Overflow::Auto);
+                            content->SetScrollTop(content->GetScrollHeight());
+                            context_->Update();
+                            EXPECT_LE(bottom(axis), bottom(content) + 1.0f);
+                        } else {
+                            EXPECT_LE(content->GetScrollHeight(), content->GetClientHeight() + 1.0f);
+                        }
+                    }
                 }
             }
         }

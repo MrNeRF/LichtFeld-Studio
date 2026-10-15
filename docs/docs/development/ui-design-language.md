@@ -290,8 +290,8 @@ range inputs and bin scrub text are centered. Use the bottom-dock title bar
 close button without adding a second close control to the toolbar. Keep field
 descriptions in tooltips,
 editable bounds beside the chart, and summary statistics in a flat strip below
-it. Let the chart shrink with the panel height rather than adding nested
-scrollbars. Comparison axes need only a compact numeric gutter; the field
+it. Keep a readable minimum chart height and scroll the content area when
+the panel is too short. Controls and statistics remain outside that scroll area. Comparison axes need only a compact numeric gutter; the field
 selectors already identify both axes. Size closed selectors to the active label,
 while their popup menus retain enough width for the longer localized options.
 Bar fills use a constant semantic color and opacity; only 2D cell intensity
