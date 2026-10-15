@@ -8,7 +8,7 @@ import tempfile
 import unittest
 import subprocess
 import sys
-from _lfs_path_io import Path, native_path, logical_path, open, walk, TemporaryDirectory, executable_kwargs
+from _lfs_path_io import Path, native_path, logical_path, open, walk, TemporaryDirectory, executable_kwargs, bounded_sibling_path
 
 
 class NativePathIo(unittest.TestCase):
@@ -35,6 +35,38 @@ class NativePathIo(unittest.TestCase):
         result = subprocess.run(command, **executable_kwargs(command), capture_output=True, text=True, check=True)
         self.assertIn("Python", result.stdout)
         self.assertEqual(executable_kwargs(["python", "--version"]), {})
+
+    @unittest.skipUnless(os.name == "nt", "Windows filename aliases")
+    def test_bounded_catalog_lock_uses_one_key_for_case_aliases(self):
+        lower = self.deep / ("a" * 250 + ".json")
+        upper = self.deep / ("A" * 250 + ".JSON")
+        self.assertEqual(bounded_sibling_path(lower, ".lock"), bounded_sibling_path(upper, ".lock"))
+
+    @unittest.skipUnless(os.name == "nt", "Windows directory case sensitivity")
+    def test_bounded_catalog_lock_keeps_case_sensitive_names_distinct(self):
+        from ctypes import wintypes
+        parent = self.root / "case-sensitive"
+        parent.mkdir()
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        create = kernel.CreateFileW
+        create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+        create.restype = wintypes.HANDLE
+        close = kernel.CloseHandle
+        close.argtypes = (wintypes.HANDLE,)
+        set_info = kernel.SetFileInformationByHandle
+        set_info.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+        set_info.restype = wintypes.BOOL
+        handle = create(native_path(parent), 0x100, 7, None, 3, 0x02000000, None)
+        self.assertNotEqual(handle, ctypes.c_void_p(-1).value)
+        try:
+            flags = wintypes.DWORD(1)
+            if not set_info(handle, 23, ctypes.byref(flags), ctypes.sizeof(flags)):
+                self.skipTest(f"Directory case sensitivity unavailable: {ctypes.get_last_error()}")
+        finally:
+            close(handle)
+        lower = parent / ("a" * 250 + ".json")
+        upper = parent / ("A" * 250 + ".JSON")
+        self.assertNotEqual(str(bounded_sibling_path(lower, ".lock")), str(bounded_sibling_path(upper, ".lock")))
 
     def test_open_stat_replace_and_persisted_names(self):
         file = self.deep / "project_\u6e2c\u8a66.json"

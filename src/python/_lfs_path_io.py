@@ -113,11 +113,46 @@ def _component_units(name):
     return len(name.encode("utf-16-le", errors="surrogatepass")) // 2 if os.name == "nt" else len(os.fsencode(name))
 
 
+def _artifact_filename_key(source):
+    name = source.name
+    if os.name != "nt":
+        return name
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    create.restype = wintypes.HANDLE
+    query = kernel.GetFileInformationByHandleEx
+    query.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+    query.restype = wintypes.BOOL
+    close = kernel.CloseHandle
+    close.argtypes = (wintypes.HANDLE,)
+    close.restype = wintypes.BOOL
+    parent = source.parent
+    while not parent.exists() and parent != parent.parent:
+        parent = parent.parent
+    handle = create(native_path(parent), 0x80, 7, None, 3, 0x02000000, None)
+    if handle != ctypes.c_void_p(-1).value:
+        try:
+            flags = wintypes.DWORD()
+            if query(handle, 23, ctypes.byref(flags), ctypes.sizeof(flags)) and flags.value & 1:
+                return name
+        finally:
+            close(handle)
+    upcase = ctypes.WinDLL("ntdll").RtlUpcaseUnicodeChar
+    upcase.argtypes = (ctypes.c_uint16,)
+    upcase.restype = ctypes.c_uint16
+    raw = name.encode("utf-16-le", errors="surrogatepass")
+    folded = b"".join(int(upcase(int.from_bytes(raw[i:i + 2], "little"))).to_bytes(2, "little") for i in range(0, len(raw), 2))
+    return folded.decode("utf-16-le", errors="surrogatepass")
+
+
 def bounded_sibling_path(source, suffix):
     source = Path(source)
     name = source.name
     if _component_units(name + suffix) > 255:
-        name = ".lfs-artifact-" + hashlib.sha256(name.encode("utf-8", errors="surrogatepass")).hexdigest()[:32]
+        name = ".lfs-artifact-" + hashlib.sha256(_artifact_filename_key(source).encode("utf-8", errors="surrogatepass")).hexdigest()[:32]
     return source.with_name(name + suffix)
 
 
