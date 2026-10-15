@@ -93,6 +93,8 @@ namespace fast_lfs::rasterization {
         bool mip_filter,
         cudaStream_t stream,
         float* max_screen_share = nullptr,
-        float dilation_scale = 1.0f);
+        float dilation_scale = 1.0f,
+        const float* sb_params = nullptr,
+        int sb_lobes = 0);
 
 } // namespace fast_lfs::rasterization

@@ -46,6 +46,8 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--strategy", "strategy", String, false, "; legacy aliases: mnrf, lfs"},
             OptimizationCliBinding{"--sh-degree", "sh_degree", Integer},
             OptimizationCliBinding{"--sh-degree-interval", "sh_degree_interval", Integer},
+            OptimizationCliBinding{"--sb-lobes", "sb_lobes", Integer, false, " [0-8]; uses the gsplat rasterizer (--gut)"},
+            OptimizationCliBinding{"--sb-params-lr", "sb_params_lr", Float},
             OptimizationCliBinding{"--morton-reorder-interval", "morton_reorder_interval", Integer},
             OptimizationCliBinding{"--max-cap", "max_cap", Integer},
             OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
@@ -816,6 +818,8 @@ namespace {
             ::args::ValueFlag<std::string> strategy(training_group, "strategy", lfs::core::args::optimization_cli_help("--strategy"), {"strategy"});
             ::args::ValueFlag<int> sh_degree(training_group, "sh_degree", lfs::core::args::optimization_cli_help("--sh-degree"), {"sh-degree"});
             ::args::ValueFlag<int> sh_degree_interval(training_group, "sh_degree_interval", lfs::core::args::optimization_cli_help("--sh-degree-interval"), {"sh-degree-interval"});
+            ::args::ValueFlag<int> sb_lobes(training_group, "sb_lobes", lfs::core::args::optimization_cli_help("--sb-lobes"), {"sb-lobes"});
+            ::args::ValueFlag<float> sb_params_lr(training_group, "sb_params_lr", lfs::core::args::optimization_cli_help("--sb-params-lr"), {"sb-params-lr"});
             ::args::ValueFlag<int> morton_reorder_interval(training_group, "morton_reorder_interval", lfs::core::args::optimization_cli_help("--morton-reorder-interval"), {"morton-reorder-interval"});
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
@@ -1453,6 +1457,17 @@ namespace {
                 }
             }
 
+            if (sb_lobes) {
+                const int lobes = ::args::get(sb_lobes);
+                if (lobes < 0 || lobes > 8) {
+                    return std::unexpected("ERROR: --sb-lobes must be between 0 and 8 (0 disables Spherical Beta)");
+                }
+            }
+
+            if (sb_params_lr && !(::args::get(sb_params_lr) >= 0.0f)) {
+                return std::unexpected("ERROR: --sb-params-lr must be >= 0");
+            }
+
             if (ppisp_holdout_appearance &&
                 !lfs::core::param::ppisp_holdout_appearance_from_string(::args::get(ppisp_holdout_appearance)))
                 return std::unexpected("ERROR: --ppisp-holdout-appearance must be mean or nearest");
@@ -1569,6 +1584,8 @@ namespace {
                                         sh_degree_interval_val = cli_option_present({"--sh-degree-interval"}) ? std::optional<int>(::args::get(sh_degree_interval)) : std::optional<int>(),
                                         morton_reorder_interval_val = cli_option_present({"--morton-reorder-interval"}) ? std::optional<int>(::args::get(morton_reorder_interval)) : std::optional<int>(),
                                         sh_degree_val = cli_option_present({"--sh-degree"}) ? std::optional<int>(::args::get(sh_degree)) : std::optional<int>(),
+                                        sb_lobes_val = cli_option_present({"--sb-lobes"}) ? std::optional<int>(::args::get(sb_lobes)) : std::optional<int>(),
+                                        sb_params_lr_val = cli_option_present({"--sb-params-lr"}) ? std::optional<float>(::args::get(sb_params_lr)) : std::optional<float>(),
                                         min_opacity_val = cli_option_present({"--min-opacity"}) ? std::optional<float>(::args::get(min_opacity)) : std::optional<float>(),
                                         eval_mask_opacity_val = cli_option_present({"--eval-mask-opacity"}) ? std::optional<float>(::args::get(eval_mask_opacity)) : std::optional<float>(),
                                         cropbox_lr_scale_val = cli_option_present({"--cropbox-lr-scale"}) ? std::optional<float>(::args::get(cropbox_lr_scale)) : std::optional<float>(),
@@ -1740,6 +1757,8 @@ namespace {
                     opt.morton_reorder_interval = static_cast<size_t>(*morton_reorder_interval_val);
                 }
                 setVal(sh_degree_val, opt.sh_degree);
+                setVal(sb_lobes_val, opt.sb_lobes);
+                setVal(sb_params_lr_val, opt.sb_params_lr);
                 setVal(min_opacity_val, opt.min_opacity);
                 setVal(cropbox_lr_scale_val, opt.cropbox_lr_scale);
                 setVal(cropbox_loss_weight_val, opt.cropbox_loss_weight);
@@ -1896,6 +1915,8 @@ namespace {
                 note_opt("sh_degree_interval", sh_degree_interval_val.has_value());
                 note_opt("morton_reorder_interval", morton_reorder_interval_val.has_value());
                 note_opt("sh_degree", sh_degree_val.has_value());
+                note_opt("sb_lobes", sb_lobes_val.has_value());
+                note_opt("sb_params_lr", sb_params_lr_val.has_value());
                 note_opt("min_opacity", min_opacity_val.has_value());
                 note_opt("cropbox_lr_scale", cropbox_lr_scale_val.has_value());
                 note_opt("cropbox_loss_weight", cropbox_loss_weight_val.has_value());

@@ -184,7 +184,19 @@ namespace lfs::training {
                 }
             }
 
+            // Spherical Beta lobes (additive view-dependent color); empty unless enabled.
+            const uint32_t sb_lobes = gaussian_model.has_spherical_beta()
+                                          ? static_cast<uint32_t>(gaussian_model.get_sb_lobes())
+                                          : 0u;
+            core::Tensor sb_params;
+            if (sb_lobes > 0) {
+                sb_params = ensure_contiguous(gaussian_model.sb_params());
+            }
+
             core::pin_operands({&means, &opacities, &scales, &quats, &sh0, &shN});
+            if (sb_lobes > 0) {
+                core::pin_operands({&sb_params});
+            }
 
             // Current-stream-first (the caller's guard), tensor stream as
             // fallback — matches the lib-wide rule and the begin_frame stream,
@@ -209,6 +221,7 @@ namespace lfs::training {
             const float* scales_ptr = scales.ptr<float>();
             const float* quats_ptr = quats.ptr<float>();
             const float* sh0_ptr = sh0.ptr<float>();
+            const float* sb_params_ptr = sb_lobes > 0 ? sb_params.ptr<float>() : nullptr;
             // gsplat is float-native — dequant q16 shN into a temporary float4
             // buffer (does not mutate resident storage). FastGS path decodes in-registers.
             core::Tensor shN_dequant_temp;
@@ -436,7 +449,8 @@ namespace lfs::training {
             const size_t radii_size = align(C * N * 2 * sizeof(int32_t));
             const size_t means2d_size = align(C * N * 2 * sizeof(float));
             const size_t depths_size = align(C * N * sizeof(float));
-            const size_t dirs_size = (sh_degree > 0) ? align(C * N * 3 * sizeof(float)) : 0;
+            const bool need_dirs = sh_degree > 0 || sb_lobes > 0;
+            const size_t dirs_size = need_dirs ? align(C * N * 3 * sizeof(float)) : 0;
             const size_t conics_size = align(C * N * 3 * sizeof(float));
             const size_t compensations_size = calc_compensations ? align(C * N * sizeof(float)) : 0;
             const size_t tiles_per_gauss_size = align(C * N * sizeof(int32_t));
@@ -515,7 +529,7 @@ namespace lfs::training {
                 .means2d = means2d_ptr_out,
                 .depths = depths_ptr_out,
                 .colors = colors_ptr_out,
-                .dirs = (sh_degree > 0) ? dirs_ptr_out : nullptr,
+                .dirs = need_dirs ? dirs_ptr_out : nullptr,
                 .conics = conics_ptr_out,
                 .tiles_per_gauss = tiles_per_gauss_ptr,
                 .tile_offsets = tile_offsets_ptr_out,
@@ -560,6 +574,8 @@ namespace lfs::training {
                 radial_ptr,
                 tangential_ptr,
                 thin_prism_ptr,
+                sb_params_ptr,
+                sb_lobes,
                 result,
                 fwd_stream);
             // isect_ids / flatten_ids are borrowed from the TLS VMM cache —
@@ -627,7 +643,7 @@ namespace lfs::training {
             ctx.means2d_ptr = means2d_ptr_out;
             ctx.depths_ptr = depths_ptr_out;
             ctx.colors_ptr = colors_ptr_out;
-            ctx.dirs_ptr = (sh_degree > 0) ? dirs_ptr_out : nullptr;
+            ctx.dirs_ptr = need_dirs ? dirs_ptr_out : nullptr;
             ctx.tile_offsets_ptr = tile_offsets_ptr_out;
             ctx.last_ids_ptr = last_ids_ptr_out;
             ctx.compensations_ptr = compensations_ptr_out;
@@ -650,6 +666,8 @@ namespace lfs::training {
             // (Float16 bit-patterns), the forward dequant temp is the float4 buffer
             // the kernels actually read — must save that, not the raw codes.
             ctx.shN = shN_dequant_temp.is_valid() ? shN_dequant_temp : shN;
+            ctx.sb_params = sb_params;
+            ctx.sb_lobes = sb_lobes;
 
             // Store camera pointers
             ctx.viewmat_ptr = viewmat_ptr;
@@ -765,10 +783,13 @@ namespace lfs::training {
             size_t v_scales_size = align(N * 3 * sizeof(float));
             size_t v_opacities_size = align(N * sizeof(float));
             size_t v_sh_coeffs_size = align(N * K * 3 * sizeof(float));
+            const uint32_t sb_lobes = ctx.sb_params.is_valid() ? ctx.sb_lobes : 0u;
+            const size_t sb_values = static_cast<size_t>(N) * sb_lobes * 6;
+            size_t v_sb_params_size = align(sb_values * sizeof(float));
 
             size_t total_bwd_size = v_render_colors_size + v_render_alphas_size +
                                     v_means_size + v_quats_size + v_scales_size +
-                                    v_opacities_size + v_sh_coeffs_size;
+                                    v_opacities_size + v_sh_coeffs_size + v_sb_params_size;
 
             char* bwd_blob = arena_allocator(total_bwd_size);
             if (bwd_blob == nullptr) {
@@ -806,6 +827,8 @@ namespace lfs::training {
             auto* v_opacities_ptr = reinterpret_cast<float*>(bwd_ptr);
             bwd_ptr += v_opacities_size;
             auto* v_sh_coeffs_ptr = reinterpret_cast<float*>(bwd_ptr);
+            bwd_ptr += v_sh_coeffs_size;
+            float* const v_sb_params_ptr = sb_lobes > 0 ? reinterpret_cast<float*>(bwd_ptr) : nullptr;
 
             LFS_CUDA_CHECK_MSG(
                 cudaMemsetAsync(bwd_blob, 0, total_bwd_size, stream),
@@ -927,6 +950,8 @@ namespace lfs::training {
                 ctx.radial_ptr,
                 ctx.tangential_ptr,
                 ctx.thin_prism_ptr,
+                sb_lobes > 0 ? ctx.sb_params.ptr<float>() : nullptr,
+                sb_lobes,
                 ctx.render_alphas_ptr,
                 ctx.last_ids_ptr,
                 ctx.tile_offsets_ptr,
@@ -946,6 +971,7 @@ namespace lfs::training {
                 v_scales_ptr,
                 v_opacities_ptr,
                 v_sh_coeffs_ptr,
+                v_sb_params_ptr,
                 densification_info_ptr,
                 pixel_error_map_ptr,
                 edge_weight_map_ptr,
@@ -1013,6 +1039,19 @@ namespace lfs::training {
                 K,
                 static_cast<std::uint32_t>(gaussian_model.max_sh_coeffs_rest()),
                 stream);
+
+            // Spherical Beta lobes: dense [N, sb_lobes * 6], same layout as the optimizer grad.
+            if (v_sb_params_ptr != nullptr) {
+                auto& sb_grad = optimizer.get_grad(ParamType::SbParams);
+                if (sb_grad.is_valid() && sb_grad.numel() >= sb_values) {
+                    sb_grad.set_stream(stream);
+                    kernels::launch_grad_accumulate(
+                        sb_grad.ptr<float>(),
+                        v_sb_params_ptr,
+                        static_cast<int64_t>(sb_values),
+                        stream);
+                }
+            }
 
             // Accumulate gradient norms when pixel-error map is not provided
             if (update_densification_info && pixel_error_map_ptr == nullptr) {

@@ -31,6 +31,9 @@
 #include <format>
 #include <ios>
 #include <limits>
+#include <numbers>
+#include <random>
+#include <stdexcept>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <vector>
@@ -887,6 +890,8 @@ namespace lfs::core {
         copy._scaling = cloned(_scaling, "splat.scaling");
         copy._rotation = cloned(_rotation, "splat.rotation");
         copy._opacity = cloned(_opacity, "splat.opacity");
+        copy._sb_params = cloned(_sb_params, "splat.sb_params");
+        copy._sb_lobes = _sb_lobes;
         copy._densification_info = cloned(_densification_info, "splat.densification_info");
         copy._max_screen_share = cloned(_max_screen_share, "splat.max_screen_share");
         copy._deleted = cloned(_deleted, "splat.deleted_mask");
@@ -933,6 +938,8 @@ namespace lfs::core {
         copy._scaling = clone_tensor(_scaling);
         copy._rotation = clone_tensor(_rotation);
         copy._opacity = clone_tensor(_opacity);
+        copy._sb_params = clone_tensor(_sb_params);
+        copy._sb_lobes = _sb_lobes;
         copy._densification_info = clone_tensor(_densification_info);
         copy._max_screen_share = clone_tensor(_max_screen_share);
         copy._deleted = clone_tensor(_deleted);
@@ -959,6 +966,8 @@ namespace lfs::core {
           _scaling(std::move(other._scaling)),
           _rotation(std::move(other._rotation)),
           _opacity(std::move(other._opacity)),
+          _sb_params(std::move(other._sb_params)),
+          _sb_lobes(other._sb_lobes),
           _densification_info(std::move(other._densification_info)),
           _max_screen_share(std::move(other._max_screen_share)),
           _deleted(std::move(other._deleted)),
@@ -973,6 +982,7 @@ namespace lfs::core {
         other._active_sh_degree = 0;
         other._max_sh_degree = 0;
         other._scene_scale = 0.0f;
+        other._sb_lobes = 0;
         other._deleted_count.store(0, std::memory_order_relaxed);
         other._deleted_mask_version.store(0, std::memory_order_relaxed);
         other._param_layout_generation = 0;
@@ -994,6 +1004,9 @@ namespace lfs::core {
             _scaling = std::move(other._scaling);
             _rotation = std::move(other._rotation);
             _opacity = std::move(other._opacity);
+            _sb_params = std::move(other._sb_params);
+            _sb_lobes = other._sb_lobes;
+            other._sb_lobes = 0;
             _densification_info = std::move(other._densification_info);
             _max_screen_share = std::move(other._max_screen_share);
             _deleted = std::move(other._deleted);
@@ -1085,6 +1098,7 @@ namespace lfs::core {
             &_scaling,
             &_rotation,
             &_opacity,
+            &_sb_params,
             &_deleted,
             &_densification_info,
             &_max_screen_share,
@@ -1847,6 +1861,85 @@ namespace lfs::core {
             grow_direct(_rotation, capacity);
         if (_opacity.is_valid())
             grow_direct(_opacity, capacity);
+        if (_sb_params.is_valid())
+            grow_direct(_sb_params, capacity);
+    }
+
+    void SplatData::set_sb_params(Tensor sb_params, const int sb_lobes) {
+        if (sb_lobes <= 0 || !sb_params.is_valid()) {
+            clear_spherical_beta();
+            return;
+        }
+        if (sb_lobes > MAX_SB_LOBES || sb_params.ndim() != 2 ||
+            sb_params.shape()[1] != static_cast<size_t>(sb_lobes) * SB_PARAMS_PER_LOBE ||
+            sb_params.dtype() != DataType::Float32) {
+            throw std::invalid_argument(std::format(
+                "Spherical Beta parameters must be float32 [N, {}], got {}",
+                static_cast<size_t>(sb_lobes) * SB_PARAMS_PER_LOBE, sb_params.shape().str()));
+        }
+        _sb_params = sb_params.device() == Device::CUDA ? std::move(sb_params) : sb_params.cuda();
+        if (!_sb_params.is_contiguous())
+            _sb_params = _sb_params.contiguous();
+        _sb_params.set_name("splat.sb_params");
+        _sb_lobes = sb_lobes;
+        if (_means.is_valid())
+            reserve_spherical_beta(_means.capacity());
+    }
+
+    void SplatData::clear_spherical_beta() {
+        _sb_params = Tensor{};
+        _sb_lobes = 0;
+    }
+
+    void SplatData::reserve_spherical_beta(const size_t capacity) {
+        if (!_sb_params.is_valid() || _sb_params.capacity() >= capacity ||
+            capacity <= static_cast<size_t>(_sb_params.shape()[0])) {
+            return;
+        }
+        Tensor grown = Tensor::zeros_direct(_sb_params.shape(), capacity, Device::CUDA);
+        if (_sb_params.numel() > 0)
+            grown.copy_from(_sb_params);
+        grown.set_name("splat.sb_params");
+        _sb_params = std::move(grown);
+    }
+
+    void SplatData::init_spherical_beta(const int sb_lobes) {
+        if (sb_lobes <= 0) {
+            clear_spherical_beta();
+            return;
+        }
+        if (sb_lobes > MAX_SB_LOBES) {
+            throw std::invalid_argument(std::format(
+                "Spherical Beta supports at most {} lobes (got {})", MAX_SB_LOBES, sb_lobes));
+        }
+        const size_t n = _means.is_valid() ? static_cast<size_t>(_means.shape()[0]) : 0;
+        const size_t cols = static_cast<size_t>(sb_lobes) * SB_PARAMS_PER_LOBE;
+        const size_t capacity = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
+        Tensor device = Tensor::zeros_direct({n, cols}, std::max<size_t>(capacity, 1), Device::CUDA);
+        if (n > 0)
+            device.copy_from(make_spherical_beta_rows(n, sb_lobes, 0xB17AB17Au));
+        device.set_name("splat.sb_params");
+        _sb_params = std::move(device);
+        _sb_lobes = sb_lobes;
+    }
+
+    Tensor SplatData::make_spherical_beta_rows(const size_t n, const int sb_lobes, const uint32_t seed) {
+        const size_t cols = static_cast<size_t>(std::max(sb_lobes, 0)) * SB_PARAMS_PER_LOBE;
+        // Per lobe [r, g, b, theta, phi, beta]: colors and sharpness start at zero, directions
+        // uniform in theta in [0, pi] and phi in [0, 2pi] as in the reference.
+        Tensor host = Tensor::zeros({n, cols}, Device::CPU);
+        if (n > 0 && cols > 0) {
+            float* const p = host.ptr<float>();
+            std::mt19937 rng(seed);
+            std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+            constexpr float kPi = std::numbers::pi_v<float>;
+            for (size_t i = 0; i < n * static_cast<size_t>(sb_lobes); ++i) {
+                float* const lobe = p + i * SB_PARAMS_PER_LOBE;
+                lobe[3] = kPi * u01(rng);
+                lobe[4] = 2.0f * kPi * u01(rng);
+            }
+        }
+        return host.cuda();
     }
 
     // ========== SOFT DELETION ==========
@@ -2040,6 +2133,7 @@ namespace lfs::core {
         Tensor saved_scaling = _scaling;
         Tensor saved_rotation = _rotation;
         Tensor saved_opacity = _opacity;
+        Tensor saved_sb_params = _sb_params;
         Tensor saved_shN = _shN;
         Tensor saved_bounds = _shN_value_bounds;
         Tensor saved_deleted = _deleted;
@@ -2053,6 +2147,7 @@ namespace lfs::core {
             _scaling = saved_scaling;
             _rotation = saved_rotation;
             _opacity = saved_opacity;
+            _sb_params = saved_sb_params;
             _shN = saved_shN;
             _shN_value_bounds = saved_bounds;
             _deleted = saved_deleted;
@@ -2073,6 +2168,11 @@ namespace lfs::core {
             Tensor gathered_scaling = gather_rows(_scaling);
             Tensor gathered_rotation = gather_rows(_rotation);
             Tensor gathered_opacity = gather_rows(_opacity);
+            Tensor gathered_sb_params;
+            if (has_spherical_beta()) {
+                gathered_sb_params = gather_rows(_sb_params);
+                gathered_sb_params.set_name("splat.sb_params");
+            }
 
             if (gathered_means.size(0) != new_size || gathered_sh0.size(0) != new_size ||
                 gathered_scaling.size(0) != new_size || gathered_rotation.size(0) != new_size ||
@@ -2123,6 +2223,11 @@ namespace lfs::core {
             _scaling = std::move(new_scaling);
             _rotation = std::move(new_rotation);
             _opacity = std::move(new_opacity);
+            if (gathered_sb_params.is_valid()) {
+                _sb_params = std::move(gathered_sb_params);
+            } else {
+                clear_spherical_beta();
+            }
 
             if (gathered_shN.is_valid()) {
                 _shN_value_bounds = Tensor{};
@@ -2153,8 +2258,12 @@ namespace lfs::core {
 
     namespace {
         constexpr uint32_t SPLAT_DATA_MAGIC = 0x4C465350; // "LFSP"
-        constexpr uint32_t SPLAT_DATA_VERSION = 4;
+        // v4: frozen ranges. v5: Spherical Beta lobes (written only when present, so
+        // models without lobes keep the v4 byte layout).
+        constexpr uint32_t SPLAT_DATA_VERSION = 5;
+        constexpr uint32_t SPLAT_DATA_VERSION_NO_SPHERICAL_BETA = 4;
         constexpr uint32_t SPLAT_DATA_MIN_VERSION_FROZEN_RANGES = 4;
+        constexpr uint32_t SPLAT_DATA_MIN_VERSION_SPHERICAL_BETA = 5;
 
         void validate_frozen_ranges(
             const std::vector<SplatData::FrozenRange>& ranges,
@@ -2179,8 +2288,11 @@ namespace lfs::core {
 
     void SplatData::serialize(std::ostream& os) const {
         validate_frozen_ranges(_frozen_ranges, size());
+        const bool write_spherical_beta = has_spherical_beta();
+        const uint32_t version =
+            write_spherical_beta ? SPLAT_DATA_VERSION : SPLAT_DATA_VERSION_NO_SPHERICAL_BETA;
         os.write(reinterpret_cast<const char*>(&SPLAT_DATA_MAGIC), sizeof(SPLAT_DATA_MAGIC));
-        os.write(reinterpret_cast<const char*>(&SPLAT_DATA_VERSION), sizeof(SPLAT_DATA_VERSION));
+        os.write(reinterpret_cast<const char*>(&version), sizeof(version));
         os.write(reinterpret_cast<const char*>(&_active_sh_degree), sizeof(_active_sh_degree));
         os.write(reinterpret_cast<const char*>(&_max_sh_degree), sizeof(_max_sh_degree));
         os.write(reinterpret_cast<const char*>(&_scene_scale), sizeof(_scene_scale));
@@ -2256,6 +2368,12 @@ namespace lfs::core {
             }
         }
 
+        if (write_spherical_beta) {
+            const int32_t sb_lobes = _sb_lobes;
+            os.write(reinterpret_cast<const char*>(&sb_lobes), sizeof(sb_lobes));
+            os << _sb_params.cpu().contiguous();
+        }
+
         LOG_DEBUG("Serialized SplatData: {} Gaussians, SH {}/{}", size(), _active_sh_degree, _max_sh_degree);
     }
 
@@ -2269,7 +2387,7 @@ namespace lfs::core {
         if (magic != SPLAT_DATA_MAGIC) {
             throw std::runtime_error("Invalid SplatData: wrong magic");
         }
-        if (version != 3 && version != SPLAT_DATA_VERSION) {
+        if (version < 3 || version > SPLAT_DATA_VERSION) {
             throw std::runtime_error("Unsupported SplatData version: " + std::to_string(version));
         }
 
@@ -2355,6 +2473,16 @@ namespace lfs::core {
             }
         }
 
+        int32_t sb_lobes = 0;
+        Tensor sb_params;
+        if (version >= SPLAT_DATA_MIN_VERSION_SPHERICAL_BETA) {
+            serialization_detail::read_exact(is, &sb_lobes, sizeof(sb_lobes), "SplatData Spherical Beta lobes");
+            if (sb_lobes < 0 || sb_lobes > MAX_SB_LOBES)
+                throw std::runtime_error("Invalid SplatData: Spherical Beta lobe count is out of range");
+            if (sb_lobes > 0)
+                is >> sb_params;
+        }
+
         const auto require_shape = [](const Tensor& value,
                                       const DataType dtype,
                                       const std::vector<size_t>& shape,
@@ -2400,6 +2528,10 @@ namespace lfs::core {
                 throw std::runtime_error("Invalid SplatData: densification state has incompatible schema");
         }
         validate_frozen_ranges(loaded_frozen_ranges, n);
+        if (sb_lobes > 0) {
+            require_shape(sb_params, DataType::Float32,
+                          {n, static_cast<size_t>(sb_lobes) * SB_PARAMS_PER_LOBE}, "sb_params");
+        }
         const auto gpu_upload_started =
             std::chrono::steady_clock::now();
 
@@ -2468,6 +2600,13 @@ namespace lfs::core {
         Tensor loaded_scaling = copy_param(std::move(scaling), "SplatData.scaling");
         Tensor loaded_rotation = copy_param(std::move(rotation), "SplatData.rotation");
         Tensor loaded_opacity = copy_param(std::move(opacity), "SplatData.opacity");
+        Tensor loaded_sb_params;
+        if (sb_lobes > 0) {
+            loaded_sb_params = sb_params.to(Device::CUDA, upload_stream);
+            if (!loaded_sb_params.is_contiguous())
+                loaded_sb_params = loaded_sb_params.contiguous();
+            loaded_sb_params.set_name("splat.sb_params");
+        }
 
         Tensor loaded_shN;
         Tensor uploaded_shN_canon;
@@ -2551,6 +2690,8 @@ namespace lfs::core {
         _scaling = std::move(loaded_scaling);
         _rotation = std::move(loaded_rotation);
         _opacity = std::move(loaded_opacity);
+        _sb_params = std::move(loaded_sb_params);
+        _sb_lobes = sb_lobes;
         _shN = std::move(loaded_shN);
         _deleted = std::move(loaded_deleted);
         _deleted_count.store(loaded_deleted_count, std::memory_order_relaxed);
@@ -2588,7 +2729,7 @@ namespace lfs::core {
         if (magic != SPLAT_DATA_MAGIC) {
             throw std::runtime_error("Invalid SplatData: wrong magic");
         }
-        if (version != 3 && version != SPLAT_DATA_VERSION) {
+        if (version < 3 || version > SPLAT_DATA_VERSION) {
             throw std::runtime_error("Unsupported SplatData version: " + std::to_string(version));
         }
 
@@ -2653,6 +2794,15 @@ namespace lfs::core {
                 if (!is)
                     throw std::runtime_error("Failed to skip SplatData frozen ranges");
             }
+        }
+
+        if (version >= SPLAT_DATA_MIN_VERSION_SPHERICAL_BETA) {
+            int32_t sb_lobes = 0;
+            serialization_detail::read_exact(is, &sb_lobes, sizeof(sb_lobes), "SplatData Spherical Beta lobes");
+            if (sb_lobes < 0 || sb_lobes > MAX_SB_LOBES)
+                throw std::runtime_error("Invalid SplatData: Spherical Beta lobe count is out of range");
+            if (sb_lobes > 0)
+                serialization_detail::skip_serialized_tensor(is);
         }
 
         const auto skip_ms = std::chrono::duration<double, std::milli>(
@@ -3087,6 +3237,10 @@ namespace lfs::core {
             if (direct_q16) {
                 result.shN_value_bounds() = std::move(shN_bounds_);
                 result.shN_value_bounds().set_name("splat.shN_value_bounds");
+            }
+            if (params.optimization.sb_lobes > 0) {
+                result.init_spherical_beta(params.optimization.sb_lobes);
+                LOG_INFO("Spherical Beta color: {} lobes per splat", params.optimization.sb_lobes);
             }
 
             // One-shot pool trim after dataset SfM points finish loading into

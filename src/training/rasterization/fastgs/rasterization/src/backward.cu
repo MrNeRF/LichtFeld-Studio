@@ -76,7 +76,9 @@ void fast_lfs::rasterization::backward(
     const uint shN_value_bits,
     const float* edge_weight_map,
     float* edge_score_out,
-    cudaStream_t stream) {
+    cudaStream_t stream,
+    const float* sb_params,
+    int sb_lobes) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
     const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
@@ -204,7 +206,9 @@ void fast_lfs::rasterization::backward(
                 fused_adam,
                 shN_value_bounds,
                 shN_value_n_cells,
-                shN_value_bits);
+                shN_value_bits,
+                sb_params,
+                static_cast<uint>(sb_lobes > 0 ? sb_lobes : 0));
             LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.preprocess_backward");
         };
         const bool disabled_features = fused_adam.erank_reg_weight <= 0.0f &&

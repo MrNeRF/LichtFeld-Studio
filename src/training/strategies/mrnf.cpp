@@ -589,6 +589,9 @@ namespace lfs::training {
             ensure_capacity_direct(_splat_data->scaling_raw());
             ensure_capacity_direct(_splat_data->rotation_raw());
             ensure_capacity_direct(_splat_data->opacity_raw());
+            if (_splat_data->has_spherical_beta()) {
+                ensure_capacity_direct(_splat_data->sb_params());
+            }
         }
 
         // Convert shN to pad-dropped u16 after reserving float capacity.
@@ -998,6 +1001,8 @@ namespace lfs::training {
             reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, prune_indices);
             reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, prune_indices);
             reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, prune_indices);
+            if (_splat_data->has_spherical_beta())
+                reset_optimizer_state_at_indices(*_optimizer, ParamType::SbParams, prune_indices);
 
             LOG_DEBUG("MRNF: soft-pruned {} splats at iter {} (active: {}, total slots: {})",
                       pruned_count, iter, active_count(), _splat_data->size());
@@ -1357,6 +1362,8 @@ namespace lfs::training {
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, split_indices);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, split_indices);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, split_indices);
+        if (_splat_data->has_spherical_beta())
+            reset_optimizer_state_at_indices(*_optimizer, ParamType::SbParams, split_indices);
 
         // Children are staged in canonical fp32 (the SH rest dominates). Large
         // growth events are split into chunks so the staging rows and the SH
@@ -1364,7 +1371,12 @@ namespace lfs::training {
         // A q16 SH block touched by several chunks is re-encoded once per chunk,
         // so its values may differ from a single pass by one quantization step.
         constexpr std::size_t CHILD_CHUNK_BYTES = 256ull << 20;
-        const std::size_t child_row_bytes = (3 + 4 + 3 + 3 + 1 + (use_shN ? sh_rest * 3 : 0)) * sizeof(float);
+        const std::size_t sb_cols = _splat_data->has_spherical_beta()
+                                        ? static_cast<std::size_t>(_splat_data->get_sb_lobes()) *
+                                              lfs::core::SplatData::SB_PARAMS_PER_LOBE
+                                        : 0;
+        const std::size_t child_row_bytes =
+            (3 + 4 + 3 + 3 + 1 + (use_shN ? sh_rest * 3 : 0) + sb_cols) * sizeof(float);
         const auto [reused, n_append] = split_parents_into_children(
             split_indices, std::max<std::size_t>(1, CHILD_CHUNK_BYTES / child_row_bytes));
 
@@ -1436,6 +1448,11 @@ namespace lfs::training {
                 lfs::training::sh_value::gather_shN_to_canonical(
                     *_splat_data, chunk_indices, child_shN);
             }
+            // Children inherit the parent's Spherical Beta lobes unchanged.
+            Tensor child_sb;
+            if (_splat_data->has_spherical_beta()) {
+                child_sb = _splat_data->sb_params().index_select(0, chunk_indices).contiguous();
+            }
 
             size_t append_start = 0;
             lfs::training::sh_value::ShNMutationBatch shn_batch(*_splat_data);
@@ -1448,7 +1465,8 @@ namespace lfs::training {
                     child_shN,
                     child_raw_opacities,
                     static_cast<int64_t>(count),
-                    &shn_batch);
+                    &shn_batch,
+                    child_sb);
                 append_start = count - static_cast<size_t>(remaining_after_fill);
             }
 
@@ -1461,7 +1479,8 @@ namespace lfs::training {
                 child_raw_opacities,
                 append_start,
                 count,
-                &shn_batch);
+                &shn_batch,
+                child_sb);
             clear_rendered_support(chunk_indices);
             shn_batch.flush();
             reused += append_start;
@@ -1511,6 +1530,7 @@ namespace lfs::training {
         Tensor valid_indices = keep_mask.nonzero().squeeze(-1);
         const size_t new_size = valid_indices.numel();
         const size_t cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
+        const bool has_sb = _splat_data->has_spherical_beta();
 
         // Gather kept rows into one max-capacity destination so compaction keeps
         // at most the source and destination allocations live concurrently.
@@ -1579,14 +1599,17 @@ namespace lfs::training {
         compact(_splat_data->scaling_raw());
         compact(_splat_data->rotation_raw());
         compact(_splat_data->opacity_raw());
+        if (has_sb) {
+            compact(_splat_data->sb_params());
+        } else {
+            _splat_data->clear_spherical_beta();
+        }
 
-        static constexpr ParamType ALL_PARAMS[] = {
-            ParamType::Means, ParamType::Sh0, ParamType::ShN,
-            ParamType::Scaling, ParamType::Rotation, ParamType::Opacity};
-
-        for (auto pt : ALL_PARAMS) {
+        for (auto pt : AdamOptimizer::all_param_types()) {
             auto* state = _optimizer->get_state_mutable(pt);
             if (!state)
+                continue;
+            if (pt == ParamType::SbParams && (!has_sb || !state->exp_avg.is_valid()))
                 continue;
             if (state->is_joint()) {
                 // Compact packed rows + rebuild zero bounds → free-zero moments
@@ -1657,6 +1680,9 @@ namespace lfs::training {
                     break;
                 case ParamType::Opacity:
                     param_t = &_splat_data->opacity_raw();
+                    break;
+                case ParamType::SbParams:
+                    param_t = &_splat_data->sb_params();
                     break;
                 default:
                     break;
@@ -1928,7 +1954,8 @@ namespace lfs::training {
         const lfs::core::Tensor& shN,
         const lfs::core::Tensor& opacities,
         int64_t count,
-        lfs::training::sh_value::ShNMutationBatch* shn_batch) {
+        lfs::training::sh_value::ShNMutationBatch* shn_batch,
+        const lfs::core::Tensor& sb_params) {
 
         using namespace lfs::core;
 
@@ -1995,6 +2022,19 @@ namespace lfs::training {
             }
         }
 
+        // Recycled slots take the incoming lobes (inherited from the split parent) or
+        // fresh ones, and drop the previous occupant's Adam moments.
+        if (_splat_data->has_spherical_beta()) {
+            const Tensor sb_rows =
+                sb_params.is_valid() && sb_params.numel() > 0
+                    ? sb_params.slice(0, 0, slots_to_fill).contiguous()
+                    : SplatData::make_spherical_beta_rows(static_cast<size_t>(slots_to_fill),
+                                                          _splat_data->get_sb_lobes(),
+                                                          static_cast<uint32_t>(current_size));
+            _splat_data->sb_params().index_put_(target_indices, sb_rows);
+            reset_optimizer_state_at_indices(*_optimizer, ParamType::SbParams, target_indices);
+        }
+
         // Zero residual grads so the post-densify Adam step does not use
         // previous-occupant / pre-split gradients on rewritten rows.
         zero_adam_grads_at_indices(*_optimizer, target_indices, layout_rest);
@@ -2014,11 +2054,14 @@ namespace lfs::training {
         const lfs::core::Tensor& child_raw_opacities,
         const size_t append_start,
         const size_t K,
-        lfs::training::sh_value::ShNMutationBatch* shn_batch) {
+        lfs::training::sh_value::ShNMutationBatch* shn_batch,
+        const lfs::core::Tensor& child_sb_params) {
         using namespace lfs::core;
         if (K <= append_start) {
             return 0;
         }
+        // Captured before size() advances: has_spherical_beta() requires aligned rows.
+        const bool has_sb = _splat_data->has_spherical_beta();
 
         const size_t n_append = K - append_start;
         const size_t old_size = static_cast<size_t>(_splat_data->size());
@@ -2075,6 +2118,14 @@ namespace lfs::training {
         _optimizer->add_new_params(ParamType::Scaling, append_scaling, true);
         _optimizer->add_new_params(ParamType::Rotation, append_rotation, true);
         _optimizer->add_new_params(ParamType::Opacity, append_opacity, true);
+        if (has_sb) {
+            const Tensor append_sb =
+                child_sb_params.is_valid() && child_sb_params.numel() > 0
+                    ? child_sb_params.slice(0, append_start, K).contiguous()
+                    : SplatData::make_spherical_beta_rows(n_append, _splat_data->get_sb_lobes(),
+                                                          static_cast<uint32_t>(old_size));
+            _optimizer->add_new_params(ParamType::SbParams, append_sb, true);
+        }
         // Append live (false) deleted rows now that size() has advanced.
         append_live_deleted_rows(*_splat_data, _free_mask, n_append);
         if (_splat_data->has_deleted_mask() &&
@@ -2625,6 +2676,9 @@ namespace lfs::training {
 
         if (_optimizer) {
             _optimizer->set_param_lr(ParamType::Scaling, _scale_lr_current);
+            if (_splat_data && _splat_data->has_spherical_beta()) {
+                _optimizer->set_param_lr(ParamType::SbParams, params.sb_params_lr);
+            }
             sync_mean_learning_rate();
         }
     }

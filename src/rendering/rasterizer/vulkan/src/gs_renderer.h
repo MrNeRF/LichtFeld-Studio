@@ -111,8 +111,13 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     uint32_t depth_offset_pad0;
     uint32_t depth_offset_pad1;
     uint32_t depth_offset_pad2;
+    // Spherical Beta lobes ([N, sb_lobes * 6] fp32, buffer device address); 0 = off.
+    uint64_t sb_address;
+    uint32_t sb_lobes;
+    uint32_t sb_pad;
 });
-static_assert(sizeof(VulkanGSRendererUniforms) == 224);
+static_assert(sizeof(VulkanGSRendererUniforms) == 240);
+static_assert(offsetof(VulkanGSRendererUniforms, sb_address) % 8 == 0);
 static_assert(offsetof(VulkanGSRendererUniforms, shN_address) % 8 == 0);
 static_assert(offsetof(VulkanGSRendererUniforms, dist_coeffs) % 16 == 0);
 

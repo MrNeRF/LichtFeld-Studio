@@ -48,26 +48,34 @@ namespace fast_lfs::optimizer {
         if (n_prims <= 0 || n_attr <= 0) {
             throw std::runtime_error("adam_step_joint_contiguous: n_prims and n_attr must be positive");
         }
+        if (n_attr > kernels::adam::kMaxContiguousAttrWide) {
+            throw std::runtime_error("adam_step_joint_contiguous: n_attr exceeds the supported row width");
+        }
+        if (bits != 8 && bits != 16) {
+            throw std::runtime_error("adam_step_joint_contiguous: bits must be 8 or 16");
+        }
         constexpr int kBS = 256;
         const int n_blocks = (n_prims + kBS - 1) / kBS;
+        auto launch = [&]<int BITS, int MAX_ATTR>() {
+            kernels::adam::adam_step_joint_contiguous_cu<BITS, MAX_ATTR><<<n_blocks, kBS, 0, stream>>>(
+                param, packed, bounds, param_grad,
+                frozen_mask, frozen_mask_size, frozen_lr_scale,
+                crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
+                n_prims, n_attr, lr, beta1, beta2, eps,
+                bias_correction1_rcp, bias_correction2_sqrt_rcp,
+                screen_share_max, screen_share_n, screen_share_limit, screen_share_penalty);
+        };
+        const bool wide = n_attr > kernels::adam::kMaxContiguousAttr;
         if (bits == 16) {
-            kernels::adam::adam_step_joint_contiguous_cu<16><<<n_blocks, kBS, 0, stream>>>(
-                param, packed, bounds, param_grad,
-                frozen_mask, frozen_mask_size, frozen_lr_scale,
-                crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
-                n_prims, n_attr, lr, beta1, beta2, eps,
-                bias_correction1_rcp, bias_correction2_sqrt_rcp,
-                screen_share_max, screen_share_n, screen_share_limit, screen_share_penalty);
-        } else if (bits == 8) {
-            kernels::adam::adam_step_joint_contiguous_cu<8><<<n_blocks, kBS, 0, stream>>>(
-                param, packed, bounds, param_grad,
-                frozen_mask, frozen_mask_size, frozen_lr_scale,
-                crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
-                n_prims, n_attr, lr, beta1, beta2, eps,
-                bias_correction1_rcp, bias_correction2_sqrt_rcp,
-                screen_share_max, screen_share_n, screen_share_limit, screen_share_penalty);
+            if (wide)
+                launch.template operator()<16, kernels::adam::kMaxContiguousAttrWide>();
+            else
+                launch.template operator()<16, kernels::adam::kMaxContiguousAttr>();
         } else {
-            throw std::runtime_error("adam_step_joint_contiguous: bits must be 8 or 16");
+            if (wide)
+                launch.template operator()<8, kernels::adam::kMaxContiguousAttrWide>();
+            else
+                launch.template operator()<8, kernels::adam::kMaxContiguousAttr>();
         }
         LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_joint_contiguous_raw");
     }
@@ -107,7 +115,8 @@ namespace fast_lfs::optimizer {
                 !host_entries[i].bounds || !host_entries[i].grad) {
                 throw std::runtime_error("adam_step_joint_contiguous_batched: null entry");
             }
-            if (host_entries[i].n_prims <= 0 || host_entries[i].n_attr <= 0) {
+            if (host_entries[i].n_prims <= 0 || host_entries[i].n_attr <= 0 ||
+                host_entries[i].n_attr > kernels::adam::kMaxContiguousAttr) {
                 throw std::runtime_error("adam_step_joint_contiguous_batched: n_prims/n_attr");
             }
             max_prims = std::max(max_prims, host_entries[i].n_prims);

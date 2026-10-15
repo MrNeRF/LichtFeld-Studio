@@ -240,6 +240,10 @@ namespace lfs::core {
             // 0 disables. Applied until stop_refine, at the densify-safe mutation point.
             size_t morton_reorder_interval = 5'000;
             int sh_degree = 3;
+            // Spherical Beta view-dependent color (Beta Splatting, Liu et al.). Additive lobes on
+            // top of the SH base color; orthogonal to sh_degree. 0 disables.
+            int sb_lobes = 0;
+            float sb_params_lr = 0.0025f;
             float opacity_reg = 0.01f;
             float scale_reg = 0.01f;
             float scale_reg_decay_power = -1.0f;

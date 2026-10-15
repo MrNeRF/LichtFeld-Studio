@@ -2213,6 +2213,8 @@ namespace lfs::vis {
         detachManagedBuffers();
         for (std::size_t ring_slot = 0; ring_slot < kInputRingSize; ++ring_slot) {
             releaseDeletedMaskSlot(*context_, ring_slot);
+            context_->destroyExternalBuffer(cuda_sb_copies_[ring_slot].buffer);
+            cuda_sb_copies_[ring_slot] = {};
             auto& overlay = cuda_overlays_[ring_slot];
             context_->destroyExternalBuffer(overlay.buffer);
             overlay = {};
@@ -2341,6 +2343,12 @@ namespace lfs::vis {
             }
         }
         for (auto& slot : cuda_deleted_mask_copies_) {
+            if (context_) {
+                context_->destroyExternalBuffer(slot.buffer);
+            }
+            slot = {};
+        }
+        for (auto& slot : cuda_sb_copies_) {
             if (context_) {
                 context_->destroyExternalBuffer(slot.buffer);
             }
@@ -3442,6 +3450,8 @@ namespace lfs::vis {
         detach(buffers_.shN.deviceBuffer);
         buffers_.shN_address = 0;
         buffers_.shN_committed_bytes = 0;
+        buffers_.sb_address = 0;
+        buffers_.sb_lobes = 0;
         detach(buffers_.scaling_raw.deviceBuffer);
         detach(buffers_.opacity_raw.deviceBuffer);
         detach(buffers_.deleted_mask.deviceBuffer);
@@ -5509,6 +5519,38 @@ namespace lfs::vis {
                          ring_slot, mask_bytes, mask_copy_upload_needed);
             }
 
+            // Spherical Beta lobes stay outside the exportable block (training-only
+            // parameter), so they reach the shader through a per-ring interop copy.
+            auto& sb_slot = cuda_sb_copies_[ring_slot];
+            const bool has_sb = splat_data.has_spherical_beta() &&
+                                splat_data.sb_params().device() == Device::CUDA &&
+                                splat_data.sb_params().is_contiguous();
+            const std::size_t sb_bytes = has_sb ? splat_data.sb_params().bytes() : 0;
+            buffers_.sb_address = 0;
+            buffers_.sb_lobes = 0;
+            if (has_sb && sb_bytes > 0) {
+                auto sb_ok = ensureCudaInteropBuffer(context,
+                                                     sb_slot.block,
+                                                     sb_slot.buffer,
+                                                     sb_bytes,
+                                                     "vulkan.vksplat.sb_params_copy",
+                                                     std::format("ring{}.sb_params", ring_slot),
+                                                     "Spherical Beta");
+                if (sb_ok && sb_slot.buffer.device_address != 0 &&
+                    exportableDevicePtr(sb_slot.block) != nullptr) {
+                    sb_slot.bytes = sb_bytes;
+                    buffers_.sb_address = static_cast<uint64_t>(sb_slot.buffer.device_address);
+                    buffers_.sb_lobes = static_cast<uint32_t>(splat_data.get_sb_lobes());
+                } else if (!sb_copy_failure_logged_) {
+                    sb_copy_failure_logged_ = true;
+                    LOG_WARN("VkSplat: Spherical Beta lobes are not shown in the viewport ({})",
+                             sb_ok ? std::string("buffer device address unavailable") : sb_ok.error());
+                }
+            } else if (sb_slot.buffer.buffer != VK_NULL_HANDLE) {
+                context.destroyExternalBuffer(sb_slot.buffer);
+                sb_slot = {};
+            }
+
             {
                 LOG_TIMER("prepareInputs.borrow_views");
                 buffers_.xyz_ws.deviceBuffer = makeBorrowedBufferView(
@@ -5647,6 +5689,19 @@ namespace lfs::vis {
                 if (auto ok = waitForSplatInputStreams(stream, splat_data); !ok) {
                     return std::unexpected(ok.error());
                 }
+            }
+            if (buffers_.sb_address != 0) {
+                LOG_TIMER("prepareInputs.sb_params.copy");
+                const auto& sb_params = splat_data.sb_params();
+                sb_params.sync_to_stream(stream);
+                const cudaError_t status = cudaMemcpyAsync(
+                    exportableDevicePtr(sb_slot.block),
+                    sb_params.data_ptr(),
+                    sb_slot.bytes,
+                    cudaMemcpyDeviceToDevice,
+                    stream);
+                if (status != cudaSuccess)
+                    return std::unexpected(std::format("VkSplat Spherical Beta copy failed: {}", cudaGetErrorString(status)));
             }
             if (has_deleted_mask && !deleted_storage && mask_copy_upload_needed) {
                 LOG_TIMER("prepareInputs.deleted_mask.copy");

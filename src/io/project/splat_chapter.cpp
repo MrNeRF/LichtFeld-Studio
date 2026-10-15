@@ -385,7 +385,7 @@ namespace lfs::io::project {
                     lfs::ErrorCode::DataLoss, "The embedded splat payload has invalid magic.",
                     std::format("SPLT payload magic is 0x{:08x}, expected LFSP", magic));
             }
-            if (version != 3 && version != 4) {
+            if (version < 3 || version > 5) {
                 return splat_error(
                     lfs::ErrorCode::Unsupported,
                     "This embedded splat payload version is not supported.",

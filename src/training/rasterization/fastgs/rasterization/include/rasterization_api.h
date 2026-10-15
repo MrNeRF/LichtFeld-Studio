@@ -57,6 +57,8 @@ namespace fast_lfs::rasterization {
         void* grad_color_helper = nullptr;
         void* primitive_normals = nullptr;
         const uint* primitive_work_indices = nullptr;
+        const float* sb_params = nullptr;
+        int sb_lobes = 0;
         // Backward-phase allocator retained by the frame context for the
         // optional normal helper, which is only known at backward dispatch.
         std::function<char*(size_t)> phase_allocator;
@@ -102,7 +104,9 @@ namespace fast_lfs::rasterization {
         unsigned int sh_value_n_cells = 0,
         unsigned int sh_value_bits = 0, // 0=fp32, 16=q16(+bounds) or IEEE f16
         float* max_screen_share_ptr = nullptr,
-        float dilation_scale = 1.0f);
+        float dilation_scale = 1.0f,
+        const float* sb_params_ptr = nullptr,
+        int sb_lobes = 0);
 
     void release_forward_context(const ForwardContext& forward_ctx);
 
@@ -151,7 +155,9 @@ namespace fast_lfs::rasterization {
         unsigned shN_value_n_cells = 0u,
         unsigned shN_value_bits = 0u,
         const float* edge_weight_map = nullptr,
-        float* edge_score_out = nullptr);
+        float* edge_score_out = nullptr,
+        const float* sb_params_ptr = nullptr,
+        int sb_lobes = 0);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();

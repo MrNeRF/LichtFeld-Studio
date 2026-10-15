@@ -1169,7 +1169,7 @@ struct Uniforms {
     // 0 = median depth; > 0 = alpha-weighted (expected) depth, far bound = value.
     float expected_far;
     // Explicit padding to keep dist_coeffs 16-byte aligned; mirrors the C++
-    // struct exactly (224 bytes total). shN_address occupies the former
+    // struct exactly (240 bytes total). shN_address occupies the former
     // uniforms_pad1/pad2 (offset 104, 8-byte aligned).
     uint depth_wave;
     uint64_t shN_address;
@@ -1184,6 +1184,10 @@ struct Uniforms {
     uint depth_offset_pad0;
     uint depth_offset_pad1;
     uint depth_offset_pad2;
+    // Spherical Beta lobes ([N, sb_lobes * 6] fp32 device address); 0 = off.
+    uint64_t sb_address;
+    uint sb_lobes;
+    uint sb_pad;
 }
 
 // mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1),

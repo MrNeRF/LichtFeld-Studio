@@ -15,6 +15,10 @@
 namespace fast_lfs::optimizer::kernels::adam {
 
     inline constexpr int kMaxContiguousBatch = 6;
+    // Per-row attribute caps for the non-fused contiguous step. Splat params use at most
+    // four; Spherical Beta rows hold 6 * lobes (up to 48) and take the wide instantiation.
+    inline constexpr int kMaxContiguousAttr = 16;
+    inline constexpr int kMaxContiguousAttrWide = 48;
 
     struct JointContiguousBatch {
         JointContiguousBatchEntry entries[kMaxContiguousBatch];
@@ -25,7 +29,7 @@ namespace fast_lfs::optimizer::kernels::adam {
     // (matches fused preprocess_backward / joint_adam::kBlockSizeDevice).
     // Frozen / crop-damped rows with zero lr skip the Adam update but still
     // re-encode under the new block bounds (same as fused adam_step_row_joint).
-    template <int BITS>
+    template <int BITS, int MAX_ATTR = kMaxContiguousAttr>
     __global__ void adam_step_joint_contiguous_cu(
         float* param,
         uint8_t* packed,
@@ -76,13 +80,13 @@ namespace fast_lfs::optimizer::kernels::adam {
                                   ? *reinterpret_cast<const float4*>(bounds + 4 * bidx)
                                   : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-        // Means/scale/rot/opacity/sh0 attrs are small (≤4); sh0 is 3.
-        constexpr int kMaxAttr = 16;
-        float us_u[kMaxAttr];
-        float us_s[kMaxAttr];
+        // Means/scale/rot/opacity/sh0 attrs are small (≤4); sh0 is 3. The host
+        // dispatcher rejects rows wider than MAX_ATTR.
+        float us_u[MAX_ATTR];
+        float us_s[MAX_ATTR];
         float local_u_min = kInf, local_u_max = -kInf;
         float local_s_min = kInf, local_s_max = -kInf;
-        const int row = in_range ? min(n_attr, kMaxAttr) : 0;
+        const int row = in_range ? min(n_attr, MAX_ATTR) : 0;
         const float step_size = row_lr * bias_correction1_rcp;
         const float beta1_comp = 1.0f - beta1;
         const float beta2_comp = 1.0f - beta2;

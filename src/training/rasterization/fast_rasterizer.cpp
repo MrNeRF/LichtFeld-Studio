@@ -85,6 +85,7 @@ namespace lfs::training {
         fused_adam.opacity = convert_param(optimizer_fused.opacity);
         fused_adam.sh0 = convert_param(optimizer_fused.sh0);
         fused_adam.shN = convert_param(optimizer_fused.shN);
+        fused_adam.sb_params = convert_param(optimizer_fused.sb_params);
         fused_adam.per_splat_mean_step = optimizer_fused.per_splat_mean_step;
         fused_adam.mean_step_median_extent = optimizer_fused.mean_step_median_extent;
         // The kernel compares an unsigned row index with this count. Reject
@@ -492,6 +493,9 @@ namespace lfs::training {
                 shN_ptr = gaussian_model.shN().ptr<float>();
             }
             const unsigned shN_bits = (shN_q16 || shN_f16) ? 16u : 0u;
+            const bool sb_enabled = gaussian_model.has_spherical_beta();
+            const float* sb_params_ptr = sb_enabled ? gaussian_model.sb_params_raw().ptr<float>() : nullptr;
+            const int sb_lobes = sb_enabled ? gaussian_model.get_sb_lobes() : 0;
             forward_ctx = fast_lfs::rasterization::forward_raw(
                 means.ptr<float>(),
                 raw_scales.ptr<float>(),
@@ -528,7 +532,9 @@ namespace lfs::training {
                  gaussian_model._max_screen_share.numel() >= static_cast<size_t>(n_primitives))
                     ? gaussian_model._max_screen_share.ptr<float>()
                     : nullptr,
-                dilation_scale);
+                dilation_scale,
+                sb_params_ptr,
+                sb_lobes);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(
@@ -644,6 +650,10 @@ namespace lfs::training {
         ctx.raw_rotations = raw_rotations;
         ctx.raw_opacities = raw_opacities;
         ctx.shN = shN;
+        if (gaussian_model.has_spherical_beta()) {
+            ctx.sb_params = gaussian_model.sb_params_raw();
+            ctx.sb_lobes = gaussian_model.get_sb_lobes();
+        }
 
         // Store camera pointers directly (tensors are managed by camera, already contiguous)
         ctx.w2c_ptr = w2c_ptr;
@@ -853,7 +863,9 @@ namespace lfs::training {
             bwd_shN_n_cells,
             bwd_shN_bits,
             fused_extra_gradients.edge_weight_map,
-            fused_extra_gradients.edge_score_out);
+            fused_extra_gradients.edge_score_out,
+            ctx.sb_params.is_valid() ? ctx.sb_params.ptr<float>() : nullptr,
+            ctx.sb_lobes);
 
         ctx.mark_forward_context_released();
 

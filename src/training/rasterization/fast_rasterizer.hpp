@@ -50,6 +50,8 @@ namespace lfs::training {
         lfs::core::Tensor raw_rotations;
         lfs::core::Tensor raw_opacities;
         lfs::core::Tensor shN;
+        lfs::core::Tensor sb_params;
+        int sb_lobes = 0;
 
         const float* w2c_ptr = nullptr;
         const float* cam_position_ptr = nullptr;
@@ -111,6 +113,8 @@ namespace lfs::training {
             raw_rotations = std::move(other.raw_rotations);
             raw_opacities = std::move(other.raw_opacities);
             shN = std::move(other.shN);
+            sb_params = std::move(other.sb_params);
+            sb_lobes = std::exchange(other.sb_lobes, 0);
             w2c_ptr = std::exchange(other.w2c_ptr, nullptr);
             cam_position_ptr = std::exchange(other.cam_position_ptr, nullptr);
             forward_ctx = std::exchange(other.forward_ctx, {});

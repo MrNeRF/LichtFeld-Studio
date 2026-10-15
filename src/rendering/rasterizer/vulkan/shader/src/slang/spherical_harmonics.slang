@@ -635,3 +635,30 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs_split_quant(
 
     return g_sh_coeffs;
 }
+
+// Spherical Beta lobes (Beta Splatting, Liu et al.), matching the training kernel:
+//   C += sum_l softplus(rgb_l) * max(dot(dir, d_l), 0)^(4 * exp(beta_l))
+// sb_address points at [N, lobes * 6] fp32 rows of raw [r, g, b, theta, phi, beta].
+float sb_softplus(float x) {
+    const float b = 6.931471805599453;
+    const float bx = b * x;
+    return bx > 20.0 ? x : log(1.0 + exp(bx)) / b;
+}
+
+float3 compute_spherical_beta_color(uint64_t sb_address, uint lobes, uint splat_idx, float3 dir) {
+    float* row = (float*)sb_address + uint64_t(splat_idx) * uint64_t(lobes * 6u);
+    float3 color = float3(0.0);
+    for (uint l = 0u; l < lobes; ++l) {
+        const float theta = row[l * 6u + 3u];
+        const float phi = row[l * 6u + 4u];
+        const float3 lobe_dir = float3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
+        const float d = dot(dir, lobe_dir);
+        if (d <= 0.0)
+            continue;
+        const float term = pow(d, 4.0 * exp(row[l * 6u + 5u]));
+        color += term * float3(sb_softplus(row[l * 6u + 0u]),
+                               sb_softplus(row[l * 6u + 1u]),
+                               sb_softplus(row[l * 6u + 2u]));
+    }
+    return color;
+}

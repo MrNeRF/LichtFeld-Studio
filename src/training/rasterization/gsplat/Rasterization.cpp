@@ -6,6 +6,7 @@
 #include "Common.h"
 #include "GeometryFeatures.h"
 #include "Ops.h"
+#include "SphericalBeta.h"
 
 #include <cassert>
 #include <cstdio>
@@ -240,6 +241,8 @@ namespace gsplat_lfs {
         const float* radial_coeffs,
         const float* tangential_coeffs,
         const float* thin_prism_coeffs,
+        const float* sb_params,
+        uint32_t sb_lobes,
         RasterizeWithSHResult& result,
         cudaStream_t stream) {
         gsplat_lfs::debug_validate_cuda_pointer(means, "means");
@@ -287,13 +290,20 @@ namespace gsplat_lfs {
 
         // Step 3: Compute viewing directions and evaluate SH
         if (render_mode == 0 || render_mode >= 3) {
-            if (sh_degree > 0) {
+            const bool use_sb = sb_lobes > 0 && sb_params != nullptr;
+            if (sh_degree > 0 || use_sb) {
                 compute_view_dirs(means, viewmats0, C, N, result.dirs, stream);
             }
             spherical_harmonics_swizzled_fwd(
                 sh_degree, sh_layout_degree, sh_degree > 0 ? result.dirs : nullptr,
                 sh0, shN, nullptr, static_cast<int64_t>(C) * N,
                 result.colors, channels, stream);
+            if (use_sb) {
+                // Additive specular lobes on top of the SH base color.
+                launch_spherical_beta_fwd_kernel(
+                    sb_lobes, channels, N, static_cast<int64_t>(C) * N,
+                    result.dirs, sb_params, nullptr, result.colors, stream);
+            }
         }
         if (channels != 3) {
             geometry_features_fwd(means, quats, scales, viewmats0, result.colors,
@@ -387,6 +397,8 @@ namespace gsplat_lfs {
         const float* radial_coeffs,
         const float* tangential_coeffs,
         const float* thin_prism_coeffs,
+        const float* sb_params,
+        uint32_t sb_lobes,
         const float* render_alphas,
         const int32_t* last_ids,
         const int32_t* tile_offsets,
@@ -405,6 +417,7 @@ namespace gsplat_lfs {
         float* v_scales,
         float* v_opacities,
         float* v_sh_coeffs,
+        float* v_sb_params,
         float* densification_info,
         const float* densification_error_map,
         const float* edge_weight_map,
@@ -477,8 +490,13 @@ namespace gsplat_lfs {
                                   N, C, channels, camera_model, stream);
         }
 
-        // Backward through SH
+        // Backward through SH (and Spherical Beta, whose base-color gradient is the identity)
         if (render_mode == 0 || render_mode >= 3) {
+            if (sb_lobes > 0 && sb_params != nullptr && v_sb_params != nullptr) {
+                launch_spherical_beta_bwd_kernel(
+                    sb_lobes, channels, N, static_cast<int64_t>(C) * N,
+                    dirs, sb_params, nullptr, v_colors, v_sb_params, stream);
+            }
             spherical_harmonics_swizzled_bwd(
                 K, sh_degree, sh_layout_degree,
                 dirs,

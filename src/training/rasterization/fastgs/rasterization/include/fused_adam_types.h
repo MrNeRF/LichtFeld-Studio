@@ -78,6 +78,7 @@ namespace fast_lfs::rasterization {
         FusedAdamParam opacity;
         FusedAdamParam sh0;
         FusedAdamParam shN;
+        FusedAdamParam sb_params;
     };
 
 } // namespace fast_lfs::rasterization

@@ -5202,6 +5202,28 @@ namespace lfs::core {
             return result;
         };
 
+        // Spherical Beta lobes travel with their splats; a deleted mask filters them
+        // like every other per-splat attribute.
+        const auto carry_spherical_beta = [](lfs::core::SplatData& result,
+                                             const lfs::core::SplatData& src,
+                                             const lfs::core::Tensor& keep_mask,
+                                             const bool borrow) {
+            if (!src.has_spherical_beta())
+                return;
+            lfs::core::Tensor lobes = keep_mask.is_valid()
+                                          ? src.sb_params().index_select(0, keep_mask).contiguous()
+                                          : (borrow ? src.sb_params() : src.sb_params().clone());
+            result.set_sb_params(std::move(lobes), src.get_sb_lobes());
+        };
+        // Concatenated pieces keep lobes only when every piece has the same lobe count.
+        const auto merge_spherical_beta = [](lfs::core::SplatData& result,
+                                             const std::vector<lfs::core::Tensor>& pieces,
+                                             const int lobes) {
+            if (lobes <= 0 || pieces.empty())
+                return;
+            result.set_sb_params(pieces.size() == 1 ? pieces.front() : lfs::core::Tensor::cat(pieces, 0), lobes);
+        };
+
         int max_sh = 0;
         int max_active_sh = 0;
         for (const auto& [model, _] : splats) {
@@ -5244,6 +5266,7 @@ namespace lfs::core {
                     (src.shN_value_quantized() && src.shN_value_bounds().is_valid())
                         ? src.shN_value_bounds().clone()
                         : lfs::core::Tensor{});
+                carry_spherical_beta(*result, src, lfs::core::Tensor{}, false);
                 return limit_degree(std::move(result));
             }
 
@@ -5276,6 +5299,7 @@ namespace lfs::core {
                     src.get_scene_scale(),
                     lfs::core::SplatData::ShNLayout::Canonical);
                 result->set_active_sh_degree(active_sh);
+                carry_spherical_beta(*result, src, keep_mask, false);
                 return limit_degree(std::move(result));
             }
 
@@ -5311,6 +5335,7 @@ namespace lfs::core {
                 src.get_scene_scale(),
                 lfs::core::SplatData::ShNLayout::Swizzled);
             result->set_active_sh_degree(active_sh);
+            carry_spherical_beta(*result, src, keep_mask, false);
             return limit_degree(std::move(result));
         };
 
@@ -5349,6 +5374,7 @@ namespace lfs::core {
                             std::make_unique<lfs::core::SplatLodTree>(
                                 *src->lod_tree);
                     }
+                    carry_spherical_beta(*result, *src, lfs::core::Tensor{}, true);
                     return limit_degree(std::move(result));
                 }
 
@@ -5392,6 +5418,8 @@ namespace lfs::core {
                                         : lfs::core::Tensor{};
 
             size_t offset = 0;
+            std::vector<lfs::core::Tensor> sb_pieces;
+            int sb_lobes = -1;
             for (const auto& [model, _] : splats) {
                 // clone_filtered_swizzled keeps compact q16 / IEEE-f16 when there
                 // is no deleted mask. Convert those pieces to Float32 swizzle here.
@@ -5401,6 +5429,10 @@ namespace lfs::core {
                 }
                 ensure_float_swizzled_shN(*piece);
                 const size_t visible = static_cast<size_t>(piece->size());
+                const int piece_lobes = piece->has_spherical_beta() ? piece->get_sb_lobes() : 0;
+                sb_lobes = sb_lobes < 0 || sb_lobes == piece_lobes ? piece_lobes : 0;
+                if (piece_lobes > 0)
+                    sb_pieces.push_back(piece->sb_params());
 
                 means.slice(0, offset, offset + visible).copy_from(piece->means_raw());
                 sh0.slice(0, offset, offset + visible).copy_from(piece->sh0_raw());
@@ -5436,6 +5468,7 @@ namespace lfs::core {
                 total_scale / static_cast<float>(splats.size()),
                 lfs::core::SplatData::ShNLayout::Swizzled);
             result->set_active_sh_degree(max_active_sh_identity);
+            merge_spherical_beta(*result, sb_pieces, sb_lobes);
             return limit_degree(std::move(result));
         }
 
@@ -5457,6 +5490,8 @@ namespace lfs::core {
 
         float total_scale = 0.0f;
         size_t total_count = 0;
+        std::vector<lfs::core::Tensor> sb_list;
+        int sb_lobes = -1;
 
         for (const auto& [model, world_transform] : splats) {
             auto transformed = clone_filtered_swizzled(*model);
@@ -5480,6 +5515,10 @@ namespace lfs::core {
             scaling_list.push_back(transformed->scaling_raw().clone());
             rotation_list.push_back(transformed->rotation_raw().clone());
             opacity_list.push_back(transformed->opacity_raw().clone());
+            const int piece_lobes = transformed->has_spherical_beta() ? transformed->get_sb_lobes() : 0;
+            sb_lobes = sb_lobes < 0 || sb_lobes == piece_lobes ? piece_lobes : 0;
+            if (piece_lobes > 0)
+                sb_list.push_back(transformed->sb_params());
 
             if (shN_coeffs > 0) {
                 shN_sizes.push_back(static_cast<size_t>(transformed->size()));
@@ -5533,6 +5572,7 @@ namespace lfs::core {
             total_scale / static_cast<float>(splats.size()),
             lfs::core::SplatData::ShNLayout::Swizzled);
         result->set_active_sh_degree(max_active_sh);
+        merge_spherical_beta(*result, sb_list, sb_lobes);
 
         return limit_degree(std::move(result));
     }

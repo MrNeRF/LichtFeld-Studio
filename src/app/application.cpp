@@ -48,6 +48,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "sequencer/timeline.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
+#include "training/rasterization/gsplat_rasterizer.hpp"
 #include "visualizer/gui/layout_state.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
@@ -1359,7 +1360,11 @@ namespace lfs::app {
                     cfg.width, cfg.height,
                     frame);
 
-                auto render_output = training::fast_rasterize(camera, *model, background);
+                // Spherical Beta lobes are evaluated only by the gsplat rasterizer.
+                auto render_output = model->has_spherical_beta()
+                                         ? training::gsplat_rasterize(camera, *model, background, 1.0f, false,
+                                                                      training::GsplatRenderMode::RGB, true)
+                                         : training::fast_rasterize(camera, *model, background);
                 auto image = render_output.image;
                 if (image.dtype() != core::DataType::Float32) {
                     image = image.to(core::DataType::Float32);

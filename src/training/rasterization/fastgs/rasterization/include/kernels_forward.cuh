@@ -86,7 +86,9 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float far_,
         const bool mip_filter,
         const float dilation_scale,
-        float* __restrict__ max_screen_share) {
+        float* __restrict__ max_screen_share,
+        const float* __restrict__ sb_params = nullptr,
+        const uint num_sb_lobes = 0) {
         (void)w;
         (void)h;
         auto work_idx = cg::this_grid().thread_rank();
@@ -287,12 +289,17 @@ namespace fast_lfs::rasterization::kernels::forward {
         primitive_mean2d[work_idx] = packed;
         primitive_conic_opacity[work_idx] = make_float4(conic, output_opacity);
         // Pad float3 color → float4 for 128-bit loads (w unused).
-        const float3 sh_color = convert_sh_to_color(
+        float3 combined_color = convert_sh_to_color(
             sh_coefficients_0, sh_coefficients_rest,
             mean3d, cam_position[0],
             primitive_idx, active_sh_bases, sh_layout_slots,
             sh_value_bounds, sh_value_n_cells, sh_value_bits);
-        primitive_color[work_idx] = make_float4(sh_color, 0.0f);
+        if (sb_params != nullptr && num_sb_lobes > 0) {
+            const float3 view_dir = safe_normalize(mean3d - cam_position[0]);
+            combined_color = add_spherical_beta_color(
+                combined_color, sb_params, view_dir, primitive_idx, num_sb_lobes);
+        }
+        primitive_color[work_idx] = make_float4(combined_color, 0.0f);
         primitive_depth_keys[work_idx] = depth_sort_key(depth);
         primitive_depths[work_idx] = depth;
 
