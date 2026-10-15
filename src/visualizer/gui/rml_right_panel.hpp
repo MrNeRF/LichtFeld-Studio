@@ -106,6 +106,7 @@ namespace lfs::vis::gui {
         std::vector<TabSnapshot> tabs_;
         Rml::String active_tab_;
         float tab_scroll_left_ = 0.0f;
+        std::string revealed_tab_;
         bool tabs_overflow_ = false;
         bool can_scroll_tabs_left_ = false;
         bool can_scroll_tabs_right_ = false;
