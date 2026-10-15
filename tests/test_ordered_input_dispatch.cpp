@@ -18,6 +18,7 @@
 #include "gui/panel_layout.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/rml_modal_overlay.hpp"
+#include "gui/rml_right_panel.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
@@ -2645,6 +2646,85 @@ namespace lfs::vis {
         EXPECT_NE(overlay_context->GetFocusElement(), overlay_select);
         click(60, 180);
         EXPECT_FALSE(overlay_select->IsSelectBoxVisible());
+    }
+
+    // Fails if a pointer event drops the open tab picker list from the overlay
+    // record, so the panel under the list takes clicks meant for its options.
+    TEST_F(WindowInputDispatchTest, OpenTabPickerKeepsCoveringPanelsDuringPointerEvents) {
+        gui::RmlRightPanel right_panel;
+        right_panel.init(&manager());
+        struct Shutdown {
+            gui::RmlRightPanel& panel;
+            ~Shutdown() { panel.shutdown(); }
+        } shutdown{right_panel};
+        gui::RightPanelLayout layout;
+        layout.pos = {250.0f, 0.0f};
+        layout.size = {150.0f, 300.0f};
+        std::vector<gui::TabSnapshot> tabs;
+        for (const char* id : {"first", "second", "third", "fourth"})
+            tabs.push_back({.id = id, .label = id, .dom_id = std::string("rp-tab-") + id});
+        const auto render = [&] {
+            manager().beginFrameCursorTracking();
+            right_panel.render(layout, tabs, "first", 0.0f, 0.0f, 400, 300);
+        };
+        render();
+        render();
+        auto* const context = Rml::GetContext("right_panel");
+        ASSERT_NE(context, nullptr);
+        auto* const picker = dynamic_cast<Rml::ElementFormControlSelect*>(
+            context->GetDocument(0)->GetElementById("tab-picker"));
+        ASSERT_NE(picker, nullptr);
+        picker->ShowSelectBox();
+        context->Update();
+        context->Render();
+        render();
+        Rml::Element* list = nullptr;
+        for (int i = 0; i < picker->GetNumChildren(true); ++i)
+            if (picker->GetChild(i)->GetTagName() == "selectbox")
+                list = picker->GetChild(i);
+        ASSERT_NE(list, nullptr);
+        const auto list_pos = list->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const glm::vec2 point(layout.pos.x + list_pos.x + 10.0f, layout.pos.y + list_pos.y + 6.0f);
+        ASSERT_TRUE(manager().activeOverlayContainsPoint(point.x, point.y));
+
+        // SDL delivers the pointer to the right panel before the next frame.
+        right_panel.processInput(layout, {});
+        SDL_Event motion{};
+        motion.type = SDL_EVENT_MOUSE_MOTION;
+        motion.motion.x = point.x;
+        motion.motion.y = point.y;
+        dispatch(motion);
+        manager().beginFrameCursorTracking();
+        EXPECT_TRUE(picker->IsSelectBoxVisible());
+        EXPECT_TRUE(manager().activeOverlayOccludesContext(context_, point.x, point.y));
+    }
+
+    // Fails if a tab picked while the strip overflows stays scrolled out of view.
+    TEST_F(WindowInputDispatchTest, ActiveTabScrollsIntoTheOverflowingStrip) {
+        gui::RmlRightPanel right_panel;
+        right_panel.init(&manager());
+        struct Shutdown {
+            gui::RmlRightPanel& panel;
+            ~Shutdown() { panel.shutdown(); }
+        } shutdown{right_panel};
+        gui::RightPanelLayout layout;
+        layout.size = {150.0f, 300.0f};
+        std::vector<gui::TabSnapshot> tabs;
+        for (const char* id : {"first", "second", "third", "fourth"})
+            tabs.push_back({.id = id, .label = id, .dom_id = std::string("rp-tab-") + id});
+        auto* const document = Rml::GetContext("right_panel")->GetDocument(0);
+        auto* const strip = document->GetElementById("tab-strip-viewport");
+        ASSERT_NE(strip, nullptr);
+        for (const char* active : {"first", "fourth", "second"}) {
+            SCOPED_TRACE(active);
+            right_panel.render(layout, tabs, active, 0.0f, 0.0f, 400, 300);
+            auto* const tab = document->GetElementById(std::string("rp-tab-") + active);
+            ASSERT_NE(tab, nullptr);
+            EXPECT_GT(strip->GetScrollWidth(), strip->GetClientWidth());
+            EXPECT_GE(tab->GetOffsetLeft(), strip->GetScrollLeft() - 0.5f);
+            EXPECT_LE(tab->GetOffsetLeft() + tab->GetOffsetWidth(),
+                      strip->GetScrollLeft() + strip->GetClientWidth() + 0.5f);
+        }
     }
 
     TEST_F(WindowInputDispatchTest, SequencerEditShortcutsRespectTextFocusAndVisibility) {

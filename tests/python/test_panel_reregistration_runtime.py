@@ -81,3 +81,23 @@ def test_panel_id_can_register_again(camera_runtime, tmp_path, retained, unregis
     _editor(endpoint, "assert RepeatedPanel.id not in lf.ui.get_panel_names(lf.ui.PanelSpace.SCENE_HEADER)")
     if retained:
         _editor(endpoint, "assert unmounts == 4, unmounts")
+
+
+def test_panels_without_an_id_keep_distinct_class_ids(camera_runtime):
+    # Fails if a panel without its own id registers as "": its tab could not be
+    # selected, and a second such panel replaced the first.
+    _editor(camera_runtime, "import lichtfeld as lf\n"
+            "class FirstTab(lf.ui.Panel):\n"
+            "    label = 'First tab'\n"
+            "    space = lf.ui.PanelSpace.MAIN_PANEL_TAB\n"
+            "class SecondTab(lf.ui.Panel):\n"
+            "    label = 'Second tab'\n"
+            "    space = lf.ui.PanelSpace.MAIN_PANEL_TAB\n"
+            "lf.register_class(FirstTab)\n"
+            "lf.register_class(SecondTab)\n"
+            "ids = [tab.id for tab in lf.ui.get_main_panel_tabs()]\n"
+            "assert FirstTab._class_id() in ids and SecondTab._class_id() in ids, ids\n"
+            "lf.unregister_class(FirstTab)\n"
+            "lf.unregister_class(SecondTab)\n"
+            "ids = [tab.id for tab in lf.ui.get_main_panel_tabs()]\n"
+            "assert FirstTab._class_id() not in ids and SecondTab._class_id() not in ids, ids\n")

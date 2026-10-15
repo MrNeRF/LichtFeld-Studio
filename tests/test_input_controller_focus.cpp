@@ -1285,6 +1285,32 @@ namespace lfs::vis {
         EXPECT_NEAR(glm::dot(forward, to_pivot), 1.0f, 1e-4f);
     }
 
+    // Fails if mouse look stops while the locked pointer rests at the window edge.
+    TEST_F(InputControllerFocusTest, FpvLookKeepsTurningWhileThePointerRestsAtTheEdge) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        viewport.camera.t = glm::vec3(0.0f, 0.0f, 5.0f);
+        viewport.camera.setPivot(glm::vec3(0.0f));
+        viewport.camera.R = glm::mat3(1.0f);
+        controller.setCameraNavigationMode(InputController::CameraNavigationMode::FPV);
+        const glm::vec3 start = lfs::rendering::cameraForward(viewport.camera.R);
+
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, 40.0, 50.0);
+        controller.handleMouseMove(0.0, 50.0, glm::dvec2(-40.0, 0.0));
+        const glm::vec3 first = lfs::rendering::cameraForward(viewport.camera.R);
+        controller.handleMouseMove(0.0, 50.0, glm::dvec2(-40.0, 0.0));
+        const glm::vec3 second = lfs::rendering::cameraForward(viewport.camera.R);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_RELEASE, 0.0, 50.0);
+
+        const float first_turn = std::acos(glm::clamp(glm::dot(start, first), -1.0f, 1.0f));
+        const float second_turn = std::acos(glm::clamp(glm::dot(first, second), -1.0f, 1.0f));
+        EXPECT_GT(first_turn, 0.01f);
+        EXPECT_NEAR(second_turn, first_turn, 1e-3f);
+        EXPECT_NEAR(viewport.camera.t.z, 5.0f, 1e-5f);
+    }
+
     TEST_F(InputControllerFocusTest, TrackballModeAllowsPerfectTopView) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);

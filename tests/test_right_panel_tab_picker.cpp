@@ -96,6 +96,29 @@ namespace {
         EXPECT_FALSE(RmlRightPanelTestAccess::tooltipPending(panel));
     }
 
+    // Fails if the help that was pending when the picker opened shows over its list.
+    TEST_F(RightPanelTabPickerTest, ClickOpeningThePickerDropsItsPendingHelp) {
+        RmlRightPanelTestAccess::sync(panel, tabs({"A", "B"}), "A");
+        picker->SetAttribute("title", "All panels");
+        context->Update();
+        RightPanelLayout layout;
+        layout.size = {400, 600};
+        PanelInputState input;
+        const auto position = picker->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = picker->GetBox().GetSize(Rml::BoxArea::Border);
+        input.mouse_x = position.x + size.x * 0.5f;
+        input.mouse_y = position.y + size.y * 0.5f;
+        panel.processInput(layout, input);
+        ASSERT_TRUE(RmlRightPanelTestAccess::tooltipPending(panel));
+        input.mouse_clicked[0] = true;
+        panel.processInput(layout, input);
+        input.mouse_clicked[0] = false;
+        input.mouse_released[0] = true;
+        panel.processInput(layout, input);
+        ASSERT_TRUE(picker->IsSelectBoxVisible());
+        EXPECT_FALSE(RmlRightPanelTestAccess::tooltipPending(panel));
+    }
+
     TEST_F(RightPanelTabPickerTest, RemovingEarlierTabPreservesActiveSelection) {
         for (const std::string active : {"C", "D"}) {
             RmlRightPanelTestAccess::sync(panel, tabs({"A", "B", "C", "D"}), active);

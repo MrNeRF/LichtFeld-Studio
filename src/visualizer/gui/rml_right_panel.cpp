@@ -153,6 +153,7 @@ namespace lfs::vis::gui {
         tab_strip_viewport_el_ = nullptr;
         tab_separator_el_ = nullptr;
         tab_scroll_left_ = 0.0f;
+        revealed_tab_.clear();
         tabs_overflow_ = false;
         can_scroll_tabs_left_ = false;
         can_scroll_tabs_right_ = false;
@@ -370,6 +371,19 @@ namespace lfs::vis::gui {
         const float max_scroll = tabs_overflow_
                                      ? std::max(0.0f, content_width - viewport_width)
                                      : 0.0f;
+        // A newly active tab, e.g. one picked from the list, scrolls into view.
+        if (revealed_tab_ != active_tab_) {
+            const auto tab = std::ranges::find(tabs_, active_tab_, &TabSnapshot::id);
+            if (auto* const element = tab != tabs_.end() ? document_->GetElementById(tab->dom_id) : nullptr) {
+                const float left = element->GetOffsetLeft();
+                const float right = left + element->GetOffsetWidth();
+                if (left < tab_scroll_left_)
+                    tab_scroll_left_ = left;
+                else if (right > tab_scroll_left_ + viewport_width)
+                    tab_scroll_left_ = right - viewport_width;
+                revealed_tab_ = active_tab_;
+            }
+        }
         float next_scroll = std::clamp(tab_scroll_left_, 0.0f, max_scroll);
 
         if (next_scroll != tab_scroll_left_) {
@@ -492,9 +506,11 @@ namespace lfs::vis::gui {
         if (layout.size.x <= 0 || layout.size.y <= 0)
             return;
         if (rml_manager_) {
+            // Keep the open picker list registered, or the panel under it takes its clicks.
             rml_manager_->trackContextFrame(rml_context_,
                                             static_cast<int>(layout.pos.x - input.screen_x),
-                                            static_cast<int>(layout.pos.y - input.screen_y));
+                                            static_cast<int>(layout.pos.y - input.screen_y),
+                                            tabPickerPopupBounds(tab_picker_el_));
         }
 
         const bool pointer_event =
@@ -646,8 +662,11 @@ namespace lfs::vis::gui {
                     input_dirty_ = true;
                     rml_context_->ProcessMouseButtonDown(0, mods);
                 }
-                if (input.mouse_released[0])
+                if (input.mouse_released[0]) {
                     rml_context_->ProcessMouseButtonUp(0, mods);
+                    // The click may have opened the tab picker, whose list hides the help.
+                    tooltip_.setHover(resolveRmlTooltip(hover), hover);
+                }
             }
         } else if (input.mouse_clicked[0]) {
             blurFocus();
