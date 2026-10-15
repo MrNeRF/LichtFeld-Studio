@@ -145,9 +145,11 @@ namespace {
             for (auto* element : bins)
                 element->SetClass("hidden", !compare);
             // The shared controller replaces each native range with this shell.
-            for (const auto* id : {"histogram-bin-input", "x-bin-input", "y-bin-input"}) {
+            for (const auto& [id, scrub_id] : {std::pair{"histogram-bin-input", "scrub-histogram-bin-count"},
+                                               std::pair{"x-bin-input", "scrub-compare-x-bin-count"},
+                                               std::pair{"y-bin-input", "scrub-compare-y-bin-count"}}) {
                 auto* host = document_->GetElementById(id)->GetParentNode();
-                host->SetInnerRML("<div class=\"scrub-field\"><div class=\"scrub-field-fill\"></div>"
+                host->SetInnerRML("<div id=\"" + std::string(scrub_id) + "\" class=\"scrub-field\"><div class=\"scrub-field-fill\"></div>"
                                   "<span class=\"scrub-field-display\">56</span>"
                                   "<input class=\"scrub-field-input\" type=\"text\" value=\"56\"/></div>");
             }
@@ -287,6 +289,35 @@ namespace {
                     }
                 }
             }
+        }
+    }
+
+    TEST_P(HistogramLayoutTest, TabReachesVisibleBinScrubsAndContinuesToLogScale) {
+        for (const bool compare : {false, true}) {
+            loadPanel(compare);
+            resize(1000, 400);
+            document_->GetElementById("histogram-compare-field")->Focus();
+            const auto tab = [&](int modifiers = 0) {
+                context_->ProcessKeyDown(Rml::Input::KI_TAB, modifiers);
+                context_->ProcessKeyUp(Rml::Input::KI_TAB, modifiers);
+                context_->Update();
+            };
+            const std::vector<const char*> ids = compare ? std::vector<const char*>{"scrub-compare-x-bin-count", "scrub-compare-y-bin-count"}
+                                                        : std::vector<const char*>{"scrub-histogram-bin-count"};
+            for (const auto* id : ids) {
+                auto* field = document_->GetElementById(id);
+                ASSERT_NE(field, nullptr);
+                tab();
+                EXPECT_EQ(context_->GetFocusElement(), field);
+            }
+            tab();
+            EXPECT_EQ(context_->GetFocusElement(), document_->GetElementById("histogram-log-scale"));
+            for (auto it = ids.rbegin(); it != ids.rend(); ++it) {
+                tab(Rml::Input::KM_SHIFT);
+                EXPECT_EQ(context_->GetFocusElement(), document_->GetElementById(*it));
+            }
+            tab(Rml::Input::KM_SHIFT);
+            EXPECT_EQ(context_->GetFocusElement(), document_->GetElementById("histogram-compare-field"));
         }
     }
 
