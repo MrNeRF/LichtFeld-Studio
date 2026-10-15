@@ -922,6 +922,8 @@
     "zoom": "缩放"
   },
   "preferences": {
+    "marketplace": "插件市场",
+    "marketplace_layout": "布局",
     "projects": "项目",
     "project_folders": "项目文件夹",
     "project_folders_default": "默认",

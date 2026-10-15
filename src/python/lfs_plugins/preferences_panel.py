@@ -14,6 +14,11 @@ from .types import Panel
 from .rendering_defaults import RenderingDefaultsSection, vignette_value, set_vignette_value
 from .ui import PanelStateBinding, RuntimeState
 from .panels import panel_class
+from .marketplace_preferences import (
+    read_preferences as read_marketplace_preferences,
+    reset_preferences as reset_marketplace_preferences,
+    set_preference as set_marketplace_preference,
+)
 from .project_manager_preferences import (
     read_preferences as read_project_manager_preferences,
     reset_preferences as reset_project_manager_preferences,
@@ -142,6 +147,11 @@ class PreferencesPanel(Panel):
         model.bind_func("show_viewport", lambda: self._section == "viewport")
         model.bind_event("show_viewport", lambda *_: self._set_section("viewport"))
         model.bind_func("panel_label", lambda: lf.ui.tr("preferences.title"))
+        model.bind_func("show_marketplace", lambda: self._section == "marketplace")
+        model.bind_event("show_marketplace", lambda *_: self._set_section("marketplace"))
+        for key in ("view", "git_checkout"):
+            model.bind("marketplace_" + key, lambda k=key: read_marketplace_preferences()[k],
+                       lambda value, k=key: self._set_marketplace_preference(k, value))
         model.bind_func("show_general", lambda: self._section == "general")
         model.bind_func("show_appearance", lambda: self._section == "appearance")
         model.bind_func("show_input", lambda: self._section == "input")
@@ -401,6 +411,7 @@ class PreferencesPanel(Panel):
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
             lf.project_auto_save_on_close_enabled(),
+            tuple(read_marketplace_preferences().values()),
             project_manager_preferences["defaultView"],
             project_manager_preferences["openAtStartup"],
             project_manager_preferences["rememberState"],
@@ -1018,6 +1029,19 @@ class PreferencesPanel(Panel):
         if callable(reload_preferences):
             reload_preferences()
 
+    @staticmethod
+    def _notify_marketplace_preferences_changed():
+        panel = lf.ui.get_panel_object("lfs.plugin_marketplace")
+        reload_preferences = getattr(panel, "reload_marketplace_preferences", None)
+        if callable(reload_preferences):
+            reload_preferences()
+
+    def _set_marketplace_preference(self, key, value):
+        set_marketplace_preference(key, value)
+        self._notify_marketplace_preferences_changed()
+        if self._handle:
+            self._handle.dirty("marketplace_" + key)
+
     def _set_project_manager_default_view(self, value):
         try:
             set_project_manager_preference("defaultView", str(value))
@@ -1356,7 +1380,7 @@ class PreferencesPanel(Panel):
 
     def _consume_section_request(self):
         section = lf.ui.take_preferences_section_request()
-        if section in ("general", "appearance", "viewport", "input", "interface", "file_associations", "mcp"):
+        if section in ("general", "appearance", "viewport", "input", "interface", "file_associations", "mcp", "marketplace"):
             if section == "file_associations" and not self._has_file_associations():
                 return
             self._set_section(section)
@@ -1438,6 +1462,7 @@ class PreferencesPanel(Panel):
                 "has_file_associations",
                 "show_mcp",
                 "show_portal",
+                "show_marketplace",
                 "show_section_reset",
                 "reset_section_label",
             ):
@@ -1613,6 +1638,9 @@ class PreferencesPanel(Panel):
             reset_project_manager_preferences()
             self._notify_project_manager_preferences_changed()
             self._read_project_location()
+        elif section == "marketplace":
+            reset_marketplace_preferences()
+            self._notify_marketplace_preferences_changed()
         elif section == "appearance":
             if hasattr(lf.ui, "set_theme_vignette_style"):
                 lf.ui.set_theme_vignette_style(0.3, 0.7, 0.5)
@@ -1681,6 +1709,8 @@ class PreferencesPanel(Panel):
             self._dirty_project_location()
             self._handle.dirty("embed_dataset_by_default")
             self._handle.dirty("auto_save_on_close")
+            self._handle.dirty("marketplace_view")
+            self._handle.dirty("marketplace_git_checkout")
             self._handle.dirty("project_manager_default_view")
             self._handle.dirty("project_manager_open_at_startup")
             self._handle.dirty("project_manager_remember_state")

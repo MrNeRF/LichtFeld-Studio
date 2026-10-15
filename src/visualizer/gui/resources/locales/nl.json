@@ -922,6 +922,8 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "marketplace": "Marketplace",
+    "marketplace_layout": "Indeling",
     "projects": "Projecten",
     "project_folders": "Projectmappen",
     "project_folders_default": "standaard",

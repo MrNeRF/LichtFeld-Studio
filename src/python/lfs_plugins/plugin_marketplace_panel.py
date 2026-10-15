@@ -19,6 +19,7 @@ from .marketplace import (
     PluginMarketplaceCatalog,
 )
 from .localization import localized_count, safe_format
+from .marketplace_preferences import read_preferences as read_marketplace_preferences
 from .plugin import PluginInfo, PluginState
 from .types import Panel
 from .panels import panel_class
@@ -85,7 +86,6 @@ class PluginMarketplacePanel(Panel):
         self._install_filter_idx = 0
         self._sort_idx = 2
         self._git_available = shutil.which("git") is not None
-        self._git_checkout_selected: Dict[str, bool] = {}
 
         self._card_ops: Dict[str, CardOpState] = {}
         self._lock = threading.RLock()
@@ -111,9 +111,10 @@ class PluginMarketplacePanel(Panel):
         self._cached_installed_versions: Dict[str, str] = {}
         self._cached_installed_names: Set[str] = set()
         self._formats_open = False
+        self._manual_open = False
         self._expanded_list_rows: Set[str] = set()
         self._collapsed_auto_list_rows: Set[str] = set()
-        self._view_mode = _VIEW_MODE_LIST
+        self._view_mode = read_marketplace_preferences()["view"]
         self._last_lang = ""
         self._last_grid_signature: Optional[Tuple] = None
         self._last_catalog_status_signature: Optional[Tuple[str, str]] = None
@@ -162,8 +163,6 @@ class PluginMarketplacePanel(Panel):
         model.bind_event("do_install_url", self._on_manual_form_submit)
         model.bind_event("confirm_yes", self._on_confirm_yes)
         model.bind_event("confirm_no", self._on_confirm_no)
-        model.bind_event("view_cards", self._on_view_cards)
-        model.bind_event("view_list", self._on_view_list)
 
         self._handle = model.get_handle()
 
@@ -208,6 +207,14 @@ class PluginMarketplacePanel(Panel):
         self._pending_scroll_restore = None
         self._escape_revert.clear()
 
+        manual_header = doc.get_element_by_id("manual-header")
+        if manual_header:
+            manual_header.add_event_listener("click", self._on_toggle_manual)
+            manual_content = doc.get_element_by_id("manual-content")
+            if manual_content:
+                w.sync_section_state(manual_content, self._manual_open,
+                                     manual_header, doc.get_element_by_id("manual-arrow"))
+
         formats_header = doc.get_element_by_id("formats-header")
         if formats_header:
             formats_header.add_event_listener("click", self._on_toggle_formats)
@@ -247,7 +254,7 @@ class PluginMarketplacePanel(Panel):
                 lambda: str(self._manual_url or ""),
                 self._restore_manual_url,
             )
-        self._sync_view_mode_controls(doc)
+        self.reload_marketplace_preferences()
         self._subscribe_reactive_state()
         self._ensure_loaded()
         self._request_model_update()
@@ -379,7 +386,6 @@ class PluginMarketplacePanel(Panel):
         self._update_catalog_status(
             doc, len(entries_raw), is_loading, registry_loaded, entries_raw
         )
-        self._sync_view_mode_controls(doc)
 
         snapshot_key = (tuple(entries_raw), is_loading, registry_loaded)
         if snapshot_key != self._prev_snapshot_key:
@@ -543,14 +549,6 @@ class PluginMarketplacePanel(Panel):
             "plugin_name": plugin_name or "",
             "show_install": (not buttons_busy) and not is_installed and not is_local_only and not entry.error,
             "show_cancel": buttons_busy and card_state.cancellable,
-            "show_git_checkout": (
-                self._git_available
-                and (not buttons_busy)
-                and not is_installed
-                and not is_local_only
-                and not entry.error
-            ),
-            "git_checkout_selected": self._git_checkout_selected.get(card_id, False),
             "show_load": (not buttons_busy) and is_installed and plugin_state != PluginState.ACTIVE,
             "show_unload": (not buttons_busy) and is_installed and plugin_state == PluginState.ACTIVE,
             "show_reload": (not buttons_busy) and is_remote_installed and plugin_state == PluginState.ACTIVE,
@@ -829,7 +827,6 @@ class PluginMarketplacePanel(Panel):
             '<div class="separator"></div>'
             '</div>'
             f'{self._build_feedback_markup(record)}'
-            f'{self._build_git_row(record)}'
             f'{self._build_startup_row(record)}'
             f'<div class="card-buttons" id="btns-{esc("card_id")}">{self._build_action_buttons_markup(record)}</div>'
         )
@@ -908,7 +905,6 @@ class PluginMarketplacePanel(Panel):
             f'{self._build_feedback_markup(record, extra_class="plugin-list-feedback")}'
             f'<div class="plugin-list-options">'
             f'<div class="plugin-list-buttons" id="btns-{esc("card_id")}">{self._build_action_buttons_markup(record)}</div>'
-            f'{self._build_git_row(record, row_class="plugin-list-option-row", label_class="plugin-list-option-label text-disabled")}'
             f'{self._build_startup_row(record, row_class="plugin-list-option-row", label_class="plugin-list-option-label text-disabled")}'
             f'</div>'
             '</div>'
@@ -933,7 +929,7 @@ class PluginMarketplacePanel(Panel):
         escaped_url = escape(url, quote=True)
         return (
             f'<a class="{name_class} mp-project-link" href="{escaped_url}" '
-            f'title="{escaped_url}" data-action="open-url" data-url="{escaped_url}">{label}</a>'
+            f'title="{escaped_url}" data-action="open-url" data-url="{escaped_url}"><span>{label}</span></a>'
         )
 
     def _build_action_buttons_markup(self, record: Dict[str, object]) -> str:
@@ -1015,28 +1011,6 @@ class PluginMarketplacePanel(Panel):
             f'<span class="{label_class}">{escape(tr("plugin_marketplace.load_on_startup"))}</span>'
             '</label></div>'
         )
-
-    def _build_git_row(
-        self,
-        record: Dict[str, object],
-        row_class: str = "card-git-row",
-        label_class: str = "card-startup-label text-disabled",
-    ) -> str:
-        if not record.get("show_git_checkout"):
-            return ""
-
-        tr = lf.ui.tr
-        checked = ' checked="checked"' if record.get("git_checkout_selected") else ""
-        card_id = escape(str(record.get("card_id", "")), quote=True)
-        return (
-            f'<div class="{row_class}"><label>'
-            f'<input type="checkbox"{checked} data-action="git-checkout" '
-            f'data-card-id="{card_id}" />'
-            f'<span class="{label_class}">{escape(tr("plugin_marketplace.install_as_git_checkout"))}</span>'
-            '</label></div>'
-        )
-
-    # ── Card state updates (per-frame, minimal DOM touches) ───
 
     def _update_card_states(self, doc, entries, card_ids, mgr,
                             installed_lookup, installed_versions, installed_names):
@@ -1242,6 +1216,15 @@ class PluginMarketplacePanel(Panel):
 
     # ── Event handlers ────────────────────────────────────────
 
+    def _on_toggle_manual(self, _ev):
+        self._manual_open = not self._manual_open
+        if self._doc:
+            content = self._doc.get_element_by_id("manual-content")
+            if content:
+                w.animate_section_toggle(content, self._manual_open,
+                                         self._doc.get_element_by_id("manual-arrow"),
+                                         header_element=self._doc.get_element_by_id("manual-header"))
+
     def _on_toggle_formats(self, _ev):
         self._formats_open = not self._formats_open
         doc = self._doc
@@ -1348,12 +1331,6 @@ class PluginMarketplacePanel(Panel):
             self._close_confirm()
         event.stop_propagation()
 
-    def _on_view_cards(self, *_args):
-        self._set_view_mode(_VIEW_MODE_CARD)
-
-    def _on_view_list(self, *_args):
-        self._set_view_mode(_VIEW_MODE_LIST)
-
     def _on_card_click(self, ev):
         if self._confirm_is_open:
             ev.stop_propagation()
@@ -1435,8 +1412,6 @@ class PluginMarketplacePanel(Panel):
         if action == "startup" and plugin_name:
             self._set_startup_preference(target, plugin_name)
             return
-        if action == "git-checkout" and card_id:
-            self._set_git_checkout_preference(target, card_id)
 
     def _find_card_action(self, element):
         while element is not None:
@@ -1475,42 +1450,16 @@ class PluginMarketplacePanel(Panel):
         prefs.set("load_on_startup", checked)
         self._request_model_update()
 
-    def _set_git_checkout_preference(self, element, card_id: str):
-        cb_el = self._find_element_with_attr(element, "type", "checkbox")
-        checked = cb_el.has_attribute("checked") if cb_el else False
-        if self._git_checkout_selected.get(card_id, False) == checked:
-            return
-        self._git_checkout_selected[card_id] = checked
-        self._request_model_update()
+    def reload_marketplace_preferences(self):
+        self._set_view_mode(read_marketplace_preferences()["view"])
 
     def _set_view_mode(self, view_mode: str):
-        if view_mode not in _VALID_VIEW_MODES:
-            return
-        if view_mode == self._view_mode:
-            if self._doc:
-                self._sync_view_mode_controls(self._doc)
+        if view_mode not in _VALID_VIEW_MODES or view_mode == self._view_mode:
             return
         self._view_mode = view_mode
         self._entries_dirty = True
         self._last_grid_signature = None
-        if self._doc:
-            self._sync_view_mode_controls(self._doc)
         self._request_model_update()
-
-    def _sync_view_mode_controls(self, doc):
-        tr = lf.ui.tr
-        cards_btn = doc.get_element_by_id("view-cards-btn")
-        list_btn = doc.get_element_by_id("view-list-btn")
-        if cards_btn:
-            cards_btn.set_class("selected", self._view_mode == _VIEW_MODE_CARD)
-            self._set_attribute_if_changed(
-                cards_btn, "title", tr("plugin_marketplace.view.grid")
-            )
-        if list_btn:
-            list_btn.set_class("selected", self._view_mode == _VIEW_MODE_LIST)
-            self._set_attribute_if_changed(
-                list_btn, "title", tr("plugin_marketplace.view.list")
-            )
 
     @staticmethod
     def _set_attribute_if_changed(element, name: str, value: str):
@@ -1562,8 +1511,8 @@ class PluginMarketplacePanel(Panel):
     def _toggle_list_row(self, card_id: str):
         self._set_list_row_expanded(card_id, not self._is_list_row_expanded(card_id), rerender=True)
 
-    def _selected_install_transport(self, card_id: str) -> str:
-        if self._git_available and self._git_checkout_selected.get(card_id, False):
+    def _selected_install_transport(self) -> str:
+        if self._git_available and read_marketplace_preferences()["git_checkout"]:
             return "git"
         return "archive"
 
@@ -1784,7 +1733,7 @@ class PluginMarketplacePanel(Panel):
         import lichtfeld as lf
 
         tr = lf.ui.tr
-        transport = self._selected_install_transport(card_id)
+        transport = self._selected_install_transport()
 
         def do_install(on_progress, should_cancel=None):
             if entry.registry_id:
@@ -1831,8 +1780,10 @@ class PluginMarketplacePanel(Panel):
             self._schedule_model_update()
             return
 
+        transport = self._selected_install_transport()
+
         def do_install(on_progress, should_cancel=None):
-            kwargs = {"on_progress": on_progress}
+            kwargs = {"on_progress": on_progress, "transport": transport}
             if should_cancel is not None:
                 kwargs["should_cancel"] = should_cancel
             name = mgr.install(clean_url, **kwargs)

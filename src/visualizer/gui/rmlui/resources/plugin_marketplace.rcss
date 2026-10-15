@@ -96,58 +96,6 @@
     min-width: 148dp;
 }
 
-.mp-view-toggle {
-    display: flex;
-    align-items: center;
-    gap: 3dp;
-    margin-left: auto;
-    flex-shrink: 0;
-}
-
-.mp-view-btn {
-    box-sizing: border-box;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 30dp;
-    min-width: 30dp;
-    height: 30dp;
-    min-height: 30dp;
-    padding: 0;
-    text-align: center;
-}
-
-.mp-icon-grid {
-    display: inline-flex;
-    flex-wrap: wrap;
-    width: 12dp;
-    height: 12dp;
-    gap: 1dp;
-    vertical-align: middle;
-}
-
-.mp-icon-grid > span {
-    display: block;
-    width: 5dp;
-    height: 5dp;
-}
-
-.mp-icon-list {
-    display: inline-flex;
-    flex-direction: column;
-    justify-content: center;
-    width: 12dp;
-    height: 12dp;
-    gap: 2dp;
-    vertical-align: middle;
-}
-
-.mp-icon-list > span {
-    display: block;
-    width: 12dp;
-    height: 1.5dp;
-}
-
 /* ── Manual URL install ───────────────────────────────────── */
 
 .mp-manual-section {
@@ -155,17 +103,29 @@
     flex-direction: column;
     min-width: 0;
     margin-bottom: 12dp;
-    padding: 12dp;
+    padding: 6dp 10dp;
     border-width: 1dp;
     border-radius: 6dp;
 }
 
-.mp-section-heading {
+.mp-manual-header {
+    box-sizing: border-box;
     display: flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: 6dp 10dp;
-    min-width: 0;
+    align-items: center;
+    gap: 5dp;
+    width: 100%;
+    min-height: 28dp;
+    margin: 0;
+    padding: 4dp 0;
+    border-width: 0;
+    background-color: transparent;
+    text-align: left;
+}
+
+#manual-content.section-content {
+    margin: 0;
+    padding: 0 0 4dp;
+    border-width: 0;
 }
 
 .mp-section-title {
@@ -185,12 +145,15 @@
     min-width: 0;
 }
 
-.mp-url-input {
+input.mp-url-input[type="text"] {
     flex: 1;
     min-width: 120dp;
     box-sizing: border-box;
-    height: 30dp;
-    min-height: 30dp;
+    height: 28dp;
+    min-height: 28dp;
+    padding: 4dp 8dp;
+    font-size: 12dp;
+    line-height: 16dp;
 }
 
 .mp-formats-header {
@@ -407,8 +370,7 @@
     min-width: 76dp;
 }
 
-.card-startup-row,
-.card-git-row {
+.card-startup-row {
     display: flex;
     align-items: center;
     min-height: 20dp;
@@ -416,7 +378,6 @@
 }
 
 .card-startup-row label,
-.card-git-row label,
 .plugin-list-option-row label {
     display: flex;
     align-items: center;
@@ -425,7 +386,6 @@
 }
 
 .card-startup-row input[type="checkbox"],
-.card-git-row input[type="checkbox"],
 .plugin-list-option-row input[type="checkbox"] {
     margin: 0;
 }
@@ -585,12 +545,23 @@
 }
 
 .mp-project-link {
-    display: block;
+    display: inline-flex;
+    align-items: center;
     flex: 0 1 auto;
+    min-width: 0;
     max-width: 100%;
     text-decoration: underline;
     cursor: pointer;
     tab-index: auto;
+}
+
+.mp-project-link > span {
+    display: block;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .plugin-list-description,
@@ -637,7 +608,6 @@
 /* Labels live in spans so RmlUi measures them as flex items. */
 .card-buttons .btn,
 .plugin-list-buttons .btn,
-.mp-install-btn,
 .confirm-buttons .btn {
     box-sizing: border-box;
     display: inline-flex;
@@ -649,6 +619,21 @@
     padding: 0 12dp;
     font-size: 13dp;
     line-height: 18dp;
+    text-align: center;
+}
+
+.mp-install-btn {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    min-width: 76dp;
+    height: 28dp;
+    min-height: 28dp;
+    padding: 0 10dp;
+    font-size: 12dp;
+    line-height: 16dp;
     text-align: center;
 }
 

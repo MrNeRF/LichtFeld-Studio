@@ -922,6 +922,8 @@
     "zoom": "줌"
   },
   "preferences": {
+    "marketplace": "마켓플레이스",
+    "marketplace_layout": "레이아웃",
     "projects": "프로젝트",
     "project_folders": "프로젝트 폴더",
     "project_folders_default": "기본",

@@ -922,6 +922,8 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "marketplace": "Marketplace",
+    "marketplace_layout": "Disposition",
     "projects": "Projets",
     "project_folders": "Dossiers de projets",
     "project_folders_default": "par défaut",

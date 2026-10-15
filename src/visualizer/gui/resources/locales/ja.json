@@ -922,6 +922,8 @@
     "zoom": "ズーム"
   },
   "preferences": {
+    "marketplace": "マーケットプレイス",
+    "marketplace_layout": "レイアウト",
     "projects": "プロジェクト",
     "project_folders": "プロジェクトフォルダー",
     "project_folders_default": "既定",
