@@ -1247,7 +1247,7 @@ namespace lfs::training {
     }
 
     nlohmann::json add_view_evaluation(nlohmann::json document, const ViewMetrics& view, const int step,
-                                       const std::string_view split) {
+                                       const std::string_view split, const bool pixel_sets) {
         if (!document.is_object())
             document = nlohmann::json::object();
         auto& record = document[view.image_name];
@@ -1257,34 +1257,35 @@ namespace lfs::training {
             record["width"] = view.width;
             record["height"] = view.height;
         }
+        const auto scores_of = [&view](const auto& set) {
+            nlohmann::json scores = {
+                {"psnr", json_metric(set.psnr)},
+                {"ssim", json_metric(set.ssim)},
+                {"lpips", json_metric(set.lpips)},
+                {"evaluated_pixel_fraction", set.evaluated_pixel_fraction},
+            };
+            if (view.flip || set.flip)
+                scores["flip"] = json_metric(set.flip);
+            if (!set.skipped_reason.empty())
+                scores["skipped_reason"] = set.skipped_reason;
+            return scores;
+        };
         nlohmann::json entry = {
             {"step", step},
             {"split", split},
-            {"psnr", json_metric(view.psnr)},
-            {"ssim", json_metric(view.ssim)},
-            {"lpips", json_metric(view.lpips)},
-            {"masked", view.masked},
             {"bit_depth", view.bit_depth},
-            {"evaluated_pixel_fraction", view.evaluated_pixel_fraction},
             {"validity_mask_applied", view.validity_mask_applied},
         };
-        if (view.flip)
-            entry["flip"] = json_metric(view.flip);
-        if (!view.skipped_reason.empty())
+        if (!pixel_sets) {
+            entry.update(scores_of(view));
+            entry["masked"] = view.masked;
+        } else if (!view.skipped_reason.empty()) {
             entry["skipped_reason"] = view.skipped_reason;
-        for (const auto& [name, set] : {std::pair{"unmasked", &view.unmasked}, std::pair{"inverted", &view.inverted}}) {
-            if (!*set)
-                continue;
-            auto& scores = entry[name] = {
-                {"psnr", json_metric((*set)->psnr)},
-                {"ssim", json_metric((*set)->ssim)},
-                {"lpips", json_metric((*set)->lpips)},
-                {"evaluated_pixel_fraction", (*set)->evaluated_pixel_fraction},
-            };
-            if (view.flip || (*set)->flip)
-                scores["flip"] = json_metric((*set)->flip);
-            if (!(*set)->skipped_reason.empty())
-                scores["skipped_reason"] = (*set)->skipped_reason;
+        } else {
+            entry["masked"] = scores_of(view);
+            for (const auto& [name, set] : {std::pair{"unmasked", &view.unmasked}, std::pair{"inverted", &view.inverted}})
+                if (*set)
+                    entry[name] = scores_of(**set);
         }
 
         std::vector<nlohmann::json> evaluations;
@@ -1324,8 +1325,9 @@ namespace lfs::training {
         if (metrics.views.empty())
             return;
         auto document = read_json_object(per_image_path_);
+        const bool pixel_sets = metrics.unmasked || metrics.inverted;
         for (const auto& view : metrics.views)
-            document = add_view_evaluation(std::move(document), view, metrics.iteration, split);
+            document = add_view_evaluation(std::move(document), view, metrics.iteration, split, pixel_sets);
         write_json_file(per_image_path_, document);
     }
 
@@ -1596,8 +1598,9 @@ namespace lfs::training {
         const std::filesystem::path eval_dir =
             source.image_dir.empty() ? _params.dataset.output_path / ("eval_step_" + std::to_string(iteration))
                                      : source.image_dir;
+        const auto flip_dir = eval_dir / "flip";
         if (_params.optimization.enable_save_eval_images) {
-            std::filesystem::create_directories(eval_dir);
+            std::filesystem::create_directories(_params.optimization.eval_flip ? flip_dir : eval_dir);
         }
 
         const size_t val_dataset_size = val_dataset->size();
@@ -2093,7 +2096,7 @@ namespace lfs::training {
                 lfs::core::image_io::save_image_async(eval_dir / (stem + ".png"), grid.contiguous(), metadata);
                 if (flip_map.is_valid()) {
                     lfs::core::image_io::save_image_async(
-                        eval_dir / (stem + "_flip.png"),
+                        flip_dir / (stem + ".png"),
                         flip_error_image(flip_map).to(lfs::core::DataType::Float32).div(255.0f));
                 }
                 saved_images++;

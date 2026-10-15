@@ -346,9 +346,10 @@ namespace lfs::training {
 
     // Adds this step's result for one image to the per-image document, which maps
     // image names to their size and evaluations. An earlier entry for the same
-    // step and split is replaced; entries stay sorted by step.
+    // step and split is replaced; entries stay sorted by step. With `pixel_sets` (the run scored extra pixel sets)
+    // the scores of each set sit under its own key: masked, unmasked, inverted.
     [[nodiscard]] nlohmann::json add_view_evaluation(nlohmann::json document, const ViewMetrics& view, int step,
-                                                     std::string_view split);
+                                                     std::string_view split, bool pixel_sets);
 
     // Metrics reporter class
     class MetricsReporter {

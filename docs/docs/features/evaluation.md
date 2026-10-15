@@ -39,8 +39,10 @@ Everything is written to the output directory:
 └── eval_step_30000
     ├── IMG_0001.png               ground truth | render, unscored pixels black; with a mask three rows:
     │                              unmasked, mask applied, inverted mask applied
-    ├── IMG_0001_flip.png          FLIP error map, with --eval-flip
-    └── ...
+    ├── ...
+    └── flip
+        ├── IMG_0001.png           FLIP error map, with --eval-flip
+        └── ...
 ```
 
 Images are named after their input image. When two input images share a name, the later ones get their evaluation index appended.
@@ -76,7 +78,7 @@ A caption band above each row names its two images, for example `Ground Truth, M
 
 `split` is `test` for held-out images and `train` with `--eval-all`. An image that could not be scored keeps its entry with a `skipped_reason`.
 
-With `--eval-mask-report`, each evaluation also holds an `unmasked` and/or `inverted` object with that set's `psnr`, `ssim`, `lpips`, `flip` and `evaluated_pixel_fraction` (see [Several pixel sets in one run](#several-pixel-sets-in-one-run)). The values outside these objects stay the mask's, and so does `metrics.csv`.
+With `--eval-mask-report`, every scored pixel set has its own object in the evaluation, named `masked`, `unmasked` and `inverted`, each with that set's `psnr`, `ssim`, `lpips`, `flip` and `evaluated_pixel_fraction` (see [Several pixel sets in one run](#several-pixel-sets-in-one-run)). Only `step`, `split`, `bit_depth` and `validity_mask_applied` stay outside them, and the `masked` true/false entry is left out because the object names the set. An image that could not be scored has its `skipped_reason` beside them and no set objects. `metrics.csv` keeps the mask's scores.
 
 ## Metrics
 
@@ -122,11 +124,9 @@ The extra scores are written next to the mask's: in `per_image_metrics.json` (ex
 {
   "step": 30000,
   "split": "test",
-  "psnr": 25.41,
-  "ssim": 0.812,
-  "lpips": 0.184,
-  "masked": true,
-  "evaluated_pixel_fraction": 0.62,
+  "bit_depth": 8,
+  "validity_mask_applied": false,
+  "masked": {"psnr": 25.41, "ssim": 0.812, "lpips": 0.184, "evaluated_pixel_fraction": 0.62},
   "unmasked": {"psnr": 23.87, "ssim": 0.781, "lpips": 0.203, "evaluated_pixel_fraction": 1.0},
   "inverted": {"psnr": 22.95, "ssim": 0.764, "lpips": 0.215, "evaluated_pixel_fraction": 0.38}
 }
@@ -228,6 +228,6 @@ Any other lens difference stops the comparison. Test cameras placed elsewhere th
 | `--eval-space` | `distorted` or `undistorted`, see above. |
 | `--undistort` | The test folder was rendered with the undistorted reference cameras. |
 | `--eval-bit-depth`, `--eval-flip` | As in training. |
-| `--save-images` | Save reference and test side by side to `compare_images/` (captioned `Ground Truth` and `Test`, three rows with a mask), and FLIP error maps with `--eval-flip`. |
+| `--save-images` | Save reference and test side by side to `compare_images/` (captioned `Ground Truth` and `Test`, three rows with a mask), and FLIP error maps to `compare_images/flip/` with `--eval-flip`. |
 
-The scores go to `compare.json` (the settings, the mean scores and each image's PSNR, SSIM, LPIPS, FLIP, size, bit depth and scored pixel fraction) and `compare_report.txt` (the table the command prints); a rerun into the same folder replaces them and `compare_images/`. Both image sets are read with the same decoder, so identical files score PSNR 100 and SSIM 1. Values are compared as stored: a linear EXR and an sRGB PNG of the same image do not match.
+The scores go to `compare.json` (the settings, the mean scores and each image's PSNR, SSIM, LPIPS, FLIP, size, bit depth and scored pixel fraction; with `--eval-mask-report` the scores of each pixel set in its own `masked`, `unmasked` or `inverted` object, as in `per_image_metrics.json`) and `compare_report.txt` (the table the command prints); a rerun into the same folder replaces them and `compare_images/`. Both image sets are read with the same decoder, so identical files score PSNR 100 and SSIM 1. Values are compared as stored: a linear EXR and an sRGB PNG of the same image do not match.

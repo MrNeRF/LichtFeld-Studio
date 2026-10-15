@@ -506,33 +506,43 @@ namespace lfs::training {
                     block["skipped"] = (*set)->skipped_reason;
             }
         };
+        const auto& metrics = result.metrics;
+        // With extra pixel sets the mask's scores sit under "masked", beside "unmasked" and "inverted".
+        const auto add_mask_scores = [pixel_sets = metrics.unmasked || metrics.inverted](
+                                         nlohmann::ordered_json& entry, nlohmann::ordered_json scores) {
+            if (pixel_sets)
+                entry["masked"] = std::move(scores);
+            else
+                entry.update(scores);
+        };
         auto images = nlohmann::ordered_json::object();
-        for (const auto& view : result.metrics.views) {
+        for (const auto& view : metrics.views) {
             if (!view.skipped_reason.empty()) {
                 images[view.image_name] = {{"skipped", view.skipped_reason}};
                 continue;
             }
             auto& image = images[view.image_name] = {{"width", view.width},
                                                      {"height", view.height},
-                                                     {"bit_depth", view.bit_depth},
-                                                     {"evaluated_pixel_fraction", view.evaluated_pixel_fraction},
-                                                     {"psnr", value(view.psnr)},
-                                                     {"ssim", value(view.ssim)},
-                                                     {"lpips", value(view.lpips)},
-                                                     {"flip", value(view.flip)}};
+                                                     {"bit_depth", view.bit_depth}};
+            add_mask_scores(image, {{"evaluated_pixel_fraction", view.evaluated_pixel_fraction},
+                                    {"psnr", value(view.psnr)},
+                                    {"ssim", value(view.ssim)},
+                                    {"lpips", value(view.lpips)},
+                                    {"flip", value(view.flip)}});
             add_mask_sets(image, view.unmasked, view.inverted);
         }
         auto unmatched = nlohmann::ordered_json::array();
         for (const auto& path : result.unmatched)
             unmatched.push_back(lfs::core::path_to_utf8(path));
-        const auto& metrics = result.metrics;
-        auto mean = metrics.valid ? nlohmann::ordered_json{{"psnr", metrics.psnr},
-                                                           {"ssim", metrics.ssim},
-                                                           {"lpips", value(metrics.lpips)},
-                                                           {"flip", value(metrics.flip)}}
-                                  : nlohmann::ordered_json(nullptr);
-        if (metrics.valid)
+        auto mean = nlohmann::ordered_json(nullptr);
+        if (metrics.valid) {
+            mean = nlohmann::ordered_json::object();
+            add_mask_scores(mean, {{"psnr", metrics.psnr},
+                                   {"ssim", metrics.ssim},
+                                   {"lpips", value(metrics.lpips)},
+                                   {"flip", value(metrics.flip)}});
             add_mask_sets(mean, metrics.unmasked, metrics.inverted);
+        }
         return {{"reference", lfs::core::path_to_utf8(params.reference_path)},
                 {"test", lfs::core::path_to_utf8(params.test_path)},
                 {"lens", result.lens},

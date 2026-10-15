@@ -482,7 +482,7 @@ TEST(MetricsEvaluator, FlipIsReportedAndSavedOnlyWhenEnabled) {
         const auto metrics = evaluator.evaluate(1, splat, dataset, background);
         ASSERT_TRUE(metrics.valid);
         ASSERT_EQ(metrics.views.size(), 1u);
-        const auto flip_png = params.dataset.output_path / "eval_step_1" / "_DSC8679_flip.png";
+        const auto flip_png = params.dataset.output_path / "eval_step_1" / "flip" / "_DSC8679.png";
         EXPECT_EQ(metrics.views[0].flip.has_value(), enabled);
         EXPECT_EQ(metrics.flip.has_value(), enabled);
         EXPECT_EQ(std::filesystem::exists(flip_png), enabled);
@@ -1706,10 +1706,10 @@ TEST(ViewEvaluationJson, AddsStepsInOrderAndReplacesARepeatedStep) {
         .image_name = "a.png",
         .skipped_reason = "failed to load ground truth image: gone"};
 
-    auto document = lfs::training::add_view_evaluation({}, measured, 7000, "test");
-    document = lfs::training::add_view_evaluation(std::move(document), skipped, 3000, "test");
-    document = lfs::training::add_view_evaluation(std::move(document), remeasured, 7000, "test");
-    document = lfs::training::add_view_evaluation(std::move(document), measured, 7000, "train");
+    auto document = lfs::training::add_view_evaluation({}, measured, 7000, "test", false);
+    document = lfs::training::add_view_evaluation(std::move(document), skipped, 3000, "test", false);
+    document = lfs::training::add_view_evaluation(std::move(document), remeasured, 7000, "test", false);
+    document = lfs::training::add_view_evaluation(std::move(document), measured, 7000, "train", false);
 
     ASSERT_EQ(document.size(), 1u);
     const auto& record = document.at("a.png");
@@ -1966,8 +1966,8 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
         .index = 3,
         .image_name = "cam/frame.png",
         .skipped_reason = "failed to load mask: gone"};
-    auto document = lfs::training::add_view_evaluation({}, measured, 7000, "test");
-    document = lfs::training::add_view_evaluation(std::move(document), skipped, 30000, "test");
+    auto document = lfs::training::add_view_evaluation({}, measured, 7000, "test", false);
+    document = lfs::training::add_view_evaluation(std::move(document), skipped, 30000, "test", false);
 
     const auto keys = [](const nlohmann::json& object) {
         std::vector<std::string> names;
@@ -1994,15 +1994,38 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
     EXPECT_FALSE(record.at("evaluations")[1].at("validity_mask_applied"));
 }
 
-// Catches extra pixel sets written flat into the evaluation, where they would overwrite the mask's scores.
-TEST(ViewEvaluationJson, MaskSetsAreNestedUnderTheirNames) {
-    lfs::training::ViewMetrics view{.image_name = "frame.png", .psnr = 24.0f, .ssim = 0.8f, .flip = 0.1f};
+// Catches extra pixel sets written flat into the evaluation, where they would overwrite the mask's scores, and
+// a mask set left flat beside them.
+TEST(ViewEvaluationJson, PixelSetsAreNestedUnderTheirNames) {
+    lfs::training::ViewMetrics view{
+        .image_name = "frame.png",
+        .psnr = 24.0f,
+        .ssim = 0.8f,
+        .flip = 0.1f,
+        .masked = true,
+        .evaluated_pixel_fraction = 0.25f};
     view.unmasked = lfs::training::MaskSetMetrics{.psnr = 21.0f, .ssim = 0.7f, .flip = 0.2f, .evaluated_pixel_fraction = 1.0f};
     view.inverted = lfs::training::MaskSetMetrics{.evaluated_pixel_fraction = 0.0f,
                                                   .skipped_reason = "no pixel in this set"};
-    const auto document = lfs::training::add_view_evaluation({}, view, 7000, "test");
-    const auto& evaluation = document.at("frame.png").at("evaluations")[0];
-    EXPECT_FLOAT_EQ(evaluation.at("psnr"), 24.0f);
+    const lfs::training::ViewMetrics skipped{.image_name = "frame.png", .skipped_reason = "failed to load mask: gone"};
+    auto document = lfs::training::add_view_evaluation({}, view, 7000, "test", true);
+    document = lfs::training::add_view_evaluation(std::move(document), skipped, 30000, "test", true);
+
+    const auto keys = [](const nlohmann::json& object) {
+        std::vector<std::string> names;
+        for (const auto& item : object.items())
+            names.push_back(item.key());
+        return names;
+    };
+    const auto& evaluations = document.at("frame.png").at("evaluations");
+    ASSERT_EQ(evaluations.size(), 2u);
+    const auto& evaluation = evaluations[0];
+    EXPECT_EQ(keys(evaluation), (std::vector<std::string>{"bit_depth", "inverted", "masked", "split", "step", "unmasked", "validity_mask_applied"}));
+    const auto& masked = evaluation.at("masked");
+    EXPECT_EQ(keys(masked), (std::vector<std::string>{"evaluated_pixel_fraction", "flip", "lpips", "psnr", "ssim"}));
+    EXPECT_FLOAT_EQ(masked.at("psnr"), 24.0f);
+    EXPECT_FLOAT_EQ(masked.at("flip"), 0.1f);
+    EXPECT_FLOAT_EQ(masked.at("evaluated_pixel_fraction"), 0.25f);
     const auto& unmasked = evaluation.at("unmasked");
     EXPECT_FLOAT_EQ(unmasked.at("psnr"), 21.0f);
     EXPECT_FLOAT_EQ(unmasked.at("flip"), 0.2f);
@@ -2012,6 +2035,7 @@ TEST(ViewEvaluationJson, MaskSetsAreNestedUnderTheirNames) {
     const auto& inverted = evaluation.at("inverted");
     EXPECT_TRUE(inverted.at("psnr").is_null());
     EXPECT_EQ(inverted.at("skipped_reason"), "no pixel in this set");
+    EXPECT_EQ(keys(evaluations[1]), (std::vector<std::string>{"bit_depth", "skipped_reason", "split", "step", "validity_mask_applied"}));
 }
 
 // Catches a depth mask that compares accumulated instead of expected depth, keeps faint pixels,
