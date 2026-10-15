@@ -926,6 +926,10 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "marketplace": "Marketplace",
+    "marketplace_layout": "Disposition",
+    "marketplace_git_checkout_description": "Installe un clone Git plutôt qu’une archive source pour examiner les modifications et utiliser Git dans le dossier du plugin. Nécessite Git ; sinon, une archive est utilisée.",
+    "marketplace_git_unavailable": "Git est introuvable dans PATH. Installez Git pour utiliser cette option.",
     "projects": "Projets",
     "project_folders": "Dossiers de projets",
     "project_folders_default": "par défaut",
@@ -2260,14 +2264,13 @@
       "updating": "Mise à jour de {name}...",
       "updated": "{name} mis à jour"
     },
-    "title_line": "Parcourez les plugins installables depuis le registre de plugins.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "Avertissement : cette source de plugin n'a pas d'empreinte SHA-256 ; son archive n'est pas vérifiée.",
     "error.checksum_mismatch": "La vérification SHA-256 de l'archive du plugin a échoué.",
     "error.digest_conflict": "L'empreinte de l'URL et l'argument sha256 ne correspondent pas.",
     "error.invalid_digest": "L'empreinte SHA-256 doit contenir exactement 64 caractères hexadécimaux.",
     "error.digest_requires_archive": "La vérification SHA-256 nécessite le mode d'installation par archive.",
-    "warning_body": "AVERTISSEMENT : LFS n'approuve pas directement et n'assume aucune responsabilité. Utilisation à vos risques.",
+    "warning_body": "AVERTISSEMENT : Lichtfeld Studio n'approuve pas directement et n'assume aucune responsabilité. Utilisation à vos risques.",
     "filter_label": "Filtre",
     "sort_label": "Trier par",
     "filter.all": "Tous",

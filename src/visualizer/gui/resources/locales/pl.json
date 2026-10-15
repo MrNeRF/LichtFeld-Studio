@@ -926,6 +926,10 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "marketplace": "Marketplace",
+    "marketplace_layout": "Układ",
+    "marketplace_git_checkout_description": "Instaluje klon Git zamiast archiwum źródeł, umożliwiając przeglądanie zmian i używanie Git w folderze wtyczki. Wymaga Git; w przeciwnym razie używane jest archiwum.",
+    "marketplace_git_unavailable": "Nie znaleziono Git w PATH. Zainstaluj Git, aby użyć tej opcji.",
     "projects": "Projekty",
     "project_folders": "Foldery projektów",
     "project_folders_default": "domyślny",
@@ -2260,14 +2264,13 @@
       "updating": "Aktualizowanie {name}...",
       "updated": "Zaktualizowano {name}"
     },
-    "title_line": "Przeglądaj instalowalne wtyczki z rejestru wtyczek.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "Ostrzeżenie: to źródło wtyczki nie ma skrótu SHA-256; archiwum nie jest zweryfikowane.",
     "error.checksum_mismatch": "Weryfikacja SHA-256 archiwum wtyczki nie powiodła się.",
     "error.digest_conflict": "Skrót URL i argument sha256 są różne.",
     "error.invalid_digest": "Skrót SHA-256 musi zawierać dokładnie 64 znaki szesnastkowe.",
     "error.digest_requires_archive": "Weryfikacja SHA-256 wymaga instalacji z archiwum.",
-    "warning_body": "OSTRZEŻENIE: LFS nie udziela bezpośredniej rekomendacji ani nie ponosi odpowiedzialności. Używasz na własne ryzyko.",
+    "warning_body": "OSTRZEŻENIE: Lichtfeld Studio nie udziela bezpośredniej rekomendacji ani nie ponosi odpowiedzialności. Używasz na własne ryzyko.",
     "filter_label": "Filtr",
     "sort_label": "Sortuj według",
     "filter.all": "Wszystkie",

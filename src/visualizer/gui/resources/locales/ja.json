@@ -926,6 +926,10 @@
     "zoom": "ズーム"
   },
   "preferences": {
+    "marketplace": "マーケットプレイス",
+    "marketplace_layout": "レイアウト",
+    "marketplace_git_checkout_description": "ソースアーカイブの代わりに Git クローンをインストールし、プラグインフォルダーで変更の確認や Git ツールの使用ができます。Git が必要です。利用できない場合はアーカイブを使用します。",
+    "marketplace_git_unavailable": "PATH に Git が見つかりません。このオプションを使用するには Git をインストールしてください。",
     "projects": "プロジェクト",
     "project_folders": "プロジェクトフォルダー",
     "project_folders_default": "既定",
@@ -2260,14 +2264,13 @@
       "updating": "{name} を更新中...",
       "updated": "{name} を更新しました"
     },
-    "title_line": "プラグインレジストリからインストール可能なプラグインを参照します。",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "警告: このプラグインソースには SHA-256 ダイジェストがなく、アーカイブは検証されていません。",
     "error.checksum_mismatch": "プラグインアーカイブの SHA-256 検証に失敗しました。",
     "error.digest_conflict": "URL のダイジェストと sha256 引数が一致しません。",
     "error.invalid_digest": "SHA-256 ダイジェストは 64 桁の 16 進数である必要があります。",
     "error.digest_requires_archive": "SHA-256 検証にはアーカイブ方式でのインストールが必要です。",
-    "warning_body": "警告: LFS は直接的な推奨や責任の負担を行いません。利用は自己責任で行ってください。",
+    "warning_body": "警告: Lichtfeld Studio は直接的な推奨や責任の負担を行いません。利用は自己責任で行ってください。",
     "filter_label": "フィルター",
     "sort_label": "並び替え",
     "filter.all": "すべて",

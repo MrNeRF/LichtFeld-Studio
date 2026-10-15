@@ -926,6 +926,10 @@
     "zoom": "缩放"
   },
   "preferences": {
+    "marketplace": "插件市场",
+    "marketplace_layout": "布局",
+    "marketplace_git_checkout_description": "通过 Git 克隆而非源码压缩包安装，可在插件文件夹中查看更改并使用 Git 工具。需要安装 Git；否则使用源码压缩包。",
+    "marketplace_git_unavailable": "在 PATH 中未找到 Git。请安装 Git 以使用此选项。",
     "projects": "项目",
     "project_folders": "项目文件夹",
     "project_folders_default": "默认",
@@ -2260,14 +2264,13 @@
       "updating": "正在更新 {name}...",
       "updated": "已更新 {name}"
     },
-    "title_line": "浏览可从插件源安装的插件",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "警告：此插件来源没有 SHA-256 摘要；其归档文件未经验证。",
     "error.checksum_mismatch": "插件归档文件的 SHA-256 验证失败。",
     "error.digest_conflict": "URL 摘要与 sha256 参数不匹配。",
     "error.invalid_digest": "SHA-256 摘要必须恰好包含 64 个十六进制字符。",
     "error.digest_requires_archive": "SHA-256 验证需要使用归档安装方式。",
-    "warning_body": "警告：LFS 不直接背书也不承担责任。使用风险自负",
+    "warning_body": "警告：Lichtfeld Studio 不直接背书也不承担责任。使用风险自负",
     "filter_label": "筛选",
     "sort_label": "排序方式",
     "filter.all": "全部",

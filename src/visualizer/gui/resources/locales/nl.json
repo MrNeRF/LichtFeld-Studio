@@ -926,6 +926,10 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "marketplace": "Marketplace",
+    "marketplace_layout": "Indeling",
+    "marketplace_git_checkout_description": "Installeert een Git-kloon in plaats van een bronarchief, zodat je wijzigingen kunt bekijken en Git in de pluginmap kunt gebruiken. Vereist Git; anders wordt een archief gebruikt.",
+    "marketplace_git_unavailable": "Git is niet gevonden in PATH. Installeer Git om deze optie te gebruiken.",
     "projects": "Projecten",
     "project_folders": "Projectmappen",
     "project_folders_default": "standaard",
@@ -2260,14 +2264,13 @@
       "updating": "{name} bijwerken...",
       "updated": "{name} bijgewerkt"
     },
-    "title_line": "Bekijk installeerbare plug-ins uit het plugin-register.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "Waarschuwing: deze pluginbron heeft geen SHA-256-digest; het archief is niet geverifieerd.",
     "error.checksum_mismatch": "SHA-256-verificatie van het pluginarchief is mislukt.",
     "error.digest_conflict": "De URL-digest en het sha256-argument komen niet overeen.",
     "error.invalid_digest": "De SHA-256-digest moet precies 64 hexadecimale tekens bevatten.",
     "error.digest_requires_archive": "Voor SHA-256-verificatie is installatie via een archief vereist.",
-    "warning_body": "WAARSCHUWING: LFS keurt niet direct goed en neemt geen verantwoordelijkheid. Gebruik op eigen risico.",
+    "warning_body": "WAARSCHUWING: Lichtfeld Studio keurt niet direct goed en neemt geen verantwoordelijkheid. Gebruik op eigen risico.",
     "filter_label": "Filter",
     "sort_label": "Sorteren op",
     "filter.all": "Alle",
