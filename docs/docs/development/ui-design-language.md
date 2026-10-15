@@ -282,11 +282,13 @@ view mode, sort, refresh, and scan status are separate affordances, followed by
 the content region. Preserve that hierarchy even if the toolbar is simplified
 for a narrower panel.
 
-The Histogram panel uses one shared toolbar above its chart in both docked and
-floating modes. Keep the field description and full data range in the context
-row, compact editable display bounds beside the chart, and summary statistics
-in a flat wrapping strip below it. Chart fills use solid semantic theme colors;
-avoid decorative gradients, per-control cards, and duplicate field headings.
+The Histogram is a horizontal bottom panel with a compact wrapping toolbar,
+explicit numeric bin counts, and a labeled log-scale checkbox. It uses the same
+small close glyph as the Project Manager. Keep field descriptions in tooltips,
+editable bounds beside the chart, and summary statistics in a flat strip below
+it. Let the chart shrink with the panel height rather than adding nested
+scrollbars. Comparison axes need only a compact numeric gutter; the field
+selectors already identify both axes. Chart fills use solid semantic colors.
 
 #### Sections and settings
 

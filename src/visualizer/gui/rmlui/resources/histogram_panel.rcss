@@ -1,4 +1,4 @@
-/* Layout is shared by docked and floating histogram panels. */
+/* Bottom panel: fixed controls and statistics, chart fills the remaining height. */
 #content-wrap {
     padding: 0;
     overflow: hidden;
@@ -19,47 +19,21 @@
 
 #histogram-shell {
     flex: 1;
-    padding: 8dp 10dp;
+    padding: 6dp 8dp;
     display: flex;
     flex-direction: column;
-    gap: 8dp;
+    gap: 6dp;
     overflow-x: hidden;
-    overflow-y: auto;
+    overflow-y: hidden;
     min-width: 0;
     min-height: 0;
 }
 
-#histogram-floating-header {
-    min-height: 28dp;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8dp;
-    flex-shrink: 0;
-}
-
-#histogram-floating-title {
-    font-size: 12dp;
-    font-weight: bold;
-}
-
-.histogram-panel-actions {
-    display: flex;
-    align-items: center;
-    gap: 6dp;
-    flex-shrink: 0;
-}
-
-.histogram-panel-action {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 64dp;
-}
-
 #histogram-toolbar {
+    position: relative;
     flex-shrink: 0;
-    padding-bottom: 8dp;
+    padding-right: 30dp;
+    padding-bottom: 6dp;
     border-bottom-width: 1dp;
 }
 
@@ -67,7 +41,7 @@
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 8dp 16dp;
+    gap: 6dp 14dp;
     min-width: 0;
 }
 
@@ -75,24 +49,8 @@
     display: flex;
     align-items: center;
     gap: 6dp;
-    min-width: 0;
-    min-height: 26dp;
-}
-
-.histogram-toolbar-item--select {
-    flex: 0 1 230dp;
-}
-
-.histogram-toolbar-item--slider {
-    flex: 0 1 190dp;
-}
-
-.histogram-toolbar-item--compare-bins {
-    flex: 0 1 170dp;
-}
-
-.histogram-toolbar-item--action {
-    margin-left: auto;
+    flex: 0 0 auto;
+    height: 24dp;
 }
 
 .control-label,
@@ -103,52 +61,55 @@
 }
 
 .histogram-select {
-    flex: 1;
-    min-width: 100dp;
-    height: 26dp;
+    flex: 0 0 128dp;
+    width: 128dp;
+    min-width: 0;
+    height: 24dp;
+    box-sizing: border-box;
 }
 
-.histogram-toggle-control {
+.histogram-stepper {
     display: flex;
     align-items: center;
+    height: 24dp;
 }
 
-.histogram-toggle-control input[type="checkbox"] {
-    margin-right: 0;
+.histogram-bin-input[type="text"] {
+    flex: 0 0 36dp;
+    width: 36dp;
+    height: 24dp;
+    text-align: center;
+    border-left-width: 0;
+    border-right-width: 0;
 }
 
-.histogram-setting-slider {
-    flex: 1;
-    min-width: 64dp;
-    margin-top: 0;
-    position: static;
-    top: auto;
+.histogram-step-button {
+    width: 22dp;
+    height: 24dp;
+    padding: 0;
+    font-size: 14dp;
+    text-align: center;
+    border-width: 1dp;
+    box-sizing: border-box;
 }
 
-.histogram-slider-value {
-    min-width: 24dp;
-    text-align: right;
-    font-size: 12dp;
+.histogram-log-control input[type="checkbox"] {
+    margin: 0;
 }
 
-#histogram-context {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 4dp 16dp;
-    flex-shrink: 0;
-    font-size: 12dp;
-}
-
-.histogram-description {
-    flex: 1 1 220dp;
-}
-
-.histogram-context-values {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4dp 16dp;
+#histogram-close {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 24dp;
+    height: 24dp;
+    padding: 0;
+    font-size: 18dp;
+    line-height: 20dp;
+    text-align: center;
+    border-width: 1dp;
+    border-radius: 3dp;
+    box-sizing: border-box;
 }
 
 #histogram-empty {
@@ -157,13 +118,14 @@
 }
 
 .empty-card {
+    box-sizing: border-box;
     height: 100%;
-    min-height: 180dp;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8dp;
+    gap: 6dp;
     padding: 18dp;
     text-align: center;
 }
@@ -182,9 +144,9 @@
 #histogram-content {
     display: flex;
     flex-direction: column;
-    flex: 1 0 230dp;
+    flex: 1;
     min-width: 0;
-    min-height: 230dp;
+    min-height: 0;
 }
 
 #histogram-card,
@@ -194,15 +156,15 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 8dp;
+    gap: 6dp;
 }
 
 #histogram-stats {
     display: flex;
     flex-wrap: wrap;
-    gap: 6dp 20dp;
+    gap: 4dp 14dp;
     flex-shrink: 0;
-    padding-top: 8dp;
+    padding-top: 6dp;
     border-top-width: 1dp;
 }
 
@@ -212,6 +174,11 @@
     gap: 6dp;
     min-width: 0;
     font-size: 12dp;
+}
+
+/* Selection is distinct from the distribution summary. */
+.histogram-selection-stat {
+    margin-left: auto;
 }
 
 .stat-value {
@@ -249,7 +216,9 @@
     flex-shrink: 0;
 }
 
-.range-reset {
+.range-reset.btn {
+    box-sizing: border-box;
+    padding: 0 8dp;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -260,7 +229,7 @@
 #histogram-chart {
     position: relative;
     flex: 1;
-    min-height: 128dp;
+    min-height: 32dp;
     border-width: 1dp;
     border-radius: 4dp;
     overflow: hidden;
@@ -292,10 +261,10 @@
 
 #histogram-bars {
     position: absolute;
-    left: 14dp;
-    right: 14dp;
-    top: 14dp;
-    bottom: 14dp;
+    left: 8dp;
+    right: 8dp;
+    top: 8dp;
+    bottom: 8dp;
     display: flex;
     align-items: flex-end;
     cursor: crosshair;
@@ -326,7 +295,6 @@
     border-radius: 2dp 2dp 0 0;
 }
 
-
 #histogram-axis {
     display: flex;
     justify-content: space-between;
@@ -334,44 +302,45 @@
 }
 
 #compare-empty {
-    min-height: 220dp;
+    min-height: 0;
 }
 
 .compare-empty-card {
-    min-height: 220dp;
+    min-height: 0;
 }
 
 #compare-content {
     display: flex;
     flex-direction: column;
-    gap: 8dp;
+    gap: 6dp;
     flex: 1;
     min-height: 0;
 }
 
 #compare-chart-shell {
     display: flex;
-    gap: 10dp;
+    gap: 6dp;
     flex: 1;
-    min-height: 260dp;
+    min-height: 0;
 }
 
 #compare-y-axis {
-    width: 88dp;
+    width: 52dp;
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
     align-items: flex-end;
-    padding-top: 2dp;
-    padding-bottom: 22dp;
-    gap: 8dp;
+    padding-top: 8dp;
+    padding-bottom: 28dp;
+    gap: 6dp;
 }
 
 #compare-chart-column {
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 8dp;
+    gap: 6dp;
     min-width: 0;
     min-height: 0;
 }
@@ -379,7 +348,7 @@
 #compare-chart {
     position: relative;
     flex: 1;
-    min-height: 240dp;
+    min-height: 32dp;
     border-width: 1dp;
     border-radius: 4dp;
     overflow: hidden;
@@ -387,10 +356,10 @@
 
 #compare-cells {
     position: absolute;
-    left: 14dp;
-    right: 14dp;
-    top: 14dp;
-    bottom: 14dp;
+    left: 8dp;
+    right: 8dp;
+    top: 8dp;
+    bottom: 8dp;
     cursor: crosshair;
 }
 
@@ -421,7 +390,6 @@
     border-radius: 4dp;
 }
 
-
 #compare-axis {
     display: flex;
     justify-content: space-between;
@@ -449,9 +417,6 @@
     font-size: 12dp;
 }
 
-
-#histogram-floating-header.hidden,
-#histogram-context.hidden,
 #histogram-empty.hidden,
 #histogram-content.hidden,
 #histogram-stats.hidden,

@@ -62,13 +62,12 @@ class HistogramPanel(Panel):
         self._chart_el = None
         self._compare_chart_el = None
         self._handle = None
-        self._panel_space = lf.ui.PanelSpace.BOTTOM_DOCK
-        self._is_floating = False
 
         self._metric_id = METRICS[0].id
         self._compare_metric_id = ""
         self._log_scale_enabled = False
         self._histogram_bin_count = DEFAULT_HISTOGRAM_BIN_COUNT
+        self._bin_input_text: dict[str, str] = {}
         self._compare_x_bin_count = DEFAULT_COMPARE_X_BIN_COUNT
         self._compare_y_bin_count = DEFAULT_COMPARE_Y_BIN_COUNT
         self._scene_generation = -1
@@ -175,6 +174,7 @@ class HistogramPanel(Panel):
         self._compare_y_bin_count = DEFAULT_COMPARE_Y_BIN_COUNT
         self._reset_custom_range()
         self._reset_compare_y_custom_range()
+        self._bin_input_text.clear()
         if isinstance(payload, dict):
             metric = payload.get("metric_id")
             if isinstance(metric, str) and metric in METRIC_BY_ID:
@@ -290,8 +290,6 @@ class HistogramPanel(Panel):
         model.bind_func("compare_with_label", lambda: _tr("histogram.compare_with", "Compare With"))
         model.bind_func("log_scale_label", lambda: _tr("histogram.log_scale", "Log Scale"))
         model.bind_func("close_label", lambda: _tr("common.close", "Close"))
-        model.bind_func("is_floating", lambda: self._is_floating)
-        model.bind_func("dock_toggle_label", self._dock_toggle_label)
         model.bind_func("samples_label", lambda: _tr("histogram.samples", "Samples"))
         model.bind_func("range_label", lambda: _tr("histogram.range", "Range"))
         model.bind_func("mean_label", lambda: _tr("histogram.mean", "Mean"))
@@ -362,6 +360,15 @@ class HistogramPanel(Panel):
         model.bind("histogram_bin_count", lambda: self._histogram_bin_count, self._set_histogram_bin_count)
         model.bind("compare_x_bin_count", lambda: self._compare_x_bin_count, self._set_compare_x_bin_count)
         model.bind("compare_y_bin_count", lambda: self._compare_y_bin_count, self._set_compare_y_bin_count)
+        for axis, attr in (("histogram", "_histogram_bin_count"),
+                           ("x", "_compare_x_bin_count"), ("y", "_compare_y_bin_count")):
+            model.bind(f"{axis}_bins_str",
+                       lambda axis=axis, attr=attr: self._bin_input_text.get(axis, str(getattr(self, attr))),
+                       lambda value, axis=axis: self._bin_input_text.__setitem__(axis, str(value)))
+        model.bind_event("commit_bins", self._on_commit_bins)
+        model.bind_event("submit_bins", self._on_submit_bins)
+        model.bind_event("step_bins", self._on_step_bins)
+        model.bind_func("has_marked_range", lambda: self._marked_count > 0)
         model.bind_func("range_inputs_ready", self._range_inputs_ready)
         model.bind_func("compare_y_range_inputs_ready", self._compare_y_range_inputs_ready)
         model.bind("range_min_str", lambda: self._custom_range_min_str, self._set_custom_range_min)
@@ -379,7 +386,6 @@ class HistogramPanel(Panel):
         model.bind_func("compare_has_custom_range", self._has_any_custom_range)
         model.bind_event("reset_range", self._on_reset_range)
         model.bind_event("reset_compare_range", self._on_reset_compare_range)
-        model.bind_event("toggle_dock_mode", self._on_toggle_dock_mode)
         model.bind_event("close_panel", self._on_close_panel)
         model.bind_record_list("metric_options")
         model.bind_record_list("compare_metric_options")
@@ -1136,6 +1142,44 @@ class HistogramPanel(Panel):
         self._reset_custom_range()
         self._reset_compare_y_custom_range()
         self._refresh_after_range_change()
+
+    def _bin_control(self, axis):
+        if axis == "histogram":
+            return (self._histogram_bin_count, MIN_HISTOGRAM_BIN_COUNT,
+                    MAX_HISTOGRAM_BIN_COUNT, self._set_histogram_bin_count)
+        if axis == "x":
+            return (self._compare_x_bin_count, MIN_COMPARE_BIN_COUNT,
+                    MAX_COMPARE_BIN_COUNT, self._set_compare_x_bin_count)
+        if axis == "y":
+            return (self._compare_y_bin_count, MIN_COMPARE_BIN_COUNT,
+                    MAX_COMPARE_BIN_COUNT, self._set_compare_y_bin_count)
+        return None
+
+    def _commit_bin_input(self, axis, delta=0):
+        control = self._bin_control(axis)
+        if control is None:
+            return
+        current, minimum, maximum, setter = control
+        text = self._bin_input_text.pop(axis, str(current))
+        try:
+            value = int(text.strip())
+        except (ValueError, TypeError):
+            value = current
+        setter(max(minimum, min(maximum, value + delta)))
+        if self._handle:
+            self._handle.dirty_all()
+
+    def _on_commit_bins(self, _handle, _event, args):
+        if args:
+            self._commit_bin_input(str(args[0]))
+
+    def _on_submit_bins(self, handle, event, args):
+        if event.get_bool_parameter("linebreak", False):
+            self._on_commit_bins(handle, event, args)
+
+    def _on_step_bins(self, _handle, _event, args):
+        if len(args) == 2:
+            self._commit_bin_input(str(args[0]), int(args[1]))
 
     def _set_histogram_bin_count(self, value):
         bin_count = self._clamp_int(value, MIN_HISTOGRAM_BIN_COUNT, MAX_HISTOGRAM_BIN_COUNT)
@@ -4020,34 +4064,15 @@ class HistogramPanel(Panel):
         except Exception:
             return -1
 
-    def _dock_toggle_label(self) -> str:
-        return "Dock" if self._is_floating else "Undock"
-
     def _sync_panel_space_state(self) -> bool:
-        info = None
+        """Migrate older saved floating layouts back to the bottom panel."""
         try:
             info = lf.ui.get_panel(self.id)
+            if info is not None and info.space != lf.ui.PanelSpace.BOTTOM_DOCK:
+                return bool(lf.ui.set_panel_space(self.id, lf.ui.PanelSpace.BOTTOM_DOCK))
         except Exception:
-            info = None
-
-        panel_space = getattr(info, "space", self._panel_space)
-        is_floating = panel_space == lf.ui.PanelSpace.FLOATING
-        changed = panel_space != self._panel_space or is_floating != self._is_floating
-        self._panel_space = panel_space
-        self._is_floating = is_floating
-        return changed
-
-    def _on_toggle_dock_mode(self, _handle, _event, _args):
-        target_space = lf.ui.PanelSpace.BOTTOM_DOCK if self._is_floating else lf.ui.PanelSpace.FLOATING
-        try:
-            changed = bool(lf.ui.set_panel_space(self.id, target_space))
-        except Exception:
-            changed = False
-        if not changed:
-            return
-        self._sync_panel_space_state()
-        if self._handle:
-            self._handle.dirty_all()
+            pass
+        return False
 
     def _on_close_panel(self, _handle, _event, _args):
         self._clear_owned_scene_selection()

@@ -18,8 +18,6 @@
 .range-of-interest-label,
 .range-separator,
 .compare-axis-marker,
-.histogram-description,
-.histogram-context-values,
 .stat-label,
 .axis-metric,
 .empty-message {
@@ -28,9 +26,7 @@
 
 .stat-value,
 .axis-label,
-#histogram-floating-title,
-.empty-title,
-.histogram-slider-value {
+.empty-title {
     color: @{text};
 }
 
@@ -49,4 +45,22 @@
 #compare-selection {
     border-color: @{warning};
     background-color: @{panel.histogram_selection_fill};
+}
+
+.histogram-step-button,
+#histogram-close {
+    background-color: @{surface_bright};
+    border-color: @{border};
+    color: @{text};
+}
+
+.histogram-step-button:hover,
+#histogram-close:hover {
+    background-color: @{lighten(surface_bright,0.06)};
+}
+
+.histogram-step-button:active,
+#histogram-close:active {
+    background-color: @{alpha(primary,0.32)};
+    border-color: @{primary};
 }

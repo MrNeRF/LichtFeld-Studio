@@ -77,7 +77,7 @@ PANEL_SPECS = {
     ),
     "histogram": _PanelSpec(
         "lfs_plugins.histogram_panel", "HistogramPanel", "lfs.histogram", "Histogram",
-        "BOTTOM_DOCK", 97, "rmlui/histogram_panel.rml", "FILL", (860, 660),
+        "BOTTOM_DOCK", 97, "rmlui/histogram_panel.rml", "FILL", (1000, 300),
         update_policy="dirty", has_poll=True,
     ),
     "scripts": _PanelSpec(
