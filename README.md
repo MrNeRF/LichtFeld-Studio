@@ -107,6 +107,9 @@ Current project notes:
 - Windows is the primary prebuilt distribution target today
 - Windows and Linux CUDA builds require an NVIDIA GPU with compute capability 7.5 or newer
   (GTX 16-series, RTX 20-series and up) and NVIDIA driver 570 or newer (CUDA 12.8+)
+- NVENC H.264/HEVC video export with the pinned FFmpeg 9.0.2 / NVENC API 13.0
+  build also requires driver 570.0+ and a GPU supporting the selected codec;
+  see [video export requirements](docs/development/media-hevc-export.md#nvidia-driver-requirements).
 - The macOS Apple Silicon viewer requires macOS 26 and a Metal 4 GPU; Metal renders
   scenes and Vulkan through MoltenVK presents the GUI
 - Source builds use modern C++23 toolchains

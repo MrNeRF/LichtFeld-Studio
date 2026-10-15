@@ -8,6 +8,19 @@
 - Ninja for preset builds
 - Apple Clang from Xcode 26+ (macOS), GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
 
+The manifest pins FFmpeg 9.0.2 and `ffnvcodec` 13.0.19.0 (NVENC API 13.0).
+NVENC video export requires NVIDIA driver **570.0 or newer on Windows and Linux**
+and a GPU supporting the selected codec. CUDA and the GPU model may impose a
+higher minimum. WSL uses the Windows host driver. See
+[video export requirements](development/media-hevc-export.md#nvidia-driver-requirements)
+for provider and fallback behavior; this requirement does not apply to macOS
+VideoToolbox or software-only video processing.
+
+FFmpeg 9 changes its library ABI. Reconfigure and rebuild all linked targets
+through vcpkg after updating; do not replace FFmpeg DLLs from another build.
+The separately installed `ffmpeg`/`ffprobe` fixture tools do not determine the
+version linked into LichtFeld Studio.
+
 Windows builds require the **C++ Clang Compiler for Windows** Visual Studio
 Installer individual component in addition to the regular C++ desktop workload.
 It provides `clang-cl`, which is used only to build libplacebo (an unconditional

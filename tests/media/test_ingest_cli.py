@@ -108,6 +108,7 @@ class IngestCLI(unittest.TestCase):
         model=json.loads((reply/model_ref["jsonFile"]).read_text(encoding="utf-8"))
         configuration=next(item for item in model["configurations"] if item["name"]==BUILD_CONFIG)
         providers=set()
+        allowed_providers={"lfs_media","media_extraction_runner","hdr_tonemap_contracts","lichtfeld_tests","lichtfeld_format_tests"}
         archives=re.compile(r"(?:lib)?(?:avcodec|avformat|avutil|avfilter|avdevice|swscale|swresample)d?\.(?:a|lib)\b|(?<![\w-])-l(?:avcodec|avformat|avutil|avfilter|avdevice|swscale|swresample)\b",re.I)
         for ref in configuration["targets"]:
             target=json.loads((reply/ref["jsonFile"]).read_text(encoding="utf-8"))
@@ -115,7 +116,15 @@ class IngestCLI(unittest.TestCase):
             ffmpeg=[item["fragment"] for item in fragments if archives.search(item["fragment"])]
             if ffmpeg:
                 providers.add(target["name"])
-                self.assertIn(target["name"],{"lfs_media","media_extraction_runner","hdr_tonemap_contracts","lichtfeld_tests","lichtfeld_format_tests"},f"FFmpeg linked independently by {target['name']}: {ffmpeg}")
+                if target["name"]=="media_apple_hevc_fallback_runner":
+                    # The Apple codec-open fault seam compiles the session into
+                    # this test host; production still has one media provider.
+                    self.assertEqual(sys.platform,"darwin")
+                    self.assertEqual(target["type"],"EXECUTABLE")
+                    self.assertIn("tests/media/extractor/apple_hevc_fallback_runner.cpp",
+                                  {source["path"] for source in target.get("sources",[])})
+                    allowed_providers.add(target["name"])
+                self.assertIn(target["name"],allowed_providers,f"FFmpeg linked independently by {target['name']}: {ffmpeg}")
         self.assertIn("lfs_media",providers)
         filename="lfs_media.dll" if sys.platform=="win32" else ("liblfs_media.dylib" if sys.platform=="darwin" else "liblfs_media.so")
         provider=CLI.parent/filename
