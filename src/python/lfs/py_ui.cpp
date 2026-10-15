@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "py_ui.hpp"
 #include "control/command_api.hpp"
 #include "core/environment.hpp"
@@ -551,7 +552,7 @@ namespace lfs::python {
 
             std::filesystem::path icon_path = lfs::core::utf8_to_path(plugin_path) / "icons" / (icon_name + ".png");
 
-            if (!std::filesystem::exists(icon_path)) {
+            if (!lfs::core::fs::exists(icon_path)) {
                 icon_path = lfs::vis::getAssetPath("icon/" + icon_name + ".png");
             }
 

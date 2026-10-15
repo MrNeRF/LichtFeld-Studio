@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/path_utils.hpp"
+#include "core/filesystem.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "core/logger.hpp"
 #include "gui/panel_layout.hpp"
@@ -133,7 +135,7 @@ namespace lfs::vis::gui {
         }
 
         bool isThemeProvidedStaticStylesheet(const std::filesystem::path& rcss_path) {
-            const auto filename = rcss_path.filename().string();
+            const auto filename = lfs::core::path_to_utf8(rcss_path.filename());
             return filename == "components.rcss" || filename == "font_fallback.rcss";
         }
 
@@ -145,14 +147,14 @@ namespace lfs::vis::gui {
 
             const auto normalized_path = rcss_path.lexically_normal();
             std::error_code ec;
-            if (!std::filesystem::exists(normalized_path, ec))
+            if (!lfs::core::fs::exists(normalized_path, ec))
                 return;
 
-            const std::string key = normalized_path.generic_string();
+            const std::string key = lfs::core::path_to_generic_utf8(normalized_path);
             if (!loaded_paths.insert(key).second)
                 return;
 
-            const std::string rcss = rml_theme::loadBaseRCSS(normalized_path.string());
+            const std::string rcss = rml_theme::loadBaseRCSS(lfs::core::path_to_utf8(normalized_path));
             if (rcss.empty())
                 return;
 
@@ -238,10 +240,10 @@ namespace lfs::vis::gui {
             auto theme_path = resolveDocumentPath(rml_path_);
             theme_path.replace_extension(".theme.rcss");
             std::error_code ec;
-            if (std::filesystem::exists(theme_path, ec)) {
+            if (lfs::core::fs::exists(theme_path, ec)) {
                 if (!panel_theme.empty())
                     panel_theme += "\n";
-                panel_theme += rml_theme::loadBaseRCSS(theme_path.string());
+                panel_theme += rml_theme::loadBaseRCSS(lfs::core::path_to_utf8(theme_path));
             }
         } catch (const std::exception&) {
             // Sibling theme files are optional; missing ones should not produce startup noise.

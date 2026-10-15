@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
@@ -325,18 +326,18 @@ namespace lfs::io {
         void remove_stale_run_spill_directories() {
             const auto base = run_spill_base();
             std::error_code ec;
-            if (!std::filesystem::is_directory(base, ec) || ec)
+            if (!lfs::core::fs::is_directory(base, ec) || ec)
                 return;
 
             constexpr std::string_view prefix = "ppl_run_";
-            for (const auto& entry : std::filesystem::directory_iterator(base, ec)) {
+            for (const auto& entry : lfs::core::fs::directory_iterator(base, ec)) {
                 if (ec)
                     break;
                 if (!entry.is_directory(ec) || ec) {
                     ec.clear();
                     continue;
                 }
-                const auto name = entry.path().filename().string();
+                const auto name = lfs::core::path_to_utf8(entry.path().filename());
                 if (!name.starts_with(prefix))
                     continue;
 
@@ -351,7 +352,7 @@ namespace lfs::io {
                     continue;
 
                 std::error_code remove_ec;
-                std::filesystem::remove_all(entry.path(), remove_ec);
+                lfs::core::fs::remove_all(entry.path(), remove_ec);
                 if (remove_ec) {
                     LOG_WARN("[PipelinedImageLoader] Failed to remove stale run spill {}: {}",
                              lfs::core::path_to_utf8(entry.path()), remove_ec.message());
@@ -587,7 +588,7 @@ namespace lfs::io {
         }
 
         [[nodiscard]] bool is_jpeg_file_signature(const std::filesystem::path& path) {
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             if (!lfs::core::open_file_for_read(path, std::ios::binary, file))
                 return false;
 
@@ -605,11 +606,11 @@ namespace lfs::io {
                 return false;
             }
             std::error_code ec;
-            const bool exists = std::filesystem::exists(path, ec);
+            const bool exists = lfs::core::fs::exists(path, ec);
             if (ec || !exists) {
                 return false;
             }
-            const bool regular = std::filesystem::is_regular_file(path, ec);
+            const bool regular = lfs::core::fs::is_regular_file(path, ec);
             return !ec && regular;
         }
 
@@ -646,7 +647,7 @@ namespace lfs::io {
 
         std::tuple<uint8_t*, int, int> load_grayscale_stb(const std::filesystem::path& path) {
             int w, h, c;
-            uint8_t* const data = stbi_load(lfs::core::path_to_utf8(path).c_str(), &w, &h, &c, 1);
+            uint8_t* const data = stbi_load(lfs::core::path_to_native_utf8(path).c_str(), &w, &h, &c, 1);
             return {data, w, h};
         }
 
@@ -692,12 +693,12 @@ namespace lfs::io {
         {
             const auto base = run_spill_base();
             std::error_code ec;
-            std::filesystem::create_directories(base, ec);
+            lfs::core::fs::create_directories(base, ec);
             if (!ec) {
                 run_spill_folder_ = base /
                                     ("ppl_run_" + std::to_string(current_process_id()) + "_" +
                                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-                std::filesystem::create_directories(run_spill_folder_, ec);
+                lfs::core::fs::create_directories(run_spill_folder_, ec);
             }
             if (ec) {
                 LOG_WARN("[PipelinedImageLoader] Run spill folder creation failed: {}", ec.message());
@@ -1196,7 +1197,7 @@ namespace lfs::io {
         } else if (!decodes_16bit(params) && !decodes_float(path, params) && !needs_requested_processing) {
             const std::string path_str = lfs::core::path_to_utf8(path);
             int w = 0, h = 0, ch = 0;
-            unsigned char* img_data = stbi_load(path_str.c_str(), &w, &h, &ch, 3);
+            unsigned char* img_data = stbi_load(lfs::core::path_to_native_utf8(lfs::core::utf8_to_path(path_str)).c_str(), &w, &h, &ch, 3);
             const bool used_stbi = (img_data != nullptr);
             if (img_data) {
                 ch = 3;
@@ -1370,7 +1371,7 @@ namespace lfs::io {
     }
 
     std::vector<uint8_t> PipelinedImageLoader::read_file(const std::filesystem::path& path) const {
-        std::ifstream file;
+        lfs::core::fs::ifstream file;
         if (!lfs::core::open_file_for_read(path, std::ios::binary | std::ios::ate, file))
             throw std::runtime_error("Failed to open: " + lfs::core::path_to_utf8(path));
 
@@ -1700,7 +1701,7 @@ namespace lfs::io {
             if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
                 spill_cache_bytes_ -= it->second.size_bytes;
                 std::error_code ec;
-                std::filesystem::remove(it->second.path, ec);
+                lfs::core::fs::remove(it->second.path, ec);
                 spill_cache_.erase(it);
             }
             return nullptr;
@@ -1720,7 +1721,7 @@ namespace lfs::io {
             if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
                 spill_cache_bytes_ -= it->second.size_bytes;
                 std::error_code ec;
-                std::filesystem::remove(it->second.path, ec);
+                lfs::core::fs::remove(it->second.path, ec);
                 spill_cache_.erase(it);
             }
             evict_jpeg_cache_if_needed(size);
@@ -1746,7 +1747,7 @@ namespace lfs::io {
         if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
             spill_cache_bytes_ -= it->second.size_bytes;
             std::error_code ec;
-            std::filesystem::remove(it->second.path, ec);
+            lfs::core::fs::remove(it->second.path, ec);
             spill_cache_.erase(it);
         }
     }
@@ -1825,7 +1826,7 @@ namespace lfs::io {
 
         const auto path = run_spill_folder_ /
                           ("blob_" + std::to_string(++spill_sequence_) + ".bin");
-        std::ofstream file;
+        lfs::core::fs::ofstream file;
         if (!lfs::core::open_file_for_write(path, std::ios::binary, file)) {
             LOG_WARN("[PipelinedImageLoader] Failed to open run spill: {}", lfs::core::path_to_utf8(path));
             return;
@@ -1843,7 +1844,7 @@ namespace lfs::io {
         if (run_spill_folder_.empty())
             return;
         std::error_code ec;
-        std::filesystem::remove_all(run_spill_folder_, ec);
+        lfs::core::fs::remove_all(run_spill_folder_, ec);
         if (ec) {
             LOG_WARN("[PipelinedImageLoader] Failed to remove run spill {}: {}",
                      lfs::core::path_to_utf8(run_spill_folder_), ec.message());
@@ -3065,7 +3066,7 @@ namespace lfs::io {
                     bool used_gpu = false;
                     bool float_depth = false;
                     bool share_processed_mask_source = false;
-                    auto extension = item.path.extension().string();
+                    auto extension = lfs::core::path_to_utf8(item.path.extension());
                     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
                         return static_cast<char>(std::tolower(ch));
                     });
@@ -3073,7 +3074,7 @@ namespace lfs::io {
                     // nvimagecodec and the uint8 path truncate to 8 bits; 16-bit
                     // depth priors must keep their precision.
                     const bool depth_16bit =
-                        item.is_depth && stbi_is_16_bit(lfs::core::path_to_utf8(item.path).c_str());
+                        item.is_depth && stbi_is_16_bit(lfs::core::path_to_native_utf8(item.path).c_str());
 
                     // Depth sidecars keep their first-touch 16-bit PNG precision by
                     // decoding with stb before the processed tensor is transcoded.
@@ -3122,7 +3123,7 @@ namespace lfs::io {
                         if (depth_16bit) {
                             int channels = 0;
                             stbi_us* const gray16 = stbi_load_16(
-                                lfs::core::path_to_utf8(item.path).c_str(),
+                                lfs::core::path_to_native_utf8(item.path).c_str(),
                                 &src_w, &src_h, &channels, 1);
                             if (!gray16)
                                 throw std::runtime_error("Failed to decode 16-bit depth");
@@ -3283,11 +3284,11 @@ namespace lfs::io {
                     // and world->camera rotation are all inverted in one GPU
                     // kernel; the loss re-normalizes per pixel, so resampling
                     // shrinkage is fine.
-                    const bool normal_16bit = stbi_is_16_bit(path_utf8.c_str());
+                    const bool normal_16bit = stbi_is_16_bit(lfs::core::path_to_native_utf8(lfs::core::utf8_to_path(path_utf8)).c_str());
                     bool normal_float = false;
                     lfs::core::Tensor gpu_staging;
                     if (normal_16bit) {
-                        stbi_us* const rgb16 = stbi_load_16(path_utf8.c_str(), &src_w, &src_h, &channels, 3);
+                        stbi_us* const rgb16 = stbi_load_16(lfs::core::path_to_native_utf8(lfs::core::utf8_to_path(path_utf8)).c_str(), &src_w, &src_h, &channels, 3);
                         if (!rgb16)
                             throw std::runtime_error("Failed to decode 16-bit normal map");
                         // Float16 is only a 2-byte container for the uint16 samples (no UInt16 dtype).
@@ -3300,7 +3301,7 @@ namespace lfs::io {
                         synchronize_async_upload_before_free(gpu_staging.stream(), "normal");
                         stbi_image_free(rgb16);
                     } else {
-                        stbi_uc* const rgb8 = stbi_load(path_utf8.c_str(), &src_w, &src_h, &channels, 3);
+                        stbi_uc* const rgb8 = stbi_load(lfs::core::path_to_native_utf8(lfs::core::utf8_to_path(path_utf8)).c_str(), &src_w, &src_h, &channels, 3);
                         if (rgb8) {
                             auto cpu_tensor = lfs::core::Tensor::from_blob(
                                 rgb8,
@@ -3407,7 +3408,7 @@ namespace lfs::io {
                     std::optional<MaskedImageFill> fill;
                     if (item.fill_masked_rgb && (item.rgb_mask_path || item.rgb_mask)) {
                         lfs::core::Tensor mask;
-                        auto mask_extension = item.rgb_mask_path ? item.rgb_mask_path->extension().string() : std::string{};
+                        auto mask_extension = item.rgb_mask_path ? lfs::core::path_to_utf8(item.rgb_mask_path->extension()) : std::string{};
                         std::transform(mask_extension.begin(), mask_extension.end(), mask_extension.begin(), [](unsigned char ch) {
                             return static_cast<char>(std::tolower(ch));
                         });

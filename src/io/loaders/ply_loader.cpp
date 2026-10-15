@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "ply_loader.hpp"
 #include "core/error_reporter.hpp"
 #include "core/logger.hpp"
@@ -36,12 +37,12 @@ namespace lfs::io {
         }
 
         // Validate file exists
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "PLY file does not exist", path);
         }
 
-        if (!std::filesystem::is_regular_file(path)) {
+        if (!lfs::core::fs::is_regular_file(path)) {
             return make_error(ErrorCode::NOT_A_FILE,
                               "Path is not a regular file", path);
         }
@@ -50,7 +51,7 @@ namespace lfs::io {
         if (options.validate_only) {
             LOG_DEBUG("Validation only mode for PLY: {}", lfs::core::path_to_utf8(path));
             // Basic validation - check if it's a PLY file
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return make_error(ErrorCode::PERMISSION_DENIED,
                                   "Cannot open file for reading", path);
@@ -187,11 +188,11 @@ namespace lfs::io {
     }
 
     bool PLYLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path) || std::filesystem::is_directory(path)) {
+        if (!lfs::core::fs::exists(path) || lfs::core::fs::is_directory(path)) {
             return false;
         }
 
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         if (ext != ".ply")
             return false;

@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "ply.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
@@ -277,7 +278,7 @@ namespace lfs::io {
         [[nodiscard]] bool visit_bounded_ply_header(
             const std::filesystem::path& filepath,
             Visitor&& visitor) {
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             if (!lfs::core::open_file_for_read(filepath, std::ios::binary, file))
                 return false;
 
@@ -508,7 +509,7 @@ namespace lfs::io {
 
         [[nodiscard]] bool map(const std::filesystem::path& filepath) {
             auto wide_path = filepath.wstring();
-            file_handle = CreateFileW(wide_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+            file_handle = CreateFileW(lfs::core::fs::native_path(wide_path.c_str()).c_str(), GENERIC_READ, FILE_SHARE_READ,
                                       nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
             if (file_handle == INVALID_HANDLE_VALUE) {
                 return false;
@@ -1910,7 +1911,7 @@ namespace lfs::io {
             LOG_TIMER("PLY File Loading");
             const auto start_time = std::chrono::steady_clock::now();
 
-            if (!std::filesystem::exists(filepath)) {
+            if (!lfs::core::fs::exists(filepath)) {
                 throw_ply_error(
                     lfs::ErrorCode::NotFound,
                     std::format("PLY file does not exist: {}", lfs::core::path_to_utf8(filepath)));
@@ -3042,7 +3043,7 @@ namespace lfs::io {
                     output_path, std::format(".{}.{}.tmp", ticks, counter.fetch_add(1, std::memory_order_relaxed)));
 
                 std::error_code ec;
-                if (!std::filesystem::exists(candidate, ec))
+                if (!lfs::core::fs::exists(candidate, ec))
                     return candidate;
             }
 
@@ -3059,7 +3060,7 @@ namespace lfs::io {
                     return;
 
                 std::error_code ec;
-                std::filesystem::remove(path, ec);
+                lfs::core::fs::remove(path, ec);
             }
 
             void dismiss() {
@@ -3070,8 +3071,7 @@ namespace lfs::io {
         Result<void> replace_output_file(const std::filesystem::path& temp_path,
                                          const std::filesystem::path& output_path) {
 #ifdef _WIN32
-            if (!MoveFileExW(temp_path.wstring().c_str(),
-                             output_path.wstring().c_str(),
+            if (!MoveFileExW(lfs::core::fs::native_path(temp_path.wstring().c_str()).c_str(),lfs::core::fs::native_path(output_path.wstring().c_str()).c_str(),
                              MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   std::format("Cannot replace output file: Windows error {}", GetLastError()),
@@ -3079,7 +3079,7 @@ namespace lfs::io {
             }
 #else
             std::error_code ec;
-            std::filesystem::rename(temp_path, output_path, ec);
+            lfs::core::fs::rename(temp_path, output_path, ec);
             if (ec) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   std::format("Cannot replace output file: {}", ec.message()),
@@ -3146,7 +3146,7 @@ namespace lfs::io {
                     return {};
                 }
 
-                std::ifstream stream(path);
+                lfs::core::fs::ifstream stream(path);
                 LFS_ASSERT_MSG(stream.is_open(),
                                std::format("PLY writer verification must reopen the temporary ASCII "
                                            "output (is_open={}, path='{}')",
@@ -3481,7 +3481,7 @@ namespace lfs::io {
                 {
                     LOG_TIMER_DEBUG("PLY export: file write");
 #ifdef _WIN32
-                    FILE* file = _wfopen(temp_path.wstring().c_str(), L"wb");
+                    FILE* file = _wfopen(lfs::core::fs::native_path(temp_path.wstring().c_str()).c_str(), L"wb");
 #else
                     FILE* file = std::fopen(temp_path.c_str(), "wb");
 #endif
@@ -3811,7 +3811,7 @@ namespace lfs::io {
                 fb.pubsetbuf(legacy_io_buffer.data(),
                              static_cast<std::streamsize>(legacy_io_buffer.size()));
 #ifdef _WIN32
-                fb.open(temp_path.wstring(), std::ios::out | std::ios::binary);
+                fb.open(lfs::core::fs::native_path(temp_path).wstring(), std::ios::out | std::ios::binary);
 #else
                 fb.open(temp_path, std::ios::out | std::ios::binary);
 #endif
@@ -4150,7 +4150,7 @@ namespace lfs::io {
             const auto parent = options.output_path.parent_path();
             std::error_code ec;
             if (!parent.empty()) {
-                std::filesystem::create_directories(parent, ec);
+                lfs::core::fs::create_directories(parent, ec);
             }
             if (ec) {
                 return make_error(ErrorCode::PERMISSION_DENIED,
@@ -4198,7 +4198,7 @@ namespace lfs::io {
     }
 
     bool ply_has_faces(const std::filesystem::path& filepath) {
-        if (!std::filesystem::exists(filepath))
+        if (!lfs::core::fs::exists(filepath))
             return false;
 
         bool has_faces = false;
@@ -4213,7 +4213,7 @@ namespace lfs::io {
     }
 
     bool is_gaussian_splat_ply(const std::filesystem::path& filepath) {
-        if (!std::filesystem::exists(filepath))
+        if (!lfs::core::fs::exists(filepath))
             return false;
 
         bool has_opacity = false, has_scale = false, has_rotation = false;
@@ -4236,7 +4236,7 @@ namespace lfs::io {
                                                                            const LoadOptions& options) {
         constexpr uint8_t DEFAULT_COLOR = 255;
 
-        if (!std::filesystem::exists(filepath)) {
+        if (!lfs::core::fs::exists(filepath)) {
             return std::unexpected(std::format("File not found: {}", lfs::core::path_to_utf8(filepath)));
         }
 
@@ -4248,7 +4248,7 @@ namespace lfs::io {
             if (!visit_bounded_ply_header(filepath, [](const std::string_view) {}))
                 return std::unexpected("PLY header is missing, malformed, or exceeds the 1 MiB byte budget");
 
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             if (!lfs::core::open_file_for_read(filepath, std::ios::binary, file)) {
                 return std::unexpected(std::format("Cannot open: {}", lfs::core::path_to_utf8(filepath)));
             }

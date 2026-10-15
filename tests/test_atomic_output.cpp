@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/atomic_output.hpp"
+#include "core/filesystem.hpp"
 
 #include <array>
 #include <filesystem>
@@ -17,15 +18,15 @@
 
 namespace {
 
-    namespace fs = std::filesystem;
+    namespace fs = lfs::core::fs;
 
     std::string read_file(const fs::path& path) {
-        std::ifstream stream(path, std::ios::binary);
+        fs::ifstream stream(path, std::ios::binary);
         return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
     }
 
     void write_file(const fs::path& path, const std::string& contents) {
-        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        fs::ofstream stream(path, std::ios::binary | std::ios::trunc);
         ASSERT_TRUE(stream.is_open());
         stream.write(contents.data(), static_cast<std::streamsize>(contents.size()));
         stream.close();
@@ -92,7 +93,7 @@ namespace {
                     checkpoint,
                     lfs::io::AtomicOutputTempName::AppendSuffix,
                     lfs::io::AtomicOutputDurability::Durable);
-                std::ofstream stream(output.temp_path(), std::ios::binary | std::ios::trunc);
+                fs::ofstream stream(output.temp_path(), std::ios::binary | std::ios::trunc);
                 stream.write(new_contents.data(), static_cast<std::streamsize>(new_contents.size()));
                 stream.close();
                 if (!stream) {

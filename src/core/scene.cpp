@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "core/scene.hpp"
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
@@ -6450,7 +6451,7 @@ namespace lfs::core {
                 continue;
             }
             std::error_code exists_error;
-            const bool exists = std::filesystem::is_regular_file(image_path, exists_error);
+            const bool exists = lfs::core::fs::is_regular_file(image_path, exists_error);
             camera.set_has_image(exists);
             if (!exists) {
                 missing.push_back(camera.image_name().empty()

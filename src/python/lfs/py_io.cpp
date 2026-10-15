@@ -322,6 +322,11 @@ namespace lfs::python {
 
     void register_io(nb::module_& m) {
         namespace project = io::project;
+        m.def("native_path", [](const std::filesystem::path& path, const bool force_extended) {
+            return core::path_to_utf8(core::fs::native_path(path, force_extended));
+        }, nb::arg("path"), nb::arg("force_extended") = false,
+              "Return a filename for filesystem I/O, including extended Windows paths. "
+              "Use force_extended for recursive operations. Keep the original path for UI, JSON and external commands.");
 
         nb::class_<project::Hash128>(m, "Hash128")
             .def(nb::init<>())

@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "gui/async_task_manager.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/error_bus.hpp"
@@ -1958,7 +1959,7 @@ namespace lfs::vis::gui {
         publication.path = path;
         publication.format = format;
         try {
-            if (std::filesystem::exists(path) || std::filesystem::is_symlink(path))
+            if (lfs::core::fs::exists(path) || lfs::core::fs::is_symlink(path))
                 throw std::runtime_error("The gallery preparation directory already exists.");
             auto snapshots = manager->getScene().snapshotVisibleSplats();
             const auto visible = manager->getScene().getVisibleSplatNodeSlots();
@@ -2084,7 +2085,7 @@ namespace lfs::vis::gui {
                 if (cancelled || !error.empty()) {
                     if (owns_directory) {
                         std::error_code ignored;
-                        std::filesystem::remove_all(path, ignored);
+                        lfs::core::fs::remove_all(path, ignored);
                     }
                     jobs_.report(job, std::nullopt, cancelled ? "Scene preparation canceled" : "Scene preparation failed", error);
                 } else {

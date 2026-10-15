@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "training_setup.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
@@ -169,7 +170,7 @@ namespace lfs::training {
         }
 
         bool isPlainPointCloudPly(const std::filesystem::path& path) {
-            return path.extension().string() == ".ply" && !lfs::io::is_gaussian_splat_ply(path);
+            return lfs::core::path_to_utf8(path.extension()) == ".ply" && !lfs::io::is_gaussian_splat_ply(path);
         }
 
         std::optional<std::filesystem::path> gaussianSplatInitPath(
@@ -1287,7 +1288,7 @@ namespace lfs::training {
             return std::unexpected(
                 "Project checkpoint has no dataset path");
         }
-        if (!std::filesystem::exists(
+        if (!lfs::core::fs::exists(
                 params.dataset.data_path)) {
             return std::unexpected(std::format(
                 "Dataset path does not exist: {}",

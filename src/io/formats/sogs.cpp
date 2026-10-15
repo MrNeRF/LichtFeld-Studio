@@ -8,6 +8,7 @@
 #endif
 #endif
 
+#include "core/filesystem.hpp"
 #include "sogs.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error_reporter.hpp"
@@ -983,7 +984,7 @@ namespace lfs::io {
                 LOG_TIMER_DEBUG("SOG load: archive read");
 
                 std::error_code file_error;
-                const uintmax_t archive_size = std::filesystem::file_size(path, file_error);
+                const uintmax_t archive_size = lfs::core::fs::file_size(path, file_error);
                 if (file_error) {
                     return std::unexpected(std::format(
                         "Failed to inspect SOG archive: {}", file_error.message()));
@@ -994,7 +995,7 @@ namespace lfs::io {
                         "SOG archive exceeds the {} byte limit", MAX_ARCHIVE_BYTES));
                 }
 
-                std::ifstream archive_file;
+                lfs::core::fs::ifstream archive_file;
                 if (!lfs::core::open_file_for_read(path, std::ios::binary, archive_file)) {
                     return std::unexpected("Failed to open SOG archive");
                 }
@@ -1045,7 +1046,7 @@ namespace lfs::io {
                         return std::unexpected(std::format(
                             "SOG archive contains more than {} entries", MAX_ARCHIVE_ENTRIES));
                     }
-                    const char* const pathname = archive_entry_pathname(entry);
+                    const char* const pathname = archive_entry_pathname_utf8(entry);
                     if (!pathname) {
                         return std::unexpected("SOG archive entry has no valid pathname");
                     }
@@ -1246,18 +1247,18 @@ namespace lfs::io {
         std::optional<std::vector<uint8_t>>* license_bytes) {
         if (license_bytes) {
             std::vector<std::filesystem::path> candidates;
-            for (const auto& entry : std::filesystem::directory_iterator(path)) {
+            for (const auto& entry : lfs::core::fs::directory_iterator(path)) {
                 if (is_sog_license_member(core::path_to_utf8(entry.path().filename())) &&
-                    std::filesystem::is_regular_file(entry.symlink_status()))
+                    lfs::core::fs::is_regular_file(entry.symlink_status()))
                     candidates.push_back(entry.path());
             }
             std::sort(candidates.begin(), candidates.end());
             for (const auto& candidate : candidates) {
-                const auto size = std::filesystem::file_size(candidate);
+                const auto size = lfs::core::fs::file_size(candidate);
                 if (size > 64 * 1024)
                     continue;
                 std::vector<uint8_t> bytes(static_cast<size_t>(size));
-                std::ifstream file(candidate, std::ios::binary);
+                lfs::core::fs::ifstream file(candidate, std::ios::binary);
                 if (size && !file.read(reinterpret_cast<char*>(bytes.data()),
                                        static_cast<std::streamsize>(size)))
                     return make_error(ErrorCode::READ_FAILURE, "Cannot read complete SOG license", candidate);
@@ -1268,12 +1269,12 @@ namespace lfs::io {
         auto ready = prepare_sog_entries([&](const std::string& name, size_t limit) -> Result<std::vector<uint8_t>> {
             const auto file_path = path / core::utf8_to_path(name);
             std::error_code ec;
-            const auto size = std::filesystem::file_size(file_path, ec);
+            const auto size = lfs::core::fs::file_size(file_path, ec);
             if (ec)
                 return make_error(ErrorCode::READ_FAILURE, ec.message(), file_path);
             if (!size || size > limit)
                 return make_error(ErrorCode::CORRUPTED_DATA, "Invalid SOG entry size", file_path);
-            std::ifstream file(file_path, std::ios::binary);
+            lfs::core::fs::ifstream file(file_path, std::ios::binary);
             std::vector<uint8_t> bytes(static_cast<size_t>(size));
             if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
                 return make_error(ErrorCode::READ_FAILURE, "Cannot read complete SOG entry", file_path);
@@ -1290,9 +1291,9 @@ namespace lfs::io {
         try {
             if (license_bytes)
                 license_bytes->reset();
-            if (!std::filesystem::exists(path))
+            if (!lfs::core::fs::exists(path))
                 return make_error(ErrorCode::PATH_NOT_FOUND, "SOG file/directory does not exist", path);
-            if (core::has_extension(path, ".sog") && !std::filesystem::is_directory(path)) {
+            if (core::has_extension(path, ".sog") && !lfs::core::fs::is_directory(path)) {
                 auto result = read_sog_bundle(path, license_bytes);
                 if (!result)
                     return make_error(ErrorCode::DECODING_FAILED, result.error(), path);
@@ -1300,7 +1301,7 @@ namespace lfs::io {
             }
             if (path.filename() == "meta.json")
                 return read_sog_directory(path.parent_path(), license_bytes);
-            if (std::filesystem::is_directory(path))
+            if (lfs::core::fs::is_directory(path))
                 return read_sog_directory(path, license_bytes);
             return make_error(ErrorCode::UNSUPPORTED_FORMAT, "Unknown SOG format", path);
         } catch (const std::bad_alloc&) {
@@ -1384,7 +1385,8 @@ namespace lfs::io {
                     return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, "Failed to allocate archive structure", output_path_);
                 }
 
-                if (archive_write_set_format_zip(a_) != ARCHIVE_OK) {
+                if (archive_write_set_format_zip(a_) != ARCHIVE_OK ||
+                    archive_write_set_format_option(a_, "zip", "hdrcharset", "UTF-8") != ARCHIVE_OK) {
                     return make_error(ErrorCode::ARCHIVE_CREATION_FAILED,
                                       std::format("Failed to set ZIP format: {}", archive_error_string(a_) ? archive_error_string(a_) : "unknown error"), output_path_);
                 }
@@ -1392,7 +1394,7 @@ namespace lfs::io {
                 // Use wide-character API on Windows for proper Unicode path handling
                 int result;
 #ifdef _WIN32
-                result = archive_write_open_filename_w(a_, output_path_.wstring().c_str());
+                result = archive_write_open_filename_w(a_,lfs::core::fs::native_path(output_path_.wstring().c_str()).c_str());
 #else
                 result = archive_write_open_filename(a_, output_path_.c_str());
 #endif
@@ -1449,7 +1451,7 @@ namespace lfs::io {
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t = std::chrono::system_clock::to_time_t(now);
 
-                archive_entry_set_pathname(entry, filename.c_str());
+                archive_entry_set_pathname_utf8(entry, filename.c_str());
                 archive_entry_set_size(entry, static_cast<la_int64_t>(size));
                 archive_entry_set_filetype(entry, AE_IFREG);
                 archive_entry_set_perm(entry, 0644);
@@ -2498,7 +2500,7 @@ namespace lfs::io {
         public:
             explicit DirectorySink(std::filesystem::path directory) : directory_(std::move(directory)) {}
             Result<void> add_file(const std::string& name, const void* bytes, size_t size) override {
-                std::ofstream file(directory_ / name, std::ios::binary | std::ios::trunc);
+                lfs::core::fs::ofstream file(directory_ / name, std::ios::binary | std::ios::trunc);
                 file.write(static_cast<const char*>(bytes), static_cast<std::streamsize>(size));
                 file.close();
                 if (!file)
@@ -2507,7 +2509,7 @@ namespace lfs::io {
             }
         };
         try {
-            std::filesystem::create_directories(options.output_path);
+            lfs::core::fs::create_directories(options.output_path);
             DirectorySink sink(options.output_path);
             return encode_sog(data, options, sink);
         } catch (const std::exception& e) {

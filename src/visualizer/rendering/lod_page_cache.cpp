@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "lod_page_cache.hpp"
 
 #include "core/logger.hpp"
@@ -165,7 +166,7 @@ namespace lfs::vis {
         static bool byPriority(const Entry& a, const Entry& b) { return a.priority < b.priority; }
 
         void workerLoop() {
-            std::ifstream stream;
+            lfs::core::fs::ifstream stream;
             std::vector<std::uint8_t> raw;
             std::unique_lock lock(mutex_);
             while (true) {

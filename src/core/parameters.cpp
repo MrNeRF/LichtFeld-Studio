@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "core/parameters.hpp"
 #include "core/file_extensions.hpp"
 #include "core/logger.hpp"
@@ -535,11 +536,11 @@ namespace lfs::core {
             }
 
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
-                if (!std::filesystem::exists(path)) {
+                if (!lfs::core::fs::exists(path)) {
                     return std::unexpected(std::format("Config file not found: {}", path_to_utf8(path)));
                 }
 
-                std::ifstream file;
+                lfs::core::fs::ifstream file;
                 if (!open_file_for_read(path, file)) {
                     return std::unexpected(std::format("Cannot open config: {}", path_to_utf8(path)));
                 }
@@ -750,7 +751,7 @@ namespace lfs::core {
                 auto absolute = std::filesystem::absolute(utf8_to_path(std::string(path)), error);
                 if (error)
                     return std::string(path);
-                auto canonical = std::filesystem::weakly_canonical(absolute, error);
+                auto canonical = lfs::core::fs::weakly_canonical(absolute, error);
                 return path_to_utf8((error ? absolute : canonical).lexically_normal());
             };
             if (const auto file = eval_mask_splat_file(spec))
@@ -1071,7 +1072,7 @@ namespace lfs::core {
                     if (path.empty()) {
                         return "--add-splat path cannot be empty";
                     }
-                    if (!add_splats_applied && !std::filesystem::exists(path)) {
+                    if (!add_splats_applied && !lfs::core::fs::exists(path)) {
                         return std::format("Added splat does not exist: '{}'",
                                            lfs::core::path_to_utf8(path));
                     }
@@ -1089,7 +1090,7 @@ namespace lfs::core {
                 return "--data-path project.licht and --resume are mutually exclusive";
             }
             if (project_path) {
-                auto extension = project_path->extension().string();
+                auto extension = lfs::core::path_to_utf8(project_path->extension());
                 std::ranges::transform(
                     extension, extension.begin(),
                     [](const unsigned char character) {
@@ -1105,7 +1106,7 @@ namespace lfs::core {
                 }
             }
             if (resume_project) {
-                auto resume_extension = resume_project->extension().string();
+                auto resume_extension = lfs::core::path_to_utf8(resume_project->extension());
                 std::ranges::transform(
                     resume_extension, resume_extension.begin(),
                     [](const unsigned char character) {
@@ -1141,7 +1142,7 @@ namespace lfs::core {
                 if (optimization.ppisp_sidecar_path.empty()) {
                     return "PPISP sidecar freeze requires a sidecar path";
                 }
-                if (!std::filesystem::exists(optimization.ppisp_sidecar_path)) {
+                if (!lfs::core::fs::exists(optimization.ppisp_sidecar_path)) {
                     return std::format("PPISP sidecar does not exist: '{}'",
                                        lfs::core::path_to_utf8(optimization.ppisp_sidecar_path));
                 }
@@ -1492,7 +1493,7 @@ namespace lfs::core {
                 const std::filesystem::path filepath = (output_path.extension() == ".json")
                                                            ? output_path
                                                            : output_path / "training_config.json";
-                std::ofstream file;
+                lfs::core::fs::ofstream file;
                 if (!open_file_for_write(filepath, file)) {
                     return std::unexpected(std::format("Cannot write: {}", path_to_utf8(filepath)));
                 }

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/filesystem.hpp"
 #include "core/path_utils.hpp"
 #include "io/loader.hpp"
 
@@ -26,7 +27,7 @@ namespace lfs::io {
     inline constexpr std::array<std::string_view, 2> TRANSFORMS_DATASET_MARKERS = {
         "transforms.json", "transforms_train.json"};
 
-    namespace fs = std::filesystem;
+    namespace fs = lfs::core::fs;
 
     namespace detail {
         inline constexpr size_t CANCEL_POLL_INTERVAL = 64;
@@ -351,7 +352,7 @@ namespace lfs::io {
         static const std::vector<std::string> image_extensions = {
             ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"};
 
-        std::string ext = path.extension().string();
+        std::string ext = lfs::core::path_to_utf8(path.extension());
         detail::ascii_lower_inplace(ext);
 
         return std::find(image_extensions.begin(), image_extensions.end(), ext) != image_extensions.end();

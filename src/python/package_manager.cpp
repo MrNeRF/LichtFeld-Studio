@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/path_utils.hpp"
+#include "core/filesystem.hpp"
 #include "package_manager.hpp"
 #include "windows_process_utils.hpp"
 
@@ -50,7 +52,7 @@ namespace lfs::python {
                 path[len] = '\0';
                 return std::filesystem::path(path).parent_path();
             }
-            return std::filesystem::current_path();
+            return lfs::core::fs::current_path();
 #endif
         }
 
@@ -142,7 +144,7 @@ namespace lfs::python {
             void* environment_ptr = environment.empty() ? nullptr : environment.data();
 
             // Keep lpApplicationName and argv[0] aligned to the same executable path.
-            if (!CreateProcessW(program_w.c_str(), cmdline.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+            if (!CreateProcessW(lfs::core::fs::native_path(program_w).c_str(), cmdline.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
                                 environment_ptr, nullptr, &si, &pi)) {
                 CloseHandle(hReadPipe);
                 CloseHandle(hWritePipe);
@@ -229,7 +231,7 @@ namespace lfs::python {
                 return paths->venvDir();
             LOG_WARN("Unable to resolve Python environment directory: {}; using temporary storage",
                      lfs::format_for_developer(paths.error()));
-            return std::filesystem::temp_directory_path() / "lichtfeld" / "venv";
+            return lfs::core::fs::temp_directory_path() / "lichtfeld" / "venv";
         }
 
     } // namespace
@@ -254,10 +256,10 @@ namespace lfs::python {
         const auto exe_dir = get_executable_dir();
         bool bundled = false;
 
-        if (const auto p = exe_dir / "bin" / UV_BINARY; std::filesystem::exists(p)) {
+        if (const auto p = exe_dir / "bin" / UV_BINARY; lfs::core::fs::exists(p)) {
             cached = p;
             bundled = true;
-        } else if (const auto p = exe_dir / UV_BINARY; std::filesystem::exists(p)) {
+        } else if (const auto p = exe_dir / UV_BINARY; lfs::core::fs::exists(p)) {
             cached = p;
             bundled = true;
         }
@@ -293,18 +295,18 @@ namespace lfs::python {
     bool PackageManager::ensure_venv() {
         std::lock_guard lock(m_mutex);
 
-        if (m_venv_ready && std::filesystem::exists(venv_python()))
+        if (m_venv_ready && lfs::core::fs::exists(venv_python()))
             return true;
 
-        if (std::filesystem::exists(venv_python())) {
+        if (lfs::core::fs::exists(venv_python())) {
             LOG_INFO("Existing venv found: {}", lfs::core::path_to_utf8(venv_python()));
             m_venv_ready = true;
             return true;
         }
 
-        if (std::filesystem::exists(m_venv_dir) && !std::filesystem::exists(venv_python())) {
+        if (lfs::core::fs::exists(m_venv_dir) && !lfs::core::fs::exists(venv_python())) {
             LOG_WARN("Broken venv (missing python), removing: {}", lfs::core::path_to_utf8(m_venv_dir));
-            std::filesystem::remove_all(m_venv_dir);
+            lfs::core::fs::remove_all(m_venv_dir);
         }
 
         const auto uv = uv_path();
@@ -358,14 +360,14 @@ namespace lfs::python {
         return m_venv_dir / "Lib" / "site-packages";
 #else
         const auto lib_dir = m_venv_dir / "lib";
-        if (std::filesystem::exists(lib_dir)) {
+        if (lfs::core::fs::exists(lib_dir)) {
             std::filesystem::path best_match;
-            for (const auto& entry : std::filesystem::directory_iterator(lib_dir)) {
+            for (const auto& entry : lfs::core::fs::directory_iterator(lib_dir)) {
                 if (entry.is_directory()) {
-                    const auto name = entry.path().filename().string();
+                    const auto name = lfs::core::path_to_utf8(entry.path().filename());
                     // Prefer pythonX.Y over pythonX (more specific version)
                     if (name.find("python") == 0) {
-                        if (best_match.empty() || name.length() > best_match.filename().string().length()) {
+                        if (best_match.empty() || name.length() > lfs::core::path_to_utf8(best_match.filename()).length()) {
                             best_match = entry.path();
                         }
                     }
@@ -443,16 +445,16 @@ namespace lfs::python {
         std::vector<PackageInfo> packages;
 
         const auto site_dir = site_packages_dir();
-        if (!std::filesystem::exists(site_dir))
+        if (!lfs::core::fs::exists(site_dir))
             return packages;
 
         static const std::regex DIST_INFO_PATTERN(R"((.+)-(.+)\.dist-info)");
 
-        for (const auto& entry : std::filesystem::directory_iterator(site_dir)) {
+        for (const auto& entry : lfs::core::fs::directory_iterator(site_dir)) {
             if (!entry.is_directory())
                 continue;
 
-            const auto name = entry.path().filename().string();
+            const auto name = lfs::core::path_to_utf8(entry.path().filename());
             if (name.find(".dist-info") == std::string::npos)
                 continue;
 
@@ -461,11 +463,11 @@ namespace lfs::python {
                 const std::string pkg_name = match[1].str();
                 std::filesystem::path pkg_path = site_dir / pkg_name;
 
-                if (!std::filesystem::exists(pkg_path)) {
+                if (!lfs::core::fs::exists(pkg_path)) {
                     std::string normalized = pkg_name;
                     std::replace(normalized.begin(), normalized.end(), '-', '_');
                     const auto alt_path = site_dir / normalized;
-                    pkg_path = std::filesystem::exists(alt_path) ? alt_path : site_dir;
+                    pkg_path = lfs::core::fs::exists(alt_path) ? alt_path : site_dir;
                 }
 
                 packages.push_back(

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "checkpoint.hpp"
 #include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
@@ -488,7 +489,7 @@ namespace lfs::training {
         PPISPControllerPool* ppisp_controller_pool,
         ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator) {
-        std::ifstream file;
+        lfs::core::fs::ifstream file;
         if (!lfs::core::open_file_for_read(
                 path, std::ios::binary, file)) {
             return std::unexpected(
@@ -498,7 +499,7 @@ namespace lfs::training {
 
         std::error_code size_error;
         const auto file_size =
-            std::filesystem::file_size(path, size_error);
+            lfs::core::fs::file_size(path, size_error);
         if (size_error) {
             return std::unexpected(
                 "Failed to inspect checkpoint size: " +

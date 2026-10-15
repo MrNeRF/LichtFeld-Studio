@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "core/filesystem.hpp"
 #include "io/project_chapters.hpp"
 
 #include "core/path_utils.hpp"
@@ -644,7 +645,7 @@ namespace lfs::io::project {
         lfs::Result<std::vector<std::byte>> read_file_window(
             const std::filesystem::path& path, const std::uint64_t offset,
             const std::size_t bytes) {
-            std::ifstream stream(path, std::ios::binary);
+            lfs::core::fs::ifstream stream(path, std::ios::binary);
             if (!stream) {
                 return fail<std::vector<std::byte>>(
                     lfs::ErrorCode::NotFound, "The referenced file could not be opened.",
@@ -695,7 +696,7 @@ namespace lfs::io::project {
 
         lfs::Result<Hash128>
         hash_file_streaming(const std::filesystem::path& path) {
-            std::ifstream stream(path, std::ios::binary);
+            lfs::core::fs::ifstream stream(path, std::ios::binary);
             if (!stream) {
                 return fail<Hash128>(
                     lfs::ErrorCode::PermissionDenied,
@@ -750,7 +751,7 @@ namespace lfs::io::project {
             };
             std::vector<Entry> entries;
             std::error_code error;
-            std::filesystem::recursive_directory_iterator iterator(
+            lfs::core::fs::recursive_directory_iterator iterator(
                 root, std::filesystem::directory_options::skip_permission_denied, error);
             if (error) {
                 return fail<std::vector<std::byte>>(
@@ -760,7 +761,7 @@ namespace lfs::io::project {
                                 error.message()),
                     "REFS", "fingerprint");
             }
-            for (const auto end = std::filesystem::recursive_directory_iterator{};
+            for (const auto end = lfs::core::fs::recursive_directory_iterator{};
                  iterator != end; iterator.increment(error)) {
                 if (error) {
                     return fail<std::vector<std::byte>>(
@@ -778,7 +779,7 @@ namespace lfs::io::project {
                                     lfs::core::path_to_utf8(root), MAX_DIRECTORY_ENTRIES),
                         "REFS", "fingerprint");
                 }
-                const auto relative = std::filesystem::relative(iterator->path(), root, error);
+                const auto relative = lfs::core::fs::relative(iterator->path(), root, error);
                 if (error) {
                     return fail<std::vector<std::byte>>(
                         lfs::ErrorCode::Unavailable,
@@ -800,9 +801,9 @@ namespace lfs::io::project {
                 Entry entry{
                     .path = lfs::core::path_to_generic_utf8(relative),
                     .size = 0,
-                    .kind = std::filesystem::is_directory(status)
+                    .kind = lfs::core::fs::is_directory(status)
                                 ? 'd'
-                                : (std::filesystem::is_regular_file(status) ? 'f' : 'o'),
+                                : (lfs::core::fs::is_regular_file(status) ? 'f' : 'o'),
                 };
                 if (entry.kind == 'f') {
                     entry.size = iterator->file_size(error);
@@ -945,14 +946,14 @@ namespace lfs::io::project {
     lfs::Result<ReferenceFingerprint> fingerprint_path(
         const std::filesystem::path& path, const bool include_full_hash) {
         std::error_code error;
-        const auto status = std::filesystem::status(path, error);
-        if (error || !std::filesystem::exists(status)) {
+        const auto status = lfs::core::fs::status(path, error);
+        if (error || !lfs::core::fs::exists(status)) {
             return fail<ReferenceFingerprint>(
                 lfs::ErrorCode::NotFound, "The referenced path is missing.",
                 std::format("'{}' does not exist", lfs::core::path_to_utf8(path)),
                 "REFS", "fingerprint");
         }
-        const auto mtime = std::filesystem::last_write_time(path, error);
+        const auto mtime = lfs::core::fs::last_write_time(path, error);
         if (error) {
             return fail<ReferenceFingerprint>(
                 lfs::ErrorCode::Unavailable, "The referenced path could not be inspected.",
@@ -963,9 +964,9 @@ namespace lfs::io::project {
 
         ReferenceFingerprint result;
         result.mtime_unix_ns = file_time_ns(mtime);
-        if (std::filesystem::is_regular_file(status)) {
+        if (lfs::core::fs::is_regular_file(status)) {
             result.kind = FingerprintKind::File;
-            result.size = std::filesystem::file_size(path, error);
+            result.size = lfs::core::fs::file_size(path, error);
             if (error) {
                 return fail<ReferenceFingerprint>(
                     lfs::ErrorCode::Unavailable,
@@ -995,7 +996,7 @@ namespace lfs::io::project {
             }
             return result;
         }
-        if (!std::filesystem::is_directory(status)) {
+        if (!lfs::core::fs::is_directory(status)) {
             return fail<ReferenceFingerprint>(
                 lfs::ErrorCode::InvalidArgument,
                 "The referenced path type is not supported.",
@@ -1025,8 +1026,8 @@ namespace lfs::io::project {
         const std::filesystem::path& path,
         const ReferenceFingerprint& expected) {
         std::error_code error;
-        const auto status = std::filesystem::status(path, error);
-        if (error || !std::filesystem::exists(status)) {
+        const auto status = lfs::core::fs::status(path, error);
+        if (error || !lfs::core::fs::exists(status)) {
             return FingerprintCheck{
                 .disposition = FingerprintDisposition::Missing,
                 .observed = std::nullopt,
@@ -1035,10 +1036,10 @@ namespace lfs::io::project {
             };
         }
         const FingerprintKind observed_kind =
-            std::filesystem::is_regular_file(status) ? FingerprintKind::File
+            lfs::core::fs::is_regular_file(status) ? FingerprintKind::File
                                                      : FingerprintKind::Directory;
-        if ((!std::filesystem::is_regular_file(status) &&
-             !std::filesystem::is_directory(status)) ||
+        if ((!lfs::core::fs::is_regular_file(status) &&
+             !lfs::core::fs::is_directory(status)) ||
             observed_kind != expected.kind) {
             return FingerprintCheck{
                 .disposition = FingerprintDisposition::TypeMismatch,
@@ -1047,7 +1048,7 @@ namespace lfs::io::project {
             };
         }
 
-        const auto mtime = std::filesystem::last_write_time(path, error);
+        const auto mtime = lfs::core::fs::last_write_time(path, error);
         if (error) {
             return fail<FingerprintCheck>(
                 lfs::ErrorCode::Unavailable,
@@ -1059,7 +1060,7 @@ namespace lfs::io::project {
         const std::int64_t observed_mtime = file_time_ns(mtime);
         if (observed_kind == FingerprintKind::File) {
             const std::uint64_t observed_size =
-                std::filesystem::file_size(path, error);
+                lfs::core::fs::file_size(path, error);
             if (error) {
                 return fail<FingerprintCheck>(
                     lfs::ErrorCode::Unavailable,
@@ -2138,7 +2139,7 @@ namespace lfs::io::project {
         for (const auto& candidate :
              locator_candidates((*record)->locator, project_root)) {
             std::error_code error;
-            if (!std::filesystem::exists(candidate, error) || error) {
+            if (!lfs::core::fs::exists(candidate, error) || error) {
                 continue;
             }
             auto check =

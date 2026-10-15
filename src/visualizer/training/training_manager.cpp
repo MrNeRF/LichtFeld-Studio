@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "training/training_manager.hpp"
 #include "core/error.hpp"
 #include "core/error_envelope.hpp"
@@ -1393,7 +1394,7 @@ namespace lfs::vis {
         if (!trainer_->isInitialized() && params.init_path && !params.init_path->empty()) {
             std::error_code path_error;
             const auto init_path = lfs::core::utf8_to_path(*params.init_path);
-            if (!std::filesystem::exists(init_path, path_error)) {
+            if (!lfs::core::fs::exists(init_path, path_error)) {
                 const auto reason = path_error
                                         ? std::format("Cannot access training initialization file '{}': {}",
                                                       *params.init_path,

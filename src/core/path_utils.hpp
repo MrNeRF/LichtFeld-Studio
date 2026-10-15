@@ -312,6 +312,12 @@ namespace lfs::core {
 #endif
     }
 
+    // UTF-8 representation for a filename-taking library at its I/O boundary.
+    // Do not use this representation in UI, project JSON, or subprocess arguments.
+    inline std::string path_to_native_utf8(const std::filesystem::path& path) {
+        return path_to_utf8(lfs::core::fs::native_path(path));
+    }
+
     inline std::string path_to_generic_utf8(const std::filesystem::path& p) {
 #ifdef _WIN32
         return wstring_to_utf8(p.generic_wstring());
@@ -472,8 +478,8 @@ namespace lfs::core {
      */
     inline bool reveal_in_file_manager(const std::filesystem::path& path) {
         std::error_code ec;
-        const std::filesystem::path absolute = std::filesystem::weakly_canonical(path, ec);
-        if (ec || absolute.empty() || !std::filesystem::exists(absolute, ec))
+        const std::filesystem::path absolute = lfs::core::fs::weakly_canonical(path, ec);
+        if (ec || absolute.empty() || !lfs::core::fs::exists(absolute, ec))
             return false;
 
 #ifdef _WIN32

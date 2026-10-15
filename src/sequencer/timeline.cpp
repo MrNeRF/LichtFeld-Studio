@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "timeline.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -332,7 +333,7 @@ namespace lfs::sequencer {
                 path_fs,
                 lfs::io::AtomicOutputTempName::AppendSuffix,
                 lfs::io::AtomicOutputDurability::Durable);
-            std::ofstream file;
+            lfs::core::fs::ofstream file;
             // Binary mode keeps saved paths byte-identical on every platform (no CRLF rewriting on Windows).
             if (!lfs::core::open_file_for_write(atomic_output.temp_path(), std::ios::binary, file)) {
                 LOG_ERROR("Failed to open timeline file: {}", path);
@@ -451,7 +452,7 @@ namespace lfs::sequencer {
     bool Timeline::loadFromJson(const std::string& path) {
         try {
             const std::filesystem::path path_fs = lfs::core::utf8_to_path(path);
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             // The size guard below compares bytes read with filesystem::file_size().
             // Binary mode is required on Windows so CRLF translation does not shrink
             // the bytes read below the physical file size.
@@ -461,7 +462,7 @@ namespace lfs::sequencer {
             }
 
             std::error_code size_error;
-            const uintmax_t file_size = std::filesystem::file_size(path_fs, size_error);
+            const uintmax_t file_size = lfs::core::fs::file_size(path_fs, size_error);
             if (size_error || file_size == 0 || file_size > MAX_TIMELINE_JSON_BYTES)
                 throw std::runtime_error("Timeline JSON is empty or exceeds the 16 MiB input budget");
             std::vector<char> json_bytes(static_cast<size_t>(file_size) + 1);

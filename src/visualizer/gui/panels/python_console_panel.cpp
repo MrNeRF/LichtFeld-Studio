@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -1304,7 +1305,7 @@ namespace {
     }
 
     bool load_script(const std::filesystem::path& path, lfs::vis::gui::panels::PythonConsoleState& state) {
-        std::ifstream file;
+        lfs::core::fs::ifstream file;
         if (!lfs::core::open_file_for_read(path, file)) {
             state.addError(LOCF(lichtfeld::Strings::PythonConsole::OPEN_FAILED, lfs::core::path_to_utf8(path)));
             return false;
@@ -1334,7 +1335,7 @@ namespace {
             return false;
         }
 
-        std::ofstream file;
+        lfs::core::fs::ofstream file;
         if (!lfs::core::open_file_for_write(path, file)) {
             state.addError(LOCF(lichtfeld::Strings::PythonConsole::SAVE_FAILED, lfs::core::path_to_utf8(path)));
             return false;

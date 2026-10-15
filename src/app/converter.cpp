@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "app/converter.hpp"
 #include "app/converter_output_paths.hpp"
 #include "app/converter_overwrite.hpp"
@@ -55,15 +56,15 @@ namespace lfs::app {
             std::vector<std::filesystem::path> files;
             if (&valid_extensions[0] == &CONVERT_EXTENSIONS[0] && lfs::io::is_ssog_path(path))
                 return {path};
-            if (std::filesystem::is_directory(path)) {
-                for (const auto& entry : std::filesystem::directory_iterator(path)) {
+            if (lfs::core::fs::is_directory(path)) {
+                for (const auto& entry : lfs::core::fs::directory_iterator(path)) {
                     if (&valid_extensions[0] == &CONVERT_EXTENSIONS[0] && lfs::io::is_ssog_path(entry.path())) {
                         files.push_back(entry.path());
                         continue;
                     }
                     if (!entry.is_regular_file())
                         continue;
-                    auto ext = entry.path().extension().string();
+                    auto ext = lfs::core::path_to_utf8(entry.path().extension());
                     std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                         return static_cast<char>(std::tolower(c));
                     });
@@ -157,7 +158,7 @@ namespace lfs::app {
         }
 
         bool isPlyExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -165,7 +166,7 @@ namespace lfs::app {
         }
 
         bool isRadExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -173,7 +174,7 @@ namespace lfs::app {
         }
 
         bool isResumeExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -181,7 +182,7 @@ namespace lfs::app {
         }
 
         bool isLichtExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -378,7 +379,7 @@ namespace lfs::app {
             const std::uint64_t estimated = info->vertex_count * per_splat;
             std::uint64_t budget = 8ull << 30;
 #ifndef _WIN32
-            std::ifstream meminfo("/proc/meminfo");
+            lfs::core::fs::ifstream meminfo("/proc/meminfo");
             std::string line;
             while (std::getline(meminfo, line)) {
                 if (line.starts_with("MemAvailable:")) {
@@ -590,7 +591,7 @@ namespace lfs::app {
             }
             const auto output = generate_converter_output_path(input, output_template, params.format, "_converted");
 
-            if (std::filesystem::exists(output) && !overwrite_all && !params.overwrite) {
+            if (lfs::core::fs::exists(output) && !overwrite_all && !params.overwrite) {
                 const auto choice = ask_overwrite(output, std::cin, std::cout);
                 if (choice == OverwriteChoice::NO) {
                     std::println("  Skipped");
@@ -631,7 +632,7 @@ namespace lfs::app {
 
             bool skip = false;
             for (const auto& output : outputs) {
-                if (std::filesystem::exists(output.path) && !overwrite_all && !params.overwrite) {
+                if (lfs::core::fs::exists(output.path) && !overwrite_all && !params.overwrite) {
                     const auto choice = ask_overwrite(output.path, std::cin, std::cout);
                     if (choice == OverwriteChoice::NO) {
                         skip = true;

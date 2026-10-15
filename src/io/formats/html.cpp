@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "html.hpp"
 #include "core/base64.hpp"
 #include "core/executable_path.hpp"
@@ -28,7 +29,7 @@ namespace lfs::io {
     namespace {
 
         std::vector<uint8_t> read_file_binary(const std::filesystem::path& path) {
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             if (!lfs::core::open_file_for_read(path, std::ios::binary | std::ios::ate, file))
                 return {};
 
@@ -43,7 +44,7 @@ namespace lfs::io {
         // Viewer export resources (template/css/js/gizmo/measure-tool) are read
         // from disk at export time, so editing them needs no rebuild.
         Result<std::string> read_text_file(const std::filesystem::path& path) {
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return make_error(ErrorCode::READ_FAILURE, "Failed to open HTML viewer resource", path);
             }
@@ -130,7 +131,7 @@ namespace lfs::io {
             candidates.push_back(lfs::core::utf8_to_path(LFS_DEV_VIEWER_SOURCE_DIR));
 #endif
             for (const auto& dir : candidates) {
-                if (std::filesystem::exists(dir / "viewer_template.html")) {
+                if (lfs::core::fs::exists(dir / "viewer_template.html")) {
                     return dir;
                 }
             }
@@ -372,7 +373,7 @@ namespace lfs::io {
         }
 
         ScopedAtomicOutputFile atomic_output(options.output_path);
-        std::ofstream out;
+        lfs::core::fs::ofstream out;
         if (!lfs::core::open_file_for_write(atomic_output.temp_path(), std::ios::binary | std::ios::out, out)) {
             return make_error(ErrorCode::WRITE_FAILURE,
                               "Failed to open temporary HTML file for writing",

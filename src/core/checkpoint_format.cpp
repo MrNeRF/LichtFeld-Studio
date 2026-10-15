@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -21,7 +22,7 @@ namespace lfs::core {
             }
 
             std::error_code size_error;
-            const auto file_size = std::filesystem::file_size(path, size_error);
+            const auto file_size = lfs::core::fs::file_size(path, size_error);
             if (size_error) {
                 return std::unexpected("Failed to inspect checkpoint size: " + size_error.message());
             }
@@ -119,7 +120,7 @@ namespace lfs::core {
         const std::filesystem::path& path) {
 
         try {
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             return open_and_validate(path, file);
         } catch (const std::exception& e) {
             return std::unexpected(std::string("Read header failed: ") + e.what());
@@ -141,7 +142,7 @@ namespace lfs::core {
         SplatTensorAllocator tensor_allocator) {
 
         try {
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             auto header = open_and_validate(path, file);
             if (!header) {
                 return std::unexpected(header.error());
@@ -198,7 +199,7 @@ namespace lfs::core {
         const std::filesystem::path& path) {
 
         try {
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             auto header = open_and_validate(path, file);
             if (!header) {
                 return std::unexpected(header.error());

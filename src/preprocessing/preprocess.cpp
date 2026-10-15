@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "preprocessing/preprocess.hpp"
 #include "preprocessing/lens_priors.hpp"
 
@@ -59,7 +60,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace fs = std::filesystem;
+namespace fs = lfs::core::fs;
 
 namespace {
 
@@ -144,7 +145,7 @@ namespace {
     }
 
     bool is_image_file(const fs::path& path) {
-        const auto ext = lower_copy(path.extension().string());
+        const auto ext = lower_copy(lfs::core::path_to_utf8(path.extension()));
         return ext == ".jpg" || ext == ".jpeg" || ext == ".png" ||
                ext == ".bmp" || ext == ".tif" || ext == ".tiff" ||
                ext == ".webp";
@@ -274,7 +275,7 @@ namespace {
     };
 
     std::string sha256_file(const fs::path& path) {
-        std::ifstream input(path, std::ios::binary);
+        lfs::core::fs::ifstream input(path, std::ios::binary);
         if (!input)
             throw std::runtime_error("Could not open " + path_to_string(path) + " for hashing");
 
@@ -351,7 +352,7 @@ namespace {
     }
 
     size_t curl_write(void* ptr, size_t size, size_t nmemb, void* userdata) {
-        auto* out = static_cast<std::ofstream*>(userdata);
+        auto* out = static_cast<lfs::core::fs::ofstream*>(userdata);
         const auto bytes = size * nmemb;
         out->write(static_cast<const char*>(ptr), static_cast<std::streamsize>(bytes));
         return out->good() ? bytes : 0;
@@ -390,7 +391,7 @@ namespace {
         fs::path tmp_path = destination;
         tmp_path += ".tmp";
 
-        std::ofstream output;
+        lfs::core::fs::ofstream output;
         lfs::core::open_file_for_write(tmp_path, std::ios::binary | std::ios::trunc, output);
         if (!output)
             throw std::runtime_error("Could not open " + path_to_string(tmp_path) + " for writing");

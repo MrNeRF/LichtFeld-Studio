@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "core/session_breadcrumb.hpp"
 
 #include "core/logger.hpp"
@@ -27,7 +28,7 @@
 namespace lfs::core {
 
     namespace {
-        namespace fs = std::filesystem;
+        namespace fs = lfs::core::fs;
         using json = nlohmann::json;
 
         constexpr std::uintmax_t PREVIOUS_LOG_MAX_BYTES = 1024ULL * 1024ULL;
@@ -59,7 +60,7 @@ namespace lfs::core {
 
         std::optional<SessionBreadcrumb> decode_record(const fs::path& path) {
             try {
-                std::ifstream input;
+                lfs::core::fs::ifstream input;
                 if (!open_file_for_read(path, input))
                     return std::nullopt;
                 json value;
@@ -93,7 +94,7 @@ namespace lfs::core {
         }
 
         std::string read_log_tail(const fs::path& path) {
-            std::ifstream input;
+            lfs::core::fs::ifstream input;
             if (!open_file_for_read(path, std::ios::binary | std::ios::ate, input))
                 return {};
             const auto end = input.tellg();

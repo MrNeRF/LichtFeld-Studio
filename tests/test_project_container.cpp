@@ -3847,6 +3847,82 @@ namespace {
         }
     };
 
+#ifdef _WIN32
+    TEST(ProjectContainerWriter, CaseSensitiveDirectoryKeepsDistinctBoundedSiblingKeys) {
+        LongPathTemporaryDirectory temporary;
+        const auto directory = detail::project_fs::native_path(temporary.path);
+        const HANDLE handle = CreateFileW(directory.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                          nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+        FILE_CASE_SENSITIVE_INFO info{FILE_CS_FLAG_CASE_SENSITIVE_DIR};
+        const bool enabled = SetFileInformationByHandle(handle, FileCaseSensitiveInfo, &info, sizeof(info)) != FALSE;
+        const auto error = GetLastError();
+        CloseHandle(handle);
+        if (!enabled)
+            GTEST_SKIP() << "Directory case-sensitive mode unavailable: " << error;
+        const auto lower = temporary.path / (std::string(249, 'x') + ".licht");
+        const auto upper = temporary.path / (std::string(249, 'X') + ".LICHT");
+        EXPECT_NE(detail::project_lock_path(lower), detail::project_lock_path(upper));
+        EXPECT_NE(autosave_sidecar_path(lower), autosave_sidecar_path(upper));
+        create_single_chunk_fixture(lower, 7931, 7932, 7933, fixed_key("PROJ", 7934), R"({"master":"lower"})");
+        create_single_chunk_fixture(upper, 7941, 7942, 7943, fixed_key("PROJ", 7944), R"({"master":"upper"})");
+        EXPECT_FALSE(detail::project_fs::equivalent(lower, upper));
+        auto first = require_result(WriterLockLease::acquire(lower));
+        auto second = require_result(WriterLockLease::acquire(upper));
+        require_status(require_result(ProjectReader::open(lower)).verify_all());
+        require_status(require_result(ProjectReader::open(upper)).verify_all());
+    }
+    TEST(ProjectContainerWriter, ValidUnicodeArtifactNamesKeepTheirExistingSpelling) {
+        LongPathTemporaryDirectory temporary;
+        auto master = temporary.path / fs::path(std::wstring(100, L'\u6e2c') + L".licht");
+        auto expected_lock = master; expected_lock += ".lock";
+        auto expected_sidecar = master; expected_sidecar += ".autosave";
+        EXPECT_EQ(detail::project_lock_path(master), expected_lock);
+        EXPECT_EQ(autosave_sidecar_path(master), expected_sidecar);
+        create_single_chunk_fixture(master, 7921, 7922, 7923, fixed_key("PROJ", 7924), R"({"master":"unicode"})");
+        require_status(require_result(ProjectReader::open(master)).verify_all());
+        const auto lowercase = temporary.path / (std::string(249, 'x') + ".licht");
+        const auto uppercase = temporary.path / (std::string(249, 'X') + ".LICHT");
+        EXPECT_EQ(detail::project_lock_path(lowercase), detail::project_lock_path(uppercase));
+        EXPECT_EQ(autosave_sidecar_path(lowercase), autosave_sidecar_path(uppercase));
+    }
+#endif
+
+    TEST(ProjectContainerWriter, MaximumLengthNameSupportsLocksAutosaveAndQuarantine) {
+        LongPathTemporaryDirectory temporary;
+        const auto master = temporary.path / (std::string(249, 'x') + ".licht");
+        const auto other = temporary.path / (std::string(249, 'y') + ".licht");
+        ASSERT_EQ(master.filename().native().size(), 255u);
+        create_single_chunk_fixture(master, 7901, 7902, 7903, fixed_key("PROJ", 7904), R"({"master":"bounded"})");
+        const auto lock_path = detail::project_lock_path(master);
+        EXPECT_LE(lfs::core::path_to_utf8(lock_path.filename()).size(), 255u);
+        EXPECT_NE(lock_path, detail::project_lock_path(other));
+        {
+            auto lease = require_result(WriterLockLease::acquire(master));
+            EXPECT_TRUE(detail::project_fs::exists(lock_path));
+            EXPECT_FALSE(WriterLockLease::acquire(master));
+            sweep_stale_licht_artifacts_for_known_masters({master});
+            EXPECT_TRUE(detail::project_fs::exists(lock_path));
+        }
+        const auto sidecar = autosave_sidecar_path(master);
+        EXPECT_LE(lfs::core::path_to_utf8(sidecar.filename()).size(), 250u);
+        EXPECT_NE(sidecar, autosave_sidecar_path(other));
+        create_single_chunk_fixture(sidecar, 7911, 7912, 7913, fixed_key("PROJ", 7914), R"({"autosave":"bounded"})");
+        require_status(require_result(ProjectReader::open(sidecar)).verify_all());
+        const auto aside = require_result(quarantine_project_artifact(master));
+        EXPECT_LE(lfs::core::path_to_utf8(aside.filename()).size(), 255u);
+        EXPECT_FALSE(detail::project_fs::exists(master));
+        EXPECT_TRUE(detail::project_fs::exists(aside));
+        require_status(require_result(ProjectReader::open(aside)).verify_all());
+        // Preserve the names used by existing projects and their locks.
+        const auto short_master = temporary.path / "ordinary.licht";
+        EXPECT_EQ(detail::project_lock_path(short_master).filename().string(), "ordinary.licht.lock");
+        EXPECT_EQ(autosave_sidecar_path(short_master).filename().string(), "ordinary.licht.autosave");
+        const auto formerly_supported = temporary.path / (std::string(244, 'z') + ".licht");
+        EXPECT_EQ(detail::project_lock_path(formerly_supported), fs::path(formerly_supported.string() + ".lock"));
+    }
+
     TEST(ProjectContainerWriter, LongFilenameAtomicReplacementCanRollbackAndFinish) {
         LongPathTemporaryDirectory temporary;
         const auto destination = temporary.path / (std::string(234, 'x') + ".licht");

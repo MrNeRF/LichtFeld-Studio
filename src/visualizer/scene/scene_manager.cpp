@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "scene/scene_manager.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/sh_layout.cuh"
@@ -1028,7 +1029,7 @@ namespace lfs::vis {
                 }
             }
 
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             state::SceneLoaded::Type file_type = state::SceneLoaded::Type::PLY;
             if (ext == ".sog" || lfs::io::is_ssog_path(path)) {
@@ -1203,7 +1204,7 @@ namespace lfs::vis {
     void SceneManager::loadPPISPCompanion(const std::filesystem::path& ppisp_path) {
         try {
             // Read header to get dimensions
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             if (!lfs::core::open_file_for_read(ppisp_path, std::ios::binary, file)) {
                 LOG_ERROR("Failed to open PPISP file: {}", lfs::core::path_to_utf8(ppisp_path));
                 return;
@@ -1344,7 +1345,7 @@ namespace lfs::vis {
             }
 
             // RAD assets always enter LOD mode; availability still reflects tree presence.
-            auto add_ext = path.extension().string();
+            auto add_ext = lfs::core::path_to_utf8(path.extension());
             std::transform(add_ext.begin(), add_ext.end(), add_ext.begin(), ::tolower);
             const auto* splat_for_cropbox = scene_.getNodeById(node_id);
             if (splat_for_cropbox) {
@@ -3399,7 +3400,7 @@ namespace lfs::vis {
             if (checkpoint_params.dataset.data_path.empty()) {
                 throw std::runtime_error("Checkpoint has no dataset path and none provided");
             }
-            if (!std::filesystem::exists(checkpoint_params.dataset.data_path)) {
+            if (!lfs::core::fs::exists(checkpoint_params.dataset.data_path)) {
                 throw std::runtime_error("Dataset path does not exist: " +
                                          lfs::core::path_to_utf8(checkpoint_params.dataset.data_path));
             }
@@ -3871,7 +3872,7 @@ namespace lfs::vis {
             if (!splat_paths_.empty()) {
                 info.source_path = splat_paths_.begin()->second;
                 // Determine specific type from extension
-                auto ext = info.source_path.extension().string();
+                auto ext = lfs::core::path_to_utf8(info.source_path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                 if (lfs::io::is_ssog_path(info.source_path)) {
                     info.source_type = "SSOG";

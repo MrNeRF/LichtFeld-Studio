@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "fast_rasterizer.hpp"
 #include "core/crash_handler.hpp"
 #include "core/logger.hpp"
@@ -260,7 +261,7 @@ namespace lfs::training {
 
         // Directory path is relative to cwd, e.g. "./crash_dump_20251211_143052_847"
         std::string dump_dir = std::string("crash_dump_") + time_buf + "_" + std::to_string(ms.count());
-        std::filesystem::create_directories(dump_dir);
+        lfs::core::fs::create_directories(dump_dir);
 
         // Log absolute path for easier debugging
         auto abs_path = std::filesystem::absolute(dump_dir);
@@ -299,7 +300,7 @@ namespace lfs::training {
             // - fx, fy, cx, cy: Camera intrinsics
             // - near_plane, far_plane: Clipping planes
             // - *_shape: Shape of each tensor for verification
-            std::ofstream params_file;
+            lfs::core::fs::ofstream params_file;
             if (lfs::core::open_file_for_write(std::filesystem::path(dump_dir) / "params.json",
                                                std::ios::out | std::ios::binary, params_file)) {
                 params_file << "{\n";

@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "core/system_info.hpp"
 
 #include <cuda_runtime.h>
@@ -111,7 +112,7 @@ namespace lfs::core::system_info {
         }
 
         void collect_os(SystemInfo& info) {
-            std::ifstream release("/etc/os-release");
+            lfs::core::fs::ifstream release("/etc/os-release");
             std::string line;
             while (std::getline(release, line)) {
                 constexpr std::string_view prefix = "PRETTY_NAME=";
@@ -127,7 +128,7 @@ namespace lfs::core::system_info {
         }
 
         std::string collect_cpu() {
-            std::ifstream cpuinfo("/proc/cpuinfo");
+            lfs::core::fs::ifstream cpuinfo("/proc/cpuinfo");
             std::string line;
             while (std::getline(cpuinfo, line)) {
                 const auto separator = line.find(':');

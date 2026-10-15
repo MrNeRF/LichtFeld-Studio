@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "image_exr.hpp"
 #include "core/path_utils.hpp"
 
@@ -136,7 +137,7 @@ namespace lfs::core::image_codecs {
                     }
                 }
             };
-            const auto name = path_to_utf8(path);
+            const auto name = path_to_native_utf8(path);
             if (!check(exr_start_read(&context.value, name.c_str(), &init), error) ||
                 !check(exr_get_storage(context.value, 0, &header.storage), error) ||
                 !check(exr_get_data_window(context.value, 0, &header.window), error))
@@ -206,7 +207,7 @@ namespace lfs::core::image_codecs {
         if (!open(path, context, header, error))
             return false;
         std::error_code file_error;
-        const auto file_size = std::filesystem::file_size(path, file_error);
+        const auto file_size = lfs::core::fs::file_size(path, file_error);
         if (file_error) {
             error = "EXR: unable to read file size: " + file_error.message();
             return false;

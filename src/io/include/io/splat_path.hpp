@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/filesystem.hpp"
 #include "core/file_extensions.hpp"
 #include "core/path_utils.hpp"
 #include <filesystem>
@@ -9,14 +10,14 @@
 namespace lfs::io {
     inline bool is_ssog_path(const std::filesystem::path& p) {
         std::error_code ec;
-        return (core::has_extension(p, ".ssog") && std::filesystem::is_regular_file(p, ec)) ||
-               (p.filename() == "lod-meta.json" && std::filesystem::is_regular_file(p, ec)) ||
-               (std::filesystem::is_directory(p, ec) && std::filesystem::is_regular_file(p / "lod-meta.json", ec));
+        return (core::has_extension(p, ".ssog") && lfs::core::fs::is_regular_file(p, ec)) ||
+               (p.filename() == "lod-meta.json" && lfs::core::fs::is_regular_file(p, ec)) ||
+               (lfs::core::fs::is_directory(p, ec) && lfs::core::fs::is_regular_file(p / "lod-meta.json", ec));
     }
 
     // Use the asset folder, rather than its generic JSON manifest, in the scene.
     inline std::string splat_import_name(const std::filesystem::path& source) {
-        namespace fs = std::filesystem;
+        namespace fs = lfs::core::fs;
         auto path = fs::absolute(source).lexically_normal();
         if (path.filename().empty())
             path = path.parent_path();

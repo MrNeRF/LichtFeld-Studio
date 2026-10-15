@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/image_codecs.hpp"
+#include "core/filesystem.hpp"
 #include "core/image_exr.hpp"
 #include <Imath/half.h>
 #include <OpenEXR/ImfChannelList.h>
@@ -40,7 +41,7 @@ namespace {
     // Use filesystem-aware streams so fixture creation and the reference reader
     // support the same Unicode paths as the production OpenEXRCore reader.
     class OutputStream : public exr::OStream {
-        std::ofstream file_;
+        lfs::core::fs::ofstream file_;
 
     public:
         explicit OutputStream(const std::filesystem::path& p) : exr::OStream("fixture"), file_(p, std::ios::binary) {}
@@ -52,7 +53,7 @@ namespace {
         void seekp(uint64_t p) override { file_.seekp(static_cast<std::streamoff>(p)); }
     };
     class InputStream : public exr::IStream {
-        std::ifstream file_;
+        lfs::core::fs::ifstream file_;
 
     public:
         explicit InputStream(const std::filesystem::path& p) : exr::IStream("fixture"), file_(p, std::ios::binary) {}
@@ -80,7 +81,7 @@ namespace {
         }
         ~Fixture() {
             std::error_code ec;
-            std::filesystem::remove(path, ec);
+            lfs::core::fs::remove(path, ec);
         }
 
         void write(exr::Compression compression, bool tiled, exr::PixelType type,
@@ -462,6 +463,22 @@ namespace {
             EXPECT_FALSE(error.empty());
             EXPECT_FALSE(codec::decode(f.path, image, error));
         }
+    }
+    TEST(ExrCodecRegression, UnicodeLongPathMatchesReferenceWithoutWindowsOptIn) {
+        namespace fs = lfs::core::fs;
+#ifdef LFS_REQUIRE_LONG_PATHS_DISABLED
+        ASSERT_EQ(fs::process_long_paths_enabled(), std::optional<bool>(false));
+#endif
+        Fixture fixture;
+        const auto root = fs::temp_directory_path() / ("lfs-exr-long-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        struct Cleanup { fs::path path; ~Cleanup(){ std::error_code ec; fs::remove_all(path, ec); EXPECT_FALSE(ec); } } cleanup{root};
+        auto directory = root;
+        for (int i = 0; i < 12; ++i) directory /= fs::path(u8"directory_\u6e2c\u8a66_01234567890123456789");
+        fs::create_directories(directory);
+        fixture.path = directory / fs::path(u8"lighting_\u6e2c\u8a66.EXR");
+        ASSERT_GT(fixture.path.native().size(), 260u);
+        fixture.write(exr::ZIP_COMPRESSION, false, exr::HALF);
+        expect_reference(fixture, false);
     }
     TEST(ExrCodecRegression, UnicodeAndUppercaseExtension) {
         Fixture f;

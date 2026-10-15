@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
+from _lfs_path_io import Path
 
 from .templates import create_plugin
 

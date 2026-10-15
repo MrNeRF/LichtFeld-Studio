@@ -9,6 +9,7 @@
 #endif
 #endif
 
+#include "core/filesystem.hpp"
 #include "formats/nurec_usdz.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -85,7 +86,7 @@ namespace lfs::io {
         };
 
         std::string normalized_extension(const std::filesystem::path& path) {
-            auto extension = path.extension().string();
+            auto extension = lfs::core::path_to_utf8(path.extension());
             std::transform(extension.begin(), extension.end(), extension.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -431,7 +432,7 @@ namespace lfs::io {
             archive_read_support_filter_all(archive);
 
 #ifdef _WIN32
-            const int open_result = archive_read_open_filename_w(archive, filepath.wstring().c_str(), 10240);
+            const int open_result = archive_read_open_filename_w(archive,lfs::core::fs::native_path(filepath.wstring().c_str()).c_str(), 10240);
 #else
             const int open_result = archive_read_open_filename(archive, filepath.c_str(), 10240);
 #endif
@@ -444,7 +445,7 @@ namespace lfs::io {
             UsdzEntries entries;
             struct archive_entry* entry = nullptr;
             while (archive_read_next_header(archive, &entry) == ARCHIVE_OK) {
-                const char* entry_name = archive_entry_pathname(entry);
+                const char* entry_name = archive_entry_pathname_utf8(entry);
                 if (!entry_name) {
                     archive_read_free(archive);
                     return std::unexpected("USDZ archive entry is missing a path name");
@@ -476,7 +477,8 @@ namespace lfs::io {
                 }
 
                 archive_write_add_filter_none(archive_);
-                if (archive_write_set_format_zip(archive_) != ARCHIVE_OK) {
+                if (archive_write_set_format_zip(archive_) != ARCHIVE_OK ||
+                    archive_write_set_format_option(archive_, "zip", "hdrcharset", "UTF-8") != ARCHIVE_OK) {
                     const std::string error = archive_error_string(archive_) ? archive_error_string(archive_) : "unknown error";
                     archive_write_free(archive_);
                     archive_ = nullptr;
@@ -485,7 +487,7 @@ namespace lfs::io {
                 archive_write_set_options(archive_, "zip:compression=store");
 
 #ifdef _WIN32
-                const int open_result = archive_write_open_filename_w(archive_, output_path.wstring().c_str());
+                const int open_result = archive_write_open_filename_w(archive_,lfs::core::fs::native_path(output_path.wstring().c_str()).c_str());
 #else
                 const int open_result = archive_write_open_filename(archive_, output_path.c_str());
 #endif
@@ -527,7 +529,7 @@ namespace lfs::io {
                     return std::unexpected("Failed to allocate archive entry");
                 }
 
-                archive_entry_set_pathname(entry, filename.c_str());
+                archive_entry_set_pathname_utf8(entry, filename.c_str());
                 archive_entry_set_size(entry, static_cast<la_int64_t>(data.size()));
                 archive_entry_set_filetype(entry, AE_IFREG);
                 archive_entry_set_perm(entry, 0644);
@@ -884,7 +886,7 @@ namespace lfs::io {
             }
         }
 
-        const std::string nurec_filename = std::format("{}.nurec", options.output_path.stem().string());
+        const std::string nurec_filename = std::format("{}.nurec", lfs::core::path_to_utf8(options.output_path.stem()));
         std::optional<std::string> provenance_json;
         if (options.provenance) {
             provenance_json = core::provenance_to_json(*options.provenance);

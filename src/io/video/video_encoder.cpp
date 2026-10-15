@@ -226,7 +226,7 @@ namespace lfs::io::video {
                 return "encoder unavailable";
             }
 
-            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            const std::string path_utf8 = lfs::core::path_to_native_utf8(path);
 
             int ret = avformat_alloc_output_context2(
                 &fmt_ctx_, nullptr, "mp4", path_utf8.c_str());
@@ -346,7 +346,7 @@ namespace lfs::io::video {
             const std::filesystem::path& path,
             const VideoExportOptions& opts) {
 
-            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            const std::string path_utf8 = lfs::core::path_to_native_utf8(path);
 
             int ret = avformat_alloc_output_context2(
                 &fmt_ctx_, nullptr, "mp4", path_utf8.c_str());

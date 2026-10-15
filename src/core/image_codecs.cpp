@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "image_codecs.hpp"
 #include "image_exr.hpp"
 
@@ -45,14 +46,14 @@ namespace lfs::core::image_codecs {
         constexpr std::array<std::uint8_t, 8> kPngSignature{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
 
         std::string lower_extension(const std::filesystem::path& path) {
-            auto extension = path.extension().string();
+            auto extension = lfs::core::path_to_utf8(path.extension());
             std::transform(extension.begin(), extension.end(), extension.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return extension;
         }
 
         bool read_file(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error) {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            lfs::core::fs::ifstream file(path, std::ios::binary | std::ios::ate);
             if (!file) {
                 error = "Could not open file " + path_to_utf8(path);
                 return false;
@@ -74,7 +75,7 @@ namespace lfs::core::image_codecs {
 
         bool read_prefix(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error,
                          const std::size_t limit = 32) {
-            std::ifstream file(path, std::ios::binary);
+            lfs::core::fs::ifstream file(path, std::ios::binary);
             if (!file) {
                 error = "Could not open file " + path_to_utf8(path);
                 return false;
@@ -151,7 +152,7 @@ namespace lfs::core::image_codecs {
 
         std::FILE* open_binary_file(const std::filesystem::path& path) {
 #ifdef _WIN32
-            return _wfopen(path.c_str(), L"rb");
+            return _wfopen(lfs::core::fs::native_path(path.c_str()).c_str(), L"rb");
 #else
             const auto path_utf8 = path_to_utf8(path);
             return std::fopen(path_utf8.c_str(), "rb");
@@ -160,7 +161,7 @@ namespace lfs::core::image_codecs {
 
         std::FILE* open_output_file(const std::filesystem::path& path) {
 #ifdef _WIN32
-            return _wfopen(path.c_str(), L"wb");
+            return _wfopen(lfs::core::fs::native_path(path.c_str()).c_str(), L"wb");
 #else
             const auto path_utf8 = path_to_utf8(path);
             return std::fopen(path_utf8.c_str(), "wb");
@@ -617,7 +618,7 @@ namespace lfs::core::image_codecs {
             TIFFOpenOptionsSetErrorHandlerExtR(options, tiff_error_handler_ext_r, &error);
             TIFFOpenOptionsSetWarningHandlerExtR(options, tiff_warning_handler_ext_r, nullptr);
 #ifdef _WIN32
-            TIFF* tiff = TIFFOpenWExt(path.c_str(), mode, options);
+            TIFF* tiff = TIFFOpenWExt(lfs::core::fs::native_path(path.c_str()).c_str(), mode, options);
 #else
             const auto path_utf8 = path_to_utf8(path);
             TIFF* tiff = TIFFOpenExt(path_utf8.c_str(), mode, options);

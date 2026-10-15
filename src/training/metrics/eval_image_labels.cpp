@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "eval_image_labels.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
@@ -40,7 +41,7 @@ namespace lfs::training {
                 return found->second.get();
 
             auto font = std::make_unique<CaptionFont>();
-            std::ifstream in;
+            lfs::core::fs::ifstream in;
             if (lfs::core::open_file_for_read(path, std::ios::in | std::ios::binary, in))
                 font->bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
             if (font->bytes.empty() ||

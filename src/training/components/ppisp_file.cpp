@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "ppisp_file.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -64,7 +65,7 @@ namespace lfs::training {
         PPISPFileMetadata* metadata) {
 
         try {
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return std::unexpected("Failed to open file for reading: " + lfs::core::path_to_utf8(path));
             }
@@ -146,7 +147,7 @@ namespace lfs::training {
 
     std::filesystem::path find_ppisp_companion(const std::filesystem::path& splat_path) {
         auto companion = get_ppisp_companion_path(splat_path);
-        if (std::filesystem::exists(companion)) {
+        if (lfs::core::fs::exists(companion)) {
             return companion;
         }
         return {};

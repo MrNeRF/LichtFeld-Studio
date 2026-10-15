@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -85,7 +86,7 @@ namespace lfs::vis::gui::rml_theme {
                     return it->second;
             }
 
-            std::ifstream f(rcss_path);
+            lfs::core::fs::ifstream f(rcss_path);
             if (f) {
                 std::string contents{std::istreambuf_iterator<char>(f),
                                      std::istreambuf_iterator<char>()};
@@ -93,7 +94,7 @@ namespace lfs::vis::gui::rml_theme {
                 auto inserted = base_rcss_cache.emplace(cache_key, std::move(contents));
                 return inserted.first->second;
             }
-            LOG_ERROR("RmlTheme: failed to open RCSS at {}", rcss_path.string());
+            LOG_ERROR("RmlTheme: failed to open RCSS at {}", lfs::core::path_to_utf8(rcss_path));
         } catch (const std::exception& e) {
             LOG_ERROR("RmlTheme: RCSS not found: {}", e.what());
         }

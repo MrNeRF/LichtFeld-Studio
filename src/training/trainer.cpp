@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "trainer.hpp"
 #include "backward.h" // BWD-A T_eff hist arm/flush
 #include "components/bilateral_grid.hpp"
@@ -1555,7 +1556,7 @@ namespace lfs::training {
             const auto sidecar_path = params_.optimization.ppisp_sidecar_path;
             PPISPFileHeader sidecar_header{};
             if (import_frozen_sidecar_controller) {
-                std::ifstream file;
+                lfs::core::fs::ifstream file;
                 if (!lfs::core::open_file_for_read(sidecar_path, std::ios::binary, file)) {
                     return std::unexpected("Failed to open frozen PPISP sidecar: " +
                                            lfs::core::path_to_utf8(sidecar_path));
@@ -2452,7 +2453,7 @@ namespace lfs::training {
         double source_ms = read_ms;
         if (cached) {
             raw = std::move(*cached);
-            LOG_INFO("Depth anchors: loaded {} cached anchors from {}", raw.size(), sidecar.string());
+            LOG_INFO("Depth anchors: loaded {} cached anchors from {}", raw.size(), lfs::core::path_to_utf8(sidecar));
         } else {
             nvtxRangePush("depth_anchors/compute");
             const auto compute_start = std::chrono::steady_clock::now();
@@ -2461,7 +2462,7 @@ namespace lfs::training {
             source_ms = phase_ms(compute_start);
             nvtxRangePop();
             if (!sidecar.empty() && !writeDepthAnchorSidecar(sidecar, raw, fingerprint)) {
-                LOG_WARN("Depth anchors: failed to write sidecar {}", sidecar.string());
+                LOG_WARN("Depth anchors: failed to write sidecar {}", lfs::core::path_to_utf8(sidecar));
             }
         }
         LOG_INFO("Depth anchors: fingerprint {:.1f} ms, {} {:.1f} ms",
@@ -2827,7 +2828,7 @@ namespace lfs::training {
                     "Image background mode requires a background image path");
             }
             std::error_code ec;
-            if (!std::filesystem::is_regular_file(
+            if (!lfs::core::fs::is_regular_file(
                     params.optimization.bg_image_path, ec)) {
                 return std::unexpected(std::format(
                     "Image background file does not exist or is not a regular file: '{}'",
@@ -3202,7 +3203,7 @@ namespace lfs::training {
                             "Image background mode restored from checkpoint without a path");
                     }
                     std::error_code bg_path_error;
-                    if (!std::filesystem::is_regular_file(
+                    if (!lfs::core::fs::is_regular_file(
                             params_.optimization.bg_image_path,
                             bg_path_error)) {
                         return std::unexpected(std::format(
@@ -3782,7 +3783,7 @@ namespace lfs::training {
         // Load/reload background image if needed
         if (bg_mode_is_image && bg_image_path_changed &&
             !params.optimization.bg_image_path.empty() &&
-            std::filesystem::exists(params.optimization.bg_image_path)) {
+            lfs::core::fs::exists(params.optimization.bg_image_path)) {
             try {
                 auto& loader = lfs::io::CacheLoader::getInstance();
                 lfs::io::LoadParams load_params{
@@ -4539,7 +4540,7 @@ namespace lfs::training {
         aside += std::format(
             ".corrupt-{}", unix_seconds);
         std::error_code ec;
-        std::filesystem::rename(
+        lfs::core::fs::rename(
             destination, aside, ec);
         if (ec) {
             return lfs::from_std_error_code(
@@ -4925,7 +4926,7 @@ namespace lfs::training {
                                      ->source_path;
                         } else if (
                             !document_context &&
-                            std::filesystem::exists(
+                            lfs::core::fs::exists(
                                 path)) {
                             source_path = path;
                             compact_after_publish =
@@ -4940,7 +4941,7 @@ namespace lfs::training {
                         }
                         bool save_as =
                             !source_path &&
-                            std::filesystem::exists(
+                            lfs::core::fs::exists(
                                 path);
                         const auto create_fresh_document =
                             [&]()
@@ -8474,7 +8475,7 @@ namespace lfs::training {
                                 std::string folder_name = lfs::io::strip_extension(img_name);
 
                                 auto output_path = params_.dataset.output_path / "timelapse" / folder_name;
-                                std::filesystem::create_directories(output_path);
+                                lfs::core::fs::create_directories(output_path);
 
                                 auto stamp = params_.include_provenance ? lfs::core::make_provenance_stamp()
                                                                         : lfs::core::make_minimal_provenance_stamp();
@@ -9803,7 +9804,7 @@ namespace lfs::training {
         const std::filesystem::path& checkpoint_path) {
         std::error_code error;
         const auto source_bytes =
-            std::filesystem::file_size(
+            lfs::core::fs::file_size(
                 checkpoint_path, error);
         if (error) {
             return std::unexpected(
@@ -9813,7 +9814,7 @@ namespace lfs::training {
                         checkpoint_path),
                     error.message()));
         }
-        std::ifstream source(
+        lfs::core::fs::ifstream source(
             checkpoint_path,
             std::ios::binary);
         if (!source) {

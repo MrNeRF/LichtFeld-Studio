@@ -4,13 +4,82 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <string_view>
 #include <system_error>
 #include <type_traits>
 #include <utility>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace lfs::core::fs {
     namespace fs = lfs::core::fs;
     using namespace std::filesystem;
+
+    // Effective process opt-in, including Windows policy and executable manifest.
+    // Unknown on older systems; this diagnostic never gates the I/O adapter.
+    [[nodiscard]] inline std::optional<bool> process_long_paths_enabled() noexcept {
+#ifdef _WIN32
+        using Query = BOOLEAN(NTAPI*)();
+        const auto module = GetModuleHandleW(L"ntdll.dll");
+        const auto query = module ? reinterpret_cast<Query>(GetProcAddress(module, "RtlAreLongPathsEnabled")) : nullptr;
+        if (query)
+            return query() != FALSE;
+#endif
+        return std::nullopt;
+    }
+
+    [[nodiscard]] inline path display_path(const path& value);
+#ifdef _WIN32
+    namespace detail {
+        inline bool dos_device_name(std::wstring_view value) {
+            value = value.substr(0, value.find(L'.'));
+            while (!value.empty() && (value.back() == L' ' || value.back() == L'.')) value.remove_suffix(1);
+            if (value.size() != 3 && value.size() != 4) return false;
+            const auto at = [&](size_t i) { auto ch = value[i]; return ch >= L'a' && ch <= L'z' ? wchar_t(ch - (L'a' - L'A')) : ch; };
+            if (value.size() == 3)
+                return (at(0) == L'C' && at(1) == L'O' && at(2) == L'N') ||
+                       (at(0) == L'P' && at(1) == L'R' && at(2) == L'N') ||
+                       (at(0) == L'A' && at(1) == L'U' && at(2) == L'X') ||
+                       (at(0) == L'N' && at(1) == L'U' && at(2) == L'L');
+            return ((at(0) == L'C' && at(1) == L'O' && at(2) == L'M') ||
+                    (at(0) == L'L' && at(1) == L'P' && at(2) == L'T')) &&
+                   ((value[3] >= L'1' && value[3] <= L'9') || value[3] == L'\u00b9' || value[3] == L'\u00b2' || value[3] == L'\u00b3');
+        }
+        inline bool bare_device(const path& value) {
+            return !value.has_parent_path() && !value.has_extension() && dos_device_name(value.native());
+        }
+        inline bool needs_verbatim(const path& value) {
+            const std::wstring_view name = value.native();
+            size_t begin = 0;
+            while (begin < name.size()) {
+                const auto end = name.find_first_of(L"\\/", begin);
+                const auto part = name.substr(begin, end == name.npos ? name.npos : end - begin);
+                if (!part.empty() && part != L"." && part != L".." &&
+                    (part.back() == L'.' || part.back() == L' ' || dos_device_name(part))) return true;
+                if (end == name.npos) break;
+                begin = end + 1;
+            }
+            return false;
+        }
+        inline path absolute_preserving_names(const path& value, std::error_code& error) {
+            if (value.is_absolute()) return display_path(value);
+            if (value.has_root_name() && !value.has_root_directory()) {
+                const auto base = display_path(std::filesystem::absolute(value.root_name() / L".", error));
+                return error ? path{} : base / value.relative_path();
+            }
+            const auto base = display_path(std::filesystem::current_path(error));
+            return error ? path{} : base / value;
+        }
+    }
+#endif
 
     // This representation belongs only at an OS I/O boundary, never in persisted
     // project references, UI text, URLs, or command-line arguments to other apps.
@@ -21,9 +90,15 @@ namespace lfs::core::fs {
         const auto& name = value.native();
         if (name.starts_with(L"\\\\?\\") || name.starts_with(L"\\\\.\\"))
             return value;
+        // Keep explicit device syntax and legacy bare NUL/CON destinations.
+        if (!force_extended && detail::bare_device(value))
+            return value;
+        const bool verbatim = force_extended || detail::needs_verbatim(value);
+        if (!verbatim && value.is_absolute() && name.size() < 248)
+            return value;
         std::error_code error;
-        auto absolute = std::filesystem::absolute(value, error);
-        if (error || (!force_extended && absolute.native().size() < 248))
+        auto absolute = detail::absolute_preserving_names(value, error);
+        if (error || (!verbatim && !detail::needs_verbatim(absolute.parent_path()) && absolute.native().size() < 248))
             return value;
         absolute = absolute.lexically_normal();
         absolute.make_preferred();
@@ -47,6 +122,59 @@ namespace lfs::core::fs {
 #endif
         return value;
     }
+    [[nodiscard]] inline path temp_directory_path(std::error_code& error) {
+#ifdef _WIN32
+        // GetTempPathW may silently fall back to USERPROFILE when TMP exceeds
+        // MAX_PATH with opt-in disabled. Read its documented precedence directly.
+        path result;
+        for (const auto* key : {L"TMP", L"TEMP", L"USERPROFILE"}) {
+            const DWORD required = GetEnvironmentVariableW(key, nullptr, 0);
+            if (!required)
+                continue;
+            std::wstring buffer(required, L'\0');
+            const DWORD length = GetEnvironmentVariableW(key, buffer.data(), required);
+            if (!length || length >= required) {
+                error = std::error_code(length == 0 ? GetLastError() : ERROR_INSUFFICIENT_BUFFER,
+                                        std::system_category());
+                return {};
+            }
+            buffer.resize(length);
+            result = display_path(path(buffer));
+            break;
+        }
+        if (result.empty()) {
+            std::wstring buffer(32768, L'\0');
+            const UINT length = GetWindowsDirectoryW(buffer.data(), static_cast<UINT>(buffer.size()));
+            if (!length || length >= buffer.size()) {
+                error = std::error_code(length == 0 ? GetLastError() : ERROR_INSUFFICIENT_BUFFER,
+                                        std::system_category());
+                return {};
+            }
+            buffer.resize(length);
+            result = path(buffer);
+        }
+        result = display_path(std::filesystem::absolute(result, error));
+        if (error)
+            return {};
+        if (!std::filesystem::is_directory(native_path(result), error)) {
+            if (!error)
+                error = std::make_error_code(std::errc::not_a_directory);
+            return {};
+        }
+        error.clear();
+        return result;
+#else
+        return std::filesystem::temp_directory_path(error);
+#endif
+    }
+    [[nodiscard]] inline path temp_directory_path() {
+        std::error_code error;
+        auto result = temp_directory_path(error);
+        if (error)
+            throw filesystem_error("Cannot locate temporary directory", error);
+        return result;
+    }
+
     template <typename... Args>
     inline auto exists(const path& value, Args&&... args) {
         return std::filesystem::exists(native_path(value), std::forward<Args>(args)...);
@@ -184,14 +312,28 @@ namespace lfs::core::fs {
     inline path canonical(const path& value) { return display_path(std::filesystem::canonical(native_path(value))); }
     inline path weakly_canonical(const path& value, std::error_code& error) {
 #ifdef _WIN32
-        auto existing = native_path(std::filesystem::absolute(value, error));
-        if (error)
-            return {};
+        if (value.empty()) {
+            error.clear();
+            return value;
+        }
+        auto existing = native_path(value);
+        if (!existing.native().starts_with(L"\\\\?\\"))
+            return std::filesystem::weakly_canonical(existing, error);
+        const auto& name = existing.native();
+        std::size_t root_length;
+        if (name.starts_with(L"\\\\?\\UNC\\")) {
+            const auto server_end = name.find(L'\\', 8);
+            const auto share_end = server_end == std::wstring::npos ? server_end : name.find(L'\\', server_end + 1);
+            root_length = share_end == std::wstring::npos ? name.size() : share_end;
+        } else {
+            const auto root_end = name.find(L'\\', 4);
+            root_length = root_end == std::wstring::npos ? name.size() : root_end + 1;
+        }
         path missing;
         while (!std::filesystem::exists(existing, error)) {
             if (error)
                 return {};
-            if (!existing.has_relative_path()) {
+            if (existing.native().size() <= root_length) {
                 error = std::make_error_code(std::errc::no_such_file_or_directory);
                 return {};
             }
@@ -236,6 +378,10 @@ namespace lfs::core::fs {
     inline void current_path(const path& value) { std::filesystem::current_path(native_path(value)); }
     inline void current_path(const path& value, std::error_code& error) { std::filesystem::current_path(native_path(value), error); }
 
+    [[nodiscard]] inline path from_utf8(std::string_view value) {
+        return path(std::u8string_view(reinterpret_cast<const char8_t*>(value.data()), value.size()));
+    }
+
     template <typename Stream, std::ios_base::openmode DefaultMode>
     class native_file_stream : public Stream {
     public:
@@ -248,6 +394,15 @@ namespace lfs::core::fs {
         void open(const fs::path& value, std::ios_base::openmode mode = DefaultMode) {
             Stream::open(native_path(value), mode);
         }
+        explicit native_file_stream(const std::string& value, std::ios_base::openmode mode = DefaultMode)
+            : native_file_stream(from_utf8(value), mode) {}
+        explicit native_file_stream(const char* value, std::ios_base::openmode mode = DefaultMode)
+            : native_file_stream(from_utf8(value), mode) {}
+        explicit native_file_stream(std::string_view value, std::ios_base::openmode mode = DefaultMode)
+            : native_file_stream(from_utf8(value), mode) {}
+        void open(const std::string& value, std::ios_base::openmode mode = DefaultMode) { open(from_utf8(value), mode); }
+        void open(const char* value, std::ios_base::openmode mode = DefaultMode) { open(from_utf8(value), mode); }
+        void open(std::string_view value, std::ios_base::openmode mode = DefaultMode) { open(from_utf8(value), mode); }
     };
     using ifstream = native_file_stream<std::ifstream, std::ios::in>;
     using ofstream = native_file_stream<std::ofstream, std::ios::out>;
@@ -264,7 +419,11 @@ namespace lfs::core::fs {
             : std::filesystem::directory_entry(native_path(value)), display_(display_path(value)) {}
         directory_entry(const fs::path& value, std::error_code& error)
             : std::filesystem::directory_entry(native_path(value), error), display_(display_path(value)) {}
+        directory_entry(const std::filesystem::directory_entry& entry, const fs::path& logical)
+            : std::filesystem::directory_entry(entry), display_(logical) {}
         const fs::path& path() const noexcept { return display_; }
+        friend bool operator==(const directory_entry& left, const directory_entry& right) noexcept { return left.path() == right.path(); }
+        friend auto operator<=>(const directory_entry& left, const directory_entry& right) noexcept { return left.path() <=> right.path(); }
         operator const fs::path&() const noexcept { return display_; }
         void assign(const fs::path& value) {
             std::filesystem::directory_entry::assign(native_path(value));
@@ -281,6 +440,7 @@ namespace lfs::core::fs {
     template <bool Recursive>
     class basic_directory_iterator {
         using Native = std::conditional_t<Recursive, std::filesystem::recursive_directory_iterator, std::filesystem::directory_iterator>;
+        fs::path logical_root_, native_root_;
         Native iterator_;
         mutable directory_entry entry_;
 
@@ -293,9 +453,10 @@ namespace lfs::core::fs {
         basic_directory_iterator() = default;
         template <typename... Args>
         explicit basic_directory_iterator(const fs::path& value, Args&&... args)
-            : iterator_(native_path(value, true), std::forward<Args>(args)...) {}
+            : logical_root_(display_path(value)), native_root_(native_path(value, true)),
+              iterator_(native_root_, std::forward<Args>(args)...) {}
         reference operator*() const {
-            entry_ = directory_entry(*iterator_);
+            entry_ = directory_entry(*iterator_, logical_root_ / iterator_->path().lexically_relative(native_root_));
             return entry_;
         }
         pointer operator->() const { return &operator*(); }

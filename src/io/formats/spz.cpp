@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "spz.hpp"
 #include "coordinate-system-adobe.h"
 #include "core/error.hpp"
@@ -508,7 +509,7 @@ namespace lfs::io {
     } // namespace
 
     bool is_spz_glb(const std::filesystem::path& filepath) {
-        std::ifstream in;
+        lfs::core::fs::ifstream in;
         if (!lfs::core::open_file_for_read(filepath, std::ios::binary, in)) {
             return false;
         }
@@ -529,7 +530,7 @@ namespace lfs::io {
 
         std::string_view format_name = "SPZ"; // "GLB" once a glTF container is detected
         try {
-            std::ifstream in;
+            lfs::core::fs::ifstream in;
             if (!lfs::core::open_file_for_read(filepath, std::ios::binary | std::ios::ate, in)) {
                 return std::unexpected(std::format("Failed to open SPZ file: {}", lfs::core::path_to_utf8(filepath)));
             }
@@ -829,7 +830,7 @@ namespace lfs::io {
             }
 
             ScopedAtomicOutputFile atomic_output(options.output_path);
-            std::ofstream file;
+            lfs::core::fs::ofstream file;
             if (!lfs::core::open_file_for_write(atomic_output.temp_path(), std::ios::binary | std::ios::out, file)) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   "Failed to open temporary SPZ file for writing",
@@ -857,7 +858,7 @@ namespace lfs::io {
             std::chrono::high_resolution_clock::now() - start);
 
         // Get file size
-        auto file_size = std::filesystem::file_size(options.output_path);
+        auto file_size = lfs::core::fs::file_size(options.output_path);
         LOG_INFO("SPZ saved: {} gaussians, {:.1f} MB in {}ms",
                  splat_data.size(),
                  static_cast<double>(file_size) / (1024.0 * 1024.0),

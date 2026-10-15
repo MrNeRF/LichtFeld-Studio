@@ -166,6 +166,12 @@ namespace lfs::io::project::detail {
         std::optional<std::filesystem::path> backup_path;
     };
 
+    // Preserve existing artifact names when valid; hash only filenames whose
+    // suffix would exceed a 255-unit native filesystem component. Never truncate UTF-8.
+    [[nodiscard]] std::filesystem::path project_artifact_path(
+        const std::filesystem::path& source, std::string_view suffix);
+    [[nodiscard]] std::filesystem::path project_lock_path(const std::filesystem::path& source);
+
     // Stable short stem for long names; recovery uses the same key to associate
     // artifacts without treating a truncated filename as a different master.
     [[nodiscard]] std::filesystem::path temporary_project_stem(const std::filesystem::path& destination);

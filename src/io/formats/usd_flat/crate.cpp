@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "crate.hpp"
 #include "core/path_utils.hpp"
 #include "half.hpp"
@@ -82,7 +83,7 @@ namespace lfs::io::usd_flat {
             static lfs::Result<MappedFile> open(const std::filesystem::path& path) {
                 MappedFile result;
 #ifdef _WIN32
-                result.file_ = CreateFileW(path.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                result.file_ = CreateFileW(lfs::core::fs::native_path(path.wstring().c_str()).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                            FILE_ATTRIBUTE_NORMAL, nullptr);
                 if (result.file_ == INVALID_HANDLE_VALUE) {
                     return make_flat_error("Failed to open USD file: " + lfs::core::path_to_utf8(path));
@@ -117,7 +118,7 @@ namespace lfs::io::usd_flat {
                     return result;
                 }
 
-                std::ifstream input(path, std::ios::binary);
+                lfs::core::fs::ifstream input(path, std::ios::binary);
                 if (!input) {
                     return make_flat_error("Failed to open USD file: " + lfs::core::path_to_utf8(path));
                 }
@@ -1163,7 +1164,7 @@ namespace lfs::io::usd_flat {
         }
         offset = padded(offset);
         const std::size_t toc_offset = padded(data_base + blob_offset);
-        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        lfs::core::fs::ofstream output(path, std::ios::binary | std::ios::trunc);
         if (!output)
             return lfs::Status::failure(make_flat_error("Failed to open USD crate for writing: " + lfs::core::path_to_utf8(path)));
 

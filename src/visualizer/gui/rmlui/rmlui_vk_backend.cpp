@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: MIT */
 
+#include "core/filesystem.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "core/error.hpp"
 #include "core/image_io.hpp"
@@ -978,7 +979,7 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
         int width = 0;
         int height = 0;
         int channels = 0;
-        unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, 4);
+        unsigned char* data = stbi_load(lfs::core::path_to_native_utf8(lfs::core::utf8_to_path(path)).c_str(), &width, &height, &channels, 4);
         if (!data)
             return 0;
 
@@ -992,7 +993,7 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
         // tint paints only the foreground.
         int probe_w = 0, probe_h = 0, probe_channels = 0;
         const bool is_single_channel =
-            stbi_info(path.c_str(), &probe_w, &probe_h, &probe_channels) &&
+            stbi_info(lfs::core::path_to_native_utf8(lfs::core::utf8_to_path(path)).c_str(), &probe_w, &probe_h, &probe_channels) &&
             probe_channels == 1;
 
         const int pixel_count = width * height;
@@ -1038,7 +1039,7 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
 
         try {
             const auto path = lfs::vis::getAssetPath(asset_name);
-            if (std::filesystem::exists(path))
+            if (lfs::core::fs::exists(path))
                 return load_with_stbi(lfs::core::path_to_utf8(path));
         } catch (...) {
         }
@@ -1067,7 +1068,7 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
 #ifndef _WIN32
     if (!source.empty() && source[0] != '/' && source.find("://") == Rml::String::npos) {
         const std::string absolute_source = "/" + source;
-        if (std::filesystem::exists(absolute_source)) {
+        if (lfs::core::fs::exists(absolute_source)) {
             if (const Rml::TextureHandle handle = load_with_stbi(absolute_source); handle)
                 return handle;
         }

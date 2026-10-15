@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "rad.hpp"
 #include "rad_dequant_math.hpp"
 
@@ -3153,7 +3154,7 @@ namespace lfs::io {
         };
 
         std::expected<RadFileInfo, std::string> read_rad_file_info(const std::filesystem::path& filepath) {
-            std::ifstream in;
+            lfs::core::fs::ifstream in;
             if (!lfs::core::open_file_for_read(filepath, std::ios::binary, in)) {
                 return std::unexpected("Failed to open RAD file");
             }
@@ -3318,17 +3319,17 @@ namespace lfs::io {
             const std::size_t chunk_area_start) {
             RadSourceStamp stamp;
             std::error_code ec;
-            stamp.file_size = std::filesystem::file_size(rad_path, ec);
+            stamp.file_size = lfs::core::fs::file_size(rad_path, ec);
             if (ec) {
                 return std::unexpected(std::format("Failed to stat RAD file: {}", ec.message()));
             }
-            const auto mtime = std::filesystem::last_write_time(rad_path, ec);
+            const auto mtime = lfs::core::fs::last_write_time(rad_path, ec);
             if (ec) {
                 return std::unexpected(std::format("Failed to read RAD mtime: {}", ec.message()));
             }
             stamp.mtime = static_cast<std::uint64_t>(mtime.time_since_epoch().count());
 
-            std::ifstream in;
+            lfs::core::fs::ifstream in;
             if (!lfs::core::open_file_for_read(rad_path, std::ios::binary, in)) {
                 return std::unexpected("Failed to open RAD file for header hash");
             }
@@ -3531,7 +3532,7 @@ namespace lfs::io {
                 return static_cast<std::size_t>(status.ullAvailPhys);
             }
 #else
-            std::ifstream meminfo("/proc/meminfo");
+            lfs::core::fs::ifstream meminfo("/proc/meminfo");
             std::string line;
             while (std::getline(meminfo, line)) {
                 if (line.rfind("MemAvailable:", 0) == 0) {
@@ -3667,7 +3668,7 @@ namespace lfs::io {
             };
 
             struct ChunkScratch {
-                std::ifstream stream;
+                lfs::core::fs::ifstream stream;
                 bool stream_ok = false;
                 std::vector<std::uint8_t> raw;
                 std::vector<float> means;
@@ -3976,7 +3977,7 @@ namespace lfs::io {
         }
 
         // Fallback: whole-file buffered decode for legacy or non-indexed files.
-        std::ifstream in;
+        lfs::core::fs::ifstream in;
         if (!lfs::core::open_file_for_read(filepath, std::ios::binary | std::ios::ate, in)) {
             return std::unexpected(std::format("Failed to open RAD file: {}", lfs::core::path_to_utf8(filepath)));
         }
@@ -4432,7 +4433,7 @@ namespace lfs::io {
         const lfs::core::SplatLodTree::ChunkFileRange& range,
         const int max_sh_degree,
         const bool lod_opacity_encoded) {
-        std::ifstream in;
+        lfs::core::fs::ifstream in;
         if (!lfs::core::open_file_for_read(filepath, std::ios::binary, in)) {
             return std::unexpected(std::format("Failed to open RAD file for chunk read: {}",
                                                lfs::core::path_to_utf8(filepath)));
@@ -4581,7 +4582,7 @@ namespace lfs::io {
         }
 
         ScopedAtomicOutputFile atomic_output(options.output_path);
-        std::ofstream out;
+        lfs::core::fs::ofstream out;
         if (!lfs::core::open_file_for_write(atomic_output.temp_path(), std::ios::binary | std::ios::out, out)) {
             return make_error(ErrorCode::WRITE_FAILURE,
                               "Failed to open temporary RAD file for writing",
@@ -4609,7 +4610,7 @@ namespace lfs::io {
             std::chrono::high_resolution_clock::now() - start);
 
         // Get file size
-        auto file_size = std::filesystem::file_size(options.output_path);
+        auto file_size = lfs::core::fs::file_size(options.output_path);
         LOG_INFO("RAD saved: {} gaussians, {:.1f} MB in {}ms",
                  splat_data.size(),
                  static_cast<double>(file_size) / (1024.0 * 1024.0),
@@ -4658,7 +4659,7 @@ namespace lfs::io {
                 meta_path_ = rad_meta_sidecar_path(rad_path);
                 {
                     std::error_code ec;
-                    const auto space = std::filesystem::space(meta_path_.parent_path(), ec);
+                    const auto space = lfs::core::fs::space(meta_path_.parent_path(), ec);
                     if (!ec && space.available < total_bytes + (std::uint64_t{1} << 28)) {
                         return std::unexpected(
                             std::format("not enough disk space for sidecar: need {} GB, {} GB free",
@@ -4674,7 +4675,7 @@ namespace lfs::io {
                 tmp_path_ = meta_path_;
                 tmp_path_ += std::format(".tmp.{}", pid);
                 {
-                    std::ofstream create;
+                    lfs::core::fs::ofstream create;
                     if (!lfs::core::open_file_for_write(tmp_path_, std::ios::binary | std::ios::trunc, create)) {
                         return std::unexpected(std::format(
                             "failed to create sidecar temp file: {}", io_error_detail()));
@@ -4775,7 +4776,7 @@ namespace lfs::io {
                 out_.close();
 
                 std::error_code rename_ec;
-                std::filesystem::rename(tmp_path_, meta_path_, rename_ec);
+                lfs::core::fs::rename(tmp_path_, meta_path_, rename_ec);
                 if (rename_ec) {
                     removeTmp();
                     open_ = false;
@@ -4804,14 +4805,14 @@ namespace lfs::io {
         private:
             void removeTmp() {
                 std::error_code ec;
-                std::filesystem::remove(tmp_path_, ec);
+                lfs::core::fs::remove(tmp_path_, ec);
             }
 
             RadMetaHeader header_{};
             std::vector<RadMetaChunkEntry> chunk_table_;
             std::filesystem::path meta_path_;
             std::filesystem::path tmp_path_;
-            std::fstream out_;
+            lfs::core::fs::fstream out_;
             std::uint64_t nodes_written_ = 0;
             bool open_ = false;
         };
@@ -4828,7 +4829,7 @@ namespace lfs::io {
         std::uint32_t file_chunk_size = DEFAULT_RAD_FILE_CHUNK_SIZE;
 
         std::optional<ScopedAtomicOutputFile> atomic_output;
-        std::ofstream out;
+        lfs::core::fs::ofstream out;
         std::size_t meta_reserved = 0;
         std::uint64_t written_count = 0;
         std::uint64_t chunk_area_bytes = 0;
@@ -5572,7 +5573,7 @@ namespace lfs::io {
         const auto meta_path = rad_meta_sidecar_path(rad_path);
         {
             std::error_code ec;
-            const auto space = std::filesystem::space(meta_path.parent_path(), ec);
+            const auto space = lfs::core::fs::space(meta_path.parent_path(), ec);
             if (!ec && space.available < total_bytes + (std::uint64_t{1} << 28)) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   std::format("Not enough disk space for sidecar: need {} GB, {} GB free",
@@ -5594,14 +5595,14 @@ namespace lfs::io {
             ~TmpGuard() {
                 if (!keep) {
                     std::error_code ec;
-                    std::filesystem::remove(path, ec);
+                    lfs::core::fs::remove(path, ec);
                 }
             }
         } tmp_guard{.path = tmp_path};
 
         // Create and pre-extend so parallel writers can seek anywhere.
         {
-            std::ofstream create;
+            lfs::core::fs::ofstream create;
             if (!lfs::core::open_file_for_write(tmp_path, std::ios::binary | std::ios::trunc, create)) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   std::format("Failed to create sidecar temp file: {}", io_error_detail()),
@@ -5638,8 +5639,8 @@ namespace lfs::io {
         std::atomic<bool> cancelled{false};
 
         struct BuildScratch {
-            std::ifstream rad;
-            std::fstream out;
+            lfs::core::fs::ifstream rad;
+            lfs::core::fs::fstream out;
             bool open_ok = false;
             std::vector<std::uint8_t> raw;
             std::vector<float> means;
@@ -5788,7 +5789,7 @@ namespace lfs::io {
         }
 
         {
-            std::fstream rmw(tmp_path, std::ios::binary | std::ios::in | std::ios::out);
+            lfs::core::fs::fstream rmw(tmp_path, std::ios::binary | std::ios::in | std::ios::out);
             if (!rmw.is_open()) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   std::format("Failed to reopen sidecar temp file: {}", io_error_detail()),
@@ -5821,7 +5822,7 @@ namespace lfs::io {
         }
 
         std::error_code rename_ec;
-        std::filesystem::rename(tmp_path, meta_path, rename_ec);
+        lfs::core::fs::rename(tmp_path, meta_path, rename_ec);
         if (rename_ec) {
             // A concurrent builder may have won the race; adopt its result if
             // it validates, otherwise surface the rename failure.
@@ -5883,7 +5884,7 @@ namespace lfs::io {
         const int max_sh = meta.max_sh.value_or(0);
         const int sh_coeffs = max_sh > 0 ? SH_COEFFS_FOR_DEGREE[max_sh] : 0;
 
-        std::ifstream in;
+        lfs::core::fs::ifstream in;
         if (!lfs::core::open_file_for_read(input, std::ios::binary, in)) {
             return make_error(ErrorCode::PATH_NOT_FOUND, "Failed to open RAD file", input);
         }

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "depth_anchor_cache.hpp"
 
 #include "core/camera.hpp"
@@ -392,14 +393,14 @@ namespace lfs::training {
             }
 
             std::error_code ec;
-            const auto size = std::filesystem::file_size(cam->depth_path(), ec);
+            const auto size = lfs::core::fs::file_size(cam->depth_path(), ec);
             hash_scalar(hash, ec ? std::uint64_t{0} : static_cast<std::uint64_t>(size));
             ec.clear();
-            const auto mtime = std::filesystem::last_write_time(cam->depth_path(), ec);
+            const auto mtime = lfs::core::fs::last_write_time(cam->depth_path(), ec);
             const long long ticks = ec ? 0 : static_cast<long long>(mtime.time_since_epoch().count());
             hash_scalar(hash, ticks);
 
-            std::ifstream depth(cam->depth_path(), std::ios::binary);
+            lfs::core::fs::ifstream depth(cam->depth_path(), std::ios::binary);
             std::array<char, 64 * 1024> buffer;
             while (depth.read(buffer.data(), buffer.size()) || depth.gcount() > 0) {
                 hash_bytes(hash, buffer.data(), static_cast<std::size_t>(depth.gcount()));
@@ -447,7 +448,7 @@ namespace lfs::training {
         }
         lfs::io::ScopedAtomicOutputFile output(path);
         {
-            std::ofstream file(output.temp_path(), std::ios::binary | std::ios::trunc);
+            lfs::core::fs::ofstream file(output.temp_path(), std::ios::binary | std::ios::trunc);
             if (!file) {
                 return false;
             }
@@ -463,10 +464,10 @@ namespace lfs::training {
         const std::filesystem::path& path,
         const DepthAnchorFingerprint& expected) {
         std::error_code ec;
-        if (expected.version != kSchemaVersion || path.empty() || !std::filesystem::exists(path, ec)) {
+        if (expected.version != kSchemaVersion || path.empty() || !lfs::core::fs::exists(path, ec)) {
             return std::nullopt;
         }
-        std::ifstream file(path, std::ios::binary);
+        lfs::core::fs::ifstream file(path, std::ios::binary);
         if (!file) {
             return std::nullopt;
         }

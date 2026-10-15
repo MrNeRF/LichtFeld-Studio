@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "vulkan_context.hpp"
 
 #include "core/crash_handler.hpp"
@@ -407,7 +408,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool readFile(const std::filesystem::path& path, std::vector<char>& data) {
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             if (!lfs::core::open_file_for_read(path, std::ios::binary | std::ios::ate, file)) {
                 return false;
             }
@@ -5174,13 +5175,13 @@ namespace lfs::vis {
                 }
                 std::error_code ec;
                 if (path) {
-                    std::filesystem::create_directories(path->parent_path(), ec);
+                    lfs::core::fs::create_directories(path->parent_path(), ec);
                 }
                 if (path && !ec) {
                     const auto temporary = *path;
                     const auto temporary_string = lfs::core::path_to_utf8(temporary) + ".tmp";
                     const auto temporary_path = lfs::core::utf8_to_path(temporary_string);
-                    std::ofstream file;
+                    lfs::core::fs::ofstream file;
                     if (lfs::core::open_file_for_write(temporary_path,
                                                        std::ios::binary | std::ios::trunc,
                                                        file)) {
@@ -5188,14 +5189,14 @@ namespace lfs::vis {
                         file.close();
                         if (file) {
                             std::error_code rename_ec;
-                            std::filesystem::rename(temporary_path, *path, rename_ec);
+                            lfs::core::fs::rename(temporary_path, *path, rename_ec);
                             if (rename_ec) {
                                 // Windows does not replace an existing file
                                 // with rename(). The fallback still ensures
                                 // readers never see a partially written cache.
-                                std::filesystem::remove(*path, rename_ec);
+                                lfs::core::fs::remove(*path, rename_ec);
                                 rename_ec.clear();
-                                std::filesystem::rename(temporary_path, *path, rename_ec);
+                                lfs::core::fs::rename(temporary_path, *path, rename_ec);
                             }
                             if (!rename_ec) {
                                 saved_pipeline_cache_hash_ = cache_hash;

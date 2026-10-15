@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/path_utils.hpp"
+#include "core/filesystem.hpp"
 #include "gui/vram_hud_overlay.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
@@ -2482,23 +2484,24 @@ namespace lfs::vis::gui {
             directory = paths->dataDir() / "vram";
         }
         std::error_code ec;
-        std::filesystem::create_directories(directory, ec);
+        lfs::core::fs::create_directories(directory, ec);
         if (ec)
             return;
         const auto path = directory / std::format("vram_timeline_{}.csv", stamp);
-        const auto temp = path.string() + ".tmp";
+        auto temp = path;
+        temp += ".tmp";
         {
-            std::ofstream file(temp, std::ios::binary);
+            lfs::core::fs::ofstream file(temp, std::ios::binary);
             if (!file)
                 return;
             file << timeline_.csv();
             if (!file)
                 return;
         }
-        std::filesystem::rename(temp, path, ec);
+        lfs::core::fs::rename(temp, path, ec);
         if (!ec && export_path_) {
             std::string escaped;
-            escapeRmlInto(escaped, path.string());
+            escapeRmlInto(escaped, lfs::core::path_to_utf8(path));
             export_path_->SetInnerRML(std::format("{} {}", LOC("ui.vram_exported_to"), escaped));
         }
     }

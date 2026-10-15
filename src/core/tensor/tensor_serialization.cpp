@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "internal/tensor_serialization.hpp"
 
 #include "core/contiguous_streambuf.hpp"
@@ -372,7 +373,7 @@ namespace lfs::core {
     }
 
     void save_tensor(const Tensor& tensor, const std::string& filename) {
-        std::ofstream file;
+        lfs::core::fs::ofstream file;
         if (!open_file_for_write(utf8_to_path(filename), std::ios::binary, file)) {
             throw std::runtime_error("Failed to open file: " + filename);
         }
@@ -380,7 +381,7 @@ namespace lfs::core {
     }
 
     Tensor load_tensor(const std::string& filename) {
-        std::ifstream file;
+        lfs::core::fs::ifstream file;
         if (!open_file_for_read(utf8_to_path(filename), std::ios::binary, file)) {
             throw std::runtime_error("Failed to open file: " + filename);
         }

@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "usd.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -59,7 +60,7 @@ namespace lfs::io {
         }
 
         std::string normalized_extension(const std::filesystem::path& path) {
-            auto extension = path.extension().string();
+            auto extension = lfs::core::path_to_utf8(path.extension());
             std::transform(extension.begin(), extension.end(), extension.begin(), [](const unsigned char character) {
                 return static_cast<char>(std::tolower(character));
             });
@@ -80,7 +81,7 @@ namespace lfs::io {
                 return usd_flat::read_usdc(path);
             }
             if (extension == ".usd") {
-                std::ifstream input(path, std::ios::binary);
+                lfs::core::fs::ifstream input(path, std::ios::binary);
                 std::array<char, 8> header{};
                 if (!input || !input.read(header.data(), static_cast<std::streamsize>(header.size()))) {
                     return usd_flat::make_flat_error("Failed to read USD file header: " + lfs::core::path_to_utf8(path));

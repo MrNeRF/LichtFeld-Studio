@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
@@ -126,14 +127,14 @@ namespace lfs::vis::gui::rml_documents {
             const auto resolved_path =
                 (document_path.parent_path() / lfs::core::utf8_to_path(std::string(source)))
                     .lexically_normal();
-            if (!std::filesystem::exists(resolved_path)) {
+            if (!lfs::core::fs::exists(resolved_path)) {
                 std::string asset_source(source);
                 while (asset_source.rfind("../", 0) == 0)
                     asset_source.erase(0, 3);
                 if (!asset_source.empty()) {
                     try {
                         const auto asset_path = lfs::vis::getAssetPath(asset_source);
-                        if (std::filesystem::exists(asset_path))
+                        if (lfs::core::fs::exists(asset_path))
                             return rml_theme::pathToRmlImageSource(asset_path);
                     } catch (const std::exception& e) {
                         LOG_DEBUG("RmlUI image source fallback could not resolve asset '{}': {}",
@@ -244,7 +245,7 @@ namespace lfs::vis::gui::rml_documents {
 
     std::vector<std::filesystem::path> loadLinkedStylesheetPaths(
         const std::filesystem::path& document_path) {
-        std::ifstream input(document_path, std::ios::binary);
+        lfs::core::fs::ifstream input(document_path, std::ios::binary);
         if (!input)
             return {};
 
@@ -264,7 +265,7 @@ namespace lfs::vis::gui::rml_documents {
         }
 
         std::optional<std::string> loadDocumentSource(const std::filesystem::path& document_path) {
-            std::ifstream input(document_path, std::ios::binary);
+            lfs::core::fs::ifstream input(document_path, std::ios::binary);
             if (!input)
                 return std::nullopt;
 

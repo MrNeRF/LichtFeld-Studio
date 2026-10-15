@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "preferences.hpp"
 #include "rendering/rendering_types.hpp"
 #include "visualizer/navigation_up_axis.hpp"
@@ -176,7 +177,7 @@ namespace lfs::vis {
                     expanded);
             }
             absolute = absolute.lexically_normal();
-            std::filesystem::create_directories(absolute, error);
+            lfs::core::fs::create_directories(absolute, error);
             if (error) {
                 return preferencePathError(
                     lfs::ErrorCode::PermissionDenied,
@@ -184,7 +185,7 @@ namespace lfs::vis {
                     error.message(),
                     absolute);
             }
-            if (!std::filesystem::is_directory(absolute, error) || error) {
+            if (!lfs::core::fs::is_directory(absolute, error) || error) {
                 return preferencePathError(
                     lfs::ErrorCode::InvalidArgument,
                     display_name + " path is not a directory.",
@@ -202,7 +203,7 @@ namespace lfs::vis {
                  std::to_string(
                      std::chrono::steady_clock::now().time_since_epoch().count()));
             {
-                std::ofstream output(probe, std::ios::binary | std::ios::trunc);
+                lfs::core::fs::ofstream output(probe, std::ios::binary | std::ios::trunc);
                 if (!output) {
                     return preferencePathError(
                         lfs::ErrorCode::PermissionDenied,
@@ -214,7 +215,7 @@ namespace lfs::vis {
                 output.flush();
                 if (!output) {
                     std::error_code ignored;
-                    std::filesystem::remove(probe, ignored);
+                    lfs::core::fs::remove(probe, ignored);
                     return preferencePathError(
                         lfs::ErrorCode::PermissionDenied,
                         display_name + " is not writable.",
@@ -222,7 +223,7 @@ namespace lfs::vis {
                         absolute);
                 }
             }
-            std::filesystem::remove(probe, error);
+            lfs::core::fs::remove(probe, error);
             if (error) {
                 return preferencePathError(
                     lfs::ErrorCode::PermissionDenied,
@@ -242,15 +243,15 @@ namespace lfs::vis {
 
         [[nodiscard]] bool containsLichtProject(const std::filesystem::path& directory) {
             std::error_code error;
-            if (!std::filesystem::is_directory(directory, error) || error)
+            if (!lfs::core::fs::is_directory(directory, error) || error)
                 return false;
 
             constexpr int max_depth = 4;
-            std::filesystem::recursive_directory_iterator iterator(
+            lfs::core::fs::recursive_directory_iterator iterator(
                 directory,
                 std::filesystem::directory_options::skip_permission_denied,
                 error);
-            const std::filesystem::recursive_directory_iterator end;
+            const lfs::core::fs::recursive_directory_iterator end;
             while (iterator != end) {
                 if (error) {
                     error.clear();
@@ -448,7 +449,7 @@ namespace lfs::vis {
             persisted_values = json::object();
             reset_project_manager_on_save = false;
 
-            std::ifstream input(path);
+            lfs::core::fs::ifstream input(path);
             if (!input)
                 return;
 
@@ -1350,7 +1351,7 @@ namespace lfs::vis {
         const auto resolved = lfs::core::UserPaths::resolve();
         if (!resolved)
             return {};
-        std::ifstream input(resolved->preferencesFile());
+        lfs::core::fs::ifstream input(resolved->preferencesFile());
         if (!input)
             return {};
         try {

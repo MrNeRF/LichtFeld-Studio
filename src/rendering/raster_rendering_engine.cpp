@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "core/camera.hpp"
 #include "core/executable_path.hpp"
 #include "core/image_codecs.hpp"
@@ -58,7 +59,7 @@ namespace lfs::rendering {
             if (requested.empty() || requested.is_absolute()) {
                 return requested;
             }
-            if (std::filesystem::exists(requested)) {
+            if (lfs::core::fs::exists(requested)) {
                 return requested;
             }
 
@@ -68,7 +69,7 @@ namespace lfs::rendering {
                 lfs::core::getExecutableDir() / "assets" / requested,
             };
             for (const auto& candidate : candidates) {
-                if (std::filesystem::exists(candidate)) {
+                if (lfs::core::fs::exists(candidate)) {
                     return candidate;
                 }
             }
@@ -91,7 +92,7 @@ namespace lfs::rendering {
             return std::unexpected("Environment map path is empty");
         }
         const std::string path_utf8 = lfs::core::path_to_utf8(resolved_path);
-        if (!std::filesystem::exists(resolved_path)) {
+        if (!lfs::core::fs::exists(resolved_path)) {
             return std::unexpected(std::format("Environment map not found: {}", path_utf8));
         }
 
@@ -143,13 +144,13 @@ namespace lfs::rendering {
         const auto resolved_path = resolveEnvironmentPath(environment_path);
         if (resolved_path.empty())
             throw std::runtime_error("Environment map path is empty");
-        auto extension = resolved_path.extension().string();
+        auto extension = lfs::core::path_to_utf8(resolved_path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(),
                        [](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
         if (extension == ".hdr") {
             if (!lfs::core::image_codecs::radiance_scanlines_complete(resolved_path)) {
                 const auto path_utf8 = lfs::core::path_to_utf8(resolved_path);
-                throw std::runtime_error(std::filesystem::exists(resolved_path)
+                throw std::runtime_error(lfs::core::fs::exists(resolved_path)
                                              ? std::format("Environment map pixel data is incomplete: {}", path_utf8)
                                              : std::format("Environment map not found: {}", path_utf8));
             }

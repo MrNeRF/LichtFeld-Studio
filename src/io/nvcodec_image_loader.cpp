@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "io/nvcodec_image_loader.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
@@ -200,7 +201,7 @@ namespace lfs::io {
 
             LOG_INFO("[nvImageCodec Diagnostics] Extensions directory: {}", lfs::core::path_to_utf8(ext_dir));
 
-            if (!std::filesystem::exists(ext_dir)) {
+            if (!lfs::core::fs::exists(ext_dir)) {
                 LOG_ERROR("[nvImageCodec Diagnostics] Extensions directory does not exist!");
                 return;
             }
@@ -209,9 +210,9 @@ namespace lfs::io {
             std::vector<std::string> dll_files;
             std::error_code ec;
 
-            for (std::filesystem::directory_iterator it(ext_dir, ec), end; !ec && it != end; it.increment(ec)) {
+            for (lfs::core::fs::directory_iterator it(ext_dir, ec), end; !ec && it != end; it.increment(ec)) {
                 const auto& path = it->path();
-                std::string ext = path.extension().string();
+                std::string ext = lfs::core::path_to_utf8(path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
 #ifdef _WIN32
@@ -251,7 +252,7 @@ namespace lfs::io {
 
             for (const auto& f : dll_files) {
                 const auto full_path = ext_dir / f;
-                const HMODULE hModule = LoadLibraryExW(full_path.wstring().c_str(), nullptr, 0);
+                const HMODULE hModule = LoadLibraryExW(lfs::core::fs::native_path(full_path).c_str(), nullptr, 0);
                 if (hModule) {
                     LOG_DEBUG("[nvImageCodec] {} loaded OK", f);
                     FreeLibrary(hModule);
@@ -314,8 +315,8 @@ namespace lfs::io {
             std::string extensions_path_str;
             const char* extensions_path_ptr = nullptr;
 
-            if (!extensions_dir.empty() && std::filesystem::exists(extensions_dir)) {
-                extensions_path_str = lfs::core::path_to_utf8(extensions_dir);
+            if (!extensions_dir.empty() && lfs::core::fs::exists(extensions_dir)) {
+                extensions_path_str = lfs::core::path_to_native_utf8(extensions_dir);
                 extensions_path_ptr = extensions_path_str.c_str();
             }
 
@@ -367,8 +368,8 @@ namespace lfs::io {
             std::string extensions_path_str;
             const char* extensions_path_ptr = nullptr;
 
-            if (!extensions_dir.empty() && std::filesystem::exists(extensions_dir)) {
-                extensions_path_str = lfs::core::path_to_utf8(extensions_dir);
+            if (!extensions_dir.empty() && lfs::core::fs::exists(extensions_dir)) {
+                extensions_path_str = lfs::core::path_to_native_utf8(extensions_dir);
                 extensions_path_ptr = extensions_path_str.c_str();
             }
 
@@ -1041,8 +1042,8 @@ namespace lfs::io {
         std::string extensions_path_str;
         const char* extensions_path_ptr = nullptr;
 
-        if (!extensions_dir.empty() && std::filesystem::exists(extensions_dir)) {
-            extensions_path_str = lfs::core::path_to_utf8(extensions_dir);
+        if (!extensions_dir.empty() && lfs::core::fs::exists(extensions_dir)) {
+            extensions_path_str = lfs::core::path_to_native_utf8(extensions_dir);
             extensions_path_ptr = extensions_path_str.c_str();
             LOG_DEBUG("[NvCodecImageLoader] Extensions: {}", extensions_path_str);
         } else {
@@ -1139,7 +1140,7 @@ namespace lfs::io {
     }
 
     std::vector<uint8_t> NvCodecImageLoader::read_file(const std::filesystem::path& path) {
-        std::ifstream file;
+        lfs::core::fs::ifstream file;
         if (!lfs::core::open_file_for_read(path, std::ios::binary | std::ios::ate, file)) {
             throw std::runtime_error("Failed to open file: " + lfs::core::path_to_utf8(path));
         }

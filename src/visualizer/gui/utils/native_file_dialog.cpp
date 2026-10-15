@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/utils/file_dialog_path.hpp"
 
@@ -167,7 +168,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::filesystem::path absoluteDialogDirectory(
             const std::filesystem::path& directory) {
             std::error_code ec;
-            auto canonical = std::filesystem::weakly_canonical(directory, ec);
+            auto canonical = lfs::core::fs::weakly_canonical(directory, ec);
             if (!ec && !canonical.empty()) {
                 return canonical;
             }
@@ -188,16 +189,16 @@ namespace lfs::vis::gui {
             }
 
             std::error_code ec;
-            if (std::filesystem::exists(inputPath, ec)) {
-                if (std::filesystem::is_directory(inputPath, ec)) {
+            if (lfs::core::fs::exists(inputPath, ec)) {
+                if (lfs::core::fs::is_directory(inputPath, ec)) {
                     return absoluteDialogDirectory(inputPath);
                 }
                 return absoluteDialogDirectory(inputPath.parent_path());
             }
 
             const std::filesystem::path parent = inputPath.parent_path();
-            if (!parent.empty() && std::filesystem::exists(parent, ec) &&
-                std::filesystem::is_directory(parent, ec)) {
+            if (!parent.empty() && lfs::core::fs::exists(parent, ec) &&
+                lfs::core::fs::is_directory(parent, ec)) {
                 return absoluteDialogDirectory(parent);
             }
             return {};

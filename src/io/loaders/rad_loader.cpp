@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "rad_loader.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -40,7 +41,7 @@ namespace lfs::io {
             options.progress(0.0f, "Loading RAD file...");
         }
 
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "RAD file does not exist", path);
         }
@@ -49,7 +50,7 @@ namespace lfs::io {
         if (options.validate_only) {
             LOG_DEBUG("Validation only mode for RAD: {}", lfs::core::path_to_utf8(path));
 
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return make_error(ErrorCode::READ_FAILURE,
                                   "Cannot open RAD file", path);
@@ -162,15 +163,15 @@ namespace lfs::io {
     }
 
     bool RadLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::fs::exists(path)) {
             return false;
         }
 
-        if (std::filesystem::is_directory(path)) {
+        if (lfs::core::fs::is_directory(path)) {
             return false;
         }
 
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         return ext == ".rad";
     }

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "compare_images.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/image_io.hpp"
@@ -58,9 +59,9 @@ namespace lfs::training {
                 }
             };
             if (recursive)
-                collect(std::filesystem::recursive_directory_iterator(folder));
+                collect(lfs::core::fs::recursive_directory_iterator(folder));
             else
-                collect(std::filesystem::directory_iterator(folder));
+                collect(lfs::core::fs::directory_iterator(folder));
             std::ranges::sort(files);
             std::map<std::string, std::filesystem::path> images;
             for (const auto& file : files) {
@@ -203,12 +204,12 @@ namespace lfs::training {
     } // namespace
 
     ImageSet resolve_image_set(const std::filesystem::path& path) {
-        if (!std::filesystem::is_directory(path))
+        if (!lfs::core::fs::is_directory(path))
             return {.images = path};
         for (const auto& sparse : lfs::io::get_colmap_search_paths(path)) {
             if (lfs::io::find_file_ci(sparse, "cameras.bin").empty() && lfs::io::find_file_ci(sparse, "cameras.txt").empty())
                 continue;
-            if (std::filesystem::is_directory(path / "images"))
+            if (lfs::core::fs::is_directory(path / "images"))
                 return {.images = path / "images", .sparse = sparse, .recursive = true};
             return {.images = path, .sparse = sparse};
         }
@@ -218,7 +219,7 @@ namespace lfs::training {
     ImagePairing pair_images_by_name(const std::filesystem::path& reference, const std::filesystem::path& test,
                                      const bool recursive) {
         ImagePairing pairing;
-        if (!std::filesystem::is_directory(reference)) {
+        if (!lfs::core::fs::is_directory(reference)) {
             const auto name = reference.filename();
             pairing.pairs.push_back({reference, test, image_name(name), pairing_key(name),
                                      pairing_key(test.filename())});
@@ -430,13 +431,13 @@ namespace lfs::training {
         });
         // Test images in a distorted reference lens are scored like native GUT renders: masks follow that lens.
         evaluation.optimization.gut = native_distorted_tests > 0;
-        std::filesystem::create_directories(params.output_path);
+        lfs::core::fs::create_directories(params.output_path);
         const auto report_path = params.output_path / "compare_report.txt";
         const auto json_path = params.output_path / "compare.json";
         const auto image_dir = params.output_path / "compare_images";
         for (const auto& previous : {report_path, json_path, image_dir}) {
             std::error_code error;
-            std::filesystem::remove_all(previous, error);
+            lfs::core::fs::remove_all(previous, error);
             if (error)
                 return evaluation_error(std::format("cannot replace {}: {}", lfs::core::path_to_utf8(previous),
                                                     error.message()),
@@ -477,7 +478,7 @@ namespace lfs::training {
         result.metrics = evaluator.evaluate_views(0, dataset, source, background, loader.get());
         for (const auto& [path, text] : {std::pair{report_path, format_compare_report(params, result)},
                                          std::pair{json_path, compare_json(params, result).dump(2)}}) {
-            std::ofstream file;
+            lfs::core::fs::ofstream file;
             if (!lfs::core::open_file_for_write(path, std::ios::out | std::ios::binary, file) ||
                 !(file << text << '\n') || !file.flush())
                 return evaluation_error(std::format("cannot write {}", lfs::core::path_to_utf8(path)),

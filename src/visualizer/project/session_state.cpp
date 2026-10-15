@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "core/filesystem.hpp"
 #include "project/session_state.hpp"
 
 #include "core/error.hpp"
@@ -3156,7 +3157,7 @@ namespace lfs::vis::project {
                     64U * 1024U * 1024U;
             std::error_code error;
             const auto size =
-                std::filesystem::file_size(
+                lfs::core::fs::file_size(
                     path, error);
             if (error)
                 return {.text = std::nullopt,
@@ -3172,7 +3173,7 @@ namespace lfs::vis::project {
                         .code = lfs::ErrorCode::
                             ResourceExhausted};
 
-            std::ifstream stream;
+            lfs::core::fs::ifstream stream;
             if (!lfs::core::open_file_for_read(
                     path, std::ios::binary,
                     stream)) {

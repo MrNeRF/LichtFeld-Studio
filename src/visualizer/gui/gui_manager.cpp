@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "gui/gui_manager.hpp"
 #include "control/command_api.hpp"
 #include "core/camera.hpp"
@@ -3605,7 +3606,7 @@ namespace lfs::vis::gui {
                 return std::nullopt;
             }
             std::error_code filesystem_error;
-            if (!std::filesystem::is_regular_file(paths->windowStateFile(), filesystem_error)) {
+            if (!lfs::core::fs::is_regular_file(paths->windowStateFile(), filesystem_error)) {
                 if (filesystem_error == std::make_error_code(std::errc::no_such_file_or_directory))
                     LOG_DEBUG("Unable to inspect window state: {}", filesystem_error.message());
                 else if (filesystem_error)
@@ -3655,7 +3656,7 @@ namespace lfs::vis::gui {
             try {
                 const auto path = paths->windowStateFile();
                 std::error_code error;
-                if (std::filesystem::exists(path, error)) {
+                if (lfs::core::fs::exists(path, error)) {
                     std::optional<nlohmann::json> old;
                     try {
                         old = lfs::core::persisted_settings::readObject(path);
@@ -4426,8 +4427,8 @@ namespace lfs::vis::gui {
 #ifdef LFS_DEV_LOCALE_SOURCE_DIR
         {
             const auto source_locale_dir = lfs::core::utf8_to_path(LFS_DEV_LOCALE_SOURCE_DIR);
-            if (std::filesystem::exists(source_locale_dir) &&
-                std::filesystem::is_directory(source_locale_dir)) {
+            if (lfs::core::fs::exists(source_locale_dir) &&
+                lfs::core::fs::is_directory(source_locale_dir)) {
                 locale_dir = source_locale_dir;
             }
         }
@@ -4747,14 +4748,14 @@ namespace lfs::vis::gui {
 #ifdef LFS_DEV_RMLUI_SOURCE_DIR
         {
             const auto dir = lfs::core::utf8_to_path(LFS_DEV_RMLUI_SOURCE_DIR);
-            if (std::filesystem::exists(dir) && std::filesystem::is_directory(dir))
+            if (lfs::core::fs::exists(dir) && lfs::core::fs::is_directory(dir))
                 dev_resource_watch_.rml_dir = dir;
         }
 #endif
 #ifdef LFS_DEV_LOCALE_SOURCE_DIR
         {
             const auto dir = lfs::core::utf8_to_path(LFS_DEV_LOCALE_SOURCE_DIR);
-            if (std::filesystem::exists(dir) && std::filesystem::is_directory(dir))
+            if (lfs::core::fs::exists(dir) && lfs::core::fs::is_directory(dir))
                 dev_resource_watch_.locale_dir = dir;
         }
 #endif
@@ -4786,17 +4787,17 @@ namespace lfs::vis::gui {
                     return;
 
                 std::error_code ec;
-                if (!std::filesystem::exists(dir, ec) || ec ||
-                    !std::filesystem::is_directory(dir, ec) || ec) {
+                if (!lfs::core::fs::exists(dir, ec) || ec ||
+                    !lfs::core::fs::is_directory(dir, ec) || ec) {
                     if (ec)
                         result.scan_failed = true;
                     return;
                 }
 
                 try {
-                    std::filesystem::recursive_directory_iterator it(
+                    lfs::core::fs::recursive_directory_iterator it(
                         dir, std::filesystem::directory_options::skip_permission_denied, ec);
-                    const std::filesystem::recursive_directory_iterator end;
+                    const lfs::core::fs::recursive_directory_iterator end;
                     if (ec) {
                         result.scan_failed = true;
                         return;
@@ -4813,7 +4814,7 @@ namespace lfs::vis::gui {
                         if (!watched)
                             continue;
 
-                        const auto mtime = std::filesystem::last_write_time(it->path(), entry_ec);
+                        const auto mtime = lfs::core::fs::last_write_time(it->path(), entry_ec);
                         if (entry_ec)
                             continue;
 
@@ -8226,7 +8227,7 @@ namespace lfs::vis::gui {
             size_t available_bytes = e.available_bytes;
             if (project_save) {
                 std::error_code space_error;
-                const auto space = std::filesystem::space(path.parent_path(), space_error);
+                const auto space = lfs::core::fs::space(path.parent_path(), space_error);
                 if (!space_error)
                     available_bytes = static_cast<size_t>(space.available);
             }

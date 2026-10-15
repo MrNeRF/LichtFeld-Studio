@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/path_utils.hpp"
+#include "core/filesystem.hpp"
 #include "gui/layout_state.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
@@ -27,14 +29,14 @@ namespace lfs::vis::gui {
 
         void backUpDamagedLegacyLayout(const std::filesystem::path& path) {
             std::error_code error;
-            const auto modified = std::filesystem::last_write_time(path, error);
+            const auto modified = lfs::core::fs::last_write_time(path, error);
             if (error)
                 throw std::runtime_error("legacy layout timestamp could not be read: " + error.message());
-            const auto size = std::filesystem::file_size(path, error);
+            const auto size = lfs::core::fs::file_size(path, error);
             if (error)
                 throw std::runtime_error("legacy layout size could not be read: " + error.message());
             std::scoped_lock lock(g_legacy_layout_backup_mutex);
-            const auto key = path.string();
+            const auto key = lfs::core::path_to_utf8(path);
             const auto signature = std::pair{modified, size};
             if (const auto found = g_legacy_layout_backups.find(key);
                 found != g_legacy_layout_backups.end() && found->second == signature)
@@ -146,9 +148,9 @@ namespace lfs::vis::gui {
             const auto load_file =
                 [this](const std::filesystem::path& path,
                        const bool legacy_layout) {
-                    if (!std::filesystem::exists(path))
+                    if (!lfs::core::fs::exists(path))
                         return;
-                    std::ifstream file(path);
+                    lfs::core::fs::ifstream file(path);
                     if (!file)
                         return;
                     nlohmann::json j;
@@ -157,7 +159,7 @@ namespace lfs::vis::gui {
                         if (!j.is_object())
                             throw std::runtime_error("settings root must be an object");
                     } catch (const std::exception& error) {
-                        LOG_WARN("Failed to load UI settings from '{}': {}", path.string(), error.what());
+                        LOG_WARN("Failed to load UI settings from '{}': {}", lfs::core::path_to_utf8(path), error.what());
                         if (legacy_layout) {
                             try {
                                 backUpDamagedLegacyLayout(path);
@@ -280,7 +282,7 @@ namespace lfs::vis::gui {
                 try {
                     load_file(path, legacy_layout);
                 } catch (const std::exception& error) {
-                    LOG_WARN("Failed to load UI settings from '{}': {}", path.string(), error.what());
+                    LOG_WARN("Failed to load UI settings from '{}': {}", lfs::core::path_to_utf8(path), error.what());
                 }
             };
             load_independently(legacy_path, true);

@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "io/loaders/colmap_loader.hpp"
 #include "core/camera.hpp"
 #include "core/error_reporter.hpp"
@@ -36,12 +37,12 @@ namespace lfs::io {
         auto start_time = std::chrono::high_resolution_clock::now();
 
         // Validate directory exists
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "COLMAP dataset path does not exist", path);
         }
 
-        if (!std::filesystem::is_directory(path)) {
+        if (!lfs::core::fs::is_directory(path)) {
             return make_error(ErrorCode::NOT_A_DIRECTORY,
                               "COLMAP dataset must be a directory", path);
         }
@@ -110,9 +111,9 @@ namespace lfs::io {
         // A relative images folder that is not inside the dataset may sit next to it,
         // resolved from the working directory like the dataset path itself.
         if (const auto requested = lfs::core::utf8_to_path(options.images_folder);
-            requested.is_relative() && !std::filesystem::exists(image_dir)) {
+            requested.is_relative() && !lfs::core::fs::exists(image_dir)) {
             std::error_code ec;
-            if (std::filesystem::is_directory(requested, ec)) {
+            if (lfs::core::fs::is_directory(requested, ec)) {
                 image_dir = std::filesystem::absolute(requested, ec).lexically_normal();
                 actual_images_folder = lfs::core::path_to_utf8(image_dir);
                 LOG_INFO("Images folder '{}' is outside the dataset; using {}",
@@ -126,7 +127,7 @@ namespace lfs::io {
             }
 
             std::error_code ec;
-            bool equivalent = std::filesystem::equivalent(candidate, path, ec);
+            bool equivalent = lfs::core::fs::equivalent(candidate, path, ec);
             if (!ec) {
                 return equivalent;
             }
@@ -135,7 +136,7 @@ namespace lfs::io {
         };
 
         // If specified folder doesn't exist, check for flat structure
-        if (!std::filesystem::exists(image_dir)) {
+        if (!lfs::core::fs::exists(image_dir)) {
             LOG_TIMER_DEBUG("COLMAP resolve image directory");
             const auto cameras_txt_parent =
                 cameras_txt.empty() ? std::filesystem::path{} : cameras_txt.parent_path();
@@ -147,7 +148,7 @@ namespace lfs::io {
 
             if (is_flat_structure) {
                 bool has_images_in_root = false;
-                for (const auto& entry : std::filesystem::directory_iterator(path)) {
+                for (const auto& entry : lfs::core::fs::directory_iterator(path)) {
                     if (entry.is_regular_file() && is_image_file(entry.path())) {
                         has_images_in_root = true;
                         break;

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "theme.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -729,7 +730,7 @@ namespace lfs::vis {
                 std::set<std::string> family_ids;
                 std::vector<ThemePresetRecord> family_presets;
                 const auto family_path = getAssetPath(asset_name);
-                std::ifstream file;
+                lfs::core::fs::ifstream file;
                 if (!lfs::core::open_file_for_read(family_path, file))
                     throw std::runtime_error("could not open family file");
 
@@ -815,9 +816,9 @@ namespace lfs::vis {
 
             try {
                 g_theme_manifest_path = getAssetPath(std::string(THEMES_MANIFEST_ASSET_NAME));
-                g_theme_manifest_mtime = std::filesystem::last_write_time(g_theme_manifest_path);
+                g_theme_manifest_mtime = lfs::core::fs::last_write_time(g_theme_manifest_path);
 
-                std::ifstream file;
+                lfs::core::fs::ifstream file;
                 if (!lfs::core::open_file_for_read(g_theme_manifest_path, file))
                     throw std::runtime_error("could not open manifest");
 
@@ -884,7 +885,7 @@ namespace lfs::vis {
                 }
 
                 syncThemePresetName(preset);
-                preset.mtime = std::filesystem::last_write_time(preset.path);
+                preset.mtime = lfs::core::fs::last_write_time(preset.path);
             } catch (...) {
                 preset.path.clear();
             }
@@ -892,10 +893,10 @@ namespace lfs::vis {
         }
 
         bool hotReloadThemePreset(ThemePresetRecord& preset) {
-            if (!preset.loaded || preset.path.empty() || !std::filesystem::exists(preset.path))
+            if (!preset.loaded || preset.path.empty() || !lfs::core::fs::exists(preset.path))
                 return false;
 
-            const auto mtime = std::filesystem::last_write_time(preset.path);
+            const auto mtime = lfs::core::fs::last_write_time(preset.path);
             if (mtime == preset.mtime)
                 return false;
 
@@ -1086,8 +1087,8 @@ namespace lfs::vis {
         bool active_theme_reloaded = false;
 
         try {
-            if (!g_theme_manifest_path.empty() && std::filesystem::exists(g_theme_manifest_path)) {
-                const auto manifest_mtime = std::filesystem::last_write_time(g_theme_manifest_path);
+            if (!g_theme_manifest_path.empty() && lfs::core::fs::exists(g_theme_manifest_path)) {
+                const auto manifest_mtime = lfs::core::fs::last_write_time(g_theme_manifest_path);
                 if (manifest_mtime != g_theme_manifest_mtime) {
                     LOG_INFO("Hot-reloading theme manifest");
                     loadThemesFromFiles();
@@ -1103,9 +1104,9 @@ namespace lfs::vis {
         try {
             for (const auto& preset : g_theme_presets) {
                 if (preset.variant_mode.empty() || preset.path.empty() ||
-                    !std::filesystem::exists(preset.path))
+                    !lfs::core::fs::exists(preset.path))
                     continue;
-                if (std::filesystem::last_write_time(preset.path) == preset.mtime)
+                if (lfs::core::fs::last_write_time(preset.path) == preset.mtime)
                     continue;
 
                 LOG_INFO("Hot-reloading theme family catalog");
@@ -1256,7 +1257,7 @@ namespace lfs::vis {
             write_gradient("histogram_fill", t.gradients.histogram_fill);
             write_gradient("histogram_selection", t.gradients.histogram_selection);
 
-            std::ofstream file;
+            lfs::core::fs::ofstream file;
             if (!lfs::core::open_file_for_write(lfs::core::utf8_to_path(path), file))
                 return false;
             file << j.dump(2);
@@ -1471,7 +1472,7 @@ namespace lfs::vis {
 
     bool loadTheme(Theme& t, const std::string& path) {
         try {
-            std::ifstream file;
+            lfs::core::fs::ifstream file;
             if (!lfs::core::open_file_for_read(lfs::core::utf8_to_path(path), file))
                 return false;
 
@@ -1490,7 +1491,7 @@ namespace lfs::vis {
                                     const std::filesystem::path& path,
                                     const std::string_view variant_mode) {
             try {
-                std::ifstream file;
+                lfs::core::fs::ifstream file;
                 if (!lfs::core::open_file_for_read(path, file))
                     return false;
 

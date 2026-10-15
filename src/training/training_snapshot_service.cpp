@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "core/filesystem.hpp"
 #include "training_snapshot_service.hpp"
 
 #include "checkpoint.hpp"
@@ -142,7 +143,7 @@ namespace lfs::training {
 
         std::uint64_t read_rss_bytes() {
 #if defined(__linux__)
-            std::ifstream input("/proc/self/status");
+            lfs::core::fs::ifstream input("/proc/self/status");
             std::string line;
             while (std::getline(input, line)) {
                 if (!line.starts_with("VmRSS:")) {
@@ -179,7 +180,7 @@ namespace lfs::training {
                 };
             }
 #elif defined(__linux__)
-            std::ifstream input("/proc/meminfo");
+            lfs::core::fs::ifstream input("/proc/meminfo");
             std::string line;
             while (std::getline(input, line)) {
                 unsigned long long kib = 0;

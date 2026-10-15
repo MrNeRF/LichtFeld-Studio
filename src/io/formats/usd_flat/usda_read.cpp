@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "usda_read.hpp"
 #include "core/path_utils.hpp"
 #include "half.hpp"
@@ -602,7 +603,7 @@ namespace lfs::io::usd_flat {
     }
 
     lfs::Result<FlatStage> read_usda(const std::filesystem::path& path) {
-        std::ifstream input(path, std::ios::binary);
+        lfs::core::fs::ifstream input(path, std::ios::binary);
         if (!input) {
             return make_flat_error("Failed to open USD file: " + lfs::core::path_to_utf8(path));
         }

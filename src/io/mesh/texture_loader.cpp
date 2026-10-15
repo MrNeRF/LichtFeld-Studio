@@ -18,7 +18,7 @@ namespace lfs::io::mesh {
         }
 
         TextureData tex;
-        auto* data = stbi_load(key.c_str(), &tex.width, &tex.height, &tex.channels, 4);
+        auto* data = stbi_load(lfs::core::path_to_native_utf8(lfs::core::utf8_to_path(key)).c_str(), &tex.width, &tex.height, &tex.channels, 4);
         if (!data) {
             LOG_ERROR("Failed to load texture: {}", key);
             return nullptr;

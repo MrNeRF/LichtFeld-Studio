@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "core/filesystem.hpp"
 #include "io/project_document.hpp"
 
 #include "core/error.hpp"
@@ -87,19 +88,19 @@ namespace lfs::io::project {
         }
         const auto images_dir = dataset_images_directory(dataset);
         std::error_code ec;
-        if (!std::filesystem::is_directory(images_dir, ec) || ec) {
+        if (!lfs::core::fs::is_directory(images_dir, ec) || ec) {
             return std::nullopt;
         }
         std::optional<std::filesystem::path> first;
         std::string first_key;
-        std::filesystem::directory_iterator it(
+        lfs::core::fs::directory_iterator it(
             images_dir,
             std::filesystem::directory_options::skip_permission_denied,
             ec);
         if (ec) {
             return std::nullopt;
         }
-        for (; !ec && it != std::filesystem::directory_iterator();
+        for (; !ec && it != lfs::core::fs::directory_iterator();
              it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec) {

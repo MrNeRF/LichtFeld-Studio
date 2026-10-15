@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "core/legacy_settings_migration.hpp"
 
 #include "core/environment.hpp"
@@ -75,13 +76,13 @@ namespace lfs::core {
             const std::filesystem::path& destination,
             bool& conflict) {
             std::error_code error;
-            if (!std::filesystem::is_regular_file(source, error))
+            if (!lfs::core::fs::is_regular_file(source, error))
                 return {};
-            if (std::filesystem::exists(destination, error)) {
+            if (lfs::core::fs::exists(destination, error)) {
                 conflict = true;
                 return {};
             }
-            std::ifstream input(source, std::ios::binary);
+            lfs::core::fs::ifstream input(source, std::ios::binary);
             if (!input)
                 return migrationFailure(
                     std::format("Unable to read legacy settings file '{}'", path_to_utf8(source)), source);
@@ -96,13 +97,13 @@ namespace lfs::core {
                                      "language_preference", "ui_scale"}) {
                 const auto path = legacy / name;
                 std::error_code error;
-                if (std::filesystem::is_regular_file(path, error))
+                if (lfs::core::fs::is_regular_file(path, error))
                     files.push_back(path);
             }
             const auto keymaps = legacy / "input_profiles";
             std::error_code error;
-            if (std::filesystem::is_directory(keymaps, error))
-                for (std::filesystem::directory_iterator entry(keymaps, error), end;
+            if (lfs::core::fs::is_directory(keymaps, error))
+                for (lfs::core::fs::directory_iterator entry(keymaps, error), end;
                      !error && entry != end; entry.increment(error)) {
                     if (entry->is_regular_file(error) && entry->path().extension() == ".json")
                         files.push_back(entry->path());
@@ -116,11 +117,11 @@ namespace lfs::core {
             const std::vector<std::filesystem::path>& files,
             const std::filesystem::path& marker) {
             std::error_code error;
-            const auto migrated_at = std::filesystem::last_write_time(marker, error);
+            const auto migrated_at = lfs::core::fs::last_write_time(marker, error);
             if (error)
                 return false;
             for (const auto& file : files) {
-                const auto changed_at = std::filesystem::last_write_time(file, error);
+                const auto changed_at = lfs::core::fs::last_write_time(file, error);
                 if (!error && changed_at > migrated_at)
                     return true;
                 error.clear();
@@ -137,8 +138,8 @@ namespace lfs::core {
         const auto marker = paths.dataDir() / "migrations" / "legacy-user-settings-v1.done";
         std::error_code error;
         std::string marker_text;
-        if (std::filesystem::exists(marker, error) && !error) {
-            std::ifstream input(marker);
+        if (lfs::core::fs::exists(marker, error) && !error) {
+            lfs::core::fs::ifstream input(marker);
             marker_text.assign(std::istreambuf_iterator<char>(input), {});
             if (marker_text == "legacy settings migration conflict announced\n")
                 return {};
@@ -151,7 +152,7 @@ namespace lfs::core {
             return ensured;
 
         const auto legacy = legacyConfigDirectory();
-        if (!legacy || *legacy == paths.configDir() || !std::filesystem::is_directory(*legacy, error))
+        if (!legacy || *legacy == paths.configDir() || !lfs::core::fs::is_directory(*legacy, error))
             return marker_text.empty() ? writeTextFileAtomically(marker, "no legacy settings found\n") : lfs::Status{};
 
         const auto files = legacyFiles(*legacy);
@@ -174,8 +175,8 @@ namespace lfs::core {
             return copied;
 
         const auto old_keymaps = *legacy / "input_profiles";
-        if (std::filesystem::is_directory(old_keymaps, error) && !error) {
-            for (std::filesystem::directory_iterator entry(old_keymaps, error), end;
+        if (lfs::core::fs::is_directory(old_keymaps, error) && !error) {
+            for (lfs::core::fs::directory_iterator entry(old_keymaps, error), end;
                  !error && entry != end; entry.increment(error)) {
                 if (!entry->is_regular_file(error) || entry->path().extension() != ".json")
                     continue;
@@ -188,7 +189,7 @@ namespace lfs::core {
                 return migrationFailure(error.message(), old_keymaps);
         }
 
-        const bool current_preferences_exist = std::filesystem::exists(paths.preferencesFile(), error);
+        const bool current_preferences_exist = lfs::core::fs::exists(paths.preferencesFile(), error);
         if (error)
             return migrationFailure(error.message(), paths.preferencesFile());
         json preferences = json::object();
@@ -217,12 +218,12 @@ namespace lfs::core {
             for (const auto [filename, key] : {
                      std::pair{"theme_preference", "theme"},
                      std::pair{"language_preference", "language"}}) {
-                std::ifstream input(*legacy / filename);
+                lfs::core::fs::ifstream input(*legacy / filename);
                 std::string value;
                 if (input >> value)
                     import_field(key, value);
             }
-            std::ifstream scale_input(*legacy / "ui_scale");
+            lfs::core::fs::ifstream scale_input(*legacy / "ui_scale");
             float scale = 0.0f;
             if (scale_input >> scale && std::isfinite(scale))
                 import_field("ui_scale", scale <= 0.0f ? json("auto") : json(scale));

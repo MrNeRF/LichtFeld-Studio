@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "core/exif.hpp"
 #include "core/path_utils.hpp"
 
@@ -393,7 +394,7 @@ namespace lfs::core {
     } // namespace
 
     std::optional<double> exif_exposure_ev(const std::filesystem::path& image) {
-        std::ifstream file;
+        lfs::core::fs::ifstream file;
         if (!open_file_for_read(image, std::ios::in | std::ios::binary, file)) {
             return std::nullopt;
         }

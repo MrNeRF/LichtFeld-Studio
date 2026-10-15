@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/filesystem.hpp"
 #include "core/executable_path.hpp"
 #include "core/path_utils.hpp"
 #include <filesystem>
@@ -50,7 +51,7 @@ namespace lfs::vis {
 #endif
 
         for (const auto& path : search_paths) {
-            if (std::filesystem::exists(path))
+            if (lfs::core::fs::exists(path))
                 return path;
         }
 

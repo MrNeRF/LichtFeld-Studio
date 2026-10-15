@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "colmap.hpp"
 #include "core/assert.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -68,7 +69,7 @@ namespace lfs::io {
     using lfs::core::PointCloud;
     using lfs::core::Tensor;
 
-    namespace fs = std::filesystem;
+    namespace fs = lfs::core::fs;
 
     namespace {
         [[noreturn]] void throw_colmap_error(
@@ -1049,7 +1050,7 @@ namespace lfs::io {
     static std::unique_ptr<BinaryBuffer>
     read_binary(const std::filesystem::path& p) {
         LOG_TRACE("Reading binary file: {}", lfs::core::path_to_utf8(p));
-        std::ifstream f;
+        lfs::core::fs::ifstream f;
         if (!lfs::core::open_file_for_read(p, std::ios::binary | std::ios::ate, f)) {
             throw_colmap_error(lfs::ErrorCode::Internal,
                                "Failed to open " + lfs::core::path_to_utf8(p));
@@ -1103,7 +1104,7 @@ namespace lfs::io {
 
 #if defined(_WIN32)
             f.close();
-            HANDLE handle = CreateFileW(p.c_str(), GENERIC_READ,
+            HANDLE handle = CreateFileW(lfs::core::fs::native_path(p.c_str()).c_str(), GENERIC_READ,
                                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                         nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
             if (handle == INVALID_HANDLE_VALUE) {
@@ -1870,7 +1871,7 @@ namespace lfs::io {
     std::vector<std::string> read_text_file(const std::filesystem::path& file_path,
                                             const LoadOptions& options = {}) {
         LOG_TRACE("Reading text file: {}", lfs::core::path_to_utf8(file_path));
-        std::ifstream file;
+        lfs::core::fs::ifstream file;
         if (!lfs::core::open_file_for_read(file_path, file)) {
             throw_colmap_error(lfs::ErrorCode::Internal,
                                "Failed to open " + lfs::core::path_to_utf8(file_path));
@@ -2108,7 +2109,7 @@ namespace lfs::io {
         SkipTally* pose_tally = nullptr) {
         LOG_TIMER_TRACE("Read images.txt camera metadata");
 
-        std::ifstream file;
+        lfs::core::fs::ifstream file;
         if (!lfs::core::open_file_for_read(file_path, file)) {
             throw_colmap_error(lfs::ErrorCode::Internal,
                                "Failed to open " + lfs::core::path_to_utf8(file_path));
@@ -2852,7 +2853,7 @@ namespace lfs::io {
 
         std::filesystem::path images_path = base_path / lfs::core::utf8_to_path(images_folder);
 
-        if (!std::filesystem::exists(images_path)) {
+        if (!lfs::core::fs::exists(images_path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "Images folder does not exist", images_path);
         }
@@ -4106,7 +4107,7 @@ namespace lfs::io {
                                        lfs::core::path_to_utf8(output_sparse_path / "points3D.bin")));
         } else {
             const auto points_path = output_sparse_path / "points3D.txt";
-            std::ifstream points_stream(points_path);
+            lfs::core::fs::ifstream points_stream(points_path);
             LFS_ASSERT_MSG(points_stream.is_open(),
                            std::format("COLMAP writer verification must reopen empty points3D.txt "
                                        "(is_open={}, path='{}')",
@@ -4137,7 +4138,7 @@ namespace lfs::io {
 
     void write_cameras_binary_file(const fs::path& path,
                                    const std::unordered_map<uint32_t, CameraDataIntermediate>& cameras) {
-        std::ofstream stream(path, std::ios::trunc | std::ios::binary);
+        lfs::core::fs::ofstream stream(path, std::ios::trunc | std::ios::binary);
         if (!stream.is_open()) {
             throw std::runtime_error("Failed to open " + lfs::core::path_to_utf8(path));
         }
@@ -4157,7 +4158,7 @@ namespace lfs::io {
     }
 
     void write_images_binary_file(const fs::path& path, const std::vector<ImageData>& images) {
-        std::ofstream stream(path, std::ios::trunc | std::ios::binary);
+        lfs::core::fs::ofstream stream(path, std::ios::trunc | std::ios::binary);
         if (!stream.is_open()) {
             throw std::runtime_error("Failed to open " + lfs::core::path_to_utf8(path));
         }
@@ -4184,7 +4185,7 @@ namespace lfs::io {
     }
 
     void write_points3D_binary_file(const fs::path& path, const std::vector<Point3DData>& points) {
-        std::ofstream stream(path, std::ios::trunc | std::ios::binary);
+        lfs::core::fs::ofstream stream(path, std::ios::trunc | std::ios::binary);
         if (!stream.is_open()) {
             throw std::runtime_error("Failed to open " + lfs::core::path_to_utf8(path));
         }
@@ -4210,7 +4211,7 @@ namespace lfs::io {
 
     void write_cameras_text_file(const fs::path& path,
                                  const std::unordered_map<uint32_t, CameraDataIntermediate>& cameras) {
-        std::ofstream stream(path, std::ios::trunc);
+        lfs::core::fs::ofstream stream(path, std::ios::trunc);
         if (!stream.is_open()) {
             throw std::runtime_error("Failed to open " + lfs::core::path_to_utf8(path));
         }
@@ -4234,7 +4235,7 @@ namespace lfs::io {
     }
 
     void write_images_text_file(const fs::path& path, const std::vector<ImageData>& images) {
-        std::ofstream stream(path, std::ios::trunc);
+        lfs::core::fs::ofstream stream(path, std::ios::trunc);
         if (!stream.is_open()) {
             throw std::runtime_error("Failed to open " + lfs::core::path_to_utf8(path));
         }
@@ -4269,7 +4270,7 @@ namespace lfs::io {
     }
 
     void write_points3D_text_file(const fs::path& path, const std::vector<Point3DData>& points) {
-        std::ofstream stream(path, std::ios::trunc);
+        lfs::core::fs::ofstream stream(path, std::ios::trunc);
         if (!stream.is_open()) {
             throw std::runtime_error("Failed to open " + lfs::core::path_to_utf8(path));
         }

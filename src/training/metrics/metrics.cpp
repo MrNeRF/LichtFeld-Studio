@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "metrics.hpp"
 #include "../kernels/normal_loss.hpp"
 #include "../rasterization/fast_rasterizer.hpp"
@@ -423,11 +424,11 @@ namespace lfs::training {
 
         void write_json_file(const std::filesystem::path& path, const nlohmann::json& document) {
             std::error_code ec;
-            std::filesystem::create_directories(path.parent_path(), ec);
+            lfs::core::fs::create_directories(path.parent_path(), ec);
             auto temp_path = path;
             temp_path += ".tmp";
             {
-                std::ofstream out;
+                lfs::core::fs::ofstream out;
                 if (!lfs::core::open_file_for_write(temp_path, std::ios::out | std::ios::binary, out)) {
                     LOG_WARN("Eval: failed to open '{}'", lfs::core::path_to_utf8(temp_path));
                     return;
@@ -438,13 +439,13 @@ namespace lfs::training {
                     return;
                 }
             }
-            std::filesystem::rename(temp_path, path, ec);
+            lfs::core::fs::rename(temp_path, path, ec);
             if (ec)
                 LOG_WARN("Eval: failed to replace '{}': {}", lfs::core::path_to_utf8(path), ec.message());
         }
 
         [[nodiscard]] nlohmann::json read_json_object(const std::filesystem::path& path) {
-            std::ifstream in;
+            lfs::core::fs::ifstream in;
             if (!lfs::core::open_file_for_read(path, std::ios::in | std::ios::binary, in))
                 return nlohmann::json::object();
             try {
@@ -1224,8 +1225,8 @@ namespace lfs::training {
           txt_path_(output_dir_ / "metrics_report.txt"),
           per_image_path_(output_dir_ / "per_image_metrics.json") {
         // Create CSV header if file doesn't exist
-        if (!std::filesystem::exists(csv_path_)) {
-            std::ofstream csv_file;
+        if (!lfs::core::fs::exists(csv_path_)) {
+            lfs::core::fs::ofstream csv_file;
             if (lfs::core::open_file_for_write(csv_path_, csv_file)) {
                 csv_file << EvalMetrics{}.to_csv_header() << std::endl;
                 csv_file.close();
@@ -1307,7 +1308,7 @@ namespace lfs::training {
         all_metrics_.push_back(metrics);
 
         // Append to CSV immediately
-        std::ofstream csv_file;
+        lfs::core::fs::ofstream csv_file;
         if (lfs::core::open_file_for_write(csv_path_, std::ios::app, csv_file)) {
             csv_file << metrics.to_csv_row() << std::endl;
             csv_file.close();
@@ -1326,7 +1327,7 @@ namespace lfs::training {
 
     void MetricsReporter::write_training_config(const lfs::core::param::TrainingParameters& params) const {
         std::error_code ec;
-        std::filesystem::create_directories(output_dir_, ec);
+        lfs::core::fs::create_directories(output_dir_, ec);
         if (const auto saved = lfs::core::param::save_training_parameters_to_json(
                 params, output_dir_ / "training_config.json");
             !saved) {
@@ -1335,7 +1336,7 @@ namespace lfs::training {
     }
 
     void MetricsReporter::save_report() const {
-        std::ofstream report_file;
+        lfs::core::fs::ofstream report_file;
         if (!lfs::core::open_file_for_write(txt_path_, report_file)) {
             std::cerr << "Failed to open report file: " << lfs::core::path_to_utf8(txt_path_) << std::endl;
             return;
@@ -1431,7 +1432,7 @@ namespace lfs::training {
         report_file.close();
         std::cout << "Evaluation report saved to: " << lfs::core::path_to_utf8(txt_path_) << std::endl;
         std::cout << "Metrics CSV saved to: " << lfs::core::path_to_utf8(csv_path_) << std::endl;
-        if (std::filesystem::exists(per_image_path_))
+        if (lfs::core::fs::exists(per_image_path_))
             std::cout << "Per-image metrics JSON saved to: " << lfs::core::path_to_utf8(per_image_path_) << std::endl;
     }
 
@@ -1489,7 +1490,7 @@ namespace lfs::training {
         } else if (param::is_eval_mask_folder(spec)) {
             const auto folder = lfs::core::utf8_to_path(std::string(param::eval_mask_folder(spec)));
             std::error_code folder_error;
-            if (!std::filesystem::is_directory(folder, folder_error))
+            if (!lfs::core::fs::is_directory(folder, folder_error))
                 return evaluation_error(std::format("Evaluation mask folder '{}' does not exist",
                                                     lfs::core::path_to_utf8(folder)),
                                         LFS_SOURCE_SITE_CURRENT());
@@ -1590,7 +1591,7 @@ namespace lfs::training {
                                      : source.image_dir;
         const auto flip_dir = eval_dir / "flip";
         if (_params.optimization.enable_save_eval_images) {
-            std::filesystem::create_directories(_params.optimization.eval_flip ? flip_dir : eval_dir);
+            lfs::core::fs::create_directories(_params.optimization.eval_flip ? flip_dir : eval_dir);
         }
 
         const size_t val_dataset_size = val_dataset->size();

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "localization_manager.hpp"
 
 #include "core/logger.hpp"
@@ -10,7 +11,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
-namespace fs = std::filesystem;
+namespace fs = lfs::core::fs;
 using json = nlohmann::json;
 
 namespace lfs::event {
@@ -41,7 +42,7 @@ namespace lfs::event {
         warned_missing_keys_.clear();
 
         const fs::path index_path = fs::path(locales_dir_).parent_path() / "locale_index.json";
-        std::ifstream index_file;
+        lfs::core::fs::ifstream index_file;
         if (!lfs::core::open_file_for_read(index_path, index_file)) {
             LOG_ERROR("Locale index not found: {}", lfs::core::path_to_utf8(index_path));
             return false;
@@ -256,7 +257,7 @@ namespace lfs::event {
 
     bool LocalizationManager::parseLocaleFile(const std::string& filepath,
                                               std::unordered_map<std::string, std::string>& strings) const {
-        std::ifstream file;
+        lfs::core::fs::ifstream file;
         if (!lfs::core::open_file_for_read(lfs::core::utf8_to_path(filepath), file)) {
             LOG_ERROR("Failed to open locale file: {}", filepath);
             return false;

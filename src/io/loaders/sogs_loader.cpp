@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filesystem.hpp"
 #include "sogs_loader.hpp"
 #include "core/file_extensions.hpp"
 #include "core/logger.hpp"
@@ -35,7 +36,7 @@ namespace lfs::io {
         }
 
         // Validate path exists
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "SOG file/directory does not exist", path);
         }
@@ -47,9 +48,9 @@ namespace lfs::io {
             bool valid = false;
 
             // Check if it's a .sog bundle
-            if (core::has_extension(path, ".sog") && std::filesystem::is_regular_file(path)) {
+            if (core::has_extension(path, ".sog") && lfs::core::fs::is_regular_file(path)) {
                 // Basic validation - check if it's a valid archive
-                std::ifstream file;
+                lfs::core::fs::ifstream file;
                 if (lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                     // Check for ZIP/archive header (PK)
                     char header[2];
@@ -60,13 +61,13 @@ namespace lfs::io {
                 }
             }
             // Check if it's a directory with meta.json
-            else if (std::filesystem::is_directory(path)) {
-                if (std::filesystem::exists(path / "meta.json")) {
+            else if (lfs::core::fs::is_directory(path)) {
+                if (lfs::core::fs::exists(path / "meta.json")) {
                     valid = true;
                 }
             }
             // Check if it's a meta.json file directly
-            else if (path.filename() == "meta.json" && std::filesystem::is_regular_file(path)) {
+            else if (path.filename() == "meta.json" && lfs::core::fs::is_regular_file(path)) {
                 valid = true;
             }
 
@@ -128,22 +129,22 @@ namespace lfs::io {
     }
 
     bool SogLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::fs::exists(path)) {
             return false;
         }
 
         // Check for .sog bundle file
-        if (core::has_extension(path, ".sog") && std::filesystem::is_regular_file(path)) {
+        if (core::has_extension(path, ".sog") && lfs::core::fs::is_regular_file(path)) {
             return true;
         }
 
         // Check for directory with meta.json
-        if (std::filesystem::is_directory(path)) {
-            return std::filesystem::exists(path / "meta.json");
+        if (lfs::core::fs::is_directory(path)) {
+            return lfs::core::fs::exists(path / "meta.json");
         }
 
         // Check if it's a meta.json file directly
-        if (path.filename() == "meta.json" && std::filesystem::is_regular_file(path)) {
+        if (path.filename() == "meta.json" && lfs::core::fs::is_regular_file(path)) {
             return true;
         }
 
