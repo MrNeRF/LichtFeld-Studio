@@ -282,13 +282,13 @@ view mode, sort, refresh, and scan status are separate affordances, followed by
 the content region. Preserve that hierarchy even if the toolbar is simplified
 for a narrower panel.
 
-#The Histogram panel uses one shared toolbar above its chart in both docked and
+The Histogram panel uses one shared toolbar above its chart in both docked and
 floating modes. Keep the field description and full data range in the context
 row, compact editable display bounds beside the chart, and summary statistics
 in a flat wrapping strip below it. Chart fills use solid semantic theme colors;
 avoid decorative gradients, per-control cards, and duplicate field headings.
 
-### Sections and settings
+#### Sections and settings
 
 Use `.section-header` with `.text-accent`, a `.section-arrow`, and a matching
 `.section-content` for collapsible groups. Keep the expanded state in model or
