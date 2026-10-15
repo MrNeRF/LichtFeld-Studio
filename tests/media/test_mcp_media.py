@@ -8,12 +8,41 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import importlib.util
 
 RUNNER = None
 FFMPEG = os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg")
+_exif_spec = importlib.util.spec_from_file_location("source_exif_fixture", Path(__file__).resolve().parent / "source_exif_fixture.py")
+source_exif_fixture = importlib.util.module_from_spec(_exif_spec)
+_exif_spec.loader.exec_module(source_exif_fixture)
 
 
 class McpMedia(unittest.TestCase):
+    def test_source_exif_invalid_utf8_diagnostic_remains_malformed(self):
+        path = self.root / "invalid-diagnostic.avif"
+        source_exif_fixture.write_invalid_heif(path)
+        request = self.root / "source-exif-invalid.json"
+        request.write_text(json.dumps({"operation": "source-exif", "arguments": {"input": str(path)}}), encoding="utf-8")
+        result = subprocess.run([str(RUNNER), str(request)], capture_output=True, check=True, timeout=30)
+        value = json.loads(result.stdout)
+        self.assertTrue(value["success"])
+        self.assertEqual(value["exif"]["status"], "malformed")
+        self.assertIn("\ufffd", value["exif"]["diagnostic"])
+
+    def test_source_exif_schema_originals_and_unicode(self):
+        path = self.root / "original EXIF é 日本語.jpg"
+        payload = source_exif_fixture.write_jpeg(path)
+        request = self.root / "source-exif-request.json"
+        for args in ({"input": str(path)}, {"input": {}}, {"input": str(path), "unexpected": True}, {}):
+            request.write_text(json.dumps({"operation": "source-exif", "arguments": args}), encoding="utf-8")
+            result = subprocess.run([str(RUNNER), str(request)], capture_output=True, check=True, timeout=30)
+            value = json.loads(result.stdout)
+            if args == {"input": str(path)}:
+                self.assertTrue(value["success"])
+                source_exif_fixture.check(self, value["exif"], payload)
+            else:
+                self.assertEqual(value["error"]["code"], "InvalidArgument")
+
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="lfs-mcp-media-")

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "image_codecs.hpp"
+#include "core/source_metadata.hpp"
 #include "image_exr.hpp"
 #include "image_heif.hpp"
 
@@ -1573,6 +1574,122 @@ namespace lfs::core::image_codecs {
                     const int width, const int height, const int channels, const int quality,
                     const std::optional<std::string>& comment, std::string& error) {
         return write_jpeg(path, data, width, height, channels, quality, comment, error, false);
+    }
+
+    SourceExif read_source_exif(const std::filesystem::path& path, const MetadataLimits& limits) {
+        SourceExif result;
+        // Keep caller-controlled window allocations bounded independently of file size.
+        if (!limits.jpeg_header_bytes || limits.jpeg_header_bytes > 4 * 1024 * 1024 ||
+            !limits.blocks || limits.blocks > 4096 || !limits.block_bytes || !limits.total_bytes) {
+            result.status = MetadataStatus::Limited;
+            result.diagnostic = "Invalid EXIF collection limits";
+            return result;
+        }
+        std::error_code source_error;
+        if (std::filesystem::is_directory(path, source_error)) {
+            result.status = MetadataStatus::IoError;
+            result.diagnostic = "Metadata source is a directory";
+            return result;
+        }
+        std::ifstream input(path, std::ios::binary);
+        if (!input) {
+            result.status = MetadataStatus::IoError;
+            result.diagnostic = "Cannot open metadata source";
+            return result;
+        }
+        std::array<uint8_t, 12> signature{};
+        input.read(reinterpret_cast<char*>(signature.data()), signature.size());
+        const auto signature_size = static_cast<size_t>(input.gcount());
+        if (input.bad()) {
+            result.status = MetadataStatus::IoError;
+            result.diagnostic = "Cannot read metadata source";
+            return result;
+        }
+        if (is_heif(std::span(signature).first(signature_size)))
+            return read_heif_exif(path, limits);
+        if (signature_size < 2 || signature[0] != 0xff || signature[1] != 0xd8) {
+            result.status = MetadataStatus::Unsupported;
+            result.diagnostic = "EXIF collection supports JPEG and HEIF sources";
+            return result;
+        }
+        result.scope = "jpeg-before-sos";
+        input.clear();
+        input.seekg(0);
+        std::vector<uint8_t> window(limits.jpeg_header_bytes);
+        input.read(reinterpret_cast<char*>(window.data()), static_cast<std::streamsize>(window.size()));
+        const auto bytes_read = static_cast<size_t>(input.gcount());
+        if (input.bad()) {
+            result.status = MetadataStatus::IoError;
+            result.diagnostic = "Cannot read metadata source";
+            return result;
+        }
+        const bool capped = bytes_read == window.size() && input.peek() != std::char_traits<char>::eof();
+        window.resize(bytes_read);
+        // Heap state remains valid after libjpeg's error longjmp. No C++ object
+        // requiring destruction is created across a call that can longjmp.
+        struct State {
+            jpeg_decompress_struct codec{};
+            JpegError error{};
+            int header = JPEG_SUSPENDED;
+            bool exhausted = false;
+            bool failed = false;
+            ~State() { jpeg_destroy_decompress(&codec); }
+        };
+        auto state = std::make_unique<State>();
+        state->codec.err = jpeg_std_error(&state->error.base);
+        state->error.base.error_exit = jpeg_error_exit;
+        // Diagnostics are returned, never printed by a headless inspection.
+        state->error.base.output_message = [](j_common_ptr common) {
+            auto* error = reinterpret_cast<JpegError*>(common->err);
+            (*common->err->format_message)(common, error->message);
+        };
+        if (setjmp(state->error.jump)) {
+            state->failed = true;
+        } else {
+            jpeg_create_decompress(&state->codec);
+            state->codec.client_data = state.get();
+            jpeg_mem_src(&state->codec, window.data(), static_cast<unsigned long>(window.size()));
+            state->codec.src->fill_input_buffer = [](j_decompress_ptr codec) -> boolean {
+                auto* state = static_cast<State*>(codec->client_data);
+                state->exhausted = true;
+                // jpeg_mem_src normally fabricates an EOI at exhaustion, even
+                // inside an unfinished APP1. Stop before invented bytes could
+                // complete a saved marker. This also exits skip_input_data,
+                // which cannot suspend. Completed marker_list entries survive.
+                longjmp(state->error.jump, 1);
+            };
+            jpeg_save_markers(&state->codec, JPEG_APP0 + 1, 0xffff);
+            state->header = jpeg_read_header(&state->codec, TRUE);
+        }
+        result.status = MetadataStatus::Absent;
+        if (state->exhausted && capped) {
+            result.status = MetadataStatus::Limited;
+            result.diagnostic = "JPEG header window exhausted";
+        } else if (state->failed || state->header != JPEG_HEADER_OK || state->error.base.num_warnings) {
+            result.status = MetadataStatus::Malformed;
+            result.diagnostic = state->exhausted ? "Truncated JPEG header" : state->error.message;
+        }
+        size_t total = 0;
+        for (auto* marker = state->codec.marker_list; marker; marker = marker->next) {
+            if (marker->data_length < 6 || std::memcmp(marker->data, "Exif\0\0", 6))
+                continue;
+            const size_t size = marker->data_length;
+            if (result.blocks.size() >= limits.blocks || size > limits.block_bytes || size > limits.total_bytes - total) {
+                if (result.status != MetadataStatus::Malformed)
+                    result.status = MetadataStatus::Limited;
+                if (!result.diagnostic.empty())
+                    result.diagnostic += "; ";
+                result.diagnostic += "EXIF collection budget exhausted";
+                break;
+            }
+            ExifBlock block;
+            block.bytes.assign(marker->data, marker->data + size);
+            result.blocks.push_back(std::move(block));
+            total += size;
+            if (result.status == MetadataStatus::Absent)
+                result.status = MetadataStatus::Collected;
+        }
+        return result;
     }
 
     static bool write_jpeg_stream(const std::filesystem::path& path, const std::uint8_t* data,

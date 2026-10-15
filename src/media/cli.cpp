@@ -70,7 +70,7 @@ namespace {
     int run(const std::vector<std::string>& args) {
         try {
             if (args.size() == 2 && (args[1] == "--help" || args[1] == "-h")) {
-                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N]\n"
+                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N]\n"
                              "media-ingest extract INPUT --output DIRECTORY [--fps N | --interval N]\n"
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
                              "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr|tiff16] [--quality N]\n"
@@ -89,6 +89,13 @@ namespace {
             if (args.size() == 2 && args[1] == "capabilities") {
                 const auto c = MediaIngest::capabilities();
                 std::cout << json{{"schema_version", 1}, {"success", true}, {"software_decode", c.software_decode}, {"rgb8", c.rgb8}, {"png", c.png}, {"jpeg", c.jpeg}, {"hardware_decode", c.hardware_decode}, {"hdr_to_sdr", c.hdr_to_sdr}, {"rgb_float_sdr", c.rgb_float_sdr}, {"exr", c.exr}, {"tiff16", c.tiff16}, {"float_sdr_profile", c.float_sdr_profile}, {"rgb_float_pq", c.rgb_float_pq}, {"float_pq_profile", c.float_pq_profile}, {"rgb_float_hlg", c.rgb_float_hlg}, {"float_hlg_profile", c.float_hlg_profile}}.dump() << '\n';
+                return 0;
+            }
+            if (args.size() == 3 && args[1] == "source-exif") {
+                const auto result = MediaIngest::sourceExif(lfs::core::utf8_to_path(args[2]));
+                if (!result)
+                    return failed(result.error());
+                std::cout << json_detail::dump(json{{"schema_version", 1}, {"success", true}, {"exif", json_detail::sourceExif(*result)}}) << '\n';
                 return 0;
             }
             if (args.size() < 3 || (args[1] != "probe" && args[1] != "extract"))

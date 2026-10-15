@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "core/image_codecs.hpp"
+#include "core/source_metadata.hpp"
 #include "media/decoded_video_frame_ffmpeg.hpp"
 #include "media/media_probe_ffmpeg.hpp"
 #include "media/video_player.hpp"
@@ -7,7 +9,9 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/display.h>
 }
+#include <chrono>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string_view>
@@ -17,9 +21,117 @@ namespace {
         if (!condition)
             throw std::runtime_error(std::string(message));
     }
+
+    void sourceExifContracts() {
+        using namespace lfs::core::image_codecs;
+        struct Directory {
+            std::filesystem::path path;
+            ~Directory() {
+                std::error_code ec;
+                std::filesystem::remove_all(path, ec);
+            }
+        } directory{std::filesystem::temp_directory_path() /
+                    ("lfs-source-exif-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))};
+        require(std::filesystem::create_directory(directory.path), "create metadata fixture directory");
+        const auto path = directory.path / "source.jpg";
+        const uint8_t pixel[]{20, 80, 160};
+        std::string error;
+        require(write_jpeg(path, pixel, 1, 1, 3, 95, {}, error), error);
+        require(read_source_exif(path).status == MetadataStatus::Absent, "JPEG without EXIF is absent");
+        std::ifstream input(path, std::ios::binary);
+        const std::vector<uint8_t> jpeg{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        input.close();
+        const std::vector<uint8_t> exif{'E', 'x', 'i', 'f', 0, 0, 'I', 'I', 42, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        auto write = [&](const std::vector<uint8_t>& bytes) {
+            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            require(static_cast<bool>(output), "write metadata fixture");
+        };
+        std::vector<uint8_t> enriched{0xff, 0xd8};
+        for (int duplicate = 0; duplicate < 2; ++duplicate) {
+            enriched.insert(enriched.end(), {0xff, 0xe1, 0, static_cast<uint8_t>(exif.size() + 2)});
+            enriched.insert(enriched.end(), exif.begin(), exif.end());
+        }
+        enriched.insert(enriched.end(), jpeg.begin() + 2, jpeg.end());
+        write(enriched);
+        const auto metadata = read_source_exif(path);
+        require(metadata.status == MetadataStatus::Collected && metadata.blocks.size() == 2,
+                "ordered duplicate APP1 blocks retained");
+        require(metadata.scope == "jpeg-before-sos" && metadata.blocks[0].bytes == exif && metadata.blocks[1].bytes == exif,
+                "exact original envelope retained");
+        require(!metadata.blocks[0].image_item && !metadata.blocks[0].metadata_item,
+                "JPEG has no fabricated HEIF item association");
+        MetadataLimits limits;
+        limits.blocks = 1;
+        const auto limited = read_source_exif(path, limits);
+        require(limited.status == MetadataStatus::Limited && limited.blocks.size() == 1,
+                "block count limit preserves collected prefix without completeness claim");
+        limits = {};
+        limits.total_bytes = exif.size() - 1;
+        require(read_source_exif(path, limits).status == MetadataStatus::Limited,
+                "aggregate budget checked before retained payload copy");
+        limits = {};
+        limits.jpeg_header_bytes = 16;
+        require(read_source_exif(path, limits).status == MetadataStatus::Limited, "header window exhaustion explicit");
+        Image decoded;
+        require(decode(path, decoded, error) && decoded.width == 1 && decoded.height == 1,
+                "metadata inspection does not alter JPEG decode");
+        enriched.insert(enriched.end(), {0xff, 0xe1, 0, static_cast<uint8_t>(exif.size() + 2)});
+        enriched.insert(enriched.end(), exif.begin(), exif.end());
+        write(enriched);
+        require(read_source_exif(path).blocks.size() == 2, "JPEG metadata scope does not claim markers after SOS");
+        write({0xff, 0xd8, 0xff, 0xe1, 0, 100, 'E'});
+        require(read_source_exif(path).status == MetadataStatus::Malformed, "truncated header is malformed");
+        require(metadata.blocks[0].bytes == exif, "owned bytes survive source replacement");
+        write({1, 2, 3});
+        require(read_source_exif(path).status == MetadataStatus::Unsupported, "unsupported source is not absent");
+        require(read_source_exif(directory.path / "missing.jpg").status == MetadataStatus::IoError,
+                "missing file is not absent metadata");
+        require(read_source_exif(directory.path).status == MetadataStatus::IoError,
+                "directory input is an I/O failure rather than absent or unsupported metadata");
+        // Camera-sized files must not turn an unrelated header warning into
+        // window exhaustion, or discard completed APP1 blocks on any failure.
+        const size_t prefix_size = 2 + 2 * (exif.size() + 4);
+        auto check_prefix = [&](const std::vector<uint8_t>& bytes, MetadataStatus expected, size_t blocks, const MetadataLimits& bounds = {}) {
+            write(bytes);
+            const auto collected = read_source_exif(path, bounds);
+            require(collected.status == expected, "JPEG header outcome matches the actual failure");
+            require(collected.blocks.size() == blocks, "JPEG failure preserves only completed EXIF blocks");
+            for (const auto& block : collected.blocks)
+                require(block.bytes == exif, "JPEG collected prefix remains byte-exact");
+        };
+        std::vector<uint8_t> prefix(enriched.begin(), enriched.begin() + prefix_size);
+        auto warned = prefix;
+        warned.insert(warned.end(), {1, 2, 3});
+        warned.insert(warned.end(), jpeg.begin() + 2, jpeg.end());
+        warned.resize(9 * 1024 * 1024);
+        check_prefix(warned, MetadataStatus::Malformed, 2);
+        auto long_header = prefix;
+        for (int i = 0; i < 21; ++i) {
+            long_header.insert(long_header.end(), {0xff, 0xe2, 0xff, 0xff});
+            long_header.resize(long_header.size() + 65533);
+        }
+        long_header.insert(long_header.end(), jpeg.begin() + 2, jpeg.end());
+        long_header.resize(9 * 1024 * 1024);
+        check_prefix(long_header, MetadataStatus::Limited, 2);
+        auto fatal = prefix;
+        fatal.insert(fatal.end(), {0xff, 0xc0, 0, 2});
+        fatal.resize(9 * 1024 * 1024);
+        check_prefix(fatal, MetadataStatus::Malformed, 2);
+        std::vector<uint8_t> truncated(prefix.begin(), prefix.begin() + 2 + exif.size() + 4);
+        truncated.insert(truncated.end(), {0xff, 0xe1, 0, 100, 'E', 'x', 'i', 'f', 0, 0});
+        check_prefix(truncated, MetadataStatus::Malformed, 1);
+        limits = {};
+        limits.jpeg_header_bytes = truncated.size();
+        check_prefix(truncated, MetadataStatus::Malformed, 1, limits);
+        truncated.resize(2 * 1024 * 1024);
+        limits.jpeg_header_bytes -= 1;
+        check_prefix(truncated, MetadataStatus::Limited, 1, limits);
+    }
 } // namespace
 
 int runProbeUnitContracts() {
+    sourceExifContracts();
     using namespace lfs::media;
     const auto* dav1d = avcodec_find_decoder_by_name("libdav1d");
     require(detail::softwareVideoDecoder(AV_CODEC_ID_AV1) ==

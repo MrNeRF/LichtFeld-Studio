@@ -311,6 +311,17 @@ namespace lfs::app {
 
     void register_media_tools(mcp::ToolRegistry& registry) {
         registry.register_tool(mcp::McpTool{
+                                   .name = "media.source_exif",
+                                   .description = "Read original JPEG/primary HEIF EXIF and typed entries without decoding pixels; binary values use hex and MakerNotes remain opaque",
+                                   .input_schema = {.type = "object", .properties = {{"input", {{"type", "string"}}}}, .required = {"input"}},
+                                   .metadata = {.category = "media", .kind = "query", .runtime = "process"}},
+                               [](const json& args) {
+                                   if (const auto error = invalid_field(args, json{{"input", {{"type", "string"}}}}))
+                                       return mcp::invalid_argument_result(*error, "media.source_exif");
+                                   const auto result = MediaIngest::sourceExif(core::utf8_to_path(args.at("input").get<std::string>()));
+                                   return result ? json{{"success", true}, {"exif", json_detail::sourceExif(*result)}} : failure_json(result.error());
+                               });
+        registry.register_tool(mcp::McpTool{
                                    .name = "media.capabilities",
                                    .description = "Inspect the registered Media Ingest capabilities and codec build",
                                    .input_schema = {.type = "object", .properties = json::object(), .required = {}},

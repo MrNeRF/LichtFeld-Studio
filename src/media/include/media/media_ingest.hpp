@@ -3,6 +3,7 @@
 #pragma once
 #include "core/export.hpp"
 #include "media/file_frame_sink.hpp"
+#include "media/source_exif.hpp"
 #include <functional>
 #include <string_view>
 
@@ -95,6 +96,7 @@ namespace lfs::media {
         [[nodiscard]] static IngestCapabilities capabilities() noexcept;
         [[nodiscard]] static CodecBuildInfo codecBuildInfo();
         [[nodiscard]] static Result<MediaDescription> probe(const std::filesystem::path&, const ProbeOptions& = {});
+        [[nodiscard]] static Result<ImageExifDescription> sourceExif(const std::filesystem::path&);
         [[nodiscard]] static Result<IngestReport> extract(const IngestRequest&, FrameSink&);
         [[nodiscard]] static Result<IngestReport> extractFiles(const IngestRequest&, const FileExtraction&);
     };

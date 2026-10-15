@@ -19,6 +19,9 @@ import unicodedata
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+_exif_spec = importlib.util.spec_from_file_location("source_exif_fixture", ROOT / "tests/media/source_exif_fixture.py")
+source_exif_fixture = importlib.util.module_from_spec(_exif_spec)
+_exif_spec.loader.exec_module(source_exif_fixture)
 spec = importlib.util.spec_from_file_location("media_fixtures", ROOT / "scripts/prepare_media_fixtures.py")
 fixtures = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixtures)
@@ -27,6 +30,31 @@ MEDIA_ERROR = None
 
 
 class MediaBindings(unittest.TestCase):
+    def test_source_exif_diagnostics_and_large_header_prefix(self):
+        path = self.root / "invalid-diagnostic.avif"
+        source_exif_fixture.write_invalid_heif(path)
+        result = json.loads(media.MediaIngest.source_exif_json(path))
+        self.assertEqual(result["status"], "malformed")
+        self.assertIn("\ufffd", result["diagnostic"])
+        path = self.root / "large-header.jpg"
+        for long_header in (False, True):
+            with self.subTest(long_header=long_header):
+                payload = source_exif_fixture.write_header_failure(path, long_header)
+                result = json.loads(media.MediaIngest.source_exif_json(path))
+                self.assertEqual(result["status"], "limited" if long_header else "malformed")
+                self.assertEqual(len(result["blocks"]), 2)
+                for block in result["blocks"]:
+                    self.assertEqual(bytes.fromhex(block["bytes"]), payload)
+                    self.assertEqual(block["interpretation"]["status"], "parsed")
+
+    def test_source_exif_json_unicode_originals_and_ownership(self):
+        path = self.root / "original EXIF é 日本語.jpg"
+        payload = source_exif_fixture.write_jpeg(path)
+        value = media.MediaIngest.source_exif_json(path)
+        path.unlink()
+        source_exif_fixture.check(self, json.loads(value), payload)
+        self.assertEqual(json.loads(media.MediaIngest.source_exif_json(path))["status"], "io_error")
+
     def test_tiff16_public_output_precision_alpha_and_failures(self):
         ffmpeg = os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg")
         color = media.FrameColor()

@@ -12,6 +12,7 @@
 #include <lcms2.h>
 #include <libheif/heif.h>
 #include <libheif/heif_items.h>
+#include <libheif/heif_metadata.h>
 #include <libheif/heif_properties.h>
 #include <limits>
 #include <memory>
@@ -36,7 +37,7 @@ namespace lfs::core::image_codecs {
             int orientation = 1;
             std::unique_ptr<heif_context, decltype(&heif_context_free)> context{nullptr, heif_context_free};
             std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> handle{nullptr, heif_image_handle_release};
-            bool open(const std::filesystem::path& path, std::string& error) {
+            bool open(const std::filesystem::path& path, std::string& error, bool metadata_only = false) {
                 input_path = &path;
                 file.open(path, std::ios::binary | std::ios::ate);
                 if (!file || file.tellg() < 0) {
@@ -75,6 +76,13 @@ namespace lfs::core::image_codecs {
                     }};
                 if (!checked(heif_context_read_from_reader(context.get(), &reader, this, nullptr), error))
                     return false;
+                if (metadata_only) {
+                    heif_image_handle* primary = nullptr;
+                    if (!checked(heif_context_get_primary_image_handle(context.get(), &primary), error))
+                        return false;
+                    handle.reset(primary);
+                    return true;
+                }
                 return primary_image(error);
             }
             bool open(std::span<const uint8_t> bytes, std::string& error) {
@@ -537,6 +545,59 @@ namespace lfs::core::image_codecs {
             return decode_heif(input, image, error, display) && copy_target(image, target, info, error);
         }
     } // namespace
+    SourceExif read_heif_exif(const std::filesystem::path& path, const MetadataLimits& limits) {
+        SourceExif result;
+        result.scope = "heif-primary-image";
+        Source source;
+        if (!source.open(path, result.diagnostic, true)) {
+            result.status = source.file.is_open() ? MetadataStatus::Malformed : MetadataStatus::IoError;
+            return result;
+        }
+        heif_item_id primary = 0;
+        if (!checked(heif_context_get_primary_image_ID(source.context.get(), &primary), result.diagnostic)) {
+            result.status = MetadataStatus::Malformed;
+            return result;
+        }
+        const int count = heif_image_handle_get_number_of_metadata_blocks(source.handle.get(), "Exif");
+        if (count < 0) {
+            result.status = MetadataStatus::Malformed;
+            result.diagnostic = "HEIF: invalid EXIF block count";
+            return result;
+        }
+        result.status = count ? MetadataStatus::Collected : MetadataStatus::Absent;
+        const auto retained = std::min(static_cast<size_t>(count), limits.blocks);
+        std::vector<heif_item_id> ids(retained);
+        if (retained && heif_image_handle_get_list_of_metadata_block_IDs(source.handle.get(), "Exif", ids.data(), static_cast<int>(retained)) != static_cast<int>(retained)) {
+            result.status = MetadataStatus::Malformed;
+            result.diagnostic = "HEIF: inconsistent EXIF block list";
+            return result;
+        }
+        size_t total = 0;
+        for (auto id : ids) {
+            const auto size = heif_image_handle_get_metadata_size(source.handle.get(), id);
+            if (size > limits.block_bytes || size > limits.total_bytes - total) {
+                result.status = MetadataStatus::Limited;
+                result.diagnostic = "EXIF collection budget exhausted";
+                return result;
+            }
+            ExifBlock block;
+            block.envelope = ExifEnvelope::HeifOffset;
+            block.image_item = primary;
+            block.metadata_item = id;
+            block.bytes.resize(size);
+            if (!checked(heif_image_handle_get_metadata(source.handle.get(), id, block.bytes.data()), result.diagnostic)) {
+                result.status = MetadataStatus::Malformed;
+                return result;
+            }
+            total += size;
+            result.blocks.push_back(std::move(block));
+        }
+        if (static_cast<size_t>(count) > retained) {
+            result.status = MetadataStatus::Limited;
+            result.diagnostic = "EXIF block count budget exhausted";
+        }
+        return result;
+    }
     bool is_heif(std::span<const uint8_t> bytes) {
         if (bytes.size() < 12)
             return false;

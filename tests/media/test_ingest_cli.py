@@ -14,8 +14,12 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import struct
 import unittest
 ROOT=Path(__file__).resolve().parents[2]
+_exif_spec = importlib.util.spec_from_file_location("source_exif_fixture", ROOT / "tests/media/source_exif_fixture.py")
+source_exif_fixture = importlib.util.module_from_spec(_exif_spec)
+_exif_spec.loader.exec_module(source_exif_fixture)
 spec=importlib.util.spec_from_file_location("media_fixtures",ROOT/"scripts/prepare_media_fixtures.py")
 fixtures=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixtures)
@@ -61,6 +65,59 @@ def defined_symbols(path, exports=False):
 def ffmpeg_public(name):
     return re.match(r"^(av|avcodec|avformat|avutil|avfilter|avdevice|avio|swscale|swresample|sws|swr)_",name)
 class IngestCLI(unittest.TestCase):
+    def test_source_exif_originals_unicode_and_status(self):
+        path = self.root / "original EXIF é 日本語.jpg"
+        payload = source_exif_fixture.write_jpeg(path)
+        before = path.read_bytes()
+        result, stderr = self.invoke("source-exif", path)
+        self.assertTrue(result["success"])
+        self.assertEqual(stderr, b"")
+        source_exif_fixture.check(self, result["exif"], payload)
+        self.assertEqual(path.read_bytes(), before)
+        result, _ = self.invoke("source-exif", self.root / "missing.jpg")
+        self.assertEqual(result["exif"]["status"], "io_error")
+        self.invoke("source-exif", path, "--extra", code=2)
+
+    def test_source_exif_parse_budget_is_shared_across_blocks(self):
+        path = self.root / "shared-budget.jpg"
+        source_exif_fixture.write_jpeg(path)
+        # Preserve a valid JPEG header, adding two independent large EXIF blocks.
+        count = 2500
+        tiff = b"II" + struct.pack("<HIH", 42, 8, count)
+        tiff += struct.pack("<HHII", 0xc7fe, 4, 1, 123) * count + b"\0" * 4
+        payload = b"Exif\0\0" + tiff
+        marker = b"\xff\xe1" + struct.pack(">H", len(payload) + 2) + payload
+        jpeg = path.read_bytes()
+        path.write_bytes(jpeg[:2] + marker + marker + jpeg[2:])
+        result, _ = self.invoke("source-exif", path)
+        blocks = result["exif"]["blocks"]
+        self.assertEqual(result["exif"]["status"], "collected")
+        self.assertEqual(blocks[0]["interpretation"]["status"], "parsed")
+        self.assertEqual(len(blocks[0]["interpretation"]["entries"]), count)
+        self.assertEqual(blocks[1]["interpretation"]["status"], "limited")
+        self.assertEqual(bytes.fromhex(blocks[1]["bytes"]), payload)
+
+    def test_source_exif_retains_prefix_on_large_header_warning_and_exhaustion(self):
+        path = self.root / "large-header.jpg"
+        for long_header in (False, True):
+            with self.subTest(long_header=long_header):
+                payload = source_exif_fixture.write_header_failure(path, long_header)
+                result, _ = self.invoke("source-exif", path)
+                value = result["exif"]
+                self.assertEqual(value["status"], "limited" if long_header else "malformed")
+                self.assertEqual(len(value["blocks"]), 2)
+                for block in value["blocks"]:
+                    self.assertEqual(bytes.fromhex(block["bytes"]), payload)
+                    self.assertEqual(block["interpretation"]["status"], "parsed")
+
+    def test_source_exif_invalid_utf8_diagnostic_is_valid_json(self):
+        path = self.root / "invalid-diagnostic.avif"
+        source_exif_fixture.write_invalid_heif(path)
+        result, _ = self.invoke("source-exif", path)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["exif"]["status"], "malformed")
+        self.assertIn("\ufffd", result["exif"]["diagnostic"])
+
     @classmethod
     def setUpClass(cls):
         cls.temp=tempfile.TemporaryDirectory(prefix="lfs-cli-contratti-")

@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <libheif/heif.h>
+#include <libheif/heif_metadata.h>
 #include <libheif/heif_properties.h>
 #ifdef _WIN32
 #include <objbase.h>
@@ -18,6 +19,50 @@
 namespace {
     namespace codec = lfs::core::image_codecs;
     const std::filesystem::path fixtures = LFS_HEIF_FIXTURES;
+    TEST(ProductionHeif, OriginalExifDoesNotRequirePixelDecoder) {
+        auto* context = heif_context_alloc();
+        ASSERT_NE(context, nullptr);
+        std::unique_ptr<heif_context, decltype(&heif_context_free)> owner(context, heif_context_free);
+        ASSERT_EQ(heif_context_read_from_file(context, (fixtures / "system-yuv420.heic").string().c_str(), nullptr).code, heif_error_Ok);
+        heif_image_handle* raw = nullptr;
+        ASSERT_EQ(heif_context_get_primary_image_handle(context, &raw).code, heif_error_Ok);
+        std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> handle(raw, heif_image_handle_release);
+        const uint8_t tiff[]{'I', 'I', 42, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        ASSERT_EQ(heif_context_add_exif_metadata(context, raw, tiff, sizeof(tiff)).code, heif_error_Ok);
+        ASSERT_EQ(heif_context_add_exif_metadata(context, raw, tiff, sizeof(tiff)).code, heif_error_Ok);
+        struct Temporary {
+            std::filesystem::path path;
+            ~Temporary() {
+                std::error_code ec;
+                std::filesystem::remove(path, ec);
+            }
+        } output{std::filesystem::temp_directory_path() /
+                 ("lfs-exif-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".heic")};
+        ASSERT_EQ(heif_context_write_to_file(context, output.path.string().c_str()).code, heif_error_Ok);
+        const auto metadata = codec::read_source_exif(output.path);
+        ASSERT_EQ(metadata.status, codec::MetadataStatus::Collected) << metadata.diagnostic;
+        EXPECT_EQ(metadata.scope, "heif-primary-image");
+        ASSERT_EQ(metadata.blocks.size(), 2);
+        const auto& block = metadata.blocks.front();
+        EXPECT_EQ(block.envelope, codec::ExifEnvelope::HeifOffset);
+        EXPECT_TRUE(block.image_item.has_value());
+        EXPECT_TRUE(block.metadata_item.has_value());
+        const std::vector<uint8_t> expected{0, 0, 0, 0, 'I', 'I', 42, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        EXPECT_EQ(block.bytes, expected);
+        EXPECT_EQ(metadata.blocks[1].bytes, expected);
+        EXPECT_NE(block.metadata_item, metadata.blocks[1].metadata_item);
+        codec::MetadataLimits limits;
+        limits.block_bytes = expected.size() - 1;
+        const auto limited = codec::read_source_exif(output.path, limits);
+        EXPECT_EQ(limited.status, codec::MetadataStatus::Limited);
+        EXPECT_TRUE(limited.blocks.empty());
+        limits = {};
+        limits.blocks = 1;
+        const auto count_limited = codec::read_source_exif(output.path, limits);
+        EXPECT_EQ(count_limited.status, codec::MetadataStatus::Limited);
+        EXPECT_EQ(count_limited.blocks.size(), 1);
+        EXPECT_FALSE(heif_have_decoder_for_format(heif_compression_HEVC));
+    }
     TEST(ProductionHeif, DistributionUsesDav1dWithoutHevcOrEncoders) {
         EXPECT_TRUE(heif_have_decoder_for_format(heif_compression_AV1));
         EXPECT_FALSE(heif_have_decoder_for_format(heif_compression_HEVC));

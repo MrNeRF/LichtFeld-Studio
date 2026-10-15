@@ -2,9 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "media/media_probe.hpp"
+#include "media/source_exif.hpp"
+#include <cmath>
 #include <nlohmann/json.hpp>
 namespace lfs::media::json_detail {
     using nlohmann::json;
+    inline std::string dump(const json& value) {
+        // Library diagnostics can contain untrusted non-UTF-8 box names.
+        // Binary originals are hex; replace invalid diagnostic text at transport.
+        return value.dump(-1, ' ', false, json::error_handler_t::replace);
+    }
     inline json rational(const std::optional<Rational>& value) {
         return value ? json::array({value->numerator, value->denominator}) : json(nullptr);
     }
@@ -13,6 +20,63 @@ namespace lfs::media::json_detail {
     }
     template <class T>
     inline json optional(const std::optional<T>& value) { return value ? json(*value) : json(nullptr); }
+    inline std::string hexBytes(const std::vector<uint8_t>& bytes) {
+        constexpr char digits[] = "0123456789abcdef";
+        std::string result(bytes.size() * 2, '0');
+        for (size_t i = 0; i < bytes.size(); ++i) {
+            result[2 * i] = digits[bytes[i] >> 4];
+            result[2 * i + 1] = digits[bytes[i] & 15];
+        }
+        return result;
+    }
+    inline const char* metadataStatus(core::image_codecs::MetadataStatus status) {
+        using core::image_codecs::MetadataStatus;
+        switch (status) {
+        case MetadataStatus::Absent: return "absent";
+        case MetadataStatus::Collected: return "collected";
+        case MetadataStatus::Limited: return "limited";
+        case MetadataStatus::Malformed: return "malformed";
+        case MetadataStatus::Unsupported: return "unsupported";
+        case MetadataStatus::IoError: return "io_error";
+        default: return "not_examined";
+        }
+    }
+    inline const char* exifParseStatus(ExifParseStatus status) {
+        switch (status) {
+        case ExifParseStatus::Parsed: return "parsed";
+        case ExifParseStatus::Limited: return "limited";
+        case ExifParseStatus::Malformed: return "malformed";
+        default: return "unsupported";
+        }
+    }
+    inline json sourceExif(const ImageExifDescription& description) {
+        const auto& original = description.original;
+        json result{{"status", metadataStatus(original.status)}, {"scope", original.scope}, {"diagnostic", original.diagnostic}, {"binary_encoding", "hex"}, {"blocks", json::array()}};
+        for (size_t i = 0; i < original.blocks.size(); ++i) {
+            const auto& block = original.blocks[i];
+            json item{{"envelope", block.envelope == core::image_codecs::ExifEnvelope::JpegApp1 ? "jpeg_app1" : "heif_offset"},
+                      {"image_item", optional(block.image_item)},
+                      {"metadata_item", optional(block.metadata_item)},
+                      {"bytes", hexBytes(block.bytes)},
+                      {"interpretation", nullptr}};
+            if (i < description.interpretations.size()) {
+                const auto& parsed = description.interpretations[i];
+                json interpretation{{"status", exifParseStatus(parsed.status)}, {"diagnostic", parsed.diagnostic}, {"entries", json::array()}};
+                for (const auto& entry : parsed.entries) {
+                    json rationals = json::array(), floating = json::array();
+                    for (const auto& r : entry.rational_values)
+                        rationals.push_back({{"numerator", r.numerator}, {"denominator", r.denominator}});
+                    for (const auto value : entry.floating_values)
+                        floating.push_back(std::isfinite(value) ? json(value) : json(std::isnan(value) ? "nan" : value < 0 ? "-inf"
+                                                                                                                           : "+inf"));
+                    interpretation["entries"].push_back({{"directory_path", entry.directory_path}, {"directory_offset", entry.directory_offset}, {"entry_index", entry.entry_index}, {"id", entry.id}, {"type", entry.type}, {"count", entry.count}, {"directory", entry.directory}, {"unsigned_values", entry.unsigned_values}, {"signed_values", entry.signed_values}, {"floating_values", floating}, {"rational_values", rationals}, {"bytes", hexBytes(entry.bytes)}});
+                }
+                item["interpretation"] = std::move(interpretation);
+            }
+            result["blocks"].push_back(std::move(item));
+        }
+        return result;
+    }
     inline const char* streamKind(StreamKind kind) {
         switch (kind) {
         case StreamKind::Video: return "video";
