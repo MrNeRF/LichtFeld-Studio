@@ -921,6 +921,7 @@
     "marketplace": "Marketplace",
     "marketplace_layout": "Layout",
     "marketplace_git_checkout_description": "Installs a Git clone instead of a source archive, so you can inspect changes and use Git tools in the plugin folder. Requires Git; otherwise an archive is used.",
+    "marketplace_git_unavailable": "Git was not found on PATH. Install Git to use this option.",
     "projects": "Projects",
     "project_folders": "Project folders",
     "project_folders_default": "default",

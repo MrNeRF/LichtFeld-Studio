@@ -125,7 +125,10 @@
           </div>
           <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.marketplace_git_checkout_description">
             <span class="preferences-label">@tr:plugin_marketplace.install_as_git_checkout</span>
-            <input type="checkbox" data-checked="marketplace_git_checkout" />
+            <input type="checkbox" data-checked="marketplace_git_checkout" data-attrif-disabled="!marketplace_git_available" />
+          </div>
+          <div class="preferences-description" data-if="!marketplace_git_available">
+            @tr:preferences.marketplace_git_unavailable
           </div>
         </div>
       </div>

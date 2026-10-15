@@ -925,6 +925,7 @@
     "marketplace": "Marketplace",
     "marketplace_layout": "Indeling",
     "marketplace_git_checkout_description": "Installeert een Git-kloon in plaats van een bronarchief, zodat je wijzigingen kunt bekijken en Git in de pluginmap kunt gebruiken. Vereist Git; anders wordt een archief gebruikt.",
+    "marketplace_git_unavailable": "Git is niet gevonden in PATH. Installeer Git om deze optie te gebruiken.",
     "projects": "Projecten",
     "project_folders": "Projectmappen",
     "project_folders_default": "standaard",

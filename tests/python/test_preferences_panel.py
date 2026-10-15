@@ -1402,3 +1402,19 @@ def test_marketplace_preferences_apply_and_reset_independently(preferences_panel
     assert state.marketplace_preferences == {"view": "list", "git_checkout": False}
     assert len(state.marketplace_notifications) == 3
     assert state.set_language_calls == []
+
+
+@pytest.mark.parametrize("git_available", [False, True])
+def test_marketplace_git_checkout_requires_git_without_changing_saved_choice(preferences_panel_module, monkeypatch, git_available):
+    module, state = preferences_panel_module
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/usr/bin/git" if git_available else None)
+    panel = module.PreferencesPanel()
+    assert panel._marketplace_git_available is git_available
+    panel._set_marketplace_preference("git_checkout", True)
+    assert state.marketplace_preferences["git_checkout"] is git_available
+    state.marketplace_preferences["git_checkout"] = True
+    reopened = module.PreferencesPanel()
+    assert reopened._marketplace_git_available is git_available
+    assert state.marketplace_preferences["git_checkout"] is True
+    reopened._set_marketplace_preference("git_checkout", False)
+    assert state.marketplace_preferences["git_checkout"] is False

@@ -925,6 +925,7 @@
     "marketplace": "Marketplace",
     "marketplace_layout": "Disposition",
     "marketplace_git_checkout_description": "Installe un clone Git plutôt qu’une archive source pour examiner les modifications et utiliser Git dans le dossier du plugin. Nécessite Git ; sinon, une archive est utilisée.",
+    "marketplace_git_unavailable": "Git est introuvable dans PATH. Installez Git pour utiliser cette option.",
     "projects": "Projets",
     "project_folders": "Dossiers de projets",
     "project_folders_default": "par défaut",

@@ -4,6 +4,7 @@
 
 import lichtfeld as lf
 import threading
+import shutil
 
 from .asset_index import AssetIndex, resolve_asset_manager_storage_path, resolve_default_asset_directory
 from .asset_watch import scan_all_asset_folders, scan_asset_folder
@@ -102,6 +103,7 @@ class PreferencesPanel(Panel):
         self._theme_families = []
         self._language_catalog = []
         self._last_state = None
+        self._marketplace_git_available = shutil.which("git") is not None
         self._section = "general"
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._mcp_enabled = True
@@ -147,6 +149,7 @@ class PreferencesPanel(Panel):
         model.bind_func("show_viewport", lambda: self._section == "viewport")
         model.bind_event("show_viewport", lambda *_: self._set_section("viewport"))
         model.bind_func("panel_label", lambda: lf.ui.tr("preferences.title"))
+        model.bind_func("marketplace_git_available", lambda: self._marketplace_git_available)
         model.bind_func("show_marketplace", lambda: self._section == "marketplace")
         model.bind_event("show_marketplace", lambda *_: self._set_section("marketplace"))
         for key in ("view", "git_checkout"):
@@ -1037,6 +1040,8 @@ class PreferencesPanel(Panel):
             reload_preferences()
 
     def _set_marketplace_preference(self, key, value):
+        if key == "git_checkout" and value and not self._marketplace_git_available:
+            return
         set_marketplace_preference(key, value)
         self._notify_marketplace_preferences_changed()
         if self._handle:

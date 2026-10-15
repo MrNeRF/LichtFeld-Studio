@@ -925,6 +925,7 @@
     "marketplace": "Marketplace",
     "marketplace_layout": "Układ",
     "marketplace_git_checkout_description": "Instaluje klon Git zamiast archiwum źródeł, umożliwiając przeglądanie zmian i używanie Git w folderze wtyczki. Wymaga Git; w przeciwnym razie używane jest archiwum.",
+    "marketplace_git_unavailable": "Nie znaleziono Git w PATH. Zainstaluj Git, aby użyć tej opcji.",
     "projects": "Projekty",
     "project_folders": "Foldery projektów",
     "project_folders_default": "domyślny",

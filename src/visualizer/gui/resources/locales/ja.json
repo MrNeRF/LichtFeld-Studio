@@ -925,6 +925,7 @@
     "marketplace": "マーケットプレイス",
     "marketplace_layout": "レイアウト",
     "marketplace_git_checkout_description": "ソースアーカイブの代わりに Git クローンをインストールし、プラグインフォルダーで変更の確認や Git ツールの使用ができます。Git が必要です。利用できない場合はアーカイブを使用します。",
+    "marketplace_git_unavailable": "PATH に Git が見つかりません。このオプションを使用するには Git をインストールしてください。",
     "projects": "プロジェクト",
     "project_folders": "プロジェクトフォルダー",
     "project_folders_default": "既定",
