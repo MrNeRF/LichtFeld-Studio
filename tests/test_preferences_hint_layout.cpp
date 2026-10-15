@@ -148,4 +148,55 @@ namespace {
         }
     }
 
+    TEST_F(PreferencesHintLayoutTest, ProjectDefaultsActionFitsEveryLocaleAndScale) {
+        auto read = [](const std::filesystem::path& path) {
+            std::ifstream file(path);
+            return std::string{std::istreambuf_iterator<char>(file), {}};
+        };
+        const auto resources = root() / "src/visualizer/gui/rmlui/resources";
+        const auto markup = read(resources / "preferences.rml");
+        const auto event = markup.find("data-event-click=\"apply_viewport_defaults\"");
+        ASSERT_NE(event, std::string::npos);
+        const auto start = markup.rfind("<button", event);
+        const auto end = markup.find("</button>", event) + std::string("</button>").size();
+        const auto button_markup = markup.substr(start, end - start);
+        const auto styles = read(resources / "components.rcss") + read(resources / "preferences.rcss");
+        for (const auto* locale : {"de", "en", "es", "fr", "it", "ja", "ko", "nl", "pl", "zh"}) {
+            SCOPED_TRACE(locale);
+            const auto json = nlohmann::json::parse(read(root() / "src/visualizer/gui/resources/locales" / (std::string(locale) + ".json")));
+            const auto label = json.at("preferences").at("apply_viewport_defaults").get<std::string>();
+            for (const float scale : {1.0f, 1.5f, 2.0f}) {
+                SCOPED_TRACE(scale);
+                context_->SetDensityIndependentPixelRatio(scale);
+                auto translated = button_markup;
+                const std::string token = "@tr:preferences.apply_viewport_defaults";
+                translated.replace(translated.find(token), token.size(), label);
+                auto* doc = context_->LoadDocumentFromMemory(
+                    "<rml><head><style>" + styles + "body { font-family: Inter; }</style></head><body>"
+                                                    "<div id=\"action-container\" class=\"preferences-inline-actions\" style=\"width:280dp;\">" +
+                    translated + "</div></body></rml>");
+                ASSERT_NE(doc, nullptr);
+                doc->Show();
+                context_->Update();
+                auto* container = doc->GetElementById("action-container");
+                auto* button = container->QuerySelector("button");
+                ASSERT_NE(button, nullptr);
+                const auto left = container->GetAbsoluteOffset(Rml::BoxArea::Content).x;
+                EXPECT_GE(button->GetAbsoluteOffset(Rml::BoxArea::Border).x, left - 0.5f);
+                EXPECT_LE(button->GetAbsoluteOffset(Rml::BoxArea::Border).x + button->GetBox().GetSize(Rml::BoxArea::Border).x,
+                          left + container->GetBox().GetSize(Rml::BoxArea::Content).x + 0.5f);
+                auto* text = rmlui_dynamic_cast<Rml::ElementText*>(button->GetChild(0));
+                ASSERT_NE(text, nullptr);
+                std::string joined;
+                for (const auto& line : text->GetLines())
+                    joined += line.text;
+                auto expected = label;
+                std::erase(expected, ' ');
+                std::erase(joined, ' ');
+                EXPECT_EQ(joined, expected);
+                doc->Close();
+            }
+        }
+    }
+
 } // namespace

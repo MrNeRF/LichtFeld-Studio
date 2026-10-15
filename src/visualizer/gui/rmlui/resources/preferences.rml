@@ -202,6 +202,10 @@
           <input type="text" class="preferences-select" data-value="default_lod_pool_vram_fraction" />
         </div>
         <span class="preferences-description status-error">{{rendering_defaults_error}}</span>
+        <div class="preferences-inline-actions">
+          <button class="btn btn--secondary preferences-apply-defaults" data-event-click="apply_viewport_defaults"
+                  data-tooltip="rendering_panel.apply_defaults_hint">@tr:preferences.apply_viewport_defaults</button>
+        </div>
       </div>
 
       <div class="preferences-section" data-if="show_appearance">
