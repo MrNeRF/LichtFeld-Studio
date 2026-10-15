@@ -497,23 +497,25 @@
               <button class="btn btn--secondary" data-tooltip="training.tooltip.eval_mask_clear" data-if="has_eval_mask_clear" data-event-click="action('clear_eval_mask')">{{label_clear}}</button>
             </div>
           </div>
-          <div class="setting-row" data-for="row : pv_dataset_eval_mask_invert_rows" data-if="dep_eval_mask"
-               data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
-            <input type="checkbox" data-checked="row.checked"
-                   data-event-click="pv_value_change(row.id, !row.checked)" />
+          <div class="setting-row" data-tooltip="training.tooltip.eval_mask_report" data-if="dep_eval_mask &amp;&amp; !pv_search_active">
+            <span class="prop-label">{{label_eval_mask_headline}}</span>
+            <select data-value="eval_mask_headline_str">
+              <option value="mask">{{label_eval_set_mask}}</option>
+              <option value="unmasked">{{label_eval_set_unmasked}}</option>
+              <option value="inverted">{{label_eval_set_inverted}}</option>
+            </select>
           </div>
-          <div class="setting-row" data-for="row : pv_dataset_eval_mask_report_unmasked_rows" data-if="dep_eval_mask"
-               data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
-            <input type="checkbox" data-checked="row.checked"
-                   data-event-click="pv_value_change(row.id, !row.checked)" />
+          <div class="setting-row" data-tooltip="training.tooltip.eval_mask_report_mask" data-if="show_eval_also_mask &amp;&amp; !pv_search_active">
+            <span class="prop-label">{{label_eval_also_mask}}</span>
+            <input type="checkbox" data-checked="eval_also_mask" />
           </div>
-          <div class="setting-row" data-for="row : pv_dataset_eval_mask_report_inverted_rows" data-if="dep_eval_mask"
-               data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
-            <input type="checkbox" data-checked="row.checked"
-                   data-event-click="pv_value_change(row.id, !row.checked)" />
+          <div class="setting-row" data-tooltip="training.tooltip.eval_mask_report_unmasked" data-if="show_eval_also_unmasked &amp;&amp; !pv_search_active">
+            <span class="prop-label">{{label_eval_also_unmasked}}</span>
+            <input type="checkbox" data-checked="eval_also_unmasked" />
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.eval_mask_report_inverted" data-if="show_eval_also_inverted &amp;&amp; !pv_search_active">
+            <span class="prop-label">{{label_eval_also_inverted}}</span>
+            <input type="checkbox" data-checked="eval_also_inverted" />
           </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_mask_opacity_rows" data-if="dep_eval_mask_splat"
                data-attr-data-tooltip="row.tooltip_key">

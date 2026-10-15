@@ -556,8 +556,10 @@ TEST(CompareImages, JsonNestsEveryPixelSetUnderItsName) {
               (std::vector<std::string>{"width", "height", "bit_depth", "evaluated_pixel_fraction", "psnr", "ssim", "lpips", "flip"}));
     EXPECT_EQ(keys(flat.at("mean")), (std::vector<std::string>{"psnr", "ssim", "lpips", "flip"}));
 
-    view.unmasked = lfs::training::MaskSetMetrics{.psnr = 28.0f, .evaluated_pixel_fraction = 1.0f};
-    result.metrics.unmasked = view.unmasked;
+    using lfs::core::param::EvalPixelSet;
+    view.sets[EvalPixelSet::Mask] = lfs::training::MaskSetMetrics{.psnr = 30.0f, .evaluated_pixel_fraction = 0.25f};
+    view.sets[EvalPixelSet::Unmasked] = lfs::training::MaskSetMetrics{.psnr = 28.0f, .evaluated_pixel_fraction = 1.0f};
+    result.metrics.sets = view.sets;
     const auto nested = lfs::training::compare_json(params, result);
     const auto& image = nested.at("images").at("a.exr");
     EXPECT_EQ(keys(image), (std::vector<std::string>{"width", "height", "bit_depth", "masked", "unmasked"}));

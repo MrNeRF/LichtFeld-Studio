@@ -3147,7 +3147,6 @@ namespace lfs::training {
                 evaluator_->set_lpips_weights_path(*lpips_weights_path_);
             if (!params_.optimization.eval_mask.empty()) {
                 const glm::vec3 origin = scene_ ? scene_->getTrainingDataOrigin() : glm::vec3{0.0f};
-                const bool invert = params_.optimization.eval_mask_invert;
                 auto installed = evaluator_->install_eval_mask_source({origin.x, origin.y, origin.z});
                 if (!installed)
                     return std::unexpected(std::string(installed.error().user_message()));
@@ -3165,20 +3164,18 @@ namespace lfs::training {
                         evaluator_->set_eval_points(lfs::training::EvaluationPoints{
                             .means = cloud->means.to(lfs::core::Device::CUDA).to(lfs::core::DataType::Float32).contiguous(),
                             .radius = (*splat)[0],
-                            .close = (*splat)[1],
-                            .invert = invert});
-                        LOG_INFO("Evaluation mask: {} initial points, radius {} px, closed by {} px{}",
-                                 cloud->means.shape()[0], (*splat)[0], (*splat)[1], invert ? " (inverted)" : "");
+                            .close = (*splat)[1]});
+                        LOG_INFO("Evaluation mask: {} initial points, radius {} px, closed by {} px",
+                                 cloud->means.shape()[0], (*splat)[0], (*splat)[1]);
                     } else if (lfs::core::param::is_eval_mask_cropbox(params_.optimization.eval_mask)) {
                         const auto cropbox = scene_ ? lfs::training::resolve_training_cropbox_geom(*scene_) : std::nullopt;
                         if (!cropbox)
                             return std::unexpected("Evaluation mask 'cropbox' needs an enabled crop box on the training model");
-                        const bool cropbox_invert = invert != cropbox->inverse;
                         evaluator_->set_eval_mesh(lfs::training::make_evaluation_box(
-                            lfs::training::training_cropbox_model_corners(*cropbox), cropbox_invert));
-                        LOG_INFO("Evaluation mask: crop box{}", cropbox_invert ? " (inverted)" : "");
+                            lfs::training::training_cropbox_model_corners(*cropbox), cropbox->inverse));
+                        LOG_INFO("Evaluation mask: crop box{}", cropbox->inverse ? " (inverted)" : "");
                     } else {
-                        LOG_INFO("Evaluation mask: {}{}", params_.optimization.eval_mask, invert ? " (inverted)" : "");
+                        LOG_INFO("Evaluation mask: {}", params_.optimization.eval_mask);
                     }
                 }
             }

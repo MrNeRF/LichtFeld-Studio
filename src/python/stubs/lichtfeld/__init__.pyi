@@ -2217,27 +2217,13 @@ class OptimizationParams:
     def eval_mask(self, arg: str, /) -> None: ...
 
     @property
-    def eval_mask_invert(self) -> bool:
-        """Scores the pixels outside the evaluation mask instead"""
-
-    @eval_mask_invert.setter
-    def eval_mask_invert(self, arg: bool, /) -> None: ...
-
-    @property
-    def eval_mask_report_unmasked(self) -> bool:
+    def eval_mask_report(self) -> str:
         """
-        With an evaluation mask, also score every valid pixel of each view, as without the mask
+        Pixel sets scored with the evaluation mask, comma list of mask, unmasked and inverted; the first is the headline set, whose scores go to metrics.csv, the log and the training panel. Empty: the mask
         """
 
-    @eval_mask_report_unmasked.setter
-    def eval_mask_report_unmasked(self, arg: bool, /) -> None: ...
-
-    @property
-    def eval_mask_report_inverted(self) -> bool:
-        """With an evaluation mask, also score the valid pixels outside the mask"""
-
-    @eval_mask_report_inverted.setter
-    def eval_mask_report_inverted(self, arg: bool, /) -> None: ...
+    @eval_mask_report.setter
+    def eval_mask_report(self, arg: str, /) -> None: ...
 
     @property
     def eval_mask_opacity(self) -> float:
