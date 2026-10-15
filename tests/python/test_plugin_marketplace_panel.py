@@ -1092,14 +1092,15 @@ def test_marketplace_star_badges_preserve_zero_and_unknown_counts(
     assert panel._build_star_count_markup(record) == ""
 
 
-def test_marketplace_loads_star_metadata_for_alphabetical_sort(plugin_marketplace_module):
+@pytest.mark.parametrize("sort_idx", [0, 1, 2, 3])
+def test_marketplace_only_loads_star_metadata_for_popularity_sort(plugin_marketplace_module, sort_idx):
     module, _state = plugin_marketplace_module
     panel = module.PluginMarketplacePanel()
     calls = []
     panel._catalog.refresh_async = lambda **kwargs: calls.append(kwargs)
-    panel._sort_idx = 2
+    panel._sort_idx = sort_idx
     panel._ensure_loaded()
-    assert calls == [{"require_github_enrichment": True}]
+    assert calls == [{"require_github_enrichment": sort_idx in (0, 1)}]
 
 
 def test_marketplace_refresh_preserves_unchanged_card_dom(plugin_marketplace_module):
@@ -1178,3 +1179,36 @@ def test_equal_list_record_syncs_expansion_when_error_expires(
     panel._toggle_list_row(card_id)
     assert panel._is_list_row_expanded(card_id) is explicit_expansion
     assert ('class="plugin-list-details hidden"' in card.inner_rml) is not explicit_expansion
+
+
+def test_default_marketplace_opens_and_cache_expiry_do_not_fetch_github_metadata(plugin_marketplace_module, monkeypatch):
+    module, _ = plugin_marketplace_module
+    marketplace = import_module("lfs_plugins.marketplace")
+    now = [0.0]
+    lookups = []
+    registry_calls = []
+    manager_module = ModuleType("lfs_plugins.manager")
+    manager_module.PluginManager = SimpleNamespace(instance=lambda: SimpleNamespace(
+        search=lambda _: registry_calls.append(now[0]) or []))
+    monkeypatch.setitem(sys.modules, "lfs_plugins.manager", manager_module)
+    monkeypatch.setattr(marketplace, "_catalog_cache", None)
+    monkeypatch.setattr(marketplace.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(marketplace, "_resolve_github_entries", lambda entries: lookups.extend(entries) or entries)
+
+    class ImmediateThread:
+        def __init__(self, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(marketplace.threading, "Thread", ImmediateThread)
+    for timestamp in (0.0, 1.0, marketplace.CATALOG_CACHE_TTL_SEC + 1.0):
+        now[0] = timestamp
+        panel = module.PluginMarketplacePanel()
+        panel._catalog = marketplace.PluginMarketplaceCatalog()
+        panel._ensure_loaded()
+        assert panel._catalog.snapshot()[0]
+        assert panel._catalog.snapshot()[2]
+    assert len(registry_calls) == 2
+    assert lookups == []

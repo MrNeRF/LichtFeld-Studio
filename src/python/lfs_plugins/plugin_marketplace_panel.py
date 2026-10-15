@@ -1552,7 +1552,9 @@ class PluginMarketplacePanel(Panel):
 
     def _ensure_loaded(self):
         # Star badges need the existing cached GitHub metadata in every sort mode.
-        self._catalog.refresh_async(require_github_enrichment=True)
+        # Stars may use cached metadata. Only an explicit popularity sort
+        # requests GitHub lookups; opening the panel must not spend API quota.
+        self._catalog.refresh_async(require_github_enrichment=self._sort_idx in (0, 1))
 
     def _invalidate_discover_cache(self):
         self._discover_cache = None
