@@ -169,7 +169,9 @@ namespace lfs::vis {
 
         // Event handlers (called by WindowManager)
         void handleMouseButton(int button, int action, double x, double y);
-        void handleMouseMove(double x, double y);
+        // `motion` is the pointer's relative movement. Mouse look follows it, so
+        // it keeps turning while the locked pointer rests at the window edge.
+        void handleMouseMove(double x, double y, std::optional<glm::dvec2> motion = std::nullopt);
         void handleScroll(double xoff, double yoff);
         void handleKey(int key, int action, int mods);
         void handleKey(int physical_key, int logical_key, int scancode, int action, int mods, bool owned_release = false, bool gui_consumed = false);
@@ -229,6 +231,10 @@ namespace lfs::vis {
         std::pair<glm::vec3, glm::vec3> computePickRay(double x, double y) const;
         input::ToolMode getCurrentToolMode() const;
         void clearViewportDragState();
+        // Mouse look in fly and drone mode hides and locks the pointer, so it
+        // never stops at a screen edge; the pointer returns to where it started.
+        void lockLookPointer(double x, double y);
+        void syncLookPointerLock(bool restore_position = true);
         void clearWasdMomentumViewport();
         void clearSelectedCameraContextMenuGesture();
         void beginPanDrag(const PanelInteractionState& interaction, int button, double x, double y);
@@ -275,6 +281,8 @@ namespace lfs::vis {
         bool camera_view_snap_enabled_ = false;
         int drag_button_ = -1;
         glm::dvec2 last_mouse_pos_{0, 0};
+        glm::dvec2 look_pos_{0, 0};
+        std::optional<glm::vec2> look_pointer_restore_;
         float splitter_start_pos_ = 0.5f;
         double splitter_start_x_ = 0.0;
         Viewport* drag_viewport_ = nullptr;

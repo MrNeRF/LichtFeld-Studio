@@ -470,6 +470,7 @@ namespace lfs::vis {
 
         window_focus_lost_handler_id_ = internal::WindowFocusLost::when([this](const auto&) {
             drag_mode_ = DragMode::None;
+            syncLookPointerLock(false);
             clearSelectedCameraContextMenuGesture();
             press_selected_camera_frustum_ = false;
             pressed_camera_frustum_id_ = -1;
@@ -1089,6 +1090,7 @@ namespace lfs::vis {
                             pivot_distance = 5.0f;
                         interaction->viewport->camera.updatePivotFromCamera(pivot_distance);
                         drag_mode_ = DragMode::Rotate;
+                        lockLookPointer(x, y);
                     } else {
                         interaction->viewport->camera.startRotateAroundCenter(
                             glm::vec2(x, y), static_cast<float>(SDL_GetTicks() / 1000.0f));
@@ -1244,6 +1246,7 @@ namespace lfs::vis {
                 drag_mode_ = DragMode::None;
                 drag_button_ = -1;
                 was_dragging = true;
+                syncLookPointerLock();
             } else if (drag_mode_ == DragMode::Orbit) {
                 if (drag_viewport_) {
                     drag_viewport_->camera.endRotateAroundCenter();
@@ -1409,18 +1412,24 @@ namespace lfs::vis {
         }
     }
 
-    void InputController::handleMouseMove(double x, double y) {
+    void InputController::handleMouseMove(double x, double y, const std::optional<glm::dvec2> motion) {
         decayHeldDragMomentum();
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
+        // The locked pointer's position stops at the window edge; mouse look
+        // accumulates the relative motion instead.
+        const bool relative_look = drag_mode_ == DragMode::Rotate && motion.has_value();
+        if (relative_look)
+            look_pos_ += *motion;
+        const glm::vec2 camera_drag_pos = relative_look ? glm::vec2(look_pos_) : glm::vec2(x, y);
         const auto park_camera_drag_anchor = [&]() {
             if (drag_mode_ != DragMode::Pan && drag_mode_ != DragMode::Orbit &&
                 drag_mode_ != DragMode::Rotate)
                 return;
             auto* const target = drag_viewport_ ? drag_viewport_ : &viewport_;
             const float now = static_cast<float>(SDL_GetTicks() / 1000.0f);
-            target->camera.followDragPointer(glm::vec2(static_cast<float>(x), static_cast<float>(y)), now);
+            target->camera.followDragPointer(camera_drag_pos, now);
         };
 
         if (gui && gui->isCapturingInput()) {
@@ -1628,9 +1637,9 @@ namespace lfs::vis {
             }
             case DragMode::Rotate:
                 if (camera_navigation_mode_ == CameraNavigationMode::Drone) {
-                    target_viewport->camera.droneLook(pos);
+                    target_viewport->camera.droneLook(camera_drag_pos);
                 } else {
-                    target_viewport->camera.rotateFpv(pos);
+                    target_viewport->camera.rotateFpv(camera_drag_pos);
                 }
                 break;
             case DragMode::Orbit: {
@@ -2467,6 +2476,7 @@ namespace lfs::vis {
             pressed_camera_frustum_id_ = -1;
             pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
         }
+        syncLookPointerLock();
 
         if (drag_mode_ == DragMode::Splitter &&
             !isMouseButtonPressed(static_cast<int>(input::AppMouseButton::LEFT))) {
@@ -3281,10 +3291,28 @@ namespace lfs::vis {
         press_selected_camera_frustum_ = false;
         pressed_camera_frustum_id_ = -1;
         pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
+        syncLookPointerLock();
 
         if (was_camera_drag) {
             onCameraMovementEnd();
         }
+    }
+
+    void InputController::lockLookPointer(const double x, const double y) {
+        look_pos_ = {x, y};
+        if (!window_ || look_pointer_restore_ || !SDL_SetWindowRelativeMouseMode(window_, true))
+            return;
+        look_pointer_restore_ =
+            glm::vec2(static_cast<float>(x), static_cast<float>(y)) / input::windowPixelScale(window_);
+    }
+
+    void InputController::syncLookPointerLock(const bool restore_position) {
+        if (!look_pointer_restore_ || drag_mode_ == DragMode::Rotate)
+            return;
+        SDL_SetWindowRelativeMouseMode(window_, false);
+        if (restore_position)
+            SDL_WarpMouseInWindow(window_, look_pointer_restore_->x, look_pointer_restore_->y);
+        look_pointer_restore_.reset();
     }
 
     void InputController::clearWasdMomentumViewport() {

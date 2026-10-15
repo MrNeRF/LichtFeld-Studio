@@ -1224,8 +1224,10 @@ namespace lfs::vis {
                 break;
             }
             if (input_controller_) {
-                const auto position = glm::vec2(event.motion.x, event.motion.y) * input::windowPixelScale(window_);
-                input_controller_->handleMouseMove(position.x, position.y);
+                const auto scale = input::windowPixelScale(window_);
+                const auto position = glm::vec2(event.motion.x, event.motion.y) * scale;
+                const auto motion = glm::vec2(event.motion.xrel, event.motion.yrel) * scale;
+                input_controller_->handleMouseMove(position.x, position.y, glm::dvec2(motion));
             }
             updateResizeCursor(static_cast<int>(std::round(event.motion.x)),
                                static_cast<int>(std::round(event.motion.y)));
