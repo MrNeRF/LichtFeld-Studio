@@ -889,6 +889,46 @@ namespace lfs::vis {
         op::operators().unregisterOperator(id);
     }
 
+    TEST_F(InputControllerFocusTest, FocusFramesOnlyVisibleModels) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        SceneManager scene_manager;
+        ToolContext tool_context(nullptr, &scene_manager, &viewport, nullptr);
+        controller.setToolContext(&tool_context);
+
+        const auto make_splat = [](const float x) {
+            return std::make_unique<lfs::core::SplatData>(
+                0,
+                Tensor::from_vector({x - 1.0f, 0.0f, 0.0f, x + 1.0f, 0.0f, 0.0f}, {size_t{2}, size_t{3}}, Device::CPU),
+                Tensor::zeros({size_t{2}, size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::zeros({size_t{2}, size_t{0}, size_t{3}}, Device::CPU, DataType::Float32),
+                Tensor::zeros({size_t{2}, size_t{3}}, Device::CPU),
+                Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f}, {size_t{2}, size_t{4}}, Device::CPU),
+                Tensor::zeros({size_t{2}, size_t{1}}, Device::CPU),
+                1.0f);
+        };
+        auto& scene = scene_manager.getScene();
+        const auto group = scene.addGroup("group");
+        scene.addSplat("near", make_splat(0.0f), group);
+        scene.setNodeVisibility(scene.addSplat("far", make_splat(100.0f), group), false);
+
+        const auto expect_framed_near = [&](const char* selection) {
+            SCOPED_TRACE(selection);
+            viewport.camera.pivot = glm::vec3(7.0f);
+            ASSERT_TRUE(controller.focusSelection());
+            EXPECT_LT(glm::length(viewport.camera.getPivot()), 1e-3f);
+        };
+        expect_framed_near("nothing");
+        scene_manager.selectNode("group");
+        expect_framed_near("group with a hidden child");
+        scene_manager.selectNode("far");
+        expect_framed_near("hidden node");
+    }
+
     TEST_F(InputControllerFocusTest, DeleteNodeShortcutFiresWhenViewportFocused) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
