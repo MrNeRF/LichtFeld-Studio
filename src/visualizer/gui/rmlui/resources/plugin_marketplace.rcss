@@ -486,8 +486,8 @@
     align-items: center;
     gap: 6dp;
     min-width: 0;
-    height: 32dp;
-    min-height: 32dp;
+    height: 28dp;
+    min-height: 28dp;
     padding: 3dp 9dp;
     overflow: hidden;
 }
@@ -555,9 +555,9 @@
 .plugin-list-details {
     display: flex;
     flex-direction: column;
-    gap: 3dp;
+    gap: 0;
     min-width: 0;
-    padding: 4dp 11dp 6dp 38dp;
+    padding: 2dp 11dp 6dp 38dp;
     border-top-width: 1dp;
     overflow: hidden;
 }
@@ -596,9 +596,9 @@
     tab-index: auto;
 }
 
-/* The list already supplies spacing between detail rows. */
+/* Keep the description against its metadata; space links and actions explicitly. */
 .plugin-list-details .mp-project-link {
-    margin-top: 0;
+    margin-top: 2dp;
     line-height: 15dp;
 }
 
@@ -616,7 +616,7 @@
 }
 
 .plugin-list-options {
-    margin-top: 3dp;
+    margin-top: 6dp;
     display: flex;
     align-items: center;
     flex-wrap: wrap;
