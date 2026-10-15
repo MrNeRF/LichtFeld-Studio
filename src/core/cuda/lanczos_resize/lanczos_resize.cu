@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: MIT (original Lanczos implementation)
  */
 
+#include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_memory_guard.hpp"
@@ -157,6 +158,17 @@ namespace lfs::core {
             return sinc(x) * sinc(x / a);
         }
 
+        // The coefficient table and every resample kernel must agree on each sample's support, or a kernel reads
+        // a weight the table never wrote. Explicit rounding stops the compiler from contracting the copies differently.
+        __device__ __forceinline__ int2 lanczos_support(const int output_idx, const int input_size,
+                                                        const int output_size, const int kernel_size) {
+            const float scale = __fdiv_rn(static_cast<float>(input_size), static_cast<float>(output_size));
+            const float center = __fmul_rn(__fadd_rn(static_cast<float>(output_idx), 0.5f), scale);
+            const float reach = __fmul_rn(static_cast<float>(kernel_size), scale);
+            return {max(static_cast<int>(__fadd_rn(__fsub_rn(center, reach), 0.5f)), 0),
+                    min(static_cast<int>(__fadd_rn(__fadd_rn(center, reach), 0.5f)), input_size)};
+        }
+
         __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
             PreComputeCoef(
                 const int input_size,
@@ -175,9 +187,9 @@ namespace lfs::core {
                 return;
 
             const float center = (output_ax + 0.5f) * scale;
-            const int2 box = {
-                max((int)(center - kernel_size * scale + 0.5f), 0),
-                min((int)(center + kernel_size * scale + 0.5f), input_size)};
+            const int2 box = lanczos_support(output_idx, input_size, output_size, kernel_size);
+            LFS_DEBUG_ASSERT_MSG(box.y > box.x && static_cast<uint32_t>(box.y - box.x) <= coefficient_stride,
+                                 "Lanczos support must be non-empty and fit the coefficient stride");
 
             const uint32_t offset = output_idx * coefficient_stride;
             float norm = 0.0f;
@@ -188,6 +200,9 @@ namespace lfs::core {
             }
             for (int i = box.x; i < box.y; i++) {
                 kernel_values[offset + i - box.x] /= norm;
+            }
+            for (uint32_t i = static_cast<uint32_t>(box.y - box.x); i < coefficient_stride; i++) {
+                kernel_values[offset + i] = __int_as_float(0x7fffffff);
             }
         }
 
@@ -210,22 +225,19 @@ namespace lfs::core {
             const uint2 pix = {
                 block.group_index().x * BLOCK_X + thread_idx_x,
                 block.group_index().y * BLOCK_Y + thread_idx_y};
-            const float2 pixf = {(float)pix.x, (float)pix.y};
-            float scale_h = 1.0f * input_h / output_h, scale_w = 1.0f * input_w / output_w;
-
             const bool inside = (pix.x < output_w && pix.y < output_h);
 
             if (!inside)
                 return;
 
-            const float2 center = {(pixf.x + 0.5f) * scale_w, (pixf.y + 0.5f) * scale_h};
-
-            const int2 LU = {
-                max((int)(center.x - kernel_size * scale_w + 0.5f), 0),
-                max((int)(center.y - kernel_size * scale_h + 0.5f), 0)};
-            const int2 RD = {
-                min((int)(center.x + kernel_size * scale_w + 0.5f), input_w),
-                min((int)(center.y + kernel_size * scale_h + 0.5f), input_h)};
+            const int2 support_x = lanczos_support(pix.x, input_w, output_w, kernel_size);
+            const int2 support_y = lanczos_support(pix.y, input_h, output_h, kernel_size);
+            const int2 LU = {support_x.x, support_y.x};
+            const int2 RD = {support_x.y, support_y.y};
+            LFS_DEBUG_ASSERT_MSG(RD.x > LU.x && RD.y > LU.y &&
+                                     static_cast<uint32_t>(RD.x - LU.x) <= coefficient_stride_x &&
+                                     static_cast<uint32_t>(RD.y - LU.y) <= coefficient_stride_y,
+                                 "Lanczos support must be non-empty and fit the coefficient stride");
 
             float accumulator[CHANNELS] = {0.0f};
 
@@ -234,6 +246,8 @@ namespace lfs::core {
                 for (int x = LU.x; x < RD.x; x++) {
                     const uint32_t input_pix_id = input_w * y + x;
                     const float kernel_value_x = pre_coef_x[pix.x * coefficient_stride_x + x - LU.x];
+                    LFS_DEBUG_ASSERT_MSG(isfinite(kernel_value_x) && isfinite(kernel_value_y),
+                                         "Lanczos read a coefficient the table did not write");
                     const float kernel_value = kernel_value_y * kernel_value_x;
 
                     for (int ch = 0; ch < CHANNELS; ch++) {
@@ -275,22 +289,19 @@ namespace lfs::core {
             const uint2 pix = {
                 block.group_index().x * BLOCK_X + thread_idx_x,
                 block.group_index().y * BLOCK_Y + thread_idx_y};
-            const float2 pixf = {(float)pix.x, (float)pix.y};
-            float scale_h = 1.0f * input_h / output_h, scale_w = 1.0f * input_w / output_w;
-
             const bool inside = (pix.x < output_w && pix.y < output_h);
 
             if (!inside)
                 return;
 
-            const float2 center = {(pixf.x + 0.5f) * scale_w, (pixf.y + 0.5f) * scale_h};
-
-            const int2 LU = {
-                max((int)(center.x - kernel_size * scale_w + 0.5f), 0),
-                max((int)(center.y - kernel_size * scale_h + 0.5f), 0)};
-            const int2 RD = {
-                min((int)(center.x + kernel_size * scale_w + 0.5f), input_w),
-                min((int)(center.y + kernel_size * scale_h + 0.5f), input_h)};
+            const int2 support_x = lanczos_support(pix.x, input_w, output_w, kernel_size);
+            const int2 support_y = lanczos_support(pix.y, input_h, output_h, kernel_size);
+            const int2 LU = {support_x.x, support_y.x};
+            const int2 RD = {support_x.y, support_y.y};
+            LFS_DEBUG_ASSERT_MSG(RD.x > LU.x && RD.y > LU.y &&
+                                     static_cast<uint32_t>(RD.x - LU.x) <= coefficient_stride_x &&
+                                     static_cast<uint32_t>(RD.y - LU.y) <= coefficient_stride_y,
+                                 "Lanczos support must be non-empty and fit the coefficient stride");
 
             float accumulator = 0.0f;
 
@@ -299,6 +310,8 @@ namespace lfs::core {
                 for (int x = LU.x; x < RD.x; x++) {
                     const uint32_t input_pix_id = input_w * y + x;
                     const float kernel_value_x = pre_coef_x[pix.x * coefficient_stride_x + x - LU.x];
+                    LFS_DEBUG_ASSERT_MSG(isfinite(kernel_value_x) && isfinite(kernel_value_y),
+                                         "Lanczos read a coefficient the table did not write");
                     const float kernel_value = kernel_value_y * kernel_value_x;
                     float pixel_value;
                     if constexpr (ExactMask && std::is_same_v<TIn, uint8_t>)
@@ -331,22 +344,19 @@ namespace lfs::core {
             const uint2 pix = {
                 block.group_index().x * BLOCK_X + thread_idx_x,
                 block.group_index().y * BLOCK_Y + thread_idx_y};
-            const float2 pixf = {(float)pix.x, (float)pix.y};
-            float scale_h = 1.0f * input_h / output_h, scale_w = 1.0f * input_w / output_w;
-
             const bool inside = (pix.x < output_w && pix.y < output_h);
 
             if (!inside)
                 return;
 
-            const float2 center = {(pixf.x + 0.5f) * scale_w, (pixf.y + 0.5f) * scale_h};
-
-            const int2 LU = {
-                max((int)(center.x - kernel_size * scale_w + 0.5f), 0),
-                max((int)(center.y - kernel_size * scale_h + 0.5f), 0)};
-            const int2 RD = {
-                min((int)(center.x + kernel_size * scale_w + 0.5f), input_w),
-                min((int)(center.y + kernel_size * scale_h + 0.5f), input_h)};
+            const int2 support_x = lanczos_support(pix.x, input_w, output_w, kernel_size);
+            const int2 support_y = lanczos_support(pix.y, input_h, output_h, kernel_size);
+            const int2 LU = {support_x.x, support_y.x};
+            const int2 RD = {support_x.y, support_y.y};
+            LFS_DEBUG_ASSERT_MSG(RD.x > LU.x && RD.y > LU.y &&
+                                     static_cast<uint32_t>(RD.x - LU.x) <= coefficient_stride_x &&
+                                     static_cast<uint32_t>(RD.y - LU.y) <= coefficient_stride_y,
+                                 "Lanczos support must be non-empty and fit the coefficient stride");
 
             const int input_plane = input_h * input_w;
             const int output_plane = output_h * output_w;
@@ -358,6 +368,8 @@ namespace lfs::core {
                 for (int x = LU.x; x < RD.x; x++) {
                     const uint32_t input_pix_id = input_w * y + x;
                     const float kernel_value_x = pre_coef_x[pix.x * coefficient_stride_x + x - LU.x];
+                    LFS_DEBUG_ASSERT_MSG(isfinite(kernel_value_x) && isfinite(kernel_value_y),
+                                         "Lanczos read a coefficient the table did not write");
                     const float kernel_value = kernel_value_y * kernel_value_x;
 
                     for (int ch = 0; ch < CHANNELS; ch++) {
