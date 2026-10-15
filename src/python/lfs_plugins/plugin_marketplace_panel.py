@@ -19,7 +19,10 @@ from .marketplace import (
     PluginMarketplaceCatalog,
 )
 from .localization import localized_count, safe_format
-from .marketplace_preferences import read_preferences as read_marketplace_preferences
+from .marketplace_preferences import (
+    read_preferences as read_marketplace_preferences,
+    set_preference as set_marketplace_preference,
+)
 from .plugin import PluginInfo, PluginState
 from .types import Panel
 from .panels import panel_class
@@ -155,6 +158,10 @@ class PluginMarketplacePanel(Panel):
             self._set_sort_idx,
         )
 
+        model.bind_func("view_is_card", lambda: self._view_mode == _VIEW_MODE_CARD)
+        model.bind_func("view_is_list", lambda: self._view_mode == _VIEW_MODE_LIST)
+        model.bind_event("view_cards", lambda *_: self._select_view_mode(_VIEW_MODE_CARD))
+        model.bind_event("view_list", lambda *_: self._select_view_mode(_VIEW_MODE_LIST))
         model.bind_event("do_install_url", self._on_manual_form_submit)
         model.bind_event("confirm_yes", self._on_confirm_yes)
         model.bind_event("confirm_no", self._on_confirm_no)
@@ -1452,10 +1459,17 @@ class PluginMarketplacePanel(Panel):
     def reload_marketplace_preferences(self):
         self._set_view_mode(read_marketplace_preferences()["view"])
 
+    def _select_view_mode(self, view_mode: str):
+        set_marketplace_preference("view", view_mode)
+        self._set_view_mode(view_mode)
+
     def _set_view_mode(self, view_mode: str):
         if view_mode not in _VALID_VIEW_MODES or view_mode == self._view_mode:
             return
         self._view_mode = view_mode
+        if self._handle:
+            self._handle.dirty("view_is_card")
+            self._handle.dirty("view_is_list")
         self._entries_dirty = True
         self._last_grid_signature = None
         self._request_model_update()

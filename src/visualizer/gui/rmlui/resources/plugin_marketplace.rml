@@ -30,6 +30,14 @@
           </select>
         </div>
       </div>
+      <div class="mp-view-toggle">
+        <button id="view-cards-btn" type="button" class="btn btn--secondary mp-view-btn"
+                data-class-selected="view_is_card" data-tooltip="plugin_marketplace.view.grid"
+                data-event-click="view_cards"><span class="mp-icon-grid"><span></span><span></span><span></span><span></span></span></button>
+        <button id="view-list-btn" type="button" class="btn btn--secondary mp-view-btn"
+                data-class-selected="view_is_list" data-tooltip="plugin_marketplace.view.list"
+                data-event-click="view_list"><span class="mp-icon-list"><span></span><span></span><span></span></span></button>
+      </div>
     </div>
 
     <!-- Manual URL install -->

@@ -1212,3 +1212,33 @@ def test_default_marketplace_opens_and_cache_expiry_do_not_fetch_github_metadata
         assert panel._catalog.snapshot()[2]
     assert len(registry_calls) == 2
     assert lookups == []
+
+
+def test_panel_layout_buttons_save_preferences_and_follow_external_changes(plugin_marketplace_module, monkeypatch):
+    from unittest.mock import MagicMock
+
+    module, state = plugin_marketplace_module
+    writes = []
+
+    def set_view(value):
+        writes.append(value)
+        state.marketplace_preferences["view"] = value
+
+    monkeypatch.setattr(module.lf.ui, "set_marketplace_view", set_view, raising=False)
+    panel = module.PluginMarketplacePanel()
+    functions, events = {}, {}
+    model = MagicMock()
+    model.bind_func.side_effect = functions.__setitem__
+    model.bind_event.side_effect = events.__setitem__
+    panel.on_bind_model(SimpleNamespace(create_data_model=lambda _: model))
+    for event, expected in (("view_cards", "card"), ("view_list", "list")):
+        events[event](None, None, None)
+        assert panel._view_mode == expected
+        assert state.marketplace_preferences["view"] == expected
+        assert functions["view_is_card"]() == (expected == "card")
+        assert functions["view_is_list"]() == (expected == "list")
+    assert writes == ["card", "list"]
+    state.marketplace_preferences["view"] = "card"
+    panel.reload_marketplace_preferences()
+    assert functions["view_is_card"]()
+    assert writes == ["card", "list"]

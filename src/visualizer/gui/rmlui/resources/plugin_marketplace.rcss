@@ -96,6 +96,59 @@
     min-width: 148dp;
 }
 
+.mp-view-toggle {
+    display: flex;
+    align-items: center;
+    gap: 3dp;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.mp-view-btn {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28dp;
+    min-width: 28dp;
+    height: 24dp;
+    min-height: 24dp;
+    padding: 0;
+    line-height: 22dp;
+    text-align: center;
+}
+
+.mp-icon-grid {
+    display: inline-flex;
+    flex-wrap: wrap;
+    width: 12dp;
+    height: 12dp;
+    gap: 1dp;
+    vertical-align: middle;
+}
+
+.mp-icon-grid > span {
+    display: block;
+    width: 5dp;
+    height: 5dp;
+}
+
+.mp-icon-list {
+    display: inline-flex;
+    flex-direction: column;
+    justify-content: center;
+    width: 12dp;
+    height: 12dp;
+    gap: 2dp;
+    vertical-align: middle;
+}
+
+.mp-icon-list > span {
+    display: block;
+    width: 12dp;
+    height: 1.5dp;
+}
+
 /* ── Manual URL install ───────────────────────────────────── */
 
 .mp-manual-section {

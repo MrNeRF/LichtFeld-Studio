@@ -50,6 +50,30 @@
     background-color: transparent;
 }
 
+.mp-view-btn {
+    color: @{text_dim};
+    background-color: transparent;
+    border-color: @{border};
+}
+
+.mp-view-btn:hover {
+    color: @{text};
+    background-color: @{alpha(primary,0.10)};
+    border-color: @{alpha(primary,0.60)};
+}
+
+.mp-view-btn.selected,
+.mp-view-btn.selected:hover {
+    color: @{text};
+    background-color: @{alpha(primary,0.22)};
+    border-color: @{primary};
+}
+
+.mp-icon-grid > span,
+.mp-icon-list > span {
+    background-color: @{text};
+}
+
 .mp-collapse-toggle:hover,
 .mp-collapse-toggle:focus-visible {
     color: @{primary};
