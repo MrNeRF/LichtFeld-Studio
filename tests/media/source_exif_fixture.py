@@ -3,7 +3,36 @@
 """One independent TIFF fixture shared by the headless consumer contracts."""
 import struct
 import base64
+import zlib
 from pathlib import Path
+
+
+def write_png(path, *, post_idat=False, duplicate=False):
+    tiff = b"II" + struct.pack("<HIH", 42, 8, 1)
+    tiff += struct.pack("<HHIHHI", 0x112, 3, 1, 6, 0, 0)
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    header = chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+    pixels = chunk(b"IDAT", zlib.compress(b"\0\x14\x50\xa0"))
+    metadata = chunk(b"eXIf", tiff) * (2 if duplicate else 1)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + header + (pixels + metadata if post_idat else metadata + pixels) + chunk(b"IEND", b""))
+    return tiff
+
+
+def check_png(test, result, payload, *, count=1, status="collected"):
+    test.assertEqual(result["status"], status)
+    test.assertEqual(result["scope"], "png-chunks-through-iend")
+    test.assertEqual(len(result["blocks"]), count)
+    for block in result["blocks"]:
+        test.assertEqual(block["envelope"], "png_exif")
+        test.assertEqual(bytes.fromhex(block["bytes"]), payload)
+        test.assertIsNone(block["image_item"])
+        test.assertIsNone(block["metadata_item"])
+        test.assertEqual(block["interpretation"]["status"], "parsed")
+        entry, = block["interpretation"]["entries"]
+        test.assertEqual((entry["id"], entry["type"], entry["unsigned_values"]), (0x112, 3, [6]))
 
 
 def write_jpeg(path):

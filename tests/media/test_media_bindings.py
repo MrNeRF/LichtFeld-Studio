@@ -30,6 +30,13 @@ MEDIA_ERROR = None
 
 
 class MediaBindings(unittest.TestCase):
+    def test_png_source_exif_owned_original_and_typed_values(self):
+        path = self.root / "PNG EXIF é 日本語.png"
+        payload = source_exif_fixture.write_png(path)
+        result = media.MediaIngest.source_exif_json(path)
+        path.unlink()
+        source_exif_fixture.check_png(self, json.loads(result), payload)
+
     def test_source_exif_diagnostics_and_large_header_prefix(self):
         path = self.root / "invalid-diagnostic.avif"
         source_exif_fixture.write_invalid_heif(path)

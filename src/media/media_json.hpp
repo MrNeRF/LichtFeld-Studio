@@ -54,7 +54,8 @@ namespace lfs::media::json_detail {
         json result{{"status", metadataStatus(original.status)}, {"scope", original.scope}, {"diagnostic", original.diagnostic}, {"binary_encoding", "hex"}, {"blocks", json::array()}};
         for (size_t i = 0; i < original.blocks.size(); ++i) {
             const auto& block = original.blocks[i];
-            json item{{"envelope", block.envelope == core::image_codecs::ExifEnvelope::JpegApp1 ? "jpeg_app1" : "heif_offset"},
+            json item{{"envelope", block.envelope == core::image_codecs::ExifEnvelope::JpegApp1 ? "jpeg_app1" : block.envelope == core::image_codecs::ExifEnvelope::PngExif ? "png_exif"
+                                                                                                                                                                            : "heif_offset"},
                       {"image_item", optional(block.image_item)},
                       {"metadata_item", optional(block.metadata_item)},
                       {"bytes", hexBytes(block.bytes)},

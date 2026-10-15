@@ -77,6 +77,17 @@ int runSourceExifContracts() {
                 "MakerNote that resembles an IFD remains opaque");
         require(result.entries[5].bytes == std::vector<uint8_t>({255, 0, 65, 0}), "ASCII byte count, invalid UTF8 and NUL preserved");
         require(original.bytes == snapshot, "private parsing never mutates originals");
+        auto png = original;
+        png.envelope = ExifEnvelope::PngExif;
+        png.bytes.erase(png.bytes.begin(), png.bytes.begin() + 6);
+        const auto png_result = interpretExif(png);
+        require(png_result.status == ExifParseStatus::Parsed && png_result.entries.size() == result.entries.size(),
+                "PNG eXIf uses its original bare TIFF payload without an invented envelope");
+        ImageExifDescription png_description;
+        png_description.original.blocks.push_back(png);
+        png_description.interpretations.push_back(png_result);
+        require(json_detail::sourceExif(png_description).at("blocks")[0].at("envelope") == "png_exif",
+                "PNG envelope is explicit in the shared serializer");
         ImageExifDescription description;
         description.original.blocks.push_back(original);
         description.interpretations.push_back(result);

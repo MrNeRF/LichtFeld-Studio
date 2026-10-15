@@ -127,6 +127,110 @@ namespace {
         truncated.resize(2 * 1024 * 1024);
         limits.jpeg_header_bytes -= 1;
         check_prefix(truncated, MetadataStatus::Limited, 1, limits);
+
+        // Independent PNG chunk construction: bitwise reference CRC rather
+        // than the production zlib implementation.
+        auto chunk = [](const char* type, const std::vector<uint8_t>& payload) {
+            std::vector<uint8_t> bytes;
+            auto put = [&](uint32_t value) {
+                for (int shift = 24; shift >= 0; shift -= 8)
+                    bytes.push_back(static_cast<uint8_t>(value >> shift));
+            };
+            put(static_cast<uint32_t>(payload.size()));
+            bytes.insert(bytes.end(), type, type + 4);
+            bytes.insert(bytes.end(), payload.begin(), payload.end());
+            uint32_t crc = 0xffffffff;
+            for (size_t i = 4; i < bytes.size(); ++i) {
+                crc ^= bytes[i];
+                for (int bit = 0; bit < 8; ++bit)
+                    crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+            }
+            put(~crc);
+            return bytes;
+        };
+        const std::vector<uint8_t> tiff(exif.begin() + 6, exif.end());
+        std::vector<uint8_t> png{137, 'P', 'N', 'G', 13, 10, 26, 10};
+        auto append = [&](const char* type, const std::vector<uint8_t>& payload) {
+            const auto bytes = chunk(type, payload);
+            png.insert(png.end(), bytes.begin(), bytes.end());
+        };
+        append("IHDR", {0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0});
+        append("eXIf", tiff);
+        const auto png_prefix = png;
+        append("IDAT", {1, 2, 3}); // Intentionally not valid deflate: no pixel decoding.
+        append("IEND", {});
+        write(png);
+        const auto png_metadata = read_source_exif(path);
+        require(png_metadata.status == MetadataStatus::Collected && png_metadata.blocks.size() == 1 &&
+                    png_metadata.scope == "png-chunks-through-iend" && png_metadata.blocks[0].bytes == tiff &&
+                    png_metadata.blocks[0].envelope == ExifEnvelope::PngExif,
+                "PNG is signature detected and retains bare TIFF without decoding pixels");
+        limits = {};
+        limits.png_scan_bytes = png.size() - 3;
+        require(read_source_exif(path, limits).status == MetadataStatus::Collected,
+                "exact PNG scan budget succeeds without charging skipped pixel payload");
+        --limits.png_scan_bytes;
+        require(read_source_exif(path, limits).status == MetadataStatus::Limited, "PNG scan exhaustion is explicit");
+        limits = {};
+        limits.png_chunks = 2;
+        require(read_source_exif(path, limits).status == MetadataStatus::Limited && read_source_exif(path, limits).blocks.size() == 1,
+                "PNG chunk limit preserves complete EXIF prefix");
+        limits = {};
+        limits.block_bytes = tiff.size() - 1;
+        require(read_source_exif(path, limits).status == MetadataStatus::Limited && read_source_exif(path, limits).blocks.empty(),
+                "PNG oversized EXIF is rejected before copying");
+        const auto valid_png = png;
+        auto oversized_declaration = png_prefix;
+        oversized_declaration.insert(oversized_declaration.end(), {0x10, 0, 0, 0, 'e', 'X', 'I', 'f', 0, 0, 0, 0});
+        write(oversized_declaration);
+        require(read_source_exif(path).status == MetadataStatus::Malformed && read_source_exif(path).blocks.size() == 1,
+                "bogus PNG chunk length is truncation, not a budget failure; completed prefix survives");
+        for (size_t size = 8; size < valid_png.size(); ++size) {
+            write(std::vector<uint8_t>(valid_png.begin(), valid_png.begin() + size));
+            require(read_source_exif(path).status == MetadataStatus::Malformed, "PNG truncation is never absent or collected");
+        }
+        png = valid_png;
+        png.back() ^= 1;
+        write(png);
+        require(read_source_exif(path).status == MetadataStatus::Malformed && read_source_exif(path).blocks.size() == 1,
+                "late CRC failure preserves complete metadata prefix");
+        png = png_prefix;
+        append("eXIf", tiff);
+        append("IDAT", {});
+        append("IEND", {});
+        write(png);
+        require(read_source_exif(path).status == MetadataStatus::Malformed && read_source_exif(path).blocks.size() == 2,
+                "duplicate PNG EXIF is preserved without claiming a conforming container");
+        png.assign(valid_png.begin(), valid_png.begin() + 33);
+        append("IDAT", {});
+        append("eXIf", tiff);
+        append("IEND", {});
+        write(png);
+        require(read_source_exif(path).status == MetadataStatus::Malformed && read_source_exif(path).blocks.size() == 1,
+                "post-IDAT EXIF is preserved with explicit nonconformance");
+        png.assign(valid_png.begin(), valid_png.begin() + 33);
+        append("IDAT", {});
+        append("IEND", {});
+        write(png);
+        require(read_source_exif(path).status == MetadataStatus::Absent, "complete PNG without EXIF is absent");
+        require(png_metadata.blocks[0].bytes == tiff, "PNG original bytes outlive the source file");
+        {
+            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            output.write(reinterpret_cast<const char*>(png_prefix.data()), static_cast<std::streamsize>(png_prefix.size()));
+            const uint8_t header[]{0, 32, 0, 0, 'I', 'D', 'A', 'T'};
+            output.write(reinterpret_cast<const char*>(header), sizeof(header));
+            output.seekp(2 * 1024 * 1024, std::ios::cur);
+            const uint8_t ignored_crc[4]{};
+            output.write(reinterpret_cast<const char*>(ignored_crc), sizeof(ignored_crc));
+            const auto end = chunk("IEND", {});
+            output.write(reinterpret_cast<const char*>(end.data()), static_cast<std::streamsize>(end.size()));
+            require(static_cast<bool>(output), "write large skipped PNG pixel payload");
+        }
+        limits = {};
+        limits.png_scan_bytes = png_prefix.size() + 24;
+        const auto skipped = read_source_exif(path, limits);
+        require(skipped.status == MetadataStatus::Collected && skipped.blocks.size() == 1 && skipped.blocks[0].bytes == tiff,
+                "large PNG pixel payload does not consume the metadata examination budget or require a valid pixel CRC");
     }
 } // namespace
 
