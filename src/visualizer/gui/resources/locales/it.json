@@ -924,6 +924,7 @@
   "preferences": {
     "marketplace": "Marketplace",
     "marketplace_layout": "Layout",
+    "marketplace_git_checkout_description": "Installa un clone Git anziché un archivio dei sorgenti, per esaminare le modifiche e usare Git nella cartella del plugin. Richiede Git; altrimenti viene usato un archivio.",
     "projects": "Progetti",
     "project_folders": "Cartelle dei progetti",
     "project_folders_default": "predefinita",

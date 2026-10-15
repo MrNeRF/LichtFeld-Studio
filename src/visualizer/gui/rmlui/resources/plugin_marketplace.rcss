@@ -108,18 +108,21 @@
     border-radius: 6dp;
 }
 
-.mp-manual-header {
+.mp-collapse-toggle {
     box-sizing: border-box;
-    display: flex;
+    display: inline-flex;
     align-items: center;
+    align-self: flex-start;
     gap: 5dp;
-    width: 100%;
-    min-height: 28dp;
+    max-width: 100%;
+    min-height: 24dp;
     margin: 0;
-    padding: 4dp 0;
+    padding: 2dp 0;
     border-width: 0;
     background-color: transparent;
+    font-size: 12dp;
     text-align: left;
+    cursor: pointer;
 }
 
 #manual-content.section-content {
@@ -149,23 +152,15 @@ input.mp-url-input[type="text"] {
     flex: 1;
     min-width: 120dp;
     box-sizing: border-box;
-    height: 28dp;
-    min-height: 28dp;
-    padding: 4dp 8dp;
+    height: 24dp;
+    min-height: 24dp;
+    padding: 3dp 8dp;
     font-size: 12dp;
     line-height: 16dp;
 }
 
 .mp-formats-header {
-    display: flex;
-    align-items: center;
-    gap: 5dp;
-    min-height: 24dp;
-    margin: 8dp 0 0;
-    padding: 6dp 0 0;
-    border-top-width: 1dp;
-    border-radius: 0;
-    font-weight: 600;
+    margin-top: 6dp;
 }
 
 .mp-formats-header .section-arrow {
@@ -301,6 +296,23 @@ input.mp-url-input[type="text"] {
     line-height: 16dp;
 }
 
+.mp-stars {
+    display: inline-flex;
+    align-items: center;
+    gap: 4dp;
+    flex-shrink: 0;
+    margin-left: auto;
+    font-size: 11dp;
+    line-height: 16dp;
+    white-space: nowrap;
+}
+
+.mp-star-icon,
+.mp-star-count {
+    display: block;
+    flex-shrink: 0;
+}
+
 .card-version {
     flex-shrink: 0;
     font-size: 11dp;
@@ -366,8 +378,8 @@ input.mp-url-input[type="text"] {
 }
 
 .card-buttons .btn {
-    flex: 1 1 auto;
-    min-width: 76dp;
+    flex: 0 0 auto;
+    min-width: 64dp;
 }
 
 .card-startup-row {
@@ -602,7 +614,7 @@ input.mp-url-input[type="text"] {
 }
 
 .plugin-list-buttons .btn {
-    min-width: 76dp;
+    min-width: 64dp;
 }
 
 /* Labels live in spans so RmlUi measures them as flex items. */
@@ -614,11 +626,11 @@ input.mp-url-input[type="text"] {
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    height: 30dp;
-    min-height: 30dp;
-    padding: 0 12dp;
-    font-size: 13dp;
-    line-height: 18dp;
+    height: 24dp;
+    min-height: 24dp;
+    padding: 0 8dp;
+    font-size: 12dp;
+    line-height: 16dp;
     text-align: center;
 }
 
@@ -628,10 +640,10 @@ input.mp-url-input[type="text"] {
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    min-width: 76dp;
-    height: 28dp;
-    min-height: 28dp;
-    padding: 0 10dp;
+    min-width: 64dp;
+    height: 24dp;
+    min-height: 24dp;
+    padding: 0 8dp;
     font-size: 12dp;
     line-height: 16dp;
     text-align: center;

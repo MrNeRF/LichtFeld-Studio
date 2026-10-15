@@ -494,8 +494,6 @@ class PluginMarketplacePanel(Panel):
 
         metrics = []
         if not is_local_only:
-            if entry.stars is not None:
-                metrics.append(f"{tr('plugin_marketplace.stars')}: {entry.stars}")
             if entry.downloads > 0:
                 metrics.append(f"{tr('plugin_marketplace.downloads')}: {entry.downloads}")
         metrics_text = "  |  ".join(metrics)
@@ -536,6 +534,7 @@ class PluginMarketplacePanel(Panel):
             "repo_label": repo_label,
             "has_metrics": bool(metrics_text),
             "metrics_text": metrics_text,
+            "stars": entry.stars,
             "has_tags": bool(tags_text),
             "tags_text": tags_text,
             "is_local": is_local,
@@ -816,6 +815,7 @@ class PluginMarketplacePanel(Panel):
             '<div class="card-title-row">'
             f'{self._build_project_title_markup(record, "card-name")}'
             f'{version_span}'
+            f'{self._build_star_count_markup(record)}'
             '</div>'
             f'{repo_span}'
             f'{metrics_span}'
@@ -897,6 +897,7 @@ class PluginMarketplacePanel(Panel):
             '</div>'
             '<div class="plugin-list-summary-right">'
             f'{summary_status}'
+            f'{self._build_star_count_markup(record)}'
             '</div>'
             '</div>'
             f'<div class="plugin-list-details{expanded_class}">'
@@ -918,6 +919,19 @@ class PluginMarketplacePanel(Panel):
             f'<div class="plugin-list-row" id="card-{esc("card_id")}" data-card-id="{esc("card_id")}">'
             f'{self._build_list_inner_markup(record)}'
             '</div>'
+        )
+
+    @staticmethod
+    def _build_star_count_markup(record: Dict[str, object]) -> str:
+        if not record.get("github_url"):
+            return ""
+        stars = record.get("stars")
+        count = str(stars) if stars is not None else "—"
+        tooltip = escape(f"{lf.ui.tr('plugin_marketplace.stars')}: {count}", quote=True)
+        return (
+            f'<span class="mp-stars" title="{tooltip}">'
+            '<span class="mp-star-icon">★</span>'
+            f'<span class="mp-star-count">{escape(count)}</span></span>'
         )
 
     @staticmethod
@@ -1544,9 +1558,8 @@ class PluginMarketplacePanel(Panel):
     # ── Business logic (unchanged) ────────────────────────────
 
     def _ensure_loaded(self):
-        # Alphabetical sorting only needs registry metadata. Popularity sorting depends on
-        # GitHub enrichment for curated entries, so defer that extra fetch until requested.
-        self._catalog.refresh_async(require_github_enrichment=self._sort_idx in (0, 1))
+        # Star badges need the existing cached GitHub metadata in every sort mode.
+        self._catalog.refresh_async(require_github_enrichment=True)
 
     def _invalidate_discover_cache(self):
         self._discover_cache = None

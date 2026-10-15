@@ -924,6 +924,7 @@
   "preferences": {
     "marketplace": "Marketplace",
     "marketplace_layout": "Diseño",
+    "marketplace_git_checkout_description": "Instala un clon de Git en lugar de un archivo de código fuente para revisar cambios y usar Git en la carpeta del complemento. Requiere Git; de lo contrario se usa un archivo.",
     "projects": "Proyectos",
     "project_folders": "Carpetas de proyectos",
     "project_folders_default": "predeterminada",

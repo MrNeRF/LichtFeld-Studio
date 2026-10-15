@@ -123,7 +123,7 @@
               <option value="list">@tr:plugin_marketplace.view.list</option>
             </select>
           </div>
-          <div class="preferences-row preferences-checkbox-row">
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.marketplace_git_checkout_description">
             <span class="preferences-label">@tr:plugin_marketplace.install_as_git_checkout</span>
             <input type="checkbox" data-checked="marketplace_git_checkout" />
           </div>

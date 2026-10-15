@@ -924,6 +924,7 @@
   "preferences": {
     "marketplace": "插件市场",
     "marketplace_layout": "布局",
+    "marketplace_git_checkout_description": "通过 Git 克隆而非源码压缩包安装，可在插件文件夹中查看更改并使用 Git 工具。需要安装 Git；否则使用源码压缩包。",
     "projects": "项目",
     "project_folders": "项目文件夹",
     "project_folders_default": "默认",

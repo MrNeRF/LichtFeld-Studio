@@ -1072,3 +1072,35 @@ def test_manual_url_install_uses_marketplace_preference(
     )
     panel._install_plugin_from_url(manager, "owner/repo", "manual")
     assert calls == [("owner/repo", expected)]
+
+
+@pytest.mark.parametrize("stars,expected", [(0, "0"), (37, "37"), (None, "—")])
+def test_marketplace_star_badges_preserve_zero_and_unknown_counts(
+    plugin_marketplace_module, stars, expected,
+):
+    from xml.etree import ElementTree
+
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    record = {
+        "card_id": "sample", "name": "Sample", "github_url": "https://github.com/owner/repo",
+        "stars": stars,
+    }
+    for markup in (panel._build_card_markup(record), panel._build_list_markup(record)):
+        root = ElementTree.fromstring(markup)
+        count = next(el for el in root.iter("span") if el.attrib.get("class") == "mp-star-count")
+        assert count.text == expected
+        icon = next(el for el in root.iter("span") if el.attrib.get("class") == "mp-star-icon")
+        assert icon.text == "★"
+    record["github_url"] = ""
+    assert panel._build_star_count_markup(record) == ""
+
+
+def test_marketplace_loads_star_metadata_for_alphabetical_sort(plugin_marketplace_module):
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    calls = []
+    panel._catalog.refresh_async = lambda **kwargs: calls.append(kwargs)
+    panel._sort_idx = 2
+    panel._ensure_loaded()
+    assert calls == [{"require_github_enrichment": True}]

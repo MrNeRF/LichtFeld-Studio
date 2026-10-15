@@ -924,6 +924,7 @@
   "preferences": {
     "marketplace": "Marketplace",
     "marketplace_layout": "Ansicht",
+    "marketplace_git_checkout_description": "Installiert einen Git-Klon statt eines Quellarchivs. So können Sie Änderungen prüfen und Git-Werkzeuge im Plugin-Ordner nutzen. Erfordert Git; andernfalls wird ein Archiv verwendet.",
     "projects": "Projekte",
     "project_folders": "Projektordner",
     "project_folders_default": "Standard",
