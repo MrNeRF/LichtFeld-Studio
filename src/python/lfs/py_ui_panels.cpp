@@ -384,10 +384,13 @@ namespace lfs::python {
         float initial_width = 0.0f;
         float initial_height = 0.0f;
 
+        // A panel without its own id keeps the class id, as unregister_panel expects.
         if (nb::hasattr(panel_class, "id")) {
-            panel_id = parse_string_value(panel_class.attr("id"), "id");
-            if (class_overrides(panel_class, panel_base, "id") && panel_id.empty())
+            auto explicit_id = parse_string_value(panel_class.attr("id"), "id");
+            if (class_overrides(panel_class, panel_base, "id") && explicit_id.empty())
                 throw_value_error("id must not be empty");
+            if (!explicit_id.empty())
+                panel_id = std::move(explicit_id);
         }
 
         if (nb::hasattr(panel_class, "label")) {

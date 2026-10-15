@@ -10,6 +10,7 @@
 #include "core/services.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "viewport_request_builder.hpp"
 #include "visualizer/app_store.hpp"
 #include <algorithm>
 
@@ -86,7 +87,7 @@ namespace lfs::vis {
     void RenderingManager::handleToggleSplitView() {
         if (!isPLYComparisonActive()) {
             const auto* const scene_manager = services().sceneOrNull();
-            if (!scene_manager || scene_manager->getScene().getVisibleSplatNodeSlots().size() < 2) {
+            if (!scene_manager || plyComparisonNodes(scene_manager->getScene()).size() < 2) {
                 lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
                     .error = lfs::make_error({
                         .code = lfs::ErrorCode::FailedPrecondition,

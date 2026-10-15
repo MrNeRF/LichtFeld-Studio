@@ -3,7 +3,11 @@
 
 #pragma once
 
+#include <algorithm>
 #include <filesystem>
+#include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace lfs::io::project::detail::project_fs {
@@ -84,8 +88,50 @@ namespace lfs::io::project::detail::project_fs {
         return std::filesystem::last_write_time(native_path(path), std::forward<Args>(args)...);
     }
 
+#ifdef _WIN32
+    // Length of the part of an extended path that has no parent to search: \\?\C:\ or \\?\UNC\server\share.
+    [[nodiscard]] inline std::size_t extended_root_length(const std::wstring& name) {
+        constexpr std::wstring_view unc = L"\\\\?\\UNC\\";
+        if (name.starts_with(unc)) {
+            const auto server_end = std::min(name.find(L'\\', unc.size()), name.size());
+            return std::min(name.find(L'\\', server_end + 1), name.size());
+        }
+        return std::min(name.find(L'\\', 4), name.size()) + 1;
+    }
+#endif
+
+    // std::filesystem::weakly_canonical, except for missing extended-length paths on Windows: MSVC walks
+    // those down from \\?\, which it parses as the root of \\?\UNC\server\share, so the walk opens the
+    // network redirector and fails with ERROR_INVALID_FUNCTION. They are resolved from their deepest
+    // existing folder instead, never searching above the drive or share.
     inline std::filesystem::path weakly_canonical(const std::filesystem::path& path, std::error_code& error) {
-        return display_path(std::filesystem::weakly_canonical(native_path(path), error));
+        auto native = native_path(path);
+#ifdef _WIN32
+        if (native.native().starts_with(L"\\\\?\\")) {
+            const auto root = extended_root_length(native.native());
+            std::filesystem::path missing;
+            while (!std::filesystem::exists(native, error)) {
+                if (error) {
+                    return {};
+                }
+                if (native.native().size() <= root) {
+                    error = std::make_error_code(std::errc::no_such_file_or_directory);
+                    return {};
+                }
+                missing = missing.empty() ? native.filename() : native.filename() / missing;
+                native = native.parent_path();
+            }
+            auto resolved = std::filesystem::canonical(native, error);
+            if (error) {
+                return {};
+            }
+            if (!missing.empty()) {
+                resolved /= missing;
+            }
+            return display_path(resolved.lexically_normal());
+        }
+#endif
+        return display_path(std::filesystem::weakly_canonical(native, error));
     }
 
     template <typename... Args>

@@ -12,6 +12,7 @@
       <button class="btn preferences-nav-item" data-class-active="show_input" data-event-click="show_input">@tr:preferences.input</button>
       <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
       <button class="btn preferences-nav-item" data-class-active="show_file_associations" data-event-click="show_file_associations" data-if="has_file_associations">@tr:preferences.file_associations</button>
+      <button class="btn preferences-nav-item" data-class-active="show_marketplace" data-event-click="show_marketplace">@tr:preferences.marketplace</button>
       <button class="btn preferences-nav-item" data-class-active="show_mcp" data-event-click="show_mcp">@tr:preferences.mcp</button>
       <button class="btn preferences-nav-item" data-class-active="show_portal" data-event-click="show_portal">@tr:preferences.portal</button>
     </div>
@@ -112,6 +113,26 @@
         </div>
       </div>
 
+      <div class="preferences-section" data-if="show_marketplace">
+        <div class="section-header text-accent">@tr:preferences.marketplace</div>
+        <div class="section-content">
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.marketplace_layout</span>
+            <select class="preferences-select" data-value="marketplace_view">
+              <option value="card">@tr:plugin_marketplace.view.grid</option>
+              <option value="list">@tr:plugin_marketplace.view.list</option>
+            </select>
+          </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.marketplace_git_checkout_description">
+            <span class="preferences-label">@tr:plugin_marketplace.install_as_git_checkout</span>
+            <input type="checkbox" data-checked="marketplace_git_checkout" data-attrif-disabled="!marketplace_git_available" />
+          </div>
+          <div class="preferences-description" data-if="!marketplace_git_available">
+            @tr:preferences.marketplace_git_unavailable
+          </div>
+        </div>
+      </div>
+
       <div class="preferences-section" data-if="show_portal">
         <div class="section-header text-accent" data-class-is-expanded="portal_expanded" data-event-click="toggle_section('portal')">
           <span class="section-arrow text-accent" data-class-is-expanded="portal_expanded">&#x25B6;</span>
@@ -202,6 +223,10 @@
           <input type="text" class="preferences-select" data-value="default_lod_pool_vram_fraction" />
         </div>
         <span class="preferences-description status-error">{{rendering_defaults_error}}</span>
+        <div class="preferences-inline-actions">
+          <button class="btn btn--secondary preferences-apply-defaults" data-event-click="apply_viewport_defaults"
+                  data-tooltip="rendering_panel.apply_defaults_hint">@tr:preferences.apply_viewport_defaults</button>
+        </div>
       </div>
 
       <div class="preferences-section" data-if="show_appearance">

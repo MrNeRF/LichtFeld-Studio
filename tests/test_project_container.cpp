@@ -3989,6 +3989,169 @@ namespace {
     }
 #endif
 
+    // Destination lengths whose ".project-write.<ticks>.<pid>.<n>.tmp" siblings land on both sides
+    // of the 248-unit switch to extended-length paths.
+    constexpr std::array kLengthsAroundExtendedPathSwitch{
+        std::size_t{160}, std::size_t{196}, std::size_t{200}, std::size_t{202}, std::size_t{204},
+        std::size_t{206}, std::size_t{208}, std::size_t{212}, std::size_t{247}, std::size_t{248},
+        std::size_t{259}, std::size_t{260}, std::size_t{261}, std::size_t{320}};
+
+    fs::path with_native_length(const fs::path& directory, const std::size_t length, const fs::path& leaf) {
+        const std::size_t fixed = directory.native().size() + 1 + leaf.native().size();
+        if (length < fixed || length == fixed + 1) {
+            throw std::runtime_error("requested path length does not fit its fixed components");
+        }
+        const std::size_t remaining = length - fixed;
+        const std::size_t components = (remaining + 100) / 101;
+        std::size_t characters = remaining - components;
+        auto path = directory;
+        for (std::size_t i = 0; i < components; ++i) {
+            const std::size_t size = characters / (components - i);
+            path /= std::string(size, static_cast<char>('a' + i % 26));
+            characters -= size;
+        }
+        return path / leaf;
+    }
+
+    void save_and_verify(const fs::path& destination, const std::uint64_t tag) {
+        std::error_code error;
+        detail::project_fs::create_directories(destination.parent_path(), error);
+        ASSERT_FALSE(error) << error.message();
+        create_single_chunk_fixture(destination, tag, tag + 1, tag + 2, fixed_key("PROJ", tag + 3), R"({"saved":true})");
+        auto reader = require_result(ProjectReader::open(destination));
+        EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(tag + 1));
+        require_status(reader.verify_all());
+    }
+
+    TEST(ProjectPathResolution, MatchesStandardResolutionForShortPaths) {
+        TemporaryDirectory temporary;
+        const auto root = temporary.path / lfs::core::utf8_to_path("проект 保存 é 🙂");
+        fs::create_directories(root / "existing");
+        write_file_bytes(root / "existing" / "scene.licht", byte_vector("scene"));
+        std::vector<fs::path> paths{
+            fs::path{},
+            root,
+            root / "existing",
+            root / "existing" / "scene.licht",
+            root / "existing" / "missing.licht",
+            root / "missing" / "deeper" / "scene.licht",
+            root / "missing" / ".." / "existing" / "scene.licht",
+            root / "." / "existing" / "." / "missing.licht",
+            root / "existing" / ".." / "missing.licht",
+        };
+#ifndef _WIN32
+        fs::create_directory_symlink(root / "existing", root / "link");
+        paths.push_back(root / "link" / "missing.licht");
+        paths.push_back(root / "link" / ".." / "missing.licht");
+#endif
+        for (const auto& path : paths) {
+            const auto text = lfs::core::path_to_utf8(path);
+            std::error_code project_error;
+            std::error_code standard_error;
+            const auto resolved = detail::project_fs::weakly_canonical(path, project_error);
+            const auto expected = fs::weakly_canonical(path, standard_error);
+            ASSERT_FALSE(project_error) << text << ": " << project_error.message();
+            ASSERT_FALSE(standard_error) << text << ": " << standard_error.message();
+            EXPECT_EQ(lfs::core::path_to_utf8(resolved), lfs::core::path_to_utf8(expected.lexically_normal())) << text;
+        }
+    }
+
+    TEST(ProjectPathResolution, UnicodeProjectsSaveOnBothSidesOfTheExtendedPathSwitch) {
+        LongPathTemporaryDirectory temporary;
+        const auto leaf = lfs::core::utf8_to_path("scène 🙂.licht");
+        std::uint64_t tag = 7100;
+        for (const auto length : kLengthsAroundExtendedPathSwitch) {
+            const auto directory = temporary.path / lfs::core::utf8_to_path("проект 保存 🙂") / std::to_string(length);
+            const auto destination = with_native_length(directory, length, leaf);
+            ASSERT_EQ(destination.native().size(), length);
+            save_and_verify(destination, tag += 10);
+            std::error_code error;
+            const auto resolved = lfs::core::path_to_utf8(detail::project_fs::weakly_canonical(destination, error));
+            ASSERT_FALSE(error) << length << ": " << error.message();
+            EXPECT_FALSE(resolved.starts_with(R"(\\?\)")) << resolved;
+            EXPECT_TRUE(resolved.ends_with(lfs::core::path_to_utf8(destination.lexically_relative(temporary.path)))) << resolved;
+            auto lease = require_result(WriterLockLease::acquire(destination));
+            const auto parent = destination.parent_path();
+            auto second = detail::WriterLock::acquire(parent / ".." / parent.filename() / leaf);
+            ASSERT_FALSE(second) << length;
+            EXPECT_EQ(second.error().code(), lfs::ErrorCode::Unavailable) << length;
+        }
+    }
+
+#ifdef _WIN32
+    // A share created for the test run (the Windows CI job provisions one): LFS_TEST_UNC_ROOT is its network
+    // path and LFS_TEST_UNC_LOCAL the folder it exposes. LFS_TEST_REQUIRE_UNC turns a missing share into a failure.
+    struct NetworkShare {
+        fs::path network;
+        fs::path local;
+    };
+
+    std::optional<std::wstring> environment(const wchar_t* const name) {
+        const DWORD size = GetEnvironmentVariableW(name, nullptr, 0);
+        if (size == 0) {
+            return std::nullopt;
+        }
+        std::wstring value(size, L'\0');
+        value.resize(GetEnvironmentVariableW(name, value.data(), size));
+        return value;
+    }
+
+    std::optional<NetworkShare> network_share() {
+        const auto network = environment(L"LFS_TEST_UNC_ROOT");
+        const auto local = environment(L"LFS_TEST_UNC_LOCAL");
+        std::error_code error;
+        if (!network || !local || !fs::is_directory(fs::path(*network), error)) {
+            return std::nullopt;
+        }
+        return NetworkShare{fs::path(*network), fs::path(*local)};
+    }
+
+    TEST(ProjectPathResolution, NetworkProjectsSaveOnBothSidesOfTheExtendedPathSwitch) {
+        const auto share = network_share();
+        if (!share) {
+            if (environment(L"LFS_TEST_REQUIRE_UNC")) {
+                FAIL() << "LFS_TEST_UNC_ROOT and LFS_TEST_UNC_LOCAL must name a reachable network share";
+            }
+            GTEST_SKIP() << "No network share provisioned (LFS_TEST_UNC_ROOT, LFS_TEST_UNC_LOCAL)";
+        }
+        const auto run = std::format("lfs-path-test-{}", std::chrono::steady_clock::now().time_since_epoch().count());
+        const fs::path network_root = share->network / run;
+        const fs::path local_root = share->local / run;
+        struct Cleanup {
+            fs::path path;
+            ~Cleanup() {
+                std::error_code ignored;
+                fs::remove_all(fs::path(L"\\\\?\\" + fs::absolute(path).native()), ignored);
+            }
+        } cleanup{local_root};
+        std::error_code error;
+        const auto leaf = lfs::core::utf8_to_path("scène 🙂.licht");
+        std::uint64_t tag = 7300;
+        for (const auto length : kLengthsAroundExtendedPathSwitch) {
+            const auto directory = network_root / lfs::core::utf8_to_path("проект 保存 🙂") / std::to_string(length);
+            const auto network = with_native_length(directory, length, leaf);
+            ASSERT_EQ(network.native().size(), length);
+            const auto tail = network.lexically_relative(network_root);
+            const auto local = local_root / tail;
+            save_and_verify(network, tag += 10);
+            for (const auto& spelling : {network, detail::project_fs::native_path(network)}) {
+                const auto resolved = lfs::core::path_to_utf8(detail::project_fs::weakly_canonical(spelling, error));
+                ASSERT_FALSE(error) << length << ": " << error.message();
+                EXPECT_FALSE(resolved.starts_with(R"(\\?\)")) << resolved;
+                EXPECT_TRUE(resolved.ends_with(lfs::core::path_to_utf8(tail))) << resolved;
+            }
+            {
+                auto reader = require_result(ProjectReader::open(local));
+                EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(tag + 1));
+            }
+            auto lease = require_result(WriterLockLease::acquire(network));
+            auto local_writer = detail::WriterLock::acquire(local);
+            ASSERT_FALSE(local_writer) << length;
+            EXPECT_EQ(local_writer.error().code(), lfs::ErrorCode::Unavailable) << length;
+        }
+    }
+#endif
+
     TEST(ProjectContainerWriter, RecoveryRemovesOnlyUnheldLongNameStagingFiles) {
         TemporaryDirectory temporary;
         const auto master = temporary.path / "source.licht";

@@ -652,11 +652,24 @@ namespace lfs::vis {
         return items;
     }
 
+    std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene) {
+        std::vector<PlyComparisonNode> nodes;
+        for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
+            nodes.push_back({.node = slot.node, .splat_slot = slot.slot_index});
+        }
+        for (const auto& mesh : scene.getVisibleMeshes()) {
+            if (const auto* const node = scene.getNodeById(mesh.node_id)) {
+                nodes.push_back({.node = node, .splat_slot = std::nullopt});
+            }
+        }
+        return nodes;
+    }
+
     const core::SceneNode* plyComparisonNodeForPanel(
         const core::Scene& scene,
         const size_t split_view_offset,
         const SplitViewPanelId panel) {
-        const auto visible_nodes = scene.getVisibleSplatNodeSlots();
+        const auto visible_nodes = plyComparisonNodes(scene);
         const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
         if (!pair) {
             return nullptr;
@@ -750,7 +763,7 @@ namespace lfs::vis {
         const size_t split_view_offset,
         const SplitViewPanelId panel) {
         PlyComparisonDepthSample sample;
-        const auto visible_nodes = scene.getVisibleSplatNodeSlots();
+        const auto visible_nodes = plyComparisonNodes(scene);
         const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
         if (!pair) {
             return sample;
@@ -758,7 +771,10 @@ namespace lfs::vis {
         const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
         const auto& slot = visible_nodes[index];
         sample.node = slot.node;
-        sample.visible_index = static_cast<int>(slot.slot_index);
+        if (!slot.splat_slot) {
+            return sample;
+        }
+        sample.visible_index = static_cast<int>(*slot.splat_slot);
         if (slot.node && hasRenderableGaussians(slot.node->model.get())) {
             sample.model = slot.node->model.get();
             sample.uses_owned_node_model = true;

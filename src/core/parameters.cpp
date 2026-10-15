@@ -767,6 +767,38 @@ namespace lfs::core {
             return normalize_path(spec);
         }
 
+        lfs::Result<std::vector<EvalPixelSet>> parse_eval_pixel_sets(const std::string_view list) {
+            const auto invalid = [](std::string reason) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::Core,
+                    .user_message = std::move(reason),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            };
+            std::vector<EvalPixelSet> sets;
+            if (list.empty())
+                return sets;
+            std::string_view rest = list;
+            while (true) {
+                const auto comma = rest.find(',');
+                auto entry = rest.substr(0, comma);
+                while (!entry.empty() && std::isspace(static_cast<unsigned char>(entry.front())))
+                    entry.remove_prefix(1);
+                while (!entry.empty() && std::isspace(static_cast<unsigned char>(entry.back())))
+                    entry.remove_suffix(1);
+                const auto set = std::ranges::find(kEvalPixelSets, entry, eval_pixel_set_name);
+                if (set == kEvalPixelSets.end())
+                    return invalid(entry.empty() ? std::string("empty entry") : std::format("unknown set '{}'", entry));
+                if (std::ranges::find(sets, *set) != sets.end())
+                    return invalid(std::format("'{}' is listed twice", entry));
+                sets.push_back(*set);
+                if (comma == std::string_view::npos)
+                    return sets;
+                rest.remove_prefix(comma + 1);
+            }
+        }
+
         nlohmann::json OptimizationParameters::to_json() const {
             nlohmann::json opt_json;
             write_registered_optimization_properties(opt_json, *this);
@@ -805,8 +837,9 @@ namespace lfs::core {
 
             if (!is_valid_strategy_name(strategy))
                 return std::format("strategy must be one of mcmc, mrnf, or igs+ (got '{}')", strategy);
-            if (eval_mask_invert && eval_mask.empty())
-                return "eval_mask_invert requires eval_mask";
+            if (const auto sets = parse_eval_pixel_sets(eval_mask_report); !sets)
+                return std::format("eval_mask_report must be a comma list of mask, unmasked and inverted ({}: '{}')",
+                                   sets.error().user_message(), eval_mask_report);
             if (!(eval_mask_opacity > 0.0f && eval_mask_opacity <= 1.0f))
                 return std::format("eval_mask_opacity must be greater than 0 and at most 1 (got {})", eval_mask_opacity);
             if (!eval_mask.empty() && !enable_eval)

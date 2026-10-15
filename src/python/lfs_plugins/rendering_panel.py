@@ -8,6 +8,7 @@ import os
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .rendering_defaults import confirm_apply_defaults
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .selection_groups import GROUPS_LIST_ID, SelectionGroupsSection
 from .types import Panel
@@ -1326,12 +1327,7 @@ class RenderingPanel(Panel):
             handle.dirty(prop_name)
 
     def _confirm_apply_defaults(self, *_):
-        apply_label = tr("common.apply")
-        def apply_if_confirmed(button):
-            if button == apply_label:
-                lf.ui.apply_rendering_defaults()
-                if self._handle:
-                    self._handle.dirty_all()
-        lf.ui.confirm_dialog(tr("rendering_panel.apply_defaults"),
-                             tr("rendering_panel.apply_defaults_confirm"),
-                             [apply_label, tr("common.cancel")], apply_if_confirmed)
+        def refresh():
+            if self._handle:
+                self._handle.dirty_all()
+        confirm_apply_defaults(refresh)

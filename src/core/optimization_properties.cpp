@@ -797,24 +797,12 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.eval_mask")
             .flags(PROP_NEEDS_RESTART)
             .all_strategies()
-            .bool_prop(&OptimizationParameters::eval_mask_invert,
-                       "eval_mask_invert", "Invert Evaluation Mask", d.eval_mask_invert,
-                       "Scores the pixels outside the evaluation mask instead")
-            .locale("training_params.eval_mask_invert")
-            .tooltip("training.tooltip.eval_mask_invert")
-            .flags(PROP_NEEDS_RESTART)
-            .all_strategies()
-            .bool_prop(&OptimizationParameters::eval_mask_report_unmasked,
-                       "eval_mask_report_unmasked", "Also Score Unmasked", d.eval_mask_report_unmasked,
-                       "With an evaluation mask, also score every valid pixel of each view, as without the mask")
-            .locale("training_params.eval_mask_report_unmasked")
-            .tooltip("training.tooltip.eval_mask_report_unmasked")
-            .all_strategies()
-            .bool_prop(&OptimizationParameters::eval_mask_report_inverted,
-                       "eval_mask_report_inverted", "Also Score Inverted", d.eval_mask_report_inverted,
-                       "With an evaluation mask, also score the valid pixels outside the mask")
-            .locale("training_params.eval_mask_report_inverted")
-            .tooltip("training.tooltip.eval_mask_report_inverted")
+            .string_prop(&OptimizationParameters::eval_mask_report,
+                         "eval_mask_report", "Headline Set", d.eval_mask_report,
+                         "Pixel sets scored with the evaluation mask, comma list of mask, unmasked and inverted; the "
+                         "first is the headline set, whose scores go to metrics.csv, the log and this panel")
+            .locale("training_params.eval_mask_report")
+            .tooltip("training.tooltip.eval_mask_report")
             .all_strategies()
             .float_prop(&OptimizationParameters::eval_mask_opacity,
                         "eval_mask_opacity", "Splat Mask Opacity", d.eval_mask_opacity, 0.01f, 1.0f,

@@ -30,6 +30,7 @@ def test_library_rechecks_identity_at_json_replacement(monkeypatch, tmp_path, op
     monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: current))
     index = AssetIndex(tmp_path / "library.json", tmp_path / "default")
     assert index.load()
+    assert index.add_folder(str(folder)) is not None
     project, _ = index.register_licht_asset(str(path))
     alternate = folder / "new.licht"
     shutil.copyfile(path, alternate)
@@ -267,6 +268,43 @@ def test_single_file_project_is_persisted_without_watching_parent(monkeypatch, t
     assert restarted.verify_asset(project.id).status == "MISSING"
     assert restarted.delete_asset(project.id)
     assert restarted.list_projects() == []
+
+
+@pytest.mark.parametrize("operation", ["register", "relink"])
+def test_adding_one_project_file_does_not_import_its_directory(monkeypatch, tmp_path, operation):
+    from lfs_plugins.asset_watch import scan_all_asset_folders
+
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    other_dir = tmp_path / "other-dir"
+    (other_dir / "sub").mkdir(parents=True)
+    original = watched / "original.licht"
+    chosen = other_dir / "chosen.licht"
+    for path in (original, chosen, other_dir / "sibling.licht", other_dir / "sub" / "nested.licht"):
+        path.write_bytes(b"project")
+    project_uuid = str(uuid.uuid4())
+    _install_inspections(monkeypatch, {
+        "original.licht": _inspection(project_uuid),
+        "chosen.licht": _inspection(project_uuid),
+        "sibling.licht": _inspection(str(uuid.uuid4())),
+        "nested.licht": _inspection(str(uuid.uuid4())),
+    })
+    index = AssetIndex(tmp_path / "library.json", tmp_path / "default")
+    assert index.load()
+    if operation == "register":
+        project, _ = index.register_licht_asset(str(chosen))
+    else:
+        assert index.add_folder(str(watched)) is not None
+        project, _ = index.register_licht_asset(str(original))
+        original.unlink()
+        assert index.relink_asset(project.id, str(chosen))
+    folders = set(index.folders)
+
+    scan_all_asset_folders(index)
+
+    assert set(index.folders) == folders
+    assert [Path(entry.path) for entry in index.list_projects()] == [chosen]
+    assert index.get_asset(project.id).to_dict()["pinned"] is True
 
 
 def test_changing_default_folder_does_not_watch_pinned_project_parent(monkeypatch, tmp_path):

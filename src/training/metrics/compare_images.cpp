@@ -198,8 +198,7 @@ namespace lfs::training {
         }
 
         std::string eval_mask_report_label(const lfs::core::param::OptimizationParameters& evaluation) {
-            return std::string("mask") + (evaluation.eval_mask_report_unmasked ? ",unmasked" : "") +
-                   (evaluation.eval_mask_report_inverted ? ",inverted" : "");
+            return evaluation.eval_mask_report.empty() ? std::string("mask") : evaluation.eval_mask_report;
         }
     } // namespace
 
@@ -492,53 +491,59 @@ namespace lfs::training {
             return score ? nlohmann::ordered_json(*score) : nlohmann::ordered_json(nullptr);
         };
         const auto& evaluation = params.evaluation;
-        const auto add_mask_sets = [&](nlohmann::ordered_json& scores, const std::optional<MaskSetMetrics>& unmasked,
-                                       const std::optional<MaskSetMetrics>& inverted) {
-            for (const auto& [name, set] : {std::pair{"unmasked", &unmasked}, std::pair{"inverted", &inverted}}) {
-                if (!*set)
-                    continue;
-                auto& block = scores[name] = {{"evaluated_pixel_fraction", (*set)->evaluated_pixel_fraction},
-                                              {"psnr", value((*set)->psnr)},
-                                              {"ssim", value((*set)->ssim)},
-                                              {"lpips", value((*set)->lpips)},
-                                              {"flip", value((*set)->flip)}};
-                if (!(*set)->skipped_reason.empty())
-                    block["skipped"] = (*set)->skipped_reason;
-            }
+        const auto& metrics = result.metrics;
+        const auto set_scores = [&](const MaskSetMetrics& set) {
+            auto scores = nlohmann::ordered_json{{"evaluated_pixel_fraction", set.evaluated_pixel_fraction},
+                                                 {"psnr", value(set.psnr)},
+                                                 {"ssim", value(set.ssim)},
+                                                 {"lpips", value(set.lpips)},
+                                                 {"flip", value(set.flip)}};
+            if (!set.skipped_reason.empty())
+                scores["skipped"] = set.skipped_reason;
+            return scores;
+        };
+        // With scored pixel sets every set's scores sit under its own key instead of the flat mask scores.
+        const auto add_set_scores = [&](nlohmann::ordered_json& entry, const PixelSetScores& sets) {
+            for (const auto set : lfs::core::param::kEvalPixelSets)
+                if (const auto& scores = sets[set])
+                    entry[pixel_set_json_key(set)] = set_scores(*scores);
         };
         auto images = nlohmann::ordered_json::object();
-        for (const auto& view : result.metrics.views) {
+        for (const auto& view : metrics.views) {
             if (!view.skipped_reason.empty()) {
                 images[view.image_name] = {{"skipped", view.skipped_reason}};
                 continue;
             }
             auto& image = images[view.image_name] = {{"width", view.width},
                                                      {"height", view.height},
-                                                     {"bit_depth", view.bit_depth},
-                                                     {"evaluated_pixel_fraction", view.evaluated_pixel_fraction},
-                                                     {"psnr", value(view.psnr)},
-                                                     {"ssim", value(view.ssim)},
-                                                     {"lpips", value(view.lpips)},
-                                                     {"flip", value(view.flip)}};
-            add_mask_sets(image, view.unmasked, view.inverted);
+                                                     {"bit_depth", view.bit_depth}};
+            if (metrics.sets.any())
+                add_set_scores(image, view.sets);
+            else
+                image.update({{"evaluated_pixel_fraction", view.evaluated_pixel_fraction},
+                              {"psnr", value(view.psnr)},
+                              {"ssim", value(view.ssim)},
+                              {"lpips", value(view.lpips)},
+                              {"flip", value(view.flip)}});
         }
         auto unmatched = nlohmann::ordered_json::array();
         for (const auto& path : result.unmatched)
             unmatched.push_back(lfs::core::path_to_utf8(path));
-        const auto& metrics = result.metrics;
-        auto mean = metrics.valid ? nlohmann::ordered_json{{"psnr", metrics.psnr},
-                                                           {"ssim", metrics.ssim},
-                                                           {"lpips", value(metrics.lpips)},
-                                                           {"flip", value(metrics.flip)}}
-                                  : nlohmann::ordered_json(nullptr);
-        if (metrics.valid)
-            add_mask_sets(mean, metrics.unmasked, metrics.inverted);
+        auto mean = nlohmann::ordered_json(nullptr);
+        if (metrics.valid && metrics.sets.any()) {
+            mean = nlohmann::ordered_json::object();
+            add_set_scores(mean, metrics.sets);
+        } else if (metrics.valid) {
+            mean = {{"psnr", metrics.psnr},
+                    {"ssim", metrics.ssim},
+                    {"lpips", value(metrics.lpips)},
+                    {"flip", value(metrics.flip)}};
+        }
         return {{"reference", lfs::core::path_to_utf8(params.reference_path)},
                 {"test", lfs::core::path_to_utf8(params.test_path)},
                 {"lens", result.lens},
                 {"eval_space", lfs::core::param::eval_space_name(evaluation.eval_space)},
                 {"eval_mask", mask_label(evaluation.eval_mask)},
-                {"eval_mask_invert", evaluation.eval_mask_invert},
                 {"eval_mask_report", eval_mask_report_label(evaluation)},
                 {"eval_bit_depth", lfs::core::param::eval_bit_depth_name(evaluation.eval_bit_depth)},
                 {"mean", std::move(mean)},
@@ -565,13 +570,14 @@ namespace lfs::training {
         report += std::format("test       {}\n", lfs::core::path_to_utf8(params.test_path));
         report += std::format("lens       {}\n", result.lens);
         report += std::format("space      {}\n", lfs::core::param::eval_space_name(params.evaluation.eval_space));
-        report += std::format("mask       {}{}\n", masked ? mask_label(params.evaluation.eval_mask) : "none",
-                              params.evaluation.eval_mask_invert ? " (inverted)" : "");
+        report += std::format("mask       {}\n", masked ? mask_label(params.evaluation.eval_mask) : "none");
         if (masked)
             report += std::format("report     {}\n", eval_mask_report_label(params.evaluation));
         report += std::format("bit depth  {}\n", lfs::core::param::eval_bit_depth_name(params.evaluation.eval_bit_depth));
         report += std::format("pairs      {} compared, {} skipped, {} without a counterpart\n\n",
                               metrics.views.size() - static_cast<size_t>(skipped), skipped, result.unmatched.size());
+        if (metrics.sets.any())
+            report += std::format("{} pixels\n", lfs::core::param::eval_pixel_set_name(metrics.headline));
         report += std::format("{:<40} {:>9} {:>8} {:>8}{}{}\n", "image", "PSNR", "SSIM", "LPIPS",
                               params.evaluation.eval_flip ? "     FLIP" : "", masked ? "   pixels" : "");
         for (const auto& view : metrics.views) {
@@ -583,14 +589,13 @@ namespace lfs::training {
         }
         if (metrics.valid)
             report += row("mean", metrics.psnr, metrics.ssim, metrics.lpips, metrics.flip, "");
-        for (const auto& [name, summary, set_of] :
-             {std::tuple{"unmasked", &metrics.unmasked, &ViewMetrics::unmasked},
-              std::tuple{"inverted", &metrics.inverted, &ViewMetrics::inverted}}) {
-            if (!*summary)
+        for (const auto pixel_set : lfs::core::param::kEvalPixelSets) {
+            const auto& summary = metrics.sets[pixel_set];
+            if (!summary || pixel_set == metrics.headline)
                 continue;
-            report += std::format("\n{} pixels\n", name);
+            report += std::format("\n{} pixels\n", lfs::core::param::eval_pixel_set_name(pixel_set));
             for (const auto& view : metrics.views) {
-                const auto& set = view.*set_of;
+                const auto& set = view.sets[pixel_set];
                 if (!set)
                     continue;
                 if (!set->skipped_reason.empty())
@@ -599,7 +604,7 @@ namespace lfs::training {
                     report += row(view.image_name, set->psnr, set->ssim, set->lpips, set->flip,
                                   std::format("{:.1f}%", 100.0f * set->evaluated_pixel_fraction));
             }
-            report += row("mean", (*summary)->psnr, (*summary)->ssim, (*summary)->lpips, (*summary)->flip, "");
+            report += row("mean", summary->psnr, summary->ssim, summary->lpips, summary->flip, "");
         }
         return report;
     }

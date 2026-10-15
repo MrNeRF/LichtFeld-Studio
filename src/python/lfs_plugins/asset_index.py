@@ -2090,9 +2090,10 @@ class AssetIndex:
                 else None
             )
             target_folder_id = self._folder_id_for_path(path)
-            if target_folder_id is None and not pin:
-                target_folder_id = self._add_folder_record(str(Path(path).parent)).id
+            # A file outside every folder is added on its own. Watching its
+            # directory would import every other project there on the next scan.
             if target_folder_id is None:
+                pin = True
                 target_folder_id = DEFAULT_FOLDER_ID
 
             project = self._projects.get(current_id) if current_id else None
@@ -2225,11 +2226,8 @@ class AssetIndex:
             self._projects.pop(conflicting.id, None)
         folder_id = self._folder_id_for_path(path)
         if folder_id is None:
-            folder_id = (
-                DEFAULT_FOLDER_ID
-                if project.pinned
-                else self._add_folder_record(str(Path(path).parent)).id
-            )
+            project.pinned = True
+            folder_id = DEFAULT_FOLDER_ID
         self._project_by_path.pop(self._path_key(project.path), None)
         project.path = path
         project.folder_id = folder_id

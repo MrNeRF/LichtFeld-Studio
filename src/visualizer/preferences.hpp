@@ -91,6 +91,12 @@ namespace lfs::vis {
         void setViewportToolbarFreeY(float value);
         [[nodiscard]] float viewportToolbarFreeY();
 
+        void setMarketplaceView(std::string_view value);
+        [[nodiscard]] std::string marketplaceView();
+        void setMarketplaceGitCheckout(bool enabled);
+        [[nodiscard]] bool marketplaceGitCheckout();
+        void resetMarketplacePreferences();
+
         void setProjectManagerDefaultView(std::string_view value);
         [[nodiscard]] std::string projectManagerDefaultView();
         void setOpenProjectManagerAtStartup(bool enabled);

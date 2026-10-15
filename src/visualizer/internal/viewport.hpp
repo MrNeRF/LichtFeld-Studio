@@ -86,6 +86,15 @@ class Viewport {
             home_saved = true;
         }
 
+        // Restore the built-in home that Shift+H replaces.
+        void resetHomePosition() {
+            const CameraMotion defaults{};
+            home_R = defaults.home_R;
+            home_t = defaults.home_t;
+            home_pivot = defaults.home_pivot;
+            home_saved = true;
+        }
+
         void resetToHome() {
             R = home_R;
             t = home_t;

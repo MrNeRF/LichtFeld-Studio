@@ -401,9 +401,15 @@ def set_panel_enabled(panel_id: str, enabled: bool) -> None:
     """Enable or disable a panel by id"""
 
 def save_startup_sidebar() -> bool:
-    """Save the right sidebar as a startup default; .licht GUIL overrides it."""
+    """
+    Save the right sidebar as a startup default; saved .licht workspaces take precedence.
+    """
+
 def clear_startup_sidebar() -> None:
-    """Clear startup sidebar defaults without changing the current workspace."""
+    """
+    Clear startup sidebar defaults without changing the current project workspace.
+    """
+
 def reset_layout() -> str:
     """
     Reset the saved UI layout and apply the default dock arrangement immediately.
@@ -2772,6 +2778,18 @@ def apply_rendering_defaults() -> None:
     """
     Explicitly apply user defaults to the current project; other rendering fields are preserved.
     """
+
+def get_marketplace_preferences() -> dict:
+    """Get Marketplace preferences from the canonical user preferences store"""
+
+def set_marketplace_view(view: str) -> None:
+    """Set the Marketplace layout (card or list)"""
+
+def set_marketplace_git_checkout(enabled: bool) -> None:
+    """Set whether Marketplace installs use Git checkouts"""
+
+def reset_marketplace_preferences() -> None:
+    """Reset Marketplace layout and installation preferences"""
 
 def get_project_manager_preferences() -> dict:
     """

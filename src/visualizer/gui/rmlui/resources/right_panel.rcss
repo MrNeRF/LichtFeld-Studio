@@ -46,7 +46,7 @@ body {
     z-index: 3;
 }
 #tab-picker selectvalue { visibility: hidden; }
-#tab-picker selectarrow { width: 26dp; }
+#tab-picker selectarrow { margin-right: 4dp; }
 #tab-picker selectbox { right: 0; min-width: 200dp; max-height: 400dp; overflow-y: auto; }
 
 /* The shared panel_tabs stylesheet owns the common geometry. These right-panel

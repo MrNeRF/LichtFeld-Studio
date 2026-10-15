@@ -1930,11 +1930,11 @@ namespace {
                     const float xl = samples[y][x - d][0], xr = samples[y][x + d][0];
                     const float yl = samples[y][x - d][1], yr = samples[y][x + d][1];
                     if (full_support) {
-                        sx += (xl + xr) * w;
-                        sxx += (xl * xl + xr * xr) * w;
-                        sy += (yl + yr) * w;
-                        syy += (yl * yl + yr * yr) * w;
-                        sxy += (xl * yl + xr * yr) * w;
+                        sx = __fmaf_rn(xl + xr, w, sx);
+                        sxx = __fmaf_rn(xl * xl + xr * xr, w, sxx);
+                        sy = __fmaf_rn(yl + yr, w, sy);
+                        syy = __fmaf_rn(yl * yl + yr * yr, w, syy);
+                        sxy = __fmaf_rn(xl * yl + xr * yr, w, sxy);
                     } else {
                         const float ml = weights[y][x - d] * w, mr = weights[y][x + d] * w;
                         sx += xl * ml + xr * mr;
@@ -1962,7 +1962,13 @@ namespace {
                     moments[k] += (horizontal[y - d][threadIdx.x][k] + horizontal[y + d][threadIdx.x][k]) * cGauss[HALO - d];
 #pragma unroll
             for (int k = 0; k < 5; ++k)
-                moments[k] = (moments[k] + horizontal[y][threadIdx.x][k] * cGauss[HALO]) * inv_mass;
+                moments[k] += horizontal[y][threadIdx.x][k] * cGauss[HALO];
+            // Preserve the unmasked kernel's FMA rounding with full support.
+            if (!full_support) {
+#pragma unroll
+                for (int k = 0; k < 5; ++k)
+                    moments[k] *= inv_mass;
+            }
             if (px < W && py < H) {
                 const float mx = moments[0], my = moments[2];
                 const float xx = mx * mx, yy = my * my;
@@ -1970,7 +1976,7 @@ namespace {
                 const float xy = moments[4] - mx * my;
                 constexpr float C1 = 0.01f * 0.01f, C2 = 0.03f * 0.03f;
                 const float A = xx + yy + C1, B = vx + vy + C2;
-                const float C = 2.0f * mx * my + C1, D = 2.0f * xy + C2;
+                const float C = __fmaf_rn(2.0f * mx, my, C1), D = 2.0f * xy + C2;
                 map[(b * CH + c) * H * W + py * W + px] = kept ? (C * D) / (A * B) : 1.0f;
             }
             block.sync();

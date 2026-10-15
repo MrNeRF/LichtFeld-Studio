@@ -9,6 +9,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "io/formats/colmap.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
@@ -18,8 +19,10 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -155,6 +158,109 @@ TEST_F(FastGSSortBufferTest, ExactPathMatchesRepeatedPathPixels) {
     for (size_t i = 0; i < image_sync.numel(); ++i) {
         ASSERT_EQ(a[i], b[i]) << "pixel mismatch at i=" << i
                               << " sync=" << a[i] << " async=" << b[i];
+    }
+}
+
+TEST(FastGSSortKeyTest, DuplicatedRealSplatsKeepOrderAcrossArenaReallocation) {
+    const auto sparse_path = std::filesystem::path(TEST_DATA_DIR) / "bicycle" / "sparse" / "0";
+    if (!std::filesystem::exists(sparse_path)) {
+        GTEST_SKIP() << "Requires the public bicycle COLMAP dataset at " << sparse_path;
+    }
+
+    struct ArenaCleanup {
+        ~ArenaCleanup() { cleanup_arena(); }
+    } cleanup;
+    auto points = lfs::io::read_colmap_point3D_binary_records(sparse_path / "points3D.bin");
+    ASSERT_TRUE(points.has_value());
+    auto cameras = lfs::io::read_colmap_cameras_only(sparse_path, 4.0f);
+    ASSERT_TRUE(cameras.has_value());
+    auto& views = std::get<0>(*cameras);
+    ASSERT_FALSE(views.empty());
+    auto& camera = *views.front();
+    const auto transform = camera.world_view_transform().to(Device::CPU).contiguous();
+    ASSERT_EQ(transform.ndim(), 3u);
+    ASSERT_EQ(transform.shape()[0], 1u);
+    ASSERT_EQ(transform.shape()[1], 4u);
+    ASSERT_EQ(transform.shape()[2], 4u);
+    const auto* view = transform.ptr<float>();
+    const auto [fx, fy, cx, cy] = camera.get_intrinsics();
+    const lfs::io::Point3DData* source = nullptr;
+    float source_depth = 0.0f;
+    float nearest_center = std::numeric_limits<float>::infinity();
+    for (const auto& point : points->value) {
+        float position[3];
+        for (int row = 0; row < 3; ++row)
+            position[row] = view[4 * row] * point.xyz[0] + view[4 * row + 1] * point.xyz[1] +
+                            view[4 * row + 2] * point.xyz[2] + view[4 * row + 3];
+        if (position[2] <= 0.2f)
+            continue;
+        const float dx = fx * position[0] / position[2] + cx - camera.image_width() * 0.5f;
+        const float dy = fy * position[1] / position[2] + cy - camera.image_height() * 0.5f;
+        const float distance = dx * dx + dy * dy;
+        if (distance < nearest_center) {
+            nearest_center = distance;
+            source = &point;
+            source_depth = position[2];
+        }
+    }
+    ASSERT_NE(source, nullptr);
+    ASSERT_LT(nearest_center, 16.0f * 16.0f);
+    RecordProperty("source_point_id", std::to_string(source->point3D_id));
+    const float log_scale = std::log(source_depth * 64.0f / std::min(fx, fy));
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+    constexpr size_t count = 1025;
+    auto means = Tensor::empty({count, 3}, Device::CPU);
+    auto colors = Tensor::zeros({count, 1, 3}, Device::CPU);
+    auto rotations = Tensor::zeros({count, 4}, Device::CPU);
+    for (size_t i = 0; i < count; ++i) {
+        for (int axis = 0; axis < 3; ++axis)
+            means.ptr<float>()[3 * i + axis] = static_cast<float>(source->xyz[axis]);
+        colors.ptr<float>()[3 * i] = i % 2 == 0 ? 1.0f : -1.0f;
+        colors.ptr<float>()[3 * i + 2] = i % 2 == 0 ? -1.0f : 1.0f;
+        rotations.ptr<float>()[4 * i] = 1.0f;
+    }
+    SplatData duplicated(0,
+                         means.to(Device::CUDA),
+                         colors.to(Device::CUDA),
+                         Tensor::zeros({count, size_t{0}, size_t{3}}, Device::CUDA),
+                         Tensor::full({count, 3}, log_scale, Device::CUDA),
+                         rotations.to(Device::CUDA),
+                         Tensor::full({count}, 2.0f, Device::CUDA),
+                         1.0f);
+
+    Tensor reference;
+    for (int repeat = 0; repeat < 8; ++repeat) {
+        SCOPED_TRACE(repeat);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        if (repeat % 2 == 0)
+            cleanup_arena();
+        auto result = fast_rasterize_forward(camera, duplicated, bg, 0, 0, 0, 0, false);
+        ASSERT_TRUE(result.has_value()) << lfs::format_for_developer(result.error());
+        const auto& ctx = result->second.forward_ctx;
+        ASSERT_EQ(ctx.n_visible, count);
+        ASSERT_GT(ctx.n_instances, count * 128);
+        ASSERT_EQ(ctx.n_instances % count, 0u);
+        RecordProperty("tiles_per_splat", std::to_string(ctx.n_instances / count));
+        std::vector<uint32_t> indices(ctx.n_instances);
+        ASSERT_EQ(cudaStreamSynchronize(ctx.stream), cudaSuccess);
+        ASSERT_EQ(cudaMemcpy(indices.data(), ctx.sorted_primitive_indices,
+                             indices.size() * sizeof(uint32_t), cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        size_t wrong_indices = 0;
+        for (size_t i = 0; i < indices.size(); ++i)
+            wrong_indices += indices[i] != i % count;
+        EXPECT_EQ(wrong_indices, 0u) << "Equal-depth instances must retain primitive-index order in every tile";
+        auto image = result->first.image.to(Device::CPU).contiguous();
+        ASSERT_EQ(image.ndim(), 3u);
+        ASSERT_EQ(image.shape()[0], 3u);
+        if (repeat == 0) {
+            reference = image.clone();
+        } else {
+            ASSERT_EQ(image.shape(), reference.shape());
+            EXPECT_EQ(std::memcmp(image.ptr<float>(), reference.ptr<float>(),
+                                  image.numel() * sizeof(float)),
+                      0);
+        }
     }
 }
 

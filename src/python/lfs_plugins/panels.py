@@ -103,7 +103,7 @@ PANEL_SPECS = {
     "plugin_marketplace": _PanelSpec(
         "lfs_plugins.plugin_marketplace_panel", "PluginMarketplacePanel",
         "lfs.plugin_marketplace", "Plugin Marketplace", "FLOATING", 91,
-        "rmlui/plugin_marketplace.rml", "FILL", (770, 560),
+        "rmlui/plugin_marketplace.rml", "FILL", (840, 600),
         update_policy="dirty",
     ),
     "asset_manager": _PanelSpec(
