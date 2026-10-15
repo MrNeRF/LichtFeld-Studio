@@ -95,7 +95,7 @@ namespace {
                 const auto result = MediaIngest::sourceExif(lfs::core::utf8_to_path(args[2]));
                 if (!result)
                     return failed(result.error());
-                std::cout << json{{"schema_version", 1}, {"success", true}, {"exif", json_detail::sourceExif(*result)}}.dump() << '\n';
+                std::cout << json_detail::dump(json{{"schema_version", 1}, {"success", true}, {"exif", json_detail::sourceExif(*result)}}) << '\n';
                 return 0;
             }
             if (args.size() < 3 || (args[1] != "probe" && args[1] != "extract"))

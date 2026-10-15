@@ -54,6 +54,15 @@ namespace {
 } // namespace
 
 int runSourceExifContracts() {
+    ImageExifDescription diagnostics;
+    diagnostics.original.diagnostic = "bad\xff box";
+    diagnostics.original.blocks.emplace_back();
+    diagnostics.interpretations.emplace_back();
+    diagnostics.interpretations[0].diagnostic = "bad\xfe tag";
+    const auto diagnostic_json = nlohmann::json::parse(json_detail::dump(json_detail::sourceExif(diagnostics)));
+    require(diagnostic_json.at("diagnostic") == "bad\xef\xbf\xbd box" &&
+                diagnostic_json.at("blocks")[0].at("interpretation").at("diagnostic") == "bad\xef\xbf\xbd tag",
+            "shared JSON transport replaces invalid diagnostic UTF8 without failing");
     for (const bool le : {false, true}) {
         const auto original = values(le);
         const auto snapshot = original.bytes;

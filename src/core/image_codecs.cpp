@@ -1071,7 +1071,7 @@ namespace lfs::core::image_codecs {
 #ifndef _WIN32
             if (hdr && target.sample_type == SampleType::Float32) {
                 const int descriptor = open(path.c_str(), O_RDONLY);
-                struct stat file_status{};
+                struct stat file_status {};
                 if (descriptor >= 0 && fstat(descriptor, &file_status) == 0 && file_status.st_size > 0 &&
                     file_status.st_size <= std::numeric_limits<int>::max()) {
                     const auto size = static_cast<std::size_t>(file_status.st_size);
@@ -1623,50 +1623,71 @@ namespace lfs::core::image_codecs {
             result.diagnostic = "Cannot read metadata source";
             return result;
         }
-        const bool capped = bytes_read == window.size();
+        const bool capped = bytes_read == window.size() && input.peek() != std::char_traits<char>::eof();
         window.resize(bytes_read);
         // Heap state remains valid after libjpeg's error longjmp. No C++ object
         // requiring destruction is created across a call that can longjmp.
         struct State {
             jpeg_decompress_struct codec{};
             JpegError error{};
+            int header = JPEG_SUSPENDED;
+            bool exhausted = false;
+            bool failed = false;
             ~State() { jpeg_destroy_decompress(&codec); }
         };
         auto state = std::make_unique<State>();
         state->codec.err = jpeg_std_error(&state->error.base);
         state->error.base.error_exit = jpeg_error_exit;
         // Diagnostics are returned, never printed by a headless inspection.
-        state->error.base.output_message = [](j_common_ptr) {};
+        state->error.base.output_message = [](j_common_ptr common) {
+            auto* error = reinterpret_cast<JpegError*>(common->err);
+            (*common->err->format_message)(common, error->message);
+        };
         if (setjmp(state->error.jump)) {
-            result.status = capped ? MetadataStatus::Limited : MetadataStatus::Malformed;
-            result.diagnostic = capped ? "JPEG header window exhausted" : state->error.message;
-            return result;
+            state->failed = true;
+        } else {
+            jpeg_create_decompress(&state->codec);
+            state->codec.client_data = state.get();
+            jpeg_mem_src(&state->codec, window.data(), static_cast<unsigned long>(window.size()));
+            state->codec.src->fill_input_buffer = [](j_decompress_ptr codec) -> boolean {
+                auto* state = static_cast<State*>(codec->client_data);
+                state->exhausted = true;
+                // jpeg_mem_src normally fabricates an EOI at exhaustion, even
+                // inside an unfinished APP1. Stop before invented bytes could
+                // complete a saved marker. This also exits skip_input_data,
+                // which cannot suspend. Completed marker_list entries survive.
+                longjmp(state->error.jump, 1);
+            };
+            jpeg_save_markers(&state->codec, JPEG_APP0 + 1, 0xffff);
+            state->header = jpeg_read_header(&state->codec, TRUE);
         }
-        jpeg_create_decompress(&state->codec);
-        jpeg_mem_src(&state->codec, window.data(), static_cast<unsigned long>(window.size()));
-        jpeg_save_markers(&state->codec, JPEG_APP0 + 1, 0xffff);
-        const int header = jpeg_read_header(&state->codec, TRUE);
-        if (header != JPEG_HEADER_OK || state->error.base.num_warnings) {
-            result.status = capped ? MetadataStatus::Limited : MetadataStatus::Malformed;
-            result.diagnostic = capped ? "JPEG header window exhausted" : "Malformed JPEG header";
-            return result;
+        result.status = MetadataStatus::Absent;
+        if (state->exhausted && capped) {
+            result.status = MetadataStatus::Limited;
+            result.diagnostic = "JPEG header window exhausted";
+        } else if (state->failed || state->header != JPEG_HEADER_OK || state->error.base.num_warnings) {
+            result.status = MetadataStatus::Malformed;
+            result.diagnostic = state->exhausted ? "Truncated JPEG header" : state->error.message;
         }
         size_t total = 0;
-        result.status = MetadataStatus::Absent;
         for (auto* marker = state->codec.marker_list; marker; marker = marker->next) {
             if (marker->data_length < 6 || std::memcmp(marker->data, "Exif\0\0", 6))
                 continue;
             const size_t size = marker->data_length;
             if (result.blocks.size() >= limits.blocks || size > limits.block_bytes || size > limits.total_bytes - total) {
-                result.status = MetadataStatus::Limited;
-                result.diagnostic = "EXIF collection budget exhausted";
+                if (result.status != MetadataStatus::Malformed)
+                    result.status = MetadataStatus::Limited;
+                if (!result.diagnostic.empty())
+                    result.diagnostic += "; ";
+                result.diagnostic += "EXIF collection budget exhausted";
                 break;
             }
             ExifBlock block;
             block.bytes.assign(marker->data, marker->data + size);
             result.blocks.push_back(std::move(block));
             total += size;
-            result.status = MetadataStatus::Collected;
+            if (result.status == MetadataStatus::Absent)
+                result.status = MetadataStatus::Collected;
         }
         return result;
     }

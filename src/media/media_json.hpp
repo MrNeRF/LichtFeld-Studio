@@ -7,6 +7,11 @@
 #include <nlohmann/json.hpp>
 namespace lfs::media::json_detail {
     using nlohmann::json;
+    inline std::string dump(const json& value) {
+        // Library diagnostics can contain untrusted non-UTF-8 box names.
+        // Binary originals are hex; replace invalid diagnostic text at transport.
+        return value.dump(-1, ' ', false, json::error_handler_t::replace);
+    }
     inline json rational(const std::optional<Rational>& value) {
         return value ? json::array({value->numerator, value->denominator}) : json(nullptr);
     }

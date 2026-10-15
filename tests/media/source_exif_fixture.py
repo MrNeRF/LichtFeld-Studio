@@ -3,6 +3,7 @@
 """One independent TIFF fixture shared by the headless consumer contracts."""
 import struct
 import base64
+from pathlib import Path
 
 
 def write_jpeg(path):
@@ -32,3 +33,21 @@ def check(test, result, payload):
         test.assertEqual(block["interpretation"]["status"], "parsed")
         entry, = block["interpretation"]["entries"]
         test.assertEqual((entry["id"], entry["type"], entry["unsigned_values"]), (0x112, 3, [6]))
+
+
+def write_header_failure(path, long_header=False):
+    payload = write_jpeg(path)
+    original = path.read_bytes()
+    prefix_end = 2 + 2 * (len(payload) + 4)
+    extra = (b"\xff\xe2\xff\xff" + b"\0" * 65533) * 21 if long_header else b"\x01\x02\x03"
+    changed = original[:prefix_end] + extra + original[prefix_end:]
+    path.write_bytes(changed + b"\0" * (9 * 1024 * 1024 - len(changed)))
+    return payload
+
+
+def write_invalid_heif(path):
+    # Keep the existing essential irot property's size/association intact, but
+    # make its fourcc unknown and invalid UTF-8 in libheif's diagnostic.
+    original = bytearray((Path(__file__).resolve().parents[1] / "data/heif/rotated.avif").read_bytes())
+    original[original.index(b"irot")] = 255
+    path.write_bytes(original)

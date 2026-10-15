@@ -18,6 +18,17 @@ _exif_spec.loader.exec_module(source_exif_fixture)
 
 
 class McpMedia(unittest.TestCase):
+    def test_source_exif_invalid_utf8_diagnostic_remains_malformed(self):
+        path = self.root / "invalid-diagnostic.avif"
+        source_exif_fixture.write_invalid_heif(path)
+        request = self.root / "source-exif-invalid.json"
+        request.write_text(json.dumps({"operation": "source-exif", "arguments": {"input": str(path)}}), encoding="utf-8")
+        result = subprocess.run([str(RUNNER), str(request)], capture_output=True, check=True, timeout=30)
+        value = json.loads(result.stdout)
+        self.assertTrue(value["success"])
+        self.assertEqual(value["exif"]["status"], "malformed")
+        self.assertIn("\ufffd", value["exif"]["diagnostic"])
+
     def test_source_exif_schema_originals_and_unicode(self):
         path = self.root / "original EXIF é 日本語.jpg"
         payload = source_exif_fixture.write_jpeg(path)

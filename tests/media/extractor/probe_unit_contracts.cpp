@@ -89,6 +89,44 @@ namespace {
                 "missing file is not absent metadata");
         require(read_source_exif(directory.path).status == MetadataStatus::IoError,
                 "directory input is an I/O failure rather than absent or unsupported metadata");
+        // Camera-sized files must not turn an unrelated header warning into
+        // window exhaustion, or discard completed APP1 blocks on any failure.
+        const size_t prefix_size = 2 + 2 * (exif.size() + 4);
+        auto check_prefix = [&](const std::vector<uint8_t>& bytes, MetadataStatus expected, size_t blocks, const MetadataLimits& bounds = {}) {
+            write(bytes);
+            const auto collected = read_source_exif(path, bounds);
+            require(collected.status == expected, "JPEG header outcome matches the actual failure");
+            require(collected.blocks.size() == blocks, "JPEG failure preserves only completed EXIF blocks");
+            for (const auto& block : collected.blocks)
+                require(block.bytes == exif, "JPEG collected prefix remains byte-exact");
+        };
+        std::vector<uint8_t> prefix(enriched.begin(), enriched.begin() + prefix_size);
+        auto warned = prefix;
+        warned.insert(warned.end(), {1, 2, 3});
+        warned.insert(warned.end(), jpeg.begin() + 2, jpeg.end());
+        warned.resize(9 * 1024 * 1024);
+        check_prefix(warned, MetadataStatus::Malformed, 2);
+        auto long_header = prefix;
+        for (int i = 0; i < 21; ++i) {
+            long_header.insert(long_header.end(), {0xff, 0xe2, 0xff, 0xff});
+            long_header.resize(long_header.size() + 65533);
+        }
+        long_header.insert(long_header.end(), jpeg.begin() + 2, jpeg.end());
+        long_header.resize(9 * 1024 * 1024);
+        check_prefix(long_header, MetadataStatus::Limited, 2);
+        auto fatal = prefix;
+        fatal.insert(fatal.end(), {0xff, 0xc0, 0, 2});
+        fatal.resize(9 * 1024 * 1024);
+        check_prefix(fatal, MetadataStatus::Malformed, 2);
+        std::vector<uint8_t> truncated(prefix.begin(), prefix.begin() + 2 + exif.size() + 4);
+        truncated.insert(truncated.end(), {0xff, 0xe1, 0, 100, 'E', 'x', 'i', 'f', 0, 0});
+        check_prefix(truncated, MetadataStatus::Malformed, 1);
+        limits = {};
+        limits.jpeg_header_bytes = truncated.size();
+        check_prefix(truncated, MetadataStatus::Malformed, 1, limits);
+        truncated.resize(2 * 1024 * 1024);
+        limits.jpeg_header_bytes -= 1;
+        check_prefix(truncated, MetadataStatus::Limited, 1, limits);
     }
 } // namespace
 

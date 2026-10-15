@@ -30,7 +30,8 @@ int main(int argc, char** argv) {
         mcp::ToolRegistry registry;
         app::register_media_tools(registry);
         if (input.value("operation", "") == "source-exif") {
-            std::cout << registry.call_tool("media.source_exif", input.at("arguments")).dump() << std::endl;
+            // Match the production MCP transport's diagnostic replacement policy.
+            std::cout << registry.call_tool("media.source_exif", input.at("arguments")).dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
             return 0;
         }
         json output;

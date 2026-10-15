@@ -30,6 +30,23 @@ MEDIA_ERROR = None
 
 
 class MediaBindings(unittest.TestCase):
+    def test_source_exif_diagnostics_and_large_header_prefix(self):
+        path = self.root / "invalid-diagnostic.avif"
+        source_exif_fixture.write_invalid_heif(path)
+        result = json.loads(media.MediaIngest.source_exif_json(path))
+        self.assertEqual(result["status"], "malformed")
+        self.assertIn("\ufffd", result["diagnostic"])
+        path = self.root / "large-header.jpg"
+        for long_header in (False, True):
+            with self.subTest(long_header=long_header):
+                payload = source_exif_fixture.write_header_failure(path, long_header)
+                result = json.loads(media.MediaIngest.source_exif_json(path))
+                self.assertEqual(result["status"], "limited" if long_header else "malformed")
+                self.assertEqual(len(result["blocks"]), 2)
+                for block in result["blocks"]:
+                    self.assertEqual(bytes.fromhex(block["bytes"]), payload)
+                    self.assertEqual(block["interpretation"]["status"], "parsed")
+
     def test_source_exif_json_unicode_originals_and_ownership(self):
         path = self.root / "original EXIF é 日本語.jpg"
         payload = source_exif_fixture.write_jpeg(path)

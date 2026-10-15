@@ -97,6 +97,27 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(blocks[1]["interpretation"]["status"], "limited")
         self.assertEqual(bytes.fromhex(blocks[1]["bytes"]), payload)
 
+    def test_source_exif_retains_prefix_on_large_header_warning_and_exhaustion(self):
+        path = self.root / "large-header.jpg"
+        for long_header in (False, True):
+            with self.subTest(long_header=long_header):
+                payload = source_exif_fixture.write_header_failure(path, long_header)
+                result, _ = self.invoke("source-exif", path)
+                value = result["exif"]
+                self.assertEqual(value["status"], "limited" if long_header else "malformed")
+                self.assertEqual(len(value["blocks"]), 2)
+                for block in value["blocks"]:
+                    self.assertEqual(bytes.fromhex(block["bytes"]), payload)
+                    self.assertEqual(block["interpretation"]["status"], "parsed")
+
+    def test_source_exif_invalid_utf8_diagnostic_is_valid_json(self):
+        path = self.root / "invalid-diagnostic.avif"
+        source_exif_fixture.write_invalid_heif(path)
+        result, _ = self.invoke("source-exif", path)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["exif"]["status"], "malformed")
+        self.assertIn("\ufffd", result["exif"]["diagnostic"])
+
     @classmethod
     def setUpClass(cls):
         cls.temp=tempfile.TemporaryDirectory(prefix="lfs-cli-contratti-")
