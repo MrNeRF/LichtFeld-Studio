@@ -3,7 +3,7 @@
 """Export panel for exporting scene nodes."""
 
 import html
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Set
 from enum import IntEnum
 

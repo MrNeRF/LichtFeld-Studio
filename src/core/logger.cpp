@@ -4,6 +4,7 @@
 
 #include "core/logger.hpp"
 #include "core/environment.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include <algorithm>
@@ -32,6 +33,9 @@
 #endif
 #include <spdlog/sinks/base_sink.h>
 #include <spdlog/sinks/rotating_file_sink.h>
+#ifdef _WIN32
+#include "logger/native_rotating_file_sink.hpp"
+#endif
 #include <spdlog/spdlog.h>
 
 namespace lfs::core {
@@ -63,11 +67,11 @@ namespace lfs::core {
         if (const auto home = environment::value("HOME"))
             return utf8_to_path(*home);
 #endif
-        return std::filesystem::temp_directory_path();
+        return lfs::core::native_fs::temp_directory_path();
     }
 
     namespace {
-        namespace fs = std::filesystem;
+        namespace fs = lfs::core::native_fs;
 
         constexpr const char* ANSI_RESET = "\033[0m";
         constexpr const char* ANSI_PERF = "\033[95m";
@@ -566,10 +570,15 @@ namespace lfs::core {
             const std::atomic<uint8_t>* capture_level_;
         };
 
-        std::shared_ptr<spdlog::sinks::rotating_file_sink_mt> make_rotating_file_sink(const fs::path& path) {
+        spdlog::sink_ptr make_rotating_file_sink(const fs::path& path) {
+#ifdef _WIN32
+            auto sink = std::make_shared<NativeRotatingFileSink>(
+                path, DEFAULT_LOG_ROTATION_MAX_BYTES, DEFAULT_LOG_ROTATION_MAX_FILES);
+#else
             const auto filename = path_to_utf8(path);
             auto sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
                 filename, DEFAULT_LOG_ROTATION_MAX_BYTES, DEFAULT_LOG_ROTATION_MAX_FILES);
+#endif
             sink->set_level(spdlog::level::trace);
             sink->set_pattern(DEFAULT_LOG_FILE_PATTERN);
             return sink;
@@ -578,7 +587,7 @@ namespace lfs::core {
         // Never throws: startup must not fail because the durable log couldn't be
         // set up. On failure, prints one warning and returns nullptr so init() falls
         // back to console/memory sinks only.
-        std::shared_ptr<spdlog::sinks::rotating_file_sink_mt> make_default_file_sink(const fs::path& path) {
+        spdlog::sink_ptr make_default_file_sink(const fs::path& path) {
             std::error_code ec;
             native_fs::create_directories(path.parent_path(), ec);
             if (ec) {
@@ -716,6 +725,10 @@ namespace lfs::core {
                            spdlog::level::info, "Log file: {}", path_to_utf8(default_log_path));
 
 #ifdef _WIN32
+        const auto long_paths = fs::process_long_paths_enabled();
+        impl_->logger->log(spdlog::source_loc{__FILE__, __LINE__, __func__}, spdlog::level::info,
+                           "Windows filesystem: long-path opt-in: {}; extended-path I/O adapter: enabled",
+                           long_paths ? (*long_paths ? "enabled" : "disabled") : "unknown");
         // Deliberately keep a small, visible probe near the top of every Windows
         // startup log. It exercises the same UTF-8 -> UTF-16 console path as a
         // real diagnostic without changing the terminal's shared code page.

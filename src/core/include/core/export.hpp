@@ -14,6 +14,7 @@
 #define LFS_FILE_IO_API
 #define LFS_MEDIA_API
 #define LFS_CORE_API
+#define LFS_IO_API
 #define LFS_VIS_API
 #define LFS_MCP_API
 #else

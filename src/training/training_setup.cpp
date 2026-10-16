@@ -7,6 +7,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/provenance.hpp"
@@ -25,10 +26,12 @@
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "normal_auto_generate.hpp"
+#include "rendering/mesh2splat.hpp"
 #include "strategies/strategy_utils.hpp"
 #include "trainer.hpp"
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -121,6 +124,46 @@ namespace lfs::training {
                      *scene_scale);
         }
 
+        // Mesh2Splat emits one splat per texel of a square raster over the mesh bounds, so the
+        // count grows with the square of the resolution. Refitting the resolution keeps the
+        // whole surface covered within the budget, where dropping random splats leaves holes.
+        lfs::Result<std::unique_ptr<lfs::core::SplatData>> splatsFromInitMesh(
+            const lfs::core::MeshData& mesh,
+            const std::filesystem::path& init_file,
+            const int resolution,
+            const int64_t budget) {
+            lfs::core::Mesh2SplatOptions options;
+            options.resolution_target = resolution;
+            auto converted = lfs::rendering::mesh_to_splat(mesh, options);
+            while (converted && budget > 0 && static_cast<int64_t>((*converted)->size()) > budget &&
+                   options.resolution_target > lfs::core::Mesh2SplatOptions::kMinResolution) {
+                const double shrink = std::sqrt(static_cast<double>(budget) / static_cast<double>((*converted)->size()));
+                const int fitted_resolution = std::clamp(static_cast<int>(options.resolution_target * shrink),
+                                                         lfs::core::Mesh2SplatOptions::kMinResolution,
+                                                         options.resolution_target - 1);
+                LOG_INFO("Mesh init: {} splats at resolution {} exceed the budget of {}, converting at resolution {}",
+                         (*converted)->size(), options.resolution_target, budget, fitted_resolution);
+                options.resolution_target = fitted_resolution;
+                converted.value().reset();
+                converted = lfs::rendering::mesh_to_splat(mesh, options);
+            }
+            if (!converted) {
+                return initFileError(std::format("Failed to convert mesh '{}' to splats: {}",
+                                                 lfs::core::path_to_utf8(init_file), converted.error()));
+            }
+            LOG_INFO("Mesh init: {} splats from {} triangles in {} (resolution {})",
+                     (*converted)->size(), mesh.face_count(), lfs::core::path_to_utf8(init_file.filename()),
+                     options.resolution_target);
+            return std::move(*converted);
+        }
+
+        void warnIfMeshResolutionIgnored(const lfs::core::param::OptimizationParameters& opt) {
+            if (opt.init_mesh_resolution != lfs::core::Mesh2SplatOptions{}.resolution_target) {
+                LOG_WARN("init_mesh_resolution {} is ignored: it only applies when the init file is a mesh",
+                         opt.init_mesh_resolution);
+            }
+        }
+
         bool evalMaskNeedsInitialPoints(const lfs::core::param::TrainingParameters& params) {
             return params.optimization.enable_eval &&
                    lfs::core::param::is_eval_mask_points(params.optimization.eval_mask);
@@ -143,38 +186,56 @@ namespace lfs::training {
             const lfs::core::param::TrainingParameters& params,
             lfs::core::Scene& scene,
             const std::filesystem::path& init_file,
-            const TrainingModelGraphCapture* graph_capture) {
-            auto loader = lfs::io::Loader::create();
-            auto init_result = loader->load(init_file);
-            if (!init_result) {
-                return std::unexpected(std::string(initFileError(std::format(
-                                                                     "Failed to load '{}': {}",
-                                                                     lfs::core::path_to_utf8(init_file),
-                                                                     init_result.error().format()))
-                                                       .user_message()));
+            const TrainingModelGraphCapture* graph_capture,
+            const int64_t added_splat_count) {
+            std::unique_ptr<lfs::core::SplatData> model;
+            auto mesh = takePendingInitMesh(init_file);
+            if (!mesh) {
+                auto loader = lfs::io::Loader::create();
+                auto init_result = loader->load(init_file);
+                if (!init_result) {
+                    return std::unexpected(std::string(initFileError(std::format(
+                                                                         "Failed to load '{}': {}",
+                                                                         lfs::core::path_to_utf8(init_file),
+                                                                         init_result.error().format()))
+                                                           .user_message()));
+                }
+                if (auto* mesh_ptr = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&init_result->data);
+                    mesh_ptr && *mesh_ptr) {
+                    mesh = std::move(*mesh_ptr);
+                } else {
+                    auto* splat_ptr = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&init_result->data);
+                    if (!splat_ptr || !*splat_ptr) {
+                        return std::unexpected(std::string(initFileError(std::format(
+                                                                             "'{}': invalid SplatData",
+                                                                             lfs::core::path_to_utf8(init_file)))
+                                                               .user_message()));
+                    }
+                    if (init_result->tile_source) {
+                        // Too large to load at full detail: the loader returned only the coarsest
+                        // cut it would start streaming from. Training starts from that cut.
+                        const auto everything = [](std::uint32_t) { return true; };
+                        const auto full = lfs::io::select_splat_tiles(
+                            *init_result->tile_source, {.sse_per_error = 1.0f, .max_sse = 0.0f}, everything);
+                        LOG_WARN("Streamed model '{}' is too large to load at full detail; training starts from its "
+                                 "coarsest level ({} of {} splats)",
+                                 lfs::core::path_to_utf8(init_file.filename()), (*splat_ptr)->size(),
+                                 full.render_splats);
+                    }
+                    warnIfMeshResolutionIgnored(params.optimization);
+                    model = std::make_unique<lfs::core::SplatData>(std::move(**splat_ptr));
+                }
+            }
+            if (mesh) {
+                const int max_cap = params.optimization.max_cap;
+                auto converted = splatsFromInitMesh(*mesh, init_file, params.optimization.init_mesh_resolution,
+                                                    max_cap > 0 ? max_cap - added_splat_count : 0);
+                if (!converted) {
+                    return std::unexpected(std::string(converted.error().user_message()));
+                }
+                model = std::move(*converted);
             }
 
-            auto* splat_ptr = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&init_result->data);
-            if (!splat_ptr || !*splat_ptr) {
-                return std::unexpected(std::string(initFileError(std::format(
-                                                                     "'{}': invalid SplatData",
-                                                                     lfs::core::path_to_utf8(init_file)))
-                                                       .user_message()));
-            }
-
-            if (init_result->tile_source) {
-                // Too large to load at full detail: the loader returned only the coarsest
-                // cut it would start streaming from. Training starts from that cut.
-                const auto everything = [](std::uint32_t) { return true; };
-                const auto full = lfs::io::select_splat_tiles(
-                    *init_result->tile_source, {.sse_per_error = 1.0f, .max_sse = 0.0f}, everything);
-                LOG_WARN("Streamed model '{}' is too large to load at full detail; training starts from its "
-                         "coarsest level ({} of {} splats)",
-                         lfs::core::path_to_utf8(init_file.filename()), (*splat_ptr)->size(),
-                         full.render_splats);
-            }
-
-            auto model = std::make_unique<lfs::core::SplatData>(std::move(**splat_ptr));
             centerInitializationMeans(model->means(), graph_capture
                                                           ? graph_capture->training_data_origin
                                                           : scene.getTrainingDataOrigin());
@@ -219,10 +280,25 @@ namespace lfs::training {
             return std::move(model);
         }
 
+        lfs::Result<std::vector<std::unique_ptr<lfs::core::SplatData>>> loadAddedSplats(
+            const lfs::core::param::TrainingParameters& params) {
+            std::vector<std::unique_ptr<lfs::core::SplatData>> added;
+            if (params.add_splats_applied)
+                return added;
+            for (const auto& path : params.add_splat_paths) {
+                auto splat = loadAddedSplat(path, params.optimization.sh_degree);
+                if (!splat)
+                    return initFileError(std::move(splat.error()));
+                added.push_back(std::move(*splat));
+            }
+            return added;
+        }
+
         std::expected<void, std::string> appendAddedSplats(
             const lfs::core::param::TrainingParameters& params,
             lfs::core::SplatData& model,
-            const glm::vec3& dataset_origin) {
+            const glm::vec3& dataset_origin,
+            std::vector<std::unique_ptr<lfs::core::SplatData>> preloaded = {}) {
             if (params.add_splat_paths.empty() || params.add_splats_applied) {
                 return {};
             }
@@ -241,21 +317,26 @@ namespace lfs::training {
             splats.emplace_back(&model, glm::mat4{1.0f});
 
             for (size_t i = 0; i < params.add_splat_paths.size(); ++i) {
-                const auto& path = params.add_splat_paths[i];
-                auto added = loadAddedSplat(path, params.optimization.sh_degree);
-                if (!added) {
-                    return std::unexpected(added.error());
+                std::unique_ptr<lfs::core::SplatData> added;
+                if (i < preloaded.size()) {
+                    added = std::move(preloaded[i]);
+                } else {
+                    auto loaded = loadAddedSplat(params.add_splat_paths[i], params.optimization.sh_degree);
+                    if (!loaded) {
+                        return std::unexpected(loaded.error());
+                    }
+                    added = std::move(*loaded);
                 }
-                centerInitializationMeans((*added)->means(), dataset_origin);
+                centerInitializationMeans(added->means(), dataset_origin);
 
-                const size_t count = static_cast<size_t>((*added)->size());
+                const size_t count = static_cast<size_t>(added->size());
                 if (i < params.add_splat_freeze.size() && params.add_splat_freeze[i] && count > 0) {
                     frozen_ranges.push_back({base_count + added_count, count});
                     frozen_count += count;
                 }
                 added_count += count;
-                splats.emplace_back(added->get(), glm::mat4{1.0f});
-                owned_added_splats.push_back(std::move(*added));
+                splats.emplace_back(added.get(), glm::mat4{1.0f});
+                owned_added_splats.push_back(std::move(added));
             }
 
             const size_t merged_count = base_count + added_count;
@@ -384,11 +465,18 @@ namespace lfs::training {
             graph_capture ? graph_capture->training_model != nullptr : scene.getTrainingModel() != nullptr;
         if (!has_training_model) {
             if (const auto init_file = gaussianSplatInitPath(params)) {
-                auto loaded = loadGaussianInitModel(params, scene, *init_file, graph_capture);
+                auto added = loadAddedSplats(params);
+                if (!added) {
+                    return std::unexpected(std::string(added.error().user_message()));
+                }
+                int64_t added_count = 0;
+                for (const auto& splat : *added)
+                    added_count += static_cast<int64_t>(splat->size());
+                auto loaded = loadGaussianInitModel(params, scene, *init_file, graph_capture, added_count);
                 if (!loaded) {
                     return std::unexpected(std::move(loaded.error()));
                 }
-                if (auto result = appendAddedSplats(params, *loaded->model, dataset_origin); !result) {
+                if (auto result = appendAddedSplats(params, *loaded->model, dataset_origin, std::move(*added)); !result) {
                     return std::unexpected(std::move(result.error()));
                 }
                 const int max_cap = params.optimization.max_cap;
@@ -433,6 +521,7 @@ namespace lfs::training {
         const TrainingModelGraphCapture owned_capture =
             graph_capture ? TrainingModelGraphCapture{} : captureTrainingModelGraph(scene);
         const TrainingModelGraphCapture& context = graph_capture ? *graph_capture : owned_capture;
+        warnIfMeshResolutionIgnored(params.optimization);
         const lfs::core::PointCloud* point_cloud =
             context.point_cloud ? &*context.point_cloud : nullptr;
         lfs::core::PointCloud point_cloud_to_use;

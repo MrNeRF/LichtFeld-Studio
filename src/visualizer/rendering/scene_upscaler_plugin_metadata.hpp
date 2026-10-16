@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/native_fs.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -20,7 +22,7 @@ namespace lfs::vis {
     // The bound prevents a malformed file from allocating unbounded memory.
     [[nodiscard]] inline std::optional<std::string> readSceneUpscalerProviderId(
         const std::filesystem::path& file) {
-        std::ifstream input(file, std::ios::binary);
+        std::ifstream input(lfs::core::native_fs::native_path(file), std::ios::binary);
         if (!input)
             return std::nullopt;
         std::array<char, 131> bytes{};
@@ -57,7 +59,7 @@ namespace lfs::vis {
     }
 
     [[nodiscard]] inline std::optional<std::string> readSceneUpscalerModuleStem(const std::filesystem::path& file) {
-        std::ifstream input(file, std::ios::binary);
+        std::ifstream input(lfs::core::native_fs::native_path(file), std::ios::binary);
         if (!input)
             return std::nullopt;
         std::array<char, 131> bytes{};
@@ -76,7 +78,7 @@ namespace lfs::vis {
     }
 
     [[nodiscard]] inline std::optional<std::array<float, 3>> readSceneUpscalerPresetScales(const std::filesystem::path& file) {
-        std::ifstream input(file, std::ios::binary);
+        std::ifstream input(lfs::core::native_fs::native_path(file), std::ios::binary);
         if (!input)
             return std::nullopt;
         std::array<char, 257> bytes{};
@@ -104,7 +106,7 @@ namespace lfs::vis {
         for (const auto& root : roots) {
             std::error_code error;
             const auto folder = root / "scene_upscalers";
-            auto entries = std::filesystem::directory_iterator(folder, error);
+            auto entries = std::filesystem::directory_iterator(lfs::core::native_fs::traversal_path(folder), error);
             if (error)
                 continue;
             const std::filesystem::directory_iterator end;
@@ -116,7 +118,7 @@ namespace lfs::vis {
                     continue;
                 const auto directory = entry.path().filename();
                 auto library = readSceneUpscalerModuleStem(entry.path() / "provider-module.txt");
-                if (!library || !std::filesystem::is_regular_file(entry.path() / sceneUpscalerPluginFilename(*library), error) || error)
+                if (!library || !lfs::core::native_fs::is_regular_file(entry.path() / sceneUpscalerPluginFilename(*library), error) || error)
                     continue;
                 if (!directories.insert(directory).second)
                     continue;

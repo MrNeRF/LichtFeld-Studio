@@ -10,7 +10,7 @@ import string
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
+from _lfs_path_io import Path
 
 try:
     import tomllib

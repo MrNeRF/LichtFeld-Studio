@@ -5,7 +5,7 @@
 import ast
 import re
 import sys
-from pathlib import Path
+from _lfs_path_io import Path
 
 from .compat import (
     LICHTFELD_VERSION,

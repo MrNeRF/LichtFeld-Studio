@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/executable_path.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include <filesystem>
 #include <mutex>
@@ -24,28 +25,28 @@ namespace lfs::vis {
         if (asset_name.rfind(rmlui_prefix, 0) == 0) {
             search_paths.push_back(
                 lfs::core::utf8_to_path(LFS_DEV_RMLUI_SOURCE_DIR) /
-                asset_name.substr(rmlui_prefix.size()));
+                lfs::core::utf8_to_path(asset_name.substr(rmlui_prefix.size())));
         }
 #endif
 
         // Primary: Use runtime-detected resource directory
-        search_paths.push_back(lfs::core::getAssetsDir() / asset_name);
+        search_paths.push_back(lfs::core::getAssetsDir() / lfs::core::utf8_to_path(asset_name));
 
 #ifndef LFS_MACOS_PORTABLE_APP
         // Development fallback: Try build directory
 #ifdef VISUALIZER_ASSET_PATH
-        search_paths.push_back(std::filesystem::path(VISUALIZER_ASSET_PATH) / asset_name);
+        search_paths.push_back(lfs::core::utf8_to_path(VISUALIZER_ASSET_PATH) / lfs::core::utf8_to_path(asset_name));
 #endif
 
         // Development fallback: Source directory
 #ifdef VISUALIZER_SOURCE_ASSET_PATH
-        search_paths.push_back(std::filesystem::path(VISUALIZER_SOURCE_ASSET_PATH) / asset_name);
+        search_paths.push_back(lfs::core::utf8_to_path(VISUALIZER_SOURCE_ASSET_PATH) / lfs::core::utf8_to_path(asset_name));
 #endif
 
 #ifdef PROJECT_ROOT_PATH
-        search_paths.push_back(std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/assets" / asset_name);
+        search_paths.push_back(lfs::core::utf8_to_path(PROJECT_ROOT_PATH) / "src/visualizer/gui/assets" / lfs::core::utf8_to_path(asset_name));
         if (asset_name == "fonts/JetBrainsMono-Regular.ttf") {
-            search_paths.push_back(std::filesystem::path(PROJECT_ROOT_PATH) /
+            search_paths.push_back(lfs::core::utf8_to_path(PROJECT_ROOT_PATH) /
                                    "src/rendering/resources/assets/JetBrainsMono-Regular.ttf");
         }
 #endif
@@ -53,7 +54,7 @@ namespace lfs::vis {
 #endif // LFS_MACOS_PORTABLE_APP
 
         for (const auto& path : search_paths) {
-            if (std::filesystem::exists(path))
+            if (lfs::core::native_fs::exists(path))
                 return path;
         }
 
@@ -87,7 +88,7 @@ namespace lfs::vis {
     // Environment maps are absolute, relative to the working directory, bundled
     // assets ("environments/x.hdr") or relative to the assets directory.
     inline std::filesystem::path resolveEnvironmentMapPath(const std::filesystem::path& path) {
-        if (path.is_absolute() || std::filesystem::exists(path))
+        if (path.is_absolute() || lfs::core::native_fs::exists(path))
             return path;
         try {
             return getAssetPath(lfs::core::path_to_utf8(path));

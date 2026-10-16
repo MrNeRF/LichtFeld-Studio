@@ -11,6 +11,7 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
@@ -541,7 +542,7 @@ namespace lfs::python {
 
             std::filesystem::path icon_path = lfs::core::utf8_to_path(plugin_path) / "icons" / (icon_name + ".png");
 
-            if (!std::filesystem::exists(icon_path)) {
+            if (!lfs::core::native_fs::exists(icon_path)) {
                 icon_path = lfs::vis::getAssetPath("icon/" + icon_name + ".png");
             }
 
@@ -3387,6 +3388,19 @@ namespace lfs::python {
             },
             nb::arg("start_dir") = "",
             "Open a file dialog to select a mesh file. Returns empty string if cancelled.");
+
+        m.def(
+            "open_init_file_dialog",
+            [](const std::string& start_dir) -> std::string {
+                std::filesystem::path start_path;
+                if (!start_dir.empty()) {
+                    start_path = lfs::core::utf8_to_path(start_dir);
+                }
+                auto result = lfs::vis::gui::OpenInitFileDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("start_dir") = "",
+            "Open a file dialog to select a training initialization file: a splat, point cloud or mesh. Returns empty string if cancelled.");
 
         m.def(
             "open_checkpoint_file_dialog",

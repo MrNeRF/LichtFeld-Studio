@@ -14,6 +14,7 @@
 #include "core/error.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/session_breadcrumb.hpp"
 #include "core/tensor_backend.hpp"
@@ -56,7 +57,7 @@ namespace {
         const auto bundled_manifest = lfs::core::getExecutableDir().parent_path() /
                                       "share/vulkan/icd.d/MoltenVK_icd.json";
         std::error_code bundled_error;
-        if (std::filesystem::is_regular_file(bundled_manifest, bundled_error)) {
+        if (lfs::core::native_fs::is_regular_file(bundled_manifest, bundled_error)) {
             (void)lfs::core::environment::set_value("VK_DRIVER_FILES", bundled_manifest.string());
         }
         // A portable bundle must not silently use the build machine's Homebrew ICD.
@@ -64,7 +65,7 @@ namespace {
         const auto try_prefix = [](const std::filesystem::path& prefix) {
             const auto manifest = prefix / "etc/vulkan/icd.d/MoltenVK_icd.json";
             std::error_code error;
-            if (!std::filesystem::is_regular_file(manifest, error))
+            if (!lfs::core::native_fs::is_regular_file(manifest, error))
                 return false;
             return lfs::core::environment::set_value("VK_DRIVER_FILES", manifest.string());
         };

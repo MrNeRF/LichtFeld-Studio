@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/mesh_data.hpp"
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
@@ -33,6 +34,14 @@ namespace lfs::training {
     std::expected<void, std::string> loadTrainingDataIntoScene(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene);
+
+    /// Parses a mesh init file ahead of installing the dataset, so neither the preview nor training
+    /// start parse it again; does nothing for other init files. Load errors surface in the preview.
+    void preloadInitMesh(const lfs::core::param::TrainingParameters& params);
+
+    /// Hands the init mesh kept by preloadInitMesh or the dataset preview to training start; null
+    /// when none is kept for `init_file` or the file was written since it was parsed.
+    [[nodiscard]] std::shared_ptr<lfs::core::MeshData> takePendingInitMesh(const std::filesystem::path& init_file);
 
     // Reload the points used to initialize training for evaluation after resume.
     [[nodiscard]] lfs::Result<std::shared_ptr<lfs::core::PointCloud>> loadInitialPointCloud(

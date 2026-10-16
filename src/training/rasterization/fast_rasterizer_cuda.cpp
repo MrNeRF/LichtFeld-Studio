@@ -5,6 +5,7 @@
 #include "fast_rasterizer_cuda.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
@@ -262,7 +263,7 @@ namespace lfs::training {
 
         // Directory path is relative to cwd, e.g. "./crash_dump_20251211_143052_847"
         std::string dump_dir = std::string("crash_dump_") + time_buf + "_" + std::to_string(ms.count());
-        std::filesystem::create_directories(dump_dir);
+        lfs::core::native_fs::create_directories(dump_dir);
 
         // Log absolute path for easier debugging
         auto abs_path = std::filesystem::absolute(dump_dir);

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "media/file_frame_sink.hpp"
 #include "core/image_codecs.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "media/media_options.hpp"
 #include "media/video_frame_extractor.hpp"
@@ -38,7 +39,7 @@ namespace lfs::media {
         if (options_.format == FrameFileFormat::JPEG)
             options_.jpeg_quality = options_.jpeg_quality == 0 ? 90 : std::clamp(options_.jpeg_quality, 1, 100);
         std::error_code directory_error;
-        std::filesystem::create_directories(options_.output_directory, directory_error);
+        lfs::core::native_fs::create_directories(options_.output_directory, directory_error);
         if (directory_error) {
             return SinkResult::failure(make_error({.code = directory_error == std::errc::permission_denied ? ErrorCode::PermissionDenied : ErrorCode::Unavailable,
                                                    .domain = ErrorDomain::IO,
@@ -52,7 +53,7 @@ namespace lfs::media {
             for (const auto& path : io::generatedExtractionFiles(options_.output_directory, options_.filename_pattern)) {
                 if (options_.preserve_metadata && path.filename() == "extraction_metadata.json")
                     continue;
-                existing_frames_.push_back({path, std::filesystem::last_write_time(path), std::filesystem::file_size(path)});
+                existing_frames_.push_back({path, lfs::core::native_fs::last_write_time(path), lfs::core::native_fs::file_size(path)});
             }
         }
         active_ = true;
@@ -108,17 +109,17 @@ namespace lfs::media {
             if (filenames_.contains(old.path))
                 continue;
             std::error_code error;
-            const auto status = std::filesystem::symlink_status(old.path, error);
-            if (error || !std::filesystem::is_regular_file(status))
+            const auto status = lfs::core::native_fs::symlink_status(old.path, error);
+            if (error || !lfs::core::native_fs::is_regular_file(status))
                 continue;
             // Preserve anything another writer changed while we extracted.
-            const auto modified = std::filesystem::last_write_time(old.path, error);
+            const auto modified = lfs::core::native_fs::last_write_time(old.path, error);
             if (error || modified != old.modified)
                 continue;
-            const auto size = std::filesystem::file_size(old.path, error);
+            const auto size = lfs::core::native_fs::file_size(old.path, error);
             if (error || size != old.size)
                 continue;
-            std::filesystem::remove(old.path, error);
+            lfs::core::native_fs::remove(old.path, error);
             if (error)
                 return sinkError(ErrorCode::Unavailable, "Remove obsolete frame failed: " + core::path_to_utf8(old.path) + ": " + error.message());
         }

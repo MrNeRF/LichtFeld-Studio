@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "gui/rmlui/rml_image_file.hpp"
 
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "core/stb_file.hpp"
 #include "internal/resource_paths.hpp"
 
 #include <filesystem>
@@ -15,7 +17,7 @@ namespace lfs::vis::gui {
         std::optional<RmlImageFile> decode(const std::string& path) {
             int width = 0, height = 0, channels = 0;
             std::unique_ptr<unsigned char, decltype(&stbi_image_free)> pixels(
-                stbi_load(path.c_str(), &width, &height, &channels, 4), stbi_image_free);
+                lfs::core::stb_file::stb_load(lfs::core::utf8_to_path(path), &width, &height, &channels, 4), stbi_image_free);
             if (!pixels)
                 return std::nullopt;
             const std::size_t count = static_cast<std::size_t>(width) * height;
@@ -43,7 +45,7 @@ namespace lfs::vis::gui {
                 return std::nullopt;
             try {
                 const auto path = getAssetPath(name);
-                if (std::filesystem::exists(path))
+                if (lfs::core::native_fs::exists(path))
                     return decode(lfs::core::path_to_utf8(path));
             } catch (...) {
                 // LFS-CENSUS-OK(empty-catch): optional asset fallbacks deliberately ignore path lookup failures.
@@ -67,7 +69,7 @@ namespace lfs::vis::gui {
 #ifndef _WIN32
         if (!source.empty() && source[0] != '/' && source.find("://") == std::string::npos) {
             const std::string absolute_source = "/" + source;
-            if (std::filesystem::exists(absolute_source))
+            if (lfs::core::native_fs::exists(lfs::core::utf8_to_path(absolute_source)))
                 return decode(absolute_source);
         }
 #endif

@@ -7,6 +7,7 @@
 #include "python_lsp_client.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
 #ifdef LFS_MACOS_PORTABLE_APP
@@ -738,7 +739,7 @@ namespace lfs::vis::editor {
                   [] {
                       const auto paths = lfs::core::UserPaths::resolve();
                       return paths ? paths->configDir() / "python-editor"
-                                   : std::filesystem::temp_directory_path() / "lichtfeld-python-editor";
+                                   : lfs::core::native_fs::temp_directory_path() / "lichtfeld-python-editor";
                   }(),
 #else
                   std::filesystem::path(PROJECT_ROOT_PATH) / "external" / "zep",

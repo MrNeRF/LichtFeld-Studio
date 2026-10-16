@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "io/loader.hpp"
 
@@ -26,8 +27,6 @@ namespace lfs::io {
     inline constexpr std::array<std::string_view, 2> TRANSFORMS_DATASET_MARKERS = {
         "transforms.json", "transforms_train.json"};
 
-    namespace fs = std::filesystem;
-
     namespace detail {
         inline constexpr size_t CANCEL_POLL_INTERVAL = 64;
 
@@ -46,11 +45,11 @@ namespace lfs::io {
             return value;
         }
 
-        inline std::string normalize_lookup_key(const fs::path& value) {
+        inline std::string normalize_lookup_key(const std::filesystem::path& value) {
             return normalize_lookup_key(lfs::core::path_to_utf8(value.lexically_normal()));
         }
 
-        inline std::string raw_lookup_key(const fs::path& value) {
+        inline std::string raw_lookup_key(const std::filesystem::path& value) {
             const auto utf8 = value.generic_u8string();
             return {utf8.begin(), utf8.end()};
         }
@@ -118,30 +117,30 @@ namespace lfs::io {
     }
 
     // Safe filesystem operations that don't throw
-    inline bool safe_exists(const fs::path& path) {
+    inline bool safe_exists(const std::filesystem::path& path) {
         std::error_code ec;
         return lfs::core::native_fs::exists(path, ec);
     }
 
-    inline bool safe_is_directory(const fs::path& path) {
+    inline bool safe_is_directory(const std::filesystem::path& path) {
         std::error_code ec;
         return lfs::core::native_fs::is_directory(path, ec);
     }
 
-    inline bool safe_is_regular_file(const fs::path& path) {
+    inline bool safe_is_regular_file(const std::filesystem::path& path) {
         std::error_code ec;
         return lfs::core::native_fs::is_regular_file(path, ec);
     }
 
     // Case-insensitive file finding
-    inline fs::path find_file_ci(const fs::path& dir, const std::string& target) {
+    inline std::filesystem::path find_file_ci(const std::filesystem::path& dir, const std::string& target) {
         if (!safe_exists(dir) || !safe_is_directory(dir))
             return {};
 
         std::string target_lower = detail::normalize_lookup_key(target);
 
         std::error_code ec;
-        for (fs::directory_iterator it(lfs::core::native_fs::traversal_path(dir), ec), end; !ec && it != end; it.increment(ec)) {
+        for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(dir), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec)
                 continue;
@@ -155,8 +154,8 @@ namespace lfs::io {
     }
 
     // Find file in multiple locations (case-insensitive)
-    inline fs::path find_file_in_paths(const std::vector<fs::path>& search_paths,
-                                       const std::string& filename) {
+    inline std::filesystem::path find_file_in_paths(const std::vector<std::filesystem::path>& search_paths,
+                                                    const std::string& filename) {
         for (const auto& dir : search_paths) {
             if (auto found = find_file_ci(dir, filename); !found.empty()) {
                 return found;
@@ -173,7 +172,7 @@ namespace lfs::io {
 
     struct FileLookupResult {
         LookupStatus status = LookupStatus::NotFound;
-        fs::path path;
+        std::filesystem::path path;
 
         [[nodiscard]] bool found() const {
             return status == LookupStatus::Found && !path.empty();
@@ -190,19 +189,18 @@ namespace lfs::io {
     public:
         // Optional observer receives each regular file's path relative to root_path
         // during the existing filesystem walk.
-        explicit RecursiveFileCache(const fs::path& root_path,
+        explicit RecursiveFileCache(const std::filesystem::path& root_path,
                                     const CancelCallback& cancel_requested = nullptr,
-                                    const std::function<void(const fs::path&)>& on_file = nullptr) {
+                                    const std::function<void(const std::filesystem::path&)>& on_file = nullptr) {
             if (!safe_is_directory(root_path))
                 return;
 
             std::error_code ec;
             size_t scanned_entries = 0;
             const auto traversal_root = lfs::core::native_fs::traversal_path(root_path);
-            for (fs::recursive_directory_iterator it(
-                     traversal_root,
-                     fs::directory_options::skip_permission_denied,
-                     ec),
+            for (std::filesystem::recursive_directory_iterator it(lfs::core::native_fs::traversal_path(traversal_root),
+                                                                  std::filesystem::directory_options::skip_permission_denied,
+                                                                  ec),
                  end;
                  !ec && it != end;
                  it.increment(ec)) {
@@ -217,10 +215,10 @@ namespace lfs::io {
                 if (!entry.is_regular_file(file_ec) || file_ec)
                     continue;
 
-                const fs::path rel = entry.path().lexically_relative(traversal_root);
+                const std::filesystem::path rel = entry.path().lexically_relative(traversal_root);
                 if (rel.empty())
                     continue;
-                const fs::path file = root_path / rel;
+                const std::filesystem::path file = root_path / rel;
 
                 if (on_file)
                     on_file(rel);
@@ -282,7 +280,7 @@ namespace lfs::io {
             return {};
         }
 
-        [[nodiscard]] FileLookupResult lookup_exact(const fs::path& relative_or_name) const {
+        [[nodiscard]] FileLookupResult lookup_exact(const std::filesystem::path& relative_or_name) const {
             if (relative_or_name.empty())
                 return {};
 
@@ -303,7 +301,7 @@ namespace lfs::io {
             return {};
         }
 
-        [[nodiscard]] FileLookupResult lookup(const fs::path& relative_or_name) const {
+        [[nodiscard]] FileLookupResult lookup(const std::filesystem::path& relative_or_name) const {
             if (relative_or_name.empty())
                 return {};
             if (auto result = lookup_exact(relative_or_name); result.status != LookupStatus::NotFound)
@@ -322,7 +320,7 @@ namespace lfs::io {
             return {};
         }
 
-        [[nodiscard]] fs::path find(const fs::path& relative_or_name) const {
+        [[nodiscard]] std::filesystem::path find(const std::filesystem::path& relative_or_name) const {
             if (auto result = lookup(relative_or_name); result.found()) {
                 return result.path;
             }
@@ -330,17 +328,17 @@ namespace lfs::io {
         }
 
     private:
-        std::unordered_map<std::string, fs::path> raw_entries_;
-        std::unordered_map<std::string, fs::path> exact_entries_;
-        std::unordered_map<std::string, fs::path> basename_entries_;
+        std::unordered_map<std::string, std::filesystem::path> raw_entries_;
+        std::unordered_map<std::string, std::filesystem::path> exact_entries_;
+        std::unordered_map<std::string, std::filesystem::path> basename_entries_;
         std::unordered_set<std::string> ambiguous_exact_;
         std::unordered_set<std::string> ambiguous_basenames_;
-        std::unordered_map<std::string, fs::path> digit_entries_;
+        std::unordered_map<std::string, std::filesystem::path> digit_entries_;
         std::unordered_set<std::string> ambiguous_digits_;
     };
 
     // Get standard COLMAP search paths for a base directory
-    inline std::vector<fs::path> get_colmap_search_paths(const fs::path& base) {
+    inline std::vector<std::filesystem::path> get_colmap_search_paths(const std::filesystem::path& base) {
         return {
             base / "sparse" / "0", // Standard COLMAP
             base / "sparse",       // Alternative COLMAP
@@ -349,7 +347,7 @@ namespace lfs::io {
     }
 
     // Check if a file has an image extension
-    inline bool is_image_file(const fs::path& path) {
+    inline bool is_image_file(const std::filesystem::path& path) {
         static const std::vector<std::string> image_extensions = {
             ".jpg",
             ".jpeg",
@@ -366,13 +364,13 @@ namespace lfs::io {
 #endif
         };
 
-        std::string ext = path.extension().string();
+        std::string ext = lfs::core::path_to_utf8(path.extension());
         detail::ascii_lower_inplace(ext);
 
         return std::find(image_extensions.begin(), image_extensions.end(), ext) != image_extensions.end();
     }
 
-    inline bool is_legacy_image_file(const fs::path& path) {
+    inline bool is_legacy_image_file(const std::filesystem::path& path) {
         auto ext = path.extension().string();
         detail::ascii_lower_inplace(ext);
         return ext != ".exr" && ext != ".webp" && ext != ".avif" && ext != ".heif" && ext != ".heic" && is_image_file(path);
@@ -391,19 +389,19 @@ namespace lfs::io {
     class MaskDirCache {
     public:
         // Indexes one explicit mask folder instead of the dataset's mask sub-folders.
-        [[nodiscard]] static MaskDirCache for_folder(const fs::path& mask_dir) {
+        [[nodiscard]] static MaskDirCache for_folder(const std::filesystem::path& mask_dir) {
             MaskDirCache cache;
             if (safe_is_directory(mask_dir))
                 cache.dir_indices_.emplace_back(mask_dir, nullptr);
             return cache;
         }
 
-        explicit MaskDirCache(const fs::path& base_path,
+        explicit MaskDirCache(const std::filesystem::path& base_path,
                               const CancelCallback& cancel_requested = nullptr) {
             for (const auto* folder : MASK_SEARCH_FOLDERS) {
                 detail::throw_if_scan_cancel_requested(cancel_requested,
                                                        "Mask directory scan cancelled");
-                const fs::path mask_dir = base_path / folder;
+                const std::filesystem::path mask_dir = base_path / folder;
                 if (!safe_is_directory(mask_dir))
                     continue;
 
@@ -415,7 +413,7 @@ namespace lfs::io {
             if (dir_indices_.empty())
                 return {};
 
-            const std::vector<fs::path> lookup_keys = build_lookup_keys(image_name);
+            const std::vector<std::filesystem::path> lookup_keys = build_lookup_keys(image_name);
             bool saw_ambiguous_match = false;
 
             // Check every relative-path/extension candidate before considering a
@@ -449,7 +447,7 @@ namespace lfs::io {
             return {};
         }
 
-        [[nodiscard]] fs::path find(const std::string& image_name) const {
+        [[nodiscard]] std::filesystem::path find(const std::string& image_name) const {
             if (auto result = lookup(image_name); result.found()) {
                 return result.path;
             }
@@ -459,15 +457,15 @@ namespace lfs::io {
     private:
         MaskDirCache() = default;
 
-        static std::vector<fs::path> build_lookup_keys(const std::string& image_name) {
-            const fs::path img_path = lfs::core::utf8_to_path(image_name);
-            const fs::path stem_path = img_path.parent_path() / img_path.stem();
+        static std::vector<std::filesystem::path> build_lookup_keys(const std::string& image_name) {
+            const std::filesystem::path img_path = lfs::core::utf8_to_path(image_name);
+            const std::filesystem::path stem_path = img_path.parent_path() / img_path.stem();
 
-            std::vector<fs::path> keys;
+            std::vector<std::filesystem::path> keys;
             std::unordered_set<std::string> seen_keys;
             keys.reserve(1 + 2 * MASK_SEARCH_EXTENSIONS.size());
 
-            auto append_key = [&](const fs::path& key) {
+            auto append_key = [&](const std::filesystem::path& key) {
                 const std::string normalized_key = detail::normalize_lookup_key(key);
                 if (seen_keys.insert(normalized_key).second) {
                     keys.push_back(key);
@@ -477,13 +475,13 @@ namespace lfs::io {
             append_key(img_path);
 
             for (const auto* ext : MASK_SEARCH_EXTENSIONS) {
-                fs::path target = stem_path;
+                std::filesystem::path target = stem_path;
                 target += ext;
                 append_key(target);
             }
 
             for (const auto* ext : MASK_SEARCH_EXTENSIONS) {
-                fs::path target = img_path;
+                std::filesystem::path target = img_path;
                 target += ext;
                 append_key(target);
             }
@@ -498,7 +496,7 @@ namespace lfs::io {
     // (depth maps, normal maps) with a trailing-frame-number fallback.
     class SidecarDirCache {
     public:
-        SidecarDirCache(const fs::path& base_path,
+        SidecarDirCache(const std::filesystem::path& base_path,
                         std::span<const char* const> search_folders,
                         std::span<const char* const> search_extensions,
                         const CancelCallback& cancel_requested = nullptr)
@@ -506,7 +504,7 @@ namespace lfs::io {
             for (const auto* folder : search_folders) {
                 detail::throw_if_scan_cancel_requested(cancel_requested,
                                                        "Sidecar directory scan cancelled");
-                const fs::path sidecar_dir = base_path / folder;
+                const std::filesystem::path sidecar_dir = base_path / folder;
                 if (!safe_is_directory(sidecar_dir))
                     continue;
 
@@ -518,7 +516,7 @@ namespace lfs::io {
             if (dir_indices_.empty())
                 return {};
 
-            const std::vector<fs::path> lookup_keys = build_lookup_keys(image_name);
+            const std::vector<std::filesystem::path> lookup_keys = build_lookup_keys(image_name);
             bool saw_ambiguous_match = false;
 
             for (const auto& dir_index : dir_indices_) {
@@ -551,7 +549,7 @@ namespace lfs::io {
 
         [[nodiscard]] bool has_dirs() const { return !dir_indices_.empty(); }
 
-        [[nodiscard]] fs::path find(const std::string& image_name) const {
+        [[nodiscard]] std::filesystem::path find(const std::string& image_name) const {
             if (auto result = lookup(image_name); result.found()) {
                 return result.path;
             }
@@ -559,15 +557,15 @@ namespace lfs::io {
         }
 
     private:
-        std::vector<fs::path> build_lookup_keys(const std::string& image_name) const {
-            const fs::path img_path = lfs::core::utf8_to_path(image_name);
-            const fs::path stem_path = img_path.parent_path() / img_path.stem();
+        std::vector<std::filesystem::path> build_lookup_keys(const std::string& image_name) const {
+            const std::filesystem::path img_path = lfs::core::utf8_to_path(image_name);
+            const std::filesystem::path stem_path = img_path.parent_path() / img_path.stem();
 
-            std::vector<fs::path> keys;
+            std::vector<std::filesystem::path> keys;
             std::unordered_set<std::string> seen_keys;
             keys.reserve(1 + 2 * extensions_.size());
 
-            auto append_key = [&](const fs::path& key) {
+            auto append_key = [&](const std::filesystem::path& key) {
                 const std::string normalized_key = detail::normalize_lookup_key(key);
                 if (seen_keys.insert(normalized_key).second) {
                     keys.push_back(key);
@@ -577,13 +575,13 @@ namespace lfs::io {
             append_key(img_path);
 
             for (const auto* ext : extensions_) {
-                fs::path target = stem_path;
+                std::filesystem::path target = stem_path;
                 target += ext;
                 append_key(target);
             }
 
             for (const auto* ext : extensions_) {
-                fs::path target = img_path;
+                std::filesystem::path target = img_path;
                 target += ext;
                 append_key(target);
             }
@@ -598,7 +596,7 @@ namespace lfs::io {
     // Pre-scanned directory cache for fast case-insensitive depth-map lookups.
     class DepthDirCache : public SidecarDirCache {
     public:
-        explicit DepthDirCache(const fs::path& base_path,
+        explicit DepthDirCache(const std::filesystem::path& base_path,
                                const CancelCallback& cancel_requested = nullptr)
             : SidecarDirCache(base_path, DEPTH_SEARCH_FOLDERS, DEPTH_SEARCH_EXTENSIONS,
                               cancel_requested) {}
@@ -609,7 +607,7 @@ namespace lfs::io {
     // Pre-scanned directory cache for fast case-insensitive normal-map lookups.
     class NormalDirCache : public SidecarDirCache {
     public:
-        explicit NormalDirCache(const fs::path& base_path,
+        explicit NormalDirCache(const std::filesystem::path& base_path,
                                 const CancelCallback& cancel_requested = nullptr)
             : SidecarDirCache(base_path, NORMAL_SEARCH_FOLDERS, NORMAL_SEARCH_EXTENSIONS,
                               cancel_requested) {}
@@ -617,7 +615,7 @@ namespace lfs::io {
         [[nodiscard]] bool has_normal_dirs() const { return has_dirs(); }
     };
 
-    inline bool paths_equivalent_or_lexically_equal(const fs::path& lhs, const fs::path& rhs) {
+    inline bool paths_equivalent_or_lexically_equal(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
         if (lhs.empty() || rhs.empty()) {
             return false;
         }
@@ -633,16 +631,16 @@ namespace lfs::io {
         return false;
     }
 
-    inline int count_image_files(const fs::path& root_path, const bool recursive) {
+    inline int count_image_files(const std::filesystem::path& root_path, const bool recursive) {
         if (!safe_is_directory(root_path)) {
             return 0;
         }
 
         int count = 0;
         std::error_code ec;
-        std::unordered_set<fs::path> legacy_stems;
-        std::vector<fs::path> extended_stems;
-        const auto record = [&](const fs::path& path) {
+        std::unordered_set<std::filesystem::path> legacy_stems;
+        std::vector<std::filesystem::path> extended_stems;
+        const auto record = [&](const std::filesystem::path& path) {
             if (!is_image_file(path))
                 return;
             auto stem = path;
@@ -662,10 +660,9 @@ namespace lfs::io {
         };
 
         if (recursive) {
-            for (fs::recursive_directory_iterator it(
-                     lfs::core::native_fs::traversal_path(root_path),
-                     fs::directory_options::skip_permission_denied,
-                     ec),
+            for (std::filesystem::recursive_directory_iterator it(lfs::core::native_fs::traversal_path(root_path),
+                                                                  std::filesystem::directory_options::skip_permission_denied,
+                                                                  ec),
                  end;
                  !ec && it != end;
                  it.increment(ec)) {
@@ -677,7 +674,7 @@ namespace lfs::io {
             return total();
         }
 
-        for (fs::directory_iterator it(lfs::core::native_fs::traversal_path(root_path), ec), end; !ec && it != end; it.increment(ec)) {
+        for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(root_path), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec)
                 continue;
@@ -688,12 +685,12 @@ namespace lfs::io {
     }
 
     struct DatasetInfo {
-        fs::path base_path;
-        fs::path images_path;
-        fs::path sparse_path;
-        fs::path masks_path;
-        fs::path depths_path;
-        fs::path normals_path;
+        std::filesystem::path base_path;
+        std::filesystem::path images_path;
+        std::filesystem::path sparse_path;
+        std::filesystem::path masks_path;
+        std::filesystem::path depths_path;
+        std::filesystem::path normals_path;
         bool has_masks = false;
         bool has_depths = false;
         bool has_normals = false;
@@ -703,7 +700,7 @@ namespace lfs::io {
         int normal_count = 0;
     };
 
-    inline DatasetInfo detect_dataset_info(const fs::path& base_path) {
+    inline DatasetInfo detect_dataset_info(const std::filesystem::path& base_path) {
         static constexpr const char* const IMAGE_FOLDERS[] = {"images", "images_4", "images_2", "images_8", "input", "rgb"};
 
         DatasetInfo info;

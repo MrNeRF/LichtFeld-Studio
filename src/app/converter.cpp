@@ -11,6 +11,7 @@
 #include "core/host_metrics.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
@@ -64,7 +65,7 @@ namespace lfs::app {
                     }
                     if (!lfs::core::native_fs::entry_is_regular_file(path, entry))
                         continue;
-                    auto ext = entry.path().extension().string();
+                    auto ext = lfs::core::path_to_utf8(entry.path().extension());
                     std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                         return static_cast<char>(std::tolower(c));
                     });
@@ -158,7 +159,7 @@ namespace lfs::app {
         }
 
         bool isPlyExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -166,7 +167,7 @@ namespace lfs::app {
         }
 
         bool isRadExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -174,7 +175,7 @@ namespace lfs::app {
         }
 
         bool isResumeExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -182,7 +183,7 @@ namespace lfs::app {
         }
 
         bool isLichtExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });

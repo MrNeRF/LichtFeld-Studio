@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/native_fs.hpp"
+#include "core/path_utils.hpp"
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -43,7 +45,7 @@ namespace lfs::core {
         }
 
         path.resize(size);
-        return std::filesystem::path(path);
+        return lfs::core::native_fs::display_path(std::filesystem::path(path));
 #elif defined(__APPLE__)
         std::uint32_t size = 0;
         _NSGetExecutablePath(nullptr, &size);
@@ -73,12 +75,12 @@ namespace lfs::core {
 
             // Production: exe in bin/, resources in ../share/LichtFeld-Studio/
             if (const auto prod = exe_dir.parent_path() / "share" / "LichtFeld-Studio";
-                std::filesystem::exists(prod)) {
+                lfs::core::native_fs::exists(prod)) {
                 return prod;
             }
 
             // Development: resources/ alongside executable
-            if (const auto dev = exe_dir / "resources"; std::filesystem::exists(dev)) {
+            if (const auto dev = exe_dir / "resources"; lfs::core::native_fs::exists(dev)) {
                 return dev;
             }
 
@@ -100,12 +102,12 @@ namespace lfs::core {
 
         // Production: exe in bin/, libs in ../lib/
         if (const auto prod = exe_dir.parent_path() / "lib";
-            std::filesystem::exists(prod)) {
+            lfs::core::native_fs::exists(prod)) {
             return prod;
         }
 
         // Development: check for extensions relative to build dir
-        if (const auto dev = exe_dir / "lib"; std::filesystem::exists(dev)) {
+        if (const auto dev = exe_dir / "lib"; lfs::core::native_fs::exists(dev)) {
             return dev;
         }
 
@@ -118,7 +120,7 @@ namespace lfs::core {
 
         auto module_exists = [](const std::filesystem::path& dir) {
             std::error_code ec;
-            if (!std::filesystem::exists(dir, ec)) {
+            if (!lfs::core::native_fs::exists(dir, ec)) {
                 return false;
             }
 
@@ -130,19 +132,19 @@ namespace lfs::core {
                      "lichtfeld.abi3.pyd",
                      "lichtfeld.cp312-win_amd64.pyd",
                      "lichtfeld.cp311-win_amd64.pyd"}) {
-                if (std::filesystem::exists(dir / name, ec)) {
+                if (lfs::core::native_fs::exists(dir / name, ec)) {
                     return true;
                 }
             }
 
             // Match platform-specific CPython suffixes (e.g., lichtfeld.cpython-312-x86_64-linux-gnu.so).
-            for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(dir), ec), end; !ec && it != end; it.increment(ec)) {
                 std::error_code file_ec;
                 if (!it->is_regular_file(file_ec) || file_ec) {
                     continue;
                 }
-                const auto filename = it->path().filename().string();
-                const auto ext = it->path().extension().string();
+                const auto filename = lfs::core::path_to_utf8(it->path().filename());
+                const auto ext = lfs::core::path_to_utf8(it->path().extension());
                 if ((ext == ".so" || ext == ".pyd") && filename.rfind("lichtfeld", 0) == 0) {
                     return true;
                 }
@@ -177,10 +179,10 @@ namespace lfs::core {
     inline bool isVcpkgPythonPrefix(const std::filesystem::path& triplet_dir) {
         std::error_code ec;
 #ifdef _WIN32
-        return std::filesystem::exists(triplet_dir / "tools" / "python3" / "python.exe", ec);
+        return lfs::core::native_fs::exists(triplet_dir / "tools" / "python3" / "python.exe", ec);
 #else
-        return std::filesystem::exists(triplet_dir / "tools" / "python3" / "python3.12", ec) &&
-               std::filesystem::exists(triplet_dir / "lib" / "python3.12", ec);
+        return lfs::core::native_fs::exists(triplet_dir / "tools" / "python3" / "python3.12", ec) &&
+               lfs::core::native_fs::exists(triplet_dir / "lib" / "python3.12", ec);
 #endif
     }
 
@@ -212,7 +214,7 @@ namespace lfs::core {
 
     inline std::filesystem::path preferredVcpkgPrefix([[maybe_unused]] const std::filesystem::path& vcpkg_root) {
 #ifdef LFS_PYTHON_EXECUTABLE
-        auto configured_prefix = std::filesystem::path(LFS_PYTHON_EXECUTABLE);
+        auto configured_prefix = lfs::core::native_fs::from_utf8(LFS_PYTHON_EXECUTABLE);
         for (int i = 0; i < 3 && !configured_prefix.empty(); ++i) {
             configured_prefix = configured_prefix.parent_path();
         }
@@ -236,10 +238,10 @@ namespace lfs::core {
     inline std::filesystem::path findVcpkgPrefix(const std::filesystem::path& exe_dir) {
         std::error_code ec;
         auto vcpkg_root = exe_dir / "vcpkg_installed";
-        if (!std::filesystem::exists(vcpkg_root, ec)) {
+        if (!lfs::core::native_fs::exists(vcpkg_root, ec)) {
             // Per-config build (e.g. build/Release/): vcpkg_installed lives one level up
             vcpkg_root = exe_dir.parent_path() / "vcpkg_installed";
-            if (!std::filesystem::exists(vcpkg_root, ec)) {
+            if (!lfs::core::native_fs::exists(vcpkg_root, ec)) {
                 return {};
             }
         }
@@ -253,13 +255,13 @@ namespace lfs::core {
         std::filesystem::path fallback;
         std::string fallback_name;
 
-        for (std::filesystem::directory_iterator it(vcpkg_root, ec), end; !ec && it != end; it.increment(ec)) {
+        for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(vcpkg_root), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code dir_ec;
             if (!it->is_directory(dir_ec) || dir_ec) {
                 continue;
             }
-            const auto triplet_dir = it->path();
-            const auto name = triplet_dir.filename().string();
+            const auto triplet_dir = lfs::core::native_fs::entry_path(vcpkg_root, it->path());
+            const auto name = lfs::core::path_to_utf8(triplet_dir.filename());
             if (name == "vcpkg" || name.starts_with(".")) {
                 continue;
             }
@@ -293,7 +295,7 @@ namespace lfs::core {
         // Windows Production: exe in bin/, Python stdlib in ../Lib/
         // CPython on Windows expects Lib/ (not lib/python3.12/)
         if (const auto prod = exe_dir.parent_path() / "Lib";
-            std::filesystem::exists(prod / "os.py")) {
+            lfs::core::native_fs::exists(prod / "os.py")) {
             return exe_dir.parent_path();
         }
 
@@ -304,7 +306,7 @@ namespace lfs::core {
 #else
         // Linux Production: exe in bin/, Python stdlib in ../lib/python3.12/
         if (const auto prod = exe_dir.parent_path() / "lib" / "python3.12";
-            std::filesystem::exists(prod)) {
+            lfs::core::native_fs::exists(prod)) {
             return exe_dir.parent_path();
         }
 
@@ -324,7 +326,7 @@ namespace lfs::core {
         const auto exe_dir = getExecutableDir();
 
         auto stubs_exist = [](const std::filesystem::path& dir) {
-            return std::filesystem::exists(dir / "lichtfeld" / "__init__.pyi");
+            return lfs::core::native_fs::exists(dir / "lichtfeld" / "__init__.pyi");
         };
 
         // Production: exe in bin/, stubs in ../lib/python/lichtfeld/
@@ -350,29 +352,29 @@ namespace lfs::core {
         const auto exe_dir = getExecutableDir();
 
 #ifdef _WIN32
-        if (const auto p = exe_dir / "python.exe"; std::filesystem::exists(p))
+        if (const auto p = exe_dir / "python.exe"; lfs::core::native_fs::exists(p))
             return p;
 
 #ifndef LFS_MACOS_PORTABLE_APP
         if (const auto prefix = findVcpkgPrefix(exe_dir); !prefix.empty()) {
-            if (const auto p = prefix / "tools" / "python3" / "python.exe"; std::filesystem::exists(p))
+            if (const auto p = prefix / "tools" / "python3" / "python.exe"; lfs::core::native_fs::exists(p))
                 return p;
         }
 #endif
 #else
-        if (const auto p = exe_dir / "python3"; std::filesystem::exists(p))
+        if (const auto p = exe_dir / "python3"; lfs::core::native_fs::exists(p))
             return p;
 
 #ifndef LFS_MACOS_PORTABLE_APP
         if (const auto prefix = findVcpkgPrefix(exe_dir); !prefix.empty()) {
-            if (const auto p = prefix / "tools" / "python3" / "python3.12"; std::filesystem::exists(p))
+            if (const auto p = prefix / "tools" / "python3" / "python3.12"; lfs::core::native_fs::exists(p))
                 return p;
         }
 #endif
 #endif
 
 #if defined(LFS_PYTHON_EXECUTABLE) && !defined(LFS_MACOS_PORTABLE_APP)
-        if (const auto p = std::filesystem::path(LFS_PYTHON_EXECUTABLE); std::filesystem::exists(p))
+        if (const auto p = lfs::core::native_fs::from_utf8(LFS_PYTHON_EXECUTABLE); lfs::core::native_fs::exists(p))
             return p;
 #endif
 
@@ -384,18 +386,18 @@ namespace lfs::core {
         const auto exe_dir = getExecutableDir();
 
         // Distribution: exe in bin/, extensions in ../extensions/ (sibling directories)
-        if (const auto ext = exe_dir.parent_path() / "extensions"; std::filesystem::exists(ext)) {
+        if (const auto ext = exe_dir.parent_path() / "extensions"; lfs::core::native_fs::exists(ext)) {
             return ext;
         }
 
         // Standard location: lib/extensions/
         const auto lib_dir = getLibDir();
-        if (const auto ext = lib_dir / "extensions"; std::filesystem::exists(ext)) {
+        if (const auto ext = lib_dir / "extensions"; lfs::core::native_fs::exists(ext)) {
             return ext;
         }
 
         // Fallback: extensions/ in exe directory (development)
-        if (const auto ext = exe_dir / "extensions"; std::filesystem::exists(ext)) {
+        if (const auto ext = exe_dir / "extensions"; lfs::core::native_fs::exists(ext)) {
             return ext;
         }
 

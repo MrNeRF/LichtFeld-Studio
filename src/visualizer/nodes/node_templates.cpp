@@ -5,6 +5,7 @@
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/executable_path.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
 
@@ -18,7 +19,7 @@ namespace lfs::vis {
         std::filesystem::path builtinDirectory() {
 #if defined(LFS_DEV_NODE_TEMPLATE_SOURCE_DIR) && !defined(LFS_MACOS_PORTABLE_APP)
             const auto source = std::filesystem::path(LFS_DEV_NODE_TEMPLATE_SOURCE_DIR);
-            if (std::filesystem::is_directory(source))
+            if (lfs::core::native_fs::is_directory(source))
                 return source;
 #endif
             return core::getResourceBaseDir() / "node_templates";
@@ -30,7 +31,7 @@ namespace lfs::vis {
                 return std::unexpected(ModifierError{std::string(paths.error().user_message())});
             const auto directory = paths->configDir() / "node_templates";
             std::error_code error;
-            std::filesystem::create_directories(directory, error);
+            lfs::core::native_fs::create_directories(directory, error);
             if (error)
                 return std::unexpected(ModifierError{std::format(
                     "Unable to create template directory '{}': {}",
@@ -40,7 +41,7 @@ namespace lfs::vis {
 
         std::expected<nlohmann::json, ModifierError> readJson(const std::filesystem::path& path) {
             try {
-                std::ifstream stream(path, std::ios::binary);
+                std::ifstream stream(lfs::core::native_fs::native_path(path), std::ios::binary);
                 if (!stream)
                     return std::unexpected(ModifierError{"Unable to read template file"});
                 return nlohmann::json::parse(stream);
@@ -124,9 +125,9 @@ namespace lfs::vis {
                                                      const bool builtin) {
             std::vector<NodeGraphTemplate> result;
             std::error_code error;
-            if (!std::filesystem::is_directory(directory, error))
+            if (!lfs::core::native_fs::is_directory(directory, error))
                 return result;
-            for (std::filesystem::directory_iterator iterator(directory, error), end;
+            for (std::filesystem::directory_iterator iterator(lfs::core::native_fs::traversal_path(directory), error), end;
                  !error && iterator != end; iterator.increment(error)) {
                 if (iterator->path().extension() != ".json")
                     continue;
@@ -248,7 +249,7 @@ namespace lfs::vis {
         if (!directory)
             return std::unexpected(directory.error());
         std::error_code error;
-        if (!std::filesystem::remove(*directory / (std::string(template_id) + ".json"), error))
+        if (!lfs::core::native_fs::remove(*directory / (std::string(template_id) + ".json"), error))
             return std::unexpected(ModifierError{error ? error.message() : "Template does not exist"});
         return {};
     }

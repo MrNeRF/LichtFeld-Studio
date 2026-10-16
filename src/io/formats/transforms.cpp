@@ -5,6 +5,7 @@
 #include "transforms.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "formats/colmap.hpp"

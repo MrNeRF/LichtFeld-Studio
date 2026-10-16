@@ -7,6 +7,7 @@
 
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/user_paths.hpp"
 
 #include <algorithm>
@@ -218,7 +219,7 @@ namespace lfs::vis {
             std::error_code error;
             std::filesystem::path candidate;
             for (const auto& path : pluginCandidates(info)) {
-                if (std::filesystem::is_regular_file(path, error) && !error) {
+                if (lfs::core::native_fs::is_regular_file(path, error) && !error) {
                     candidate = path;
                     break;
                 }
@@ -411,7 +412,7 @@ namespace lfs::vis {
         if (impl_->runtime_initialized)
             return true;
         std::error_code error;
-        std::filesystem::create_directories(
+        lfs::core::native_fs::create_directories(
             std::filesystem::path(impl_->application_data_path), error);
         if (error) {
             impl_->failLocked(

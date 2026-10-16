@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_nn.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/nn/models/romav1.hpp"
 #include "core/nn/models/sam2.hpp"
@@ -290,7 +291,7 @@ namespace lfs::python {
         // tell whether the next matcher will have to download first.
         std::optional<std::string> romav1_weights_path() {
             const std::filesystem::path path = lfs::preprocessing::romav1_weights_cache_path();
-            if (!std::filesystem::is_regular_file(path)) {
+            if (!lfs::core::native_fs::is_regular_file(path)) {
                 return std::nullopt;
             }
             return path.string();

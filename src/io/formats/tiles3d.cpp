@@ -7,6 +7,7 @@
 // volumes, refinement); tile content is decoded by load_spz.
 
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "formats/spz.hpp"
 #include "io/splat_tile_source.hpp"
@@ -27,7 +28,7 @@ namespace lfs::io {
 
     namespace {
         using nlohmann::json;
-        namespace fs = std::filesystem;
+        namespace fs = lfs::core::native_fs;
 
         constexpr std::size_t kMaxTiles = 1'000'000;
         constexpr int kMaxExternalDepth = 8;

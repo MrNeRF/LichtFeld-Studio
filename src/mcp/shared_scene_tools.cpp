@@ -110,7 +110,7 @@ namespace lfs::mcp {
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", true)},
             [backend](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
 
                 core::param::TrainingParameters params;
                 params.dataset.data_path = path;
@@ -150,7 +150,7 @@ namespace lfs::mcp {
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", true)},
             [backend](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 auto result = backend.load_checkpoint(path);
                 if (!result)
                     return json{{"error", result.error()}};
@@ -169,7 +169,7 @@ namespace lfs::mcp {
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", false, true)},
             [backend](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const bool include_provenance = args.value("include_provenance", true);
                 auto result = backend.save_ply(path, include_provenance);
                 if (!result)

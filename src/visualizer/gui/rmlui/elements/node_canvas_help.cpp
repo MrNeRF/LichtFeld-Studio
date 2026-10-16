@@ -3,6 +3,7 @@
 #include "node_canvas_element.hpp"
 
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "gui/rmlui/rml_path_utils.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 
@@ -43,7 +44,7 @@ namespace lfs::vis::gui {
 #if defined(PROJECT_ROOT_PATH) && !defined(LFS_MACOS_PORTABLE_APP)
                     const auto local = std::filesystem::path(PROJECT_ROOT_PATH) /
                                        "docs/docs/development/node-graph/nodes" / (id + ".md");
-                    if (std::filesystem::exists(local))
+                    if (lfs::core::native_fs::exists(local))
                         url = rml_paths::filesystemPathToFileUri(local);
 #endif
                     if (!SDL_OpenURL(url.c_str()))

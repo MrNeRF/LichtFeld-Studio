@@ -48,6 +48,7 @@ namespace lfs::vis {
             params.grid_projection = desc.grid_projection;
             params.grid_view_projection = desc.grid_view_projection;
             params.grid_view_position = desc.grid_view_position;
+            params.grid_pivot = desc.grid_pivot;
             params.grid_plane = desc.grid_plane;
             params.grid_opacity = desc.grid_opacity;
             params.grid_orthographic = desc.grid_orthographic;

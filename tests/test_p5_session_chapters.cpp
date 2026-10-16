@@ -27,6 +27,7 @@
 #include "io/video/video_export_options.hpp"
 #include "licht_matrix_test_data.hpp"
 #include "licht_test_support.hpp"
+#include "p5_session_test_access.hpp"
 #include "project/session_state.hpp"
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_types.hpp"
@@ -59,21 +60,6 @@
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
-
-namespace lfs::vis {
-
-    class P5SessionCaptureTestAccess {
-    public:
-        static void initializeInputController(VisualizerImpl& viewer) {
-            // The constructor creates GUI/render owners, but input normally
-            // arrives during initialize(). Capture needs its real state, not
-            // a window, an event loop, or GPU initialization.
-            viewer.input_controller_ = std::make_unique<InputController>(
-                nullptr, viewer);
-        }
-    };
-
-} // namespace lfs::vis
 
 namespace {
 

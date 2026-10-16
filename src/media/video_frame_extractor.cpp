@@ -5,6 +5,7 @@
 #include "media/video_frame_extractor.hpp"
 #include "core/atomic_file.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "decoded_video_frame_ffmpeg.hpp"
 #include "io/video/probed_stream_rewind.hpp"
@@ -482,7 +483,7 @@ namespace lfs::io {
         }
 
         void write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
-            std::ofstream file(path, std::ios::binary);
+            std::ofstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
             if (!file)
                 throw std::runtime_error("Failed to open JPEG output: " + lfs::core::path_to_utf8(path));
             file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
@@ -982,8 +983,8 @@ namespace lfs::io {
         const std::filesystem::path& directory, std::string_view pattern) {
         const auto metadata = directory / "extraction_metadata.json";
         std::unordered_set<std::filesystem::path> previous;
-        if (std::filesystem::is_regular_file(std::filesystem::symlink_status(metadata))) {
-            std::ifstream stream(metadata, std::ios::binary);
+        if (lfs::core::native_fs::is_regular_file(lfs::core::native_fs::symlink_status(metadata))) {
+            std::ifstream stream(lfs::core::native_fs::native_path(metadata), std::ios::binary);
             const auto manifest = nlohmann::json::parse(stream, nullptr, false);
             if (manifest.is_object() && manifest.contains("frames") && manifest["frames"].is_array()) {
                 for (const auto& frame : manifest["frames"]) {
@@ -998,14 +999,14 @@ namespace lfs::io {
         }
         std::vector<std::filesystem::path> files;
         std::error_code ec;
-        for (std::filesystem::directory_iterator it(directory, ec), end; !ec && it != end; it.increment(ec)) {
+        for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(directory), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code type_ec;
-            if (!std::filesystem::is_regular_file(it->symlink_status(type_ec)))
+            if (!lfs::core::native_fs::is_regular_file(it->symlink_status(type_ec)))
                 continue;
             const auto name = it->path().filename();
             if (name == "extraction_metadata.json" || previous.contains(name) ||
                 isGeneratedFrameFilename(pattern, core::path_to_utf8(name), true))
-                files.push_back(it->path());
+                files.push_back(lfs::core::native_fs::entry_path(directory, it->path()));
         }
         return files;
     }

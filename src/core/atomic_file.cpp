@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/atomic_file.hpp"
+#include "core/native_fs.hpp"
 #include "path_utils.hpp"
 #include <atomic>
 #include <cerrno>
@@ -62,7 +63,7 @@ namespace lfs::core {
                     std::fclose(stream);
                 if (owned) {
                     std::error_code ignored;
-                    std::filesystem::remove(path, ignored);
+                    lfs::core::native_fs::remove(path, ignored);
                 }
             }
         };
@@ -151,7 +152,7 @@ namespace lfs::core {
                 directory = ".";
             if (options.create_directories) {
                 std::error_code error;
-                std::filesystem::create_directories(directory, error);
+                lfs::core::native_fs::create_directories(directory, error);
                 if (error)
                     return Status::failure(ioError(directory, "create directory", error.value(), error.category()));
             }
@@ -236,7 +237,7 @@ namespace lfs::core {
             if (staged.empty() || target.empty() || target.filename().empty() ||
                 staged.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
                 target.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
-                !std::filesystem::is_regular_file(std::filesystem::symlink_status(staged)))
+                !lfs::core::native_fs::is_regular_file(lfs::core::native_fs::symlink_status(staged)))
                 return Status::failure(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Staged publication requires a regular non-symlink source and valid destination", .detection = LFS_SOURCE_SITE_CURRENT()}));
             if (cancelled && cancelled())
                 return Status::failure(make_error({.code = ErrorCode::Cancelled, .domain = ErrorDomain::IO, .detail = "Staged publication cancelled: " + path_to_utf8(target), .detection = LFS_SOURCE_SITE_CURRENT()}));

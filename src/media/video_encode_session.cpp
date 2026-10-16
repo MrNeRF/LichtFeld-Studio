@@ -197,7 +197,7 @@ namespace lfs::media {
                 return false;
             }
 
-            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            const std::string path_utf8 = lfs::core::path_to_native_utf8(path);
 
             int ret = avformat_alloc_output_context2(&fmt_ctx_, nullptr, "mp4", path_utf8.c_str());
             if (ret < 0 || !fmt_ctx_) {
@@ -382,7 +382,7 @@ namespace lfs::media {
             const AVCodec* const codec,
             const bool apple_software = false) {
 
-            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            const std::string path_utf8 = lfs::core::path_to_native_utf8(path);
 
             int ret = avformat_alloc_output_context2(&fmt_ctx_, nullptr, "mp4", path_utf8.c_str());
             if (ret < 0 || !fmt_ctx_) {

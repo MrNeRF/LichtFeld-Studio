@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_context.hpp"
+#include "core/native_fs.hpp"
 #include "core/vulkan_helpers.hpp"
 #include "core/vulkan_queue_sync.hpp"
 
@@ -5170,7 +5171,7 @@ namespace lfs::vis {
                 }
                 std::error_code ec;
                 if (path) {
-                    std::filesystem::create_directories(path->parent_path(), ec);
+                    lfs::core::native_fs::create_directories(path->parent_path(), ec);
                 }
                 if (path && !ec) {
                     const auto temporary = *path;
@@ -5184,14 +5185,14 @@ namespace lfs::vis {
                         file.close();
                         if (file) {
                             std::error_code rename_ec;
-                            std::filesystem::rename(temporary_path, *path, rename_ec);
+                            lfs::core::native_fs::rename(temporary_path, *path, rename_ec);
                             if (rename_ec) {
                                 // Windows does not replace an existing file
                                 // with rename(). The fallback still ensures
                                 // readers never see a partially written cache.
-                                std::filesystem::remove(*path, rename_ec);
+                                lfs::core::native_fs::remove(*path, rename_ec);
                                 rename_ec.clear();
-                                std::filesystem::rename(temporary_path, *path, rename_ec);
+                                lfs::core::native_fs::rename(temporary_path, *path, rename_ec);
                             }
                             if (!rename_ec) {
                                 saved_pipeline_cache_hash_ = cache_hash;

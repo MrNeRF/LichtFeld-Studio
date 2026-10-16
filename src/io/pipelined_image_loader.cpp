@@ -6,6 +6,7 @@
 #include "core/error_reporter.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_image.hpp"
@@ -195,7 +196,7 @@ namespace lfs::io {
                     ec.clear();
                     continue;
                 }
-                const auto name = entry.path().filename().string();
+                const auto name = lfs::core::path_to_utf8(entry.path().filename());
                 if (!name.starts_with(prefix))
                     continue;
 

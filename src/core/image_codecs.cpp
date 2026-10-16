@@ -51,7 +51,7 @@ namespace lfs::core::image_codecs {
         constexpr std::array<std::uint8_t, 8> kPngSignature{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
 
         std::string lower_extension(const std::filesystem::path& path) {
-            auto extension = path.extension().string();
+            auto extension = lfs::core::path_to_utf8(path.extension());
             std::transform(extension.begin(), extension.end(), extension.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return extension;
@@ -2397,7 +2397,7 @@ namespace lfs::core::image_codecs {
     static bool encode_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
                                 const int width, const int height, const int channels, const int jpeg_quality,
                                 const std::optional<std::string>& comment, std::string& error, const bool jpeg_full_chroma, FILE* borrowed) {
-        auto extension = path.extension().string();
+        auto extension = lfs::core::path_to_utf8(path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
         if (extension == ".png")
             return write_png_stream(path, data, width, height, channels, 8, 6, comment, error, borrowed);

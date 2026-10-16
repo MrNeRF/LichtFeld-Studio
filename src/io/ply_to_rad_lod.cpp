@@ -7,6 +7,7 @@
 #include "core/host_metrics.hpp"
 #include "core/logger.hpp"
 #include "core/mapped_file.hpp"
+#include "core/native_fs.hpp"
 #include "core/octree_lod.hpp"
 #include "core/path_utils.hpp"
 #include "core/rad_dequant_math.hpp"
@@ -331,7 +332,7 @@ namespace lfs::io {
                     return;
                 }
                 std::error_code ec;
-                std::filesystem::remove_all(path, ec);
+                lfs::core::native_fs::remove_all(path, ec);
                 if (ec) {
                     LOG_WARN("ply_to_rad_lod: failed to remove temp dir {}: {}",
                              lfs::core::path_to_utf8(path), ec.message());
@@ -372,7 +373,7 @@ namespace lfs::io {
             const std::string pid_prefix = legacy_name + ".";
 
             std::error_code ec;
-            std::filesystem::directory_iterator it(parent, ec);
+            std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(parent), ec);
             if (ec) {
                 return;
             }
@@ -392,11 +393,11 @@ namespace lfs::io {
                 }
                 if (stale) {
                     LOG_INFO("ply_to_rad_lod: removing stale temp dir {}",
-                             lfs::core::path_to_utf8(entry.path()));
-                    std::filesystem::remove_all(entry.path(), ec);
+                             lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(parent, entry.path())));
+                    lfs::core::native_fs::remove_all(entry.path(), ec);
                     if (ec) {
                         LOG_WARN("ply_to_rad_lod: failed to remove stale temp dir {}: {}",
-                                 lfs::core::path_to_utf8(entry.path()), ec.message());
+                                 lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(parent, entry.path())), ec.message());
                     }
                 }
             }
@@ -1080,7 +1081,7 @@ namespace lfs::io {
                             std::format(".{}.lodtmp.{}", stem_utf8, current_pid());
             }
             std::error_code ec;
-            std::filesystem::create_directories(temp_root, ec);
+            lfs::core::native_fs::create_directories(temp_root, ec);
             if (ec) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   std::format("Failed to create temp dir: {}", ec.message()),
@@ -1468,7 +1469,7 @@ namespace lfs::io {
                         }
                     }
                     std::error_code ec;
-                    std::filesystem::remove(bucket_records_path(b), ec);
+                    lfs::core::native_fs::remove(bucket_records_path(b), ec);
 
                     BucketNodes nodes;
                     if (count == 1) {
@@ -1846,7 +1847,7 @@ namespace lfs::io {
         node_files.clear();
         for (std::size_t b = 0; b < bucket_count; ++b) {
             std::error_code ec;
-            std::filesystem::remove(bucket_nodes_path(b), ec);
+            lfs::core::native_fs::remove(bucket_nodes_path(b), ec);
         }
 
         if (auto ok = accumulator.finish(); !ok) {

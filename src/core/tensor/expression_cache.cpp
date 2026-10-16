@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/user_paths.hpp"
 #include "internal/expression_runtime.hpp"
 
@@ -40,7 +41,7 @@ namespace lfs::core::internal {
         }
 
         std::vector<char> read_artifact(const std::filesystem::path& path, const std::string& key) {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            std::ifstream file(lfs::core::native_fs::native_path(path), std::ios::binary | std::ios::ate);
             if (!file)
                 return {};
             const auto size = file.tellg();
@@ -61,7 +62,7 @@ namespace lfs::core::internal {
             if (!file || digest({data.data(), data.size()}) != header[2])
                 return {};
             std::error_code error;
-            std::filesystem::last_write_time(path, std::filesystem::file_time_type::clock::now(), error);
+            lfs::core::native_fs::last_write_time(path, std::filesystem::file_time_type::clock::now(), error);
             return data;
         }
 
@@ -71,7 +72,7 @@ namespace lfs::core::internal {
                 return;
             std::lock_guard lock(disk_mutex);
             std::error_code error;
-            std::filesystem::create_directories(path.parent_path(), error);
+            lfs::core::native_fs::create_directories(path.parent_path(), error);
             if (error) {
                 LOG_WARN("Expression cache directory: {}", error.message());
                 return;
@@ -91,7 +92,7 @@ namespace lfs::core::internal {
             };
             std::vector<File> files;
             uintmax_t total = 0;
-            for (std::filesystem::directory_iterator it(path.parent_path(), error), end;
+            for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(path.parent_path()), error), end;
                  !error && it != end; it.increment(error)) {
                 if (it->path().extension() != ".kernel" || !it->is_regular_file(error))
                     continue;
@@ -107,7 +108,7 @@ namespace lfs::core::internal {
             for (const auto& file : files) {
                 if (total <= disk_limit && remaining <= 1024)
                     break;
-                if (std::filesystem::remove(file.path, error)) {
+                if (lfs::core::native_fs::remove(file.path, error)) {
                     total -= file.bytes;
                     --remaining;
                 }

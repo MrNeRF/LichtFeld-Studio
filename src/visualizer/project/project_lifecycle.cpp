@@ -4,6 +4,7 @@
  */
 
 #include "project_lifecycle.hpp"
+#include "core/native_fs.hpp"
 #include "core/resource_messages.hpp"
 #include "io/project_operations.hpp"
 #include "io/sfm_observation_chapter.hpp"
@@ -477,7 +478,7 @@ namespace lfs::vis::project {
                                 project_root,
                                 **dataset_ref,
                                 dataset_hint)) {
-                    if (std::filesystem::exists(*resolved)) {
+                    if (lfs::core::native_fs::exists(*resolved)) {
                         return *resolved;
                     }
                     missing_external = *resolved;
@@ -491,7 +492,7 @@ namespace lfs::vis::project {
                                        document.project_uuid().to_string();
                     const auto marker = cache / ".complete";
                     std::error_code marker_error;
-                    if (std::filesystem::is_regular_file(marker, marker_error) &&
+                    if (lfs::core::native_fs::is_regular_file(marker, marker_error) &&
                         !marker_error) {
                         return cache;
                     }
@@ -514,7 +515,7 @@ namespace lfs::vis::project {
             }
             const auto resolved = lfs::io::project::resolve_path_reference(
                 document.references(), projectRootFor(document), **dataset_ref, {});
-            if (!resolved || !std::filesystem::is_directory(*resolved)) {
+            if (!resolved || !lfs::core::native_fs::is_directory(*resolved)) {
                 return std::nullopt;
             }
             return *resolved;
@@ -524,14 +525,14 @@ namespace lfs::vis::project {
         datasetFiles(const std::filesystem::path& directory,
                      const std::string_view kind) {
             std::vector<std::pair<std::filesystem::path, std::string>> result;
-            if (!std::filesystem::is_directory(directory)) {
+            if (!lfs::core::native_fs::is_directory(directory)) {
                 return result;
             }
             std::error_code error;
-            for (std::filesystem::recursive_directory_iterator it(directory, error), end;
+            for (std::filesystem::recursive_directory_iterator it(lfs::core::native_fs::traversal_path(directory), error), end;
                  !error && it != end; it.increment(error)) {
                 if (it->is_regular_file(error) && !error) {
-                    result.emplace_back(it->path(), std::string(kind));
+                    result.emplace_back(lfs::core::native_fs::entry_path(directory, it->path()), std::string(kind));
                 }
             }
             return result;
@@ -548,7 +549,7 @@ namespace lfs::vis::project {
             if (!configured_images.empty() && configured_images != ".") {
                 const auto configured =
                     root / lfs::core::utf8_to_path(configured_images);
-                if (std::filesystem::is_directory(configured)) {
+                if (lfs::core::native_fs::is_directory(configured)) {
                     info.images_path = configured;
                 }
             }
@@ -570,7 +571,7 @@ namespace lfs::vis::project {
                                     "transforms_train.json", "transforms_test.json",
                                     "transforms_val.json"}) {
                 const auto path = root / name;
-                if (std::filesystem::is_regular_file(path)) {
+                if (lfs::core::native_fs::is_regular_file(path)) {
                     result.emplace_back(path, "meta");
                 }
             }
@@ -894,6 +895,7 @@ namespace lfs::vis::project {
         void installTrainerFromHydratedDatasetScene(
             VisualizerImpl& viewer,
             SceneManager& scene_manager,
+            const ProjectDocument& document,
             const std::filesystem::path& dataset_root,
             const std::filesystem::path& output_path,
             const std::filesystem::path& rebase_from =
@@ -955,6 +957,45 @@ namespace lfs::vis::project {
             auto params =
                 parameter_manager->createForDataset(
                     dataset_root, output_path);
+            auto initialization = document.project().training_initialization();
+            if (!initialization) {
+                notifyTrainerRestoreFailure(viewer, developerError(initialization.error()));
+                return;
+            }
+            if (*initialization) {
+                auto& scene = scene_manager.getScene();
+                const auto& origin = (*initialization)->data_origin;
+                scene.setTrainingDataOrigin({origin[0], origin[1], origin[2]});
+                if (const auto& center = (*initialization)->scene_center) {
+                    scene.setSceneCenter(lfs::core::Tensor::from_vector(
+                        std::vector<float>(center->begin(), center->end()), {3}, lfs::core::Device::CPU));
+                }
+                if (const auto& uuid = (*initialization)->init_reference_uuid) {
+                    const auto path = lfs::io::project::resolve_path_reference(
+                        document.references(), projectRootFor(document), *uuid);
+                    std::error_code error;
+                    if (path && lfs::core::native_fs::is_regular_file(*path, error)) {
+                        params.init_path = lfs::core::path_to_utf8(*path);
+                    } else {
+                        const auto message = LOCF("runtime.training_init_unavailable",
+                                                  path ? lfs::core::path_to_utf8(*path) : uuid->to_string());
+                        LOG_WARN("{}", message);
+                        publishProjectToast(lfs::make_error(lfs::ErrorInit{
+                                                .code = lfs::ErrorCode::NotFound,
+                                                .domain = lfs::ErrorDomain::Training,
+                                                .severity = lfs::Severity::Warning,
+                                                .retryability = lfs::Retryability::NotRetryable,
+                                                .operation_id = {},
+                                                .user_message = message,
+                                                .detail = {},
+                                                .detection = LFS_SOURCE_SITE_CURRENT(),
+                                                .fields = {},
+                                                .native = std::nullopt,
+                                            }),
+                                            "project.restore_training_init");
+                    }
+                }
+            }
             data_loader->setParameters(params);
             scene_manager.setDatasetPath(dataset_root);
             parameter_manager->getDatasetConfig()
@@ -1049,7 +1090,7 @@ namespace lfs::vis::project {
                 resolveDatasetRootForTrainer(
                     document, std::filesystem::path{});
             if (!dataset_root || dataset_root->empty() ||
-                !std::filesystem::exists(*dataset_root)) {
+                !lfs::core::native_fs::exists(*dataset_root)) {
                 if (dataset_root && !dataset_root->empty()) {
                     armMissingDatasetReload(
                         *dataset_root,
@@ -1063,7 +1104,7 @@ namespace lfs::vis::project {
             }
 
             installTrainerFromHydratedDatasetScene(
-                viewer_, scene_manager, *dataset_root,
+                viewer_, scene_manager, document, *dataset_root,
                 report.pending_parameters.dataset
                     .output_path);
             return;
@@ -1094,7 +1135,7 @@ namespace lfs::vis::project {
         const auto dataset_root = resolveDatasetRootForTrainer(
             document, ckpt_params.dataset.data_path);
         if (!dataset_root || dataset_root->empty() ||
-            !std::filesystem::exists(*dataset_root)) {
+            !lfs::core::native_fs::exists(*dataset_root)) {
             if (dataset_root && !dataset_root->empty()) {
                 armMissingCheckpointDataset(
                     *dataset_root,
@@ -1281,7 +1322,7 @@ namespace lfs::vis::project {
                     report.pending_parameters.dataset
                         .data_path);
             if (dataset_root && !dataset_root->empty() &&
-                std::filesystem::exists(*dataset_root)) {
+                lfs::core::native_fs::exists(*dataset_root)) {
                 return false;
             }
             auto parsed_params = checkpointParamsFromReportOrStream(
@@ -1299,7 +1340,7 @@ namespace lfs::vis::project {
                     ckpt_params.dataset.data_path);
             if (ckpt_dataset_root &&
                 !ckpt_dataset_root->empty() &&
-                !std::filesystem::exists(
+                !lfs::core::native_fs::exists(
                     *ckpt_dataset_root)) {
                 armMissingCheckpointDataset(
                     *ckpt_dataset_root,
@@ -1328,7 +1369,7 @@ namespace lfs::vis::project {
         auto dataset_root = resolveDatasetRootForTrainer(
             *document_, std::filesystem::path{});
         if (!dataset_root || dataset_root->empty() ||
-            !std::filesystem::exists(*dataset_root)) {
+            !lfs::core::native_fs::exists(*dataset_root)) {
             if (dataset_root && !dataset_root->empty()) {
                 armMissingDatasetReload(
                     *dataset_root,
@@ -1607,6 +1648,45 @@ namespace lfs::vis::project {
             }
         }
 
+        // Keeps the init file, training origin and scene center, so an untrained reopen starts
+        // training from the same initialization.
+        [[nodiscard]] lfs::Result<void> captureTrainingInitialization(
+            lfs::io::project::ProjectChapter& project,
+            lfs::io::project::ReferencesChapter& references,
+            const std::filesystem::path& project_root,
+            const lfs::core::Scene& scene,
+            const std::optional<std::string>& init_path) {
+            auto current = project.training_initialization();
+            if (!current) {
+                return lfs::Status::failure(std::move(current).error());
+            }
+            const bool has_init = init_path && !init_path->empty();
+            if (!has_init && !*current) {
+                return {};
+            }
+            auto initialization = current->value_or(lfs::io::project::ProjectTrainingInitialization{});
+            const auto origin = scene.getTrainingDataOrigin();
+            initialization.data_origin = {origin.x, origin.y, origin.z};
+            initialization.scene_center.reset();
+            if (const auto& center = scene.getSceneCenter(); center.is_valid() && center.numel() == 3) {
+                const auto cpu = center.cpu();
+                const auto* values = cpu.ptr<float>();
+                initialization.scene_center = std::array{values[0], values[1], values[2]};
+            }
+            if (has_init) {
+                auto minted = lfs::io::project::upsert_path_reference(
+                    references, project_root, lfs::core::utf8_to_path(*init_path),
+                    "training_init", "training_init", initialization.init_reference_uuid);
+                if (minted) {
+                    initialization.init_reference_uuid = *minted;
+                } else {
+                    LOG_WARN("Could not record training initialization file '{}': {}",
+                             *init_path, developerError(minted.error()));
+                }
+            }
+            return project.set_training_initialization(initialization);
+        }
+
         void mintParameterPathReferences(
             lfs::io::project::ReferencesChapter&
                 references,
@@ -1771,6 +1851,11 @@ namespace lfs::vis::project {
                 dataset_path =
                     trainer->getParams()
                         .dataset.data_path;
+                if (auto captured = captureTrainingInitialization(
+                        project, references, project_root, viewer.getScene(), trainer->getParams().init_path);
+                    !captured) {
+                    return std::move(captured).error();
+                }
             }
             if (dataset_path.empty()) {
                 dataset_path =
@@ -1862,7 +1947,7 @@ namespace lfs::vis::project {
         [[nodiscard]] bool isLichtExtension(
             const std::filesystem::path& path) {
             std::string extension =
-                path.extension().string();
+                lfs::core::path_to_utf8(path.extension());
             std::ranges::transform(
                 extension, extension.begin(),
                 [](const unsigned char value) {
@@ -2062,7 +2147,7 @@ namespace lfs::vis::project {
             } else {
                 std::error_code error;
                 const auto file_time =
-                    std::filesystem::last_write_time(
+                    lfs::core::native_fs::last_write_time(
                         path, error);
                 if (!error) {
 #ifdef __APPLE__
@@ -2252,7 +2337,7 @@ namespace lfs::vis::project {
         const std::filesystem::path& path) {
         ProjectLifecycleSettings settings;
         std::error_code error;
-        if (!std::filesystem::exists(path, error)) {
+        if (!lfs::core::native_fs::exists(path, error)) {
             if (error) {
                 return fail<ProjectLifecycleSettings>(
                     lfs::ErrorCode::PermissionDenied,
@@ -2262,7 +2347,7 @@ namespace lfs::vis::project {
             return settings;
         }
         try {
-            std::ifstream stream(path, std::ios::binary);
+            std::ifstream stream(lfs::core::native_fs::native_path(path), std::ios::binary);
             if (!stream) {
                 return fail<ProjectLifecycleSettings>(
                     lfs::ErrorCode::PermissionDenied,
@@ -2454,7 +2539,7 @@ namespace lfs::vis::project {
             error.clear();
         }
 
-        auto resolved = std::filesystem::weakly_canonical(
+        auto resolved = lfs::core::native_fs::weakly_canonical(
             absolute_path, error);
         return error ? absolute_path.lexically_normal()
                      : resolved;
@@ -2522,7 +2607,7 @@ namespace lfs::vis::project {
                 absolute_path = path;
                 error.clear();
             }
-            auto resolved = std::filesystem::weakly_canonical(
+            auto resolved = lfs::core::native_fs::weakly_canonical(
                 absolute_path, error);
             return error ? absolute_path.lexically_normal()
                          : resolved;
@@ -2537,7 +2622,7 @@ namespace lfs::vis::project {
                 [](const ProjectMruEntry& entry) {
                     std::error_code error;
                     const bool exists =
-                        std::filesystem::exists(
+                        lfs::core::native_fs::exists(
                             entry.last_known_path, error);
                     return error || !exists ||
                            !lfs::core::project::
@@ -2905,6 +2990,7 @@ namespace lfs::vis::project {
                                 installTrainerFromHydratedDatasetScene(
                                     viewer_,
                                     *scene_manager,
+                                    *document_,
                                     new_root,
                                     output_path,
                                     old_root);
@@ -3627,7 +3713,7 @@ namespace lfs::vis::project {
         if (!opened) {
             if (opened.error().code() == lfs::ErrorCode::NotFound && document_->source_reader()) {
                 std::error_code error;
-                if (!std::filesystem::exists(path, error) && !error) {
+                if (!lfs::core::native_fs::exists(path, error) && !error) {
                     // The document still owns the removed file's payloads.
                     // Keep that reader so an explicit save can recover them.
                     return {};
@@ -3713,7 +3799,7 @@ namespace lfs::vis::project {
             recovery_session_.reset();
         } else if (recovery_session_path_) {
             std::error_code error;
-            std::filesystem::remove(
+            lfs::core::native_fs::remove(
                 *recovery_session_path_, error);
             if (error) {
                 LOG_WARN(
@@ -4145,7 +4231,7 @@ namespace lfs::vis::project {
         if (const auto snapshot = document->parameters().snapshot(); snapshot) {
             configured_images = snapshot->dataset.images;
         }
-        if (!root || root->empty() || !std::filesystem::is_directory(*root)) {
+        if (!root || root->empty() || !lfs::core::native_fs::is_directory(*root)) {
             return reportDatasetEmbedStartFailure(fail<void>(
                 lfs::ErrorCode::NotFound,
                 "The external dataset could not be found.",
@@ -4206,7 +4292,7 @@ namespace lfs::vis::project {
                             return;
                         }
                         std::error_code error;
-                        const auto size = std::filesystem::file_size(path, error);
+                        const auto size = lfs::core::native_fs::file_size(path, error);
                         if (error) {
                             fail_worker(lifecycleError(
                                 lfs::ErrorCode::DataLoss,
@@ -4606,7 +4692,7 @@ namespace lfs::vis::project {
         if (dataset.output_path_explicit &&
             !dataset.output_path.empty()) {
             std::error_code create_error;
-            std::filesystem::create_directories(
+            lfs::core::native_fs::create_directories(
                 dataset.output_path, create_error);
             if (create_error) {
                 return fail<void>(
@@ -4652,7 +4738,7 @@ namespace lfs::vis::project {
         } else if (!hasSourcePath()) {
             const auto location = loadProjectLocationPreference();
             std::error_code create_error;
-            std::filesystem::create_directories(
+            lfs::core::native_fs::create_directories(
                 location, create_error);
             if (create_error) {
                 return fail<void>(
@@ -4680,8 +4766,8 @@ namespace lfs::vis::project {
                 lock_path += ".lock";
                 std::error_code exists_error;
                 const bool exists =
-                    std::filesystem::exists(candidate, exists_error) ||
-                    std::filesystem::exists(lock_path, exists_error);
+                    lfs::core::native_fs::exists(candidate, exists_error) ||
+                    lfs::core::native_fs::exists(lock_path, exists_error);
                 if (exists_error) {
                     return fail<void>(
                         lfs::ErrorCode::PermissionDenied,
@@ -5245,7 +5331,7 @@ namespace lfs::vis::project {
                 "project.source_reader");
         }
         std::error_code exists_error;
-        if (!std::filesystem::exists(
+        if (!lfs::core::native_fs::exists(
                 autosave_base_path,
                 exists_error) ||
             exists_error) {
@@ -7257,6 +7343,13 @@ namespace lfs::vis::project {
                                 *minted);
                     !set) {
                     return set;
+                }
+                if (const auto* trainer = viewer_.getTrainer()) {
+                    if (auto captured = captureTrainingInitialization(
+                            staged_project, staged_references, project_root, scene, trainer->getParams().init_path);
+                        !captured) {
+                        return captured;
+                    }
                 }
                 if (!sameBytes(
                         document_->project()
@@ -9451,7 +9544,7 @@ namespace lfs::vis::project {
             return created;
         }
         std::error_code create_error;
-        std::filesystem::create_directories(
+        lfs::core::native_fs::create_directories(
             normalized->parent_path(), create_error);
         if (create_error) {
             return fail<void>(
@@ -9983,7 +10076,7 @@ namespace lfs::vis::project {
 #endif
             }
             return !dataset_path.empty() &&
-                   std::filesystem::is_directory(dataset_path);
+                   lfs::core::native_fs::is_directory(dataset_path);
         }();
         const bool training_active =
             viewer_.getTrainer() && trainer_manager &&
@@ -10428,7 +10521,7 @@ namespace lfs::vis::project {
         }
         std::error_code ec;
         if (!mru_path.empty() &&
-            std::filesystem::is_regular_file(
+            lfs::core::native_fs::is_regular_file(
                 mru_path, ec) &&
             !ec &&
             !isScratchPath(mru_path)) {
@@ -11001,13 +11094,13 @@ namespace lfs::vis::project {
                 continue;
             }
             std::error_code error;
-            if (!std::filesystem::is_directory(directory, error) ||
+            if (!lfs::core::native_fs::is_directory(directory, error) ||
                 error) {
                 continue;
             }
             std::vector<std::filesystem::path> candidates;
             for (std::filesystem::directory_iterator
-                     iterator(directory, error),
+                     iterator(lfs::core::native_fs::traversal_path(directory), error),
                  end;
                  !error && iterator != end;
                  iterator.increment(error)) {
@@ -11016,7 +11109,7 @@ namespace lfs::vis::project {
                     type_error) {
                     continue;
                 }
-                const auto entry = iterator->path();
+                const auto entry = lfs::core::native_fs::entry_path(directory, iterator->path());
                 if (!lfs::io::project::is_scratch_autosave_path(
                         entry, directory)) {
                     continue;
@@ -11059,7 +11152,7 @@ namespace lfs::vis::project {
                     "Pruned leftover untitled scratch {}",
                     lfs::core::path_to_utf8(scratch));
                 std::error_code ignored;
-                std::filesystem::remove(sidecar, ignored);
+                lfs::core::native_fs::remove(sidecar, ignored);
             }
         }
     }
@@ -11174,7 +11267,7 @@ namespace lfs::vis::project {
             return bound;
         }
         std::error_code create_error;
-        std::filesystem::create_directories(
+        lfs::core::native_fs::create_directories(
             temp_project_directory_, create_error);
         if (create_error) {
             return fail<void>(
