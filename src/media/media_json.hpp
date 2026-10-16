@@ -49,12 +49,21 @@ namespace lfs::media::json_detail {
         default: return "unsupported";
         }
     }
+    inline const char* exifEnvelope(core::image_codecs::ExifEnvelope envelope) {
+        using core::image_codecs::ExifEnvelope;
+        switch (envelope) {
+        case ExifEnvelope::JpegApp1: return "jpeg_app1";
+        case ExifEnvelope::HeifOffset: return "heif_offset";
+        case ExifEnvelope::PngExif: return "png_exif";
+        default: return "unknown";
+        }
+    }
     inline json sourceExif(const ImageExifDescription& description) {
         const auto& original = description.original;
         json result{{"status", metadataStatus(original.status)}, {"scope", original.scope}, {"diagnostic", original.diagnostic}, {"binary_encoding", "hex"}, {"blocks", json::array()}};
         for (size_t i = 0; i < original.blocks.size(); ++i) {
             const auto& block = original.blocks[i];
-            json item{{"envelope", block.envelope == core::image_codecs::ExifEnvelope::JpegApp1 ? "jpeg_app1" : "heif_offset"},
+            json item{{"envelope", exifEnvelope(block.envelope)},
                       {"image_item", optional(block.image_item)},
                       {"metadata_item", optional(block.metadata_item)},
                       {"bytes", hexBytes(block.bytes)},

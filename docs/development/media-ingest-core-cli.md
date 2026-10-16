@@ -3,7 +3,8 @@
 ## Original image EXIF
 
 `media-ingest source-exif INPUT` explicitly reads JPEG APP1 EXIF before the first
-SOS marker, or the Exif items associated with a HEIF container's primary image.
+SOS marker, PNG eXIf chunks through IEND, or the Exif items associated with a HEIF
+container's primary image.
 It does not decode pixels, require an HEVC pixel decoder, change training
 exposure/orientation/color, write files, or inspect auxiliary HEIF images.
 `MediaIngest::sourceExif(path)` provides the owning C++ result;
@@ -20,7 +21,9 @@ contain an unsuccessful collection or interpretation status; consumers must
 inspect those fields.
 
 JSON binary fields use hexadecimal strings (`binary_encoding: "hex"`), including
-the complete JPEG `Exif\0\0` envelope or HEIF offset prefix. Ordered entries
+the complete JPEG `Exif\0\0` envelope or HEIF offset prefix. PNG uses the original
+bare TIFF chunk payload and the explicit `png_exif` envelope; no synthetic prefix
+is added. Ordered entries
 retain original ID/type/count, IFD offset, entry ordinal and directory path
 (root ordinal followed by parent entry ordinals). Duplicate IDs do not overwrite
 one another. ASCII retains raw bytes, including NUL and invalid UTF-8. Unsigned
@@ -39,7 +42,19 @@ offsets, chained nested IFDs, zero-count values and unsupported directory-pointe
 representations are retained without a typed interpretation.
 
 Defaults: JPEG header window 1 MiB, original block 1 MiB, original bytes 4 MiB,
-64 blocks; typed interpretation across all blocks 4096 entries, 64 directories
+64 blocks; PNG additionally examines at most 64 MiB and 4096 non-IDAT chunks.
+All chunk headers and CRC bytes, including those of IDAT, consume the byte
+budget. Non-IDAT payloads are examined for CRC validation; IDAT pixel payloads
+are discarded through the stream buffer up to 8 KiB; larger spans use seeking.
+Neither path decodes pixels or validates their CRC. Scan limits are
+explicit and preserve completed original blocks on later errors. PNG eXIf
+duplicates or placement after IDAT are retained but reported as malformed under
+the PNG third-edition ordering rules; collection does not validate pixel data.
+A bad ancillary CRC marks collection malformed but scanning continues at the
+next declared chunk boundary to retain later intact EXIF. Bad critical CRCs,
+invalid framing and truncated chunks remain terminal; no byte-search recovery
+is attempted. Repeated identical CRC diagnostics are reported once.
+Typed interpretation across all blocks allows 4096 entries, 64 directories
 and an 8 MiB decoded-value storage charge. Per-directory FFmpeg limits and depth
 are also respected. Collection limits do not bound libheif's container parsing
 allocations or promise a hard process/time ceiling. No complete-file metadata

@@ -65,6 +65,30 @@ def defined_symbols(path, exports=False):
 def ffmpeg_public(name):
     return re.match(r"^(av|avcodec|avformat|avutil|avfilter|avdevice|avio|swscale|swresample|sws|swr)_",name)
 class IngestCLI(unittest.TestCase):
+    def test_png_idat_segmentation_and_ancillary_crc_recovery(self):
+        path = self.root / "review PNG.png"
+        for options, count, status in (({"idat_chunks": 5000}, 1, "collected"),
+                                        ({"idat_chunks": 5000, "include_exif": False}, 0, "absent"),
+                                        ({"damaged_ancillary": True}, 1, "malformed")):
+            with self.subTest(options=options):
+                payload = source_exif_fixture.write_png(path, **options)
+                result, stderr = self.invoke("source-exif", path)
+                self.assertEqual(stderr, b"")
+                source_exif_fixture.check_png(self, result["exif"], payload, count=count, status=status)
+
+    def test_png_source_exif_original_and_nonconforming_prefixes(self):
+        path = self.root / "PNG EXIF é 日本語.png"
+        for options in ({}, {"post_idat": True}, {"duplicate": True}):
+            with self.subTest(options=options):
+                payload = source_exif_fixture.write_png(path, **options)
+                before = path.read_bytes()
+                result, stderr = self.invoke("source-exif", path)
+                self.assertEqual(stderr, b"")
+                source_exif_fixture.check_png(self, result["exif"], payload,
+                                              count=2 if options.get("duplicate") else 1,
+                                              status="malformed" if options else "collected")
+                self.assertEqual(path.read_bytes(), before)
+
     def test_source_exif_originals_unicode_and_status(self):
         path = self.root / "original EXIF é 日本語.jpg"
         payload = source_exif_fixture.write_jpeg(path)

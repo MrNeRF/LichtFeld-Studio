@@ -19,17 +19,22 @@ namespace lfs::core::image_codecs {
                                 Unsupported,
                                 IoError };
     enum class ExifEnvelope { JpegApp1,
-                              HeifOffset };
+                              HeifOffset,
+                              PngExif };
     struct MetadataLimits {
         // Bounds the JPEG header window, not the size of the source image.
         std::size_t jpeg_header_bytes = 1024 * 1024;
         std::size_t block_bytes = 1024 * 1024;
         std::size_t total_bytes = 4 * 1024 * 1024;
         std::size_t blocks = 64;
+        // PNG bytes examined; IDAT payloads are skipped without decoding/CRC.
+        std::size_t png_scan_bytes = 64 * 1024 * 1024;
+        // Non-IDAT chunks; all chunk headers/CRC bytes still count above.
+        std::size_t png_chunks = 4096;
     };
     struct ExifBlock {
         ExifEnvelope envelope = ExifEnvelope::JpegApp1;
-        // HEIF image and metadata item identifiers; absent for JPEG.
+        // HEIF image and metadata item identifiers; absent for JPEG/PNG.
         std::optional<std::uint32_t> image_item;
         std::optional<std::uint32_t> metadata_item;
         // Exact original envelope and payload, independent of reader lifetime.
@@ -37,7 +42,7 @@ namespace lfs::core::image_codecs {
     };
     struct SourceExif {
         MetadataStatus status = MetadataStatus::NotExamined;
-        // Explicit scope: JPEG markers before SOS, or the HEIF primary image.
+        // Explicit scope: JPEG before SOS, PNG through IEND, HEIF primary image.
         std::string scope;
         std::string diagnostic;
         std::vector<ExifBlock> blocks;

@@ -1576,11 +1576,179 @@ namespace lfs::core::image_codecs {
         return write_jpeg(path, data, width, height, channels, quality, comment, error, false);
     }
 
+    namespace {
+        // libpng's eXIf accessor retains one value, while this archive must keep
+        // duplicate original chunks and inspect both sides of IDAT without
+        // inflating pixels. Only chunk framing and CRC are handled here; TIFF
+        // interpretation remains in the existing media provider.
+        SourceExif read_png_exif(std::ifstream& input, const MetadataLimits& limits) {
+            SourceExif result;
+            result.scope = "png-chunks-through-iend";
+            result.status = MetadataStatus::Absent;
+            input.clear();
+            input.seekg(0, std::ios::end);
+            const auto end = input.tellg();
+            if (end < 0) {
+                result.status = MetadataStatus::IoError;
+                result.diagnostic = "Cannot determine PNG source extent";
+                return result;
+            }
+            const auto source_size = static_cast<uint64_t>(static_cast<std::streamoff>(end));
+            input.seekg(kPngSignature.size());
+            if (!input) {
+                result.status = MetadataStatus::IoError;
+                result.diagnostic = "Cannot seek PNG metadata source";
+                return result;
+            }
+            size_t scanned = kPngSignature.size(), total = 0, chunks = 0;
+            uint64_t position = kPngSignature.size();
+            bool idat = false, exif = false;
+            auto fail = [&](MetadataStatus status, const char* text) {
+                if (result.status != MetadataStatus::Malformed || status == MetadataStatus::IoError)
+                    result.status = status;
+                if (result.diagnostic.find(text) == std::string::npos) {
+                    if (!result.diagnostic.empty())
+                        result.diagnostic += "; ";
+                    result.diagnostic += text;
+                }
+            };
+            auto read = [&](uint8_t* data, size_t size) {
+                if (position > source_size || size > source_size - position) {
+                    fail(MetadataStatus::Malformed, "Truncated PNG chunk");
+                    return false;
+                }
+                if (size > limits.png_scan_bytes - scanned) {
+                    fail(MetadataStatus::Limited, "PNG scan byte budget exhausted");
+                    return false;
+                }
+                input.read(reinterpret_cast<char*>(data), static_cast<std::streamsize>(size));
+                scanned += static_cast<size_t>(input.gcount());
+                position += static_cast<size_t>(input.gcount());
+                if (!input) {
+                    fail(input.bad() ? MetadataStatus::IoError : MetadataStatus::Malformed,
+                         input.bad() ? "Cannot read PNG metadata source" : "Truncated PNG chunk");
+                    return false;
+                }
+                return true;
+            };
+            auto u32 = [](const uint8_t* p) {
+                return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | uint32_t(p[3]);
+            };
+            std::array<uint8_t, 8192> buffer{};
+            for (;;) {
+                std::array<uint8_t, 8> header{};
+                if (!read(header.data(), header.size()))
+                    return result;
+                const size_t length = u32(header.data());
+                const auto* type = header.data() + 4;
+                const bool first = position == kPngSignature.size() + header.size();
+                const bool is_idat = !std::memcmp(type, "IDAT", 4);
+                // Pixel segmentation is an encoder detail, not metadata work.
+                // IDAT headers and CRC bytes still consume the scan budget.
+                if (!is_idat) {
+                    if (chunks == limits.png_chunks) {
+                        fail(MetadataStatus::Limited, "PNG non-IDAT chunk count budget exhausted");
+                        return result;
+                    }
+                    ++chunks;
+                }
+                if (length > 0x7fffffff ||
+                    std::any_of(type, type + 4, [](uint8_t c) { return !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')); }) ||
+                    (type[2] & 32) ||
+                    (first && (std::memcmp(type, "IHDR", 4) || length != 13)) ||
+                    (!first && !std::memcmp(type, "IHDR", 4))) {
+                    fail(MetadataStatus::Malformed, "Invalid PNG chunk framing");
+                    return result;
+                }
+                const bool is_exif = !std::memcmp(type, "eXIf", 4);
+                const bool is_end = !std::memcmp(type, "IEND", 4);
+                if (is_end && (length || !idat)) {
+                    fail(MetadataStatus::Malformed, "Invalid PNG end chunk");
+                    return result;
+                }
+                // A declared length beyond the opened source is truncation,
+                // not evidence that the inspection budget was consumed.
+                if (position > source_size || source_size - position < 4 || length > source_size - position - 4) {
+                    fail(MetadataStatus::Malformed, "Truncated PNG chunk");
+                    return result;
+                }
+                if (is_idat) {
+                    // Pixel payloads are outside this metadata-only operation.
+                    // Discard small spans through the stream buffer rather than
+                    // invalidating it with a seek for every tiny chunk. Larger
+                    // spans still seek; neither path decodes or checks pixel CRC.
+                    if (length <= buffer.size()) {
+                        input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(length));
+                        if (!input || static_cast<size_t>(input.gcount()) != length) {
+                            fail(input.bad() ? MetadataStatus::IoError : MetadataStatus::Malformed,
+                                 input.bad() ? "Cannot read PNG pixel payload" : "Truncated PNG pixel payload");
+                            return result;
+                        }
+                    } else {
+                        input.seekg(static_cast<std::streamoff>(length), std::ios::cur);
+                        if (!input) {
+                            fail(MetadataStatus::IoError, "Cannot skip PNG pixel payload");
+                            return result;
+                        }
+                    }
+                    position += length;
+                    std::array<uint8_t, 4> checksum{};
+                    if (!read(checksum.data(), checksum.size()))
+                        return result;
+                    idat = true;
+                    continue;
+                }
+                if (is_exif && (result.blocks.size() >= limits.blocks || length > limits.block_bytes || length > limits.total_bytes - total)) {
+                    fail(MetadataStatus::Limited, "EXIF collection budget exhausted");
+                    return result;
+                }
+                // Charge data and CRC before allocating a retained block.
+                if (limits.png_scan_bytes - scanned < 4 || length > limits.png_scan_bytes - scanned - 4) {
+                    fail(MetadataStatus::Limited, "PNG scan byte budget exhausted");
+                    return result;
+                }
+                ExifBlock block;
+                block.envelope = ExifEnvelope::PngExif;
+                if (is_exif)
+                    block.bytes.resize(length);
+                uLong crc = crc32_z(0, type, 4);
+                for (size_t offset = 0; offset < length;) {
+                    const size_t count = std::min(length - offset, buffer.size());
+                    auto* destination = is_exif ? block.bytes.data() + offset : buffer.data();
+                    if (!read(destination, count))
+                        return result;
+                    crc = crc32_z(crc, destination, count);
+                    offset += count;
+                }
+                std::array<uint8_t, 4> checksum{};
+                if (!read(checksum.data(), checksum.size()))
+                    return result;
+                if (is_exif) {
+                    result.blocks.push_back(std::move(block));
+                    total += length;
+                    if (result.status == MetadataStatus::Absent)
+                        result.status = MetadataStatus::Collected;
+                    if (exif || idat)
+                        fail(MetadataStatus::Malformed, "Duplicate or post-IDAT PNG eXIf chunk");
+                    exif = true;
+                }
+                if (crc != u32(checksum.data())) {
+                    fail(MetadataStatus::Malformed, "PNG chunk CRC mismatch");
+                    // Ancillary CRC damage does not erase later intact EXIF.
+                    // Trust no resynchronization: the next framing is checked
+                    // normally, and damaged critical chunks remain terminal.
+                    if (!(type[0] & 32))
+                        return result;
+                }
+                if (is_end)
+                    return result;
+            }
+        }
+    } // namespace
+
     SourceExif read_source_exif(const std::filesystem::path& path, const MetadataLimits& limits) {
         SourceExif result;
-        // Keep caller-controlled window allocations bounded independently of file size.
-        if (!limits.jpeg_header_bytes || limits.jpeg_header_bytes > 4 * 1024 * 1024 ||
-            !limits.blocks || limits.blocks > 4096 || !limits.block_bytes || !limits.total_bytes) {
+        if (!limits.blocks || limits.blocks > 4096 || !limits.block_bytes || !limits.total_bytes) {
             result.status = MetadataStatus::Limited;
             result.diagnostic = "Invalid EXIF collection limits";
             return result;
@@ -1607,12 +1775,28 @@ namespace lfs::core::image_codecs {
         }
         if (is_heif(std::span(signature).first(signature_size)))
             return read_heif_exif(path, limits);
+        if (signature_size >= kPngSignature.size() && std::equal(kPngSignature.begin(), kPngSignature.end(), signature.begin())) {
+            if (limits.png_scan_bytes < kPngSignature.size() || limits.png_scan_bytes > 1024 * 1024 * 1024 ||
+                !limits.png_chunks || limits.png_chunks > 65536) {
+                result.status = MetadataStatus::Limited;
+                result.diagnostic = "Invalid PNG collection limits";
+                return result;
+            }
+            return read_png_exif(input, limits);
+        }
         if (signature_size < 2 || signature[0] != 0xff || signature[1] != 0xd8) {
             result.status = MetadataStatus::Unsupported;
-            result.diagnostic = "EXIF collection supports JPEG and HEIF sources";
+            result.diagnostic = "EXIF collection supports JPEG, PNG and HEIF sources";
             return result;
         }
         result.scope = "jpeg-before-sos";
+        // Validate the JPEG-only window after detecting the source format;
+        // unrelated collection budgets must not reject PNG or HEIF metadata.
+        if (!limits.jpeg_header_bytes || limits.jpeg_header_bytes > 4 * 1024 * 1024) {
+            result.status = MetadataStatus::Limited;
+            result.diagnostic = "Invalid JPEG collection limits";
+            return result;
+        }
         input.clear();
         input.seekg(0);
         std::vector<uint8_t> window(limits.jpeg_header_bytes);

@@ -30,6 +30,23 @@ MEDIA_ERROR = None
 
 
 class MediaBindings(unittest.TestCase):
+    def test_png_idat_segmentation_and_ancillary_crc_recovery(self):
+        path = self.root / "review PNG.png"
+        for options, count, status in (({"idat_chunks": 5000}, 1, "collected"),
+                                        ({"idat_chunks": 5000, "include_exif": False}, 0, "absent"),
+                                        ({"damaged_ancillary": True}, 1, "malformed")):
+            with self.subTest(options=options):
+                payload = source_exif_fixture.write_png(path, **options)
+                result = json.loads(media.MediaIngest.source_exif_json(path))
+                source_exif_fixture.check_png(self, result, payload, count=count, status=status)
+
+    def test_png_source_exif_owned_original_and_typed_values(self):
+        path = self.root / "PNG EXIF é 日本語.png"
+        payload = source_exif_fixture.write_png(path)
+        result = media.MediaIngest.source_exif_json(path)
+        path.unlink()
+        source_exif_fixture.check_png(self, json.loads(result), payload)
+
     def test_source_exif_diagnostics_and_large_header_prefix(self):
         path = self.root / "invalid-diagnostic.avif"
         source_exif_fixture.write_invalid_heif(path)

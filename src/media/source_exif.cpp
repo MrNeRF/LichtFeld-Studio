@@ -207,7 +207,7 @@ namespace lfs::media {
                 return result;
             }
             offset = 6;
-        } else {
+        } else if (block.envelope == core::image_codecs::ExifEnvelope::HeifOffset) {
             if (block.bytes.size() < 4) {
                 result.status = ExifParseStatus::Malformed;
                 result.diagnostic = "Truncated HEIF EXIF envelope";
@@ -222,6 +222,10 @@ namespace lfs::media {
                 return result;
             }
             offset = static_cast<size_t>(skip);
+        } else if (block.envelope != core::image_codecs::ExifEnvelope::PngExif) {
+            result.status = ExifParseStatus::Unsupported;
+            result.diagnostic = "Unsupported EXIF envelope";
+            return result;
         }
         Guard guard;
         guard.limits = limits;
