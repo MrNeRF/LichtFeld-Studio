@@ -9,7 +9,9 @@ system policy or the registry. On other platforms it uses the standard filesyste
 Use the adapter for filesystem operations and file streams. Filename APIs in
 external libraries must receive `native_path` (wide Windows APIs) or
 `path_to_native_utf8` (documented UTF-8 APIs). Do not apply these conversions to
-URLs or command arguments. Process launch code adapts the executable filename
+URLs or command arguments. Decode UTF-8 API/JSON/resource names with
+`utf8_to_path` before path construction; an implicit narrow-string path constructor
+on Windows uses the system code page. Process launch code adapts the executable filename
 separately from its arguments. ZIP writers explicitly select UTF-8 header names.
 
 Python runtime code uses `_lfs_path_io.Path`: `str(path)` is an application path,

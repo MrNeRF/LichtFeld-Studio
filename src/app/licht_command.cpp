@@ -77,7 +77,7 @@ namespace lfs::app {
             const std::filesystem::path& dataset,
             const lfs::io::project::EmbeddedDatasetManifest& manifest) {
             for (const auto& entry : manifest.entries) {
-                const auto source = dataset / std::filesystem::path(entry.rel_path);
+                const auto source = dataset / lfs::core::utf8_to_path(entry.rel_path);
                 std::error_code error;
                 if (!lfs::core::fs::is_regular_file(source, error) || error) {
                     return false;

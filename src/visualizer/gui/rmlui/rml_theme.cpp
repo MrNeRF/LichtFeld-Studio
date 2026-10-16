@@ -74,7 +74,7 @@ namespace lfs::vis::gui::rml_theme {
 
     std::string loadBaseRCSS(const std::string& asset_name) {
         try {
-            const auto requested_path = std::filesystem::path(asset_name);
+            const auto requested_path = lfs::core::utf8_to_path(asset_name);
             const auto rcss_path = requested_path.is_absolute()
                                        ? requested_path
                                        : lfs::vis::getAssetPath(asset_name);

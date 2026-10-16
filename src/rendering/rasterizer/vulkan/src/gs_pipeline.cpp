@@ -52,7 +52,7 @@ namespace {
     }
 
     [[nodiscard]] std::string spirvDiagnosticName(const std::string& spirv_path) {
-        auto name = lfs::core::path_to_utf8(std::filesystem::path(spirv_path).stem());
+        auto name = lfs::core::path_to_utf8(lfs::core::utf8_to_path(spirv_path).stem());
         if (name.empty()) {
             return "unnamed";
         }

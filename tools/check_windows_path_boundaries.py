@@ -21,6 +21,7 @@ OPERATIONS = (
 )
 RAW_IO = re.compile(r"\bstd::filesystem::(?:" + OPERATIONS + r")\s*\(")
 RAW_ALIAS = re.compile(r"namespace\s+\w+\s*=\s*std::filesystem\s*;")
+RAW_JSON_PATH = re.compile(r'\bstd::filesystem::path\s+\w+\s*=\s*args\[[^\]]+\]\.get<std::string>\(\)')
 RAW_STREAM = re.compile(r"\bstd::(?:ifstream|ofstream|fstream)\s*(?:[A-Za-z_]\w*\s*)?\(")
 
 
@@ -30,7 +31,7 @@ def violations(source: str) -> list[tuple[int, str]]:
         code = line.split("//", 1)[0]
         if code.lstrip().startswith(("#", "*")):
             continue
-        if any(pattern.search(code) for pattern in (RAW_IO, RAW_ALIAS, RAW_STREAM)):
+        if any(pattern.search(code) for pattern in (RAW_IO, RAW_ALIAS, RAW_STREAM, RAW_JSON_PATH)):
             found.append((number, line.strip()))
     return found
 

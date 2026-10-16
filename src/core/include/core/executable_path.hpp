@@ -200,7 +200,7 @@ namespace lfs::core {
 
     inline std::filesystem::path preferredVcpkgPrefix([[maybe_unused]] const std::filesystem::path& vcpkg_root) {
 #ifdef LFS_PYTHON_EXECUTABLE
-        auto configured_prefix = std::filesystem::path(LFS_PYTHON_EXECUTABLE);
+        auto configured_prefix = lfs::core::fs::from_utf8(LFS_PYTHON_EXECUTABLE);
         for (int i = 0; i < 3 && !configured_prefix.empty(); ++i) {
             configured_prefix = configured_prefix.parent_path();
         }
@@ -354,7 +354,7 @@ namespace lfs::core {
 #endif
 
 #ifdef LFS_PYTHON_EXECUTABLE
-        if (const auto p = std::filesystem::path(LFS_PYTHON_EXECUTABLE); lfs::core::fs::exists(p))
+        if (const auto p = lfs::core::fs::from_utf8(LFS_PYTHON_EXECUTABLE); lfs::core::fs::exists(p))
             return p;
 #endif
 

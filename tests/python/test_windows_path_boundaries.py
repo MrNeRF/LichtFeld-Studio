@@ -15,6 +15,10 @@ class WindowsPathBoundaries(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertTrue(checker.violations(source))
 
+    def test_detects_implicit_windows_code_page_for_json_paths(self):
+        self.assertTrue(checker.violations('std::filesystem::path path = args["path"].get<std::string>();'))
+        self.assertFalse(checker.violations('std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());'))
+
     def test_accepts_logical_paths_and_adapted_io(self):
         self.assertFalse(checker.violations("std::filesystem::path file;\nlfs::core::fs::exists(file);\nstd::ifstream& input;\n// std::filesystem::exists(file);"))
 

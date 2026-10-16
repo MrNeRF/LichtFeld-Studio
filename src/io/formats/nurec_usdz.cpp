@@ -561,7 +561,7 @@ namespace lfs::io {
         std::expected<std::string, std::string> find_nurec_entry(const UsdzEntries& entries) {
             std::vector<std::string> candidates;
             for (const auto& [name, _] : entries.files) {
-                const auto extension = normalized_extension(std::filesystem::path(name));
+                const auto extension = normalized_extension(lfs::core::utf8_to_path(name));
                 if (extension == ".nurec") {
                     candidates.push_back(name);
                 }
@@ -772,7 +772,7 @@ namespace lfs::io {
 
         size_t match_count = 0;
         for (const auto& [name, _] : entries->files) {
-            if (normalized_extension(std::filesystem::path(name)) == ".nurec") {
+            if (normalized_extension(lfs::core::utf8_to_path(name)) == ".nurec") {
                 ++match_count;
                 if (match_count > 1) {
                     return std::unexpected("USDZ archive contains multiple .nurec payloads");

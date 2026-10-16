@@ -40,7 +40,11 @@
 
 #include <stb_image.h>
 
-namespace fs = std::filesystem;
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
+namespace fs = lfs::core::fs;
 using namespace lfs::core;
 
 // ============================================================================
@@ -64,7 +68,12 @@ protected:
     void SetUp() override {
         // Create test root with short name to maximize path budget for realistic test scenarios
         // The Unicode testing happens in the actual test paths, not the root directory
-        test_root_ = fs::temp_directory_path() / "lfs_uni_test";
+#ifdef _WIN32
+        const auto process_id = GetCurrentProcessId();
+#else
+        const auto process_id = getpid();
+#endif
+        test_root_ = fs::temp_directory_path() / ("lfsu" + std::to_string(process_id));
         fs::create_directories(test_root_);
     }
 

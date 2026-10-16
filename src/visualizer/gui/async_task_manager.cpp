@@ -1652,7 +1652,7 @@ namespace lfs::vis::gui {
         cmd::SequencerExportVideo::when([this](const auto& evt) {
             const auto path = evt.path.empty()
                                   ? SaveMp4FileDialog("camera_path")
-                                  : std::filesystem::path(evt.path);
+                                  : lfs::core::utf8_to_path(evt.path);
             if (path.empty())
                 return;
 

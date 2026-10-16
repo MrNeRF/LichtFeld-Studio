@@ -143,7 +143,7 @@ if(BUILD_VISUALIZER_TESTS)
         target_include_directories(lichtfeld_native_third_party_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include ${CMAKE_SOURCE_DIR}/src/visualizer)
         target_link_libraries(lichtfeld_native_third_party_tests PRIVATE
-            GTest::gtest_main lfs_rmlui assimp::assimp LibArchive::LibArchive PkgConfig::LFS_PATH_TEST_FFMPEG shell32)
+            GTest::gtest_main RmlUi::RmlUi assimp::assimp LibArchive::LibArchive PkgConfig::LFS_PATH_TEST_FFMPEG shell32)
         add_test(NAME lichtfeld.native_third_party_paths COMMAND lichtfeld_native_third_party_tests)
         set_tests_properties(lichtfeld.native_third_party_paths PROPERTIES LABELS "cpu;windows;filesystem" TIMEOUT 30)
     endif()

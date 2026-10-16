@@ -130,7 +130,7 @@ namespace lfs::vis::gui {
         }
 
         std::filesystem::path resolveDocumentPath(const std::string& rml_path) {
-            const auto requested_path = std::filesystem::path(rml_path);
+            const auto requested_path = lfs::core::utf8_to_path(rml_path);
             return requested_path.is_absolute() ? requested_path : lfs::vis::getAssetPath(rml_path);
         }
 
@@ -372,7 +372,7 @@ namespace lfs::vis::gui {
         if (document_)
             return true;
         try {
-            const auto requested_path = std::filesystem::path(rml_path_);
+            const auto requested_path = lfs::core::utf8_to_path(rml_path_);
             const auto full_path = requested_path.is_absolute()
                                        ? requested_path
                                        : lfs::vis::getAssetPath(rml_path_);
