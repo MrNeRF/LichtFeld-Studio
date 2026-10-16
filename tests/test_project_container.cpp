@@ -3958,10 +3958,12 @@ namespace {
                 expected_sidecar += ".autosave";
                 EXPECT_EQ(first_lock, expected_lock);
                 EXPECT_EQ(autosave_sidecar_path(first), expected_sidecar);
+#ifndef __APPLE__ // APFS rejects file names that are not valid UTF-8.
                 auto first_lease = require_result(WriterLockLease::acquire(first));
                 auto second_lease = require_result(WriterLockLease::acquire(second));
                 EXPECT_FALSE(WriterLockLease::acquire(first));
                 EXPECT_FALSE(WriterLockLease::acquire(second));
+#endif
             }
             EXPECT_LE(first_lock.filename().native().size(), 255u);
             EXPECT_LE(autosave_sidecar_path(first).filename().native().size(), 255u);

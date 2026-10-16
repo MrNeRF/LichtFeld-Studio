@@ -3,6 +3,7 @@
 #include "core/native_fs.hpp"
 #include "core/stb_file.hpp"
 #include <chrono>
+#include <cstddef>
 #include <gtest/gtest.h>
 #include <memory>
 
@@ -21,8 +22,14 @@ TEST(StbPaths, FileReadersDecodeBeyondTheWindowsFilenameBuffer) {
             fs::remove_all(root, ignored);
         }
     } cleanup{root};
+    // macOS rejects paths of PATH_MAX (1024) bytes; 900 still overflows the Windows buffer.
+#ifdef __APPLE__
+    constexpr std::size_t kPathBytes = 900;
+#else
+    constexpr std::size_t kPathBytes = 1200;
+#endif
     auto directory = root;
-    while (directory.native().size() < 1200)
+    while (directory.native().size() < kPathBytes)
         directory /= fs::path(u8"component_\u6e2c\u8a66_01234567890123456789");
     fs::create_directories(directory);
     const auto rgb = directory / "rgb.ppm";
