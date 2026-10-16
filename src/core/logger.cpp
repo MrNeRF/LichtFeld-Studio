@@ -783,6 +783,11 @@ namespace lfs::core {
             to_spdlog_level(level),
             final_msg);
 
+        // Lines below the Capture level only reach the session file; handlers
+        // see what the console and the in-app log show.
+        if (!passes_display_filter(level, static_cast<LogLevel>(global_level_.load(std::memory_order_relaxed))))
+            return;
+
         std::vector<std::pair<LogHandlerToken, LogHandler>> handlers_snapshot;
         {
             std::lock_guard lock(impl_->handler_mutex);
