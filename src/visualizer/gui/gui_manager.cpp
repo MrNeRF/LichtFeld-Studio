@@ -5262,6 +5262,7 @@ namespace lfs::vis::gui {
                     grid.projection = proj;
                     grid.view_projection = proj * view;
                     grid.view_position = panel.viewport->getTranslation();
+                    grid.pivot = panel.viewport->camera.getPivot();
                     grid.plane = rendering_manager->getGridPlaneForPanel(panel.panel);
                     grid.opacity = params.grid_opacity;
                     grid.orthographic = settings.orthographic;
@@ -5274,6 +5275,7 @@ namespace lfs::vis::gui {
                     params.grid_projection = first_grid.projection;
                     params.grid_view_projection = first_grid.view_projection;
                     params.grid_view_position = first_grid.view_position;
+                    params.grid_pivot = first_grid.pivot;
                     params.grid_orthographic = first_grid.orthographic;
                 }
             }

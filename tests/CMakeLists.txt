@@ -150,6 +150,7 @@ if(BUILD_VISUALIZER_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_point_cloud_vulkan_projection.cpp
+        test_viewport_grid.cpp
         test_align_transform.cpp
         test_orthographic_zoom.cpp
         test_ui_visibility_transition.cpp
@@ -757,6 +758,7 @@ set(TEST_FILES
     test_higs_exact_depth.cpp
     test_point_cloud_raster_orientation.cpp
     test_point_cloud_vulkan_projection.cpp
+    test_viewport_grid.cpp
     test_theme_registry.cpp
     test_viewport.cpp
     test_navigation_up_axis.cpp

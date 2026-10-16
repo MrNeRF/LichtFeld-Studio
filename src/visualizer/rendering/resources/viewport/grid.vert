@@ -5,7 +5,8 @@ layout(location = 1) out vec3 worldNear;
 struct GridUniform {
     mat4 view_projection;
     vec4 view_position_plane;
-    vec4 opacity_padding;
+    vec4 opacity_ortho;
+    vec4 pivot_radius;
     vec4 near_origin;
     vec4 near_x;
     vec4 near_y;

@@ -88,7 +88,8 @@ namespace lfs::vis {
         struct GridUniform {
             glm::mat4 view_projection{1.0f};
             glm::vec4 view_position_plane{0.0f};
-            glm::vec4 opacity_padding{0.0f};
+            glm::vec4 opacity_ortho{0.0f};
+            glm::vec4 pivot_radius{0.0f};
             glm::vec4 near_origin{0.0f};
             glm::vec4 near_x{0.0f};
             glm::vec4 near_y{0.0f};
@@ -1897,6 +1898,9 @@ namespace lfs::vis {
             glm::vec3 far_origin{0.0f};
             glm::vec3 far_x{0.0f};
             glm::vec3 far_y{0.0f};
+            // The grid fades out on a floor around the pivot, sized in visible half-heights there.
+            constexpr float kGridFloorRadius = 3.5f;
+            float pivot_half_height = 0.0f;
             if (grid.orthographic) {
                 const float half_width = 1.0f / grid.projection[0][0];
                 const float half_height = 1.0f / std::abs(grid.projection[1][1]);
@@ -1914,6 +1918,7 @@ namespace lfs::vis {
                 far_origin = far_center - right_offset - up_offset;
                 far_x = right_offset * 2.0f;
                 far_y = up_offset * 2.0f;
+                pivot_half_height = half_height;
             } else {
                 const float fov_y = 2.0f * std::atan(1.0f / std::abs(grid.projection[1][1]));
                 const float aspect = std::abs(grid.projection[1][1] / grid.projection[0][0]);
@@ -1930,13 +1935,16 @@ namespace lfs::vis {
                 far_origin = far_bl;
                 far_x = far_br - far_bl;
                 far_y = far_tl - far_bl;
+                pivot_half_height = glm::length(grid.pivot - cam_pos) * half_height;
             }
 
             GridUniform uniform{};
             uniform.view_projection = grid.view_projection;
             uniform.view_position_plane = glm::vec4(grid.view_position,
                                                     static_cast<float>(std::clamp(grid.plane, 0, 2)));
-            uniform.opacity_padding = glm::vec4(std::clamp(grid.opacity, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f);
+            uniform.opacity_ortho = glm::vec4(std::clamp(grid.opacity, 0.0f, 1.0f), grid.orthographic ? 1.0f : 0.0f,
+                                              0.0f, 0.0f);
+            uniform.pivot_radius = glm::vec4(grid.pivot, kGridFloorRadius * pivot_half_height);
             uniform.near_origin = glm::vec4(near_origin, 0.0f);
             uniform.near_x = glm::vec4(near_x, 0.0f);
             uniform.near_y = glm::vec4(near_y, 0.0f);
@@ -1964,6 +1972,7 @@ namespace lfs::vis {
                 .projection = params.grid_projection,
                 .view_projection = params.grid_view_projection,
                 .view_position = params.grid_view_position,
+                .pivot = params.grid_pivot,
                 .plane = params.grid_plane,
                 .opacity = params.grid_opacity,
                 .orthographic = params.grid_orthographic,
