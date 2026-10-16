@@ -7,6 +7,7 @@
 #include "core/cuda/mask_normalization.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/cuda_error_typed.hpp"
+#include "core/native_fs.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"

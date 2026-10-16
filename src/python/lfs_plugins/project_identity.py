@@ -1,6 +1,6 @@
 """Pin a project locator and its on-disk identity across delayed writes."""
 from dataclasses import dataclass
-from pathlib import Path
+from _lfs_path_io import Path
 import os
 
 

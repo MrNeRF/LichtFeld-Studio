@@ -4,6 +4,7 @@
 
 #include "input/input_controller.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data_transform.hpp"
@@ -2772,7 +2773,7 @@ namespace lfs::vis {
                 });
 
             if ((ext == ".licht" || lfs::io::video::is_supported_video_extension(ext)) &&
-                !std::filesystem::is_directory(filepath)) {
+                !lfs::core::native_fs::is_directory(filepath)) {
                 skipped_files.push_back(path_str);
                 skipped_video_or_project = true;
                 continue;
@@ -2821,7 +2822,7 @@ namespace lfs::vis {
                 }
                 skipped_files.push_back(path_str);
                 has_unrecognized_files = true;
-            } else if (std::filesystem::is_directory(filepath)) {
+            } else if (lfs::core::native_fs::is_directory(filepath)) {
                 // Check for dataset markers
                 LOG_DEBUG("Checking directory for dataset markers: {}", lfs::core::path_to_utf8(filepath));
                 if (lfs::io::Loader::isDatasetPath(filepath)) {
@@ -2835,8 +2836,8 @@ namespace lfs::vis {
                     continue;
                 } else {
                     // Check if it's a SOG directory (WebP-based format)
-                    if (std::filesystem::exists(filepath / "meta.json") &&
-                        std::filesystem::exists(filepath / "means_l.webp")) {
+                    if (lfs::core::native_fs::exists(filepath / "meta.json") &&
+                        lfs::core::native_fs::exists(filepath / "means_l.webp")) {
                         splat_files.push_back(filepath);
                         LOG_DEBUG("Detected SOG directory: {}", lfs::core::path_to_utf8(filepath));
                     } else {

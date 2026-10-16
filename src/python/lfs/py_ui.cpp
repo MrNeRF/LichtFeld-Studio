@@ -9,6 +9,7 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/native_fs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -551,7 +552,7 @@ namespace lfs::python {
 
             std::filesystem::path icon_path = lfs::core::utf8_to_path(plugin_path) / "icons" / (icon_name + ".png");
 
-            if (!std::filesystem::exists(icon_path)) {
+            if (!lfs::core::native_fs::exists(icon_path)) {
                 icon_path = lfs::vis::getAssetPath("icon/" + icon_name + ".png");
             }
 
@@ -5290,6 +5291,29 @@ namespace lfs::python {
                 if (const auto result = rendering->updateSettingsFromUser(settings); !result)
                     throw nb::value_error(lfs::format_for_developer(result.error()).c_str());
             } }, "Explicitly apply user defaults to the current project; other rendering fields are preserved.");
+
+        m.def(
+            "get_marketplace_preferences",
+            [] {
+                auto& preferences = vis::UserPreferences::instance();
+                nb::dict result;
+                result["view"] = preferences.marketplaceView();
+                result["git_checkout"] = preferences.marketplaceGitCheckout();
+                return result;
+            },
+            "Get Marketplace preferences from the canonical user preferences store");
+        m.def(
+            "set_marketplace_view",
+            [](const std::string& view) { vis::UserPreferences::instance().setMarketplaceView(view); },
+            nb::arg("view"), "Set the Marketplace layout (card or list)");
+        m.def(
+            "set_marketplace_git_checkout",
+            [](bool enabled) { vis::UserPreferences::instance().setMarketplaceGitCheckout(enabled); },
+            nb::arg("enabled"), "Set whether Marketplace installs use Git checkouts");
+        m.def(
+            "reset_marketplace_preferences",
+            [] { vis::UserPreferences::instance().resetMarketplacePreferences(); },
+            "Reset Marketplace layout and installation preferences");
 
         m.def(
             "get_project_manager_preferences",

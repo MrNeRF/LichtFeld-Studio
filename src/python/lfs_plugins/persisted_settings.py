@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared handling for user-editable JSON settings files."""
+from _lfs_path_io import native_path
 
 import json
 import itertools
 import logging
 import os
-from pathlib import Path
+from _lfs_path_io import Path
 import shutil
 import tempfile
 import time
@@ -40,9 +41,9 @@ def _backup_corrupt(path: Path, backup_root: Path, category: str) -> Path:
             continue
         backup = directory / path.name
         try:
-            shutil.copy2(path, backup)
+            shutil.copy2(native_path(path), native_path(backup))
         except Exception:
-            shutil.rmtree(directory)
+            shutil.rmtree(native_path(directory, force_extended=True))
             raise
         _log.warning("Damaged settings from %s were backed up to %s", path, backup)
         return backup
@@ -60,14 +61,14 @@ def write_object(path: Path, values: dict, *, damaged: bool = False,
         _backup_corrupt(path, resolved_backup_root, backup_category)
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=native_path(path.parent),
                                          prefix=f".{path.name}.", suffix=".tmp",
                                          delete=False) as output:
             temporary = Path(output.name)
             json.dump(values, output, indent=2, ensure_ascii=False)
             output.flush()
             os.fsync(output.fileno())
-        os.replace(temporary, path)
+        os.replace(native_path(temporary), native_path(path))
         temporary = None
     finally:
         if temporary is not None:

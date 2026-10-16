@@ -12,6 +12,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/error_reporter.hpp"
 #include "core/file_extensions.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
@@ -1045,7 +1046,7 @@ namespace lfs::io {
                         return std::unexpected(std::format(
                             "SOG archive contains more than {} entries", MAX_ARCHIVE_ENTRIES));
                     }
-                    const char* const pathname = archive_entry_pathname(entry);
+                    const char* const pathname = archive_entry_pathname_utf8(entry);
                     if (!pathname) {
                         return std::unexpected("SOG archive entry has no valid pathname");
                     }
@@ -1248,7 +1249,7 @@ namespace lfs::io {
             std::vector<std::filesystem::path> candidates;
             for (const auto& entry : lfs::core::native_fs::directory_iterator(path)) {
                 if (is_sog_license_member(core::path_to_utf8(entry.path().filename())) &&
-                    std::filesystem::is_regular_file(lfs::core::native_fs::entry_symlink_status(path, entry)))
+                    lfs::core::native_fs::is_regular_file(lfs::core::native_fs::entry_symlink_status(path, entry)))
                     candidates.push_back(lfs::core::native_fs::entry_path(path, entry.path()));
             }
             std::sort(candidates.begin(), candidates.end());
@@ -1384,7 +1385,8 @@ namespace lfs::io {
                     return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, "Failed to allocate archive structure", output_path_);
                 }
 
-                if (archive_write_set_format_zip(a_) != ARCHIVE_OK) {
+                if (archive_write_set_format_zip(a_) != ARCHIVE_OK ||
+                    archive_write_set_format_option(a_, "zip", "hdrcharset", "UTF-8") != ARCHIVE_OK) {
                     return make_error(ErrorCode::ARCHIVE_CREATION_FAILED,
                                       std::format("Failed to set ZIP format: {}", archive_error_string(a_) ? archive_error_string(a_) : "unknown error"), output_path_);
                 }
@@ -1449,7 +1451,7 @@ namespace lfs::io {
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t = std::chrono::system_clock::to_time_t(now);
 
-                archive_entry_set_pathname(entry, filename.c_str());
+                archive_entry_set_pathname_utf8(entry, filename.c_str());
                 archive_entry_set_size(entry, static_cast<la_int64_t>(size));
                 archive_entry_set_filetype(entry, AE_IFREG);
                 archive_entry_set_perm(entry, 0644);

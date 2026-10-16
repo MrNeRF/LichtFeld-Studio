@@ -9,6 +9,7 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
@@ -6450,7 +6451,7 @@ namespace lfs::core {
                 continue;
             }
             std::error_code exists_error;
-            const bool exists = std::filesystem::is_regular_file(image_path, exists_error);
+            const bool exists = lfs::core::native_fs::is_regular_file(image_path, exists_error);
             camera.set_has_image(exists);
             if (!exists) {
                 missing.push_back(camera.image_name().empty()

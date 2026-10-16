@@ -13,6 +13,7 @@
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
+#include "core/native_fs.hpp"
 #include "core/image_loader.hpp"
 #include "core/legacy_settings_migration.hpp"
 #include "core/logger.hpp"
@@ -1264,7 +1265,7 @@ namespace lfs::app {
 
             // Load the trained scene.
             std::shared_ptr<core::SplatData> model;
-            const auto load_ext = cfg.load_path.extension().string();
+            const auto load_ext = lfs::core::path_to_utf8(cfg.load_path.extension());
             if (load_ext == ".resume") {
                 auto splat_result = core::load_checkpoint_splat_data(cfg.load_path);
                 if (!splat_result) {

@@ -926,6 +926,10 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "marketplace": "Marketplace",
+    "marketplace_layout": "Diseño",
+    "marketplace_git_checkout_description": "Instala un clon de Git en lugar de un archivo de código fuente para revisar cambios y usar Git en la carpeta del complemento. Requiere Git; de lo contrario se usa un archivo.",
+    "marketplace_git_unavailable": "No se encontró Git en PATH. Instala Git para usar esta opción.",
     "projects": "Proyectos",
     "project_folders": "Carpetas de proyectos",
     "project_folders_default": "predeterminada",
@@ -2260,14 +2264,13 @@
       "updating": "Actualizando {name}...",
       "updated": "Se actualizó {name}"
     },
-    "title_line": "Explora los complementos instalables desde el registro de complementos.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "Advertencia: esta fuente del complemento no tiene un resumen SHA-256; el archivo no está verificado.",
     "error.checksum_mismatch": "Falló la verificación SHA-256 del archivo del complemento.",
     "error.digest_conflict": "El resumen de la URL y el argumento sha256 no coinciden.",
     "error.invalid_digest": "El resumen SHA-256 debe contener exactamente 64 caracteres hexadecimales.",
     "error.digest_requires_archive": "La verificación SHA-256 requiere el método de instalación por archivo.",
-    "warning_body": "ADVERTENCIA: LFS no respalda directamente ni asume responsabilidad. Uso bajo tu propio riesgo.",
+    "warning_body": "ADVERTENCIA: Lichtfeld Studio no respalda directamente ni asume responsabilidad. Uso bajo tu propio riesgo.",
     "filter_label": "Filtro",
     "sort_label": "Ordenar por",
     "filter.all": "Todos",

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "io/loader.hpp"
 
@@ -26,7 +27,7 @@ namespace lfs::io {
     inline constexpr std::array<std::string_view, 2> TRANSFORMS_DATASET_MARKERS = {
         "transforms.json", "transforms_train.json"};
 
-    namespace fs = std::filesystem;
+    namespace fs = lfs::core::native_fs;
 
     namespace detail {
         inline constexpr size_t CANCEL_POLL_INTERVAL = 64;
@@ -141,7 +142,7 @@ namespace lfs::io {
         std::string target_lower = detail::normalize_lookup_key(target);
 
         std::error_code ec;
-        for (fs::directory_iterator it(lfs::core::native_fs::traversal_path(dir), ec), end; !ec && it != end; it.increment(ec)) {
+        for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(dir), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec)
                 continue;
@@ -199,8 +200,7 @@ namespace lfs::io {
             std::error_code ec;
             size_t scanned_entries = 0;
             const auto traversal_root = lfs::core::native_fs::traversal_path(root_path);
-            for (fs::recursive_directory_iterator it(
-                     traversal_root,
+            for (std::filesystem::recursive_directory_iterator it(lfs::core::native_fs::traversal_path(traversal_root),
                      fs::directory_options::skip_permission_denied,
                      ec),
                  end;
@@ -353,7 +353,7 @@ namespace lfs::io {
         static const std::vector<std::string> image_extensions = {
             ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"};
 
-        std::string ext = path.extension().string();
+        std::string ext = lfs::core::path_to_utf8(path.extension());
         detail::ascii_lower_inplace(ext);
 
         return std::find(image_extensions.begin(), image_extensions.end(), ext) != image_extensions.end();
@@ -623,8 +623,7 @@ namespace lfs::io {
         std::error_code ec;
 
         if (recursive) {
-            for (fs::recursive_directory_iterator it(
-                     lfs::core::native_fs::traversal_path(root_path),
+            for (std::filesystem::recursive_directory_iterator it(lfs::core::native_fs::traversal_path(root_path),
                      fs::directory_options::skip_permission_denied,
                      ec),
                  end;
@@ -640,7 +639,7 @@ namespace lfs::io {
             return count;
         }
 
-        for (fs::directory_iterator it(lfs::core::native_fs::traversal_path(root_path), ec), end; !ec && it != end; it.increment(ec)) {
+        for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(root_path), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec)
                 continue;

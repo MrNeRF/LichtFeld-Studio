@@ -5,6 +5,7 @@
 #include "core/argument_parser.hpp"
 #include "core/environment.hpp"
 #include "core/error.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
@@ -557,7 +558,7 @@ namespace {
             ".usd", ".usda", ".usdc", ".usdz",
             ".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
         const auto is_supported = [&](const std::filesystem::path& p) {
-            auto ext = p.extension().string();
+            auto ext = lfs::core::path_to_utf8(p.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             return std::ranges::find(SUPPORTED_EXTENSIONS, ext) != SUPPORTED_EXTENSIONS.end();
         };
@@ -578,7 +579,7 @@ namespace {
             return {};
         }
 
-        auto extension = view_path.extension().string();
+        auto extension = lfs::core::path_to_utf8(view_path.extension());
         std::ranges::transform(
             extension, extension.begin(),
             [](const unsigned char character) {
@@ -684,7 +685,7 @@ namespace {
             return std::nullopt;
         }
 
-        auto extension = output_path.extension().string();
+        auto extension = lfs::core::path_to_utf8(output_path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(),
                        [](const unsigned char c) {
                            return static_cast<char>(std::tolower(c));
@@ -1227,7 +1228,7 @@ namespace {
                     if (!lfs::core::native_fs::exists(ckpt_path)) {
                         return std::unexpected(std::format("Checkpoint file does not exist: {}", ckpt_path_str));
                     }
-                    auto extension = ckpt_path.extension().string();
+                    auto extension = lfs::core::path_to_utf8(ckpt_path.extension());
                     std::ranges::transform(
                         extension, extension.begin(),
                         [](const unsigned char character) {
@@ -1322,7 +1323,7 @@ namespace {
             const auto data_path_value = has_data_path
                                              ? lfs::core::utf8_to_path(::args::get(data_path))
                                              : std::filesystem::path{};
-            auto data_extension = data_path_value.extension().string();
+            auto data_extension = lfs::core::path_to_utf8(data_path_value.extension());
             std::ranges::transform(
                 data_extension, data_extension.begin(),
                 [](const unsigned char character) {
@@ -2253,10 +2254,10 @@ namespace {
                 return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, ssog, spz, glb, html, usd, usda, usdc, rad", ::args::get(format)));
             }
         } else if (!params.output_path.empty()) {
-            if (const auto fmt = parseFormat(params.output_path.extension().string())) {
+            if (const auto fmt = parseFormat(lfs::core::path_to_utf8(params.output_path.extension()))) {
                 params.format = *fmt;
             } else {
-                return std::unexpected(std::format("Unknown extension '{}'. Use --format", params.output_path.extension().string()));
+                return std::unexpected(std::format("Unknown extension '{}'. Use --format", lfs::core::path_to_utf8(params.output_path.extension())));
             }
         }
 
@@ -2350,7 +2351,7 @@ dataset options work as in training; see the Evaluation page of the docs.
             return std::nullopt;
         }
 
-        const std::string extension = lfs::core::utf8_to_path(model).extension().string();
+        const std::string extension = lfs::core::path_to_utf8(lfs::core::utf8_to_path(model).extension());
         const bool checkpoint = extension == ".licht" || extension == ".resume";
         if (!checkpoint && !given("-d") && !given("--data-path")) {
             error = "eval of a splat file needs -d <dataset>";
@@ -2459,7 +2460,7 @@ dataset options work as in training; see the Evaluation page of the docs.
             params.formats = std::move(*formats);
             params.format = params.formats.front();
         } else if (!params.output_path.empty()) {
-            if (const auto fmt = parseFormat(params.output_path.extension().string())) {
+            if (const auto fmt = parseFormat(lfs::core::path_to_utf8(params.output_path.extension()))) {
                 params.format = *fmt;
                 params.formats = {*fmt};
             } else if (!params.output_path.extension().empty() && !lfs::core::native_fs::is_directory(params.output_path)) {
@@ -2753,7 +2754,7 @@ dataset options work as in training; see the Evaluation page of the docs.
             }
             auto override_path = lfs::core::utf8_to_path(argv[4]);
             if (override_path.is_relative()) {
-                override_path = std::filesystem::current_path() / override_path;
+                override_path = lfs::core::native_fs::current_path() / override_path;
             }
             dataset = override_path.lexically_normal();
         }

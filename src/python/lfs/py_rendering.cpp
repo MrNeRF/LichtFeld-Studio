@@ -3,6 +3,7 @@
 
 #include "py_rendering.hpp"
 #include "core/checkpoint_format.hpp"
+#include "core/native_fs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
@@ -272,8 +273,8 @@ namespace lfs::python {
 
                 const auto asset_path = core::utf8_to_path(path);
                 std::error_code file_size_error;
-                if (std::filesystem::is_regular_file(asset_path, file_size_error)) {
-                    const auto file_size = std::filesystem::file_size(asset_path, file_size_error);
+                if (lfs::core::native_fs::is_regular_file(asset_path, file_size_error)) {
+                    const auto file_size = lfs::core::native_fs::file_size(asset_path, file_size_error);
                     if (!file_size_error && file_size > MAX_RENDERED_ASSET_PREVIEW_BYTES) {
                         LOG_DEBUG("Skipping rendered asset preview for '{}' ({} MB exceeds {} MB budget)",
                                   path,
@@ -282,7 +283,7 @@ namespace lfs::python {
                         return std::nullopt;
                     }
                 }
-                auto ext = asset_path.extension().string();
+                auto ext = lfs::core::path_to_utf8(asset_path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                 if (ext == ".ckpt" || ext == ".resume") {
                     auto checkpoint_result = core::load_checkpoint_splat_data(
@@ -1103,7 +1104,7 @@ namespace lfs::python {
         [[nodiscard]] std::string normalizeExportImageFormat(std::string format,
                                                              const std::filesystem::path& path) {
             if (format.empty()) {
-                format = path.extension().string();
+                format = lfs::core::path_to_utf8(path.extension());
             }
             if (!format.empty() && format.front() == '.') {
                 format.erase(format.begin());
@@ -1125,7 +1126,7 @@ namespace lfs::python {
                 throw std::invalid_argument("export path is empty");
             }
 
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });

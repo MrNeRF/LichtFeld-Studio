@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/panel_layout.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/rml_viewport_overlay.hpp"
@@ -52,7 +53,7 @@ namespace lfs::vis::gui {
         LayoutState state;
         state.load();
         const auto config_dir = LayoutState::getConfigDir();
-        if (!config_dir.empty() && std::filesystem::exists(config_dir / "layout.json")) {
+        if (!config_dir.empty() && lfs::core::native_fs::exists(config_dir / "layout.json")) {
             auto migrated = captureProjectState();
             migrated.right_panel_width = state.right_panel_width;
             migrated.scene_panel_ratio = state.scene_panel_ratio;

@@ -6,6 +6,7 @@ No bearer or signed URL is stored in a transfer checkpoint. Call from a worker;
 progress and checkpoint callbacks let the panel publish state on the UI thread.
 """
 from __future__ import annotations
+from _lfs_path_io import native_path
 
 import hashlib
 from http.client import IncompleteRead, RemoteDisconnected
@@ -19,7 +20,7 @@ import threading
 import urllib.parse
 import urllib.request
 import uuid
-from pathlib import Path
+from _lfs_path_io import Path
 
 from .gallery_storage import GalleryStorageError, gallery_quota, storage_requirement, is_storage_error
 from .private_directory import mkdir_private
@@ -543,7 +544,7 @@ class PortalGalleryClient:
                 scene = {**scene, **{key: current[key] for key in
                          ('title', 'description', 'visibility', 'metadataRevision') if key in current}}
             destination_identity.validate()
-            os.replace(partial, destination)
+            os.replace(native_path(partial), native_path(destination))
             log_stage("download_complete", scene_id=scene["id"], bytes=total,
                       sha256=checksum, status="completed", path=destination.name)
             return scene
@@ -628,7 +629,7 @@ class PortalGalleryClient:
                 raise GalleryTransferInvalid("The gallery scene changed while downloading. Check gallery again.")
             on_checkpoint({**pin, "sha256": checksum})
             destination_identity.validate()
-            os.replace(partial, destination)
+            os.replace(native_path(partial), native_path(destination))
             return scene
         except (GalleryTransferCanceled, OSError, PortalHTTPError):
             raise

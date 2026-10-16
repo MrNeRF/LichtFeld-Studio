@@ -11,6 +11,16 @@
 #include <regex>
 
 namespace {
+    // Report assertions to GTest rather than opening a modal Windows dialog.
+    class TestSystemInterface final : public Rml::SystemInterface {
+    public:
+        bool LogMessage(Rml::Log::Type type, const Rml::String& message) override {
+            if (type == Rml::Log::LT_ASSERT)
+                ADD_FAILURE() << message;
+            return true;
+        }
+    };
+
     class StubRenderInterface final : public Rml::RenderInterface {
     public:
         Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>,
@@ -43,6 +53,7 @@ namespace {
     class PreferencesTooltipTest : public ::testing::Test {
     protected:
         static void SetUpTestSuite() {
+            Rml::SetSystemInterface(&system_);
             ASSERT_TRUE(Rml::Initialise());
             ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
                 (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
@@ -50,6 +61,7 @@ namespace {
         static void TearDownTestSuite() {
             lfs::event::LocalizationManager::getInstance().reset();
             Rml::Shutdown();
+            Rml::SetSystemInterface(nullptr);
         }
         void SetUp() override {
             context_ = Rml::CreateContext("preferences_tooltip_test", {1000, 800}, &renderer_);
@@ -63,7 +75,9 @@ namespace {
             ASSERT_NE(document_, nullptr);
         }
         void TearDown() override { Rml::RemoveContext("preferences_tooltip_test"); }
-        StubRenderInterface renderer_;
+        inline static TestSystemInterface system_;
+        // RmlUi retains the render manager until Shutdown, beyond RemoveContext.
+        inline static StubRenderInterface renderer_;
         Rml::Context* context_{};
         Rml::ElementDocument* document_{};
     };

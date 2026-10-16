@@ -4,6 +4,7 @@
 
 #include "video_extractor_dialog.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/native_fs.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/number_format.hpp"
 #include "core/path_utils.hpp"
@@ -304,7 +305,7 @@ namespace lfs::gui {
         std::vector<std::filesystem::path> generatedExtractionFiles(const VideoExtractionParams& params) {
             std::vector<std::filesystem::path> files;
             std::error_code ec;
-            for (std::filesystem::directory_iterator it(params.output_dir, ec), end;
+            for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(params.output_dir), ec), end;
                  !ec && it != end; it.increment(ec)) {
                 std::error_code type_ec;
                 if (!it->is_regular_file(type_ec))
@@ -314,7 +315,7 @@ namespace lfs::gui {
                 // starts at one, so Delete Existing removes all output for the current pattern.
                 if ((params.generate_metadata && name == "extraction_metadata.json") ||
                     io::isGeneratedFrameFilename(params.filename_pattern, name, true))
-                    files.push_back(it->path());
+                    files.push_back(lfs::core::native_fs::entry_path(params.output_dir, it->path()));
             }
             return files;
         }
@@ -2223,7 +2224,7 @@ namespace lfs::gui {
                 // Remove only what this extraction would write; other files stay.
                 for (const auto& path : generatedExtractionFiles(pending_params_)) {
                     std::error_code ec;
-                    if (!std::filesystem::remove(path, ec) && ec) {
+                    if (!lfs::core::native_fs::remove(path, ec) && ec) {
                         pending_params_set_ = false;
                         if (overwrite_overlay_el_)
                             overwrite_overlay_el_->SetClass("hidden", true);
@@ -2616,7 +2617,7 @@ namespace lfs::gui {
         for (const auto& item_params : params) {
             for (const auto& path : generatedExtractionFiles(item_params)) {
                 std::error_code ec;
-                if (!std::filesystem::remove(path, ec) && ec) {
+                if (!lfs::core::native_fs::remove(path, ec) && ec) {
                     setExtractionError(LOCF(VideoExtractor::OVERWRITE_DELETE_ERROR,
                                             lfs::core::path_to_utf8(path), ec.message()),
                                        false);

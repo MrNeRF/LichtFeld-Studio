@@ -36,6 +36,7 @@ class RenderInterface_VK;
 namespace Rml {
     class Context;
     class RenderInterface;
+    class FileInterface;
 } // namespace Rml
 
 namespace lfs::vis {
@@ -336,6 +337,7 @@ namespace lfs::vis::gui {
         std::vector<Rml::ObserverPtr<Rml::Element>> rejected_focus_;
 
         std::unique_ptr<RmlSystemInterface> system_interface_;
+        std::unique_ptr<Rml::FileInterface> file_interface_;
         std::unique_ptr<Rml::RenderInterface> owned_render_interface_;
         RenderInterface_VK* vulkan_render_interface_ = nullptr;
         std::unique_ptr<RmlTextInputHandler> text_input_handler_;

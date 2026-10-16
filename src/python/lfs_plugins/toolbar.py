@@ -3,7 +3,7 @@
 """Viewport toolbars rendered from a retained RmlUI data model."""
 
 import math
-from pathlib import Path
+from _lfs_path_io import Path
 from urllib.parse import quote
 
 from .depth_view_controls import DepthViewControlsController

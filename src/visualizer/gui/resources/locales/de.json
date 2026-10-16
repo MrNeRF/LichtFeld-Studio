@@ -926,6 +926,10 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "marketplace": "Marketplace",
+    "marketplace_layout": "Ansicht",
+    "marketplace_git_checkout_description": "Installiert einen Git-Klon statt eines Quellarchivs. So können Sie Änderungen prüfen und Git-Werkzeuge im Plugin-Ordner nutzen. Erfordert Git; andernfalls wird ein Archiv verwendet.",
+    "marketplace_git_unavailable": "Git wurde nicht im PATH gefunden. Installiere Git, um diese Option zu nutzen.",
     "projects": "Projekte",
     "project_folders": "Projektordner",
     "project_folders_default": "Standard",
@@ -2260,14 +2264,13 @@
       "updating": "{name} wird aktualisiert...",
       "updated": "{name} wurde aktualisiert"
     },
-    "title_line": "Durchsuchen Sie installierbare Plugins aus der Plugin-Registry.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "Warnung: Für diese Plugin-Quelle gibt es keinen SHA-256-Prüfwert; das Archiv ist nicht verifiziert.",
     "error.checksum_mismatch": "Die SHA-256-Prüfung des Plugin-Archivs ist fehlgeschlagen.",
     "error.digest_conflict": "Der URL-Prüfwert und das sha256-Argument stimmen nicht überein.",
     "error.invalid_digest": "Der SHA-256-Prüfwert muss genau 64 hexadezimale Zeichen enthalten.",
     "error.digest_requires_archive": "Die SHA-256-Prüfung erfordert die Archiv-Installationsart.",
-    "warning_body": "WARNUNG: LFS spricht keine direkte Empfehlung aus und übernimmt keine Verantwortung. Nutzung auf eigenes Risiko.",
+    "warning_body": "WARNUNG: Lichtfeld Studio spricht keine direkte Empfehlung aus und übernimmt keine Verantwortung. Nutzung auf eigenes Risiko.",
     "filter_label": "Filter",
     "sort_label": "Sortieren nach",
     "filter.all": "Alle",

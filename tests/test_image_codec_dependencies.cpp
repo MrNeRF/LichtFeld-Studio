@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/native_fs.hpp"
 #include "core/image_codecs.hpp"
 #include "long_path_test_support.hpp"
 #include <chrono>
@@ -86,9 +87,43 @@ namespace {
         }
         ~TemporaryDirectory() {
             std::error_code error;
-            std::filesystem::remove_all(path, error);
+            lfs::core::native_fs::remove_all(path, error);
         }
     };
+    TEST(ProductionImagePaths, PngJpegAndTiffRoundTripLongUnicodePaths) {
+        namespace fs = lfs::core::native_fs;
+#ifdef LFS_REQUIRE_LONG_PATHS_DISABLED
+        ASSERT_EQ(fs::process_long_paths_enabled(), std::optional<bool>(false));
+#endif
+        TemporaryDirectory temporary;
+        auto directory = temporary.path;
+        for (int i = 0; i < 12; ++i)
+            directory /= fs::path(u8"directory_\u6e2c\u8a66_01234567890123456789");
+        fs::create_directories(directory);
+        constexpr int width = 19, height = 17, channels = 3;
+        std::vector<std::uint8_t> pixels(width * height * channels);
+        for (size_t i = 0; i < pixels.size(); ++i)
+            pixels[i] = static_cast<std::uint8_t>(i * 17);
+        for (const auto* extension : {".png", ".jpg", ".tif"}) {
+            SCOPED_TRACE(extension);
+            auto path = directory / fs::path(u8"image_\u6e2c\u8a66");
+            path += extension;
+            std::string error;
+            if (std::string(extension) == ".png")
+                ASSERT_TRUE(codec::write_png(path, pixels.data(), width, height, channels, 8, 6, std::nullopt, error)) << error;
+            else if (std::string(extension) == ".jpg")
+                ASSERT_TRUE(codec::write_jpeg(path, pixels.data(), width, height, channels, 95, std::nullopt, error)) << error;
+            else
+                ASSERT_TRUE(codec::write_tiff(path, pixels.data(), width, height, channels, error)) << error;
+            codec::Image image;
+            ASSERT_TRUE(codec::decode(path, image, error)) << error;
+            EXPECT_EQ(image.width, width);
+            EXPECT_EQ(image.height, height);
+            EXPECT_EQ(image.channels, channels);
+            if (std::string(extension) != ".jpg")
+                EXPECT_EQ(image.data, pixels);
+        }
+    }
     TEST(ProductionPng, AllChannelsAndDepthsRoundTripWithCommentsAndUnicodePaths) {
         TemporaryDirectory temporary;
         for (int channels : {1, 2, 3, 4}) {

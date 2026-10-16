@@ -147,7 +147,7 @@ namespace {
         }
 
         std::vector<std::string> found;
-        for (fs::recursive_directory_iterator it(native_fs::traversal_path(temporary.path), error), end;
+        for (std::filesystem::recursive_directory_iterator it(native_fs::traversal_path(temporary.path), error), end;
              !error && it != end; it.increment(error)) {
             if (it->is_regular_file())
                 found.push_back(lfs::core::path_to_utf8(native_fs::entry_path(temporary.path, it->path())));

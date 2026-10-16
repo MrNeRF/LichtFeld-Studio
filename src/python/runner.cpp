@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "runner.hpp"
+#include "core/native_fs.hpp"
 #include "package_manager.hpp"
 #include "python_buffer_analysis.hpp"
 
@@ -189,7 +190,7 @@ sys.stderr = OutputCapture(True)
         // Python 3.8+ on Windows requires os.add_dll_directory() for DLL loading
         // First add the executable directory using C++ (more reliable)
         const auto exe_dir = lfs::core::getExecutableDir();
-        const auto exe_dir_str = lfs::core::path_to_utf8(exe_dir);
+        const auto exe_dir_str = lfs::core::path_to_native_utf8(exe_dir);
 
         std::string add_dll_code = std::format(R"(
 import os
@@ -353,7 +354,7 @@ _add_dll_dirs()
                 return false;
             }
 
-            const auto path_utf8 = lfs::core::path_to_utf8(path);
+            const auto path_utf8 = lfs::core::path_to_native_utf8(path);
             PyObject* const py_path = PyUnicode_FromString(path_utf8.c_str());
             if (!py_path) {
                 LOG_WARN("Failed to create Python path string for {}: {}", label, path_utf8);
@@ -386,7 +387,7 @@ _add_dll_dirs()
         void prepend_dev_python_source_path(PyObject* const sys_path) {
             const auto source_dir = lfs::core::utf8_to_path(LFS_DEV_PYTHON_SOURCE_DIR);
             std::error_code ec;
-            if (!std::filesystem::exists(source_dir / "lfs_plugins", ec)) {
+            if (!lfs::core::native_fs::exists(source_dir / "lfs_plugins", ec)) {
                 LOG_WARN("Python dev source path is unavailable: {}",
                          lfs::core::path_to_utf8(source_dir));
                 return;
@@ -1232,7 +1233,7 @@ _add_dll_dirs()
 
                 const auto python_home = lfs::core::getPythonHome();
                 if (!python_home.empty()) {
-                    const auto home_wstr = python_home.wstring();
+                    const auto home_wstr = lfs::core::native_fs::native_path(python_home).wstring();
                     PyStatus st = PyConfig_SetString(&config, &config.home, home_wstr.c_str());
                     if (PyStatus_Exception(st)) {
                         LOG_ERROR("Failed to set Python home: {}", st.err_msg ? st.err_msg : "unknown");
@@ -1264,9 +1265,9 @@ _add_dll_dirs()
 
             // Add user site-packages to sys.path
             std::filesystem::path user_packages = get_user_packages_dir();
-            if (!std::filesystem::exists(user_packages)) {
+            if (!lfs::core::native_fs::exists(user_packages)) {
                 std::error_code ec;
-                std::filesystem::create_directories(user_packages, ec);
+                lfs::core::native_fs::create_directories(user_packages, ec);
                 if (ec) {
                     LOG_WARN("Failed to create user packages dir: {}", ec.message());
                 }
@@ -1737,14 +1738,14 @@ _repl_out.close()
 
     void update_python_path() {
         const auto packages = get_user_packages_dir();
-        if (!std::filesystem::exists(packages))
+        if (!lfs::core::native_fs::exists(packages))
             return;
 
         const GilAcquire gil;
 
         PyObject* const sys_path = PySys_GetObject("path");
         if (sys_path) {
-            const auto path_str = lfs::core::path_to_utf8(packages);
+            const auto path_str = lfs::core::path_to_native_utf8(packages);
             PyObject* const py_path = PyUnicode_FromString(path_str.c_str());
             if (PySequence_Contains(sys_path, py_path) == 0) {
                 PyList_Insert(sys_path, 0, py_path);
@@ -1779,7 +1780,7 @@ _repl_out.close()
         {
             const auto python_module_dir = lfs::core::getPythonModuleDir();
             if (!python_module_dir.empty()) {
-                const auto python_module_dir_utf8 = lfs::core::path_to_utf8(python_module_dir);
+                const auto python_module_dir_utf8 = lfs::core::path_to_native_utf8(python_module_dir);
                 PyObject* sys_path = PySys_GetObject("path"); // borrowed
                 PyObject* py_path = PyUnicode_FromString(python_module_dir_utf8.c_str());
                 PyList_Append(sys_path, py_path);
@@ -1806,7 +1807,7 @@ _repl_out.close()
 
         for (const auto& script : scripts) {
             const auto script_utf8 = lfs::core::path_to_utf8(script);
-            if (!std::filesystem::exists(script)) {
+            if (!lfs::core::native_fs::exists(script)) {
                 return lfs::Status::failure(lfs::make_error({
                     .code = lfs::ErrorCode::NotFound,
                     .domain = lfs::ErrorDomain::IO,
@@ -1817,7 +1818,7 @@ _repl_out.close()
             }
 
             // Ensure script directory is on sys.path
-            const auto parent_utf8 = lfs::core::path_to_utf8(script.parent_path());
+            const auto parent_utf8 = lfs::core::path_to_native_utf8(script.parent_path());
             if (!parent_utf8.empty()) {
                 PyObject* sys_path = PySys_GetObject("path"); // borrowed ref
                 PyObject* py_parent = PyUnicode_FromString(parent_utf8.c_str());
@@ -1828,7 +1829,7 @@ _repl_out.close()
             }
 
 #ifdef _WIN32
-            FILE* const fp = _wfopen(script.wstring().c_str(), L"r");
+            FILE* const fp = _wfopen(lfs::core::native_fs::native_path(script.wstring().c_str()).c_str(), L"r");
 #else
             FILE* const fp = fopen(script.c_str(), "r");
 #endif

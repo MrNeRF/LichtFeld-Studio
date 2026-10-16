@@ -5,6 +5,7 @@
 #include "html.hpp"
 #include "core/base64.hpp"
 #include "core/executable_path.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
@@ -130,7 +131,7 @@ namespace lfs::io {
             candidates.push_back(lfs::core::utf8_to_path(LFS_DEV_VIEWER_SOURCE_DIR));
 #endif
             for (const auto& dir : candidates) {
-                if (std::filesystem::exists(dir / "viewer_template.html")) {
+                if (lfs::core::native_fs::exists(dir / "viewer_template.html")) {
                     return dir;
                 }
             }

@@ -8,6 +8,7 @@
 #include "core/editor_context.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/mesh_data.hpp"
@@ -1028,7 +1029,7 @@ namespace lfs::vis {
                 }
             }
 
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             state::SceneLoaded::Type file_type = state::SceneLoaded::Type::PLY;
             if (ext == ".sog" || lfs::io::is_ssog_path(path)) {
@@ -1344,7 +1345,7 @@ namespace lfs::vis {
             }
 
             // RAD assets always enter LOD mode; availability still reflects tree presence.
-            auto add_ext = path.extension().string();
+            auto add_ext = lfs::core::path_to_utf8(path.extension());
             std::transform(add_ext.begin(), add_ext.end(), add_ext.begin(), ::tolower);
             const auto* splat_for_cropbox = scene_.getNodeById(node_id);
             if (splat_for_cropbox) {
@@ -3399,7 +3400,7 @@ namespace lfs::vis {
             if (checkpoint_params.dataset.data_path.empty()) {
                 throw std::runtime_error("Checkpoint has no dataset path and none provided");
             }
-            if (!std::filesystem::exists(checkpoint_params.dataset.data_path)) {
+            if (!lfs::core::native_fs::exists(checkpoint_params.dataset.data_path)) {
                 throw std::runtime_error("Dataset path does not exist: " +
                                          lfs::core::path_to_utf8(checkpoint_params.dataset.data_path));
             }
@@ -3871,7 +3872,7 @@ namespace lfs::vis {
             if (!splat_paths_.empty()) {
                 info.source_path = splat_paths_.begin()->second;
                 // Determine specific type from extension
-                auto ext = info.source_path.extension().string();
+                auto ext = lfs::core::path_to_utf8(info.source_path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                 if (lfs::io::is_ssog_path(info.source_path)) {
                     info.source_type = "SSOG";

@@ -6,7 +6,6 @@
 <body template="floating-window" data-model="plugin_marketplace">
   <div id="main-area">
     <div class="mp-intro">
-      <span class="mp-title status-info">@tr:plugin_marketplace.title_line</span>
       <span class="mp-warning-note">@tr:plugin_marketplace.warning_body</span>
     </div>
 
@@ -32,39 +31,46 @@
         </div>
       </div>
       <div class="mp-view-toggle">
-        <button id="view-cards-btn" type="button" class="btn btn--secondary mp-view-btn" data-event-click="view_cards"><span class="mp-icon-grid"><span></span><span></span><span></span><span></span></span></button>
-        <button id="view-list-btn" type="button" class="btn btn--secondary mp-view-btn selected" data-event-click="view_list"><span class="mp-icon-list"><span></span><span></span><span></span></span></button>
+        <button id="view-cards-btn" type="button" class="btn btn--secondary mp-view-btn"
+                data-class-selected="view_is_card" data-tooltip="plugin_marketplace.view.grid"
+                data-event-click="view_cards"><span class="mp-icon-grid"><span></span><span></span><span></span><span></span></span></button>
+        <button id="view-list-btn" type="button" class="btn btn--secondary mp-view-btn"
+                data-class-selected="view_is_list" data-tooltip="plugin_marketplace.view.list"
+                data-event-click="view_list"><span class="mp-icon-list"><span></span><span></span><span></span></span></button>
       </div>
     </div>
 
     <!-- Manual URL install -->
     <div class="mp-manual-section">
-      <div class="mp-section-heading">
+      <button type="button" id="manual-header" class="mp-collapse-toggle">
+        <span class="section-arrow" id="manual-arrow">&#x25B6;</span>
         <span class="mp-section-title">@tr:plugin_manager.github_url_or_shorthand</span>
-      </div>
-      <form id="manual-install-form">
-        <div class="mp-manual-row">
-          <input type="text" id="manual-url-input" class="mp-url-input" data-value="manual_url" />
-          <button id="btn-install-url" type="button" class="btn btn--success mp-install-btn" data-event-click="do_install_url">@tr:plugin_manager.button.install_plugin</button>
-        </div>
-        <div id="manual-feedback" class="card-feedback hidden">
-          <progress id="manual-feedback-progress" class="card-progress hidden" max="1" value="0" />
-          <span id="manual-feedback-progress-text" class="card-progress-text hidden"></span>
-          <span id="manual-feedback-success" class="status-text status-success hidden"></span>
-          <span id="manual-feedback-error" class="status-text status-error hidden"></span>
-        </div>
-        <input class="submit-proxy" type="submit" />
-      </form>
+      </button>
+      <div id="manual-content" class="section-content collapsed">
+        <form id="manual-install-form">
+          <div class="mp-manual-row">
+            <input type="text" id="manual-url-input" class="mp-url-input" data-value="manual_url" />
+            <button id="btn-install-url" type="button" class="btn btn--success mp-install-btn" data-event-click="do_install_url"><span>@tr:plugin_marketplace.button.install</span></button>
+          </div>
+          <div id="manual-feedback" class="card-feedback hidden">
+            <progress id="manual-feedback-progress" class="card-progress hidden" max="1" value="0" />
+            <span id="manual-feedback-progress-text" class="card-progress-text hidden"></span>
+            <span id="manual-feedback-success" class="status-text status-success hidden"></span>
+            <span id="manual-feedback-error" class="status-text status-error hidden"></span>
+          </div>
+          <input class="submit-proxy" type="submit" />
+        </form>
 
-      <!-- Supported formats (collapsible) -->
-      <div id="formats-header" class="section-header mp-formats-header">
-        <span class="section-arrow" id="formats-arrow">&#x25B6;</span>
-        <span class="mp-formats-label">@tr:plugin_manager.supported_formats</span>
-      </div>
-      <div id="formats-content" class="section-content collapsed">
-        <div class="mp-format-item">https://github.com/owner/repo</div>
-        <div class="mp-format-item">github:owner/repo</div>
-        <div class="mp-format-item">owner/repo</div>
+        <!-- Supported formats (collapsible) -->
+        <button type="button" id="formats-header" class="mp-collapse-toggle mp-formats-header">
+          <span class="section-arrow" id="formats-arrow">&#x25B6;</span>
+          <span class="mp-formats-label">@tr:plugin_manager.supported_formats</span>
+        </button>
+        <div id="formats-content" class="section-content collapsed">
+          <div class="mp-format-item">https://github.com/owner/repo</div>
+          <div class="mp-format-item">github:owner/repo</div>
+          <div class="mp-format-item">owner/repo</div>
+        </div>
       </div>
     </div>
 
@@ -91,8 +97,8 @@
       <span id="confirm-message" class="confirm-message"></span>
       <div class="separator"></div>
       <div class="confirm-buttons">
-        <button class="btn btn--secondary" data-event-click="confirm_no">@tr:plugin_marketplace.confirm_uninstall_no</button>
-        <button class="btn btn--error" data-event-click="confirm_yes">@tr:plugin_marketplace.confirm_uninstall_yes</button>
+        <button class="btn btn--secondary" data-event-click="confirm_no"><span>@tr:plugin_marketplace.confirm_uninstall_no</span></button>
+        <button class="btn btn--error" data-event-click="confirm_yes"><span>@tr:plugin_marketplace.confirm_uninstall_yes</span></button>
       </div>
     </div>
   </div>

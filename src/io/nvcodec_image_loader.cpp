@@ -8,6 +8,7 @@
 #include "core/cuda/mask_normalization.hpp"
 #include "core/environment.hpp"
 #include "core/executable_path.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
@@ -209,9 +210,9 @@ namespace lfs::io {
             std::vector<std::string> dll_files;
             std::error_code ec;
 
-            for (std::filesystem::directory_iterator it(ext_dir, ec), end; !ec && it != end; it.increment(ec)) {
+            for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(ext_dir), ec), end; !ec && it != end; it.increment(ec)) {
                 const auto& path = it->path();
-                std::string ext = path.extension().string();
+                std::string ext = lfs::core::path_to_utf8(path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
 #ifdef _WIN32
@@ -251,7 +252,7 @@ namespace lfs::io {
 
             for (const auto& f : dll_files) {
                 const auto full_path = ext_dir / f;
-                const HMODULE hModule = LoadLibraryExW(full_path.wstring().c_str(), nullptr, 0);
+                const HMODULE hModule = LoadLibraryExW(lfs::core::native_fs::native_path(full_path).c_str(), nullptr, 0);
                 if (hModule) {
                     LOG_DEBUG("[nvImageCodec] {} loaded OK", f);
                     FreeLibrary(hModule);

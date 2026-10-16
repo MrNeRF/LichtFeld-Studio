@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/loader_service.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
@@ -196,7 +197,7 @@ namespace lfs::io {
                     "  - transforms.json (or transforms_train.json)",
                     filename);
             } else {
-                auto ext = path.extension().string();
+                auto ext = lfs::core::path_to_utf8(path.extension());
                 message = std::format(
                     "Cannot open '{}' - unsupported file format.\n\n"
                     "Supported formats:\n"

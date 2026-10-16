@@ -623,6 +623,46 @@ TEST(PreferencesMigration, InvalidProjectManagerPreferencesFallBackWithoutContam
     EXPECT_EQ(readPreferences(*paths).at("theme"), "dark");
 }
 
+TEST(PreferencesMigration, MarketplacePreferencesPersistAndResetIndependently) {
+    const auto home = makeHome("lfs_preferences_marketplace");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"schema_version", 999}, {"theme", "light"}, {"future_field", 42}});
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_EQ(preferences.marketplaceView(), "list");
+    EXPECT_FALSE(preferences.marketplaceGitCheckout());
+    preferences.setMarketplaceView("card");
+    preferences.setMarketplaceGitCheckout(true);
+    EXPECT_EQ(preferences.marketplaceView(), "card");
+    EXPECT_TRUE(preferences.marketplaceGitCheckout());
+    EXPECT_EQ(readPreferences(*paths).at("marketplace_view"), "card");
+    EXPECT_EQ(readPreferences(*paths).at("marketplace_git_checkout"), true);
+    EXPECT_THROW(preferences.setMarketplaceView("tiles"), std::invalid_argument);
+    preferences.resetMarketplacePreferences();
+    EXPECT_EQ(preferences.marketplaceView(), "list");
+    EXPECT_FALSE(preferences.marketplaceGitCheckout());
+    const auto saved = readPreferences(*paths);
+    EXPECT_FALSE(saved.contains("marketplace_view"));
+    EXPECT_FALSE(saved.contains("marketplace_git_checkout"));
+    EXPECT_EQ(saved.at("theme"), "light");
+    EXPECT_EQ(saved.at("future_field"), 42);
+    EXPECT_EQ(saved.at("schema_version"), 999);
+}
+
+TEST(PreferencesMigration, InvalidMarketplacePreferencesUseDefaults) {
+    const auto home = makeHome("lfs_preferences_marketplace_invalid");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"marketplace_view", "tiles"}, {"marketplace_git_checkout", "yes"}});
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_EQ(preferences.marketplaceView(), "list");
+    EXPECT_FALSE(preferences.marketplaceGitCheckout());
+}
+
 TEST(PreferencesMigration, RenderingDefaultsPreserveFutureFieldsAndDoNotChangeProjectValues) {
     const auto home = makeHome("lfs_rendering_defaults_future");
     const ScopedLfsHome scoped_home(home);

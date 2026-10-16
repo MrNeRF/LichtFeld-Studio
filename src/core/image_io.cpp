@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/image_io.hpp"
+#include "core/native_fs.hpp"
 
 #include "image_codecs.hpp"
 
@@ -343,7 +344,7 @@ namespace {
 
         const std::string path_utf8 = lfs::core::path_to_utf8(path);
         LOG_INFO("Saving image: {} shape: [{}, {}, {}]", path_utf8, height, width, channels);
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
         std::string error;
         bool success = false;
@@ -535,7 +536,7 @@ namespace {
         T* base = nullptr;
         std::optional<JpegExifData> exif;
         if (prefer_embedded_thumbnail && max_width > 0) {
-            auto extension = p.extension().string();
+            auto extension = lfs::core::path_to_utf8(p.extension());
             std::transform(extension.begin(), extension.end(), extension.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (extension == ".jpg" || extension == ".jpeg")
@@ -1029,7 +1030,7 @@ namespace lfs::core {
         }
 
         // Get file extension to determine format
-        std::string ext = p.extension().string();
+        std::string ext = lfs::core::path_to_utf8(p.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
         // Check if format is supported

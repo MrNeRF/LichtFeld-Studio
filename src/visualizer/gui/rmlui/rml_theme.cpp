@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/rml_theme.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/rmlui/rml_path_utils.hpp"
@@ -73,7 +74,7 @@ namespace lfs::vis::gui::rml_theme {
 
     std::string loadBaseRCSS(const std::string& asset_name) {
         try {
-            const auto requested_path = std::filesystem::path(asset_name);
+            const auto requested_path = lfs::core::utf8_to_path(asset_name);
             const auto rcss_path = requested_path.is_absolute()
                                        ? requested_path
                                        : lfs::vis::getAssetPath(asset_name);
@@ -85,7 +86,7 @@ namespace lfs::vis::gui::rml_theme {
                     return it->second;
             }
 
-            std::ifstream f(rcss_path);
+            std::ifstream f(lfs::core::native_fs::native_path(rcss_path));
             if (f) {
                 std::string contents{std::istreambuf_iterator<char>(f),
                                      std::istreambuf_iterator<char>()};
@@ -93,7 +94,7 @@ namespace lfs::vis::gui::rml_theme {
                 auto inserted = base_rcss_cache.emplace(cache_key, std::move(contents));
                 return inserted.first->second;
             }
-            LOG_ERROR("RmlTheme: failed to open RCSS at {}", rcss_path.string());
+            LOG_ERROR("RmlTheme: failed to open RCSS at {}", lfs::core::path_to_utf8(rcss_path));
         } catch (const std::exception& e) {
             LOG_ERROR("RmlTheme: RCSS not found: {}", e.what());
         }

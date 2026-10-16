@@ -4,6 +4,7 @@
 
 #include "eval_image_labels.hpp"
 #include "core/executable_path.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 

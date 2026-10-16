@@ -5,6 +5,7 @@
 #include "spz.hpp"
 #include "coordinate-system-adobe.h"
 #include "core/error.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"

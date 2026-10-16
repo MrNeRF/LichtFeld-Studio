@@ -926,6 +926,10 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "marketplace": "Marketplace",
+    "marketplace_layout": "Layout",
+    "marketplace_git_checkout_description": "Installa un clone Git anziché un archivio dei sorgenti, per esaminare le modifiche e usare Git nella cartella del plugin. Richiede Git; altrimenti viene usato un archivio.",
+    "marketplace_git_unavailable": "Git non è stato trovato nel PATH. Installa Git per usare questa opzione.",
     "projects": "Progetti",
     "project_folders": "Cartelle dei progetti",
     "project_folders_default": "predefinita",
@@ -2260,14 +2264,13 @@
       "updating": "Aggiornamento di {name}...",
       "updated": "Aggiornato {name}"
     },
-    "title_line": "Sfoglia i plugin installabili dal registro dei plugin.",
     "success_with_warning": "{success} {warning}",
     "warning.unverified_source": "Avviso: questa fonte del plugin non include un digest SHA-256; l'archivio non è verificato.",
     "error.checksum_mismatch": "Verifica SHA-256 dell'archivio del plugin non riuscita.",
     "error.digest_conflict": "Il digest dell'URL e l'argomento sha256 non corrispondono.",
     "error.invalid_digest": "Il digest SHA-256 deve contenere esattamente 64 caratteri esadecimali.",
     "error.digest_requires_archive": "La verifica SHA-256 richiede il metodo di installazione tramite archivio.",
-    "warning_body": "AVVISO: LFS non approva direttamente né si assume responsabilità. Utilizzo a proprio rischio.",
+    "warning_body": "AVVISO: Lichtfeld Studio non approva direttamente né si assume responsabilità. Utilizzo a proprio rischio.",
     "filter_label": "Filtro",
     "sort_label": "Ordina per",
     "filter.all": "Tutti",

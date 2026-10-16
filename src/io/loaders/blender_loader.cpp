@@ -5,6 +5,7 @@
 #include "io/loaders/blender_loader.hpp"
 #include "core/camera.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/native_fs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"

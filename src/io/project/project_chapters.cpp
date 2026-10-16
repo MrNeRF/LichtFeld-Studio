@@ -4,6 +4,7 @@
  */
 
 #include "io/project_chapters.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/path_utils.hpp"
 
@@ -752,7 +753,7 @@ namespace lfs::io::project {
             std::error_code error;
             const auto traversal_root = lfs::core::native_fs::traversal_path(root);
             std::filesystem::recursive_directory_iterator iterator(
-                traversal_root, std::filesystem::directory_options::skip_permission_denied, error);
+                lfs::core::native_fs::traversal_path(root), std::filesystem::directory_options::skip_permission_denied, error);
             if (error) {
                 return fail<std::vector<std::byte>>(
                     lfs::ErrorCode::Unavailable,
@@ -801,9 +802,9 @@ namespace lfs::io::project {
                 Entry entry{
                     .path = lfs::core::path_to_generic_utf8(relative),
                     .size = 0,
-                    .kind = std::filesystem::is_directory(status)
+                    .kind = lfs::core::native_fs::is_directory(status)
                                 ? 'd'
-                                : (std::filesystem::is_regular_file(status) ? 'f' : 'o'),
+                                : (lfs::core::native_fs::is_regular_file(status) ? 'f' : 'o'),
                 };
                 if (entry.kind == 'f') {
                     entry.size = iterator->file_size(error);
@@ -955,7 +956,7 @@ namespace lfs::io::project {
         const std::filesystem::path& path, const bool include_full_hash) {
         std::error_code error;
         const auto status = lfs::core::native_fs::status(path, error);
-        if (error || !std::filesystem::exists(status)) {
+        if (error || !lfs::core::native_fs::exists(status)) {
             return fail<ReferenceFingerprint>(
                 lfs::ErrorCode::NotFound, "The referenced path is missing.",
                 std::format("'{}' does not exist", lfs::core::path_to_utf8(path)),
@@ -972,7 +973,7 @@ namespace lfs::io::project {
 
         ReferenceFingerprint result;
         result.mtime_unix_ns = file_time_ns(mtime);
-        if (std::filesystem::is_regular_file(status)) {
+        if (lfs::core::native_fs::is_regular_file(status)) {
             result.kind = FingerprintKind::File;
             result.size = lfs::core::native_fs::file_size(path, error);
             if (error) {
@@ -1004,7 +1005,7 @@ namespace lfs::io::project {
             }
             return result;
         }
-        if (!std::filesystem::is_directory(status)) {
+        if (!lfs::core::native_fs::is_directory(status)) {
             return fail<ReferenceFingerprint>(
                 lfs::ErrorCode::InvalidArgument,
                 "The referenced path type is not supported.",
@@ -1035,7 +1036,7 @@ namespace lfs::io::project {
         const ReferenceFingerprint& expected) {
         std::error_code error;
         const auto status = lfs::core::native_fs::status(path, error);
-        if (error || !std::filesystem::exists(status)) {
+        if (error || !lfs::core::native_fs::exists(status)) {
             return FingerprintCheck{
                 .disposition = FingerprintDisposition::Missing,
                 .observed = std::nullopt,
@@ -1044,10 +1045,10 @@ namespace lfs::io::project {
             };
         }
         const FingerprintKind observed_kind =
-            std::filesystem::is_regular_file(status) ? FingerprintKind::File
-                                                     : FingerprintKind::Directory;
-        if ((!std::filesystem::is_regular_file(status) &&
-             !std::filesystem::is_directory(status)) ||
+            lfs::core::native_fs::is_regular_file(status) ? FingerprintKind::File
+                                                   : FingerprintKind::Directory;
+        if ((!lfs::core::native_fs::is_regular_file(status) &&
+             !lfs::core::native_fs::is_directory(status)) ||
             observed_kind != expected.kind) {
             return FingerprintCheck{
                 .disposition = FingerprintDisposition::TypeMismatch,

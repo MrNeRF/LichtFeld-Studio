@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mcp_http_server.hpp"
+#include "core/native_fs.hpp"
 #include "mcp_server.hpp"
 
 #include "core/environment.hpp"
@@ -68,16 +69,16 @@ namespace lfs::mcp {
             const auto path = paths->configDir() / "mcp_token";
             const auto read_existing = [&]() -> std::string {
                 std::error_code error;
-                if (!std::filesystem::is_regular_file(path, error))
+                if (!lfs::core::native_fs::is_regular_file(path, error))
                     return {};
 #ifndef _WIN32
-                const auto permissions = std::filesystem::status(path, error).permissions();
+                const auto permissions = lfs::core::native_fs::status(path, error).permissions();
                 if (error || (permissions & (std::filesystem::perms::group_all |
                                              std::filesystem::perms::others_all)) !=
                                  std::filesystem::perms::none)
                     return {};
 #endif
-                std::ifstream file(path, std::ios::binary);
+                std::ifstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
                 std::string token;
                 std::getline(file, token);
                 return file && token.size() == 64 &&
@@ -87,11 +88,11 @@ namespace lfs::mcp {
                            ? token
                            : std::string{};
             };
-            if (std::filesystem::exists(path))
+            if (lfs::core::native_fs::exists(path))
                 return read_existing();
 
             std::error_code error;
-            std::filesystem::create_directories(paths->configDir(), error);
+            lfs::core::native_fs::create_directories(paths->configDir(), error);
             if (error)
                 return {};
             std::array<unsigned char, 32> bytes{};
@@ -105,7 +106,7 @@ namespace lfs::mcp {
                 token.push_back(hex[byte & 15]);
             }
 #ifdef _WIN32
-            const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+            const HANDLE file = CreateFileW(lfs::core::native_fs::native_path(path.c_str()).c_str(), GENERIC_WRITE, 0, nullptr,
                                             CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (file == INVALID_HANDLE_VALUE)
                 return read_existing();
@@ -125,7 +126,7 @@ namespace lfs::mcp {
             ::close(file);
 #endif
             if (!saved) {
-                std::filesystem::remove(path, error);
+                lfs::core::native_fs::remove(path, error);
                 return {};
             }
             return token;

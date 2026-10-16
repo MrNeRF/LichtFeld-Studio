@@ -4,6 +4,7 @@
  */
 
 #include "io/project_document.hpp"
+#include "core/native_fs.hpp"
 #include "io/sfm_observation_chapter.hpp"
 
 #include "core/logger.hpp"
@@ -2880,12 +2881,12 @@ namespace lfs::io::project {
         std::filesystem::path temporary;
         try {
             for (const auto& folder : {directory->parent_path().parent_path(), directory->parent_path(), *directory}) {
-                if (std::filesystem::is_symlink(folder))
+                if (lfs::core::native_fs::is_symlink(folder))
                     return embedded_asset_error("The embedded asset cache was redirected.");
-                std::filesystem::create_directory(folder);
+                lfs::core::native_fs::create_directory(folder);
             }
-            std::filesystem::permissions(*directory, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
-            const auto available = std::filesystem::space(*directory).available;
+            lfs::core::native_fs::permissions(*directory, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
+            const auto available = lfs::core::native_fs::space(*directory).available;
             if (payload->size() > available || available - payload->size() < 64ull * 1024 * 1024)
                 return embedded_asset_error("There is not enough disk space to open the embedded scene asset.");
             if (const auto* reader = source_reader()) {
@@ -2895,7 +2896,7 @@ namespace lfs::io::project {
                 }
             }
             const auto destination = *directory / (uuid.to_string() + "." + std::string(extension));
-            if (std::filesystem::is_symlink(destination))
+            if (lfs::core::native_fs::is_symlink(destination))
                 return embedded_asset_error("The embedded asset cache was redirected.");
             temporary = *directory / (core::generate_uuid_v4().to_string() + ".part");
             auto output = detail::NativeFile::create_new(temporary);
@@ -2916,21 +2917,21 @@ namespace lfs::io::project {
                 return (*output)->sync_all();
             });
             if (!copied) {
-                std::filesystem::remove(temporary);
+                lfs::core::native_fs::remove(temporary);
                 return std::move(copied).error();
             }
             (*output).reset(); // Release the file before publication on Windows.
             std::error_code ignored;
-            std::filesystem::remove(destination, ignored);
-            std::filesystem::rename(temporary, destination);
-            std::filesystem::permissions(destination, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-                                         std::filesystem::perm_options::replace);
+            lfs::core::native_fs::remove(destination, ignored);
+            lfs::core::native_fs::rename(temporary, destination);
+            lfs::core::native_fs::permissions(destination, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+                                       std::filesystem::perm_options::replace);
             return destination;
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): return the failure as a typed embedded-asset error after cleanup.
             std::error_code ignored;
             if (!temporary.empty())
-                std::filesystem::remove(temporary, ignored);
+                lfs::core::native_fs::remove(temporary, ignored);
             return embedded_asset_error(error.what());
         }
     }
@@ -2996,7 +2997,7 @@ namespace lfs::io::project {
                     source.entry.chunk_uuid.to_string(), "project.dataset_embed");
             }
             std::error_code error;
-            const auto size = std::filesystem::file_size(source.source_path, error);
+            const auto size = lfs::core::native_fs::file_size(source.source_path, error);
             if (error || size != source.entry.bytes) {
                 return fail<ProjectDocumentSaveReport>(
                     lfs::ErrorCode::DataLoss,
@@ -3150,7 +3151,7 @@ namespace lfs::io::project {
                 (source.entry.kind == "sparse" || source.entry.kind == "meta") &&
                 source.entry.bytes <= MAX_COMPRESSED_DATASET_FILE_BYTES;
             if (materialize) {
-                std::ifstream input(source.source_path, std::ios::binary);
+                std::ifstream input(lfs::core::native_fs::native_path(source.source_path), std::ios::binary);
                 if (!input) {
                     return fail<ProjectDocumentSaveReport>(
                         lfs::ErrorCode::PermissionDenied,
@@ -3218,7 +3219,7 @@ namespace lfs::io::project {
             if (!stream) {
                 return std::move(stream).error();
             }
-            std::ifstream input(source.source_path, std::ios::binary);
+            std::ifstream input(lfs::core::native_fs::native_path(source.source_path), std::ios::binary);
             if (!input) {
                 return fail<ProjectDocumentSaveReport>(
                     lfs::ErrorCode::PermissionDenied,

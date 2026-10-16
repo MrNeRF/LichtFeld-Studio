@@ -35,6 +35,22 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# Deliberately no executable opt-in: exercise extended-path I/O independently
+# of the user's/runner's LongPathsEnabled registry policy.
+if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS))
+    add_executable(lichtfeld_native_filesystem_tests
+        test_native_filesystem.cpp test_native_logging.cpp native_filesystem_test.manifest)
+    target_compile_features(lichtfeld_native_filesystem_tests PRIVATE cxx_std_23)
+    target_compile_definitions(lichtfeld_native_filesystem_tests PRIVATE
+        LFS_STATIC_BUILD LFS_REQUIRE_LONG_PATHS_DISABLED)
+    target_include_directories(lichtfeld_native_filesystem_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include)
+    target_link_libraries(lichtfeld_native_filesystem_tests PRIVATE
+        GTest::gtest_main spdlog::spdlog xxHash::xxhash shell32)
+    add_test(NAME lichtfeld.native_filesystem COMMAND lichtfeld_native_filesystem_tests)
+    set_tests_properties(lichtfeld.native_filesystem PROPERTIES LABELS "cpu;windows;filesystem" TIMEOUT 30)
+endif()
+
 # Exercise a real EXE/DLL boundary: linking the same static runner into both
 # modules would pass same-module tests but split callback and initialization state.
 # Windows CI enables the focused visualizer tests without the full test suite.
@@ -114,6 +130,22 @@ if(BUILD_VISUALIZER_TESTS)
         target_link_libraries(lfs_core PRIVATE delayimp)
         target_link_options(lfs_visualizer PRIVATE "/DELAYLOAD:nvcuda.dll")
         target_link_libraries(lfs_visualizer PRIVATE delayimp)
+    endif()
+
+    if(WIN32)
+        find_package(PkgConfig REQUIRED)
+        find_package(LibArchive REQUIRED)
+        pkg_check_modules(LFS_PATH_TEST_FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil)
+        add_executable(lichtfeld_native_third_party_tests
+            test_native_third_party_paths.cpp native_filesystem_test.manifest)
+        target_compile_features(lichtfeld_native_third_party_tests PRIVATE cxx_std_23)
+        target_compile_definitions(lichtfeld_native_third_party_tests PRIVATE LFS_STATIC_BUILD)
+        target_include_directories(lichtfeld_native_third_party_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include ${CMAKE_SOURCE_DIR}/src/visualizer)
+        target_link_libraries(lichtfeld_native_third_party_tests PRIVATE
+            GTest::gtest_main RmlUi::RmlUi assimp::assimp LibArchive::LibArchive PkgConfig::LFS_PATH_TEST_FFMPEG shell32)
+        add_test(NAME lichtfeld.native_third_party_paths COMMAND lichtfeld_native_third_party_tests)
+        set_tests_properties(lichtfeld.native_third_party_paths PROPERTIES LABELS "cpu;windows;filesystem" TIMEOUT 30)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
@@ -215,6 +247,7 @@ if(BUILD_UNICODE_TEST_ONLY)
     # Standalone Unicode path tests without CUDA runtime linkage
     add_executable(unicode_path_test
         test_unicode_paths_windows.cpp
+        test_native_filesystem.cpp
         test_project_save_as_paths.cpp
         test_weight_file_paths.cpp
         test_crash_handler.cpp
@@ -291,6 +324,7 @@ endif()
 # unreferenced function sections before resolution. Keep the dependency-heavy
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
+    test_atomic_output.cpp
     test_project_save_as_paths.cpp
     test_native_fs.cpp
     test_json_chapter_dom.cpp
@@ -343,6 +377,10 @@ else()
 endif()
 
 add_executable(lichtfeld_format_tests ${LICHT_FORMAT_TARGET_FILES})
+if(WIN32 AND MSVC)
+    target_sources(lichtfeld_format_tests PRIVATE native_filesystem_test.manifest)
+endif()
+
 target_include_directories(lichtfeld_format_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/include
     ${CMAKE_SOURCE_DIR}/src/io/include
@@ -600,6 +638,7 @@ set(TEST_FILES
     test_usd_format.cpp
     test_nurec_usdz_format.cpp
     test_unicode_paths_windows.cpp
+    test_native_filesystem.cpp
     test_interleaved_slice_copy.cpp
     test_densification_tensor_ops.cpp
     test_tensor_zero_dimension.cpp

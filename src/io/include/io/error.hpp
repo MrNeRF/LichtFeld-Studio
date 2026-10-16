@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include <expected>
 #include <filesystem>
@@ -156,7 +157,7 @@ namespace lfs::io {
         if (!lfs::core::native_fs::is_directory(path, ec)) {
             check_path = path.parent_path();
             if (check_path.empty()) {
-                check_path = std::filesystem::current_path(ec);
+                check_path = lfs::core::native_fs::current_path(ec);
             }
         }
 
@@ -214,7 +215,7 @@ namespace lfs::io {
 
         auto parent = path.parent_path();
         if (parent.empty()) {
-            parent = std::filesystem::current_path(ec);
+            parent = lfs::core::native_fs::current_path(ec);
         }
 
         if (!lfs::core::native_fs::exists(parent, ec)) {

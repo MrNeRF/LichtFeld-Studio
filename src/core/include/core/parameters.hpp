@@ -7,6 +7,7 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/mesh2splat.hpp"
+#include "core/path_utils.hpp"
 
 #include <algorithm>
 #include <array>
@@ -201,7 +202,7 @@ namespace lfs::core {
         [[nodiscard]] inline std::filesystem::path default_dataset_output_path(
             const std::filesystem::path& dataset_path) {
             auto base_path = dataset_path;
-            auto ext = dataset_path.extension().string();
+            auto ext = lfs::core::path_to_utf8(dataset_path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });

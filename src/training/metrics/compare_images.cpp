@@ -3,6 +3,7 @@
 
 #include "compare_images.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/native_fs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"

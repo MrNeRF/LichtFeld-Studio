@@ -2,10 +2,6 @@
 
 /* ── Intro and controls ──────────────────────────────────── */
 
-.mp-title {
-    color: @{text};
-}
-
 .mp-warning-note {
     color: @{warning};
 }
@@ -23,7 +19,6 @@
 }
 
 .mp-control-label,
-.mp-section-hint,
 .mp-empty-description,
 .card-description,
 .card-tags,
@@ -39,11 +34,20 @@
     border-color: @{border};
 }
 
-.mp-select:hover,
-.mp-select-sort:hover,
 .mp-url-input:focus,
 .mp-url-input:focus-visible {
     border-color: @{primary};
+}
+
+/* Hover only changes the control's icon or label, never its surrounding row. */
+.mp-select:hover,
+.mp-select-sort:hover {
+    border-color: @{border};
+}
+
+.mp-controls selectarrow:hover {
+    image-color: @{primary};
+    background-color: transparent;
 }
 
 .mp-view-btn {
@@ -70,23 +74,23 @@
     background-color: @{text};
 }
 
-.mp-formats-header {
-    border-top-color: @{alpha(border,0.75)};
+.mp-collapse-toggle:hover,
+.mp-collapse-toggle:focus-visible {
+    color: @{primary};
+    background-color: transparent;
 }
 
-.mp-formats-header:hover,
-.mp-formats-header.is-expanded {
-    color: @{text};
-    background-color: @{alpha(primary,0.08)};
+.mp-collapse-toggle:hover .section-arrow,
+.mp-collapse-toggle:hover .mp-section-title,
+.mp-collapse-toggle:hover .mp-formats-label,
+.mp-collapse-toggle:focus-visible .section-arrow,
+.mp-collapse-toggle:focus-visible .mp-section-title,
+.mp-collapse-toggle:focus-visible .mp-formats-label {
+    color: @{primary};
 }
 
 .mp-formats-label {
     color: @{text_dim};
-}
-
-.mp-formats-header:hover .mp-formats-label,
-.mp-formats-header.is-expanded .mp-formats-label {
-    color: @{text};
 }
 
 .mp-format-item {
@@ -110,11 +114,6 @@
 .plugin-card {
     background-color: @{surface};
     border-color: @{alpha(border,0.88)};
-}
-
-.plugin-card:hover {
-    background-color: @{surface_bright};
-    border-color: @{primary};
 }
 
 .plugin-card.card--in-progress {
@@ -142,14 +141,25 @@
     color: @{info};
 }
 
-.card-repo,
-.plugin-list-link {
+.card-repo {
     color: @{text_dim};
 }
 
-.plugin-list-link:hover {
+.mp-project-link {
     color: @{primary};
-    text-decoration: underline;
+}
+
+.mp-project-link:hover,
+.mp-project-link:focus-visible {
+    color: @{text};
+}
+
+.mp-stars {
+    color: @{text_dim};
+}
+
+.mp-star-icon {
+    color: @{warning};
 }
 
 .card-metrics {
@@ -181,11 +191,6 @@
     border-color: @{alpha(border,0.78)};
 }
 
-.plugin-list-row:hover {
-    background-color: @{surface_bright};
-    border-color: @{alpha(primary,0.70)};
-}
-
 .plugin-list-row.card--in-progress {
     border-left-color: @{primary};
 }
@@ -202,17 +207,14 @@
     border-top-color: @{alpha(border,0.65)};
 }
 
-.plugin-list-disclosure,
-.plugin-list-name-btn {
+.plugin-list-disclosure {
     color: @{text_dim};
 }
 
 .plugin-list-disclosure:hover,
-.plugin-list-name-btn:hover,
-.plugin-list-name-btn:focus-visible,
 .plugin-list-disclosure:focus-visible {
     color: @{text};
-    background-color: @{alpha(primary,0.10)};
+    background-color: transparent;
 }
 
 .plugin-list-summary-status.status-success {
@@ -225,14 +227,6 @@
 
 .plugin-list-summary-status.status-muted {
     color: @{text_dim};
-}
-
-.plugin-list-marker--local {
-    color: @{text_dim};
-}
-
-.plugin-list-marker--remote {
-    color: @{primary};
 }
 
 /* ── Catalog status ───────────────────────────────────────── */

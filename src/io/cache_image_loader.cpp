@@ -7,6 +7,7 @@
 #include "core/cuda/mask_normalization.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/native_fs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -59,7 +60,7 @@ namespace lfs::io {
 
     std::size_t get_available_physical_memory() {
 #ifdef __linux__
-        std::ifstream meminfo("/proc/meminfo");
+        std::ifstream meminfo(lfs::core::native_fs::native_path("/proc/meminfo"));
         if (meminfo.is_open()) {
             std::string line;
             while (std::getline(meminfo, line)) {
@@ -397,7 +398,7 @@ namespace lfs::io {
         using namespace lfs::core;
         const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
         const CUDAStreamGuard guard(stream);
-        auto extension = path.extension().string();
+        auto extension = lfs::core::path_to_utf8(path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
             return static_cast<char>(std::tolower(ch));
         });
@@ -637,7 +638,7 @@ namespace lfs::io {
     }
 
     bool CacheLoader::is_jpeg_format(const std::filesystem::path& path) const {
-        std::string ext = path.extension().string();
+        std::string ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         return ext == ".jpg" || ext == ".jpeg" || ext == ".jp2";
     }

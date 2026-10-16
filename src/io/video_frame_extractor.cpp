@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_frame_extractor.hpp"
+#include "core/native_fs.hpp"
 #include "core/image_codecs.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -392,7 +393,7 @@ namespace lfs::io {
         }
 
         bool write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
-            std::ofstream file(path, std::ios::binary);
+            std::ofstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
             if (!file)
                 return false;
             file.write(reinterpret_cast<const char*>(data.data()),
@@ -1200,7 +1201,7 @@ namespace lfs::io {
                     throw std::invalid_argument(error);
                 }
 
-                std::filesystem::create_directories(params.output_dir);
+                lfs::core::native_fs::create_directories(params.output_dir);
 
                 int64_t total_frames = video_stream->nb_frames;
                 if (unknown_stream_end) {
@@ -2480,7 +2481,7 @@ namespace lfs::io {
                                               {"sharpness_score", f.sharpness_score}});
                         }
 
-                        std::ofstream meta_file(meta_path, std::ios::binary);
+                        std::ofstream meta_file(lfs::core::native_fs::native_path(meta_path), std::ios::binary);
                         meta_file << root.dump(2);
                         meta_file.close();
                         if (!meta_file)

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/project_operations.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
@@ -1823,8 +1824,8 @@ namespace lfs::io::project {
             return std::move(output_lock).error();
         if (auto available = refuse_existing_destination(destination); !available)
             return std::move(available).error();
-        auto temporary = destination;
-        temporary += ".clean-" + lfs::core::generate_uuid_v4().to_string() + ".tmp";
+        const auto temporary = detail::project_artifact_path(destination,
+                                                             ".clean-" + lfs::core::generate_uuid_v4().to_string() + ".tmp");
         struct Cleanup {
             std::filesystem::path path;
             ~Cleanup() {

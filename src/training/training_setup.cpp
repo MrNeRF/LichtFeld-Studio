@@ -6,6 +6,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
 #include "core/events.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
@@ -169,7 +170,7 @@ namespace lfs::training {
         }
 
         bool isPlainPointCloudPly(const std::filesystem::path& path) {
-            return path.extension().string() == ".ply" && !lfs::io::is_gaussian_splat_ply(path);
+            return lfs::core::path_to_utf8(path.extension()) == ".ply" && !lfs::io::is_gaussian_splat_ply(path);
         }
 
         std::optional<std::filesystem::path> gaussianSplatInitPath(

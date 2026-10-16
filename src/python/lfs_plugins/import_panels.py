@@ -4,7 +4,7 @@
 
 import threading
 import time
-from pathlib import Path
+from _lfs_path_io import Path
 
 import lichtfeld as lf
 

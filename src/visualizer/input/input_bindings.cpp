@@ -5,6 +5,7 @@
 #include "input/input_bindings.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/source_site.hpp"
@@ -633,7 +634,7 @@ namespace lfs::vis::input {
             std::string selected = "Default";
             std::ifstream marker;
             const auto marker_path = *config_dir / ".active-profile";
-            if (std::filesystem::exists(marker_path) &&
+            if (lfs::core::native_fs::exists(marker_path) &&
                 lfs::core::open_file_for_read(marker_path, marker)) {
                 std::getline(marker, selected);
                 if (!isValidProfileName(selected))
@@ -641,8 +642,8 @@ namespace lfs::vis::input {
             }
             for (const auto& name : {selected, std::string("Default")}) {
                 const auto saved_path = *config_dir / (name + ".json");
-                if (!std::filesystem::is_symlink(saved_path) &&
-                    std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path)) {
+                if (!lfs::core::native_fs::is_symlink(saved_path) &&
+                    lfs::core::native_fs::exists(saved_path) && loadProfileFromFile(saved_path)) {
                     current_profile_name_ = name;
                     return;
                 }
@@ -674,7 +675,7 @@ namespace lfs::vis::input {
         const auto path = profilePath(name);
         if (!path)
             return;
-        if (std::filesystem::exists(*path) && loadProfileFromFile(*path)) {
+        if (lfs::core::native_fs::exists(*path) && loadProfileFromFile(*path)) {
             const bool corrected_name = current_profile_name_ != name;
             current_profile_name_ = name;
             persistActiveProfileName();
@@ -728,7 +729,7 @@ namespace lfs::vis::input {
             return std::nullopt;
         }
         auto path = *config_dir / (std::string(name) + ".json");
-        if (std::filesystem::is_symlink(path)) {
+        if (lfs::core::native_fs::is_symlink(path)) {
             LOG_WARN("Refusing symbolic link input profile '{}': file is outside the keymap directory", name);
             return std::nullopt;
         }
@@ -828,8 +829,8 @@ namespace lfs::vis::input {
         using json = nlohmann::json;
 
         std::error_code file_error;
-        if (std::filesystem::exists(path, file_error)) {
-            if (std::filesystem::is_symlink(path, file_error) || file_error) {
+        if (lfs::core::native_fs::exists(path, file_error)) {
+            if (lfs::core::native_fs::is_symlink(path, file_error) || file_error) {
                 LOG_WARN("Refusing to overwrite symbolic link input profile '{}': file is unchanged",
                          lfs::core::path_to_utf8(path));
                 return false;
@@ -852,7 +853,7 @@ namespace lfs::vis::input {
                 const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
                 auto backup = path;
                 backup += ".damaged-" + std::to_string(stamp) + ".bak";
-                const bool backed_up = std::filesystem::copy_file(
+                const bool backed_up = lfs::core::native_fs::copy_file(
                     path, backup, std::filesystem::copy_options::none, file_error);
                 if (!backed_up || file_error) {
                     LOG_ERROR("Could not preserve damaged input profile '{}'; file is unchanged",
@@ -1246,7 +1247,7 @@ namespace lfs::vis::input {
                                                 ? std::optional<std::filesystem::path>(*config_dir / "Default.json")
                                                 : std::nullopt;
                 if (g_persistence_enabled.load(std::memory_order_acquire) &&
-                    config_default && std::filesystem::equivalent(path, *config_default, ec)) {
+                    config_default && lfs::core::native_fs::equivalent(path, *config_default, ec)) {
                     saveProfileToFile(*config_default);
                 }
             }
@@ -1423,8 +1424,8 @@ namespace lfs::vis::input {
             return profiles;
 
         const auto config_dir = getConfigDir();
-        if (config_dir && std::filesystem::exists(*config_dir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(*config_dir)) {
+        if (config_dir && lfs::core::native_fs::exists(*config_dir)) {
+            for (const auto& entry : lfs::core::native_fs::directory_iterator(*config_dir)) {
                 if (entry.path().extension() == ".json") {
                     const std::string name = lfs::core::path_to_utf8(entry.path().stem());
                     if (name != "Default" && isValidProfileName(name)) {

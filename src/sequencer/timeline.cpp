@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "timeline.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "interpolation.hpp"
@@ -461,7 +462,7 @@ namespace lfs::sequencer {
             }
 
             std::error_code size_error;
-            const uintmax_t file_size = std::filesystem::file_size(path_fs, size_error);
+            const uintmax_t file_size = lfs::core::native_fs::file_size(path_fs, size_error);
             if (size_error || file_size == 0 || file_size > MAX_TIMELINE_JSON_BYTES)
                 throw std::runtime_error("Timeline JSON is empty or exceeds the 16 MiB input budget");
             std::vector<char> json_bytes(static_cast<size_t>(file_size) + 1);

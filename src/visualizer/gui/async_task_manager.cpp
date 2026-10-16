@@ -7,6 +7,7 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/number_format.hpp"
@@ -1651,7 +1652,7 @@ namespace lfs::vis::gui {
         cmd::SequencerExportVideo::when([this](const auto& evt) {
             const auto path = evt.path.empty()
                                   ? SaveMp4FileDialog("camera_path")
-                                  : std::filesystem::path(evt.path);
+                                  : lfs::core::utf8_to_path(evt.path);
             if (path.empty())
                 return;
 
@@ -1958,7 +1959,7 @@ namespace lfs::vis::gui {
         publication.path = path;
         publication.format = format;
         try {
-            if (std::filesystem::exists(path) || std::filesystem::is_symlink(path))
+            if (lfs::core::native_fs::exists(path) || lfs::core::native_fs::is_symlink(path))
                 throw std::runtime_error("The gallery preparation directory already exists.");
             auto snapshots = manager->getScene().snapshotVisibleSplats();
             const auto visible = manager->getScene().getVisibleSplatNodeSlots();
@@ -2084,7 +2085,7 @@ namespace lfs::vis::gui {
                 if (cancelled || !error.empty()) {
                     if (owns_directory) {
                         std::error_code ignored;
-                        std::filesystem::remove_all(path, ignored);
+                        lfs::core::native_fs::remove_all(path, ignored);
                     }
                     jobs_.report(job, std::nullopt, cancelled ? "Scene preparation canceled" : "Scene preparation failed", error);
                 } else {

@@ -7,9 +7,11 @@
 #include "core/cuda/mask_normalization.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/error_reporter.hpp"
+#include "core/native_fs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/stb_file.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "cuda/image_format_kernels.cuh"
@@ -55,37 +57,9 @@
 namespace lfs::io {
 
     namespace {
-        // stb's filename API copies the path into a fixed buffer and opens it plainly, so long paths go
-        // through lfs::core::open_file and stb's FILE readers instead.
-        class StbFile {
-        public:
-            explicit StbFile(const std::filesystem::path& path) : file_(lfs::core::open_file(path, "rb")) {}
-            ~StbFile() {
-                if (file_)
-                    std::fclose(file_);
-            }
-            StbFile(const StbFile&) = delete;
-            StbFile& operator=(const StbFile&) = delete;
-            std::FILE* get() const { return file_; }
-
-        private:
-            std::FILE* file_;
-        };
-
-        bool stb_is_16_bit(const std::filesystem::path& path) {
-            const StbFile file(path);
-            return file.get() && stbi_is_16_bit_from_file(file.get());
-        }
-
-        stbi_uc* stb_load(const std::filesystem::path& path, int* w, int* h, int* channels, const int desired) {
-            const StbFile file(path);
-            return file.get() ? stbi_load_from_file(file.get(), w, h, channels, desired) : nullptr;
-        }
-
-        stbi_us* stb_load_16(const std::filesystem::path& path, int* w, int* h, int* channels, const int desired) {
-            const StbFile file(path);
-            return file.get() ? stbi_load_from_file_16(file.get(), w, h, channels, desired) : nullptr;
-        }
+        using core::stb_file::stb_is_16_bit;
+        using core::stb_file::stb_load;
+        using core::stb_file::stb_load_16;
 
         // Run-local cache payload: processed float32 depth, with no normalization.
         constexpr std::array<uint8_t, 8> FLOAT_DEPTH_MAGIC{'L', 'F', 'D', 'E', 'P', 'T', 'H', 1};
@@ -368,7 +342,7 @@ namespace lfs::io {
                     ec.clear();
                     continue;
                 }
-                const auto name = entry.path().filename().string();
+                const auto name = lfs::core::path_to_utf8(entry.path().filename());
                 if (!name.starts_with(prefix))
                     continue;
 
@@ -3097,7 +3071,7 @@ namespace lfs::io {
                     bool used_gpu = false;
                     bool float_depth = false;
                     bool share_processed_mask_source = false;
-                    auto extension = item.path.extension().string();
+                    auto extension = lfs::core::path_to_utf8(item.path.extension());
                     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
                         return static_cast<char>(std::tolower(ch));
                     });
@@ -3436,7 +3410,7 @@ namespace lfs::io {
                     std::optional<MaskedImageFill> fill;
                     if (item.fill_masked_rgb && (item.rgb_mask_path || item.rgb_mask)) {
                         lfs::core::Tensor mask;
-                        auto mask_extension = item.rgb_mask_path ? item.rgb_mask_path->extension().string() : std::string{};
+                        auto mask_extension = item.rgb_mask_path ? lfs::core::path_to_utf8(item.rgb_mask_path->extension()) : std::string{};
                         std::transform(mask_extension.begin(), mask_extension.end(), mask_extension.begin(), [](unsigned char ch) {
                             return static_cast<char>(std::tolower(ch));
                         });

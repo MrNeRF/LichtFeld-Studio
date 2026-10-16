@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/elements/scene_graph_element.hpp"
+#include "core/native_fs.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/rmlui/elements/scene_graph_drop_target.hpp"
 #include "gui/scene_graph_context_actions.hpp"
@@ -125,9 +126,9 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] std::string_view colmapExportExtension(const std::filesystem::path& source_path) {
             std::error_code ec;
-            const bool has_binary_cameras = std::filesystem::exists(source_path / "cameras.bin", ec);
+            const bool has_binary_cameras = lfs::core::native_fs::exists(source_path / "cameras.bin", ec);
             ec.clear();
-            const bool has_binary_images = std::filesystem::exists(source_path / "images.bin", ec);
+            const bool has_binary_images = lfs::core::native_fs::exists(source_path / "images.bin", ec);
             const bool has_binary_metadata = has_binary_cameras && has_binary_images;
             return has_binary_metadata ? "bin" : "txt";
         }
@@ -143,7 +144,7 @@ namespace lfs::vis::gui {
             };
             for (const std::string_view file_name : file_names) {
                 std::error_code ec;
-                if (std::filesystem::exists(output_path / std::string(file_name), ec)) {
+                if (lfs::core::native_fs::exists(output_path / std::string(file_name), ec)) {
                     return true;
                 }
             }

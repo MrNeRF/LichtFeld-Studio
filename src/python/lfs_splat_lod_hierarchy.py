@@ -3,12 +3,13 @@
 """Helpers for building multi-level splat simplify hierarchies in Python."""
 
 from __future__ import annotations
+from _lfs_path_io import open
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import json
 import math
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:

@@ -2650,7 +2650,7 @@ namespace {
         if (!fs::exists(dir, ec)) {
             return false;
         }
-        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(dir), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec) {
                 continue;

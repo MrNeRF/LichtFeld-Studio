@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "python/python_runtime.hpp"
@@ -566,8 +567,8 @@ namespace lfs::python {
                     return;
                 if (const auto config_dir = InputBindings::getConfigDir()) {
                     const auto saved_path = *config_dir / "Default.json";
-                    if (std::filesystem::exists(saved_path)) {
-                        std::filesystem::remove(saved_path);
+                    if (lfs::core::native_fs::exists(saved_path)) {
+                        lfs::core::native_fs::remove(saved_path);
                     }
                 }
                 get_keymap_bindings()->loadProfile("Default");

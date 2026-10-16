@@ -6,6 +6,7 @@
 #include "core/environment.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/native_fs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
@@ -252,7 +253,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] int64_t fileTimeNs(const std::filesystem::path& path) {
             std::error_code ec;
-            const auto write_time = std::filesystem::last_write_time(path, ec);
+            const auto write_time = lfs::core::native_fs::last_write_time(path, ec);
             if (ec)
                 return 0;
             return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -262,7 +263,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] std::filesystem::path stableAbsolutePath(const std::filesystem::path& path) {
             std::error_code ec;
-            auto absolute = std::filesystem::weakly_canonical(path, ec);
+            auto absolute = lfs::core::native_fs::weakly_canonical(path, ec);
             if (!ec && !absolute.empty())
                 return absolute;
             absolute = std::filesystem::absolute(path, ec);
@@ -285,14 +286,14 @@ namespace lfs::vis::gui {
             if (const auto home = lfs::core::environment::value("HOME")) {
                 return lfs::core::utf8_to_path(*home) / ".cache" / "lichtfeld" / "ply_sequence_cache";
             }
-            return std::filesystem::temp_directory_path() / "lichtfeld" / "ply_sequence_cache";
+            return lfs::core::native_fs::temp_directory_path() / "lichtfeld" / "ply_sequence_cache";
 #endif
         }
 
         [[nodiscard]] std::optional<PlySequenceCacheHeader> makePlySequenceCacheHeader(
             const std::filesystem::path& source_path) {
             std::error_code ec;
-            const uint64_t source_size = std::filesystem::file_size(source_path, ec);
+            const uint64_t source_size = lfs::core::native_fs::file_size(source_path, ec);
             if (ec)
                 return std::nullopt;
 
@@ -346,7 +347,7 @@ namespace lfs::vis::gui {
             if (!file || !cacheHeaderMatches(actual_header, *expected_header)) {
                 error = "stale cache";
                 std::error_code ec;
-                std::filesystem::remove(cache_path, ec);
+                lfs::core::native_fs::remove(cache_path, ec);
                 return nullptr;
             }
 
@@ -356,14 +357,14 @@ namespace lfs::vis::gui {
                 if (!file) {
                     error = "truncated cache";
                     std::error_code ec;
-                    std::filesystem::remove(cache_path, ec);
+                    lfs::core::native_fs::remove(cache_path, ec);
                     return nullptr;
                 }
                 return model;
             } catch (const std::exception& e) {
                 error = e.what();
                 std::error_code ec;
-                std::filesystem::remove(cache_path, ec);
+                lfs::core::native_fs::remove(cache_path, ec);
                 return nullptr;
             }
         }
@@ -379,7 +380,7 @@ namespace lfs::vis::gui {
 
             const auto cache_path = plySequenceCachePath(*header);
             std::error_code ec;
-            std::filesystem::create_directories(cache_path.parent_path(), ec);
+            lfs::core::native_fs::create_directories(cache_path.parent_path(), ec);
             if (ec) {
                 error = ec.message();
                 return false;
@@ -400,22 +401,22 @@ namespace lfs::vis::gui {
                 model.serialize(file);
             } catch (const std::exception& e) {
                 error = e.what();
-                std::filesystem::remove(tmp_path, ec);
+                lfs::core::native_fs::remove(tmp_path, ec);
                 return false;
             }
             file.close();
             if (!file) {
                 error = "write failed";
-                std::filesystem::remove(tmp_path, ec);
+                lfs::core::native_fs::remove(tmp_path, ec);
                 return false;
             }
 
-            std::filesystem::remove(cache_path, ec);
+            lfs::core::native_fs::remove(cache_path, ec);
             ec.clear();
-            std::filesystem::rename(tmp_path, cache_path, ec);
+            lfs::core::native_fs::rename(tmp_path, cache_path, ec);
             if (ec) {
                 error = ec.message();
-                std::filesystem::remove(tmp_path, ec);
+                lfs::core::native_fs::remove(tmp_path, ec);
                 return false;
             }
             return true;
@@ -2298,7 +2299,7 @@ namespace lfs::vis::gui {
             return fail(lfs::ErrorCode::Unavailable, "Scene manager unavailable");
 
         std::error_code ec;
-        if (!std::filesystem::is_directory(directory, ec)) {
+        if (!lfs::core::native_fs::is_directory(directory, ec)) {
             LOG_ERROR("PLY sequence path is not a directory: {}", lfs::core::path_to_utf8(directory));
             return fail(lfs::ErrorCode::InvalidArgument, std::format("PLY sequence path is not a directory: {}", lfs::core::path_to_utf8(directory)));
         }
@@ -2309,14 +2310,14 @@ namespace lfs::vis::gui {
             return fail(lfs::ErrorCode::Unavailable,
                         std::format("Failed to read PLY sequence directory: {}", ec.message()));
         };
-        std::filesystem::directory_iterator entry(directory, ec);
+        std::filesystem::directory_iterator entry(lfs::core::native_fs::traversal_path(directory), ec);
         if (ec)
             return directory_error();
         const std::filesystem::directory_iterator end;
         for (; entry != end; entry.increment(ec)) {
             if (ec)
                 return directory_error();
-            auto ext = entry->path().extension().string();
+            auto ext = lfs::core::path_to_utf8(entry->path().extension());
             std::transform(ext.begin(), ext.end(), ext.begin(),
                            [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (ext != ".ply")
@@ -2330,7 +2331,7 @@ namespace lfs::vis::gui {
             if (ec)
                 return directory_error();
             if (regular_file)
-                paths.push_back(entry->path());
+                paths.push_back(lfs::core::native_fs::entry_path(directory, entry->path()));
         }
         if (ec)
             return directory_error();

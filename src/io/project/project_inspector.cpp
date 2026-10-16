@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/project_inspector.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/checkpoint_format.hpp"
 #include "core/path_utils.hpp"
@@ -201,7 +202,7 @@ namespace lfs::io::project {
         std::pair<std::uint32_t, std::uint32_t>
         inspect_preview_dimensions(const std::filesystem::path& path,
                                    const std::optional<PreviewLocator>& preview) {
-            std::ifstream stream(path, std::ios::binary);
+            std::ifstream stream(lfs::core::native_fs::native_path(path), std::ios::binary);
             return stream ? inspect_preview_dimensions(stream, preview)
                           : std::pair<std::uint32_t, std::uint32_t>{};
         }
@@ -222,12 +223,12 @@ namespace lfs::io::project {
         std::optional<ProjectInspectorCard>
         inspect_project_card_headers(const std::filesystem::path& path) {
             std::error_code size_error;
-            const std::uint64_t physical_size = std::filesystem::file_size(
+            const std::uint64_t physical_size = lfs::core::native_fs::file_size(
                 path, size_error);
             if (size_error || physical_size < SUPERBLOCK_BYTES) {
                 return std::nullopt;
             }
-            std::ifstream stream(path, std::ios::binary);
+            std::ifstream stream(lfs::core::native_fs::native_path(path), std::ios::binary);
             if (!stream) {
                 return std::nullopt;
             }
@@ -553,7 +554,7 @@ namespace lfs::io::project {
                 selected->stored_bytes == row.stored_bytes) {
                 read = static_cast<bool>(reader.read_logical_prefix(row, prefix));
             } else if (row.compression == Compression::Stored) {
-                std::ifstream stream(reader.path(), std::ios::binary);
+                std::ifstream stream(lfs::core::native_fs::native_path(reader.path()), std::ios::binary);
                 if (stream) {
                     stream.seekg(static_cast<std::streamoff>(row.payload_offset));
                     stream.read(reinterpret_cast<char*>(prefix.data()),
@@ -1037,7 +1038,7 @@ namespace lfs::io::project {
                 bool reachable = false;
                 if (path_value) {
                     std::error_code error;
-                    reachable = std::filesystem::exists(*path_value, error) && !error;
+                    reachable = lfs::core::native_fs::exists(*path_value, error) && !error;
                 }
                 result.references.push_back(ProjectInspectorReference{
                     .key = record.key,
@@ -1053,7 +1054,7 @@ namespace lfs::io::project {
             if (parameter_dataset_path.is_relative())
                 parameter_dataset_path = reader.path().parent_path() / parameter_dataset_path;
             std::error_code error;
-            const bool reachable = std::filesystem::is_directory(parameter_dataset_path, error) && !error;
+            const bool reachable = lfs::core::native_fs::is_directory(parameter_dataset_path, error) && !error;
             result.references.push_back({"training_parameters", "dataset", parameter_dataset_path, reachable});
         }
 
@@ -1076,7 +1077,7 @@ namespace lfs::io::project {
         }
 
         std::error_code sidecar_error;
-        result.autosave_sidecar_present = std::filesystem::exists(
+        result.autosave_sidecar_present = lfs::core::native_fs::exists(
                                               autosave_sidecar_path(path), sidecar_error) &&
                                           !sidecar_error;
         return result;
