@@ -2966,11 +2966,8 @@ namespace lfs::vis {
         features2.features.fillModeNonSolid = supported_features2.features.fillModeNonSolid;
         features2.features.wideLines = supported_features2.features.wideLines;
         features2.features.geometryShader = supported_features2.features.geometryShader;
-        const char* const disable_sparse_env = std::getenv("LFS_DISABLE_SPARSE_BINDING");
-        const bool sparse_disabled = disable_sparse_env &&
-                                     (std::strcmp(disable_sparse_env, "1") == 0 || std::strcmp(disable_sparse_env, "true") == 0);
         features2.features.sparseBinding =
-            (sparse_binding_supported && graphics_queue_sparse && !sparse_disabled) ? VK_TRUE : VK_FALSE;
+            (sparse_binding_supported && graphics_queue_sparse) ? VK_TRUE : VK_FALSE;
 
         VkDeviceCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -3915,9 +3912,6 @@ namespace lfs::vis {
         if (!device_ || imported.buffer == VK_NULL_HANDLE) {
             return fail("bindNewChunks requires an imported VkBuffer");
         }
-        if (!imported.sparse) {
-            return fail("bindNewChunks requires a sparse imported VkBuffer");
-        }
         if (imported.bound_chunk_offsets.size() > block.chunks.size()) {
             return fail("bindNewChunks: bound offsets exceed CUDA chunk count");
         }
@@ -3927,6 +3921,9 @@ namespace lfs::vis {
         if (unbound.empty()) {
             imported.bound_chunks = imported.bound_chunk_offsets.size();
             return true;
+        }
+        if (!imported.sparse) {
+            return fail("bindNewChunks requires a sparse imported VkBuffer");
         }
 
         VkMemoryRequirements memory_requirements{};

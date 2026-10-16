@@ -3727,8 +3727,7 @@ namespace lfs::vis {
                     commit_error = grew.error();
                     return false;
                 }
-                if (shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE ||
-                    !shared_scratch_.imported_buffer.sparse) {
+                if (shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE) {
                     VulkanContext::ExternalBuffer imported{};
                     if (!context.importExportableBlock(*shared_scratch_.block,
                                                        usage,
@@ -3737,9 +3736,6 @@ namespace lfs::vis {
                                                        "cuda_vulkan_arena")) {
                         commit_error = context.lastError();
                         return false;
-                    }
-                    if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
-                        context.destroyExternalBuffer(shared_scratch_.imported_buffer);
                     }
                     shared_scratch_.imported_buffer = imported;
                 } else if (!context.bindNewChunks(shared_scratch_.imported_buffer, *shared_scratch_.block)) {
@@ -3789,8 +3785,7 @@ namespace lfs::vis {
         std::size_t reserve_bytes = target_bytes;
         {
             std::size_t free_mem = 0, total_mem = 0;
-            if (context.sparseBindingEnabled() &&
-                cudaMemGetInfo(&free_mem, &total_mem) == cudaSuccess && total_mem > reserve_bytes) {
+            if (cudaMemGetInfo(&free_mem, &total_mem) == cudaSuccess && total_mem > reserve_bytes) {
                 reserve_bytes = total_mem;
             }
         }
@@ -3847,8 +3842,7 @@ namespace lfs::vis {
         if (renderer_.supportsConditionalRendering()) {
             usage |= VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT;
         }
-        if (shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE ||
-            !shared_scratch_.imported_buffer.sparse) {
+        if (shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE) {
             VulkanContext::ExternalBuffer imported{};
             if (!context.importExportableBlock(*shared_scratch_.block,
                                                usage,
@@ -3858,9 +3852,6 @@ namespace lfs::vis {
                 return std::unexpected(std::format(
                     "VkSplat shared scratch import after grow failed: {}",
                     context.lastError()));
-            }
-            if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
-                context.destroyExternalBuffer(shared_scratch_.imported_buffer);
             }
             shared_scratch_.imported_buffer = imported;
         } else if (shared_scratch_.imported_buffer.bound_chunks < shared_scratch_.block->chunks.size()) {
