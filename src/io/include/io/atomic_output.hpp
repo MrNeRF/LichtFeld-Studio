@@ -3,7 +3,7 @@
 #include "core/path_utils.hpp"
 #include "io/atomic_output_path.hpp"
 #include "io/error.hpp"
-#include "io/exporter.hpp"
+#include "io/export_progress.hpp"
 
 #include <cerrno>
 #include <cstring>
