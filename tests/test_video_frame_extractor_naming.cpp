@@ -367,6 +367,12 @@ namespace lfs::gui {
             dialog.custom_width_ = width;
             dialog.custom_height_ = height;
             dialog.hdr_to_sdr_ = hdr_to_sdr;
+            // Batch parameters re-read both sizes from their fields, as typing leaves them.
+            for (auto [element, value] : {std::pair{dialog.custom_width_input_el_, width},
+                                          std::pair{dialog.custom_height_input_el_, height}}) {
+                if (auto* const input = dynamic_cast<Rml::ElementFormControlInput*>(element))
+                    input->SetValue(std::to_string(value));
+            }
         }
         static void selectBatch(VideoExtractorDialog& dialog, const std::size_t index) {
             dialog.selectBatchItem(index);

@@ -2594,8 +2594,10 @@ namespace lfs::gui {
             const bool allow_stream_end = item.end_time_is_auto &&
                                           item_params.mode == io::ExtractionMode::INTERVAL &&
                                           !(item_params.sharpness_enabled && item_params.sharpness_window_mode);
+            // An unselected item keeps its auto end; resolve it like the player's trim end.
+            const double trim_end = item.end_time < 0.0 ? item.duration : item.end_time;
             item_params.end_time = item.duration > 0.0
-                                       ? io::extractionEndTime(static_cast<float>(item.end_time), item.duration,
+                                       ? io::extractionEndTime(static_cast<float>(trim_end), item.duration,
                                                                allow_stream_end)
                                        : item.end_time;
             item_params.rotation = item.rotation;
