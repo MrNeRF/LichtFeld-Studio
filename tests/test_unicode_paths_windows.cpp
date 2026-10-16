@@ -1303,7 +1303,7 @@ TEST_F(UnicodePathTest, Utf8RoundTrip) {
     // Iterate and convert paths (like file_browser.cpp does)
     for (const auto& entry : fs::directory_iterator(utf8_to_path(current_path_str))) {
         // This is what file_browser does: store UTF-8 string
-        std::string selected_file_str = path_to_utf8(entry.path());
+        std::string selected_file_str = path_to_utf8(fs::entry_path(unicode_dir, entry.path()));
         EXPECT_FALSE(selected_file_str.empty()) << "path_to_utf8 failed for entry";
 
         // Convert back to path (for filesystem operations)
@@ -1316,7 +1316,7 @@ TEST_F(UnicodePathTest, Utf8RoundTrip) {
         EXPECT_FALSE(dirname_utf8.empty()) << "path_to_utf8 failed for filename";
 
         // Verify the comparison would work
-        std::string entry_path_utf8 = path_to_utf8(entry.path());
+        std::string entry_path_utf8 = path_to_utf8(fs::entry_path(unicode_dir, entry.path()));
         EXPECT_EQ(selected_file_str, entry_path_utf8)
             << "UTF-8 path comparison would fail in file browser";
     }
@@ -1356,7 +1356,7 @@ TEST_F(UnicodePathTest, DirectoryIterationWithPathToUtf8) {
         if (entry.is_directory()) {
             // This is exactly what the fixed file_browser.cpp does:
             std::string dirname = path_to_utf8(entry.path().filename());
-            std::string full_path = path_to_utf8(entry.path());
+            std::string full_path = path_to_utf8(fs::entry_path(test_dir, entry.path()));
 
             iteration_results.push_back({dirname, full_path});
 
@@ -1413,7 +1413,7 @@ TEST_F(UnicodePathTest, PathComparisonForSelection) {
     // Iterate and check selection (like file_browser does)
     int selected_count = 0;
     for (const auto& entry : fs::directory_iterator(test_dir)) {
-        std::string entry_path_utf8 = path_to_utf8(entry.path());
+        std::string entry_path_utf8 = path_to_utf8(fs::entry_path(test_dir, entry.path()));
         bool is_selected = (selected_file == entry_path_utf8);
 
         if (is_selected) {
