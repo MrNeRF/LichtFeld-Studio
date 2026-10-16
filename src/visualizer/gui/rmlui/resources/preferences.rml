@@ -207,11 +207,23 @@
         </div>
         <div class="preferences-row" data-tooltip="tooltip.selection_color_preview">
           <span class="preferences-label">@tr:main_panel.preview</span>
-          <input type="text" class="preferences-select" data-value="default_selection_color_preview" />
+          <div class="preferences-color">
+            <div class="color-swatch" data-style-background-color="default_selection_color_preview_swatch" data-event-click="default_color_click('selection_color_preview')"></div>
+            <input type="text" class="preferences-select" data-value="default_selection_color_preview" />
+          </div>
+        </div>
+        <div id="picker-selection_color_preview" class="preferences-color-picker" data-if="default_color_editing == 'selection_color_preview'" data-event-mouseup="default_color_commit" data-event-dragend="default_color_commit">
+          <color-picker data-attr-red="default_picker_r" data-attr-green="default_picker_g" data-attr-blue="default_picker_b" data-event-change="default_picker_change" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.selection_color_center_marker">
           <span class="preferences-label">@tr:main_panel.center_marker</span>
-          <input type="text" class="preferences-select" data-value="default_selection_color_center_marker" />
+          <div class="preferences-color">
+            <div class="color-swatch" data-style-background-color="default_selection_color_center_marker_swatch" data-event-click="default_color_click('selection_color_center_marker')"></div>
+            <input type="text" class="preferences-select" data-value="default_selection_color_center_marker" />
+          </div>
+        </div>
+        <div id="picker-selection_color_center_marker" class="preferences-color-picker" data-if="default_color_editing == 'selection_color_center_marker'" data-event-mouseup="default_color_commit" data-event-dragend="default_color_commit">
+          <color-picker data-attr-red="default_picker_r" data-attr-green="default_picker_g" data-attr-blue="default_picker_b" data-event-change="default_picker_change" />
         </div>
         <div class="section-header text-accent">@tr:preferences.viewport_performance_defaults</div>
         <div class="preferences-row" data-tooltip="tooltip.lod_page_pool_splats">
