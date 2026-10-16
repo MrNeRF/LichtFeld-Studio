@@ -181,7 +181,7 @@ body {
 }
 
 .tab-picker selectvalue { visibility: hidden; }
-.tab-picker selectarrow { width: 26dp; height: 26dp; }
+.tab-picker selectarrow { margin-right: 4dp; }
 
 .tab-picker selectbox {
     right: 0;

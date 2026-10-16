@@ -50,6 +50,7 @@
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -616,6 +617,8 @@ namespace lfs::vis {
         void TearDown() override {
             manager().ui_renderer_ = nullptr;
             gui::PanelRegistry::instance().unregister_panel("test.input_float");
+            for (const char* id : kPropertiesTabs)
+                gui::PanelRegistry::instance().unregister_panel(id);
             gui::cancelTranslationGizmoDrag();
             gui::cancelRotationGizmoDrag();
             gui::cancelScaleGizmoDrag();
@@ -689,6 +692,41 @@ namespace lfs::vis {
                 .float_auto_center = false,
             }});
             ASSERT_TRUE(gui::PanelRegistry::instance().isPositionOverFloatingPanel(140, 100));
+        }
+        static constexpr std::array kPropertiesTabs{"test.tab_first", "test.tab_second", "test.tab_third",
+                                                    "test.tab_fourth"};
+        // Draws the default screen with four properties tabs, more than its narrow properties
+        // area shows, and returns that area.
+        screen::AreaId drawOverflowingPropertiesTabs() {
+            class Panel final : public gui::IPanel {
+                void draw(const gui::PanelDrawContext&) override {}
+                gui::PanelRenderCapabilities renderCapabilities() const override { return {.direct = true}; }
+            };
+            for (const char* id : kPropertiesTabs) {
+                gui::PanelInfo info;
+                info.id = id;
+                info.label = id;
+                info.space = gui::PanelSpace::MainPanelTab;
+                info.panel = std::make_shared<Panel>();
+                EXPECT_TRUE(gui::PanelRegistry::instance().register_panel(std::move(info)));
+            }
+            gui_->screenHost().init({.screens = &viewer_->screens(), .rml = &manager(), .scene_manager = viewer_->getSceneManager()});
+            gui_->screenHost().layout({0.0f, 0.0f, 1000.0f, 300.0f}, 1.0f);
+            drawScreen();
+            drawScreen();
+            for (const auto& area : gui_->screenHost().areas())
+                if (area.editor == screen::editors::kProperties)
+                    return area.id;
+            return {};
+        }
+        void drawScreen(const gui::PanelInputState& input = {}) {
+            manager().beginFrameCursorTracking();
+            const gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+            gui_->screenHost().draw(ui, {.ui = &ui}, input, false, {});
+        }
+        Rml::ElementDocument* screenChrome() {
+            auto* const context = Rml::GetContext("screen_chrome");
+            return context ? context->GetDocument(0) : nullptr;
         }
         RenderInterface_VK input_renderer_;
         // GuiManager keeps these listeners alive until their Rml context is shut down.
@@ -2725,6 +2763,70 @@ namespace lfs::vis {
         EXPECT_NE(overlay_context->GetFocusElement(), overlay_select);
         click(60, 180);
         EXPECT_FALSE(overlay_select->IsSelectBoxVisible());
+    }
+
+    // Fails if a pointer event drops the open tab picker list from the overlay record, so the
+    // area under the list takes clicks meant for its options.
+    TEST_F(WindowInputDispatchTest, OpenTabPickerKeepsCoveringAreasDuringPointerEvents) {
+        const auto properties = drawOverflowingPropertiesTabs();
+        ASSERT_TRUE(properties.valid());
+        auto* const document = screenChrome();
+        ASSERT_NE(document, nullptr);
+        auto* const picker = dynamic_cast<Rml::ElementFormControlSelect*>(
+            document->GetElementById("prop-picker-" + std::to_string(properties.value)));
+        ASSERT_NE(picker, nullptr);
+        picker->ShowSelectBox();
+        // The list is laid out when the chrome renders.
+        document->GetContext()->Update();
+        document->GetContext()->Render();
+        drawScreen();
+        Rml::Element* list = nullptr;
+        for (int i = 0; i < picker->GetNumChildren(true); ++i)
+            if (picker->GetChild(i)->GetTagName() == "selectbox")
+                list = picker->GetChild(i);
+        ASSERT_NE(list, nullptr);
+        const auto list_pos = list->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const glm::vec2 point(list_pos.x + 10.0f, list_pos.y + 6.0f);
+        ASSERT_TRUE(manager().activeOverlayContainsPoint(point.x, point.y));
+
+        // SDL delivers the pointer to the screen before the next frame.
+        gui::PanelInputState input;
+        input.mouse_x = point.x;
+        input.mouse_y = point.y;
+        gui_->screenHost().processInput(input, true);
+        SDL_Event motion{};
+        motion.type = SDL_EVENT_MOUSE_MOTION;
+        motion.motion.x = point.x;
+        motion.motion.y = point.y;
+        dispatch(motion);
+        manager().beginFrameCursorTracking();
+        EXPECT_TRUE(picker->IsSelectBoxVisible());
+        EXPECT_TRUE(manager().activeOverlayOccludesContext(context_, point.x, point.y));
+    }
+
+    // Fails if a tab picked while the strip overflows stays scrolled out of view.
+    TEST_F(WindowInputDispatchTest, ActiveTabScrollsIntoTheOverflowingStrip) {
+        const auto properties = drawOverflowingPropertiesTabs();
+        ASSERT_TRUE(properties.valid());
+        auto* const document = screenChrome();
+        ASSERT_NE(document, nullptr);
+        auto* const strip = document->GetElementById("prop-tabs-" + std::to_string(properties.value));
+        ASSERT_NE(strip, nullptr);
+        for (const char* active : {"test.tab_first", "test.tab_fourth", "test.tab_second"}) {
+            SCOPED_TRACE(active);
+            gui_->screenHost().properties().setActiveTab(active);
+            drawScreen();
+            Rml::Element* tab = nullptr;
+            for (int i = 0; i < strip->GetNumChildren(); ++i)
+                if (strip->GetChild(i)->IsClassSet("active"))
+                    tab = strip->GetChild(i);
+            ASSERT_NE(tab, nullptr);
+            EXPECT_EQ(tab->GetAttribute<Rml::String>("title", ""), active);
+            EXPECT_GT(strip->GetScrollWidth(), strip->GetClientWidth());
+            EXPECT_GE(tab->GetOffsetLeft(), strip->GetScrollLeft() - 0.5f);
+            EXPECT_LE(tab->GetOffsetLeft() + tab->GetOffsetWidth(),
+                      strip->GetScrollLeft() + strip->GetClientWidth() + 0.5f);
+        }
     }
 
     TEST_F(WindowInputDispatchTest, SequencerEditShortcutsRespectTextFocusAndVisibility) {
