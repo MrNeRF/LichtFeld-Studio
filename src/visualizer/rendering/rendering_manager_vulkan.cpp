@@ -532,10 +532,6 @@ namespace lfs::vis {
             markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
     }
 
-    void RenderingManager::configureSurfacePicking(FrameContext& frame) const {
-        frame.exact_surface_picking = exact_surface_picking_;
-    }
-
     ViewportFrameResult RenderingManager::renderFrame(const RenderContext& context) {
         auto* const vulkan_context = vulkanContextOrNull(context.graphics_context);
         auto& view_state = viewState(context.view);

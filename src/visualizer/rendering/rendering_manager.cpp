@@ -317,6 +317,10 @@ namespace lfs::vis {
             shutdownViewportReference(*view, context);
     }
 
+    void RenderingManager::configureSurfacePicking(FrameContext& frame) const {
+        frame.exact_surface_picking = exact_surface_picking_;
+    }
+
     void RenderingManager::setWakeCallback(std::function<void()> callback) {
         std::scoped_lock lock(wake_callback_mutex_);
         wake_callback_ = std::move(callback);
