@@ -271,7 +271,7 @@ jobs:
           set PYTHONPATH=%CD%\src\python;%CD%\%BUILD_DIR%\src\python
           set PYTHONUTF8=1
           set LFS_REQUIRE_LONG_PATHS_DISABLED=1
-          %BUILD_DIR%\path-policy-off-python\python.exe -c "import os, unittest; dll = os.add_dll_directory(os.path.abspath(os.environ['BUILD_DIR'])); suite = unittest.defaultTestLoader.discover('tests/python', pattern='test_native_binding_path_io.py'); result = unittest.TextTestRunner(verbosity=2).run(suite); raise SystemExit(not result.wasSuccessful())"
+          %BUILD_DIR%\path-policy-off-python\python.exe -c "import os, unittest; build = os.path.abspath(os.environ['BUILD_DIR']); dll_dirs = [build, os.path.join(build, 'vcpkg_installed', 'x64-windows', 'bin'), os.path.join(os.environ['CUDA_PATH'], 'bin')]; dll_handles = [os.add_dll_directory(path) for path in dll_dirs]; suite = unittest.defaultTestLoader.discover('tests/python', pattern='test_native_binding_path_io.py'); result = unittest.TextTestRunner(verbosity=2).run(suite); raise SystemExit(not result.wasSuccessful())"
 
       - name: Build and run CPU-only visualizer and RmlUi tests
         shell: cmd
