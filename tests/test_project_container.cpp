@@ -4167,51 +4167,17 @@ namespace {
     }
 
 #ifdef _WIN32
-    // A share created for the test run (the Windows CI job provisions one): LFS_TEST_UNC_ROOT is its network
-    // path and LFS_TEST_UNC_LOCAL the folder it exposes. LFS_TEST_REQUIRE_UNC turns a missing share into a failure.
-    struct NetworkShare {
-        fs::path network;
-        fs::path local;
-    };
-
-    std::optional<std::wstring> environment(const wchar_t* const name) {
-        const DWORD size = GetEnvironmentVariableW(name, nullptr, 0);
-        if (size == 0) {
-            return std::nullopt;
-        }
-        std::wstring value(size, L'\0');
-        value.resize(GetEnvironmentVariableW(name, value.data(), size));
-        return value;
-    }
-
-    std::optional<NetworkShare> network_share() {
-        const auto network = environment(L"LFS_TEST_UNC_ROOT");
-        const auto local = environment(L"LFS_TEST_UNC_LOCAL");
-        std::error_code error;
-        if (!network || !local || !fs::is_directory(fs::path(*network), error)) {
-            return std::nullopt;
-        }
-        return NetworkShare{fs::path(*network), fs::path(*local)};
-    }
-
     TEST(ProjectPathResolution, NetworkProjectsSaveOnBothSidesOfTheExtendedPathSwitch) {
         const auto share = network_share();
         if (!share) {
-            if (environment(L"LFS_TEST_REQUIRE_UNC")) {
+            if (network_share_required()) {
                 FAIL() << "LFS_TEST_UNC_ROOT and LFS_TEST_UNC_LOCAL must name a reachable network share";
             }
             GTEST_SKIP() << "No network share provisioned (LFS_TEST_UNC_ROOT, LFS_TEST_UNC_LOCAL)";
         }
-        const auto run = std::format("lfs-path-test-{}", std::chrono::steady_clock::now().time_since_epoch().count());
-        const fs::path network_root = share->network / run;
-        const fs::path local_root = share->local / run;
-        struct Cleanup {
-            fs::path path;
-            ~Cleanup() {
-                std::error_code ignored;
-                fs::remove_all(fs::path(L"\\\\?\\" + fs::absolute(path).native()), ignored);
-            }
-        } cleanup{local_root};
+        LongPathDirectory run(share->local);
+        const fs::path local_root = run.path;
+        const fs::path network_root = share->network / run.path.filename();
         std::error_code error;
         const auto leaf = lfs::core::utf8_to_path("scène 🙂.licht");
         std::uint64_t tag = 7300;
