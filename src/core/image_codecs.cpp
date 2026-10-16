@@ -578,16 +578,52 @@ namespace lfs::core::image_codecs {
             (void)installed;
         }
 
+        int tiff_error_handler_ext_r(TIFF*, void* user_data, const char* module,
+                                     const char* format, va_list args) {
+            auto& error = *static_cast<std::string*>(user_data);
+            std::array<char, 512> message{};
+            std::vsnprintf(message.data(), message.size(), format, args);
+            if (!error.empty())
+                error += "; ";
+            if (module && *module) {
+                // libtiff names the file it was given; show the caller's spelling, not the extended one.
+                std::string_view name = module;
+                if (name.starts_with(R"(\\?\UNC\)"))
+                    error += R"(\\)" + std::string(name.substr(8)) + ": ";
+                else
+                    error += std::string(name.starts_with(R"(\\?\)") ? name.substr(4) : name) + ": ";
+            }
+            error += message.data();
+            return 1;
+        }
+
+        int tiff_warning_handler_ext_r(TIFF*, void*, const char*, const char*, va_list) {
+            return 1;
+        }
+
         TIFF* open_tiff(const std::filesystem::path& path, const char* mode, std::string& error) {
             install_tiff_quiet_handlers();
+            error.clear();
+            auto* options = TIFFOpenOptionsAlloc();
+            if (!options) {
+                error = "TIFF open failed: could not allocate codec options";
+                return nullptr;
+            }
+            TIFFOpenOptionsSetErrorHandlerExtR(options, tiff_error_handler_ext_r, &error);
+            TIFFOpenOptionsSetWarningHandlerExtR(options, tiff_warning_handler_ext_r, nullptr);
 #ifdef _WIN32
-            TIFF* tiff = TIFFOpenW(native_fs::native_path(path).c_str(), mode);
+            TIFF* tiff = TIFFOpenWExt(native_fs::native_path(path).c_str(), mode, options);
 #else
             const auto path_utf8 = path_to_utf8(path);
-            TIFF* tiff = TIFFOpen(path_utf8.c_str(), mode);
+            TIFF* tiff = TIFFOpenExt(path_utf8.c_str(), mode, options);
 #endif
-            if (!tiff)
-                error = "Could not initialize TIFF codec for " + path_to_utf8(path);
+            TIFFOpenOptionsFree(options);
+            if (!tiff) {
+                if (error.empty())
+                    error = "TIFF open failed: invalid file structure or unsupported codec";
+                else
+                    error = "TIFF open failed: " + error;
+            }
             return tiff;
         }
 
@@ -747,7 +783,7 @@ namespace lfs::core::image_codecs {
                     if (planar == PLANARCONFIG_CONTIG) {
                         if (TIFFReadScanline(tiff, row.data(), y, 0) < 0) {
                             TIFFClose(tiff);
-                            error = "TIFF scanline read failed";
+                            error = error.empty() ? "TIFF scanline read failed" : "TIFF scanline read failed: " + error;
                             return false;
                         }
                         std::memcpy(result.data.data() + static_cast<std::size_t>(y) * row_bytes, row.data(), row_bytes);
@@ -755,7 +791,8 @@ namespace lfs::core::image_codecs {
                         for (std::uint16_t channel = 0; channel < channels; ++channel) {
                             if (TIFFReadScanline(tiff, row.data(), y, channel) < 0) {
                                 TIFFClose(tiff);
-                                error = "TIFF planar scanline read failed";
+                                error = error.empty() ? "TIFF planar scanline read failed"
+                                                      : "TIFF planar scanline read failed: " + error;
                                 return false;
                             }
                             for (std::uint32_t x = 0; x < width; ++x) {
@@ -838,7 +875,7 @@ namespace lfs::core::image_codecs {
                     auto* row = static_cast<std::uint8_t*>(target.data) + static_cast<std::size_t>(y) * row_bytes;
                     if (TIFFReadScanline(tiff, row, y, 0) < 0) {
                         TIFFClose(tiff);
-                        error = "TIFF scanline read failed";
+                        error = error.empty() ? "TIFF scanline read failed" : "TIFF scanline read failed: " + error;
                         return false;
                     }
                 }
