@@ -431,6 +431,41 @@ namespace {
             EXPECT_EQ(popup->GetDisplay(), Rml::Style::Display::None);
     }
 
+    // Fails if a toggle's checkmark slot pushes its shortcut left of the other shortcuts in a menu.
+    TEST_F(MenuBarTitleTest, ShortcutsEndInOneColumnBesideToggles) {
+        using Item = lfs::vis::gui::MenuItemDesc;
+        using Type = Item::Type;
+        const std::vector<Item> items{
+            {.type = Type::ShortcutItem, .label = "Hide UI", .shortcut = "F12", .callback_index = 1},
+            {.type = Type::Toggle, .label = "Performance HUD", .shortcut = "F10", .callback_index = 2},
+            {.type = Type::Toggle, .label = "Logging", .selected = true, .callback_index = 3},
+            {.type = Type::SubMenuBegin, .label = "Appearance"},
+            {.type = Type::Toggle, .label = "Grid", .shortcut = "G", .callback_index = 4},
+            {.type = Type::Operator, .label = "Home View", .operator_id = "view.home", .shortcut = "H", .callback_index = 5},
+            {.type = Type::SubMenuEnd},
+        };
+        RmlMenuBarTestAccess::dropdown(bar_, items);
+        RmlMenuBarTestAccess::openPath(bar_, 3, -1, -1);
+        const auto shortcut_ends = [](Rml::Element* popup) {
+            std::vector<float> ends;
+            Rml::ElementList shortcuts;
+            popup->GetElementsByClassName(shortcuts, "shortcut");
+            for (auto* shortcut : shortcuts)
+                if (shortcut->IsVisible(true) && shortcut->GetParentNode()->GetParentNode()->GetParentNode() == popup)
+                    ends.push_back(bounds(shortcut).right);
+            return ends;
+        };
+        Rml::ElementList submenus;
+        el("dropdown-popup")->GetElementsByClassName(submenus, "submenu-popup");
+        std::erase_if(submenus, [](Rml::Element* popup) { return popup->GetDisplay() == Rml::Style::Display::None; });
+        ASSERT_EQ(submenus.size(), 1u);
+        for (auto* popup : {el("dropdown-popup"), submenus.front()}) {
+            const auto ends = shortcut_ends(popup);
+            ASSERT_EQ(ends.size(), 2u);
+            EXPECT_NEAR(ends[0], ends[1], 0.5f);
+        }
+    }
+
     TEST_F(MenuBarTitleTest, ArrowKeyMovesOpenMenuOncePerPress) {
         using Item = lfs::vis::gui::MenuItemDesc;
         using Type = Item::Type;

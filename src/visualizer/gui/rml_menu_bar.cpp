@@ -129,6 +129,26 @@ namespace lfs::vis::gui {
             return width;
         }
 
+        // Toggle rows end in a checkmark slot after the shortcut. In a popup with a toggle, every
+        // action row gets that slot, so all shortcuts end in one right-aligned column.
+        template <typename View>
+        std::vector<View> withSharedCheckmarkColumn(std::vector<View> views) {
+            if (std::none_of(views.begin(), views.end(), [](const View& view) { return view.show_checkmark; }))
+                return views;
+            for (auto& view : views) {
+                if constexpr (requires { view.is_label; }) {
+                    if (view.is_label)
+                        continue;
+                }
+                if constexpr (requires { view.has_children; }) {
+                    if (view.has_children)
+                        continue;
+                }
+                view.show_checkmark = true;
+            }
+            return views;
+        }
+
         MenuDropdownLeafView makeLeafItemView(const MenuItemDesc& item) {
             MenuDropdownLeafView view;
             view.label = item.label;
@@ -281,7 +301,7 @@ namespace lfs::vis::gui {
                     view.separator_before = separator_before;
                     separator_before = false;
                     ++pos;
-                    view.children = buildLeafMenuItems(items, pos, warned_excess_depth);
+                    view.children = withSharedCheckmarkColumn(buildLeafMenuItems(items, pos, warned_excess_depth));
                     result.push_back(std::move(view));
                     break;
                 }
@@ -329,7 +349,7 @@ namespace lfs::vis::gui {
                     view.separator_before = separator_before;
                     separator_before = false;
                     ++pos;
-                    view.children = buildGrandchildMenuItems(items, pos, warned_excess_depth);
+                    view.children = withSharedCheckmarkColumn(buildGrandchildMenuItems(items, pos, warned_excess_depth));
                     result.push_back(std::move(view));
                     break;
                 }
@@ -379,7 +399,7 @@ namespace lfs::vis::gui {
                     view.separator_before = separator_before;
                     separator_before = false;
                     ++pos;
-                    view.children = buildChildMenuItems(items, pos, warned_excess_depth);
+                    view.children = withSharedCheckmarkColumn(buildChildMenuItems(items, pos, warned_excess_depth));
                     result.push_back(std::move(view));
                     break;
                 }
@@ -1801,7 +1821,7 @@ namespace lfs::vis::gui {
     }
 
     std::vector<MenuDropdownRootView> RmlMenuBar::buildDropdownItems(const std::vector<MenuItemDesc>& items) {
-        auto built = buildRootMenuItems(items);
+        auto built = withSharedCheckmarkColumn(buildRootMenuItems(items));
         assignSiblingAccessKeys(built);
         return built;
     }
