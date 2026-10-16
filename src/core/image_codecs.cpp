@@ -1674,12 +1674,22 @@ namespace lfs::core::image_codecs {
                 }
                 if (is_idat) {
                     // Pixel payloads are outside this metadata-only operation.
-                    // Check their source extent, then skip them without reading
-                    // or inflating. Their CRC is intentionally not validated.
-                    input.seekg(static_cast<std::streamoff>(length), std::ios::cur);
-                    if (!input) {
-                        fail(MetadataStatus::IoError, "Cannot skip PNG pixel payload");
-                        return result;
+                    // Discard small spans through the stream buffer rather than
+                    // invalidating it with a seek for every tiny chunk. Larger
+                    // spans still seek; neither path decodes or checks pixel CRC.
+                    if (length <= buffer.size()) {
+                        input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(length));
+                        if (!input || static_cast<size_t>(input.gcount()) != length) {
+                            fail(input.bad() ? MetadataStatus::IoError : MetadataStatus::Malformed,
+                                 input.bad() ? "Cannot read PNG pixel payload" : "Truncated PNG pixel payload");
+                            return result;
+                        }
+                    } else {
+                        input.seekg(static_cast<std::streamoff>(length), std::ios::cur);
+                        if (!input) {
+                            fail(MetadataStatus::IoError, "Cannot skip PNG pixel payload");
+                            return result;
+                        }
                     }
                     position += length;
                     std::array<uint8_t, 4> checksum{};

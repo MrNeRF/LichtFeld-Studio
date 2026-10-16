@@ -244,6 +244,25 @@ namespace {
         const auto skipped = read_source_exif(path, limits);
         require(skipped.status == MetadataStatus::Collected && skipped.blocks.size() == 1 && skipped.blocks[0].bytes == tiff,
                 "large PNG pixel payload does not consume the metadata examination budget or require a valid pixel CRC");
+        for (const size_t size : {0u, 1u, 8191u, 8192u, 8193u, 65536u}) {
+            png = png_prefix;
+            append("IDAT", std::vector<uint8_t>(size, 7));
+            append("IEND", {});
+            write(png);
+            limits = {};
+            limits.png_scan_bytes = png_prefix.size() + 24;
+            const auto boundary = read_source_exif(path, limits);
+            require(boundary.status == MetadataStatus::Collected && boundary.blocks.size() == 1 && boundary.blocks[0].bytes == tiff,
+                    "buffered discard and seeking preserve originals and identical metadata byte charges at the threshold");
+            --limits.png_scan_bytes;
+            require(read_source_exif(path, limits).status == MetadataStatus::Limited,
+                    "both pixel skip paths still charge the CRC and next chunk framing");
+            png.resize(png_prefix.size() + 8 + size / 2);
+            write(png);
+            const auto truncated_skip = read_source_exif(path);
+            require(truncated_skip.status == MetadataStatus::Malformed && truncated_skip.blocks.size() == 1 && truncated_skip.blocks[0].bytes == tiff,
+                    "truncated pixel chunks preserve the complete EXIF prefix on either skip path");
+        }
         for (const bool with_exif : {false, true}) {
             png.assign(valid_png.begin(), valid_png.begin() + 33);
             if (with_exif)

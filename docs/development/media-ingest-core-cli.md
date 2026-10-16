@@ -45,7 +45,8 @@ Defaults: JPEG header window 1 MiB, original block 1 MiB, original bytes 4 MiB,
 64 blocks; PNG additionally examines at most 64 MiB and 4096 non-IDAT chunks.
 All chunk headers and CRC bytes, including those of IDAT, consume the byte
 budget. Non-IDAT payloads are examined for CRC validation; IDAT pixel payloads
-are skipped without decoding or CRC validation. Scan limits are
+are discarded through the stream buffer up to 8 KiB; larger spans use seeking.
+Neither path decodes pixels or validates their CRC. Scan limits are
 explicit and preserve completed original blocks on later errors. PNG eXIf
 duplicates or placement after IDAT are retained but reported as malformed under
 the PNG third-edition ordering rules; collection does not validate pixel data.
