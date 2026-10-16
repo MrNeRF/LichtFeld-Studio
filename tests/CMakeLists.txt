@@ -411,11 +411,13 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     )
     if(APPLE)
         # On macOS the visualizer resolves CPython from the host process. The app
-        # pulls libpython in by embedding it; the test binary must load it whole.
+        # pulls libpython in by embedding it; both test hosts must load it whole.
         find_package(Python REQUIRED COMPONENTS Development.Embed)
-        target_link_options(lichtfeld_visualizer_tests PRIVATE
-            "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
-        target_link_libraries(lichtfeld_visualizer_tests PRIVATE lfs_python_embed)
+        foreach(_python_visualizer_test IN ITEMS lichtfeld_visualizer_tests lichtfeld_rmlui_tests)
+            target_link_options(${_python_visualizer_test} PRIVATE
+                "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+            target_link_libraries(${_python_visualizer_test} PRIVATE lfs_python_embed)
+        endforeach()
     endif()
     # The trackpad tests set SDL's modifier state. A static SDL is reached through
     # lfs_visualizer; a shared one (Windows) must be linked so both see one state.

@@ -204,9 +204,13 @@ namespace lfs::core::image_codecs {
             return false;
         }
         const auto primary = CGImageSourceGetPrimaryImageIndex(source.get());
-        const void* keys[]{kCGImageSourceShouldAllowFloat, kCGImageSourceShouldCache};
-        const void* values[]{kCFBooleanTrue, kCFBooleanFalse};
-        Owned<CFDictionaryRef> options(CFDictionaryCreate(nullptr, keys, values, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
+        // CopyData needs materialized native pixels: a lazy ImageIO provider
+        // need not expose decoded backing bytes until the image is rendered.
+        // Metadata probes retain lazy decoding; no rasterization or color-space
+        // conversion is introduced to obtain the original native layout.
+        const void* keys[]{kCGImageSourceShouldAllowFloat, kCGImageSourceShouldCache, kCGImageSourceShouldCacheImmediately};
+        const void* values[]{kCFBooleanTrue, image ? kCFBooleanTrue : kCFBooleanFalse, image ? kCFBooleanTrue : kCFBooleanFalse};
+        Owned<CFDictionaryRef> options(CFDictionaryCreate(nullptr, keys, values, 3, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
         Owned<CGImageRef> native(CGImageSourceCreateImageAtIndex(source.get(), primary, options.get()));
         if (!native) {
             error = "HEIF: HEVC Apple system provider cannot decode primary image";
@@ -242,8 +246,14 @@ namespace lfs::core::image_codecs {
             return true;
         const auto provider = CGImageGetDataProvider(native.get());
         Owned<CFDataRef> pixels(provider ? CGDataProviderCopyData(provider) : nullptr);
-        if (!pixels || static_cast<size_t>(CFDataGetLength(pixels.get())) < row * height) {
-            error = "HEIF: HEVC Apple system provider cannot copy native pixels";
+        if (!pixels) {
+            error = "HEIF: HEVC Apple system provider cannot copy native pixels: no decoded backing data";
+            return false;
+        }
+        const auto pixel_bytes = static_cast<size_t>(CFDataGetLength(pixels.get()));
+        if (pixel_bytes < row * height) {
+            error = "HEIF: HEVC Apple system provider cannot copy native pixels: got " + std::to_string(pixel_bytes) +
+                    " bytes, need " + std::to_string(row * height);
             return false;
         }
         const auto* data = CFDataGetBytePtr(pixels.get());
