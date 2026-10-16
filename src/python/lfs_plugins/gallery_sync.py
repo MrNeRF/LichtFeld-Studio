@@ -1346,7 +1346,9 @@ class GallerySync:
                 source_identity.validate()
                 _require_project(project_path, project_id)
                 digest = hashlib.sha256()
-                with open(project_path, "rb") as source, tempfile.NamedTemporaryFile(dir=native_path(directory), delete=False) as output:
+                # The I/O-aware Path supplies the native spelling via __fspath__;
+                # retain the PathLike contract for temporary-file wrappers.
+                with open(project_path, "rb") as source, tempfile.NamedTemporaryFile(dir=directory, delete=False) as output:
                     temporary = Path(output.name)
                     while block := source.read(4 * 1024 * 1024):
                         if self._cancel.is_set():

@@ -71,6 +71,9 @@ namespace nanobind::detail {
                 value = lfs::python::LogicalPath(std::move(base.value));
                 return true;
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): nanobind's noexcept conversion probe
+                // rejects this overload by returning false; it must not unwind
+                // a C++ path-conversion exception through Python argument dispatch.
                 return false;
             }
         }

@@ -36,6 +36,14 @@ class NativePathIo(unittest.TestCase):
         self.assertIn("Python", result.stdout)
         self.assertEqual(executable_kwargs(["python", "--version"]), {})
 
+    def test_named_temporary_file_accepts_long_pathlike_directory(self):
+        with tempfile.NamedTemporaryFile(dir=self.deep, delete=False) as output:
+            output.write(b"temporary payload")
+            path = Path(output.name)
+        self.assertEqual(path.parent, self.deep)
+        self.assertEqual(path.read_bytes(), b"temporary payload")
+        path.unlink()
+
     @unittest.skipUnless(os.name == "nt", "Windows filename aliases")
     def test_bounded_catalog_lock_uses_one_key_for_case_aliases(self):
         lower = self.deep / ("a" * 250 + ".json")
