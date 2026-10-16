@@ -23,7 +23,7 @@ def mounted_scrubs():
         node.add_event_listener.side_effect = node.listeners.__setitem__
         node.append_child.side_effect = lambda _: element()
         node.focus.side_effect = lambda: focused.append(node)
-        node.blur.side_effect = lambda: node.listeners["blur"](None)
+        node.blur.side_effect = lambda: node.listeners.get("blur", lambda _: None)(None)
         return node
 
     props = ("histogram_bin_count", "compare_x_bin_count", "compare_y_bin_count")
@@ -105,3 +105,22 @@ def test_other_keys_and_editor_keydown_do_not_reopen_scrubs(mounted_scrubs):
     state.field.listeners["keydown"](key_event(keys.KI_SPACE))
     assert state.input_el.attrs["value"] == "42"
 
+
+def test_mouse_drag_does_not_leave_the_scrub_field_with_keyboard_focus(mounted_scrubs):
+    controller, values, committed, focused = mounted_scrubs
+    state = controller._fields["histogram_bin_count"]
+
+    def mouse(x):
+        params = {"button": "0", "mouse_x": str(x)}
+        return SimpleNamespace(get_parameter=lambda name, default="": params.get(name, default),
+                               get_bool_parameter=lambda name, default=False: default,
+                               stop_propagation=MagicMock())
+
+    state.field.listeners["mousedown"](mouse(10))
+    controller._on_body_mousemove(mouse(60))
+    controller._on_body_mouseup(mouse(60))
+    assert values["histogram_bin_count"] != 32
+    assert committed == [("histogram_bin_count", values["histogram_bin_count"])]
+    assert not state.editing
+    # The press focused the field; Space after the drag belongs to the viewport.
+    assert focused[-1] is controller._doc

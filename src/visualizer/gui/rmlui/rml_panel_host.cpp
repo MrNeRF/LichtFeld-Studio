@@ -1268,11 +1268,16 @@ namespace lfs::vis::gui {
                 rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(), composing)) {
                 had_input |= rml_input::cancelFocusedElement(*rml_context_);
             } else {
+                // Enter ends an edit in a single-line input that already had focus.
+                // An input this key press focused (a scrub field opening its
+                // editor) stays open.
+                auto* const focused_before = rml_context_->GetFocusElement();
                 had_input |= rml_input::processKeyboardEvent(*rml_context_, event, text_input_handler);
                 if (!composing && event.kind == FrameInputEventKind::KeyDown &&
                     (event.scancode == SDL_SCANCODE_RETURN || event.scancode == SDL_SCANCODE_KP_ENTER) &&
-                    rml_input::isSingleLineTextInput(rml_context_->GetFocusElement())) {
-                    rml_context_->GetFocusElement()->Blur();
+                    rml_context_->GetFocusElement() == focused_before &&
+                    rml_input::isSingleLineTextInput(focused_before)) {
+                    focused_before->Blur();
                 }
             }
             sync_text_focus();

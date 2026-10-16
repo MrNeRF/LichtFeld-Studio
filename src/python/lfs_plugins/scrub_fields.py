@@ -238,8 +238,14 @@ class ScrubFieldController:
     def _on_body_mouseup(self, event) -> None:
         if self._active_prop is None:
             return
-        open_editor = self._fields.get(self._active_prop) is not None and not self._fields[self._active_prop].dragging
+        state = self._fields.get(self._active_prop)
+        open_editor = state is not None and not state.dragging
         self._finish_active_drag(open_editor)
+        # The press focused the element under the cursor inside the field.
+        # Keyboard focus is for Tab navigation, so keys after a drag go back
+        # to the viewport.
+        if state is not None and not state.editing and self._doc is not None:
+            self._doc.focus()
         event.stop_propagation()
 
     def _on_keydown(self, event) -> None:

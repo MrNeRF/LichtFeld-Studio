@@ -658,8 +658,7 @@ namespace lfs::vis {
             host.last_fbo_w_ = width;
             host.last_fbo_h_ = height;
         }
-        void forwardHost(gui::RmlPanelHost& host, float x, float y) {
-            gui::PanelInputState input;
+        void forwardHost(gui::RmlPanelHost& host, float x, float y, gui::PanelInputState input = {}) {
             host.setInput(&input);
             host.forwardInput(x, y);
             host.setInput(nullptr);
@@ -2304,6 +2303,38 @@ namespace lfs::vis {
         EXPECT_EQ(docked.getContext()->GetHoverElement(), chart);
         chart->RemoveEventListener("mousedown", &recorder);
         chart->RemoveEventListener("mouseup", &recorder);
+    }
+
+    TEST_F(WindowInputDispatchTest, EnterThatOpensATextInputLeavesItFocused) {
+        // ScrubFieldController opens its text input from the field's Enter key-down.
+        struct OpenEditor final : Rml::EventListener {
+            Rml::Element* editor = nullptr;
+            void ProcessEvent(Rml::Event& event) override {
+                if (event.GetParameter<int>("key_identifier", 0) == Rml::Input::KI_RETURN)
+                    editor->Focus();
+            }
+        } open_editor;
+        gui::RmlPanelHost host(&manager(), "test-input-enter", "");
+        attachInputHost(host, 200, 100,
+                        "<rml><head><style>body { width:200px; height:100px; }</style></head>"
+                        "<body><div id='field' class='scrub-field'>1</div>"
+                        "<input id='editor' type='text'/></body></rml>");
+        auto* const field = host.getDocument()->GetElementById("field");
+        auto* const editor = host.getDocument()->GetElementById("editor");
+        open_editor.editor = editor;
+        field->AddEventListener(Rml::EventId::Keydown, &open_editor);
+        setKeyboardContext(host.getContext(), false);
+        const auto press_enter = [&] {
+            forwardHost(host, 0, 0);
+            key(SDL_SCANCODE_RETURN);
+        };
+        ASSERT_TRUE(field->Focus());
+        press_enter();
+        EXPECT_EQ(host.getContext()->GetFocusElement(), editor);
+        // Enter in an input that already had focus still ends the edit.
+        press_enter();
+        EXPECT_NE(host.getContext()->GetFocusElement(), editor);
+        field->RemoveEventListener(Rml::EventId::Keydown, &open_editor);
     }
 
     TEST_F(WindowInputDispatchTest, CapturedReleaseOutsidePanelEndsScrubDrag) {
