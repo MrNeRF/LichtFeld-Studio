@@ -503,6 +503,21 @@ namespace {
         ASSERT_FALSE(codec::decode(path, image, error));
         EXPECT_EQ(error.find(R"(\\?\)"), std::string::npos) << error;
     }
+    // Fails if a TIFF that libtiff cannot open reports a generic codec failure instead of the reason.
+    TEST(ProductionImagePaths, TiffOpenErrorsCarryLibtiffsReason) {
+        namespace fs = lfs::core::native_fs;
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "corrupt.tif";
+        {
+            std::ofstream file(fs::native_path(path), std::ios::binary);
+            file << "II*" << '\0' << "not a tiff directory";
+        }
+        codec::Image image;
+        std::string error;
+        ASSERT_FALSE(codec::decode(path, image, error));
+        EXPECT_TRUE(error.starts_with("TIFF open failed: ")) << error;
+        EXPECT_NE(error.find("TIFFReadDirectory: "), std::string::npos) << error;
+    }
 
     TEST(ProductionPng, AllChannelsAndDepthsRoundTripWithCommentsAndUnicodePaths) {
         TemporaryDirectory temporary;
