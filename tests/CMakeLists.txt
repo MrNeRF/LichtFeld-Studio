@@ -124,12 +124,16 @@ if(BUILD_VISUALIZER_TESTS)
     # The focused menu-bar suite exercises no GPU code. Windows CI installs
     # the CUDA toolkit but has no display driver, so defer loading nvcuda.dll
     # until a driver API is actually called. Normal application builds retain
-    # their existing eager driver dependency.
+    # their existing eager driver dependency. lfs_mcp and the Python module call
+    # the driver API directly too, and CI imports the module from a plain Python
+    # process where nothing has loaded nvcuda.dll first.
     if(MSVC)
-        target_link_options(lfs_core PRIVATE "/DELAYLOAD:nvcuda.dll")
-        target_link_libraries(lfs_core PRIVATE delayimp)
-        target_link_options(lfs_visualizer PRIVATE "/DELAYLOAD:nvcuda.dll")
-        target_link_libraries(lfs_visualizer PRIVATE delayimp)
+        foreach(_driver_user IN ITEMS lfs_core lfs_visualizer lfs_mcp lfs_py)
+            if(TARGET ${_driver_user})
+                target_link_options(${_driver_user} PRIVATE "/DELAYLOAD:nvcuda.dll")
+                target_link_libraries(${_driver_user} PRIVATE delayimp)
+            endif()
+        endforeach()
     endif()
 
     if(WIN32)
