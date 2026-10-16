@@ -33,6 +33,7 @@ namespace lfs::python {
             .value("TransformScale", vis::op::BuiltinOp::TransformScale)
             .value("TransformApplyBatch", vis::op::BuiltinOp::TransformApplyBatch)
             .value("AlignPickPoint", vis::op::BuiltinOp::AlignPickPoint)
+            .value("ScaleDistancePickPoint", vis::op::BuiltinOp::ScaleDistancePickPoint)
             .value("Undo", vis::op::BuiltinOp::Undo)
             .value("Redo", vis::op::BuiltinOp::Redo)
             .value("Delete", vis::op::BuiltinOp::Delete)
@@ -53,7 +54,8 @@ namespace lfs::python {
             .value("Rotate", vis::op::BuiltinTool::Rotate)
             .value("Scale", vis::op::BuiltinTool::Scale)
             .value("Mirror", vis::op::BuiltinTool::Mirror)
-            .value("Align", vis::op::BuiltinTool::Align);
+            .value("Align", vis::op::BuiltinTool::Align)
+            .value("ScaleDistance", vis::op::BuiltinTool::ScaleDistance);
 
         nb::enum_<vis::op::OperatorFlags>(ops, "OperatorFlags", nb::is_flag())
             .value("NONE", vis::op::OperatorFlags::NONE)

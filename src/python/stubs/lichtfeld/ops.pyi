@@ -29,31 +29,33 @@ class BuiltinOp(enum.Enum):
 
     AlignPickPoint = 6
 
-    Undo = 7
+    ScaleDistancePickPoint = 7
 
-    Redo = 8
+    Undo = 8
 
-    Delete = 9
+    Redo = 9
 
-    SelectionClear = 10
+    Delete = 10
 
-    SceneSelectNode = 11
+    SelectionClear = 11
 
-    CropBoxAdd = 12
+    SceneSelectNode = 12
 
-    CropBoxSet = 13
+    CropBoxAdd = 13
 
-    CropBoxFit = 14
+    CropBoxSet = 14
 
-    CropBoxReset = 15
+    CropBoxFit = 15
 
-    EllipsoidAdd = 16
+    CropBoxReset = 16
 
-    EllipsoidSet = 17
+    EllipsoidAdd = 17
 
-    EllipsoidFit = 18
+    EllipsoidSet = 18
 
-    EllipsoidReset = 19
+    EllipsoidFit = 19
+
+    EllipsoidReset = 20
 
 class BuiltinTool(enum.Enum):
     Select = 0
@@ -67,6 +69,8 @@ class BuiltinTool(enum.Enum):
     Mirror = 4
 
     Align = 5
+
+    ScaleDistance = 6
 
 class OperatorFlags(enum.Flag):
     NONE = 0

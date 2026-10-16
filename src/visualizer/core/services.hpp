@@ -191,6 +191,84 @@ namespace lfs::vis {
             align_status_until_ = {};
         }
 
+        enum class ScaleDistanceUiAction : uint8_t {
+            None = 0,
+            Apply,
+            Clear,
+        };
+
+        void setScaleDistancePickedPoints(std::vector<glm::vec3> points) {
+            if (scale_distance_picked_points_ == points)
+                return;
+            scale_distance_picked_points_ = std::move(points);
+            if (!scale_distance_selected_point_ ||
+                *scale_distance_selected_point_ < 0 ||
+                static_cast<size_t>(*scale_distance_selected_point_) >= scale_distance_picked_points_.size()) {
+                scale_distance_selected_point_.reset();
+            }
+            notifyDistanceScaleStateChanged();
+        }
+        [[nodiscard]] const std::vector<glm::vec3>& getScaleDistancePickedPoints() const { return scale_distance_picked_points_; }
+        void clearScaleDistancePickedPoints() {
+            const bool changed = !scale_distance_picked_points_.empty() || !scale_distance_status_message_.empty();
+            scale_distance_picked_points_.clear();
+            scale_distance_selected_point_.reset();
+            clearScaleDistanceStatusMessage();
+            if (changed)
+                notifyDistanceScaleStateChanged();
+        }
+
+        void setScaleDistanceSelectedPoint(std::optional<int> index) {
+            if (!index || *index < 0 ||
+                static_cast<size_t>(*index) >= scale_distance_picked_points_.size()) {
+                scale_distance_selected_point_.reset();
+                return;
+            }
+            scale_distance_selected_point_ = index;
+        }
+        [[nodiscard]] std::optional<int> getScaleDistanceSelectedPoint() const { return scale_distance_selected_point_; }
+        void clearScaleDistanceSelectedPoint() { scale_distance_selected_point_.reset(); }
+
+        void requestScaleDistanceUiAction(const ScaleDistanceUiAction action, const float target_distance = 0.0f) {
+            scale_distance_ui_action_ = action;
+            if (action == ScaleDistanceUiAction::Apply) {
+                scale_distance_target_distance_ = target_distance;
+            }
+        }
+        [[nodiscard]] ScaleDistanceUiAction takeScaleDistanceUiAction(float* out_target_distance = nullptr) {
+            const ScaleDistanceUiAction action = scale_distance_ui_action_;
+            if (out_target_distance) {
+                *out_target_distance = scale_distance_target_distance_;
+            }
+            scale_distance_ui_action_ = ScaleDistanceUiAction::None;
+            return action;
+        }
+        [[nodiscard]] bool hasScaleDistanceUiAction() const {
+            return scale_distance_ui_action_ != ScaleDistanceUiAction::None;
+        }
+
+        void setScaleDistanceStatusMessage(std::string message, const double duration_seconds = 1.5) {
+            scale_distance_status_message_ = std::move(message);
+            scale_distance_status_until_ = std::chrono::steady_clock::now() +
+                                          std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                              std::chrono::duration<double>(duration_seconds));
+        }
+
+        [[nodiscard]] const std::string* getScaleDistanceStatusMessage() const {
+            if (scale_distance_status_message_.empty()) {
+                return nullptr;
+            }
+            if (std::chrono::steady_clock::now() >= scale_distance_status_until_) {
+                return nullptr;
+            }
+            return &scale_distance_status_message_;
+        }
+
+        void clearScaleDistanceStatusMessage() {
+            scale_distance_status_message_.clear();
+            scale_distance_status_until_ = {};
+        }
+
         void clear() {
             scene_manager_ = nullptr;
             trainer_manager_ = nullptr;
@@ -204,10 +282,16 @@ namespace lfs::vis {
             align_ui_action_ = AlignUiAction::None;
             setAlignPreviewEnabled(false);
             clearAlignStatusMessage();
+            clearScaleDistancePickedPoints();
+            scale_distance_selected_point_.reset();
+            scale_distance_ui_action_ = ScaleDistanceUiAction::None;
+            scale_distance_target_distance_ = 0.0f;
+            clearScaleDistanceStatusMessage();
         }
 
     private:
         void notifyAlignStateChanged();
+        void notifyDistanceScaleStateChanged();
 
         Services() = default;
         ~Services() = default;
@@ -232,6 +316,14 @@ namespace lfs::vis {
         AlignUiAction align_ui_action_ = AlignUiAction::None;
         std::string align_status_message_;
         std::chrono::steady_clock::time_point align_status_until_{};
+
+        // Scale distance tool state
+        std::vector<glm::vec3> scale_distance_picked_points_;
+        std::optional<int> scale_distance_selected_point_;
+        ScaleDistanceUiAction scale_distance_ui_action_ = ScaleDistanceUiAction::None;
+        float scale_distance_target_distance_ = 0.0f;
+        std::string scale_distance_status_message_;
+        std::chrono::steady_clock::time_point scale_distance_status_until_{};
     };
 
     inline Services& services() { return Services::instance(); }

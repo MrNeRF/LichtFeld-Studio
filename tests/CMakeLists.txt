@@ -119,6 +119,7 @@ if(BUILD_VISUALIZER_TESTS)
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_point_cloud_vulkan_projection.cpp
         test_align_transform.cpp
+        test_scale_distance.cpp
         test_orthographic_zoom.cpp
         test_ui_visibility_transition.cpp
         test_summary_labels.cpp
@@ -800,6 +801,7 @@ set(TEST_FILES
     test_mesh_data.cpp
     test_mesh_offscreen_renderer.cpp
     test_align_transform.cpp
+    test_scale_distance.cpp
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp

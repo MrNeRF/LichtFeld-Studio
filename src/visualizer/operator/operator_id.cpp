@@ -23,6 +23,7 @@ namespace lfs::vis::op {
             {"transform.scale", "Scale"},
             {"transform.apply_batch", "Apply Batch Transform"},
             {"align.pick_point", "Align to Ground"},
+            {"scale_distance.pick_point", "Scale by Distance"},
             {"ed.undo", "Undo"},
             {"ed.redo", "Redo"},
             {"ed.delete", "Delete"},
@@ -50,6 +51,7 @@ namespace lfs::vis::op {
             {"builtin.scale", "Scale"},
             {"builtin.mirror", "Mirror"},
             {"builtin.align", "Align"},
+            {"builtin.distance_scale", "Distance Scale"},
         }};
 
     } // namespace

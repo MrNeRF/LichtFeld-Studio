@@ -1138,7 +1138,8 @@
     "scale": "Escalar",
     "mirror": "Reflejar",
     "crop": "Recortar",
-    "align": "Alinear"
+    "align": "Alinear",
+    "distance_scale": "Distance Scale"
   },
   "toolbar": {
     "selection": "Selección",
@@ -1202,7 +1203,13 @@
     "resize_bounds": "Redimensionar Límites",
     "reset_default": "Restablecer a Predeterminado",
     "fullscreen": "Pantalla completa",
-    "toggle_ui": "Alternar interfaz"
+    "toggle_ui": "Alternar interfaz",
+    "distance_scale": "Distance Scale",
+    "distance_scale_tool": "Distance Tool",
+    "distance_scale_measured": "Measured:",
+    "distance_scale_set": "Set Distance:",
+    "distance_scale_apply": "Confirm scale",
+    "distance_scale_reset": "Reset points"
   },
   "transform": {
     "node": "Nodo: %s",
@@ -3237,5 +3244,8 @@
     "discarded": "{discarded} descartadas"
   },
   "project.session.newer_settings.title": "Ajustes del proyecto de una versión más reciente",
-  "project.session.newer_settings.message": "Este proyecto contiene ajustes que esta versión no reconoce. Se usaron valores predeterminados para: {}"
+  "project.session.newer_settings.message": "Este proyecto contiene ajustes que esta versión no reconoce. Se usaron valores predeterminados para: {}",
+  "distance_scale": {
+    "status_invalid_distance": "Distance must be greater than zero."
+  }
 }

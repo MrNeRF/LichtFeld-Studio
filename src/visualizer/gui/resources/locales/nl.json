@@ -1138,7 +1138,8 @@
     "scale": "Schalen",
     "mirror": "Spiegelen",
     "crop": "Bijsnijden",
-    "align": "Uitlijnen"
+    "align": "Uitlijnen",
+    "distance_scale": "Distance Scale"
   },
   "toolbar": {
     "selection": "Selectie",
@@ -1202,7 +1203,13 @@
     "resize_bounds": "Grenzen Aanpassen",
     "reset_default": "Reset naar Standaard",
     "fullscreen": "Volledig Scherm",
-    "toggle_ui": "Schakel UI"
+    "toggle_ui": "Schakel UI",
+    "distance_scale": "Distance Scale",
+    "distance_scale_tool": "Distance Tool",
+    "distance_scale_measured": "Measured:",
+    "distance_scale_set": "Set Distance:",
+    "distance_scale_apply": "Confirm scale",
+    "distance_scale_reset": "Reset points"
   },
   "transform": {
     "node": "Node: %s",
@@ -3237,5 +3244,8 @@
     "discarded": "{discarded} verwijderd"
   },
   "project.session.newer_settings.title": "Projectinstellingen van een nieuwere versie",
-  "project.session.newer_settings.message": "Dit project bevat instellingen die deze versie niet herkent. Standaardwaarden gebruikt voor: {}"
+  "project.session.newer_settings.message": "Dit project bevat instellingen die deze versie niet herkent. Standaardwaarden gebruikt voor: {}",
+  "distance_scale": {
+    "status_invalid_distance": "Distance must be greater than zero."
+  }
 }

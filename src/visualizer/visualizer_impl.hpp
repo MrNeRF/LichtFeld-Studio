@@ -58,6 +58,7 @@ namespace lfs::vis {
 
     namespace tools {
         class AlignTool;
+        class ScaleDistanceTool;
         class SelectionTool;
     } // namespace tools
 
@@ -261,6 +262,14 @@ namespace lfs::vis {
 
         const tools::AlignTool* getAlignTool() const {
             return align_tool_.get();
+        }
+
+        tools::ScaleDistanceTool* getScaleDistanceTool() {
+            return scale_distance_tool_.get();
+        }
+
+        const tools::ScaleDistanceTool* getScaleDistanceTool() const {
+            return scale_distance_tool_.get();
         }
 
         tools::SelectionTool* getSelectionTool() {
@@ -701,6 +710,7 @@ namespace lfs::vis {
 
         // Tools
         std::shared_ptr<tools::AlignTool> align_tool_;
+        std::shared_ptr<tools::ScaleDistanceTool> scale_distance_tool_;
         std::shared_ptr<tools::SelectionTool> selection_tool_;
         std::unique_ptr<ToolContext> tool_context_;
 

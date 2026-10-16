@@ -1136,7 +1136,8 @@
     "scale": "Scale",
     "mirror": "Mirror",
     "crop": "Crop",
-    "align": "Align"
+    "align": "Align",
+    "distance_scale": "Distance Scale"
   },
   "toolbar": {
     "selection": "Selection",
@@ -1145,6 +1146,12 @@
     "scale": "Scale",
     "mirror": "Mirror",
     "align_3point": "3-Point Align",
+    "distance_scale": "Distance Scale",
+    "distance_scale_tool": "Distance Tool",
+    "distance_scale_measured": "Measured:",
+    "distance_scale_set": "Set Distance:",
+    "distance_scale_apply": "Confirm scale",
+    "distance_scale_reset": "Reset points",
     "crop_box": "Crop Box",
     "enable_crop_box": "Enable Crop Box",
     "crop_roi_settings": "Crop ROI Settings",
@@ -2735,6 +2742,9 @@
     "edge_label": "1 → 2 along X",
     "edge_on_help": "Edge 1 to 2 along X: ON. Levels the plane, then turns the scene so edge 1 to 2 follows the red X arrow.",
     "edge_off_help": "Edge 1 to 2 along X: OFF. Levels the plane without the extra turn."
+  },
+  "distance_scale": {
+    "status_invalid_distance": "Distance must be greater than zero."
   },
   "toast": {
     "camera_training_next_run": "Camera changes apply to the next training run. This run keeps its current images.",

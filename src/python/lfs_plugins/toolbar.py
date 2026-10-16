@@ -214,6 +214,7 @@ class _GizmoToolbarController:
         "builtin.mirror": "toolbar.mirror",
         "builtin.cropbox": "toolbar.crop_box",
         "builtin.align": "toolbar.align_3point",
+        "builtin.distance_scale": "toolbar.distance_scale",
     }
 
     _TOOL_ACTIONS = {
@@ -223,6 +224,7 @@ class _GizmoToolbarController:
         "builtin.scale": "TOOL_SCALE",
         "builtin.mirror": "TOOL_MIRROR",
         "builtin.align": "TOOL_ALIGN",
+        "builtin.distance_scale": "TOOL_DISTANCE_SCALE",
     }
 
     _SUBMODE_LOCALE_KEYS = {
@@ -270,8 +272,9 @@ class _GizmoToolbarController:
     _TRANSFORM_TOOL_IDS = {"builtin.translate", "builtin.rotate", "builtin.scale"}
     _MIRROR_TOOL_ID = "builtin.mirror"
     _ALIGN_TOOL_ID = "builtin.align"
+    _DISTANCE_SCALE_TOOL_ID = "builtin.distance_scale"
     _CROP_TOOL_ID = "builtin.cropbox"
-    _HORIZONTAL_TOOL_IDS = {"builtin.select", _MIRROR_TOOL_ID, _ALIGN_TOOL_ID, _CROP_TOOL_ID, *_TRANSFORM_TOOL_IDS}
+    _HORIZONTAL_TOOL_IDS = {"builtin.select", _MIRROR_TOOL_ID, _ALIGN_TOOL_ID, _DISTANCE_SCALE_TOOL_ID, _CROP_TOOL_ID, *_TRANSFORM_TOOL_IDS}
     _TRANSFORM_SPACE_IDS = {"local": 0, "world": 1}
     _MULTI_TRANSFORM_MODE_IDS = {"selection": 0, "individual": 1}
     _PIVOT_IDS = {"origin": 0, "bounds": 1}
@@ -325,6 +328,7 @@ class _GizmoToolbarController:
                 "show_transform_toolbar": False,
                 "show_mirror_toolbar": False,
                 "show_align_toolbar": False,
+                "show_distance_scale_toolbar": False,
                 "show_crop_toolbar": bool(crop_enable_buttons),
                 "show_crop_edit_controls": False,
                 "show_crop_enable_separator": False,
@@ -413,6 +417,7 @@ class _GizmoToolbarController:
         crop_action_buttons = self._build_crop_action_records(active_tool_id) if crop_tool_active else []
         align_tool_active = active_tool_id == self._ALIGN_TOOL_ID
         align_action_buttons = self._build_align_action_records(active_tool_id) if align_tool_active else []
+        distance_scale_tool_active = active_tool_id == self._DISTANCE_SCALE_TOOL_ID
         selection_volume_gizmo_buttons = self._build_selection_volume_gizmo_records(active_tool_id)
         multi_transform_selection = active_tool_id in self._TRANSFORM_TOOL_IDS and len(selected_nodes) > 1
         submode_buttons = self._build_submode_records(active_tool_id, tool_def, multi_transform_selection)
@@ -427,6 +432,7 @@ class _GizmoToolbarController:
             ),
             "show_mirror_toolbar": active_tool_id == self._MIRROR_TOOL_ID and bool(submode_buttons),
             "show_align_toolbar": align_tool_active and bool(align_action_buttons),
+            "show_distance_scale_toolbar": distance_scale_tool_active,
             "show_crop_toolbar": bool(crop_enable_buttons) or (crop_tool_active and bool(crop_object_buttons)),
             "show_crop_edit_controls": crop_tool_active and bool(crop_object_buttons),
             "show_crop_enable_separator": bool(crop_enable_buttons) and crop_tool_active,
@@ -1122,6 +1128,23 @@ class _GizmoToolbarController:
             lf.ui.clear_align_points()
             return
 
+        if action == "distance_scale_apply":
+            apply_fn = getattr(lf.ui, "apply_distance_scale", None)
+            if callable(apply_fn):
+                try:
+                    val = float(value) if value else 0.0
+                except (ValueError, TypeError):
+                    val = 0.0
+                if val > 0.0:
+                    apply_fn(val)
+            return
+
+        if action == "distance_scale_reset":
+            clear_fn = getattr(lf.ui, "clear_distance_scale", None)
+            if callable(clear_fn):
+                clear_fn()
+            return
+
         if action == "align_toggle_snap":
             lf.ui.set_align_axis_snap(not lf.ui.get_align_axis_snap())
             return
@@ -1394,6 +1417,9 @@ class _ViewportToolbarController:
         "show_transform_toolbar",
         "show_mirror_toolbar",
         "show_align_toolbar",
+        "show_distance_scale_toolbar",
+        "distance_scale_can_apply",
+        "distance_scale_can_reset",
         "show_crop_toolbar",
         "show_crop_edit_controls",
         "show_crop_enable_separator",
@@ -1448,6 +1474,13 @@ class _ViewportToolbarController:
         self._show_transform_toolbar = False
         self._show_mirror_toolbar = False
         self._show_align_toolbar = False
+        self._show_distance_scale_toolbar = False
+        self._distance_scale_can_apply = False
+        self._distance_scale_can_reset = False
+        self._distance_scale_measured = 0.0
+        self._distance_scale_points = 0
+        self._distance_scale_target_str = ""
+        self._distance_scale_target_manually_edited = False
         self._show_crop_toolbar = False
         self._show_crop_edit_controls = False
         self._show_crop_enable_separator = False
@@ -1496,6 +1529,15 @@ class _ViewportToolbarController:
             lambda: f"{self._cropbox_loss_weight:.3f}",
             lambda value: self._set_crop_roi_param("cropbox_loss_weight", value),
         )
+        model.bind_func(
+            "distance_scale_measured_str",
+            lambda: f"{self._distance_scale_measured:.4f}" if self._distance_scale_points >= 2 else "—",
+        )
+        model.bind(
+            "distance_scale_target_str",
+            lambda: self._distance_scale_target_str,
+            self._set_distance_scale_target,
+        )
         model.bind_event("toolbar_action", self._on_toolbar_action)
         self._gt_compare_controls.bind_model(model)
         self._depth_view_controls.bind_model(model)
@@ -1529,6 +1571,7 @@ class _ViewportToolbarController:
             self._last_toolbar_signature = None
             self._selection_controls.mount(doc)
             self._transform_controls.mount(doc)
+            self._mount_distance_scale(doc)
             dirty_sources.append("mount")
 
         if self._sync_toolbar_state(doc):
@@ -1638,6 +1681,8 @@ class _ViewportToolbarController:
         dirty |= self._sync_flag("show_transform_toolbar", gizmo_state["show_transform_toolbar"])
         dirty |= self._sync_flag("show_mirror_toolbar", gizmo_state["show_mirror_toolbar"])
         dirty |= self._sync_flag("show_align_toolbar", gizmo_state["show_align_toolbar"])
+        dirty |= self._sync_flag("show_distance_scale_toolbar", gizmo_state["show_distance_scale_toolbar"])
+        dirty |= self._sync_distance_scale()
         dirty |= self._sync_flag("show_crop_toolbar", gizmo_state["show_crop_toolbar"])
         dirty |= self._sync_flag("show_crop_edit_controls", gizmo_state["show_crop_edit_controls"])
         dirty |= self._sync_flag("show_crop_enable_separator", gizmo_state["show_crop_enable_separator"])
@@ -1665,6 +1710,73 @@ class _ViewportToolbarController:
         dirty |= self._sync_records("gizmo_buttons", gizmo_state["gizmo_buttons"])
         dirty |= self._sync_records("submode_buttons", gizmo_state["submode_buttons"])
         dirty |= self._sync_records("pivot_buttons", gizmo_state["pivot_buttons"])
+        return dirty
+
+    def _mount_distance_scale(self, doc):
+        for input_id in ("primary-distance-scale-target", "secondary-distance-scale-target"):
+            el = doc.get_element_by_id(input_id)
+            if el:
+                el.add_event_listener("keydown", self._on_distance_scale_input_keydown)
+
+    def _on_distance_scale_input_keydown(self, event):
+        key = int(event.get_parameter("key_identifier", "0"))
+        if key == 72:  # KI_RETURN
+            self._apply_distance_scale()
+            event.stop_propagation()
+
+    def _set_distance_scale_target(self, value):
+        self._distance_scale_target_str = str(value)
+        self._distance_scale_target_manually_edited = True
+
+    def _apply_distance_scale(self):
+        import lichtfeld as lf
+        apply_fn = getattr(lf.ui, "apply_distance_scale", None)
+        if callable(apply_fn):
+            try:
+                target_val = float(self._distance_scale_target_str)
+            except (ValueError, TypeError):
+                target_val = 0.0
+            if target_val > 0.0:
+                if apply_fn(target_val):
+                    measured_fn = getattr(lf.ui, "get_distance_scale_measured", lambda: target_val)
+                    self._distance_scale_measured = float(measured_fn())
+                    self._distance_scale_target_str = f"{self._distance_scale_measured:.4f}"
+                    self._distance_scale_target_manually_edited = False
+                    if self._handle:
+                        self._handle.dirty("distance_scale_target_str")
+                        self._handle.dirty("distance_scale_measured_str")
+
+    def _reset_distance_scale(self):
+        import lichtfeld as lf
+        clear_fn = getattr(lf.ui, "clear_distance_scale", None)
+        if callable(clear_fn):
+            clear_fn()
+        self._distance_scale_target_str = ""
+        self._distance_scale_target_manually_edited = False
+        if self._handle:
+            self._handle.dirty("distance_scale_target_str")
+            self._handle.dirty("distance_scale_measured_str")
+
+    def _sync_distance_scale(self):
+        import lichtfeld as lf
+        dirty = False
+        can_apply = bool(getattr(lf.ui, "can_apply_distance_scale", lambda: False)())
+        measured = float(getattr(lf.ui, "get_distance_scale_measured", lambda: 0.0)())
+        pts = getattr(lf.ui, "get_distance_scale_points", lambda: [])()
+        num_pts = len(pts) if pts is not None else 0
+
+        dirty |= self._sync_flag("distance_scale_can_apply", can_apply)
+        dirty |= self._sync_flag("distance_scale_can_reset", num_pts > 0)
+        dirty |= self._sync_value("distance_scale_measured", measured)
+        dirty |= self._sync_value("distance_scale_points", num_pts)
+
+        if not self._distance_scale_target_manually_edited:
+            new_target = f"{measured:.4f}" if can_apply else ""
+            if new_target != self._distance_scale_target_str:
+                self._distance_scale_target_str = new_target
+                if self._handle:
+                    self._handle.dirty("distance_scale_target_str")
+                dirty = True
         return dirty
 
     def _sync_crop_roi_params(self, cropbox_toolbar_signature):
@@ -1873,6 +1985,15 @@ class _ViewportToolbarController:
             align_axis_snap = True
             align_edge_to_axis = False
             align_preview = False
+
+        if active_tool == "builtin.distance_scale":
+            distance_scale_can_apply = bool(call(False, getattr(lf.ui, "can_apply_distance_scale", None)))
+            distance_scale_measured = float(call(0.0, getattr(lf.ui, "get_distance_scale_measured", None)))
+            distance_scale_points = len(call([], getattr(lf.ui, "get_distance_scale_points", None)))
+        else:
+            distance_scale_can_apply = False
+            distance_scale_measured = 0.0
+            distance_scale_points = 0
         return (
             language_generation,
             trainer_state,
@@ -1906,6 +2027,10 @@ class _ViewportToolbarController:
             align_can_apply,
             align_axis_snap,
             align_edge_to_axis,
+            distance_scale_can_apply,
+            distance_scale_measured,
+            distance_scale_points,
+            self._distance_scale_target_str,
             _bottom_dock_panel_space(_HISTOGRAM_PANEL_ID),
         )
 
@@ -1933,6 +2058,20 @@ class _ViewportToolbarController:
             self._sync_toolbar_state()
             self._sync_tool_overlays_now()
             return
+        if action == "distance_scale_apply":
+            self._viewport_export_controls.close(notify=False)
+            self._apply_distance_scale()
+            self._last_toolbar_signature = None
+            self._sync_toolbar_state()
+            self._sync_tool_overlays_now()
+            return
+        if action == "distance_scale_reset":
+            self._viewport_export_controls.close(notify=False)
+            self._reset_distance_scale()
+            self._last_toolbar_signature = None
+            self._sync_toolbar_state()
+            self._sync_tool_overlays_now()
+            return
         if action in {
             "tool",
             "submode",
@@ -1951,6 +2090,8 @@ class _ViewportToolbarController:
             "align_clear",
             "align_toggle_snap",
             "align_toggle_edge_to_axis",
+            "distance_scale_apply",
+            "distance_scale_reset",
         }:
             self._viewport_export_controls.close(notify=False)
             self._gizmo.dispatch(action, value)

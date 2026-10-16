@@ -1138,7 +1138,8 @@
     "scale": "拡大縮小",
     "mirror": "ミラー",
     "crop": "切り抜き",
-    "align": "整列"
+    "align": "整列",
+    "distance_scale": "Distance Scale"
   },
   "toolbar": {
     "selection": "選択",
@@ -1202,7 +1203,13 @@
     "resize_bounds": "境界をリサイズ",
     "reset_default": "デフォルトにリセット",
     "fullscreen": "全画面表示",
-    "toggle_ui": "UIを切り替え"
+    "toggle_ui": "UIを切り替え",
+    "distance_scale": "Distance Scale",
+    "distance_scale_tool": "Distance Tool",
+    "distance_scale_measured": "Measured:",
+    "distance_scale_set": "Set Distance:",
+    "distance_scale_apply": "Confirm scale",
+    "distance_scale_reset": "Reset points"
   },
   "transform": {
     "node": "ノード: %s",
@@ -3237,5 +3244,8 @@
     "discarded": "破棄 {discarded}"
   },
   "project.session.newer_settings.title": "新しいバージョンのプロジェクト設定",
-  "project.session.newer_settings.message": "このプロジェクトにはこのバージョンで認識できない設定があります。次の項目には既定値を使用しました: {}"
+  "project.session.newer_settings.message": "このプロジェクトにはこのバージョンで認識できない設定があります。次の項目には既定値を使用しました: {}",
+  "distance_scale": {
+    "status_invalid_distance": "Distance must be greater than zero."
+  }
 }

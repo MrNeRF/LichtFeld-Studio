@@ -1138,7 +1138,8 @@
     "scale": "Skaluj",
     "mirror": "Odbij",
     "crop": "Przytnij",
-    "align": "Wyrównaj"
+    "align": "Wyrównaj",
+    "distance_scale": "Distance Scale"
   },
   "toolbar": {
     "selection": "Zaznaczenie",
@@ -1202,7 +1203,13 @@
     "resize_bounds": "Zmień Rozmiar Granic",
     "reset_default": "Resetuj do Domyślnych",
     "fullscreen": "Pełny Ekran",
-    "toggle_ui": "Przełącz UI"
+    "toggle_ui": "Przełącz UI",
+    "distance_scale": "Distance Scale",
+    "distance_scale_tool": "Distance Tool",
+    "distance_scale_measured": "Measured:",
+    "distance_scale_set": "Set Distance:",
+    "distance_scale_apply": "Confirm scale",
+    "distance_scale_reset": "Reset points"
   },
   "transform": {
     "node": "Węzeł: %s",
@@ -3237,5 +3244,8 @@
     "discarded": "Odrzucono {discarded}"
   },
   "project.session.newer_settings.title": "Ustawienia projektu z nowszej wersji",
-  "project.session.newer_settings.message": "Ten projekt zawiera ustawienia nierozpoznawane przez tę wersję. Użyto wartości domyślnych dla: {}"
+  "project.session.newer_settings.message": "Ten projekt zawiera ustawienia nierozpoznawane przez tę wersję. Użyto wartości domyślnych dla: {}",
+  "distance_scale": {
+    "status_invalid_distance": "Distance must be greater than zero."
+  }
 }

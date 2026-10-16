@@ -1138,7 +1138,8 @@
     "scale": "Mettre à l’échelle",
     "mirror": "Miroir",
     "crop": "Rogner",
-    "align": "Aligner"
+    "align": "Aligner",
+    "distance_scale": "Distance Scale"
   },
   "toolbar": {
     "selection": "Sélection",
@@ -1202,7 +1203,13 @@
     "resize_bounds": "Redimensionner les Limites",
     "reset_default": "Réinitialiser par Défaut",
     "fullscreen": "Plein Écran",
-    "toggle_ui": "Basculer UI"
+    "toggle_ui": "Basculer UI",
+    "distance_scale": "Distance Scale",
+    "distance_scale_tool": "Distance Tool",
+    "distance_scale_measured": "Measured:",
+    "distance_scale_set": "Set Distance:",
+    "distance_scale_apply": "Confirm scale",
+    "distance_scale_reset": "Reset points"
   },
   "transform": {
     "node": "Nœud : %s",
@@ -3237,5 +3244,8 @@
     "discarded": "{discarded} supprimés"
   },
   "project.session.newer_settings.title": "Paramètres du projet issus d’une version plus récente",
-  "project.session.newer_settings.message": "Ce projet contient des paramètres que cette version ne reconnaît pas. Valeurs par défaut utilisées pour : {}"
+  "project.session.newer_settings.message": "Ce projet contient des paramètres que cette version ne reconnaît pas. Valeurs par défaut utilisées pour : {}",
+  "distance_scale": {
+    "status_invalid_distance": "Distance must be greater than zero."
+  }
 }
