@@ -2985,12 +2985,7 @@ namespace lfs::vis {
                 rendering_manager_->viewInputFingerprint(*target.viewport, scene_manager_.get(), id) !=
                     view.last_rendered_input_fingerprint_)
                 dirty = DirtyFlag::ALL;
-            if (dirty) {
-                ledger_plan.present = true;
-                ledger_plan.render_views |= mask;
-                ledger_plan.view_flags[std::countr_zero(mask)] |= dirty;
-                ledger_plan.reasons.set(static_cast<std::size_t>(FrameReason::SceneChange));
-            }
+            planDirtyView(ledger_plan, mask, dirty);
             const auto target = findView(id);
             if (target.valid() && view.has_rendered_input_fingerprint_ && ledger_plan.present &&
                 !(ledger_plan.render_views & mask) &&
@@ -3078,6 +3073,7 @@ namespace lfs::vis {
             const bool preview_refresh_only =
                 gui_frame_rendered_ && frame_demand.onlySceneDirty() &&
                 rendering_manager_->pendingDirtyMask() == DirtyFlag::SPLATS;
+            ViewMask rendered_views = 0;
             for (const auto id : visible_views) {
                 const auto mask = rendering_manager_->viewMask(id);
                 if (!(ledger_plan.render_views & mask))
@@ -3103,7 +3099,9 @@ namespace lfs::vis {
                 auto& view = rendering_manager_->viewState(id);
                 if (!view.parked_arena_retry_) {
                     rendering_manager_->retainVksplatScratch();
-                    rendering_manager_->frameDemandLedger().countViewRendered(mask, ledger_plan);
+                    // An overlay-only refresh returns the cached image and is not a view render.
+                    if (viewport_frame.rendered)
+                        rendered_views |= mask;
                     view.last_rendered_input_fingerprint_ =
                         rendering_manager_->viewInputFingerprint(camera, scene_manager_.get(), id);
                     view.has_rendered_input_fingerprint_ = true;
@@ -3114,6 +3112,7 @@ namespace lfs::vis {
                 }
                 rendering_manager_->publishFrameToInterop(id, viewport_frame);
             }
+            rendering_manager_->countViewsRendered(rendered_views, ledger_plan);
             if (preview_refresh_only && rendering_manager_->hasParkedArenaRetry()) {
                 if (scene_capture_jobs_.hasActive())
                     scene_capture_jobs_.cancelActive();

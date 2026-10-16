@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <bitset>
 #include <cassert>
 #include <chrono>
@@ -161,6 +162,18 @@ namespace lfs::vis {
 
         [[nodiscard]] bool empty() const { return !present && render_views == 0; }
     };
+
+    // Adds a view with pending invalidations to the plan. Only a view no request planned
+    // renders for an unrequested scene change; a planned view keeps its requests' reasons.
+    inline void planDirtyView(FramePlan& plan, const ViewMask view, const DirtyMask dirty) {
+        if (!dirty || !view)
+            return;
+        if (!(plan.render_views & view))
+            plan.reasons.set(static_cast<std::size_t>(FrameReason::SceneChange));
+        plan.present = true;
+        plan.render_views |= view;
+        plan.view_flags[std::countr_zero(view)] |= dirty;
+    }
 
     struct LiveHolderInfo {
         FrameReason reason;

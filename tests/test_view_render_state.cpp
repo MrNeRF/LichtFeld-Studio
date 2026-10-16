@@ -78,6 +78,23 @@ namespace lfs::vis {
             EXPECT_EQ(ledger.snapshot().views_rendered, counts);
         }
 
+        // Fails if the viewport FPS readout misses view renders or counts each view of a frame.
+        TEST_F(ViewRenderStateTest, RenderedViewsCountOneViewportFrameAndEachView) {
+            rendering.retainVisibleViews({first, second});
+            const auto views = rendering.viewMask(first) | rendering.viewMask(second);
+            FramePlan plan;
+            plan.reasons.set(static_cast<std::size_t>(FrameReason::Selection));
+            rendering.countViewsRendered(0, plan);
+            EXPECT_EQ(rendering.getFrameRates().view, 0.0f);
+
+            rendering.countViewsRendered(views, plan);
+            EXPECT_EQ(rendering.getFrameRates().view, 1.0f);
+            const auto snapshot = rendering.frameDemandLedger().snapshot();
+            EXPECT_EQ(snapshot.views_rendered[0], 1u);
+            EXPECT_EQ(snapshot.views_rendered[1], 1u);
+            EXPECT_EQ(snapshot.view_renders_by_reason[static_cast<std::size_t>(FrameReason::Selection)], 2u);
+        }
+
         TEST_F(ViewRenderStateTest, PreviewTopologyCacheInvalidationIsNotAnUnrequestedSceneChange) {
             SceneManager scene;
             auto& camera = source.view3D(first)->camera;
