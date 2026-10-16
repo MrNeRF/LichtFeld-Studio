@@ -11,10 +11,12 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <gtest/gtest.h>
 #include <tuple>
 #include <vector>
@@ -481,6 +483,40 @@ namespace {
             EXPECT_NEAR(static_cast<double>((**prepared).model->size()), resolution * resolution * 2.0 / 3.0,
                         2.0 * resolution);
         }
+    }
+
+    // Catches the preview or training start parsing the init mesh again (they fail once the file is
+    // gone), and a mesh edited after the dataset load being trained from the stale copy.
+    TEST_F(TrainingInitCentering, MeshInitParsesTheMeshOnce) {
+        const auto mesh = root / "mesh.obj";
+        param::TrainingParameters params;
+        params.dataset.data_path = root;
+        params.optimization.sh_degree = 0;
+        params.init_path = mesh.string();
+        const auto prepare_after = [&](const std::function<void()>& between_load_and_training) {
+            Scene scene;
+            const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+            EXPECT_TRUE(loaded) << loaded.error();
+            between_load_and_training();
+            auto prepared = lfs::training::prepareTrainingModel(params, scene);
+            EXPECT_TRUE(prepared && prepared->has_value());
+            return prepared && prepared->has_value() ? (**prepared).model->means().cpu().contiguous().ptr<float>()[2] : 0.0f;
+        };
+
+        write_quad_mesh(mesh);
+        EXPECT_NEAR(prepare_after([&] { fs::remove(mesh); }), 4.0f, 1e-4f);
+
+        write_quad_mesh(mesh);
+        lfs::training::preloadInitMesh(params);
+        fs::remove(mesh);
+        EXPECT_NEAR(prepare_after([] {}), 4.0f, 1e-4f);
+
+        write_quad_mesh(mesh);
+        const auto move_to_z9 = [&] {
+            std::ofstream(mesh) << "v 0 0 9\nv 1 0 9\nv 0 1 9\nf 1 2 3\n";
+            fs::last_write_time(mesh, fs::last_write_time(mesh) + std::chrono::seconds(1));
+        };
+        EXPECT_NEAR(prepare_after(move_to_z9), 9.0f, 1e-4f);
     }
 
     INSTANTIATE_TEST_SUITE_P(LoadPaths, TrainingInitCentering,

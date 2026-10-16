@@ -44,6 +44,7 @@
 #include "sequencer/keyframe.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "training/training_manager.hpp"
+#include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -2873,6 +2874,10 @@ namespace lfs::vis::gui {
 
                     auto loader = lfs::io::Loader::create();
                     auto result = loader->load(path, load_options);
+                    if (result && std::holds_alternative<lfs::io::LoadedScene>(result->data) &&
+                        !stop_token.stop_requested()) {
+                        lfs::training::preloadInitMesh(local_params);
+                    }
 
                     if (stop_token.stop_requested()) {
                         return;
