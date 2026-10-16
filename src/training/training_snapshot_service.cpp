@@ -1478,8 +1478,13 @@ namespace lfs::training {
         }
 
         void shutdown() {
-            for (auto& worker : drain_threads)
-                worker.request_stop();
+            {
+                // Under the mutex, so a drain thread between its predicate check and
+                // its wait cannot miss the stop and sleep through the notify.
+                std::scoped_lock lock(ring_mutex);
+                for (auto& worker : drain_threads)
+                    worker.request_stop();
+            }
             ring_condition.notify_all();
             for (auto& worker : drain_threads) {
                 if (worker.joinable())
