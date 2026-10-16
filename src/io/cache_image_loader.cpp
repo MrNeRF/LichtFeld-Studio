@@ -434,8 +434,9 @@ namespace lfs::io {
             // An unusual TIFF still gets the pre-existing byte-decoder fallback.
         }
         int width = 0, height = 0, channels = 0;
+        const std::unique_ptr<std::FILE, decltype(&std::fclose)> file(lfs::core::open_file(path, "rb"), &std::fclose);
         const std::unique_ptr<unsigned char, decltype(&stbi_image_free)> gray(
-            stbi_load(path_to_utf8(path).c_str(), &width, &height, &channels, 1), &stbi_image_free);
+            file ? stbi_load_from_file(file.get(), &width, &height, &channels, 1) : nullptr, &stbi_image_free);
         Tensor cpu;
         if (gray) {
             cpu = Tensor::empty({static_cast<size_t>(height), static_cast<size_t>(width)}, Device::CPU, DataType::UInt8);

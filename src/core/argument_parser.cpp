@@ -288,7 +288,7 @@ namespace {
         if (const auto file = lfs::core::param::eval_mask_splat_file(spec)) {
             const auto normalized = lfs::core::param::normalize_eval_mask(spec);
             std::error_code error;
-            if (!std::filesystem::is_regular_file(
+            if (!lfs::core::native_fs::is_regular_file(
                     lfs::core::utf8_to_path(std::string(*lfs::core::param::eval_mask_splat_file(normalized))), error))
                 return invalid(std::format("Evaluation splat file does not exist: {}", *file));
             return normalized;
@@ -296,7 +296,7 @@ namespace {
         if (const auto file = lfs::core::param::eval_mask_points_file(spec)) {
             const auto normalized = lfs::core::param::normalize_eval_mask(spec);
             std::error_code error;
-            if (!std::filesystem::is_regular_file(
+            if (!lfs::core::native_fs::is_regular_file(
                     lfs::core::utf8_to_path(std::string(*lfs::core::param::eval_mask_points_file(normalized))), error))
                 return invalid(std::format("Evaluation points file does not exist: {}", *file));
             return normalized;
@@ -318,7 +318,7 @@ namespace {
             const auto normalized = lfs::core::param::normalize_eval_mask(spec);
             std::error_code error;
             if (lfs::core::param::eval_mask_folder(spec).empty() ||
-                !std::filesystem::is_directory(
+                !lfs::core::native_fs::is_directory(
                     lfs::core::utf8_to_path(std::string(lfs::core::param::eval_mask_folder(normalized))), error))
                 return invalid(std::format("Evaluation mask folder does not exist: {}", spec.substr(6)));
             return normalized;
@@ -340,7 +340,7 @@ namespace {
             return invalid(std::format("Invalid --eval-mask. {}", expected));
         const auto path = lfs::core::param::normalize_eval_mask(spec.substr(separator + 1));
         std::error_code error;
-        if (!std::filesystem::is_regular_file(lfs::core::utf8_to_path(path), error))
+        if (!lfs::core::native_fs::is_regular_file(lfs::core::utf8_to_path(path), error))
             return invalid(std::format("Evaluation mesh file does not exist: {}", path));
         return path;
     }
@@ -542,7 +542,7 @@ namespace {
         lfs::core::param::TrainingParameters& params, const std::string& view_path_str) {
         const std::filesystem::path view_path = lfs::core::utf8_to_path(view_path_str);
 
-        if (!std::filesystem::exists(view_path)) {
+        if (!lfs::core::native_fs::exists(view_path)) {
             return std::unexpected(
                 std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
         }
@@ -562,10 +562,10 @@ namespace {
             return std::ranges::find(SUPPORTED_EXTENSIONS, ext) != SUPPORTED_EXTENSIONS.end();
         };
 
-        if (std::filesystem::is_directory(view_path)) {
-            for (const auto& entry : std::filesystem::directory_iterator(view_path)) {
-                if (entry.is_regular_file() && is_supported(entry.path())) {
-                    params.view_paths.push_back(entry.path());
+        if (lfs::core::native_fs::is_directory(view_path)) {
+            for (const auto& entry : lfs::core::native_fs::directory_iterator(view_path)) {
+                if (lfs::core::native_fs::entry_is_regular_file(view_path, entry) && is_supported(entry.path())) {
+                    params.view_paths.push_back(lfs::core::native_fs::entry_path(view_path, entry.path()));
                 }
             }
             std::ranges::sort(params.view_paths);
@@ -680,7 +680,7 @@ namespace {
     std::optional<std::string> validateOutputFormatSuffix(
         const std::filesystem::path& output_path,
         const lfs::core::param::OutputFormat format) {
-        if (output_path.empty() || std::filesystem::is_directory(output_path)) {
+        if (output_path.empty() || lfs::core::native_fs::is_directory(output_path)) {
             return std::nullopt;
         }
 
@@ -1165,7 +1165,7 @@ namespace {
             if (render_camera_path) {
                 const auto& camera_path_str = ::args::get(render_camera_path);
                 const auto camera_path = lfs::core::utf8_to_path(camera_path_str);
-                if (!std::filesystem::exists(camera_path)) {
+                if (!lfs::core::native_fs::exists(camera_path)) {
                     return std::unexpected(std::format("Camera path file does not exist: {}", camera_path_str));
                 }
                 if (!render_load || ::args::get(render_load).empty()) {
@@ -1177,7 +1177,7 @@ namespace {
                         "ERROR: --render-camera-path requires --render-output\n\n{}", parser.Help()));
                 }
                 const auto load_path = lfs::core::utf8_to_path(::args::get(render_load));
-                if (!std::filesystem::exists(load_path)) {
+                if (!lfs::core::native_fs::exists(load_path)) {
                     return std::unexpected(std::format("Scene to render does not exist: {}", ::args::get(render_load)));
                 }
 
@@ -1208,10 +1208,10 @@ namespace {
                 const auto& import_path_str = ::args::get(import_cameras);
                 if (!import_path_str.empty()) {
                     const std::filesystem::path import_path = lfs::core::utf8_to_path(import_path_str);
-                    if (!std::filesystem::exists(import_path)) {
+                    if (!lfs::core::native_fs::exists(import_path)) {
                         return std::unexpected(std::format("Path does not exist: {}", lfs::core::path_to_utf8(import_path)));
                     }
-                    if (!std::filesystem::is_directory(import_path)) {
+                    if (!lfs::core::native_fs::is_directory(import_path)) {
                         return std::unexpected(std::format("Expected directory for --import-cameras: {}", lfs::core::path_to_utf8(import_path)));
                     }
                     params.import_cameras_path = import_path;
@@ -1224,7 +1224,7 @@ namespace {
                 const auto ckpt_path_str = ::args::get(resume_checkpoint);
                 if (!ckpt_path_str.empty()) {
                     const auto ckpt_path = lfs::core::utf8_to_path(ckpt_path_str);
-                    if (!std::filesystem::exists(ckpt_path)) {
+                    if (!lfs::core::native_fs::exists(ckpt_path)) {
                         return std::unexpected(std::format("Checkpoint file does not exist: {}", ckpt_path_str));
                     }
                     auto extension = ckpt_path.extension().string();
@@ -1260,7 +1260,7 @@ namespace {
                 const auto path_str = ::args::get(init_path);
                 params.init_path = lfs::core::path_to_utf8(absolute_input_path(path_str));
 
-                if (!std::filesystem::exists(lfs::core::utf8_to_path(path_str))) {
+                if (!lfs::core::native_fs::exists(lfs::core::utf8_to_path(path_str))) {
                     return std::unexpected(std::format("Initialization file does not exist: {}", path_str));
                 }
             }
@@ -1277,7 +1277,7 @@ namespace {
                 for (size_t i = 0; i < add_splat_values.size(); ++i) {
                     const auto& path_str = add_splat_values[i];
                     const auto splat_path = absolute_input_path(path_str);
-                    if (!std::filesystem::exists(splat_path)) {
+                    if (!lfs::core::native_fs::exists(splat_path)) {
                         return std::unexpected(std::format("Added splat does not exist: {}", path_str));
                     }
                     params.add_splat_paths.push_back(splat_path);
@@ -1349,7 +1349,7 @@ namespace {
 
                     // Create output directory
                     std::error_code ec;
-                    std::filesystem::create_directories(params.dataset.output_path, ec);
+                    lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
                     if (ec) {
                         return std::unexpected(std::format(
                             "Failed to create output directory '{}': {}",
@@ -1371,7 +1371,7 @@ namespace {
 
                     // Create output directory if provided
                     std::error_code ec;
-                    std::filesystem::create_directories(params.dataset.output_path, ec);
+                    lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
                     if (ec) {
                         return std::unexpected(std::format(
                             "Failed to create output directory '{}': {}",
@@ -1999,7 +1999,7 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
         args[1] != "compare" && args[1] != "plugin") {
         const std::filesystem::path p = lfs::core::utf8_to_path(args[1]);
         std::error_code ec;
-        if (std::filesystem::exists(p, ec))
+        if (lfs::core::native_fs::exists(p, ec))
             args.insert(args.begin() + 1, "-v");
     }
 
@@ -2224,7 +2224,7 @@ namespace {
         params.spz_version = spz_version ? ::args::get(spz_version) : 4;
         params.include_provenance = !no_provenance;
 
-        if (!std::filesystem::exists(params.input_path)) {
+        if (!lfs::core::native_fs::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
         }
 
@@ -2424,7 +2424,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         params.spz_version = spz_version ? ::args::get(spz_version) : 4;
         params.include_provenance = !no_provenance;
 
-        if (!std::filesystem::exists(params.input_path)) {
+        if (!lfs::core::native_fs::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
         }
         if (params.spz_version != 3 && params.spz_version != 4) {
@@ -2462,7 +2462,7 @@ dataset options work as in training; see the Evaluation page of the docs.
             if (const auto fmt = parseFormat(params.output_path.extension().string())) {
                 params.format = *fmt;
                 params.formats = {*fmt};
-            } else if (!params.output_path.extension().empty() && !std::filesystem::is_directory(params.output_path)) {
+            } else if (!params.output_path.extension().empty() && !lfs::core::native_fs::is_directory(params.output_path)) {
                 return std::unexpected(std::format("Unknown extension '{}'. Use --format", params.output_path.extension().string()));
             }
         }
@@ -2546,20 +2546,24 @@ dataset options work as in training; see the Evaluation page of the docs.
         params.reference_path = lfs::core::utf8_to_path(::args::get(reference));
         params.test_path = lfs::core::utf8_to_path(::args::get(test));
         for (const auto& path : {params.reference_path, params.test_path}) {
-            if (!std::filesystem::exists(path))
+            if (!lfs::core::native_fs::exists(path))
                 return invalid(std::format("Not found: {}", lfs::core::path_to_utf8(path)));
         }
-        if (std::filesystem::is_directory(params.reference_path) != std::filesystem::is_directory(params.test_path))
+        if (lfs::core::native_fs::is_directory(params.reference_path) != lfs::core::native_fs::is_directory(params.test_path))
             return invalid("compare needs two images or two folders");
         if (output) {
             params.output_path = lfs::core::utf8_to_path(::args::get(output));
         } else {
-            const auto test_path = std::filesystem::weakly_canonical(params.test_path);
+            std::error_code resolve_error;
+            const auto test_path = lfs::core::native_fs::weakly_canonical(params.test_path, resolve_error);
+            if (resolve_error)
+                return invalid(std::format("Cannot resolve {}: {}", lfs::core::path_to_utf8(params.test_path),
+                                           resolve_error.message()));
             params.output_path = test_path.parent_path() / (lfs::core::path_to_utf8(test_path.stem()) + "_compare");
         }
         if (colmap) {
             params.colmap_path = lfs::core::utf8_to_path(::args::get(colmap));
-            if (!std::filesystem::is_directory(params.colmap_path))
+            if (!lfs::core::native_fs::is_directory(params.colmap_path))
                 return invalid(std::format("COLMAP model not found: {}", ::args::get(colmap)));
         }
         if (eval_mask) {
@@ -2682,10 +2686,10 @@ dataset options work as in training; see the Evaluation page of the docs.
             if (params.dataset_path.empty()) {
                 return std::unexpected(std::format("Missing dataset path\n\n{}", parser.Help()));
             }
-            if (!std::filesystem::exists(params.dataset_path)) {
+            if (!lfs::core::native_fs::exists(params.dataset_path)) {
                 return std::unexpected(std::format("Dataset not found: {}", lfs::core::path_to_utf8(params.dataset_path)));
             }
-            if (!std::filesystem::is_directory(params.dataset_path)) {
+            if (!lfs::core::native_fs::is_directory(params.dataset_path)) {
                 return std::unexpected(std::format("Expected dataset directory: {}", lfs::core::path_to_utf8(params.dataset_path)));
             }
         }
@@ -2704,7 +2708,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         if (params.bit_depth != 8 && params.bit_depth != 16) {
             return std::unexpected("--bit-depth must be 8 or 16");
         }
-        if (!params.model_path.empty() && !std::filesystem::exists(params.model_path)) {
+        if (!params.model_path.empty() && !lfs::core::native_fs::exists(params.model_path)) {
             return std::unexpected(std::format("Model not found: {}", lfs::core::path_to_utf8(params.model_path)));
         }
 
@@ -2739,7 +2743,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         if (project.extension() != ".licht") {
             return invalid("The project path must have a .licht extension.");
         }
-        if (!std::filesystem::is_regular_file(project)) {
+        if (!lfs::core::native_fs::is_regular_file(project)) {
             return invalid("The .licht project file could not be found.");
         }
         std::optional<std::filesystem::path> dataset;

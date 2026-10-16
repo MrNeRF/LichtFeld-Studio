@@ -200,7 +200,7 @@ namespace lfs::io {
 
             LOG_INFO("[nvImageCodec Diagnostics] Extensions directory: {}", lfs::core::path_to_utf8(ext_dir));
 
-            if (!std::filesystem::exists(ext_dir)) {
+            if (!lfs::core::native_fs::exists(ext_dir)) {
                 LOG_ERROR("[nvImageCodec Diagnostics] Extensions directory does not exist!");
                 return;
             }
@@ -314,7 +314,7 @@ namespace lfs::io {
             std::string extensions_path_str;
             const char* extensions_path_ptr = nullptr;
 
-            if (!extensions_dir.empty() && std::filesystem::exists(extensions_dir)) {
+            if (!extensions_dir.empty() && lfs::core::native_fs::exists(extensions_dir)) {
                 extensions_path_str = lfs::core::path_to_utf8(extensions_dir);
                 extensions_path_ptr = extensions_path_str.c_str();
             }
@@ -367,7 +367,7 @@ namespace lfs::io {
             std::string extensions_path_str;
             const char* extensions_path_ptr = nullptr;
 
-            if (!extensions_dir.empty() && std::filesystem::exists(extensions_dir)) {
+            if (!extensions_dir.empty() && lfs::core::native_fs::exists(extensions_dir)) {
                 extensions_path_str = lfs::core::path_to_utf8(extensions_dir);
                 extensions_path_ptr = extensions_path_str.c_str();
             }
@@ -1041,7 +1041,7 @@ namespace lfs::io {
         std::string extensions_path_str;
         const char* extensions_path_ptr = nullptr;
 
-        if (!extensions_dir.empty() && std::filesystem::exists(extensions_dir)) {
+        if (!extensions_dir.empty() && lfs::core::native_fs::exists(extensions_dir)) {
             extensions_path_str = lfs::core::path_to_utf8(extensions_dir);
             extensions_path_ptr = extensions_path_str.c_str();
             LOG_DEBUG("[NvCodecImageLoader] Extensions: {}", extensions_path_str);

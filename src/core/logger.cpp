@@ -580,7 +580,7 @@ namespace lfs::core {
         // back to console/memory sinks only.
         std::shared_ptr<spdlog::sinks::rotating_file_sink_mt> make_default_file_sink(const fs::path& path) {
             std::error_code ec;
-            fs::create_directories(path.parent_path(), ec);
+            native_fs::create_directories(path.parent_path(), ec);
             if (ec) {
                 std::fprintf(stderr, "lichtfeld: could not create log directory '%s': %s\n",
                              path_to_utf8(path.parent_path()).c_str(), ec.message().c_str());
@@ -597,8 +597,8 @@ namespace lfs::core {
 
         bool same_log_target(const fs::path& a, const fs::path& b) {
             std::error_code ec_a, ec_b;
-            const fs::path resolved_a = fs::weakly_canonical(a, ec_a);
-            const fs::path resolved_b = fs::weakly_canonical(b, ec_b);
+            const fs::path resolved_a = native_fs::weakly_canonical(a, ec_a);
+            const fs::path resolved_b = native_fs::weakly_canonical(b, ec_b);
             if (!ec_a && !ec_b)
                 return resolved_a == resolved_b;
             return a.lexically_normal() == b.lexically_normal();

@@ -146,7 +146,7 @@ namespace lfs::training {
 
     std::filesystem::path find_ppisp_companion(const std::filesystem::path& splat_path) {
         auto companion = get_ppisp_companion_path(splat_path);
-        if (std::filesystem::exists(companion)) {
+        if (lfs::core::native_fs::exists(companion)) {
             return companion;
         }
         return {};

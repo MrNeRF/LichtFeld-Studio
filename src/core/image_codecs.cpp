@@ -4,6 +4,7 @@
 #include "image_codecs.hpp"
 #include "image_exr.hpp"
 
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 
 #include <jpeglib.h>
@@ -52,7 +53,7 @@ namespace lfs::core::image_codecs {
         }
 
         bool read_file(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error) {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            std::ifstream file(native_fs::native_path(path), std::ios::binary | std::ios::ate);
             if (!file) {
                 error = "Could not open file " + path_to_utf8(path);
                 return false;
@@ -74,7 +75,7 @@ namespace lfs::core::image_codecs {
 
         bool read_prefix(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error,
                          const std::size_t limit = 32) {
-            std::ifstream file(path, std::ios::binary);
+            std::ifstream file(native_fs::native_path(path), std::ios::binary);
             if (!file) {
                 error = "Could not open file " + path_to_utf8(path);
                 return false;
@@ -150,21 +151,11 @@ namespace lfs::core::image_codecs {
         }
 
         std::FILE* open_binary_file(const std::filesystem::path& path) {
-#ifdef _WIN32
-            return _wfopen(path.c_str(), L"rb");
-#else
-            const auto path_utf8 = path_to_utf8(path);
-            return std::fopen(path_utf8.c_str(), "rb");
-#endif
+            return open_file(path, "rb");
         }
 
         std::FILE* open_output_file(const std::filesystem::path& path) {
-#ifdef _WIN32
-            return _wfopen(path.c_str(), L"wb");
-#else
-            const auto path_utf8 = path_to_utf8(path);
-            return std::fopen(path_utf8.c_str(), "wb");
-#endif
+            return open_file(path, "wb");
         }
 
         void* allocate_target(DecodeTarget& target, const std::size_t bytes, std::string& error) {
@@ -617,7 +608,7 @@ namespace lfs::core::image_codecs {
             TIFFOpenOptionsSetErrorHandlerExtR(options, tiff_error_handler_ext_r, &error);
             TIFFOpenOptionsSetWarningHandlerExtR(options, tiff_warning_handler_ext_r, nullptr);
 #ifdef _WIN32
-            TIFF* tiff = TIFFOpenWExt(path.c_str(), mode, options);
+            TIFF* tiff = TIFFOpenWExt(native_fs::native_path(path).c_str(), mode, options);
 #else
             const auto path_utf8 = path_to_utf8(path);
             TIFF* tiff = TIFFOpenExt(path_utf8.c_str(), mode, options);

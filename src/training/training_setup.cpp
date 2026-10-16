@@ -1287,7 +1287,7 @@ namespace lfs::training {
             return std::unexpected(
                 "Project checkpoint has no dataset path");
         }
-        if (!std::filesystem::exists(
+        if (!lfs::core::native_fs::exists(
                 params.dataset.data_path)) {
             return std::unexpected(std::format(
                 "Dataset path does not exist: {}",
