@@ -203,7 +203,7 @@ namespace lfs::io::project {
             if (fourcc == FOURCC_PROJ) {
                 known = {"schema_version", "manifest", "project_uuid",
                          "created_at_unix_ns", "modified_at_unix_ns",
-                         "dataset_reference_uuid", "project_lineage",
+                         "dataset_reference_uuid", "training_initialization", "project_lineage",
                          "georeference", "license", "embed_decisions", "provenance",
                          "embedded_payloads"};
             } else if (fourcc == FOURCC_REFS) {

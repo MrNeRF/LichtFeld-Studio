@@ -10,7 +10,9 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/executable_path.hpp"
 #include "core/guarded_task.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/main_loop.hpp"
 #include "core/mesh_data.hpp"
@@ -71,6 +73,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <csignal>
 #include <cstdlib>
@@ -17250,6 +17253,231 @@ contract["check_selection_submode_follows_native_mode"](lf)
         ASSERT_NE(model, nullptr);
         EXPECT_EQ(model->size(), 3u);
         EXPECT_EQ(viewer.getSceneManager()->buildRenderState().combined_model, model);
+    }
+
+    void check_init_reference_reopen(const std::filesystem::path& root, const ViewerOptions& options,
+                                     const bool centralize, const bool missing) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto dataset = root / "init-dataset";
+        const auto init = root / "init splat.ply";
+        const auto project = root / "untrained-init.licht";
+        write_transforms_dataset_with_cameras(dataset, 2);
+        auto splat = lfs::test::licht::make_splat(8);
+        splat->scaling_raw() = lfs::core::Tensor::from_vector(std::vector<float>(24, -1.25f), {8, 3}, lfs::core::Device::CPU);
+        splat->opacity_raw() = lfs::core::Tensor::from_vector(std::vector<float>(8, -0.75f), {8, 1}, lfs::core::Device::CPU);
+        ASSERT_TRUE(lfs::io::save_ply(*splat, {.output_path = init, .binary = true, .async = false}));
+
+        VisualizerImpl viewer(options);
+        installSessionTestInputController(viewer);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        const auto* context = viewer.getWindowManager()->getVulkanContext();
+        if (!context || !context->externalMemoryInteropEnabled())
+            GTEST_SKIP() << "Vulkan external memory interop unavailable";
+        const auto wait = [&](auto condition) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            while (!condition() && std::chrono::steady_clock::now() < deadline) {
+                viewer.pumpPostedWorkForProjectWrite();
+                viewer.getGuiManager()->asyncTasks().pollImportCompletion();
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            return condition();
+        };
+        viewer.getParameterManager()->modifyActiveParams([](auto& params) {
+            params.iterations = 1;
+            params.max_cap = 64;
+            params.enable_eval = false;
+            params.init_opacity = 0.1f;
+            params.save_steps.clear();
+            params.eval_steps.clear();
+        });
+        lfs::core::events::cmd::LoadFile{
+            .path = dataset,
+            .is_dataset = true,
+            .init_path = init,
+            .centralize_dataset = centralize ? "by_cameras" : "off",
+            .discard_changes = true}
+            .emit();
+        ASSERT_TRUE(wait([&] { return !viewer.getGuiManager()->asyncTasks().isImporting(); }));
+        ASSERT_NE(viewer.getTrainer(), nullptr);
+        const auto origin = viewer.getScene().getTrainingDataOrigin();
+        if (centralize)
+            ASSERT_NE(origin, glm::vec3{0.0f});
+        const auto center = viewer.getScene().getSceneCenter().cpu();
+        ASSERT_EQ(center.numel(), 3u);
+        auto prepared = lfs::training::prepareTrainingModel(viewer.getTrainer()->getParams(), viewer.getScene());
+        ASSERT_TRUE(prepared) << prepared.error();
+        ASSERT_TRUE(prepared->has_value());
+        const auto expected_means = (**prepared).model->means_raw().cpu();
+        const float expected_scale = (**prepared).model->get_scene_scale();
+        prepared->reset();
+        const auto save = viewer.projectSaveAs(project, false);
+        ASSERT_TRUE(save) << lfs::format_for_developer(save.error());
+        ASSERT_TRUE(wait([&] { return !viewer.projectPollWrite()->running; }));
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty()) << viewer.projectPollWrite()->error;
+        auto saved = lfs::test::licht::require_result_ptr(lfs::io::project::ProjectDocument::open(project));
+        EXPECT_TRUE(saved->checkpoint_uuids().empty());
+        const auto initialization = saved->project().dom().get_json("training_initialization");
+        EXPECT_TRUE(initialization.has_value());
+        if (missing)
+            ASSERT_TRUE(std::filesystem::remove(init));
+
+        CapturingErrorConsumer consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        auto& localization = lfs::event::LocalizationManager::getInstance();
+        localization.setOverride("runtime.training_init_unavailable", "init unavailable: {}");
+        ASSERT_TRUE(viewer.projectOpen(project, ProjectSwitchDisposition::DiscardChanges));
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(wait([&] {
+            const auto session = viewer.projectTrainingSessionState();
+            return session.hydrated && !session.restoring;
+        }));
+        localization.clearOverride("runtime.training_init_unavailable");
+        ASSERT_NE(viewer.getTrainer(), nullptr);
+        const auto expected_path = missing ? std::optional<std::string>{} : std::optional{lfs::core::path_to_utf8(init)};
+        EXPECT_EQ(viewer.getTrainer()->getParams().init_path, expected_path);
+        EXPECT_EQ(viewer.getDataLoader()->getParameters().init_path, expected_path);
+        EXPECT_EQ(viewer.getScene().getTrainingDataOrigin(), origin);
+        EXPECT_TRUE(viewer.getScene().getSceneCenter().is_valid());
+        if (viewer.getScene().getSceneCenter().is_valid()) {
+            const auto restored_center = viewer.getScene().getSceneCenter().cpu();
+            EXPECT_EQ(restored_center.numel(), center.numel());
+            if (restored_center.numel() == 3)
+                for (size_t i = 0; i < 3; ++i)
+                    EXPECT_FLOAT_EQ(restored_center.ptr<float>()[i], center.ptr<float>()[i]);
+        }
+        EXPECT_FALSE(viewer.projectGetInfo()->dirty);
+        if (missing) {
+            EXPECT_TRUE(std::ranges::any_of(consumer.user_messages, [](const auto& message) {
+                return message.find("init unavailable") != std::string::npos &&
+                       message.find("init splat.ply") != std::string::npos;
+            }));
+            ASSERT_TRUE(viewer.projectSave(false));
+            ASSERT_TRUE(wait([&] { return !viewer.projectPollWrite()->running; }));
+            EXPECT_TRUE(viewer.projectPollWrite()->error.empty());
+            auto resaved = lfs::test::licht::require_result_ptr(lfs::io::project::ProjectDocument::open(project));
+            EXPECT_EQ(resaved->project().dom().get_json("training_initialization"), initialization);
+            if (initialization && initialization->contains("init_reference_uuid")) {
+                const auto uuid = lfs::core::Uuid::from_string((*initialization)["init_reference_uuid"].get<std::string>());
+                ASSERT_TRUE(uuid);
+                EXPECT_EQ(lfs::test::licht::require_result(resaved->references().find(*uuid)),
+                          lfs::test::licht::require_result(saved->references().find(*uuid)));
+            }
+        }
+        saved.reset();
+
+        int starts = 0;
+        lfs::core::events::state::TrainingStarted::when([&](const auto&) {
+            ++starts;
+            const auto* model = viewer.getScene().getTrainingModel();
+            EXPECT_NE(model, nullptr);
+            if (model) {
+                EXPECT_EQ(model->size(), 8u);
+                const auto means = model->means_raw().cpu();
+                EXPECT_EQ(means.numel(), expected_means.numel());
+                if (means.numel() == expected_means.numel())
+                    for (size_t i = 0; i < means.numel(); ++i)
+                        EXPECT_NEAR(means.ptr<float>()[i], expected_means.ptr<float>()[i], 1e-6f);
+                const auto opacity = model->opacity_raw().cpu();
+                for (size_t i = 0; i < opacity.numel(); ++i)
+                    EXPECT_NEAR(opacity.ptr<float>()[i], missing ? std::log(0.1f / 0.9f) : -0.75f, 1e-5f);
+                if (!missing) {
+                    const auto scales = model->scaling_raw().cpu();
+                    for (size_t i = 0; i < scales.numel(); ++i)
+                        EXPECT_NEAR(scales.ptr<float>()[i], -1.25f, 1e-5f);
+                    EXPECT_FLOAT_EQ(model->get_scene_scale(), expected_scale);
+                }
+            }
+            viewer.getTrainerManager()->stopTraining();
+        });
+        const auto start_and_stop = [&] {
+            viewer.getTrainer()->set_trainer_project_save_policy({.on_completion = false, .on_stop_or_error = false, .at_step_boundaries = false});
+            EXPECT_TRUE(viewer.getTrainerManager()->startTraining());
+            EXPECT_TRUE(wait([&] {
+                return viewer.getTrainerManager()->isFinished() && !viewer.getTrainerManager()->isCompletionPending();
+            }));
+        };
+        start_and_stop();
+        EXPECT_EQ(starts, 1);
+        if (!missing) {
+            lfs::core::events::cmd::ResetTraining{}.emit();
+            ASSERT_TRUE(wait([&] { return viewer.getTrainerManager()->getState() == TrainingState::Ready; }));
+            EXPECT_EQ(viewer.getDataLoader()->getParameters().init_path, expected_path);
+            ASSERT_NE(viewer.getTrainer(), nullptr);
+            EXPECT_EQ(viewer.getTrainer()->getParams().init_path, expected_path);
+            start_and_stop();
+            EXPECT_EQ(starts, 2);
+        }
+    }
+
+    // Catches untrained reopen dropping init_path and initializing splat attributes from PCLD.
+    TEST_F(VisualizerImplResetTest, TrainingInitReferenceReopenStartAndReset) {
+        check_init_reference_reopen(temporary_.path, projectOptions(), false, false);
+    }
+
+    // Catches untrained reopen losing the centralization origin and loader scene center.
+    TEST_F(VisualizerImplResetTest, TrainingInitReferenceCentralizedReopen) {
+        check_init_reference_reopen(temporary_.path, projectOptions(), true, false);
+    }
+
+    // Catches untrained reopen silently forgetting a missing init instead of warning and preserving its reference.
+    TEST_F(VisualizerImplResetTest, TrainingInitReferenceMissingFile) {
+        check_init_reference_reopen(temporary_.path, projectOptions(), false, true);
+    }
+
+    // Catches headless adoption ignoring the stored init while preserving explicit --init precedence.
+    TEST_F(VisualizerImplResetTest, TrainingInitReferenceHeadlessAdoption) {
+#ifdef _WIN32
+        GTEST_SKIP() << "Headless executable smoke test uses POSIX shell quoting";
+#else
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto executable = lfs::core::getExecutablePath().parent_path().parent_path() / "LichtFeld-Studio";
+        ASSERT_TRUE(std::filesystem::is_regular_file(executable));
+        const auto dataset = temporary_.path / "headless-dataset";
+        const auto project = temporary_.path / "headless-init.licht";
+        const auto init = temporary_.path / "stored-init.ply";
+        const auto override_init = temporary_.path / "override-init.ply";
+        write_transforms_dataset_with_cameras(dataset, 2);
+        const std::array<uint8_t, 3> pixel{128, 128, 128};
+        for (int i = 1; i <= 2; ++i)
+            ASSERT_TRUE(lfs::core::save_png(dataset / std::format("frame_{:04}.png", i), pixel.data(), 1, 1, 3, 8, 1));
+        ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(8), {.output_path = init, .binary = true, .async = false}));
+        ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(11), {.output_path = override_init, .binary = true, .async = false}));
+        write_dataset_project_without_checkpoint(project, dataset);
+        {
+            auto document = lfs::test::licht::require_result_ptr(lfs::io::project::ProjectDocument::open(project));
+            const auto uuid = lfs::test::licht::require_result(lfs::io::project::upsert_path_reference(
+                document->edit_references(), temporary_.path, init, "training_init", "training_init"));
+            ASSERT_TRUE(document->edit_project().dom().set_json("training_initialization", {{"init_reference_uuid", uuid.to_string()},
+                                                                                            {"data_origin", {0, 0, 0}}}));
+            ASSERT_TRUE(document->save(project));
+        }
+        const auto quote = [](const std::filesystem::path& path) {
+            std::string result = "'";
+            for (const char c : lfs::core::path_to_utf8(path))
+                result += c == '\'' ? "'\\''" : std::string(1, c);
+            return result + "'";
+        };
+        for (const bool override : {false, true}) {
+            const auto output = temporary_.path / (override ? "override-out" : "stored-out");
+            const auto log = temporary_.path / (override ? "override.log" : "stored.log");
+            auto command = quote(executable) + " --headless --data-path " + quote(project) +
+                           " --output-path " + quote(output) +
+                           " --iter 1 --max-cap 64 --no-splash --no-download --log-level info";
+            if (override)
+                command += " --init " + quote(override_init);
+            command += " > " + quote(log) + " 2>&1";
+            const int status = std::system(command.c_str());
+            std::ifstream stream(log, std::ios::binary);
+            const std::string output_log{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+            EXPECT_EQ(status, 0) << output_log;
+            EXPECT_NE(output_log.find(override ? "Loaded 11 gaussians from override-init.ply" : "Loaded 8 gaussians from stored-init.ply"),
+                      std::string::npos)
+                << output_log;
+        }
+#endif
     }
 
     TEST_F(VisualizerImplResetTest,

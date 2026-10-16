@@ -1351,6 +1351,71 @@ namespace lfs::io::project {
                      : dom_.set_json("dataset_reference_uuid", nullptr);
     }
 
+    lfs::Result<std::optional<ProjectTrainingInitialization>>
+    ProjectChapter::training_initialization() const {
+        const auto value = dom_.get_json("training_initialization");
+        if (!value || value->is_null()) {
+            return std::optional<ProjectTrainingInitialization>{};
+        }
+        if (auto valid = require_object(*value, "PROJ", "training_initialization"); !valid) {
+            return std::move(valid).error();
+        }
+        const auto origin_member = value->find("data_origin");
+        if (origin_member == value->end()) {
+            return fail<std::optional<ProjectTrainingInitialization>>(
+                lfs::ErrorCode::DataLoss, "The training data origin is missing.",
+                "PROJ.training_initialization.data_origin is missing", "PROJ",
+                "training_initialization.data_origin");
+        }
+        auto origin = fixed_array<float, 3>(*origin_member, "PROJ", "training_initialization.data_origin");
+        if (!origin) {
+            return std::move(origin).error();
+        }
+        auto reference = parse_optional_uuid(*value, "init_reference_uuid", "PROJ", "training_initialization");
+        if (!reference) {
+            return std::move(reference).error();
+        }
+        ProjectTrainingInitialization result{.init_reference_uuid = *reference, .data_origin = *origin, .scene_center = std::nullopt};
+        if (const auto center = value->find("scene_center"); center != value->end() && !center->is_null()) {
+            auto parsed = fixed_array<float, 3>(*center, "PROJ", "training_initialization.scene_center");
+            if (!parsed) {
+                return std::move(parsed).error();
+            }
+            result.scene_center = *parsed;
+        }
+        return std::optional{result};
+    }
+
+    lfs::Result<void> ProjectChapter::set_training_initialization(
+        const std::optional<ProjectTrainingInitialization>& value) {
+        if (!value) {
+            return dom_.set_json("training_initialization", nullptr);
+        }
+        if ((value->init_reference_uuid && value->init_reference_uuid->is_nil()) ||
+            std::ranges::any_of(value->data_origin, [](const float item) { return !std::isfinite(item); }) ||
+            (value->scene_center && std::ranges::any_of(*value->scene_center, [](const float item) { return !std::isfinite(item); }))) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument, "The training initialization is invalid.",
+                "Training initialization requires a non-null reference UUID and finite coordinates when present",
+                "PROJ", "training_initialization");
+        }
+        Json known{{"data_origin", json_array(value->data_origin)}};
+        if (value->init_reference_uuid) {
+            known["init_reference_uuid"] = value->init_reference_uuid->to_string();
+        }
+        if (value->scene_center) {
+            known["scene_center"] = json_array(*value->scene_center);
+        }
+        auto merged = merge_known(dom_.get_json("training_initialization").value_or(Json::object()), known);
+        if (!value->init_reference_uuid) {
+            merged.erase("init_reference_uuid");
+        }
+        if (!value->scene_center) {
+            merged.erase("scene_center");
+        }
+        return dom_.set_json("training_initialization", std::move(merged));
+    }
+
     lfs::Result<std::vector<lfs::core::Uuid>>
     ProjectChapter::project_lineage() const {
         const auto value = dom_.get_json("project_lineage");
@@ -3678,6 +3743,21 @@ namespace lfs::io::project {
                     .chapter = "PROJ",
                     .owner_uuid = std::nullopt,
                     .field = "dataset_reference_uuid",
+                });
+                !status) {
+                return std::move(status).error();
+            }
+        }
+        auto initialization = project.training_initialization();
+        if (!initialization) {
+            return std::move(initialization).error();
+        }
+        if (*initialization && (*initialization)->init_reference_uuid) {
+            if (auto status = append(ReferenceOwnerBinding{
+                    .reference_uuid = *(*initialization)->init_reference_uuid,
+                    .chapter = "PROJ",
+                    .owner_uuid = std::nullopt,
+                    .field = "training_initialization.init_reference_uuid",
                 });
                 !status) {
                 return std::move(status).error();

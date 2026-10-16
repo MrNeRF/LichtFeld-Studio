@@ -2639,6 +2639,7 @@
     "environment_map_failed": "Could not read environment map \"{}\". The previous environment was kept.",
     "training_save_no_memory": "Project save failed: {}",
     "autosave_deferred_no_memory": "Autosave is paused: not enough free memory ({}). Training continues; autosave resumes when memory frees up.",
+    "training_init_unavailable": "Training initialization file \"{}\" is unavailable; training starts from the restored point cloud.",
     "scene_filter": "Filter: \"{}\"",
     "config_load_failed": "Could not load '{}':\n\n{}",
     "export_failed": "Failed to export:\n\n{}",

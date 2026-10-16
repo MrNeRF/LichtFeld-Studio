@@ -827,6 +827,7 @@ namespace lfs::vis::project {
         void installTrainerFromHydratedDatasetScene(
             VisualizerImpl& viewer,
             SceneManager& scene_manager,
+            const ProjectDocument& document,
             const std::filesystem::path& dataset_root,
             const std::filesystem::path& output_path,
             const std::filesystem::path& rebase_from =
@@ -891,6 +892,45 @@ namespace lfs::vis::project {
             auto params =
                 parameter_manager->createForDataset(
                     dataset_root, output_path);
+            auto initialization = document.project().training_initialization();
+            if (!initialization) {
+                reportTrainerRestoreFailure(viewer, developerError(initialization.error()), on_failure);
+                return;
+            }
+            if (*initialization) {
+                auto& scene = scene_manager.getScene();
+                const auto& origin = (*initialization)->data_origin;
+                scene.setTrainingDataOrigin({origin[0], origin[1], origin[2]});
+                if (const auto& center = (*initialization)->scene_center) {
+                    scene.setSceneCenter(lfs::core::Tensor::from_vector(
+                        std::vector<float>(center->begin(), center->end()), {3}, lfs::core::Device::CPU));
+                }
+                if (const auto& uuid = (*initialization)->init_reference_uuid) {
+                    const auto path = lfs::io::project::resolve_path_reference(
+                        document.references(), projectRootFor(document), *uuid);
+                    std::error_code error;
+                    if (path && lfs::core::native_fs::is_regular_file(*path, error)) {
+                        params.init_path = lfs::core::path_to_utf8(*path);
+                    } else {
+                        const auto message = LOCF("runtime.training_init_unavailable",
+                                                  path ? lfs::core::path_to_utf8(*path) : uuid->to_string());
+                        LOG_WARN("{}", message);
+                        publishProjectToast(lfs::make_error(lfs::ErrorInit{
+                                                .code = lfs::ErrorCode::NotFound,
+                                                .domain = lfs::ErrorDomain::Training,
+                                                .severity = lfs::Severity::Warning,
+                                                .retryability = lfs::Retryability::NotRetryable,
+                                                .operation_id = {},
+                                                .user_message = message,
+                                                .detail = {},
+                                                .detection = LFS_SOURCE_SITE_CURRENT(),
+                                                .fields = {},
+                                                .native = std::nullopt,
+                                            }),
+                                            "project.restore_training_init");
+                    }
+                }
+            }
             data_loader->setParameters(params);
             scene_manager.setDatasetPath(dataset_root);
             parameter_manager->getDatasetConfig()
@@ -994,7 +1034,7 @@ namespace lfs::vis::project {
             }
 
             installTrainerFromHydratedDatasetScene(
-                viewer_, scene_manager, *dataset_root,
+                viewer_, scene_manager, document, *dataset_root,
                 report.pending_parameters.dataset
                     .output_path,
                 {}, on_failure);
@@ -1521,6 +1561,45 @@ namespace lfs::vis::project {
             }
         }
 
+        // Keeps the init file, training origin and scene center, so an untrained reopen starts
+        // training from the same initialization.
+        [[nodiscard]] lfs::Result<void> captureTrainingInitialization(
+            lfs::io::project::ProjectChapter& project,
+            lfs::io::project::ReferencesChapter& references,
+            const std::filesystem::path& project_root,
+            const lfs::core::Scene& scene,
+            const std::optional<std::string>& init_path) {
+            auto current = project.training_initialization();
+            if (!current) {
+                return lfs::Status::failure(std::move(current).error());
+            }
+            const bool has_init = init_path && !init_path->empty();
+            if (!has_init && !*current) {
+                return {};
+            }
+            auto initialization = current->value_or(lfs::io::project::ProjectTrainingInitialization{});
+            const auto origin = scene.getTrainingDataOrigin();
+            initialization.data_origin = {origin.x, origin.y, origin.z};
+            initialization.scene_center.reset();
+            if (const auto& center = scene.getSceneCenter(); center.is_valid() && center.numel() == 3) {
+                const auto cpu = center.cpu();
+                const auto* values = cpu.ptr<float>();
+                initialization.scene_center = std::array{values[0], values[1], values[2]};
+            }
+            if (has_init) {
+                auto minted = lfs::io::project::upsert_path_reference(
+                    references, project_root, lfs::core::utf8_to_path(*init_path),
+                    "training_init", "training_init", initialization.init_reference_uuid);
+                if (minted) {
+                    initialization.init_reference_uuid = *minted;
+                } else {
+                    LOG_WARN("Could not record training initialization file '{}': {}",
+                             *init_path, developerError(minted.error()));
+                }
+            }
+            return project.set_training_initialization(initialization);
+        }
+
         void mintParameterPathReferences(
             lfs::io::project::ReferencesChapter&
                 references,
@@ -1684,6 +1763,11 @@ namespace lfs::vis::project {
                 dataset_path =
                     trainer->getParams()
                         .dataset.data_path;
+                if (auto captured = captureTrainingInitialization(
+                        project, references, project_root, viewer.getScene(), trainer->getParams().init_path);
+                    !captured) {
+                    return std::move(captured).error();
+                }
             }
             if (dataset_path.empty()) {
                 dataset_path =
@@ -2805,6 +2889,7 @@ namespace lfs::vis::project {
                                 installTrainerFromHydratedDatasetScene(
                                     viewer_,
                                     *scene_manager,
+                                    *document_,
                                     new_root,
                                     output_path,
                                     old_root);
@@ -7029,6 +7114,13 @@ namespace lfs::vis::project {
                                 *minted);
                     !set) {
                     return set;
+                }
+                if (const auto* trainer = viewer_.getTrainer()) {
+                    if (auto captured = captureTrainingInitialization(
+                            staged_project, staged_references, project_root, scene, trainer->getParams().init_path);
+                        !captured) {
+                        return captured;
+                    }
                 }
                 if (!sameBytes(
                         document_->project()

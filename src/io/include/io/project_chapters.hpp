@@ -196,6 +196,14 @@ namespace lfs::io::project {
         friend bool operator==(const ProvenanceRecord&, const ProvenanceRecord&) = default;
     };
 
+    struct ProjectTrainingInitialization {
+        std::optional<lfs::core::Uuid> init_reference_uuid;
+        std::array<float, 3> data_origin{};
+        std::optional<std::array<float, 3>> scene_center;
+
+        friend bool operator==(const ProjectTrainingInitialization&, const ProjectTrainingInitialization&) = default;
+    };
+
     class LFS_IO_API ProjectChapter {
     public:
         ProjectChapter();
@@ -220,6 +228,9 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>> dataset_reference() const;
         [[nodiscard]] lfs::Result<void>
         set_dataset_reference(std::optional<lfs::core::Uuid> value);
+        [[nodiscard]] lfs::Result<std::optional<ProjectTrainingInitialization>> training_initialization() const;
+        [[nodiscard]] lfs::Result<void>
+        set_training_initialization(const std::optional<ProjectTrainingInitialization>& value);
         [[nodiscard]] lfs::Result<std::vector<lfs::core::Uuid>> project_lineage() const;
         [[nodiscard]] lfs::Result<void>
         set_project_lineage(std::span<const lfs::core::Uuid> value);

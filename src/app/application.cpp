@@ -255,6 +255,25 @@ namespace lfs::app {
                     LFS_SOURCE_SITE_CURRENT()));
             }
 
+            if (!params.init_path) {
+                auto initialization = document->project().training_initialization();
+                if (!initialization) {
+                    return lfs::Status::failure(std::move(initialization).error());
+                }
+                if (*initialization && (*initialization)->init_reference_uuid) {
+                    const auto& uuid = *(*initialization)->init_reference_uuid;
+                    const auto init_path = io::project::resolve_path_reference(
+                        document->references(), path.parent_path(), uuid);
+                    std::error_code error;
+                    if (init_path && core::native_fs::is_regular_file(*init_path, error)) {
+                        params.init_path = core::path_to_utf8(*init_path);
+                    } else {
+                        LOG_WARN("Training initialization file '{}' is unavailable; using the dataset point cloud.",
+                                 init_path ? core::path_to_utf8(*init_path) : uuid.to_string());
+                    }
+                }
+            }
+
             // Without -o, exports land beside the project.
             if (!params.dataset.output_path_explicit)
                 params.dataset.output_path = path.parent_path();
