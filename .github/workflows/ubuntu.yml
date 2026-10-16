@@ -177,7 +177,7 @@ jobs:
       - name: Build and run CPU-only format tests
         run: |
           cmake --build build --target lichtfeld_format_tests -j $(nproc)
-          ctest --test-dir build --output-on-failure -R '^lichtfeld_format_tests$'
+          ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld_format_tests$'
 
       - name: Build and run EXR image codec tests
         run: |

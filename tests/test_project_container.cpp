@@ -4029,6 +4029,7 @@ namespace {
         fs::create_directories(root / "existing");
         write_file_bytes(root / "existing" / "scene.licht", byte_vector("scene"));
         std::vector<fs::path> paths{
+            fs::path{},
             root,
             root / "existing",
             root / "existing" / "scene.licht",
@@ -4078,32 +4079,60 @@ namespace {
     }
 
 #ifdef _WIN32
-    std::optional<fs::path> administrative_share_path(const fs::path& local) {
-        const auto absolute = fs::absolute(local).native();
-        if (absolute.size() < 3 || absolute[1] != L':' || absolute[2] != L'\\') {
+    // A share created for the test run (the Windows CI job provisions one): LFS_TEST_UNC_ROOT is its network
+    // path and LFS_TEST_UNC_LOCAL the folder it exposes. LFS_TEST_REQUIRE_UNC turns a missing share into a failure.
+    struct NetworkShare {
+        fs::path network;
+        fs::path local;
+    };
+
+    std::optional<std::wstring> environment(const wchar_t* const name) {
+        const DWORD size = GetEnvironmentVariableW(name, nullptr, 0);
+        if (size == 0) {
             return std::nullopt;
         }
-        return fs::path(L"\\\\localhost\\" + std::wstring(1, absolute[0]) + L"$" + absolute.substr(2));
+        std::wstring value(size, L'\0');
+        value.resize(GetEnvironmentVariableW(name, value.data(), size));
+        return value;
+    }
+
+    std::optional<NetworkShare> network_share() {
+        const auto network = environment(L"LFS_TEST_UNC_ROOT");
+        const auto local = environment(L"LFS_TEST_UNC_LOCAL");
+        std::error_code error;
+        if (!network || !local || !fs::is_directory(fs::path(*network), error)) {
+            return std::nullopt;
+        }
+        return NetworkShare{fs::path(*network), fs::path(*local)};
     }
 
     TEST(ProjectPathResolution, NetworkProjectsSaveOnBothSidesOfTheExtendedPathSwitch) {
-        LongPathTemporaryDirectory temporary;
-        const auto share = administrative_share_path(temporary.path);
-        std::error_code error;
-        if (!share || !fs::is_directory(*share, error)) {
-            if (std::getenv("GITHUB_ACTIONS") != nullptr) {
-                FAIL() << "CI must reach the temporary directory through its administrative share";
+        const auto share = network_share();
+        if (!share) {
+            if (environment(L"LFS_TEST_REQUIRE_UNC")) {
+                FAIL() << "LFS_TEST_UNC_ROOT and LFS_TEST_UNC_LOCAL must name a reachable network share";
             }
-            GTEST_SKIP() << "The temporary directory is not reachable through its administrative share";
+            GTEST_SKIP() << "No network share provisioned (LFS_TEST_UNC_ROOT, LFS_TEST_UNC_LOCAL)";
         }
+        const auto run = std::format("lfs-path-test-{}", std::chrono::steady_clock::now().time_since_epoch().count());
+        const fs::path network_root = share->network / run;
+        const fs::path local_root = share->local / run;
+        struct Cleanup {
+            fs::path path;
+            ~Cleanup() {
+                std::error_code ignored;
+                fs::remove_all(fs::path(L"\\\\?\\" + fs::absolute(path).native()), ignored);
+            }
+        } cleanup{local_root};
+        std::error_code error;
         const auto leaf = lfs::core::utf8_to_path("scène 🙂.licht");
         std::uint64_t tag = 7300;
         for (const auto length : kLengthsAroundExtendedPathSwitch) {
-            const auto directory = *share / lfs::core::utf8_to_path("проект 保存 🙂") / std::to_string(length);
+            const auto directory = network_root / lfs::core::utf8_to_path("проект 保存 🙂") / std::to_string(length);
             const auto network = with_native_length(directory, length, leaf);
             ASSERT_EQ(network.native().size(), length);
-            const auto tail = network.lexically_relative(*share);
-            const auto local = temporary.path / tail;
+            const auto tail = network.lexically_relative(network_root);
+            const auto local = local_root / tail;
             save_and_verify(network, tag += 10);
             for (const auto& spelling : {network, detail::project_fs::native_path(network)}) {
                 const auto resolved = lfs::core::path_to_utf8(detail::project_fs::weakly_canonical(spelling, error));

@@ -332,11 +332,11 @@ namespace lfs::vis {
                                     "legacy_working_directory", "new_project_navigation_up_axis",
                                     "camera_navigation_mode", "status_bar_progress_style",
                                     "viewport_chrome_style", "viewport_toolbar_position",
-                                    "scene_upscaler"})
+                                    "scene_upscaler", "marketplace_view"})
                 (void)field<std::string>(values, key, {});
             for (const char* key : {"remember_camera_navigation", "remember_camera_view_snap",
                                     "camera_view_snap", "new_project_align_grid",
-                                    "scene_graph_selection_markers"})
+                                    "scene_graph_selection_markers", "marketplace_git_checkout"})
                 (void)field<bool>(values, key, false);
             for (const char* key : {"zoom_speed", "navigation_speed", "viewport_toolbar_free_y"})
                 (void)field<float>(values, key, 0.0f);
@@ -1040,6 +1040,47 @@ namespace lfs::vis {
             return 0.5f;
         const float value = it->get<float>();
         return std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+    }
+
+    void UserPreferences::setMarketplaceView(const std::string_view value) {
+        if (value != "card" && value != "list")
+            throw std::invalid_argument("Unsupported Marketplace view");
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["marketplace_view"] = std::string(value);
+        impl_->saveLocked();
+    }
+
+    std::string UserPreferences::marketplaceView() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("marketplace_view");
+        if (it == impl_->values.end() || !it->is_string())
+            return "list";
+        const auto value = it->get<std::string>();
+        return value == "card" || value == "list" ? value : "list";
+    }
+
+    void UserPreferences::setMarketplaceGitCheckout(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["marketplace_git_checkout"] = enabled;
+        impl_->saveLocked();
+    }
+
+    bool UserPreferences::marketplaceGitCheckout() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("marketplace_git_checkout");
+        return it != impl_->values.end() && it->is_boolean() && it->get<bool>();
+    }
+
+    void UserPreferences::resetMarketplacePreferences() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values.erase("marketplace_view");
+        impl_->values.erase("marketplace_git_checkout");
+        impl_->saveLocked();
     }
 
     void UserPreferences::setProjectManagerDefaultView(const std::string_view value) {
