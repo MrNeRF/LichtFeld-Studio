@@ -1955,6 +1955,11 @@ def open_mesh_file_dialog(start_dir: str = '') -> str:
     Open a file dialog to select a mesh file. Returns empty string if cancelled.
     """
 
+def open_init_file_dialog(start_dir: str = '') -> str:
+    """
+    Open a file dialog to select a training initialization file: a splat, point cloud or mesh. Returns empty string if cancelled.
+    """
+
 def open_checkpoint_file_dialog() -> str:
     """
     Open a file dialog to select a checkpoint file. Returns empty string if cancelled.

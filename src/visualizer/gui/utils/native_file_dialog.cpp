@@ -486,6 +486,12 @@ namespace lfs::vis::gui {
                                {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".ply"})};
         }
 
+        [[nodiscard]] std::vector<DialogFilter> initFilters() {
+            return {makeFilter("Splat, Point Cloud and Mesh Files",
+                               {".ply", ".sog", ".ssog", ".spz", ".glb", ".rad", ".usd", ".usda", ".usdc", ".usdz",
+                                ".obj", ".fbx", ".gltf", ".stl", ".dae", ".3ds"})};
+        }
+
         [[nodiscard]] std::vector<DialogFilter> checkpointFilters() {
             return {makeFilter("Checkpoint Files", {".resume"})};
         }
@@ -683,6 +689,12 @@ namespace lfs::vis::gui {
     std::filesystem::path OpenMeshFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(meshFilters(), defaultPath), result);
+        return result;
+    }
+
+    std::filesystem::path OpenInitFileDialog(const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest(initFilters(), defaultPath), result);
         return result;
     }
 

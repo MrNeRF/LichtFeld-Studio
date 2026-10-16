@@ -238,6 +238,8 @@ class TrainingPanel(Panel):
         self._last_save_steps = None
         self._color_edit_prop = None
         self._picker_click_handled = False
+        self._init_mesh_checked_path = ""
+        self._init_is_mesh = False
         self._collapsed = set(INITIALLY_COLLAPSED)
         self._last_iteration = -1
         self._last_num_gaussians = -1
@@ -518,10 +520,20 @@ class TrainingPanel(Panel):
         for binding in self._pv_bindings:
             self._queue_pv_publish(binding)
 
+    def _init_file_is_mesh(self):
+        dataset = lf.dataset_params()
+        path = dataset.init_path if dataset and dataset.has_params() else ""
+        if path != self._init_mesh_checked_path:
+            self._init_mesh_checked_path = path
+            self._init_is_mesh = bool(path) and lf.io.is_mesh_file(path)
+        return self._init_is_mesh
+
     def _property_view_condition_visible(self, condition_id):
         if str(condition_id) == "has_dataset":
             dataset = lf.dataset_params()
             return bool(dataset and dataset.has_params())
+        if str(condition_id) == "dep_init_mesh":
+            return self._init_file_is_mesh()
 
         params = lf.optimization_params()
         if not params or not params.has_params():
@@ -783,6 +795,7 @@ class TrainingPanel(Panel):
             ),
         )
         model.bind_func("has_dataset", lambda: d() is not None and d().has_params())
+        model.bind_func("dep_init_mesh", self._init_file_is_mesh)
         model.bind_func(
             "show_dataset_no_data", lambda: d() is None or not d().has_params()
         )

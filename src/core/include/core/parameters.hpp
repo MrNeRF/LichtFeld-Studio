@@ -85,6 +85,9 @@ namespace lfs::core {
         };
         inline constexpr std::array kEvalPixelSets{EvalPixelSet::Mask, EvalPixelSet::Unmasked, EvalPixelSet::Inverted};
 
+        // Mesh2Splat allocates resolution^2 * 6 output splats up front: 2048 is already a 2.4 GB buffer.
+        inline constexpr int kMaxInitMeshResolution = 2048;
+
         // The set's name in eval_mask_report.
         [[nodiscard]] inline constexpr std::string_view eval_pixel_set_name(const EvalPixelSet set) noexcept {
             switch (set) {
@@ -387,6 +390,9 @@ namespace lfs::core {
             bool random = false;        // Use random initialization instead of SfM
             int init_num_pts = 100'000; // Number of random points to initialize
             float init_extent = 3.0f;   // Extent of random point cloud
+
+            // Mesh2Splat raster resolution when the init file is a mesh
+            int init_mesh_resolution = Mesh2SplatOptions{}.resolution_target;
 
             // Sparsity optimization parameters
             bool enable_sparsity = false;

@@ -720,7 +720,7 @@ class NewProjectPanel(_ImportDialogPanel):
     def _on_browse_init(self, _handle=None, _ev=None, _args=None):
         if self._source_kind != "dataset":
             return
-        path = lf.ui.open_ply_file_dialog(str(self._preview_base_path(self._source_path)))
+        path = lf.ui.open_init_file_dialog(str(self._preview_base_path(self._source_path)))
         if path:
             self._set_init_path(path)
 

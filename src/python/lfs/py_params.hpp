@@ -51,6 +51,7 @@ namespace lfs::python {
 
         [[nodiscard]] bool has_params() const;
         [[nodiscard]] bool can_edit() const;
+        [[nodiscard]] std::string init_path() const;
     };
 
     void register_dataset_properties();

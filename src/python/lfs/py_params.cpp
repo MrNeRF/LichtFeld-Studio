@@ -602,6 +602,14 @@ namespace lfs::python {
         return tm->hasTrainer() && tm->isDatasetEditable();
     }
 
+    std::string PyDatasetConfig::init_path() const {
+        const auto* tm = get_trainer_manager();
+        if (!tm || !tm->hasTrainer())
+            return {};
+        const auto* trainer = tm->getTrainer();
+        return trainer ? trainer->getParams().init_path.value_or(std::string{}) : std::string{};
+    }
+
     core::param::DatasetConfig& PyDatasetConfig::params() {
         auto* tm = get_trainer_manager();
         if (!tm) {
@@ -1347,6 +1355,9 @@ namespace lfs::python {
             .def_prop_ro(
                 "images", [](const PyDatasetConfig& self) { return self.params().images; },
                 "Subfolder name containing images")
+            .def_prop_ro(
+                "init_path", &PyDatasetConfig::init_path,
+                "Training initialization file; empty when training starts from the dataset's points")
             .def_prop_rw(
                 "test_every",
                 [](const PyDatasetConfig& self) { return self.params().test_every; },

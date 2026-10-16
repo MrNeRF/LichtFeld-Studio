@@ -953,6 +953,9 @@ def is_gaussian_splat_ply(path: str | os.PathLike) -> bool:
     Check if PLY file is a 3D Gaussian splat (has opacity, scale_0, rot_0 properties)
     """
 
+def is_mesh_file(path: str | os.PathLike) -> bool:
+    """Check if the loader reads a file as a triangle mesh"""
+
 def get_supported_formats() -> list[str]:
     """Get list of supported file format names"""
 

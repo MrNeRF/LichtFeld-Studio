@@ -63,6 +63,7 @@ NUMBER_PROPS = (
     "init_scaling",
     "init_num_pts",
     "init_extent",
+    "init_mesh_resolution",
     "min_opacity",
     "prune_opacity",
     "sparsify_steps",
@@ -292,6 +293,7 @@ INIT_RUNS = (
         "init_extent",
         visibility_condition_id="dep_random",
     ),
+    _run("init_mesh", "init_mesh_resolution", visibility_condition_id="dep_init_mesh"),
 )
 
 SPARSITY_RUNS = (

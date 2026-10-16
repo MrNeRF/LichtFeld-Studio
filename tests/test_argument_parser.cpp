@@ -86,6 +86,23 @@ TEST(ArgumentParserTest, RelativeInputPathsAreStoredAbsolute) {
     EXPECT_EQ((*parsed)->add_splat_paths[0], cwd / "scene" / "extra.ply");
 }
 
+// Catches the flag not reaching the optimization parameters or values the converter cannot allocate passing parse.
+TEST(ArgumentParserTest, InitMeshResolutionIsParsedAndBounded) {
+    const auto data_path = make_test_path("lfs_arg_parser_mesh_resolution_data");
+    const auto output_path = make_test_path("lfs_arg_parser_mesh_resolution_output");
+    for (const auto& [value, accepted] : {std::pair{"512", true}, std::pair{"15", false}, std::pair{"2049", false}}) {
+        const char* argv[] = {
+            "LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+            "--output-path", output_path.c_str(), "--init-mesh-resolution", value};
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_EQ(parsed.has_value(), accepted) << value;
+        if (accepted)
+            EXPECT_EQ((*parsed)->optimization.init_mesh_resolution, 512);
+        else
+            EXPECT_NE(parsed.error().find("init_mesh_resolution"), std::string::npos) << parsed.error();
+    }
+}
+
 TEST(ArgumentParserTest, RejectsUnknownLogLevels) {
     const auto data_path = make_test_path("lfs_arg_parser_log_level_data");
     const auto output_path = make_test_path("lfs_arg_parser_log_level_output");

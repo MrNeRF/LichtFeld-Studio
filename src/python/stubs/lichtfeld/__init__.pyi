@@ -2615,6 +2615,12 @@ class DatasetParams:
         """Subfolder name containing images"""
 
     @property
+    def init_path(self) -> str:
+        """
+        Training initialization file; empty when training starts from the dataset's points
+        """
+
+    @property
     def test_every(self) -> int:
         """Use every Nth image for testing"""
 

@@ -8,6 +8,8 @@
 #include "core/mesh_data.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "formats/ply.hpp"
+#include "formats/spz.hpp"
 #include "io/error.hpp"
 #include "io/mesh/texture_loader.hpp"
 #include <algorithm>
@@ -634,6 +636,16 @@ namespace lfs::io {
 
     int MeshLoader::priority() const {
         return 5;
+    }
+
+    bool is_mesh_file(const std::filesystem::path& filepath) {
+        auto ext = lfs::core::path_to_utf8(filepath.extension());
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext == ".ply")
+            return ply_has_faces(filepath);
+        if (ext == ".glb")
+            return lfs::core::native_fs::exists(filepath) && !is_spz_glb(filepath);
+        return lfs::core::native_fs::exists(filepath) && std::ranges::find(MESH_EXTENSIONS, ext) != MESH_EXTENSIONS.end();
     }
 
 } // namespace lfs::io

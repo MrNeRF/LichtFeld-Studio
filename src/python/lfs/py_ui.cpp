@@ -3400,6 +3400,19 @@ namespace lfs::python {
             "Open a file dialog to select a mesh file. Returns empty string if cancelled.");
 
         m.def(
+            "open_init_file_dialog",
+            [](const std::string& start_dir) -> std::string {
+                std::filesystem::path start_path;
+                if (!start_dir.empty()) {
+                    start_path = lfs::core::utf8_to_path(start_dir);
+                }
+                auto result = lfs::vis::gui::OpenInitFileDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("start_dir") = "",
+            "Open a file dialog to select a training initialization file: a splat, point cloud or mesh. Returns empty string if cancelled.");
+
+        m.def(
             "open_checkpoint_file_dialog",
             []() -> std::string {
                 auto result = lfs::vis::gui::OpenCheckpointFileDialog();

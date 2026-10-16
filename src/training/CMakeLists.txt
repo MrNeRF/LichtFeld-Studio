@@ -163,6 +163,7 @@ target_link_libraries(lfs_training
         lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
         lfs_preprocessing       # MoGe-2 normal auto-generate
         lfs_python_utils
+        lfs_rendering           # Mesh2Splat for mesh initialization
 )
 
 # Set C++ standard

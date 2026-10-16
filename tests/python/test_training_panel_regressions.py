@@ -1027,6 +1027,36 @@ def test_browse_background_image_uses_current_image_dialog(training_panel_module
     assert panel._handle.dirty_all_count == 1
 
 
+# Catches the mesh resolution row showing for splat or point inits, or a file probe on every redraw.
+def test_mesh_resolution_row_follows_the_init_file(training_panel_module, monkeypatch):
+    dataset = SimpleNamespace(init_path="", has_params=lambda: True)
+    probes = []
+
+    def is_mesh_file(path):
+        probes.append(path)
+        return path.endswith(".obj")
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(dataset_params=lambda: dataset, io=SimpleNamespace(is_mesh_file=is_mesh_file)),
+    )
+    panel = training_panel_module.TrainingPanel()
+
+    assert panel._property_view_condition_visible("dep_init_mesh") is False
+    dataset.init_path = "/scan/model.obj"
+    assert panel._property_view_condition_visible("dep_init_mesh") is True
+    assert panel._property_view_condition_visible("dep_init_mesh") is True
+    dataset.init_path = "/scan/points.ply"
+    assert panel._property_view_condition_visible("dep_init_mesh") is False
+    assert probes == ["/scan/model.obj", "/scan/points.ply"]
+
+    training_rml = Path(__file__).parent.parent.parent / "src/visualizer/gui/rmlui/resources/training.rml"
+    content = training_rml.read_text()
+    guard = content.index('<div data-if="dep_init_mesh">')
+    assert guard < content.index("pv_init_mesh_rows") < content.index("</div>", guard + 1)
+
+
 # Catches a cleared path leaving pixel sets listed or a browse action ignoring its start directory.
 def test_eval_mesh_browser_sets_path_and_clear_resets_the_report(
     training_panel_module, monkeypatch, tmp_path

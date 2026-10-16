@@ -1578,6 +1578,12 @@ namespace lfs::python {
             "Check if PLY file is a 3D Gaussian splat (has opacity, scale_0, rot_0 properties)");
 
         m.def(
+            "is_mesh_file",
+            [](const LogicalPath& path) { return io::is_mesh_file(path); },
+            nb::arg("path"),
+            "Check if the loader reads a file as a triangle mesh");
+
+        m.def(
             "get_supported_formats", []() {
                 auto loader = io::Loader::create();
                 return loader->getSupportedFormats();
