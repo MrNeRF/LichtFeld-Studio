@@ -3114,24 +3114,15 @@ namespace lfs::vis::input {
         case Action::TOGGLE_MCP_BINDING:
             return ShortcutScope::Global;
 
-        case Action::CAMERA_MOVE_FORWARD:
-        case Action::CAMERA_MOVE_BACKWARD:
-        case Action::CAMERA_MOVE_LEFT:
-        case Action::CAMERA_MOVE_RIGHT:
-        case Action::CAMERA_MOVE_UP:
-        case Action::CAMERA_MOVE_DOWN:
         case Action::CAMERA_SET_PIVOT:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:
-        case Action::CAMERA_SPEED_UP:
-        case Action::CAMERA_SPEED_DOWN:
-        case Action::ZOOM_SPEED_UP:
-        case Action::ZOOM_SPEED_DOWN:
         case Action::PIE_MENU:
             return ShortcutScope::Viewport;
 
         default:
-            // Scene, tool, edit, framing and home shortcuts yield to a focused text widget.
+            // Scene, tool, edit, framing, home and camera navigation shortcuts
+            // yield to a focused text widget.
             return ShortcutScope::GlobalWhenNotTextEditing;
         }
     }

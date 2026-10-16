@@ -2364,7 +2364,7 @@ namespace lfs::vis {
             }
         }
 
-        // Movement keys only work when viewport has focus and gizmo isn't active
+        // Movement keys work unless text is being edited or a gizmo is active
         if (!shouldCameraHandleInput() || drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
             return;
 
@@ -3176,14 +3176,14 @@ namespace lfs::vis {
             return false;
         }
 
+        // Navigation keys work while a panel holds keyboard focus, like F and
+        // Home. Text fields and modals keep them.
         if (input_router_) {
-            return input_router_->isViewportKeyboardFocused() &&
-                   !input_router_->isTextInputActive() &&
-                   !input_router_->isModalOpen();
+            return !input_router_->isTextInputActive() && !input_router_->isModalOpen();
         }
 
         const auto& focus = gui::guiFocusState();
-        if (focus.want_text_input || focus.want_capture_keyboard)
+        if (focus.want_text_input)
             return false;
 
         return !focus.any_item_active;

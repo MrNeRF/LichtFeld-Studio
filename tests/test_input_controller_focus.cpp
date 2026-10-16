@@ -970,6 +970,46 @@ namespace lfs::vis {
         EXPECT_EQ(viewport.camera.getPivot(), defaults.home_pivot);
     }
 
+    // Fails if WASD, Shift speed-up or the speed keys stop while a panel row holds keyboard focus.
+    TEST_F(InputControllerFocusTest, NavigationKeysWorkWhileAPanelHasKeyboardFocus) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.initialize();
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.any_item_active = true;
+        ASSERT_FALSE(router.isViewportKeyboardFocused());
+
+        // Hold W for half a second. Without a window the release cannot be read
+        // back from SDL, so focus loss clears the held key as it does in the app.
+        const auto travel = [&](const int mods) {
+            SDL_SetModState(mods & input::KEYMOD_SHIFT ? SDL_KMOD_LSHIFT : SDL_KMOD_NONE);
+            const glm::vec3 start = viewport.camera.t;
+            controller.handleKey(input::KEY_W, input::ACTION_PRESS, mods);
+            for (int i = 0; i < 30; ++i)
+                controller.update(1.0f / 60.0f);
+            const float distance = glm::length(viewport.camera.t - start);
+            controller.onWindowFocusLost();
+            viewport.camera.clearWasdMomentum();
+            SDL_SetModState(SDL_KMOD_NONE);
+            return distance;
+        };
+        const float plain = travel(input::KEYMOD_NONE);
+        EXPECT_GT(plain, 0.0f);
+        EXPECT_GT(travel(input::KEYMOD_SHIFT), plain * 1.5f);
+
+        const float speed = viewport.camera.getWasdSpeed();
+        controller.handleKey(input::KEY_EQUAL, input::ACTION_PRESS, input::KEYMOD_CTRL);
+        EXPECT_GT(viewport.camera.getWasdSpeed(), speed);
+
+        // A focused text field keeps its keys.
+        focus.want_text_input = true;
+        EXPECT_EQ(travel(input::KEYMOD_NONE), 0.0f);
+    }
+
     TEST_F(InputControllerFocusTest, DeleteNodeShortcutFiresWhenViewportFocused) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
