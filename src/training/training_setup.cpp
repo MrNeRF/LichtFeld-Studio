@@ -36,6 +36,7 @@
 #include <filesystem>
 #include <format>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <optional>
 #include <random>
@@ -279,10 +280,63 @@ namespace lfs::training {
             }
         }
 
+        // The init mesh is parsed once, by the import worker or the preview, and kept until training
+        // start converts it; a changed write time means the file was edited in between.
+        class PendingInitMesh {
+        public:
+            void keep(const std::filesystem::path& path, std::shared_ptr<lfs::core::MeshData> mesh) {
+                std::lock_guard lock(mutex_);
+                path_ = path;
+                write_time_ = writeTime(path);
+                mesh_ = std::move(mesh);
+            }
+
+            void clear() { keep({}, nullptr); }
+
+            [[nodiscard]] std::shared_ptr<lfs::core::MeshData> peek(const std::filesystem::path& path) {
+                std::lock_guard lock(mutex_);
+                return matches(path) ? mesh_ : nullptr;
+            }
+
+            [[nodiscard]] std::shared_ptr<lfs::core::MeshData> take(const std::filesystem::path& path) {
+                std::lock_guard lock(mutex_);
+                const bool match = matches(path);
+                auto mesh = std::move(mesh_);
+                return match ? mesh : nullptr;
+            }
+
+        private:
+            [[nodiscard]] bool matches(const std::filesystem::path& path) const {
+                const auto now = writeTime(path);
+                return mesh_ && path == path_ && (!now || now == write_time_);
+            }
+
+            static std::optional<std::filesystem::file_time_type> writeTime(const std::filesystem::path& path) {
+                std::error_code error;
+                const auto time = lfs::core::native_fs::last_write_time(path, error);
+                return error ? std::nullopt : std::optional{time};
+            }
+
+            std::mutex mutex_;
+            std::filesystem::path path_;
+            std::optional<std::filesystem::file_time_type> write_time_;
+            std::shared_ptr<lfs::core::MeshData> mesh_;
+        };
+
+        PendingInitMesh& pendingInitMesh() {
+            static PendingInitMesh pending;
+            return pending;
+        }
+
         lfs::Result<std::shared_ptr<lfs::core::PointCloud>>
-        loadInitReplacementPointCloud(const std::filesystem::path& init_file) {
+        loadInitReplacementPointCloud(const std::filesystem::path& init_file, const bool keep_mesh = false) {
             const auto filename = lfs::core::path_to_utf8(init_file.filename());
             const auto path_utf8 = lfs::core::path_to_utf8(init_file);
+
+            if (const auto pending = keep_mesh ? pendingInitMesh().peek(init_file) : nullptr) {
+                LOG_INFO("Init {} points from mesh vertices of {} (preview)", pending->vertex_count(), filename);
+                return pointCloudPreviewFromMesh(*pending);
+            }
 
             if (isPlainPointCloudPly(init_file)) {
                 auto pc_result = lfs::io::load_ply_point_cloud(init_file);
@@ -307,6 +361,8 @@ namespace lfs::training {
             if (const auto* mesh_ptr = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&init_result->data);
                 mesh_ptr && *mesh_ptr) {
                 auto preview = pointCloudPreviewFromMesh(**mesh_ptr);
+                if (keep_mesh)
+                    pendingInitMesh().keep(init_file, *mesh_ptr);
                 LOG_INFO("Init {} points from mesh vertices of {} (preview)", preview->size(), filename);
                 return preview;
             }
@@ -353,8 +409,11 @@ namespace lfs::training {
             const lfs::io::LoadedScene& data,
             const bool verbose) {
             std::shared_ptr<lfs::core::PointCloud> point_cloud;
+            if (!params.init_path.has_value() || params.init_path->empty()) {
+                pendingInitMesh().clear();
+            }
             if (params.init_path.has_value() && !params.init_path->empty()) {
-                auto loaded = loadInitReplacementPointCloud(lfs::core::utf8_to_path(*params.init_path));
+                auto loaded = loadInitReplacementPointCloud(lfs::core::utf8_to_path(*params.init_path), true);
                 if (!loaded) {
                     return lfs::Status::failure(loaded.error());
                 }
@@ -400,36 +459,41 @@ namespace lfs::training {
             const std::filesystem::path& init_file,
             const TrainingModelGraphCapture* graph_capture,
             const int64_t added_splat_count) {
-            auto loader = lfs::io::Loader::create();
-            auto init_result = loader->load(init_file);
-            if (!init_result) {
-                return std::unexpected(std::string(initFileError(std::format(
-                                                                     "Failed to load '{}': {}",
-                                                                     lfs::core::path_to_utf8(init_file),
-                                                                     init_result.error().format()))
-                                                       .user_message()));
-            }
-
             std::unique_ptr<lfs::core::SplatData> model;
-            if (const auto* mesh_ptr = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&init_result->data);
-                mesh_ptr && *mesh_ptr) {
+            auto mesh = pendingInitMesh().take(init_file);
+            if (!mesh) {
+                auto loader = lfs::io::Loader::create();
+                auto init_result = loader->load(init_file);
+                if (!init_result) {
+                    return std::unexpected(std::string(initFileError(std::format(
+                                                                         "Failed to load '{}': {}",
+                                                                         lfs::core::path_to_utf8(init_file),
+                                                                         init_result.error().format()))
+                                                           .user_message()));
+                }
+                if (auto* mesh_ptr = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&init_result->data);
+                    mesh_ptr && *mesh_ptr) {
+                    mesh = std::move(*mesh_ptr);
+                } else {
+                    auto* splat_ptr = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&init_result->data);
+                    if (!splat_ptr || !*splat_ptr) {
+                        return std::unexpected(std::string(initFileError(std::format(
+                                                                             "'{}': invalid SplatData",
+                                                                             lfs::core::path_to_utf8(init_file)))
+                                                               .user_message()));
+                    }
+                    warnIfMeshResolutionIgnored(params.optimization);
+                    model = std::make_unique<lfs::core::SplatData>(std::move(**splat_ptr));
+                }
+            }
+            if (mesh) {
                 const int max_cap = params.optimization.max_cap;
-                auto converted = splatsFromInitMesh(**mesh_ptr, init_file, params.optimization.init_mesh_resolution,
+                auto converted = splatsFromInitMesh(*mesh, init_file, params.optimization.init_mesh_resolution,
                                                     max_cap > 0 ? max_cap - added_splat_count : 0);
                 if (!converted) {
                     return std::unexpected(std::string(converted.error().user_message()));
                 }
                 model = std::move(*converted);
-            } else {
-                auto* splat_ptr = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&init_result->data);
-                if (!splat_ptr || !*splat_ptr) {
-                    return std::unexpected(std::string(initFileError(std::format(
-                                                                         "'{}': invalid SplatData",
-                                                                         lfs::core::path_to_utf8(init_file)))
-                                                           .user_message()));
-                }
-                warnIfMeshResolutionIgnored(params.optimization);
-                model = std::make_unique<lfs::core::SplatData>(std::move(**splat_ptr));
             }
 
             centerInitializationMeans(model->means(), graph_capture
@@ -989,6 +1053,21 @@ namespace lfs::training {
             }
         },
                           load_result->data);
+    }
+
+    void preloadInitMesh(const lfs::core::param::TrainingParameters& params) {
+        if (!params.init_path.has_value() || params.init_path->empty()) {
+            return;
+        }
+        const auto init_file = lfs::core::utf8_to_path(*params.init_path);
+        if (!lfs::io::is_mesh_file(init_file)) {
+            return;
+        }
+        auto loaded = lfs::io::Loader::create()->load(init_file);
+        if (auto* mesh = loaded ? std::get_if<std::shared_ptr<lfs::core::MeshData>>(&loaded->data) : nullptr;
+            mesh && *mesh) {
+            pendingInitMesh().keep(init_file, std::move(*mesh));
+        }
     }
 
     lfs::Result<std::shared_ptr<lfs::core::PointCloud>> loadInitialPointCloud(
