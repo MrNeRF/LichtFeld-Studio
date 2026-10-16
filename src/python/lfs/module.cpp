@@ -186,7 +186,7 @@ namespace {
     // Python path strings are UTF-8. Avoid implicit std::filesystem::path(string)
     // on Windows, which routes through the active ANSI code page.
     std::filesystem::path python_utf8_path(const std::string& value) {
-        return lfs::core::utf8_to_path(value);
+        return lfs::core::fs::display_path(lfs::core::utf8_to_path(value));
     }
 
     lfs::Result<void> post_clear_scene_to_viewer(lfs::vis::Visualizer& viewer) {

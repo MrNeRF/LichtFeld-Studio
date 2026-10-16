@@ -11,7 +11,7 @@ spec.loader.exec_module(checker)
 
 class WindowsPathBoundaries(unittest.TestCase):
     def test_detects_filesystem_bypasses(self):
-        for source in ["std::filesystem::exists(file);", "namespace fs = std::filesystem;", "std::ifstream stream(file);", "auto stream = std::ofstream(file);", "std::filesystem::recursive_directory_iterator(root);"]:
+        for source in ["std::filesystem::exists(file);", "namespace fs = std::filesystem;", "std::ifstream stream(file);", "auto stream = std::ofstream(file);", "std::filesystem::recursive_directory_iterator(root);", "std::filesystem::directory_entry entry(file);", "std::vector<std::filesystem::directory_entry> entries;"]:
             with self.subTest(source=source):
                 self.assertTrue(checker.violations(source))
 

@@ -17,10 +17,11 @@ OPERATIONS = (
     "create_directories|resize_file|permissions|last_write_time|copy_file|copy|"
     "copy_symlink|rename|equivalent|create_hard_link|create_symlink|"
     "create_directory_symlink|canonical|weakly_canonical|relative|read_symlink|"
-    "current_path|temp_directory_path|directory_iterator|recursive_directory_iterator"
+    "current_path|temp_directory_path|directory_entry|directory_iterator|recursive_directory_iterator"
 )
 RAW_IO = re.compile(r"\bstd::filesystem::(?:" + OPERATIONS + r")\s*\(")
 RAW_ALIAS = re.compile(r"namespace\s+\w+\s*=\s*std::filesystem\s*;")
+RAW_ENTRY = re.compile(r"\bstd::filesystem::directory_entry\b")
 RAW_JSON_PATH = re.compile(r'\bstd::filesystem::path\s+\w+\s*=\s*args\[[^\]]+\]\.get<std::string>\(\)')
 RAW_STREAM = re.compile(r"\bstd::(?:ifstream|ofstream|fstream)\s*(?:[A-Za-z_]\w*\s*)?\(")
 
@@ -31,7 +32,7 @@ def violations(source: str) -> list[tuple[int, str]]:
         code = line.split("//", 1)[0]
         if code.lstrip().startswith(("#", "*")):
             continue
-        if any(pattern.search(code) for pattern in (RAW_IO, RAW_ALIAS, RAW_STREAM, RAW_JSON_PATH)):
+        if any(pattern.search(code) for pattern in (RAW_IO, RAW_ALIAS, RAW_STREAM, RAW_ENTRY, RAW_JSON_PATH)):
             found.append((number, line.strip()))
     return found
 

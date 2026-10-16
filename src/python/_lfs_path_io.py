@@ -17,7 +17,7 @@ import tempfile as _tempfile
 def logical_path(value):
     if os.name != "nt" or not isinstance(value, str):
         return value
-    if value.startswith("\\\\?\\UNC\\"):
+    if value[:8].upper() == "\\\\?\\UNC\\":
         return "\\\\" + value[8:]
     if value.startswith("\\\\?\\") and len(value) >= 7 and value[5] == ":":
         return value[4:]
@@ -99,8 +99,19 @@ def open(file, *args, **kwargs):
 
 
 def walk(top, *args, **kwargs):
-    for root, directories, files in os.walk(native_path(top, force_extended=True), *args, **kwargs):
-        yield logical_path(root), directories, files
+    if os.name != "nt":
+        yield from os.walk(top, *args, **kwargs)
+        return
+    original = os.fspath(top)
+    logical_root = logical_path(os.fsdecode(original))
+    native_root = native_path(top, force_extended=True)
+    if isinstance(original, bytes):
+        logical_root = os.fsencode(logical_root)
+        native_root = os.fsencode(native_root)
+    for root, directories, files in os.walk(native_root, *args, **kwargs):
+        relative = os.path.relpath(root, native_root)
+        logical = logical_root if relative in (".", b".") else os.path.join(logical_root, relative)
+        yield logical, directories, files
 
 
 class TemporaryDirectory(_tempfile.TemporaryDirectory):

@@ -232,6 +232,11 @@ namespace {
         const auto missing = fs::weakly_canonical(network_deep / "new" / "file.bin", ec);
         ASSERT_FALSE(ec) << ec.message();
         EXPECT_EQ(missing.filename().string(), "file.bin");
+        auto lower_unc = fs::native_path(network_deep / "new" / "file.bin").native();
+        lower_unc.replace(4, 3, L"unc");
+        EXPECT_EQ(fs::weakly_canonical(fs::path(lower_unc), ec), missing);
+        EXPECT_FALSE(ec);
+        EXPECT_EQ(fs::display_path(fs::path(lower_unc)), network_deep / "new" / "file.bin");
         size_t files = 0;
         for (const auto& entry : fs::directory_iterator(network_deep))
             if (entry.is_regular_file())

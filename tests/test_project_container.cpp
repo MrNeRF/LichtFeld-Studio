@@ -3847,6 +3847,38 @@ namespace {
         }
     };
 
+    TEST(ProjectContainerWriter, LegacyAutosaveAtComponentLimitIsStillRecoverable) {
+        LongPathTemporaryDirectory temporary;
+        const auto master = temporary.path / (std::string(240, 'x') + ".licht");
+        create_single_chunk_fixture(master, 8001, 8002, 8003, fixed_key("SCNG", 8004), recoverable_scene_graph_payload());
+        auto legacy = master;
+        legacy += ".autosave";
+        ASSERT_EQ(legacy.filename().native().size(), 255u);
+        publish_complete_sidecar(master, legacy, 1, 8005, 8006, 8007);
+        EXPECT_EQ(autosave_sidecar_path(master), legacy);
+        auto recovery = require_result(inspect_autosave_recovery(master));
+        EXPECT_EQ(recovery.disposition, RecoveryDisposition::Offer);
+        ASSERT_TRUE(recovery.selected_path);
+        EXPECT_EQ(*recovery.selected_path, legacy);
+        auto lease = require_result(WriterLockLease::acquire(legacy));
+        EXPECT_TRUE(lease.valid());
+        EXPECT_LE(detail::project_lock_path(legacy).filename().native().size(), 255u);
+    }
+
+    TEST(ProjectContainerWriter, QuarantineCollisionStaysWithinComponentLimit) {
+        LongPathTemporaryDirectory temporary;
+        const std::string suffix = ".corrupt-1700000000";
+        const auto source = temporary.path / std::string(255 - suffix.size(), 'q');
+        write_file_bytes(detail::project_fs::native_path(source), byte_vector("quarantine source"));
+        auto existing = source;
+        existing += suffix;
+        write_file_bytes(detail::project_fs::native_path(existing), byte_vector("existing aside"));
+        const auto aside = require_result(detail::quarantine_project_artifact_with_suffix(source, suffix));
+        EXPECT_LE(aside.filename().native().size(), 255u);
+        EXPECT_TRUE(lfs::core::path_to_utf8(aside.filename()).ends_with("-1"));
+        EXPECT_EQ(read_file_bytes(detail::project_fs::native_path(aside)), byte_vector("quarantine source"));
+    }
+
 #ifdef _WIN32
     TEST(ProjectContainerWriter, CaseSensitiveDirectoryKeepsDistinctBoundedSiblingKeys) {
         LongPathTemporaryDirectory temporary;

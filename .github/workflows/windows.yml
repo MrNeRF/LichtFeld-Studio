@@ -263,6 +263,16 @@ jobs:
           set PYTHONUTF8=1
           %BUILD_DIR%\path-policy-off-python\python.exe -m unittest tests/python/test_native_path_io.py
 
+      - name: Test native Python path metadata without long-path opt-in
+        if: matrix.build_type == 'Release'
+        shell: cmd
+        run: |
+          set PYTHONHOME=%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\tools\python3
+          set PYTHONPATH=%CD%\src\python;%CD%\%BUILD_DIR%\src\python
+          set PYTHONUTF8=1
+          set LFS_REQUIRE_LONG_PATHS_DISABLED=1
+          %BUILD_DIR%\path-policy-off-python\python.exe -c "import os, unittest; dll = os.add_dll_directory(os.path.abspath(os.environ['BUILD_DIR'])); suite = unittest.defaultTestLoader.discover('tests/python', pattern='test_native_binding_path_io.py'); result = unittest.TextTestRunner(verbosity=2).run(suite); raise SystemExit(not result.wasSuccessful())"
+
       - name: Build and run CPU-only visualizer and RmlUi tests
         shell: cmd
         env:

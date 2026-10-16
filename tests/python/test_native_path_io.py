@@ -26,7 +26,7 @@ class NativePathIo(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "Windows executable boundary")
     def test_launch_executable_from_long_directory(self):
-        source = Path(sys.executable)
+        source = Path(getattr(sys, "_base_executable", sys.executable))
         target = self.deep / "python.exe"
         shutil.copyfile(source, target)
         dll_name = f"python{sys.version_info.major}{sys.version_info.minor}.dll"
@@ -67,6 +67,27 @@ class NativePathIo(unittest.TestCase):
         lower = parent / ("a" * 250 + ".json")
         upper = parent / ("A" * 250 + ".JSON")
         self.assertNotEqual(str(bounded_sibling_path(lower, ".lock")), str(bounded_sibling_path(upper, ".lock")))
+
+    @unittest.skipUnless(os.name == "nt", "Windows UNC namespace")
+    def test_logical_unc_prefix_is_case_insensitive(self):
+        for prefix in ("UNC", "unc", "UnC"):
+            self.assertEqual(logical_path("\\\\?\\" + prefix + "\\server\\share\\file"), "\\\\server\\share\\file")
+
+    def test_walk_preserves_relative_roots_and_bytes_path_type(self):
+        previous = os.getcwd()
+        try:
+            os.chdir(self.root.parent)
+            relative = self.root.name
+            expected = str(self.deep.relative_to(self.root.parent))
+            roots = [root for root, _, _ in walk(relative)]
+            self.assertEqual(roots[0], next(os.walk(relative))[0])
+            self.assertIn(expected, roots)
+            self.assertFalse(any(os.path.isabs(root) for root in roots))
+            byte_roots = [root for root, _, _ in walk(os.fsencode(relative))]
+            self.assertEqual(byte_roots[0], os.fsencode(relative))
+            self.assertIn(os.fsencode(expected), byte_roots)
+        finally:
+            os.chdir(previous)
 
     def test_open_stat_replace_and_persisted_names(self):
         file = self.deep / "project_\u6e2c\u8a66.json"

@@ -33,7 +33,6 @@ namespace lfs::python {
 
 #ifdef _WIN32
         constexpr const char* UV_BINARY = "uv.exe";
-        constexpr size_t MAX_PATH_LEN = MAX_PATH;
 #else
         constexpr const char* UV_BINARY = "uv";
         constexpr size_t MAX_PATH_LEN = 4096;
@@ -42,9 +41,7 @@ namespace lfs::python {
 
         std::filesystem::path get_executable_dir() {
 #ifdef _WIN32
-            wchar_t path[MAX_PATH_LEN];
-            GetModuleFileNameW(nullptr, path, MAX_PATH_LEN);
-            return std::filesystem::path(path).parent_path();
+            return core::getExecutableDir();
 #else
             char path[MAX_PATH_LEN];
             const ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);

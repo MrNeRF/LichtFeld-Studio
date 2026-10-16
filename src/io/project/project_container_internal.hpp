@@ -171,6 +171,9 @@ namespace lfs::io::project::detail {
     [[nodiscard]] std::filesystem::path project_artifact_path(
         const std::filesystem::path& source, std::string_view suffix);
     [[nodiscard]] std::filesystem::path project_lock_path(const std::filesystem::path& source);
+    // Shared collision-safe rename logic; the public entry supplies the timestamp suffix.
+    [[nodiscard]] lfs::Result<std::filesystem::path> quarantine_project_artifact_with_suffix(
+        const std::filesystem::path& source, const std::string& suffix);
 
     // Stable short stem for long names; recovery uses the same key to associate
     // artifacts without treating a truncated filename as a different master.

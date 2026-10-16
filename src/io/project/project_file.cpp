@@ -1006,10 +1006,9 @@ namespace lfs::io::project::detail {
     std::filesystem::path project_artifact_path(
         const std::filesystem::path& source, const std::string_view suffix) {
         auto name = lfs::core::path_to_utf8(source.filename());
-        // Reserve room for this artifact's writer lock as well.
-        if (source.filename().native().size() + lfs::core::utf8_to_path(std::string(suffix)).native().size() +
-                (suffix == ".lock" ? 0 : 5) >
-            255) {
+        // Keep every legacy artifact name that fits. Its lock is bounded
+        // independently, and autosave writers hold the master's lock.
+        if (source.filename().native().size() + lfs::core::utf8_to_path(std::string(suffix)).native().size() > 255) {
             name = lfs::core::path_to_utf8(lfs::core::detail::artifact_filename_key(source));
             const auto key = XXH3_128bits(name.data(), name.size());
             name = std::format(".lfs-artifact-{:016x}{:016x}", key.high64, key.low64);

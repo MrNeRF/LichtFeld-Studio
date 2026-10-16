@@ -39,6 +39,12 @@ namespace lfs::core::fs {
     [[nodiscard]] inline path display_path(const path& value);
 #ifdef _WIN32
     namespace detail {
+        inline bool extended_unc_path(const std::wstring_view name) noexcept {
+            return name.size() >= 8 && name.starts_with(L"\\\\?\\") &&
+                   (name[4] == L'U' || name[4] == L'u') &&
+                   (name[5] == L'N' || name[5] == L'n') &&
+                   (name[6] == L'C' || name[6] == L'c') && name[7] == L'\\';
+        }
         inline bool dos_device_name(std::wstring_view value) {
             value = value.substr(0, value.find(L'.'));
             while (!value.empty() && (value.back() == L' ' || value.back() == L'.'))
@@ -120,7 +126,7 @@ namespace lfs::core::fs {
     [[nodiscard]] inline path display_path(const path& value) {
 #ifdef _WIN32
         const auto& name = value.native();
-        if (name.starts_with(L"\\\\?\\UNC\\"))
+        if (detail::extended_unc_path(name))
             return path(L"\\\\" + name.substr(8));
         if (name.starts_with(L"\\\\?\\") && name.size() >= 7 && name[5] == L':')
             return path(name.substr(4));
@@ -326,7 +332,7 @@ namespace lfs::core::fs {
             return std::filesystem::weakly_canonical(existing, error);
         const auto& name = existing.native();
         std::size_t root_length;
-        if (name.starts_with(L"\\\\?\\UNC\\")) {
+        if (detail::extended_unc_path(name)) {
             const auto server_end = name.find(L'\\', 8);
             const auto share_end = server_end == std::wstring::npos ? server_end : name.find(L'\\', server_end + 1);
             root_length = share_end == std::wstring::npos ? name.size() : share_end;

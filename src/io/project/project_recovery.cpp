@@ -923,25 +923,14 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::filesystem::path>
-    quarantine_project_artifact(
-        const std::filesystem::path& source) {
-        const auto unix_seconds =
-            std::chrono::duration_cast<
-                std::chrono::seconds>(
-                std::chrono::system_clock::now()
-                    .time_since_epoch())
-                .count();
-        const auto aside = detail::project_artifact_path(source, std::format(
-                                                                     ".corrupt-{}", unix_seconds));
+    detail::quarantine_project_artifact_with_suffix(
+        const std::filesystem::path& source, const std::string& suffix) {
         constexpr int kMaxDisambiguators = 32;
         for (int attempt = 0;
              attempt <= kMaxDisambiguators;
              ++attempt) {
-            auto candidate = aside;
-            if (attempt > 0) {
-                candidate += std::format(
-                    "-{}", attempt);
-            }
+            const auto candidate = detail::project_artifact_path(
+                source, attempt == 0 ? suffix : suffix + std::format("-{}", attempt));
             std::error_code exists_error;
             if (detail::project_fs::exists(
                     candidate, exists_error) &&
@@ -961,6 +950,14 @@ namespace lfs::io::project {
             "A corrupt project artifact could not be quarantined.",
             "no unused .corrupt-* aside name was available",
             "recovery.quarantine");
+    }
+
+    lfs::Result<std::filesystem::path>
+    quarantine_project_artifact(const std::filesystem::path& source) {
+        const auto unix_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        return detail::quarantine_project_artifact_with_suffix(
+            source, std::format(".corrupt-{}", unix_seconds));
     }
 
     void sweep_orphan_project_artifacts(
