@@ -1169,6 +1169,7 @@ namespace lfs::vis {
 
         lfs::event::ScopedHandler event_handlers_;
 
+        friend struct SplitOutputLifetimeTestAccess;
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class RenderingManagerActualSizeStateTest_PublishesOnlyAtCommitAndRetainsAcrossResourceInvalidation_Test;
         friend class RenderingManagerActualSizeCacheTest_RetainsReadySourceAcrossTogglesAndClearsOnContextChanges_Test;

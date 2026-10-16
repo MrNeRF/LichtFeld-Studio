@@ -37,6 +37,7 @@
 #include "screen/screen_service.hpp"
 #include "selection/selection_service.hpp"
 #include "tools/selection_tool.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -594,9 +595,13 @@ namespace lfs::vis {
             lfs::core::event::bus().clear_all();
             services().clear();
             op::undoHistory().clear();
+            UnifiedToolRegistry::instance().clearActiveTool();
         }
 
         void TearDown() override {
+            // The crop commands activate the crop box tool in the process-wide registry; a
+            // later input test would otherwise route its drags to the crop box.
+            UnifiedToolRegistry::instance().clearActiveTool();
             op::undoHistory().clear();
             services().clear();
             lfs::event::EventBridge::instance().clear_all();
