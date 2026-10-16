@@ -1091,6 +1091,31 @@ add_test(NAME masked_ssim_noftz COMMAND masked_ssim_noftz_tests
     --gtest_filter=MaskedSSIMWindowTest.SparseSupportRemainsFinite:MaskedSSIMWindowTest.TinyWindowSupportApproachesUnsupported)
 set_tests_properties(masked_ssim_noftz PROPERTIES LABELS "gpu")
 
+# Keep both math modes in separate whole-program CUDA translation units, as in
+# the application's static libraries. RDC would hide the host-stub collision.
+foreach(mode precise fast)
+    add_library(cuda_stub_${mode} STATIC cuda_template_stub_fixture.cu)
+    target_compile_features(cuda_stub_${mode} PRIVATE cuda_std_20)
+    target_include_directories(cuda_stub_${mode} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_definitions(cuda_stub_${mode} PRIVATE LFS_STUB_TEST_VARIANT=${mode})
+    target_link_libraries(cuda_stub_${mode} PRIVATE lfs_core)
+    set_target_properties(cuda_stub_${mode} PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
+endforeach()
+target_compile_options(cuda_stub_fast PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>)
+
+add_executable(cuda_template_stub_tests test_main.cpp test_cuda_template_stub.cpp)
+target_compile_features(cuda_template_stub_tests PRIVATE cxx_std_23)
+target_include_directories(cuda_template_stub_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(cuda_template_stub_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+target_link_libraries(cuda_template_stub_tests PRIVATE
+    cuda_stub_precise cuda_stub_fast lfs_core GTest::gtest CUDA::cudart)
+add_test(NAME tensor.cuda_template_stub COMMAND cuda_template_stub_tests --gtest_color=no)
+set_tests_properties(tensor.cuda_template_stub PROPERTIES LABELS "tensor;gpu" TIMEOUT 30)
+if(WIN32)
+    set_tests_properties(tensor.cuda_template_stub PROPERTIES ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>;PATH=path_list_prepend:${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+endif()
+
 # Tensor-library hardening is intentionally isolated from the default test
 # tiers.  During the hardening phases these oracle tests are expected to expose
 # known failures, and crash-prone reproducers must not terminate the monolithic
