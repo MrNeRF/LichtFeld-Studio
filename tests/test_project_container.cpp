@@ -13,6 +13,7 @@
 #include "io/project_container.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
+#include "long_path_test_support.hpp"
 
 #include <zstd.h>
 
@@ -73,6 +74,7 @@ namespace {
     namespace fs = std::filesystem;
     using namespace lfs::io::project;
     using namespace lfs::test::licht;
+    using namespace lfs::test::long_paths;
     using namespace std::string_view_literals;
 
     constexpr std::uint64_t FIXED_CREATION_TIME_NS =
@@ -4002,6 +4004,111 @@ namespace {
         EXPECT_TRUE(canonical_text.ends_with(lfs::core::path_to_utf8(tail))) << canonical_text;
         EXPECT_TRUE(fs::equivalent(detail::project_fs::native_path(canonical), detail::project_fs::native_path(destination), error))
             << error.message();
+    }
+#endif
+
+    void save_and_verify(const fs::path& destination, const std::uint64_t tag) {
+        std::error_code error;
+        detail::project_fs::create_directories(destination.parent_path(), error);
+        ASSERT_FALSE(error) << error.message();
+        create_single_chunk_fixture(destination, tag, tag + 1, tag + 2, fixed_key("PROJ", tag + 3), R"({"saved":true})");
+        auto reader = require_result(ProjectReader::open(destination));
+        EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(tag + 1));
+        require_status(reader.verify_all());
+    }
+
+    TEST(ProjectPathResolution, MatchesStandardResolutionForShortPaths) {
+        TemporaryDirectory temporary;
+        const auto root = temporary.path / lfs::core::utf8_to_path("проект 保存 é 🙂");
+        fs::create_directories(root / "existing");
+        write_file_bytes(root / "existing" / "scene.licht", byte_vector("scene"));
+        std::vector<fs::path> paths{
+            fs::path{},
+            root,
+            root / "existing",
+            root / "existing" / "scene.licht",
+            root / "existing" / "missing.licht",
+            root / "missing" / "deeper" / "scene.licht",
+            root / "missing" / ".." / "existing" / "scene.licht",
+            root / "." / "existing" / "." / "missing.licht",
+            root / "existing" / ".." / "missing.licht",
+        };
+#ifndef _WIN32
+        fs::create_directory_symlink(root / "existing", root / "link");
+        paths.push_back(root / "link" / "missing.licht");
+        paths.push_back(root / "link" / ".." / "missing.licht");
+#endif
+        for (const auto& path : paths) {
+            const auto text = lfs::core::path_to_utf8(path);
+            std::error_code project_error;
+            std::error_code standard_error;
+            const auto resolved = detail::project_fs::weakly_canonical(path, project_error);
+            const auto expected = fs::weakly_canonical(path, standard_error);
+            ASSERT_FALSE(project_error) << text << ": " << project_error.message();
+            ASSERT_FALSE(standard_error) << text << ": " << standard_error.message();
+            EXPECT_EQ(lfs::core::path_to_utf8(resolved), lfs::core::path_to_utf8(expected.lexically_normal())) << text;
+        }
+    }
+
+    TEST(ProjectPathResolution, UnicodeProjectsSaveOnBothSidesOfTheExtendedPathSwitch) {
+        LongPathTemporaryDirectory temporary;
+        const auto leaf = lfs::core::utf8_to_path("scène 🙂.licht");
+        std::uint64_t tag = 7100;
+        for (const auto length : kLengthsAroundExtendedPathSwitch) {
+            const auto directory = temporary.path / lfs::core::utf8_to_path("проект 保存 🙂") / std::to_string(length);
+            const auto destination = with_native_length(directory, length, leaf);
+            ASSERT_EQ(destination.native().size(), length);
+            save_and_verify(destination, tag += 10);
+            std::error_code error;
+            const auto resolved = lfs::core::path_to_utf8(detail::project_fs::weakly_canonical(destination, error));
+            ASSERT_FALSE(error) << length << ": " << error.message();
+            EXPECT_FALSE(resolved.starts_with(R"(\\?\)")) << resolved;
+            EXPECT_TRUE(resolved.ends_with(lfs::core::path_to_utf8(destination.lexically_relative(temporary.path)))) << resolved;
+            auto lease = require_result(WriterLockLease::acquire(destination));
+            const auto parent = destination.parent_path();
+            auto second = detail::WriterLock::acquire(parent / ".." / parent.filename() / leaf);
+            ASSERT_FALSE(second) << length;
+            EXPECT_EQ(second.error().code(), lfs::ErrorCode::Unavailable) << length;
+        }
+    }
+
+#ifdef _WIN32
+    TEST(ProjectPathResolution, NetworkProjectsSaveOnBothSidesOfTheExtendedPathSwitch) {
+        const auto share = network_share();
+        if (!share) {
+            if (network_share_required()) {
+                FAIL() << "LFS_TEST_UNC_ROOT and LFS_TEST_UNC_LOCAL must name a reachable network share";
+            }
+            GTEST_SKIP() << "No network share provisioned (LFS_TEST_UNC_ROOT, LFS_TEST_UNC_LOCAL)";
+        }
+        LongPathDirectory run(share->local);
+        const fs::path local_root = run.path;
+        const fs::path network_root = share->network / run.path.filename();
+        std::error_code error;
+        const auto leaf = lfs::core::utf8_to_path("scène 🙂.licht");
+        std::uint64_t tag = 7300;
+        for (const auto length : kLengthsAroundExtendedPathSwitch) {
+            const auto directory = network_root / lfs::core::utf8_to_path("проект 保存 🙂") / std::to_string(length);
+            const auto network = with_native_length(directory, length, leaf);
+            ASSERT_EQ(network.native().size(), length);
+            const auto tail = network.lexically_relative(network_root);
+            const auto local = local_root / tail;
+            save_and_verify(network, tag += 10);
+            for (const auto& spelling : {network, detail::project_fs::native_path(network)}) {
+                const auto resolved = lfs::core::path_to_utf8(detail::project_fs::weakly_canonical(spelling, error));
+                ASSERT_FALSE(error) << length << ": " << error.message();
+                EXPECT_FALSE(resolved.starts_with(R"(\\?\)")) << resolved;
+                EXPECT_TRUE(resolved.ends_with(lfs::core::path_to_utf8(tail))) << resolved;
+            }
+            {
+                auto reader = require_result(ProjectReader::open(local));
+                EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(tag + 1));
+            }
+            auto lease = require_result(WriterLockLease::acquire(network));
+            auto local_writer = detail::WriterLock::acquire(local);
+            ASSERT_FALSE(local_writer) << length;
+            EXPECT_EQ(local_writer.error().code(), lfs::ErrorCode::Unavailable) << length;
+        }
     }
 #endif
 

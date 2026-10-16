@@ -33,6 +33,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/gt_comparison_geometry.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/selection_tool.hpp"
@@ -124,6 +125,29 @@ namespace lfs::vis {
                 const glm::vec3 world_pt = glm::vec3(world_xform * glm::vec4(corner, 1.0f));
                 world_min = glm::min(world_min, world_pt);
                 world_max = glm::max(world_max, world_pt);
+            }
+        }
+
+        [[nodiscard]] bool isGeometryContainer(const core::SceneNode& node) {
+            return node.type == core::NodeType::GROUP || node.type == core::NodeType::PLY_SEQUENCE ||
+                   node.type == core::NodeType::DATASET ||
+                   node.type == core::NodeType::CAMERA_GROUP ||
+                   node.type == core::NodeType::IMAGE_GROUP;
+        }
+
+        // Like expandNodeWorldBounds, but hidden nodes and hidden children of a
+        // container add nothing: framing follows what the viewport shows.
+        void expandVisibleNodeWorldBounds(const core::Scene& scene, const core::SceneNode& node,
+                                          glm::vec3& world_min, glm::vec3& world_max) {
+            if (!scene.isNodeEffectivelyVisible(node.id))
+                return;
+            if (!isGeometryContainer(node)) {
+                expandNodeWorldBounds(scene, node, world_min, world_max);
+                return;
+            }
+            for (const auto child_id : node.children) {
+                if (const auto* const child = scene.getNodeById(child_id))
+                    expandVisibleNodeWorldBounds(scene, *child, world_min, world_max);
             }
         }
 
@@ -494,7 +518,8 @@ namespace lfs::vis {
         });
 
         window_focus_lost_handler_id_ = internal::WindowFocusLost::when([this](const auto&) {
-            clearViewportDragState();
+            // A locked look pointer is released where it is, not warped back.
+            clearViewportDragState(false);
             clearSelectedCameraContextMenuGesture();
             press_selected_camera_frustum_ = false;
             pressed_camera_frustum_id_ = -1;
@@ -715,7 +740,7 @@ namespace lfs::vis {
     void InputController::onWindowFocusLost() {
         op::operators().cancelModalOperator();
         op::clearDepthWindowHover();
-        clearViewportDragState();
+        clearViewportDragState(false);
         if (auto* const scene_manager = services().sceneOrNull())
             scene_manager->modifierManager().cancelViewportMode();
         node_paint_dragging_ = false;
@@ -1195,6 +1220,7 @@ namespace lfs::vis {
                             pivot_distance = 5.0f;
                         interaction->viewport->camera.updatePivotFromCamera(pivot_distance);
                         drag_mode_ = DragMode::Rotate;
+                        lockLookPointer(x, y);
                     } else {
                         interaction->viewport->camera.startRotateAroundCenter(
                             glm::vec2(x, y), static_cast<float>(SDL_GetTicks() / 1000.0f));
@@ -1371,6 +1397,7 @@ namespace lfs::vis {
                 drag_mode_ = DragMode::None;
                 drag_button_ = -1;
                 was_dragging = true;
+                syncLookPointerLock();
             } else if (drag_mode_ == DragMode::Orbit) {
                 if (dragViewport()) {
                     dragViewport()->camera.endRotateAroundCenter();
@@ -1519,7 +1546,7 @@ namespace lfs::vis {
         }
     }
 
-    void InputController::handleMouseMove(double x, double y) {
+    void InputController::handleMouseMove(double x, double y, const std::optional<glm::dvec2> motion) {
         if (drag_view_ != kNoView && !dragViewport())
             clearViewportDragState();
         hover_pos_ = {x, y};
@@ -1527,13 +1554,19 @@ namespace lfs::vis {
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
+        // The locked pointer's position stops at the window edge; mouse look
+        // accumulates the relative motion instead.
+        const bool relative_look = drag_mode_ == DragMode::Rotate && motion.has_value();
+        if (relative_look)
+            look_pos_ += *motion;
+        const glm::vec2 camera_drag_pos = relative_look ? glm::vec2(look_pos_) : glm::vec2(x, y);
         const auto park_camera_drag_anchor = [&]() {
             if (drag_mode_ != DragMode::Pan && drag_mode_ != DragMode::Orbit &&
                 drag_mode_ != DragMode::Rotate)
                 return;
             auto* const target = dragViewport() ? dragViewport() : &viewport();
             const float now = static_cast<float>(SDL_GetTicks() / 1000.0f);
-            target->camera.followDragPointer(glm::vec2(static_cast<float>(x), static_cast<float>(y)), now);
+            target->camera.followDragPointer(camera_drag_pos, now);
         };
 
         if (gui && gui->isCapturingInput()) {
@@ -1797,9 +1830,9 @@ namespace lfs::vis {
             }
             case DragMode::Rotate:
                 if (camera_navigation_mode_ == CameraNavigationMode::Drone) {
-                    target_viewport->camera.droneLook(pos);
+                    target_viewport->camera.droneLook(camera_drag_pos);
                 } else {
-                    target_viewport->camera.rotateFpv(pos);
+                    target_viewport->camera.rotateFpv(camera_drag_pos);
                 }
                 break;
             case DragMode::Orbit: {
@@ -2451,7 +2484,7 @@ namespace lfs::vis {
                     rendering && (rendering->isGTComparisonActive() || rendering->hasGTComparisonAvailable())) {
                     cmd::ToggleGTComparison{}.emit();
                 } else if (const auto* const scene_manager = services().sceneOrNull();
-                           scene_manager && scene_manager->getScene().getVisibleSplatNodeSlots().size() >= 2) {
+                           scene_manager && plyComparisonNodes(scene_manager->getScene()).size() >= 2) {
                     cmd::ToggleSplitView{}.emit();
                 }
                 return;
@@ -2941,6 +2974,7 @@ namespace lfs::vis {
             pressed_camera_frustum_id_ = -1;
             pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
         }
+        syncLookPointerLock();
 
         if (drag_mode_ == DragMode::Splitter &&
             !isMouseButtonPressed(static_cast<int>(input::AppMouseButton::LEFT))) {
@@ -3497,9 +3531,11 @@ namespace lfs::vis {
         } else {
             for (const auto& name : selected) {
                 if (const auto* node = scene.getNode(name))
-                    expandNodeWorldBounds(scene, *node, total_min, total_max);
+                    expandVisibleNodeWorldBounds(scene, *node, total_min, total_max);
             }
             has_bounds = total_min.x <= total_max.x;
+            if (!has_bounds)
+                has_bounds = computeWholeSceneBounds(total_min, total_max);
         }
 
         if (has_bounds) {
@@ -3512,8 +3548,8 @@ namespace lfs::vis {
         return false;
     }
 
-    // Whole-scene world AABB, skipping container nodes that carry no geometry.
-    // use_percentile yields the trimmed (outlier-excluding) box.
+    // World AABB of the visible scene, skipping container nodes that carry no
+    // geometry. use_percentile yields the trimmed (outlier-excluding) box.
     bool InputController::computeWholeSceneBounds(glm::vec3& out_min, glm::vec3& out_max,
                                                   const bool use_percentile) const {
         if (!tool_context_)
@@ -3527,10 +3563,7 @@ namespace lfs::vis {
         out_max = glm::vec3(std::numeric_limits<float>::lowest());
 
         for (const auto* node : scene.getNodes()) {
-            if (node->type == core::NodeType::GROUP || node->type == core::NodeType::PLY_SEQUENCE ||
-                node->type == core::NodeType::DATASET ||
-                node->type == core::NodeType::CAMERA_GROUP ||
-                node->type == core::NodeType::IMAGE_GROUP)
+            if (isGeometryContainer(*node) || !scene.isNodeEffectivelyVisible(node->id))
                 continue;
             expandNodeWorldBounds(scene, *node, out_min, out_max, use_percentile);
         }
@@ -3590,6 +3623,15 @@ namespace lfs::vis {
         if (rendering)
             rendering->markCameraCut(views_.viewId(target_viewport));
         publishCameraMove(&target_viewport);
+    }
+
+    void InputController::resetHome() {
+        auto& target = activeKeyboardViewport();
+        target.camera.resetHomePosition();
+        handleResetCameraHome(target);
+        if (auto* const viewer = lfs::python::get_visualizer()) {
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+        }
     }
 
     // Helpers
@@ -3747,7 +3789,7 @@ namespace lfs::vis {
         drag_button_ = button;
     }
 
-    void InputController::clearViewportDragState() {
+    void InputController::clearViewportDragState(const bool restore_look_pointer) {
         const bool was_camera_drag =
             drag_mode_ == DragMode::Orbit ||
             drag_mode_ == DragMode::Pan ||
@@ -3778,10 +3820,28 @@ namespace lfs::vis {
         press_selected_camera_frustum_ = false;
         pressed_camera_frustum_id_ = -1;
         pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
+        syncLookPointerLock(restore_look_pointer);
 
         if (was_camera_drag) {
             onCameraMovementEnd();
         }
+    }
+
+    void InputController::lockLookPointer(const double x, const double y) {
+        look_pos_ = {x, y};
+        if (!window_ || look_pointer_restore_ || !SDL_SetWindowRelativeMouseMode(window_, true))
+            return;
+        look_pointer_restore_ =
+            glm::vec2(static_cast<float>(x), static_cast<float>(y)) / input::windowPixelScale(window_);
+    }
+
+    void InputController::syncLookPointerLock(const bool restore_position) {
+        if (!look_pointer_restore_ || drag_mode_ == DragMode::Rotate)
+            return;
+        SDL_SetWindowRelativeMouseMode(window_, false);
+        if (restore_position)
+            SDL_WarpMouseInWindow(window_, look_pointer_restore_->x, look_pointer_restore_->y);
+        look_pointer_restore_.reset();
     }
 
     void InputController::clearWasdMomentumViewport() {

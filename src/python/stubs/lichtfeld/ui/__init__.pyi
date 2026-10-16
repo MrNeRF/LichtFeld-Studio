@@ -2820,6 +2820,18 @@ def set_trackpad_preferences(device: str, swipe_pans: bool, swipe_speed: float, 
     Apply trackpad navigation preferences with optional persistence (device 'mouse', 'trackpad' or 'automatic'; speeds 1-100, 50 is the default)
     """
 
+def get_marketplace_preferences() -> dict:
+    """Get Marketplace preferences from the canonical user preferences store"""
+
+def set_marketplace_view(view: str) -> None:
+    """Set the Marketplace layout (card or list)"""
+
+def set_marketplace_git_checkout(enabled: bool) -> None:
+    """Set whether Marketplace installs use Git checkouts"""
+
+def reset_marketplace_preferences() -> None:
+    """Reset Marketplace layout and installation preferences"""
+
 def get_project_manager_preferences() -> dict:
     """
     Get Project Manager preferences from the canonical user preferences store

@@ -3075,6 +3075,12 @@ NB_MODULE(lichtfeld, m) {
         },
         "Frame the selection or the whole scene in the active view.");
     m.def(
+        "reset_home", []() {
+            if (auto* const controller = lfs::vis::InputController::instance())
+                controller->resetHome();
+        },
+        "Restore the default home view of the active viewport and move the camera there");
+    m.def(
         "get_camera_navigation_mode", []() -> std::string {
             const auto* controller = lfs::vis::InputController::instance();
             if (!controller)

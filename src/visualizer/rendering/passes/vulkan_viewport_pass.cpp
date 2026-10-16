@@ -2881,7 +2881,15 @@ namespace lfs::vis {
                         .extent = {static_cast<std::uint32_t>(x1 - x0),
                                    static_cast<std::uint32_t>(rect.height)},
                     };
-                    mesh_pass.record(command_buffer, mesh_rect, mesh_params);
+                    if (panel.full_viewport_projection) {
+                        mesh_pass.record(command_buffer,
+                                         {.offset = {rect.x, rect.y},
+                                          .extent = {static_cast<std::uint32_t>(rect.width),
+                                                     static_cast<std::uint32_t>(rect.height)}},
+                                         mesh_params, mesh_rect);
+                    } else {
+                        mesh_pass.record(command_buffer, mesh_rect, mesh_params);
+                    }
                 }
             } else if (!split_active) {
                 mesh_params.view_projection = params.mesh_view_projection;

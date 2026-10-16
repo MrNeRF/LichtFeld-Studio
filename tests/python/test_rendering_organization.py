@@ -130,3 +130,64 @@ def test_vignette_scrub_previews_without_repeated_disk_writes(preferences_panel_
     assert vignette.intensity == 0.6
     panel._commit_scrub_value("theme_vignette_intensity", 0.6)
     assert calls == [False, False, False, True]
+
+
+@pytest.mark.parametrize("prop,value", [("axes_size", "4.5"), ("camera_frustum_scale", "0.125")])
+def test_preferences_apply_defaults_commits_focused_field_then_requires_confirmation(
+        preferences_panel_module, prop, value):
+    module, state = preferences_panel_module
+    state.rendering_defaults = {"axes_size": 2.0, "camera_frustum_scale": 0.25}
+    state.render_settings.camera_frustum_scale = 0.75
+    state.render_settings.axes_size = 8.0
+    section = module.PreferencesPanel()._rendering_defaults
+    events, dialogs, applied = {}, [], []
+
+    class EventModel(_BindingModelStub):
+        def bind_event(self, name, callback):
+            events[name] = callback
+
+    model = EventModel()
+    section.bind(model)
+    module.lf.ui.confirm_dialog = lambda *args: dialogs.append(args)
+    module.lf.ui.apply_rendering_defaults = lambda: applied.append(dict(state.rendering_defaults))
+    model.bindings["default_" + prop][1](value)
+    events["apply_viewport_defaults"]()
+    assert state.rendering_defaults[prop] == float(value)
+    assert state.render_settings.camera_frustum_scale == 0.75
+    assert state.render_settings.axes_size == 8.0
+    assert applied == []
+    _, _, buttons, callback = dialogs.pop()
+    callback(buttons[1])
+    assert applied == []
+    events["apply_viewport_defaults"]()
+    _, _, buttons, callback = dialogs.pop()
+    callback(buttons[0])
+    assert len(applied) == 1
+    assert applied[0][prop] == float(value)
+
+
+def test_preferences_invalid_pending_default_cannot_apply_old_values(preferences_panel_module):
+    module, state = preferences_panel_module
+    section = module.PreferencesPanel()._rendering_defaults
+    model = _BindingModelStub()
+    section.bind(model)
+    dialogs, applied = [], []
+    module.lf.ui.confirm_dialog = lambda *args: dialogs.append(args)
+    module.lf.ui.apply_rendering_defaults = lambda: applied.append(True)
+    model.bindings["default_axes_size"][1]("nan")
+    section._confirm_apply()
+    assert section._error
+    assert dialogs == [] and applied == []
+
+
+def test_preferences_exposes_explicit_project_apply_and_translates_it_everywhere():
+    root = ET.parse(RESOURCES / "preferences.rml").getroot()
+    viewport = root.find('.//*[@data-if="show_viewport"]')
+    button = viewport.find('.//*[@data-event-click="apply_viewport_defaults"]')
+    assert button is not None
+    assert button.text == "@tr:preferences.apply_viewport_defaults"
+    for path in (ROOT / "src/visualizer/gui/resources/locales").glob("*.json"):
+        locale = json.loads(path.read_text(encoding="utf-8"))
+        assert locale["preferences"]["apply_viewport_defaults"]
+        assert locale["main_panel"]["axes_size"]
+        assert locale["tooltip"]["axes_size"]

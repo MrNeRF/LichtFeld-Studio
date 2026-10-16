@@ -331,6 +331,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_summary_labels.cpp
         test_menu_bar_title.cpp
         test_point_cloud_updates.cpp
+        test_preferences_tooltips.cpp
         test_guide_segment_clipping.cpp
 
         test_viewport_depth_layout.cpp
@@ -377,6 +378,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_rml_drag_payload.cpp
         test_sdl_rml_key_mapping.cpp
         test_rml_form_control_layout.cpp
+        test_histogram_layout.cpp
     )
     target_compile_features(lichtfeld_rmlui_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_rmlui_tests PRIVATE
@@ -617,6 +619,7 @@ set_tests_properties(lichtfeld.sdl_coordinates PROPERTIES LABELS "fast;cpu;input
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
     test_project_save_as_paths.cpp
+    test_native_fs.cpp
     test_json_chapter_dom.cpp
     test_project_chapters.cpp
     test_project_container.cpp
@@ -1320,6 +1323,7 @@ set(TEST_FILES
     test_node_canvas_widgets.cpp
     test_panel_layout_render_demand.cpp
     test_preferences_hint_layout.cpp
+    test_preferences_tooltips.cpp
     test_viewport_depth_layout.cpp
     test_viewport_select.cpp
     test_sequencer_regressions.cpp
@@ -1711,6 +1715,31 @@ endif()
 add_test(NAME masked_ssim_noftz COMMAND masked_ssim_noftz_tests
     --gtest_filter=MaskedSSIMWindowTest.SparseSupportRemainsFinite:MaskedSSIMWindowTest.TinyWindowSupportApproachesUnsupported)
 set_tests_properties(masked_ssim_noftz PROPERTIES LABELS "gpu")
+
+# Keep both math modes in separate whole-program CUDA translation units, as in
+# the application's static libraries. RDC would hide the host-stub collision.
+foreach(mode precise fast)
+    add_library(cuda_stub_${mode} STATIC cuda_template_stub_fixture.cu)
+    target_compile_features(cuda_stub_${mode} PRIVATE cuda_std_20)
+    target_include_directories(cuda_stub_${mode} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_definitions(cuda_stub_${mode} PRIVATE LFS_STUB_TEST_VARIANT=${mode} LFS_TENSOR_PRIVATE_ACCESS)
+    target_link_libraries(cuda_stub_${mode} PRIVATE lfs_core)
+    set_target_properties(cuda_stub_${mode} PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
+endforeach()
+target_compile_options(cuda_stub_fast PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>)
+
+add_executable(cuda_template_stub_tests test_main.cpp test_cuda_template_stub.cpp)
+target_compile_features(cuda_template_stub_tests PRIVATE cxx_std_23)
+target_include_directories(cuda_template_stub_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(cuda_template_stub_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+target_link_libraries(cuda_template_stub_tests PRIVATE
+    cuda_stub_precise cuda_stub_fast lfs_core GTest::gtest CUDA::cudart)
+add_test(NAME tensor.cuda_template_stub COMMAND cuda_template_stub_tests --gtest_color=no)
+set_tests_properties(tensor.cuda_template_stub PROPERTIES LABELS "tensor;gpu" TIMEOUT 30)
+if(WIN32)
+    set_tests_properties(tensor.cuda_template_stub PROPERTIES ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>;PATH=path_list_prepend:${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+endif()
 
 # Tensor-library hardening is intentionally isolated from the default test
 # tiers.  During the hardening phases these oracle tests are expected to expose

@@ -31,12 +31,12 @@ namespace lfs::io {
         }
 
         // Validate file exists
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "Checkpoint file does not exist", path);
         }
 
-        if (!std::filesystem::is_regular_file(path)) {
+        if (!lfs::core::native_fs::is_regular_file(path)) {
             return make_error(ErrorCode::NOT_A_FILE,
                               "Path is not a regular file", path);
         }
@@ -107,7 +107,7 @@ namespace lfs::io {
     }
 
     bool CheckpointLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path) || std::filesystem::is_directory(path)) {
+        if (!lfs::core::native_fs::exists(path) || lfs::core::native_fs::is_directory(path)) {
             return false;
         }
 

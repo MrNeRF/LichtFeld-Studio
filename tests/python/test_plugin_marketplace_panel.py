@@ -14,7 +14,7 @@ import pytest
 
 
 def _install_lf_stub(monkeypatch):
-    state = SimpleNamespace(translations={}, ui_scale=1.0)
+    state = SimpleNamespace(translations={}, ui_scale=1.0, marketplace_preferences={"view": "list", "git_checkout": False})
     panel_space = SimpleNamespace(
         SIDE_PANEL="SIDE_PANEL",
         FLOATING="FLOATING",
@@ -36,6 +36,7 @@ def _install_lf_stub(monkeypatch):
         PanelOption=panel_option,
         tr=tr,
         get_ui_scale=lambda: state.ui_scale,
+        get_marketplace_preferences=lambda: dict(state.marketplace_preferences),
         request_redraw=lambda: None,
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -49,6 +50,7 @@ def plugin_marketplace_module(monkeypatch):
     if str(source_python) not in sys.path:
         sys.path.insert(0, str(source_python))
 
+    sys.modules.pop("lfs_plugins.marketplace_preferences", None)
     sys.modules.pop("lfs_plugins.plugin_marketplace_panel", None)
     sys.modules.pop("lfs_plugins", None)
     state = _install_lf_stub(monkeypatch)
@@ -83,6 +85,7 @@ class _ElementStub:
         self.attributes = {}
         self.inner_rml = ""
         self.client_width = client_width
+        self.set_inner_rml_count = 0
         self.set_text_count = 0
         self.set_attribute_count = 0
         self._parent = None
@@ -110,6 +113,7 @@ class _ElementStub:
         return name in self.attributes
 
     def set_inner_rml(self, value):
+        self.set_inner_rml_count += 1
         self.inner_rml = value
 
     def parent(self):
@@ -191,7 +195,7 @@ def test_plugin_marketplace_converts_grid_width_from_pixels_to_dp(plugin_marketp
     assert panel._grid_viewport_width(doc, grid) == 600
 
 
-def test_plugin_marketplace_idle_status_and_titles_do_not_rewrite_dom(
+def test_plugin_marketplace_idle_status_does_not_rewrite_dom(
     plugin_marketplace_module,
 ):
     module, state = plugin_marketplace_module
@@ -202,24 +206,16 @@ def test_plugin_marketplace_idle_status_and_titles_do_not_rewrite_dom(
     })
     panel = module.PluginMarketplacePanel()
     status = _ElementStub()
-    cards_btn = _ElementStub()
-    list_btn = _ElementStub()
     doc = _DocStub({
         "catalog-status": status,
         "catalog-status-dot": _ElementStub(),
-        "view-cards-btn": cards_btn,
-        "view-list-btn": list_btn,
     })
 
     panel._update_catalog_status(doc, 0, True, False)
-    panel._sync_view_mode_controls(doc)
     panel._update_catalog_status(doc, 0, True, False)
-    panel._sync_view_mode_controls(doc)
 
     assert status.text == "Loading"
     assert status.set_text_count == 1
-    assert cards_btn.set_attribute_count == 1
-    assert list_btn.set_attribute_count == 1
 
 
 def test_plugin_marketplace_requests_update_on_language_generation(plugin_marketplace_module):
@@ -495,7 +491,7 @@ def test_plugin_marketplace_rediscovers_plugins_when_reopened(plugin_marketplace
     module, _state = plugin_marketplace_module
     monkeypatch.setattr(module.lf.ui, "get_current_language", lambda: "en", raising=False)
     panel = module.PluginMarketplacePanel()
-    for name in ("_subscribe_manager_callbacks", "_sync_view_mode_controls", "_subscribe_reactive_state",
+    for name in ("_subscribe_manager_callbacks", "reload_marketplace_preferences", "_subscribe_reactive_state",
                  "_ensure_loaded", "_request_model_update"):
         setattr(panel, name, lambda *_args: None)
     doc = _DocStub({})
@@ -763,7 +759,7 @@ def test_plugin_marketplace_grid_rebuild_restores_scroll_after_layout(
     assert main.scroll_top == 843.0
 
 
-def test_plugin_marketplace_renders_git_checkbox_in_both_views(plugin_marketplace_module):
+def test_plugin_marketplace_keeps_git_preference_out_of_both_views(plugin_marketplace_module):
     module, state = plugin_marketplace_module
     state.translations["plugin_marketplace.install_as_git_checkout"] = "Install as git checkout"
 
@@ -775,31 +771,18 @@ def test_plugin_marketplace_renders_git_checkbox_in_both_views(plugin_marketplac
         "name": "Sample Plugin",
         "show_install": True,
         "is_installed": False,
-        "show_git_checkout": True,
-        "git_checkout_selected": False,
     }
 
     for markup in (panel._build_card_markup(record), panel._build_list_markup(record)):
-        assert 'data-action="git-checkout"' in markup
-        assert 'class="card-git-row"' in markup or 'class="plugin-list-option-row"' in markup
-        assert "Install as git checkout" in markup
+        assert 'data-action="git-checkout"' not in markup
+        assert "Install as git checkout" not in markup
 
 
 def test_plugin_marketplace_install_uses_git_transport_when_selected(plugin_marketplace_module):
-    module, _state = plugin_marketplace_module
-
+    module, state = plugin_marketplace_module
+    state.marketplace_preferences["git_checkout"] = True
     panel = module.PluginMarketplacePanel()
     panel._git_available = True
-    checkbox = _ElementStub()
-    checkbox.attributes.update({
-        "type": "checkbox",
-        "data-action": "git-checkout",
-        "data-card-id": "sample-card",
-        "checked": "checked",
-    })
-    panel._view_mode = "list"
-    panel._on_card_change(_EventStub(target=checkbox))
-    assert panel._git_checkout_selected["sample-card"] is True
     panel._run_async = lambda _card_id, operation, _success, _error: operation(lambda _msg: None)
 
     calls = {}
@@ -832,7 +815,7 @@ def test_plugin_marketplace_install_uses_git_transport_when_selected(plugin_mark
     assert calls["transport"] == "git"
 
 
-def test_plugin_marketplace_refresh_rerenders_git_option(plugin_marketplace_module):
+def test_plugin_marketplace_refresh_updates_available_actions(plugin_marketplace_module):
     module, _state = plugin_marketplace_module
 
     panel = module.PluginMarketplacePanel()
@@ -850,8 +833,7 @@ def test_plugin_marketplace_refresh_rerenders_git_option(plugin_marketplace_modu
     panel._cached_card_ids = ["sample-card"]
     panel._cached_card_records = [{
         "card_id": "sample-card",
-        "show_git_checkout": True,
-        "git_checkout_selected": False,
+        "show_install": True,
     }]
     card = _ElementStub()
     card.inner_rml = panel._build_list_markup(panel._cached_card_records[0])
@@ -866,25 +848,27 @@ def test_plugin_marketplace_refresh_rerenders_git_option(plugin_marketplace_modu
     )
     panel._refresh_card_record(doc, "sample-card", _ManagerStub())
 
-    assert 'data-action="git-checkout"' not in card.inner_rml
+    assert 'data-action="install"' not in card.inner_rml
 
 
-def test_plugin_marketplace_list_view_marks_selected_toggle(plugin_marketplace_module):
-    module, _state = plugin_marketplace_module
-
+def test_plugin_marketplace_applies_saved_layout_changes(plugin_marketplace_module):
+    module, state = plugin_marketplace_module
+    state.marketplace_preferences["view"] = "card"
     panel = module.PluginMarketplacePanel()
-    doc = _DocStub({
-        "view-cards-btn": _ElementStub(),
-        "view-list-btn": _ElementStub(),
-    })
-
-    panel._doc = doc
-    panel._set_view_mode("list")
-
+    assert panel._view_mode == "card"
+    panel._entries_dirty = False
+    state.marketplace_preferences["view"] = "list"
+    panel.reload_marketplace_preferences()
     assert panel._view_mode == "list"
     assert panel._entries_dirty is True
-    assert doc.get_element_by_id("view-cards-btn").classes["selected"] is False
-    assert doc.get_element_by_id("view-list-btn").classes["selected"] is True
+
+
+def test_plugin_marketplace_git_preference_falls_back_without_git(plugin_marketplace_module):
+    module, state = plugin_marketplace_module
+    state.marketplace_preferences["git_checkout"] = True
+    panel = module.PluginMarketplacePanel()
+    panel._git_available = False
+    assert panel._selected_install_transport() == "archive"
 
 
 def test_plugin_marketplace_renders_list_markup(plugin_marketplace_module):
@@ -910,8 +894,6 @@ def test_plugin_marketplace_renders_list_markup(plugin_marketplace_module):
         "status_text": "Status: active",
         "summary_status_text": "Status: active",
         "status_class": "status-success",
-        "summary_marker": "●",
-        "summary_marker_class": "plugin-list-marker--local",
         "plugin_name": "sample_plugin",
         "show_install": False,
         "show_load": False,
@@ -921,8 +903,6 @@ def test_plugin_marketplace_renders_list_markup(plugin_marketplace_module):
         "show_uninstall": True,
         "show_startup": True,
         "startup_checked": True,
-        "show_git_checkout": True,
-        "git_checkout_selected": True,
     })
 
     assert 'class="plugin-list-row"' in markup
@@ -956,8 +936,6 @@ def test_plugin_marketplace_collapsed_list_row_marks_details_hidden(plugin_marke
         "is_local": False,
         "summary_status_text": "",
         "status_class": "status-muted",
-        "summary_marker": "★",
-        "summary_marker_class": "plugin-list-marker--remote",
         "show_install": True,
         "show_load": False,
         "show_unload": False,
@@ -965,7 +943,6 @@ def test_plugin_marketplace_collapsed_list_row_marks_details_hidden(plugin_marke
         "show_update": False,
         "show_uninstall": False,
         "show_startup": False,
-        "show_git_checkout": False,
     })
 
     assert 'class="plugin-list-details hidden"' in markup
@@ -1071,3 +1048,197 @@ def test_plugin_marketplace_resources_use_unified_window_language(plugin_marketp
     assert ".mp-intro > .mp-warning-note {" in theme_rcss
     assert "background-color: @{surface};" in theme_rcss
     assert "border-color: @{primary};" in theme_rcss
+
+
+@pytest.mark.parametrize("git_checkout,git_available,expected", [
+    (False, True, "archive"), (True, True, "git"), (True, False, "archive"),
+])
+def test_manual_url_install_uses_marketplace_preference(
+    plugin_marketplace_module, git_checkout, git_available, expected,
+):
+    module, state = plugin_marketplace_module
+    state.marketplace_preferences["git_checkout"] = git_checkout
+    panel = module.PluginMarketplacePanel()
+    panel._git_available = git_available
+    panel._run_async = lambda _id, operation, *_args: operation(lambda _msg: None)
+    calls = []
+    manager = SimpleNamespace(
+        install=lambda url, **kwargs: calls.append((url, kwargs["transport"])) or "sample_plugin",
+        get_state=lambda _name: module.PluginState.ACTIVE,
+    )
+    panel._install_plugin_from_url(manager, "owner/repo", "manual")
+    assert calls == [("owner/repo", expected)]
+
+
+@pytest.mark.parametrize("stars,expected", [(0, "0"), (37, "37"), (None, "—")])
+def test_marketplace_star_badges_preserve_zero_and_unknown_counts(
+    plugin_marketplace_module, stars, expected,
+):
+    from xml.etree import ElementTree
+
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    record = {
+        "card_id": "sample", "name": "Sample", "github_url": "https://github.com/owner/repo",
+        "stars": stars,
+    }
+    for markup in (panel._build_card_markup(record), panel._build_list_markup(record)):
+        root = ElementTree.fromstring(markup)
+        count = next(el for el in root.iter("span") if el.attrib.get("class") == "mp-star-count")
+        assert count.text == expected
+        icon = next(el for el in root.iter("span") if el.attrib.get("class") == "mp-star-icon")
+        assert icon.text == "★"
+    record["github_url"] = ""
+    assert panel._build_star_count_markup(record) == ""
+
+
+@pytest.mark.parametrize("sort_idx", [0, 1, 2, 3])
+def test_marketplace_only_loads_star_metadata_for_popularity_sort(plugin_marketplace_module, sort_idx):
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    calls = []
+    panel._catalog.refresh_async = lambda **kwargs: calls.append(kwargs)
+    panel._sort_idx = sort_idx
+    panel._ensure_loaded()
+    assert calls == [{"require_github_enrichment": sort_idx in (0, 1)}]
+
+
+def test_marketplace_refresh_preserves_unchanged_card_dom(plugin_marketplace_module):
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    panel._cached_entries = ["same", "changed"]
+    panel._cached_card_ids = ["same", "changed"]
+    panel._cached_card_records = [
+        {"card_id": "same", "name": "Same"},
+        {"card_id": "changed", "name": "Old"},
+    ]
+    panel._build_card_record = lambda entry, *_args: {
+        "card_id": entry, "name": "Same" if entry == "same" else "New",
+    }
+    same, changed = _ElementStub(), _ElementStub()
+    doc = _DocStub({"card-same": same, "card-changed": changed})
+    manager = SimpleNamespace(discover=lambda: [])
+    panel._refresh_all_card_records(doc, manager)
+    assert same.set_inner_rml_count == 0
+    assert changed.set_inner_rml_count == 1
+    assert "New" in changed.inner_rml
+    panel._refresh_all_card_records(doc, manager)
+    panel._refresh_card_record(doc, "changed", manager)
+    assert same.set_inner_rml_count == 0
+    assert changed.set_inner_rml_count == 1
+
+
+@pytest.mark.parametrize("bulk_refresh", [False, True])
+@pytest.mark.parametrize("explicit_expansion", [False, True])
+def test_equal_list_record_syncs_expansion_when_error_expires(
+    plugin_marketplace_module, monkeypatch, bulk_refresh, explicit_expansion,
+):
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    panel._view_mode = "list"
+    card_id = "sample-card"
+    entry = module.MarketplacePluginEntry(
+        source_url="https://github.com/owner/repo", github_url="https://github.com/owner/repo",
+        owner="owner", repo="repo", name="Sample", description="Description",
+    )
+    manager = SimpleNamespace(discover=lambda: [])
+    panel._card_ops[card_id] = module.CardOpState(
+        phase=module.CardOpPhase.ERROR, message="Failed", finished_at=10.0,
+    )
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.0)
+    if explicit_expansion:
+        panel._set_list_row_expanded(card_id, False, rerender=False)
+        panel._set_list_row_expanded(card_id, True, rerender=False)
+    record = panel._build_card_record(entry, card_id, manager, {}, {}, set())
+    panel._cached_entries = [entry]
+    panel._cached_card_ids = [card_id]
+    panel._cached_card_records = [record]
+    card, details, disclosure = _ElementStub(), _ElementStub(), _ElementStub()
+    card.set_inner_rml(panel._build_list_inner_markup(record))
+    assert 'class="plugin-list-details hidden"' not in card.inner_rml
+    details.set_class("hidden", False)
+    disclosure.set_text("▼")
+    doc = _DocStub({
+        f"card-{card_id}": card, f"details-{card_id}": details,
+        f"disclosure-{card_id}": disclosure,
+    })
+    panel._doc = doc
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.0 + module.ERROR_DISMISS_SEC + 0.1)
+    if bulk_refresh:
+        panel._refresh_all_card_records(doc, manager)
+    else:
+        panel._refresh_card_record(doc, card_id, manager)
+    assert panel._cached_card_records == [record]
+    assert panel._is_list_row_expanded(card_id) is explicit_expansion
+    assert details.is_class_set("hidden") is not explicit_expansion
+    assert disclosure.text == ("▼" if explicit_expansion else "▶")
+    assert card.set_inner_rml_count == 1
+    panel._toggle_list_row(card_id)
+    assert panel._is_list_row_expanded(card_id) is not explicit_expansion
+    assert ('class="plugin-list-details hidden"' in card.inner_rml) is explicit_expansion
+    panel._toggle_list_row(card_id)
+    assert panel._is_list_row_expanded(card_id) is explicit_expansion
+    assert ('class="plugin-list-details hidden"' in card.inner_rml) is not explicit_expansion
+
+
+def test_default_marketplace_opens_and_cache_expiry_do_not_fetch_github_metadata(plugin_marketplace_module, monkeypatch):
+    module, _ = plugin_marketplace_module
+    marketplace = import_module("lfs_plugins.marketplace")
+    now = [0.0]
+    lookups = []
+    registry_calls = []
+    manager_module = ModuleType("lfs_plugins.manager")
+    manager_module.PluginManager = SimpleNamespace(instance=lambda: SimpleNamespace(
+        search=lambda _: registry_calls.append(now[0]) or []))
+    monkeypatch.setitem(sys.modules, "lfs_plugins.manager", manager_module)
+    monkeypatch.setattr(marketplace, "_catalog_cache", None)
+    monkeypatch.setattr(marketplace.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(marketplace, "_resolve_github_entries", lambda entries: lookups.extend(entries) or entries)
+
+    class ImmediateThread:
+        def __init__(self, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(marketplace.threading, "Thread", ImmediateThread)
+    for timestamp in (0.0, 1.0, marketplace.CATALOG_CACHE_TTL_SEC + 1.0):
+        now[0] = timestamp
+        panel = module.PluginMarketplacePanel()
+        panel._catalog = marketplace.PluginMarketplaceCatalog()
+        panel._ensure_loaded()
+        assert panel._catalog.snapshot()[0]
+        assert panel._catalog.snapshot()[2]
+    assert len(registry_calls) == 2
+    assert lookups == []
+
+
+def test_panel_layout_buttons_save_preferences_and_follow_external_changes(plugin_marketplace_module, monkeypatch):
+    from unittest.mock import MagicMock
+
+    module, state = plugin_marketplace_module
+    writes = []
+
+    def set_view(value):
+        writes.append(value)
+        state.marketplace_preferences["view"] = value
+
+    monkeypatch.setattr(module.lf.ui, "set_marketplace_view", set_view, raising=False)
+    panel = module.PluginMarketplacePanel()
+    functions, events = {}, {}
+    model = MagicMock()
+    model.bind_func.side_effect = functions.__setitem__
+    model.bind_event.side_effect = events.__setitem__
+    panel.on_bind_model(SimpleNamespace(create_data_model=lambda _: model))
+    for event, expected in (("view_cards", "card"), ("view_list", "list")):
+        events[event](None, None, None)
+        assert panel._view_mode == expected
+        assert state.marketplace_preferences["view"] == expected
+        assert functions["view_is_card"]() == (expected == "card")
+        assert functions["view_is_list"]() == (expected == "list")
+    assert writes == ["card", "list"]
+    state.marketplace_preferences["view"] = "card"
+    panel.reload_marketplace_preferences()
+    assert functions["view_is_card"]()
+    assert writes == ["card", "list"]

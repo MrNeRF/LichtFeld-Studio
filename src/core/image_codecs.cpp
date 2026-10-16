@@ -7,6 +7,7 @@
 #include "image_heif.hpp"
 
 #include "core/color_transfer.h"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 
 #include <jpeglib.h>
@@ -57,7 +58,7 @@ namespace lfs::core::image_codecs {
         }
 
         bool read_file(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error) {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            std::ifstream file(native_fs::native_path(path), std::ios::binary | std::ios::ate);
             if (!file) {
                 error = "Could not open file " + path_to_utf8(path);
                 return false;
@@ -79,7 +80,7 @@ namespace lfs::core::image_codecs {
 
         bool read_prefix(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error,
                          const std::size_t limit = 32) {
-            std::ifstream file(path, std::ios::binary);
+            std::ifstream file(native_fs::native_path(path), std::ios::binary);
             if (!file) {
                 error = "Could not open file " + path_to_utf8(path);
                 return false;
@@ -155,21 +156,11 @@ namespace lfs::core::image_codecs {
         }
 
         std::FILE* open_binary_file(const std::filesystem::path& path) {
-#ifdef _WIN32
-            return _wfopen(path.c_str(), L"rb");
-#else
-            const auto path_utf8 = path_to_utf8(path);
-            return std::fopen(path_utf8.c_str(), "rb");
-#endif
+            return open_file(path, "rb");
         }
 
         std::FILE* open_output_file(const std::filesystem::path& path) {
-#ifdef _WIN32
-            return _wfopen(path.c_str(), L"wb");
-#else
-            const auto path_utf8 = path_to_utf8(path);
-            return std::fopen(path_utf8.c_str(), "wb");
-#endif
+            return open_file(path, "wb");
         }
 
         void* allocate_target(DecodeTarget& target, const std::size_t bytes, std::string& error) {
@@ -590,7 +581,7 @@ namespace lfs::core::image_codecs {
         TIFF* open_tiff(const std::filesystem::path& path, const char* mode, std::string& error) {
             install_tiff_quiet_handlers();
 #ifdef _WIN32
-            TIFF* tiff = TIFFOpenW(path.c_str(), mode);
+            TIFF* tiff = TIFFOpenW(native_fs::native_path(path).c_str(), mode);
 #else
             const auto path_utf8 = path_to_utf8(path);
             TIFF* tiff = TIFFOpen(path_utf8.c_str(), mode);
@@ -1754,12 +1745,12 @@ namespace lfs::core::image_codecs {
             return result;
         }
         std::error_code source_error;
-        if (std::filesystem::is_directory(path, source_error)) {
+        if (native_fs::is_directory(path, source_error)) {
             result.status = MetadataStatus::IoError;
             result.diagnostic = "Metadata source is a directory";
             return result;
         }
-        std::ifstream input(path, std::ios::binary);
+        std::ifstream input(native_fs::native_path(path), std::ios::binary);
         if (!input) {
             result.status = MetadataStatus::IoError;
             result.diagnostic = "Cannot open metadata source";

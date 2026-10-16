@@ -9,6 +9,7 @@
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "io/error.hpp"
+#include "io/export_progress.hpp"
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -23,9 +24,6 @@ namespace lfs::io {
 
     using lfs::core::PointCloud;
     using lfs::core::SplatData;
-
-    // Progress callback for export operations (returns false to cancel)
-    using ExportProgressCallback = std::function<bool(float progress, const std::string& stage)>;
 
     // ============================================================================
     // PLY Export

@@ -153,6 +153,32 @@ namespace {
         EXPECT_FALSE(PropertiesTabPickerTestAccess::tooltipPending(host));
     }
 
+    // Fails if the help that was pending when the picker opened shows over its list.
+    TEST_F(RightPanelTabPickerTest, ClickOpeningThePickerDropsItsPendingHelp) {
+        PropertiesTabPickerTestAccess::sync(host, tabs({"A", "B"}), "A");
+        auto* const picker = this->picker();
+        ASSERT_NE(picker, nullptr);
+        picker->SetAttribute("title", "All panels");
+        context->Update();
+        PropertiesTabPickerTestAccess::coverPointer(host);
+        PanelInputState input;
+        const auto position = picker->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = picker->GetBox().GetSize(Rml::BoxArea::Border);
+        input.mouse_x = position.x + size.x * 0.5f;
+        input.mouse_y = position.y + size.y * 0.5f;
+        host.processInput(input, true);
+        ASSERT_TRUE(PropertiesTabPickerTestAccess::tooltipPending(host));
+        input.mouse_clicked[0] = true;
+        input.mouse_down[0] = true;
+        host.processInput(input, true);
+        input.mouse_clicked[0] = false;
+        input.mouse_down[0] = false;
+        input.mouse_released[0] = true;
+        host.processInput(input, true);
+        ASSERT_TRUE(picker->IsSelectBoxVisible());
+        EXPECT_FALSE(PropertiesTabPickerTestAccess::tooltipPending(host));
+    }
+
     TEST_F(RightPanelTabPickerTest, RemovingEarlierTabPreservesActiveSelection) {
         for (const std::string active : {"C", "D"}) {
             PropertiesTabPickerTestAccess::sync(host, tabs({"A", "B", "C", "D"}), active);

@@ -9,6 +9,8 @@
 #include "render_pass.hpp"
 #include "scene_renderer.hpp"
 #include "viewport_draw_types.hpp"
+#include <optional>
+#include <vector>
 
 namespace lfs::vis {
 
@@ -55,8 +57,16 @@ namespace lfs::vis {
         const RenderSettings& settings,
         const glm::vec3& camera_backward);
 
-    // Visible splat node shown in a PLY-comparison panel, or null when the
-    // scene has fewer than two visible splat slots.
+    struct PlyComparisonNode {
+        const core::SceneNode* node = nullptr;
+        // Combined-model slot of a splat node; empty for a mesh, which the mesh pass draws.
+        std::optional<size_t> splat_slot;
+        // Evaluated mesh the mesh pass draws for a mesh node; null for a splat node.
+        const core::MeshData* mesh = nullptr;
+    };
+
+    // Nodes the PLY comparison pairs, in pair order: visible splat slots, then visible meshes.
+    [[nodiscard]] LFS_VIS_API std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene);
 
     // Scope scene/crop/ellipsoid/selection overlay state to one visible splat node so
     // a per-node comparison render can use identity transform indices.

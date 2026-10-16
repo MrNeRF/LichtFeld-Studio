@@ -153,16 +153,16 @@ namespace lfs::io {
         std::error_code ec;
         auto check_path = path;
 
-        if (!std::filesystem::is_directory(path, ec)) {
+        if (!lfs::core::native_fs::is_directory(path, ec)) {
             check_path = path.parent_path();
             if (check_path.empty()) {
                 check_path = std::filesystem::current_path(ec);
             }
         }
 
-        if (!std::filesystem::exists(check_path, ec)) {
+        if (!lfs::core::native_fs::exists(check_path, ec)) {
             auto parent = std::filesystem::absolute(check_path, ec);
-            while (!parent.empty() && !std::filesystem::exists(parent, ec)) {
+            while (!parent.empty() && !lfs::core::native_fs::exists(parent, ec)) {
                 parent = parent.parent_path();
             }
             if (parent.empty()) {
@@ -172,7 +172,7 @@ namespace lfs::io {
             check_path = parent;
         }
 
-        const auto space_info = std::filesystem::space(check_path, ec);
+        const auto space_info = lfs::core::native_fs::space(check_path, ec);
         if (ec) {
             return make_error(ErrorCode::PERMISSION_DENIED,
                               std::format("Cannot check disk space: {}", ec.message()), check_path);
@@ -200,8 +200,8 @@ namespace lfs::io {
     [[nodiscard]] inline Result<void> verify_writable(const std::filesystem::path& path) {
         std::error_code ec;
 
-        if (std::filesystem::exists(path, ec)) {
-            const auto perms = std::filesystem::status(path, ec).permissions();
+        if (lfs::core::native_fs::exists(path, ec)) {
+            const auto perms = lfs::core::native_fs::status(path, ec).permissions();
             if (ec) {
                 return make_error(ErrorCode::PERMISSION_DENIED,
                                   std::format("Cannot check permissions: {}", ec.message()), path);
@@ -217,8 +217,8 @@ namespace lfs::io {
             parent = std::filesystem::current_path(ec);
         }
 
-        if (!std::filesystem::exists(parent, ec)) {
-            if (!std::filesystem::create_directories(parent, ec)) {
+        if (!lfs::core::native_fs::exists(parent, ec)) {
+            if (!lfs::core::native_fs::create_directories(parent, ec)) {
                 return make_error(ErrorCode::PERMISSION_DENIED,
                                   std::format("Cannot create directory: {}", ec.message()), parent);
             }

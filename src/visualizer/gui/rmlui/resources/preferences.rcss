@@ -379,3 +379,11 @@ body.floating-panel {
 .preferences-project-folder-details { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; }
 .preferences-project-folder-details > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preferences-project-folder-actions { display: flex; gap: 8dp; padding: 8dp 0; }
+
+/* Keep intrinsic flex sizing: percentage max-width collapses in this layout. */
+.preferences-apply-defaults {
+    box-sizing: border-box;
+    min-width: 0;
+    white-space: normal;
+    word-break: break-word;
+}

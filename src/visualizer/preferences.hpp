@@ -136,6 +136,12 @@ namespace lfs::vis {
         // Ignore a saved backend missing from this build for this run before startup freezes the choice.
         [[nodiscard]] TensorPreferenceState sanitizeTensorBackend();
 
+        void setMarketplaceView(std::string_view value);
+        [[nodiscard]] std::string marketplaceView();
+        void setMarketplaceGitCheckout(bool enabled);
+        [[nodiscard]] bool marketplaceGitCheckout();
+        void resetMarketplacePreferences();
+
         void setProjectManagerDefaultView(std::string_view value);
         [[nodiscard]] std::string projectManagerDefaultView();
         void setOpenProjectManagerAtStartup(bool enabled);

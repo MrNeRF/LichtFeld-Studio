@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/native_fs.hpp"
+
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -380,7 +382,7 @@ namespace lfs::core {
             return nullptr;
         }
         // Preserve fopen's read/write sharing without the deprecated CRT API.
-        return _wfsopen(path.c_str(), wide_mode.c_str(), _SH_DENYNO);
+        return _wfsopen(native_fs::native_path(path).c_str(), wide_mode.c_str(), _SH_DENYNO);
 #else
         return std::fopen(path.c_str(), mode);
 #endif
@@ -402,14 +404,7 @@ namespace lfs::core {
         const std::filesystem::path& path,
         std::ios_base::openmode mode,
         std::ofstream& stream) {
-#ifdef _WIN32
-        // On Windows, explicitly use wstring to open with Unicode support
-        // This ensures we bypass any narrow string conversion issues
-        stream.open(path.wstring(), mode);
-#else
-        // On Linux/Mac, standard ofstream works with UTF-8 paths
-        stream.open(path, mode);
-#endif
+        stream.open(native_fs::native_path(path), mode);
         return stream.is_open();
     }
 
@@ -438,13 +433,7 @@ namespace lfs::core {
         const std::filesystem::path& path,
         std::ios_base::openmode mode,
         std::ifstream& stream) {
-#ifdef _WIN32
-        // On Windows, explicitly use wstring to open with Unicode support
-        stream.open(path.wstring(), mode);
-#else
-        // On Linux/Mac, standard ifstream works with UTF-8 paths
-        stream.open(path, mode);
-#endif
+        stream.open(native_fs::native_path(path), mode);
         return stream.is_open();
     }
 
@@ -470,8 +459,8 @@ namespace lfs::core {
      */
     inline bool reveal_in_file_manager(const std::filesystem::path& path) {
         std::error_code ec;
-        const std::filesystem::path absolute = std::filesystem::weakly_canonical(path, ec);
-        if (ec || absolute.empty() || !std::filesystem::exists(absolute, ec))
+        const std::filesystem::path absolute = native_fs::weakly_canonical(path, ec);
+        if (ec || absolute.empty() || !native_fs::exists(absolute, ec))
             return false;
 
 #ifdef _WIN32

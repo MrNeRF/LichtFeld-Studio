@@ -1487,6 +1487,16 @@ namespace lfs::vis::project {
         collectUnsupportedSessionSettings(
             const Json& gui, const Json& view, const Json& sequencer);
 
+        bool namesPluginItem(const PreparedGuiSessionRestore::UnsupportedSetting& setting) {
+            static constexpr std::array<std::string_view, 3> registry_paths{
+                "tools.active_tool_id",
+                "panel_registry.active_tabs.main_panel",
+                "fixed_arrangement.bottom_dock_active_tab"};
+            const std::string_view value = setting.value;
+            return std::ranges::find(registry_paths, setting.path) != registry_paths.end() &&
+                   !value.starts_with("builtin.") && !value.starts_with("lfs.") && !value.starts_with("native.");
+        }
+
     } // namespace
 
     lfs::Result<PreparedGuiSessionRestore>
@@ -1557,6 +1567,9 @@ namespace lfs::vis::project {
         prepared.unsupported_settings =
             collectUnsupportedSessionSettings(
                 *gui, *view, *sequencer);
+        // A plugin's tool or panel is missing whenever the plugin is not loaded,
+        // which says nothing about a newer version. Saving still keeps the value.
+        std::erase_if(prepared.unsupported_settings, namesPluginItem);
         if (references) {
             const auto env_uuid_json =
                 prepared.chapters.view.dom().get_json(
@@ -2060,11 +2073,6 @@ namespace lfs::vis::project {
                 {"VIEW", "render_settings.depth_visualization_mode", integers({0, 1}), static_cast<int>(Depth::Palette)},
                 {"VIEW", "tools.selection_submode", string_parser([](const std::string_view value) {
                      return selection_submode_from_name(value).has_value();
-                 }),
-                 "centers"},
-                {"VIEW", "tools.active_submode_id", string_parser([](const std::string_view value) {
-                     // Saved as-is from the tool registry, which is "" when no submode is active.
-                     return value.empty() || selection_submode_from_name(value).has_value();
                  }),
                  "centers"},
                 {"VIEW", "tools.active_tool_id", string_parser([](const std::string_view value) {

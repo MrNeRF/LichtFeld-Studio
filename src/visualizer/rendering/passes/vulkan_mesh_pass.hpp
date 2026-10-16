@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -58,9 +59,11 @@ namespace lfs::vis {
         // Record draw commands into an already-active dynamic-rendering pass.
         // Caller must have transitioned the color attachment to
         // VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL and bound a depth attachment.
+        // `scissor` clips inside viewport_rect; it defaults to all of it.
         void record(VkCommandBuffer command_buffer,
                     VkRect2D viewport_rect,
-                    const VulkanMeshPassParams& params);
+                    const VulkanMeshPassParams& params,
+                    std::optional<VkRect2D> scissor = std::nullopt);
 
         void discardImport(uint64_t mesh_id);
         void shutdown();

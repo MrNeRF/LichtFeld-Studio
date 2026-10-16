@@ -111,6 +111,8 @@ namespace lfs::vis {
         // Shadow map: depth-only pre-pass per mesh, then sampler2DShadow read in main shader.
         bool shadow_enabled = false;
         int shadow_map_resolution = 2048;
+        // Bit i set: drawn in viewport panel i (split view sides compare different meshes).
+        std::uint32_t panel_mask = ~0u;
     };
 
     struct ViewportMeshPanel {
@@ -122,6 +124,8 @@ namespace lfs::vis {
         glm::vec3 camera_position{0.0f};
         glm::vec3 camera_backward{0.0f, 0.0f, 1.0f};
         bool equirectangular = false;
+        // The projection spans the whole viewport; the panel range only clips.
+        bool full_viewport_projection = false;
     };
 
     struct ViewportMeshPassDesc {

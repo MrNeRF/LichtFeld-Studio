@@ -75,6 +75,9 @@ PRIVATE_SEAMS = {
     "src/core/cuda/diagnostics_compile_check.cu": {
         ("*", "*"): "Compile-only probe checks the private tensor/CUDA contract.",
     },
+    "tests/cuda_template_stub_fixture.cu": {
+        ("*", "*"): "Fixture instantiates a private CUDA broadcast kernel to check per-TU template stubs.",
+    },
     "src/core/cuda/lanczos_resize/lanczos_resize.cu": {
         ("private-header", "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"):
             "converted by lane F2b",
