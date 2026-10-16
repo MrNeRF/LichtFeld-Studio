@@ -676,7 +676,7 @@ namespace lfs::io {
                 (!params.skip_blob_cache && load_cached_jpeg_blob(make_cache_key(path, params))))
                 return std::nullopt;
         }
-        if (params.undistort || decodes_float(path, params))
+        if (decodes_float(path, params) || (params.undistort && decodes_16bit(params)))
             return HostDecodeKind::Float32;
         return decodes_16bit(params) ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
     }

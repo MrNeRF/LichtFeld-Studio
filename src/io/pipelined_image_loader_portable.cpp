@@ -243,7 +243,7 @@ namespace lfs::io {
         if (!params.undistort && !float_decode && !encoded)
             return load_rgb_decoded_ahead(path, params, decodes_16bit(params));
         Tensor host;
-        if (params.undistort || float_decode) {
+        if (float_decode || (params.undistort && decodes_16bit(params))) {
             auto ahead = take_decoded_ahead(path, HostDecodeKind::Float32);
             auto [data, width, height, channels] = ahead
                                                        ? std::tuple{static_cast<float*>(ahead->data.release()), ahead->width, ahead->height, ahead->channels}
@@ -267,11 +267,15 @@ namespace lfs::io {
                        .permute({2, 0, 1})
                        .contiguous();
         } else {
+            // The warp reads 8-bit sources directly; undistortion needs the full-resolution source.
+            const int resize_factor = params.undistort ? 1 : params.resize_factor;
+            const int max_width = params.undistort ? 0 : params.max_width;
+            auto ahead = params.undistort ? take_decoded_ahead(path, HostDecodeKind::UInt8) : std::nullopt;
             auto [data, width, height, channels] =
-                encoded != nullptr
-                    ? lfs::core::load_image_from_memory(encoded->data(), encoded->size(), params.resize_factor,
-                                                        params.max_width)
-                    : lfs::core::load_image(path, params.resize_factor, params.max_width);
+                ahead ? std::tuple{static_cast<unsigned char*>(ahead->data.release()), ahead->width, ahead->height, ahead->channels}
+                : encoded != nullptr
+                    ? lfs::core::load_image_from_memory(encoded->data(), encoded->size(), resize_factor, max_width)
+                    : lfs::core::load_image(path, resize_factor, max_width);
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
             // Planar bytes avoid a second device image and a per-step GPU transpose.
@@ -306,8 +310,6 @@ namespace lfs::io {
 
         if (params.undistort) {
             const bool restore_uint8 = params.output_uint8;
-            if (image.dtype() == DataType::UInt8)
-                image = image.to(DataType::Float32).div(255.0f);
             image = lfs::core::undistort_image(
                 image.contiguous(), undistort_for(*params.undistort, image, params.resize_factor, params.max_width), nullptr);
             if (restore_uint8)

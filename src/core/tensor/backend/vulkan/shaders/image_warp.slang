@@ -155,9 +155,9 @@ typedef uint64_t ImageSource;
 float read_image_sample(ImageSource source, int index) {
     if ((WARP_MODE & 256) != 0) {
 #ifdef LFS_WARP_GPU_PROGRAM
-        return float(uint(source[index])) / 255.0f;
+        return float(uint(source[index])) * (1.0f / 255.0f);
 #else
-        return float(loadByte(source, uint64_t(index))) / 255.0f;
+        return float(loadByte(source, uint64_t(index))) * (1.0f / 255.0f);
 #endif
     }
     return ((Ptr<float, Access.Read>)source)[index];
