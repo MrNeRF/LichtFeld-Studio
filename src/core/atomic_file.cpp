@@ -96,7 +96,8 @@ namespace lfs::core {
 #endif
         Status commit(Temporary& temporary, const std::filesystem::path& target, bool overwrite) {
 #ifdef _WIN32
-            if (!MoveFileExW(temporary.path.c_str(), target.c_str(),
+            if (!MoveFileExW(lfs::core::native_fs::native_path(temporary.path).c_str(),
+                             lfs::core::native_fs::native_path(target).c_str(),
                              MOVEFILE_WRITE_THROUGH | (overwrite ? MOVEFILE_REPLACE_EXISTING : 0)))
                 return Status::failure(ioError(target, "commit", static_cast<int>(GetLastError()), std::system_category()));
             temporary.owned = false;
@@ -163,7 +164,7 @@ namespace lfs::core {
                 temporary.path += std::format(".tmp-{}-{}", std::chrono::steady_clock::now().time_since_epoch().count(), sequence.fetch_add(1, std::memory_order_relaxed));
 #ifdef _WIN32
                 int fd = -1;
-                const auto native = _wsopen_s(&fd, temporary.path.c_str(), _O_RDWR | _O_CREAT | _O_EXCL | _O_BINARY, _SH_DENYRW, _S_IREAD | _S_IWRITE);
+                const auto native = _wsopen_s(&fd, lfs::core::native_fs::native_path(temporary.path).c_str(), _O_RDWR | _O_CREAT | _O_EXCL | _O_BINARY, _SH_DENYRW, _S_IREAD | _S_IWRITE);
                 if (native)
                     errno = native;
 #else

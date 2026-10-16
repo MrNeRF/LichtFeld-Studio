@@ -739,6 +739,38 @@ namespace {
         round_trip_images_around_the_extended_path_switch(temporary.path);
     }
 
+    // Fails on Windows if atomic publishing hands the OS a plain path: its temporary name is longer
+    // than the target, so a write fails from about 230 units on.
+    TEST(ProductionCodecs, AtomicWritersWorkOnBothSidesOfTheExtendedPathSwitch) {
+        using namespace lfs::test::long_paths;
+        LongPathDirectory temporary;
+        constexpr int width = 7, height = 5, channels = 3;
+        std::vector<std::uint8_t> pixels(std::size_t(width) * height * channels);
+        for (std::size_t i = 0; i < pixels.size(); ++i)
+            pixels[i] = static_cast<std::uint8_t>(i * 29);
+        std::vector<std::uint8_t> samples(pixels.size() * 2);
+        for (std::size_t i = 0; i < samples.size(); ++i)
+            samples[i] = static_cast<std::uint8_t>(i * 13);
+        for (const auto length : kLengthsAroundExtendedPathSwitch) {
+            for (const std::string extension : {".png", ".tif"}) {
+                SCOPED_TRACE(::testing::Message() << length << extension);
+                const auto path = with_native_length(temporary.path / unicode_folder() / std::to_string(length), length,
+                                                     lfs::core::utf8_to_path("bild 🙂" + extension));
+                ASSERT_EQ(path.native().size(), length);
+                const auto written =
+                    extension == ".png"
+                        ? codec::write_image_u8(path, pixels.data(), width, height, channels, 95, std::nullopt, {})
+                        : codec::write_tiff_u16(path, samples, width, height, channels,
+                                                std::size_t(width) * channels * 2, std::nullopt, {});
+                ASSERT_TRUE(written) << written.error().detail();
+                codec::Image decoded;
+                std::string error;
+                ASSERT_TRUE(codec::decode(path, decoded, error)) << error;
+                EXPECT_EQ(decoded.data, extension == ".png" ? pixels : samples);
+            }
+        }
+    }
+
 #ifdef _WIN32
     TEST(ProductionCodecs, WritersAndReadersWorkThroughANetworkShare) {
         const auto share = lfs::test::long_paths::network_share();
