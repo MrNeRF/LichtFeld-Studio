@@ -581,8 +581,14 @@ namespace lfs::core::image_codecs {
             std::vsnprintf(message.data(), message.size(), format, args);
             if (!error.empty())
                 error += "; ";
-            if (module && *module)
-                error += std::string(module) + ": ";
+            if (module && *module) {
+                // libtiff names the file it was given; show the caller's spelling, not the extended one.
+                std::string_view name = module;
+                if (name.starts_with(R"(\\?\UNC\)"))
+                    error += R"(\\)" + std::string(name.substr(8)) + ": ";
+                else
+                    error += std::string(name.starts_with(R"(\\?\)") ? name.substr(4) : name) + ": ";
+            }
             error += message.data();
             return 1;
         }

@@ -355,6 +355,11 @@ if(MSVC)
     unset(_lfs_language)
 endif()
 
+# native_fs relies on MSVC's lexically_relative fix for \\?\ paths (LWG 3699, VS 2022 17.4).
+if(MSVC AND MSVC_VERSION LESS 1934)
+    message(FATAL_ERROR "LichtFeld Studio needs Visual Studio 2022 17.4 or newer, found MSVC ${MSVC_VERSION}")
+endif()
+
 # Minimum SM for PTX-only (75=Turing, 80=Ampere, 86=GA102, 89=Ada, 90=Hopper)
 set(BUILD_CUDA_MIN_SM "75" CACHE STRING "Minimum SM for PTX-only builds")
 

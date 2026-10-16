@@ -145,9 +145,14 @@ namespace lfs::core::native_fs {
     }
 
     // An entry found by iterating traversal_path(root), spelled under `root` as the caller gave it.
-    [[nodiscard]] inline std::filesystem::path entry_path(const std::filesystem::path& root,
+    [[nodiscard]] inline std::filesystem::path entry_path([[maybe_unused]] const std::filesystem::path& root,
                                                           const std::filesystem::path& entry) {
+#ifdef _WIN32
         return root / entry.lexically_relative(traversal_path(root));
+#else
+        // POSIX walks the root unchanged, so the entry already is spelled under it.
+        return entry;
+#endif
     }
 
 #ifdef _WIN32
@@ -170,6 +175,11 @@ namespace lfs::core::native_fs {
         auto native = native_path(path);
 #ifdef _WIN32
         if (native.native().starts_with(L"\\\\?\\")) {
+            // An existing path resolves directly. Only a missing tail needs the walk.
+            if (auto resolved = std::filesystem::canonical(native, error); !error) {
+                return display_path(resolved.lexically_normal());
+            }
+            error.clear();
             const auto root = extended_root_length(native.native());
             std::filesystem::path missing;
             while (!std::filesystem::exists(native, error)) {
@@ -237,15 +247,31 @@ namespace lfs::core::native_fs {
     }
 
     // Throwing queries on an entry found by iterating traversal_path(root), reported under the caller's root.
-    inline bool entry_is_regular_file(const std::filesystem::path& root, const std::filesystem::directory_entry& entry) {
-        return rethrow_logical("is_regular_file", entry_path(root, entry.path()), nullptr,
-                               [&] { return entry.is_regular_file(); });
+    // The caller's spelling is only built for an error: walks call these once per entry.
+    inline bool entry_is_regular_file([[maybe_unused]] const std::filesystem::path& root,
+                                      const std::filesystem::directory_entry& entry) {
+#ifdef _WIN32
+        try {
+            return entry.is_regular_file();
+        } catch (const std::filesystem::filesystem_error& error) {
+            throw std::filesystem::filesystem_error("is_regular_file", entry_path(root, entry.path()), error.code());
+        }
+#else
+        return entry.is_regular_file();
+#endif
     }
 
-    inline std::filesystem::file_status entry_symlink_status(const std::filesystem::path& root,
+    inline std::filesystem::file_status entry_symlink_status([[maybe_unused]] const std::filesystem::path& root,
                                                              const std::filesystem::directory_entry& entry) {
-        return rethrow_logical("symlink_status", entry_path(root, entry.path()), nullptr,
-                               [&] { return entry.symlink_status(); });
+#ifdef _WIN32
+        try {
+            return entry.symlink_status();
+        } catch (const std::filesystem::filesystem_error& error) {
+            throw std::filesystem::filesystem_error("symlink_status", entry_path(root, entry.path()), error.code());
+        }
+#else
+        return entry.symlink_status();
+#endif
     }
 
     template <typename... Args>

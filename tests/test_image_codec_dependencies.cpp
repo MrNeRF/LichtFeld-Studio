@@ -124,6 +124,24 @@ namespace {
                 EXPECT_EQ(image.data, pixels);
         }
     }
+    TEST(ProductionImagePaths, TiffErrorsNameTheCallersLongPath) {
+        namespace fs = lfs::core::native_fs;
+        TemporaryDirectory temporary;
+        auto directory = temporary.path;
+        for (int i = 0; i < 12; ++i)
+            directory /= fs::path(u8"directory_\u6e2c\u8a66_01234567890123456789");
+        fs::create_directories(directory);
+        const auto path = directory / "corrupt.tif";
+        {
+            std::ofstream file(fs::native_path(path), std::ios::binary);
+            file << "II*" << '\0' << "not a tiff directory";
+        }
+        codec::Image image;
+        std::string error;
+        ASSERT_FALSE(codec::decode(path, image, error));
+        EXPECT_EQ(error.find(R"(\\?\)"), std::string::npos) << error;
+    }
+
     TEST(ProductionPng, AllChannelsAndDepthsRoundTripWithCommentsAndUnicodePaths) {
         TemporaryDirectory temporary;
         for (int channels : {1, 2, 3, 4}) {
