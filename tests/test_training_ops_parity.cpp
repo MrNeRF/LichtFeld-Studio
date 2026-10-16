@@ -3018,12 +3018,14 @@ namespace {
         return root;
     }
 
-    std::vector<float> train_synthetic(const std::filesystem::path& dataset, const std::filesystem::path& output, std::string& error, bool evaluate = false) {
+    std::vector<float> train_synthetic(const std::filesystem::path& dataset, const std::filesystem::path& output, std::string& error, bool evaluate = false,
+                                       lfs::core::param::RasterBackendId raster_backend = lfs::core::param::RasterBackendId::ThreeDGS) {
         lfs::core::param::TrainingParameters params;
         params.dataset.data_path = dataset;
         params.dataset.images = "images";
         params.dataset.output_path = output;
         params.optimization.iterations = 200;
+        params.optimization.set_raster_backend(raster_backend);
         params.optimization.strategy = "mcmc";
         params.optimization.sh_degree = 0;
         params.optimization.headless = true;
@@ -3252,6 +3254,32 @@ namespace {
                 }
             }
         }
+    }
+
+    TEST(TrainingVulkanOps, ThreeDGUTCompletesSyntheticTraining) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const auto previous = lfs::core::default_gpu_backend();
+        lfs::test::reset_gpu_backend_for_testing();
+        ASSERT_TRUE(lfs::core::set_default_gpu_backend(GpuBackend::Vulkan));
+        {
+            lfs::core::GpuBackendScope scope(GpuBackend::Vulkan);
+            const auto dataset = write_synthetic_scene();
+            ASSERT_FALSE(dataset.empty());
+            std::string error;
+            const auto losses = train_synthetic(dataset, dataset / "three_dgut", error, false,
+                                                lfs::core::param::RasterBackendId::ThreeDGUT);
+            EXPECT_TRUE(error.empty()) << error;
+            ASSERT_EQ(losses.size(), 200u);
+            for (const auto loss : losses)
+                EXPECT_TRUE(std::isfinite(loss));
+            // The trainer publishes loss at reporting boundaries; the initial
+            // PostStep entries may still contain the initial zero value.
+            EXPECT_GT(losses[99], 0.f);
+            EXPECT_LT(losses.back(), losses[99]);
+        }
+        lfs::test::reset_gpu_backend_for_testing();
+        EXPECT_TRUE(lfs::core::set_default_gpu_backend(previous));
     }
 
     TEST(TrainingVulkanOps, TrainingResumesAfterEvaluationReleasesWorkspaces) {

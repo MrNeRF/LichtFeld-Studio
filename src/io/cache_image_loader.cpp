@@ -114,6 +114,72 @@ namespace lfs::io {
         }
     }
 
+    lfs::core::Tensor CacheLoader::find_cpu_image(const std::string& key) {
+        if (!use_cpu_memory_)
+            return {};
+        std::lock_guard lock(cpu_cache_mutex_);
+        if (auto it = cpu_cache_.find(key); it != cpu_cache_.end()) {
+            it->second.last_access = std::chrono::steady_clock::now();
+            return *it->second.tensor;
+        }
+        return {};
+    }
+
+    bool CacheLoader::store_cpu_image(std::string key, lfs::core::Tensor pixels, const std::size_t budget) {
+        if (!use_cpu_memory_ || !pixels.is_valid() || pixels.ndim() != 3 ||
+            pixels.device() != lfs::core::Device::CPU || pixels.bytes() > budget)
+            return false;
+        std::lock_guard lock(cpu_cache_mutex_);
+        if (!has_sufficient_memory(pixels.bytes()))
+            return false;
+        if (cpu_cache_.contains(key))
+            return true;
+        while (!cpu_cache_.empty() && get_cpu_cache_size() > budget - pixels.bytes()) {
+            const auto oldest = std::min_element(cpu_cache_.begin(), cpu_cache_.end(),
+                                                 [](const auto& a, const auto& b) { return a.second.last_access < b.second.last_access; });
+            cpu_cache_.erase(oldest);
+        }
+        evict_if_needed(pixels.bytes());
+        const auto bytes = pixels.bytes();
+        const int channels = static_cast<int>(pixels.shape()[0]);
+        const int height = static_cast<int>(pixels.shape()[1]);
+        const int width = static_cast<int>(pixels.shape()[2]);
+        cpu_cache_.emplace(std::move(key), CachedImageData{
+                                               .tensor = std::make_shared<lfs::core::Tensor>(std::move(pixels)),
+                                               .width = width,
+                                               .height = height,
+                                               .channels = channels,
+                                               .size_bytes = bytes,
+                                               .last_access = std::chrono::steady_clock::now()});
+        return true;
+    }
+
+    std::size_t CacheLoader::release_cpu_images(const std::string& prefix, const std::size_t bytes) {
+        std::lock_guard lock(cpu_cache_mutex_);
+        std::size_t released = 0;
+        while (released < bytes) {
+            auto oldest = cpu_cache_.end();
+            for (auto it = cpu_cache_.begin(); it != cpu_cache_.end(); ++it)
+                if (it->first.starts_with(prefix) &&
+                    (oldest == cpu_cache_.end() || it->second.last_access < oldest->second.last_access))
+                    oldest = it;
+            if (oldest == cpu_cache_.end())
+                break;
+            released += oldest->second.size_bytes;
+            cpu_cache_.erase(oldest);
+        }
+        return released;
+    }
+
+    std::size_t CacheLoader::cpu_image_bytes(const std::string& prefix) {
+        std::lock_guard lock(cpu_cache_mutex_);
+        std::size_t bytes = 0;
+        for (const auto& [key, image] : cpu_cache_)
+            if (key.starts_with(prefix))
+                bytes += image.size_bytes;
+        return bytes;
+    }
+
     bool CacheLoader::has_sufficient_memory(std::size_t required_bytes) const {
         const std::size_t available = get_available_physical_memory();
         const std::size_t total = get_total_physical_memory();

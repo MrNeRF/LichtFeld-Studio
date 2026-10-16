@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -207,8 +208,33 @@ namespace lfs::io {
         const LoadParams& params,
         lfs::core::TensorUpload& upload,
         const std::vector<uint8_t>* const encoded) const {
-        // Like the CUDA path, only encoded bytes are cached; every request
-        // decodes, and every consumer gets a new asynchronously uploaded image.
+        // Preserve the exact prepared pixels of expensive portable warps in host
+        // memory using CacheLoader's existing CPU cache and memory policy.
+        // Each consumer still owns a fresh asynchronous device upload.
+        const bool prepared_backend = config_.backend == lfs::core::GpuBackend::Vulkan ||
+                                      config_.backend == lfs::core::GpuBackend::Metal;
+        std::string prepared_key;
+        const size_t prepared_budget = prepared_backend && params.undistort &&
+                                               CacheLoader::getInstance(true).cpu_image_cache_enabled()
+                                           ? std::min({config_.max_cache_bytes / 2,
+                                                       get_total_physical_memory() / 8,
+                                                       size_t{16} * 1024 * 1024 * 1024})
+                                           : 0;
+        if (prepared_backend && params.undistort &&
+            !params.skip_blob_cache && !params.masked_fill && prepared_budget) {
+            std::error_code ec;
+            const auto stamp = std::filesystem::last_write_time(path, ec);
+            if (!ec) {
+                const auto bytes = std::filesystem::file_size(path, ec);
+                if (!ec)
+                    prepared_key = prepared_cpu_cache_prefix() + make_cache_key(path, params) + ":prepared:" +
+                                   std::to_string(params.output_uint8) + ":" +
+                                   std::to_string(static_cast<int64_t>(stamp.time_since_epoch().count())) + ":" + std::to_string(bytes);
+            }
+            const Tensor cached = CacheLoader::getInstance(true).find_cpu_image(prepared_key);
+            if (cached.is_valid())
+                return to_device(upload, cached);
+        }
         {
             std::lock_guard stats_lock(stats_mutex_);
             ++stats_.cpu_decode_calls;
@@ -251,6 +277,18 @@ namespace lfs::io {
             // Planar bytes avoid a second device image and a per-step GPU transpose.
             host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
         }
+        std::unique_lock<std::mutex> large_prepare_lock;
+        constexpr size_t LARGE_PORTABLE_SOURCE_BYTES = size_t{128} * 1024 * 1024;
+        if (prepared_backend && params.undistort &&
+            host.bytes() > LARGE_PORTABLE_SOURCE_BYTES) {
+            large_prepare_lock = std::unique_lock(portable_large_prepare_mutex_);
+            if (!portable_large_prepare_logged_) {
+                LOG_INFO("{} image preparation: limiting large full-resolution GPU sources to one at a time (source {:.1f} MiB); CPU decoding and prepared-image caching remain in RAM",
+                         config_.backend == lfs::core::GpuBackend::Vulkan ? "Vulkan" : "Metal",
+                         host.bytes() / (1024.0 * 1024.0));
+                portable_large_prepare_logged_ = true;
+            }
+        }
         Tensor image = to_device(upload, host);
         if (!params.undistort && float_decode) {
             const auto [target_width, target_height] = lfs::core::resized_image_dimensions(static_cast<int>(image.shape()[2]), static_cast<int>(image.shape()[1]), params.resize_factor, params.max_width);
@@ -277,7 +315,32 @@ namespace lfs::io {
             else if (!params.decode_float)
                 image = image.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32).to(DataType::Float32).div(65535.0f);
         }
-        return image.contiguous();
+        image = image.contiguous();
+        if (!prepared_key.empty() && image.bytes() <= prepared_budget &&
+            get_available_physical_memory() > get_total_physical_memory() / 4 + image.bytes()) {
+            try {
+                // No compression, dtype conversion or quantization is applied
+                // here: cached and uncached consumers receive the same bytes.
+                auto pixels = image.to_pageable_host();
+                CacheLoader::getInstance(true).store_cpu_image(prepared_key, std::move(pixels), prepared_budget);
+            } catch (const std::bad_alloc&) {
+                LOG_WARN("Portable prepared image cache allocation failed; continuing with uncached image preparation");
+            }
+        }
+        if (prepared_backend && params.undistort) {
+            if (large_prepare_lock.owns_lock()) {
+                // Releasing this permit before the warp finishes would only
+                // move large inputs into the retired-allocation queue.
+                lfs::core::TensorCompletion ready;
+                ready.include(image);
+                ready.wait();
+            }
+            // The reusable upload owns its destination until it is settled.
+            // Do not retain a full-resolution source while this worker waits
+            // for the next request, especially after a prepared CPU-cache hit.
+            upload.wait();
+        }
+        return image;
     }
 
     void PipelinedImageLoader::portable_process_thread_func() {

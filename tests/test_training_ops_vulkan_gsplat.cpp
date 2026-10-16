@@ -23,7 +23,7 @@ namespace {
     using core::Tensor;
     namespace ops = gpu_ops;
     struct Result {
-        std::vector<float> image, alpha, depth, densification, scores, share;
+        std::vector<float> image, alpha, depth, normal, densification, scores, share;
         std::array<std::vector<float>, 6> gradients;
         std::vector<ops::AdamSlot> requested;
     };
@@ -37,6 +37,8 @@ namespace {
         bool saturated = false;
         float mean_z_offset = 0.f;
         bool depth_gradient = false;
+        bool normal_gradient = false;
+        float quaternion_x_offset = 0.f;
     };
     Result render(GpuBackend backend, ops::GsplatRenderMode mode = ops::GsplatRenderMode::RGB,
                   bool invisible = false, bool tile = false, bool backward = false, unsigned degree = 0, bool error_map = true, CameraCase camera = {}) {
@@ -65,6 +67,11 @@ namespace {
             means = Tensor::full({n, 3}, -10.f, Device::GPU);
         auto scales = make(std::vector<float>{-1.8f, -1.3f, -1.6f, -1.3f, -2.f, -1.1f, -1.6f, -1.5f, -1.7f, -2.f, -2.f, -2.f, -2.f, -2.f, -2.f}, 3);
         auto quats = make(std::vector<float>{1.f, .2f, -.1f, .3f, .9f, -.1f, .3f, .2f, 1.f, .05f, .2f, -.15f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f}, 4);
+        if (camera.quaternion_x_offset != 0.f) {
+            auto values = quats.to_vector();
+            values[1] += camera.quaternion_x_offset;
+            quats = Tensor::from_vector(values, {n, 4}, Device::GPU);
+        }
         auto opacity = Tensor::full({n, 1}, camera.saturated ? 12.f : 1.2f, Device::GPU);
         auto dc = make(std::vector<float>{.1f, .3f, -.4f, .9f, -.6f, .2f, -.3f, .4f, .6f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f}, 3).reshape({int(n), 1, 3});
         auto view = Tensor::eye(4, Device::GPU), bg = Tensor::full({3}, .15f, Device::GPU);
@@ -124,7 +131,7 @@ namespace {
 #endif
             status = table->forward(saved, inputs, view, radial, tangential, bg, bg_image, p, {image, alpha, depth, normal});
         EXPECT_EQ(status.code, ops::RasterResult::Code::Success) << status.message;
-        EXPECT_FALSE(normal.is_valid());
+        EXPECT_EQ(normal.is_valid(), mode == ops::GsplatRenderMode::RGB_D_N);
         Result result;
         if (image.is_valid())
             result.image = image.to_vector();
@@ -132,6 +139,8 @@ namespace {
             result.alpha = alpha.to_vector();
         if (depth.is_valid())
             result.depth = depth.to_vector();
+        if (normal.is_valid())
+            result.normal = normal.to_vector();
         if (backward) {
             size_t height = tile ? 17 : 19, width = tile ? 13 : 17;
             std::vector<float> upstream(3 * height * width), alpha_upstream(height * width);
@@ -160,6 +169,14 @@ namespace {
                                              s.requested.push_back(slot);
                                              return s.tensors[size_t(slot)];
                                          }};
+            if (camera.normal_gradient) {
+                gi.zero_();
+                ga.zero_();
+                std::vector<float> normal_upstream(3 * height * width);
+                for (size_t i = 0; i < normal_upstream.size(); ++i)
+                    normal_upstream[i] = .1f * float(i / (height * width) + 1);
+                outputs.normal = Tensor::from_vector(normal_upstream, {3, height, width}, Device::GPU);
+            }
             auto dens = Tensor::full({2, n}, .01f, Device::GPU), scores = Tensor::full({n}, .02f, Device::GPU), shares = Tensor::zeros({n}, Device::GPU);
             auto errors = error_map ? Tensor::full({height, width}, .3f, Device::GPU) : Tensor{};
             auto edges = Tensor::full({height, width}, .7f, Device::GPU);
@@ -270,6 +287,45 @@ namespace {
                 const float numerical = (plus.depth[pixel] - minus.depth[pixel]) / (2 * step);
                 EXPECT_NEAR(analytic.gradients[0][2] - .001f, numerical, .002f);
             }
+        }
+    }
+    TEST(VulkanGsplat, NormalBackwardMatchesFullImageFiniteDifference) {
+        if (!core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        constexpr float step = .005f;
+        for (bool transform : {false, true}) {
+            SCOPED_TRACE("transform=" + std::to_string(transform));
+            CameraCase camera{.count = 1, .transform = transform, .normal_gradient = true};
+            const auto analytic = render(GpuBackend::Vulkan, ops::GsplatRenderMode::RGB_D_N, false, false, true, 0, false, camera);
+            camera.quaternion_x_offset = step;
+            const auto plus = render(GpuBackend::Vulkan, ops::GsplatRenderMode::RGB_D_N, false, false, false, 0, false, camera);
+            camera.quaternion_x_offset = -step;
+            const auto minus = render(GpuBackend::Vulkan, ops::GsplatRenderMode::RGB_D_N, false, false, false, 0, false, camera);
+            ASSERT_EQ(plus.normal.size(), 3u * 19u * 17u);
+            double numerical = 0;
+            for (size_t i = 0; i < plus.normal.size(); ++i)
+                numerical += (plus.normal[i] - minus.normal[i]) / (2 * step) * (.1f * float(i / (19u * 17u) + 1));
+            EXPECT_NEAR(analytic.gradients[2][1] - .003f, numerical, .003f);
+        }
+    }
+    TEST(VulkanGsplat, RgbBackwardMatchesFullImageFiniteDifference) {
+        if (!core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        constexpr float step = .005f;
+        for (size_t count : {1u, 5u, 33u, 257u}) {
+            SCOPED_TRACE("count=" + std::to_string(count));
+            CameraCase camera{.count = count};
+            const auto analytic = render(GpuBackend::Vulkan, ops::GsplatRenderMode::RGB, false, false, true, 0, false, camera);
+            camera.mean_z_offset = step;
+            const auto plus = render(GpuBackend::Vulkan, ops::GsplatRenderMode::RGB, false, false, false, 0, false, camera);
+            camera.mean_z_offset = -step;
+            const auto minus = render(GpuBackend::Vulkan, ops::GsplatRenderMode::RGB, false, false, false, 0, false, camera);
+            double numerical = 0;
+            for (size_t i = 0; i < plus.image.size(); ++i)
+                numerical += (plus.image[i] - minus.image[i]) / (2 * step) * (.015f * std::sin(float(i) * .23f));
+            for (size_t i = 0; i < plus.alpha.size(); ++i)
+                numerical += (plus.alpha[i] - minus.alpha[i]) / (2 * step) * (.01f * std::cos(float(i) * .31f));
+            EXPECT_NEAR(analytic.gradients[0][2] - .001f, numerical, .002f);
         }
     }
     TEST(VulkanGsplat, NonzeroBackwardMatchesCuda) {

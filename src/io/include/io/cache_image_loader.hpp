@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -111,6 +112,14 @@ namespace lfs::io {
 
         void reset_cache();
         void clear_cpu_cache();
+
+        // Prepared images share the existing CPU cache and its RAM policy.
+        // Callers must upload returned tensors into fresh device storage.
+        [[nodiscard]] lfs::core::Tensor find_cpu_image(const std::string& key);
+        bool store_cpu_image(std::string key, lfs::core::Tensor pixels, std::size_t budget);
+        std::size_t release_cpu_images(const std::string& prefix, std::size_t bytes);
+        [[nodiscard]] std::size_t cpu_image_bytes(const std::string& prefix);
+        [[nodiscard]] bool cpu_image_cache_enabled() const { return use_cpu_memory_; }
 
         void update_cache_params(bool use_cpu_memory, int num_expected_images,
                                  float min_cpu_free_GB, float min_cpu_free_memory_ratio,

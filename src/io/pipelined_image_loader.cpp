@@ -295,6 +295,10 @@ namespace lfs::io {
 
     PipelinedImageLoader::~PipelinedImageLoader() {
         shutdown();
+        if ((config_.backend == lfs::core::GpuBackend::Vulkan ||
+             config_.backend == lfs::core::GpuBackend::Metal) &&
+            CacheLoader::hasInstance())
+            CacheLoader::getInstance().release_cpu_images(prepared_cpu_cache_prefix(), std::numeric_limits<size_t>::max());
     }
 
     void PipelinedImageLoader::shutdown() {
@@ -728,6 +732,11 @@ namespace lfs::io {
         return key;
     }
 
+    std::string PipelinedImageLoader::prepared_cpu_cache_prefix() const {
+        return "portable-prepared:" + std::to_string(static_cast<int>(config_.backend)) + ":" +
+               std::to_string(reinterpret_cast<std::uintptr_t>(this)) + ":";
+    }
+
     std::string PipelinedImageLoader::make_mask_cache_key(
         const std::filesystem::path& path,
         const LoadParams& params) const {
@@ -898,10 +907,15 @@ namespace lfs::io {
 
     size_t PipelinedImageLoader::release_host_cache(const size_t bytes) {
         size_t released = 0;
+        if ((config_.backend == lfs::core::GpuBackend::Vulkan ||
+             config_.backend == lfs::core::GpuBackend::Metal) &&
+            CacheLoader::hasInstance())
+            released = CacheLoader::getInstance().release_cpu_images(prepared_cpu_cache_prefix(), bytes);
         {
             std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
             const size_t cached = jpeg_cache_bytes_.load();
-            released = spill_least_recent_until_locked(cached > bytes ? cached - bytes : 0);
+            const size_t remaining = bytes > released ? bytes - released : 0;
+            released += spill_least_recent_until_locked(cached > remaining ? cached - remaining : 0);
         }
         if (released > 0) {
             return_freed_heap_to_os();
@@ -923,8 +937,13 @@ namespace lfs::io {
                 std::memory_order_relaxed)) {
             return;
         }
-        if (jpeg_cache_bytes_.load(std::memory_order_relaxed) == 0)
-            return;
+        if (jpeg_cache_bytes_.load(std::memory_order_relaxed) == 0) {
+            if (config_.backend != lfs::core::GpuBackend::Vulkan &&
+                config_.backend != lfs::core::GpuBackend::Metal)
+                return;
+            if (!CacheLoader::hasInstance() || CacheLoader::getInstance().cpu_image_bytes(prepared_cpu_cache_prefix()) == 0)
+                return;
+        }
 
         const size_t total = get_total_physical_memory();
         const auto min_free = static_cast<size_t>(total * HOST_FREE_RAM_EVICTION_RATIO);
@@ -1562,9 +1581,9 @@ namespace lfs::io {
             }
 
             if (!cuda_run) {
-                // As on CUDA, the run cache keeps each JPEG's encoded bytes and
-                // every request decodes them. Other formats, alpha masks and
-                // 16-bit color decode the file in the worker.
+                // This stage caches encoded JPEG bytes. Portable workers can
+                // additionally reuse lossless prepared warps from host memory.
+                // Other formats, alpha masks and 16-bit color are handled there.
                 PrefetchedImage result;
                 result.sequence_id = request.sequence_id;
                 result.loader_generation = request.loader_generation;

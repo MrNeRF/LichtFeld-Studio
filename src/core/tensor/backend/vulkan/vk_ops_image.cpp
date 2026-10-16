@@ -59,7 +59,8 @@ namespace lfs::core::internal {
             mode | (input.dtype() == DataType::UInt8 ? IMAGE_WARP_UINT8 : 0), inverse,
             std::max(8, int(std::ceil(std::max(p.src_fx / p.dst_fx, p.src_fy / p.dst_fy))))};
         const auto context = acquire_vulkan_context();
-        const auto& pipeline = context->pipelines().specialized("image_warp", sizeof(push), {});
+        const std::array constants{uint32_t(push.mode), uint32_t(push.inverse), uint32_t(push.channels), uint32_t(push.quadrature), uint32_t(p.model_type)};
+        const auto& pipeline = context->pipelines().specialized("image_warp", sizeof(push), constants);
         const std::array reads{source, camera_storage};
         std::vector<StorageRef> writes{destination};
         if (mask.is_valid())

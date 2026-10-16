@@ -324,10 +324,9 @@ namespace {
         std::optional<lfs::core::GpuBackendScope> scope_;
     };
 
-    void check_bilateral_slice(const bool chw, const bool exposure_chroma) {
+    void check_bilateral_slice(const bool chw, const bool exposure_chroma, const int h = 5, const int w = 7) {
         const auto& table = *lfs::training::training_ops(backend_under_test()).bilateral;
         const std::string what = std::format("bilateral {} {}", chw ? "chw" : "hwc", exposure_chroma ? "exposure-chroma" : "affine");
-        constexpr int h = 5, w = 7;
         const int channels = exposure_chroma ? 9 : 12;
         Grid grid{channels, 2, 3, 4, {}};
         const size_t cells = static_cast<size_t>(channels) * 2 * 3 * 4;
@@ -336,7 +335,7 @@ namespace {
         auto offset_values = pattern(channels, 0.1f, 17);
         auto grad_values = pattern(h * w * 3, 0.5f, 19);
         grid.values = widen(grid_values);
-        const TensorShape image = chw ? TensorShape{3, h, w} : TensorShape{h, w, 3};
+        const TensorShape image = chw ? TensorShape{3, size_t(h), size_t(w)} : TensorShape{size_t(h), size_t(w), 3};
         const auto grid_t = gpu(grid_values, {1, static_cast<size_t>(channels), 2, 3, 4});
         const auto rgb_t = gpu(rgb_values, image);
         const auto offset_t = gpu(offset_values, {static_cast<size_t>(channels)});
@@ -377,6 +376,11 @@ namespace {
                     skip[chw ? c * h * w + pixel : pixel * 3 + c] = true;
         }
         expect_close(host(grad_rgb), finite_difference(rgb, loss_of_rgb), 2e-4, 1e-3, what + " rgb gradient", skip);
+    }
+
+    TEST_P(PortableAppearance, BilateralGroupedGradientsMatchReferenceAcrossWorkgroups) {
+        check_bilateral_slice(true, false, 17, 19);
+        check_bilateral_slice(true, true, 9, 17);
     }
 
     TEST_P(PortableAppearance, BilateralSliceMatchesReferenceAndFiniteDifferences) {
@@ -558,7 +562,7 @@ namespace {
         const auto loss = [&](const PpispParams& q, const Doubles& image) {
             return weighted(ppisp_forward(q, image, H, W, 0, H, camera, frame), grad_values);
         };
-        const auto group = [&](Doubles PpispParams::*member) {
+        const auto group = [&](Doubles PpispParams::* member) {
             return finite_difference(p.*member, [&](const Doubles& values) {
                 PpispParams q = p;
                 q.*member = values;
@@ -593,7 +597,7 @@ namespace {
         table.backward({exposure, vignetting, color, crf}, gpu(rgb_values, {3, H, W}), gpu(grad_values, {3, H, W}),
                        {ge, gv, gc, gk}, grad_rgb, 2, 3, camera, frame);
 
-        const auto group = [&](Doubles PpispParams::*member) {
+        const auto group = [&](Doubles PpispParams::* member) {
             return finite_difference(p.*member, [&](const Doubles& values) {
                 PpispParams q = p;
                 q.*member = values;
@@ -1018,9 +1022,12 @@ namespace {
                 a[i] = static_cast<float>(static_cast<double>(rgba[i * 4 + 3]) / 255.0);
             }
             expect_close(host(rgb_f), rgb, 0, 0, "rgba split rgb");
-            expect_close(host(alpha), a, 0, 0, "rgba split alpha");
+            // Metal uses FP32 reciprocal multiplication: allow one FP32 ULP
+            // in [0, 1] against the correctly rounded double division.
+            const double alpha_tolerance = GetParam() == GpuBackend::Metal ? 6e-8 : 0;
+            expect_close(host(alpha), a, alpha_tolerance, 0, "rgba split alpha");
             EXPECT_EQ(host_bytes(rgb_u), rgb_bytes);
-            expect_close(host(alpha_u), a, 0, 0, "rgba split alpha (uint8 rgb)");
+            expect_close(host(alpha_u), a, alpha_tolerance, 0, "rgba split alpha (uint8 rgb)");
         }
         {
             const auto values = image_floats(P);

@@ -64,7 +64,11 @@ float sampleGrid(Parameters p, Cell c, uint channel) {
     const float offset = p.offset != 0 ? ((Ptr<float, Access.Read>)p.offset)[channel] : 0.0f;
     return (v00 * (1-c.fy) + v01 * c.fy) * (1-c.fz) + (v10 * (1-c.fy) + v11 * c.fy) * c.fz + offset;
 }
-void atomicFloatAdd(uint64_t address, uint index, float value) {
+void atomicFloatAddScalar(uint64_t address, uint index, float value) {
+#if BILATERAL_NATIVE_ATOMIC
+    float previous;
+    InterlockedAdd(((Ptr<float, Access.ReadWrite>)address)[index], value, previous);
+#else
     Ptr<uint, Access.ReadWrite> word = (Ptr<uint, Access.ReadWrite>)address;
     uint assumed = word[index], observed;
     do {
@@ -72,6 +76,26 @@ void atomicFloatAdd(uint64_t address, uint index, float value) {
         if (observed == assumed) return;
         assumed = observed;
     } while (true);
+#endif
+}
+void atomicFloatAdd(uint64_t address, uint index, float value) {
+    // Nearby pixels often update the same grid node. Combine up to four
+    // distinct destinations per subgroup; highly varying guidance retains
+    // scalar atomics for the remaining lanes. Active-lane reductions also
+    // handle the final partial subgroup without reading inactive lanes.
+    bool pending = true;
+    [unroll] for (uint group = 0; group < 4; ++group) {
+        uint destination = WaveActiveMin(pending ? index : 0xffffffffu);
+        bool matches = pending && index == destination;
+        float total = WaveActiveSum(matches ? value : 0.0f);
+        if (WaveIsFirstLane())
+            atomicFloatAddScalar(address, destination, total);
+        pending = pending && !matches;
+        if (!WaveActiveAnyTrue(pending))
+            return;
+    }
+    if (pending)
+        atomicFloatAddScalar(address, index, value);
 }
 
 [numthreads(256,1,1)]

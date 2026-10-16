@@ -711,7 +711,7 @@ namespace {
         auto service = std::make_unique<lfs::training::TrainingSnapshotService>(
             lfs::training::TrainingSnapshotServiceConfig{
                 .ring_slots = 3,
-                .band_bytes = 4096,
+                .band_bytes = 64 * 1024,
                 .calibration_bytes = 64,
                 .calibration_iterations = 4,
             });
@@ -757,12 +757,20 @@ namespace {
         };
         auto first = capture(100, 1.25f);
         ASSERT_TRUE(first);
+        // The pool retains at most ring_slots * band_bytes. Verify that the
+        // snapshot is eligible instead of relying on the heap to reuse an address.
+        ASSERT_LE(first->checkpoint_bytes->size(), 3u * 64u * 1024u);
         const auto* retired_address = first->checkpoint_bytes->data();
         std::weak_ptr<const lfs::training::TrainingSnapshotBytes> retired = first->checkpoint_bytes;
-        first.reset();
         const auto cleanup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-        while (!retired.expired() && std::chrono::steady_clock::now() < cleanup_deadline)
+        // Weak expiration can be observed before another thread finishes the
+        // custom deleter that returns storage to the pool. Wait for the drain
+        // workers to release their owners, then retire synchronously here.
+        while (first->checkpoint_bytes.use_count() > 1 &&
+               std::chrono::steady_clock::now() < cleanup_deadline)
             std::this_thread::yield();
+        ASSERT_EQ(first->checkpoint_bytes.use_count(), 1);
+        first.reset();
         ASSERT_TRUE(retired.expired());
         auto second = capture(101, 2.25f);
         ASSERT_TRUE(second);
