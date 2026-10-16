@@ -3400,6 +3400,11 @@ namespace lfs::training {
                 reason,
                 result.error()));
         }
+        // A storage migration must never change what is being trained.
+        if (params_.optimization.sb_lobes > 0 && !model.has_spherical_beta()) {
+            return std::unexpected(std::format(
+                "Training model lost its Spherical Beta lobes after {}", reason));
+        }
         return {};
     }
 

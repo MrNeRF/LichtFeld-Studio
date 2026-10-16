@@ -167,6 +167,9 @@ namespace lfs::vis {
             result->set_active_sh_degree(
                 src.get_active_sh_degree(),
                 src.shN_value_quantized() ? src.shN_value_bounds().cpu() : lfs::core::Tensor{});
+            // Spherical Beta lobes (device-resident by contract).
+            if (src.has_spherical_beta())
+                result->set_sb_params(src.sb_params().clone(), src.get_sb_lobes());
             return result;
         }
 

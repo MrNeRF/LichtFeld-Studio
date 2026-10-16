@@ -119,6 +119,9 @@ namespace lfs::io {
             const bool shN_q16 = model.shN_value_quantized();
             const bool encode_q16 = lfs::core::sh_value_quant::enabled() && !shN_q16;
             lfs::core::Tensor deleted = model.has_deleted_mask() ? model.deleted() : lfs::core::Tensor{};
+            // Spherical Beta lobes are not renderer-block tensors; carry them.
+            const int sb_lobes = model.has_spherical_beta() ? model.get_sb_lobes() : 0;
+            lfs::core::Tensor sb_params = sb_lobes > 0 ? model.sb_params() : lfs::core::Tensor{};
 
             lfs::core::Tensor shN;
             lfs::core::Tensor shN_bounds;
@@ -151,6 +154,8 @@ namespace lfs::io {
                 migrated.deleted() = std::move(deleted);
                 migrated.refresh_deleted_count();
             }
+            if (sb_lobes > 0)
+                migrated.set_sb_params(std::move(sb_params), sb_lobes);
             auto lod_tree = std::move(model.lod_tree);
             model = std::move(migrated);
             model.lod_tree = std::move(lod_tree);

@@ -585,6 +585,11 @@ namespace lfs::training {
                 lfs::core::Tensor deleted = model.has_deleted_mask() ? model.deleted() : lfs::core::Tensor{};
                 lfs::core::Tensor densification_info = model._densification_info;
                 lfs::core::Tensor max_screen_share = model._max_screen_share;
+                // Spherical Beta lobes stay outside the allocator block (as in
+                // SplatExportableStorage::rebindSplatData); the rebuilt model must keep them or
+                // training silently continues without the lobes.
+                const int sb_lobes = model.sb_params().is_valid() ? model.get_sb_lobes() : 0;
+                lfs::core::Tensor sb_params = sb_lobes > 0 ? model.sb_params() : lfs::core::Tensor{};
 
                 const auto copy_param =
                     [&](const lfs::core::Tensor& source,
@@ -708,6 +713,9 @@ namespace lfs::training {
                     migrated._max_screen_share = std::move(max_screen_share);
                 }
                 migrated.set_frozen_ranges(std::move(frozen_ranges));
+                if (sb_lobes > 0) {
+                    migrated.set_sb_params(std::move(sb_params), sb_lobes);
+                }
                 model = std::move(migrated);
                 model.set_tensor_allocator(tensor_allocator);
                 if (capacity_ensure) {
