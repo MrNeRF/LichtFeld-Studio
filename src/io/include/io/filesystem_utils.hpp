@@ -120,17 +120,17 @@ namespace lfs::io {
     // Safe filesystem operations that don't throw
     inline bool safe_exists(const fs::path& path) {
         std::error_code ec;
-        return fs::exists(path, ec);
+        return lfs::core::native_fs::exists(path, ec);
     }
 
     inline bool safe_is_directory(const fs::path& path) {
         std::error_code ec;
-        return fs::is_directory(path, ec);
+        return lfs::core::native_fs::is_directory(path, ec);
     }
 
     inline bool safe_is_regular_file(const fs::path& path) {
         std::error_code ec;
-        return fs::is_regular_file(path, ec);
+        return lfs::core::native_fs::is_regular_file(path, ec);
     }
 
     // Case-insensitive file finding
@@ -141,14 +141,14 @@ namespace lfs::io {
         std::string target_lower = detail::normalize_lookup_key(target);
 
         std::error_code ec;
-        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        for (fs::directory_iterator it(lfs::core::native_fs::traversal_path(dir), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec)
                 continue;
 
             std::string name = detail::normalize_lookup_key(it->path().filename());
             if (name == target_lower) {
-                return it->path();
+                return lfs::core::native_fs::entry_path(dir, it->path());
             }
         }
         return {};
@@ -198,8 +198,9 @@ namespace lfs::io {
 
             std::error_code ec;
             size_t scanned_entries = 0;
+            const auto traversal_root = lfs::core::native_fs::traversal_path(root_path);
             for (fs::recursive_directory_iterator it(
-                     root_path,
+                     traversal_root,
                      fs::directory_options::skip_permission_denied,
                      ec),
                  end;
@@ -216,26 +217,27 @@ namespace lfs::io {
                 if (!entry.is_regular_file(file_ec) || file_ec)
                     continue;
 
-                const fs::path rel = entry.path().lexically_relative(root_path);
+                const fs::path rel = entry.path().lexically_relative(traversal_root);
                 if (rel.empty())
                     continue;
+                const fs::path file = root_path / rel;
 
                 if (on_file)
                     on_file(rel);
 
-                raw_entries_.emplace(detail::raw_lookup_key(rel), entry.path());
+                raw_entries_.emplace(detail::raw_lookup_key(rel), file);
 
                 const std::string rel_key = detail::normalize_lookup_key(rel);
-                if (auto [it_exact, inserted] = exact_entries_.emplace(rel_key, entry.path());
-                    !inserted && it_exact->second != entry.path()) {
+                if (auto [it_exact, inserted] = exact_entries_.emplace(rel_key, file);
+                    !inserted && it_exact->second != file) {
                     ambiguous_exact_.insert(rel_key);
                 }
 
                 const std::string basename_key =
                     detail::normalize_lookup_key(entry.path().filename());
                 if (auto [it_basename, inserted] =
-                        basename_entries_.emplace(basename_key, entry.path());
-                    !inserted && it_basename->second != entry.path()) {
+                        basename_entries_.emplace(basename_key, file);
+                    !inserted && it_basename->second != file) {
                     ambiguous_basenames_.insert(basename_key);
                 }
 
@@ -243,8 +245,8 @@ namespace lfs::io {
                         trailing_digit_run(lfs::core::path_to_utf8(entry.path().stem()));
                     !digit_key.empty()) {
                     if (auto [it_digits, inserted] =
-                            digit_entries_.emplace(digit_key, entry.path());
-                        !inserted && it_digits->second != entry.path()) {
+                            digit_entries_.emplace(digit_key, file);
+                        !inserted && it_digits->second != file) {
                         ambiguous_digits_.insert(digit_key);
                     }
                 }
@@ -602,7 +604,7 @@ namespace lfs::io {
         }
 
         std::error_code ec;
-        if (fs::equivalent(lhs, rhs, ec)) {
+        if (lfs::core::native_fs::equivalent(lhs, rhs, ec)) {
             return true;
         }
         if (ec) {
@@ -622,7 +624,7 @@ namespace lfs::io {
 
         if (recursive) {
             for (fs::recursive_directory_iterator it(
-                     root_path,
+                     lfs::core::native_fs::traversal_path(root_path),
                      fs::directory_options::skip_permission_denied,
                      ec),
                  end;
@@ -638,7 +640,7 @@ namespace lfs::io {
             return count;
         }
 
-        for (fs::directory_iterator it(root_path, ec), end; !ec && it != end; it.increment(ec)) {
+        for (fs::directory_iterator it(lfs::core::native_fs::traversal_path(root_path), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec)
                 continue;

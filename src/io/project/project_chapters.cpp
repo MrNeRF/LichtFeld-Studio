@@ -644,7 +644,7 @@ namespace lfs::io::project {
         lfs::Result<std::vector<std::byte>> read_file_window(
             const std::filesystem::path& path, const std::uint64_t offset,
             const std::size_t bytes) {
-            std::ifstream stream(path, std::ios::binary);
+            std::ifstream stream(lfs::core::native_fs::native_path(path), std::ios::binary);
             if (!stream) {
                 return fail<std::vector<std::byte>>(
                     lfs::ErrorCode::NotFound, "The referenced file could not be opened.",
@@ -695,7 +695,7 @@ namespace lfs::io::project {
 
         lfs::Result<Hash128>
         hash_file_streaming(const std::filesystem::path& path) {
-            std::ifstream stream(path, std::ios::binary);
+            std::ifstream stream(lfs::core::native_fs::native_path(path), std::ios::binary);
             if (!stream) {
                 return fail<Hash128>(
                     lfs::ErrorCode::PermissionDenied,
@@ -750,8 +750,9 @@ namespace lfs::io::project {
             };
             std::vector<Entry> entries;
             std::error_code error;
+            const auto traversal_root = lfs::core::native_fs::traversal_path(root);
             std::filesystem::recursive_directory_iterator iterator(
-                root, std::filesystem::directory_options::skip_permission_denied, error);
+                traversal_root, std::filesystem::directory_options::skip_permission_denied, error);
             if (error) {
                 return fail<std::vector<std::byte>>(
                     lfs::ErrorCode::Unavailable,
@@ -778,13 +779,13 @@ namespace lfs::io::project {
                                     lfs::core::path_to_utf8(root), MAX_DIRECTORY_ENTRIES),
                         "REFS", "fingerprint");
                 }
-                const auto relative = std::filesystem::relative(iterator->path(), root, error);
+                const auto relative = lfs::core::native_fs::relative(iterator->path(), traversal_root, error);
                 if (error) {
                     return fail<std::vector<std::byte>>(
                         lfs::ErrorCode::Unavailable,
                         "A referenced directory entry could not be identified.",
                         std::format("Cannot make '{}' relative to '{}': {}",
-                                    lfs::core::path_to_utf8(iterator->path()),
+                                    lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(root, iterator->path())),
                                     lfs::core::path_to_utf8(root), error.message()),
                         "REFS", "fingerprint");
                 }
@@ -794,7 +795,7 @@ namespace lfs::io::project {
                         lfs::ErrorCode::Unavailable,
                         "A referenced directory entry could not be inspected.",
                         std::format("Cannot stat '{}': {}",
-                                    lfs::core::path_to_utf8(iterator->path()), error.message()),
+                                    lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(root, iterator->path())), error.message()),
                         "REFS", "fingerprint");
                 }
                 Entry entry{
@@ -812,12 +813,20 @@ namespace lfs::io::project {
                             lfs::ErrorCode::BoundsViolation,
                             "The referenced directory size cannot be represented.",
                             std::format("Cannot account for '{}'",
-                                        lfs::core::path_to_utf8(iterator->path())),
+                                        lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(root, iterator->path()))),
                             "REFS", "fingerprint");
                     }
                     total_size += entry.size;
                 }
                 entries.push_back(std::move(entry));
+            }
+            if (error) {
+                return fail<std::vector<std::byte>>(
+                    lfs::ErrorCode::Unavailable,
+                    "The referenced directory could not be enumerated.",
+                    std::format("Cannot enumerate '{}': {}",
+                                lfs::core::path_to_utf8(root), error.message()),
+                    "REFS", "fingerprint");
             }
             std::ranges::sort(entries, {}, &Entry::path);
 
@@ -945,14 +954,14 @@ namespace lfs::io::project {
     lfs::Result<ReferenceFingerprint> fingerprint_path(
         const std::filesystem::path& path, const bool include_full_hash) {
         std::error_code error;
-        const auto status = std::filesystem::status(path, error);
+        const auto status = lfs::core::native_fs::status(path, error);
         if (error || !std::filesystem::exists(status)) {
             return fail<ReferenceFingerprint>(
                 lfs::ErrorCode::NotFound, "The referenced path is missing.",
                 std::format("'{}' does not exist", lfs::core::path_to_utf8(path)),
                 "REFS", "fingerprint");
         }
-        const auto mtime = std::filesystem::last_write_time(path, error);
+        const auto mtime = lfs::core::native_fs::last_write_time(path, error);
         if (error) {
             return fail<ReferenceFingerprint>(
                 lfs::ErrorCode::Unavailable, "The referenced path could not be inspected.",
@@ -965,7 +974,7 @@ namespace lfs::io::project {
         result.mtime_unix_ns = file_time_ns(mtime);
         if (std::filesystem::is_regular_file(status)) {
             result.kind = FingerprintKind::File;
-            result.size = std::filesystem::file_size(path, error);
+            result.size = lfs::core::native_fs::file_size(path, error);
             if (error) {
                 return fail<ReferenceFingerprint>(
                     lfs::ErrorCode::Unavailable,
@@ -1025,7 +1034,7 @@ namespace lfs::io::project {
         const std::filesystem::path& path,
         const ReferenceFingerprint& expected) {
         std::error_code error;
-        const auto status = std::filesystem::status(path, error);
+        const auto status = lfs::core::native_fs::status(path, error);
         if (error || !std::filesystem::exists(status)) {
             return FingerprintCheck{
                 .disposition = FingerprintDisposition::Missing,
@@ -1047,7 +1056,7 @@ namespace lfs::io::project {
             };
         }
 
-        const auto mtime = std::filesystem::last_write_time(path, error);
+        const auto mtime = lfs::core::native_fs::last_write_time(path, error);
         if (error) {
             return fail<FingerprintCheck>(
                 lfs::ErrorCode::Unavailable,
@@ -1059,7 +1068,7 @@ namespace lfs::io::project {
         const std::int64_t observed_mtime = file_time_ns(mtime);
         if (observed_kind == FingerprintKind::File) {
             const std::uint64_t observed_size =
-                std::filesystem::file_size(path, error);
+                lfs::core::native_fs::file_size(path, error);
             if (error) {
                 return fail<FingerprintCheck>(
                     lfs::ErrorCode::Unavailable,
@@ -2138,7 +2147,7 @@ namespace lfs::io::project {
         for (const auto& candidate :
              locator_candidates((*record)->locator, project_root)) {
             std::error_code error;
-            if (!std::filesystem::exists(candidate, error) || error) {
+            if (!lfs::core::native_fs::exists(candidate, error) || error) {
                 continue;
             }
             auto check =

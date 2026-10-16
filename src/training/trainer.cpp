@@ -2827,7 +2827,7 @@ namespace lfs::training {
                     "Image background mode requires a background image path");
             }
             std::error_code ec;
-            if (!std::filesystem::is_regular_file(
+            if (!lfs::core::native_fs::is_regular_file(
                     params.optimization.bg_image_path, ec)) {
                 return std::unexpected(std::format(
                     "Image background file does not exist or is not a regular file: '{}'",
@@ -3202,7 +3202,7 @@ namespace lfs::training {
                             "Image background mode restored from checkpoint without a path");
                     }
                     std::error_code bg_path_error;
-                    if (!std::filesystem::is_regular_file(
+                    if (!lfs::core::native_fs::is_regular_file(
                             params_.optimization.bg_image_path,
                             bg_path_error)) {
                         return std::unexpected(std::format(
@@ -3782,7 +3782,7 @@ namespace lfs::training {
         // Load/reload background image if needed
         if (bg_mode_is_image && bg_image_path_changed &&
             !params.optimization.bg_image_path.empty() &&
-            std::filesystem::exists(params.optimization.bg_image_path)) {
+            lfs::core::native_fs::exists(params.optimization.bg_image_path)) {
             try {
                 auto& loader = lfs::io::CacheLoader::getInstance();
                 lfs::io::LoadParams load_params{
@@ -4539,7 +4539,7 @@ namespace lfs::training {
         aside += std::format(
             ".corrupt-{}", unix_seconds);
         std::error_code ec;
-        std::filesystem::rename(
+        lfs::core::native_fs::rename(
             destination, aside, ec);
         if (ec) {
             return lfs::from_std_error_code(
@@ -4886,7 +4886,7 @@ namespace lfs::training {
                         std::error_code ec;
                         if (!path.parent_path()
                                  .empty()) {
-                            std::filesystem::
+                            lfs::core::native_fs::
                                 create_directories(
                                     path.parent_path(),
                                     ec);
@@ -4925,7 +4925,7 @@ namespace lfs::training {
                                      ->source_path;
                         } else if (
                             !document_context &&
-                            std::filesystem::exists(
+                            lfs::core::native_fs::exists(
                                 path)) {
                             source_path = path;
                             compact_after_publish =
@@ -4940,7 +4940,7 @@ namespace lfs::training {
                         }
                         bool save_as =
                             !source_path &&
-                            std::filesystem::exists(
+                            lfs::core::native_fs::exists(
                                 path);
                         const auto create_fresh_document =
                             [&]()
@@ -8474,7 +8474,7 @@ namespace lfs::training {
                                 std::string folder_name = lfs::io::strip_extension(img_name);
 
                                 auto output_path = params_.dataset.output_path / "timelapse" / folder_name;
-                                std::filesystem::create_directories(output_path);
+                                lfs::core::native_fs::create_directories(output_path);
 
                                 auto stamp = params_.include_provenance ? lfs::core::make_provenance_stamp()
                                                                         : lfs::core::make_minimal_provenance_stamp();
@@ -9803,7 +9803,7 @@ namespace lfs::training {
         const std::filesystem::path& checkpoint_path) {
         std::error_code error;
         const auto source_bytes =
-            std::filesystem::file_size(
+            lfs::core::native_fs::file_size(
                 checkpoint_path, error);
         if (error) {
             return std::unexpected(
@@ -9814,7 +9814,7 @@ namespace lfs::training {
                     error.message()));
         }
         std::ifstream source(
-            checkpoint_path,
+            lfs::core::native_fs::native_path(checkpoint_path),
             std::ios::binary);
         if (!source) {
             return std::unexpected(

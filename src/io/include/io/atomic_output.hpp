@@ -42,7 +42,7 @@ namespace lfs::io {
         }
 
         std::error_code ec;
-        std::filesystem::create_directories(output_path.parent_path(), ec);
+        lfs::core::native_fs::create_directories(output_path.parent_path(), ec);
         if (ec) {
             return std::unexpected(Error{
                 ErrorCode::WRITE_FAILURE,
@@ -55,7 +55,7 @@ namespace lfs::io {
     namespace detail {
         inline Result<void> sync_file_for_durable_replace(const std::filesystem::path& path) {
 #ifdef _WIN32
-            const HANDLE handle = CreateFileW(path.wstring().c_str(),
+            const HANDLE handle = CreateFileW(lfs::core::native_fs::native_path(path).c_str(),
                                               GENERIC_READ | GENERIC_WRITE,
                                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                               nullptr,
@@ -152,8 +152,8 @@ namespace lfs::io {
         }
 
 #ifdef _WIN32
-        const auto temp_w = temp_path.wstring();
-        const auto output_w = output_path.wstring();
+        const auto temp_w = lfs::core::native_fs::native_path(temp_path);
+        const auto output_w = lfs::core::native_fs::native_path(output_path);
         // Preserve the existing Windows write-through behavior for all atomic
         // outputs. Durable mode additionally flushes the file handle first.
         const DWORD flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
@@ -165,7 +165,7 @@ namespace lfs::io {
         }
 #else
         std::error_code ec;
-        std::filesystem::rename(temp_path, output_path, ec);
+        lfs::core::native_fs::rename(temp_path, output_path, ec);
         if (ec) {
             return std::unexpected(Error{
                 ErrorCode::WRITE_FAILURE,
@@ -208,7 +208,7 @@ namespace lfs::io {
         ~ScopedAtomicOutputFile() {
             if (!committed_) {
                 std::error_code ec;
-                std::filesystem::remove(temp_path_, ec);
+                lfs::core::native_fs::remove(temp_path_, ec);
             }
         }
 

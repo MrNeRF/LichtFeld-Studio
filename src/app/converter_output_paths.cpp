@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/converter_output_paths.hpp"
+#include "core/native_fs.hpp"
 
 namespace lfs::app {
 
@@ -28,7 +29,7 @@ namespace lfs::app {
         if (output_template.empty()) {
             return working_directory / converted_name;
         }
-        if (std::filesystem::is_directory(output_template)) {
+        if (lfs::core::native_fs::is_directory(output_template)) {
             const auto directory = output_template.is_absolute()
                                        ? output_template
                                        : working_directory / output_template;

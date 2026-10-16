@@ -535,7 +535,7 @@ namespace lfs::core {
             }
 
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
-                if (!std::filesystem::exists(path)) {
+                if (!lfs::core::native_fs::exists(path)) {
                     return std::unexpected(std::format("Config file not found: {}", path_to_utf8(path)));
                 }
 
@@ -750,7 +750,7 @@ namespace lfs::core {
                 auto absolute = std::filesystem::absolute(utf8_to_path(std::string(path)), error);
                 if (error)
                     return std::string(path);
-                auto canonical = std::filesystem::weakly_canonical(absolute, error);
+                auto canonical = lfs::core::native_fs::weakly_canonical(absolute, error);
                 return path_to_utf8((error ? absolute : canonical).lexically_normal());
             };
             if (const auto file = eval_mask_splat_file(spec))
@@ -1071,7 +1071,7 @@ namespace lfs::core {
                     if (path.empty()) {
                         return "--add-splat path cannot be empty";
                     }
-                    if (!add_splats_applied && !std::filesystem::exists(path)) {
+                    if (!add_splats_applied && !lfs::core::native_fs::exists(path)) {
                         return std::format("Added splat does not exist: '{}'",
                                            lfs::core::path_to_utf8(path));
                     }
@@ -1141,7 +1141,7 @@ namespace lfs::core {
                 if (optimization.ppisp_sidecar_path.empty()) {
                     return "PPISP sidecar freeze requires a sidecar path";
                 }
-                if (!std::filesystem::exists(optimization.ppisp_sidecar_path)) {
+                if (!lfs::core::native_fs::exists(optimization.ppisp_sidecar_path)) {
                     return std::format("PPISP sidecar does not exist: '{}'",
                                        lfs::core::path_to_utf8(optimization.ppisp_sidecar_path));
                 }

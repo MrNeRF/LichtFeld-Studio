@@ -47,7 +47,7 @@ namespace {
                          const std::uint64_t offset,
                          const std::size_t size,
                          std::vector<std::uint8_t>& data) {
-        std::ifstream file(path, std::ios::binary);
+        std::ifstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
         if (!file)
             return false;
         file.seekg(static_cast<std::streamoff>(offset));
@@ -62,7 +62,7 @@ namespace {
     bool read_file_prefix(const std::filesystem::path& path,
                           const std::size_t max_size,
                           std::vector<std::uint8_t>& data) {
-        std::ifstream file(path, std::ios::binary);
+        std::ifstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
         if (!file)
             return false;
         data.resize(max_size);
@@ -826,7 +826,7 @@ namespace lfs::core {
             // Canonical gallery background: magic, little-endian width/height,
             // then top-to-bottom RGB float32. No filenames or image metadata.
             static_assert(std::endian::native == std::endian::little);
-            std::ifstream input(p, std::ios::binary | std::ios::ate);
+            std::ifstream input(lfs::core::native_fs::native_path(p), std::ios::binary | std::ios::ate);
             const auto size = input.tellg();
             input.seekg(0);
             std::array<char, 8> magic{};
