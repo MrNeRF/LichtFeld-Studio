@@ -320,6 +320,15 @@ namespace {
                     std::memcpy(expected.data() + (dy * width + dx) * 3, rgb.data() + (y * 32 + x) * 3, 3);
                 }
             EXPECT_EQ(image.data, expected);
+            std::vector<uint8_t> output(expected.size());
+            codec::DecodeTarget target;
+            target.channels = 3;
+            target.data = output.data();
+            codec::Probe info;
+            ASSERT_TRUE(codec::decode_heif_to_buffer(bytes, target, info, error)) << error;
+            EXPECT_EQ(info.width, width);
+            EXPECT_EQ(info.height, height);
+            EXPECT_EQ(output, expected);
         }
     }
     TEST(ProductionHeif, PrimaryRgbAlphaRotationAndPrecisionMatchIndependentDecode) {
