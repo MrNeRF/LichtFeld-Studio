@@ -19,6 +19,7 @@
 #include "tools/tool_base.hpp"
 
 #include <algorithm>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <memory>
 #include <vector>
@@ -1195,4 +1196,43 @@ TEST_F(SelectionServiceInteractionsTest, DatasetCameraSelectionKeepsImagePixelCo
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
     ASSERT_TRUE(service_->selectBrush(20, 20, 15, SelectionMode::Replace, 3).success);
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+}
+
+// Selection previews are render queries. Repeating one without a change must not request a frame.
+TEST_F(SelectionServiceInteractionsTest, UnchangedSelectionPreviewsRequestNoFrames) {
+    auto& ledger = rendering_manager_->frameDemandLedger();
+    const auto requests_frame = [&] { return !ledger.plan(lfs::vis::FrameClock::now()).empty(); };
+
+    Viewport viewport(100, 100);
+    ToolContext context(rendering_manager_.get(), scene_manager_.get(), &viewport, nullptr);
+    SelectionTool tool;
+    ASSERT_TRUE(tool.initialize(context));
+    tool.setEnabled(true);
+    tool.setDepthFilterEnabled(true);
+    tool.update(context);
+    ASSERT_TRUE(rendering_manager_->getSettings().depth_filter_enabled);
+    (void)requests_frame();
+    tool.update(context);
+    EXPECT_FALSE(requests_frame()) << "depth box";
+
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Polygon, lfs::vis::SelectionMode::Replace, {0.0f, 0.0f}, 0.0f));
+    ASSERT_TRUE(service_->appendInteractivePolygonVertex({30.0f, 0.0f}));
+    service_->refreshInteractivePreview();
+    (void)requests_frame();
+    service_->refreshInteractivePreview();
+    EXPECT_FALSE(requests_frame()) << "open polygon";
+    service_->updateInteractiveSelection({20.0f, 10.0f});
+    service_->refreshInteractivePreview();
+    EXPECT_TRUE(requests_frame()) << "open polygon after a cursor move";
+    service_->cancelInteractiveSelection();
+
+    // Away from the only splat, ring hover finds nothing at either position.
+    service_->updatePassiveRingHoverPreview({90.0f, 90.0f}, lfs::vis::SelectionMode::Replace);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    service_->updatePassiveRingHoverPreview({91.0f, 90.0f}, lfs::vis::SelectionMode::Replace);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    (void)requests_frame();
+    service_->updatePassiveRingHoverPreview({92.0f, 90.0f}, lfs::vis::SelectionMode::Replace);
+    EXPECT_FALSE(requests_frame()) << "ring hover over empty space";
 }
