@@ -32,6 +32,22 @@ namespace {
         EXPECT_TRUE(s.live_holders.empty());
     }
 
+    // Fails if a pending invalidation relabels a view that a request already planned as a scene
+    // change: hovering a camera frustum then reads as a scene edit in the ledger.
+    TEST(FrameDemandLedger, DirtyViewKeepsItsRequestReasons) {
+        FrameDemandLedger ledger;
+        ledger.request(FrameRequest{.reason = FrameReason::Overlay, .scope = FrameScope::View, .views = 1, .flags = DirtyFlag::OVERLAY});
+        auto plan = ledger.plan(t0());
+        lfs::vis::planDirtyView(plan, 1, DirtyFlag::OVERLAY);
+        EXPECT_TRUE(plan.reasons.test(static_cast<std::size_t>(FrameReason::Overlay)));
+        EXPECT_FALSE(plan.reasons.test(static_cast<std::size_t>(FrameReason::SceneChange)));
+
+        lfs::vis::planDirtyView(plan, 2, DirtyFlag::SPLATS);
+        EXPECT_TRUE(plan.reasons.test(static_cast<std::size_t>(FrameReason::SceneChange)));
+        EXPECT_EQ(plan.render_views, 3u);
+        EXPECT_EQ(plan.view_flags[1], DirtyFlag::SPLATS);
+    }
+
     TEST(FrameDemandLedger, DeadlineElapsedDuringPresentWakesImmediately) {
         const auto deadline = t0() + 16ms;
         EXPECT_DOUBLE_EQ(lfs::vis::secondsUntilFrameDeadline(deadline, t0()), 0.016);
