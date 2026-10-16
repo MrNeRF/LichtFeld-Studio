@@ -1052,6 +1052,8 @@ namespace lfs::training {
         view.frame_id = frame.forward_ctx.frame_id;
         view.completion_stream = frame.completion_stream;
         view.primitive_work_indices = frame.forward_ctx.primitive_work_indices;
+        view.sorted_primitive_indices =
+            static_cast<const unsigned*>(frame.forward_ctx.sorted_primitive_indices);
         return view;
     }
 

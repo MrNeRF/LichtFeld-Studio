@@ -26,6 +26,22 @@ def read_defaults():
     return json.loads(getter()) if getter else dict(DEFAULTS)
 
 
+def confirm_apply_defaults(on_applied=None):
+    """Apply saved defaults to the open project only after explicit confirmation."""
+    tr = lf.ui.tr
+    apply_label = tr("common.apply")
+
+    def apply_if_confirmed(button):
+        if button == apply_label:
+            lf.ui.apply_rendering_defaults()
+            if on_applied:
+                on_applied()
+
+    lf.ui.confirm_dialog(tr("rendering_panel.apply_defaults"),
+                         tr("rendering_panel.apply_defaults_confirm"),
+                         [apply_label, tr("common.cancel")], apply_if_confirmed)
+
+
 def vignette_value(prop):
     theme = getattr(lf.ui, "theme", lambda: None)()
     return getattr(getattr(theme, "vignette", None), prop,
@@ -71,6 +87,7 @@ class RenderingDefaultsSection:
             model.bind("theme_vignette_" + prop,
                        lambda p=prop: vignette_value(p),
                        lambda value, p=prop: set_vignette_value(p, value))
+        model.bind_event("apply_viewport_defaults", self._confirm_apply)
         self._handle = model.get_handle()
 
     def mount(self, doc):
@@ -132,6 +149,15 @@ class RenderingDefaultsSection:
             if self._handle:
                 for prop in DEFAULTS:
                     self._handle.dirty("default_" + prop)
+
+    def _confirm_apply(self, *_):
+        # A click can arrive before the focused field's blur listener commits.
+        for prop in tuple(self._text):
+            self._commit(prop)
+            if self._error:
+                return
+        if not self._error:
+            confirm_apply_defaults()
 
     def reset(self):
         lf.ui.set_rendering_defaults_json(json.dumps(DEFAULTS))

@@ -535,8 +535,11 @@ namespace lfs::rendering {
             }
 
             const glm::mat4 view = request.frame_view.getViewMatrix();
+            // A clipped target keeps the full camera: points project into camera_size and
+            // land at pixel - subregion_origin in the target.
+            const glm::ivec2 camera_size = request.frame_view.cameraSize();
             glm::mat4 projection = createProjectionMatrix(
-                request.frame_view.size,
+                camera_size,
                 focalLengthToVFov(request.frame_view.focal_length_mm),
                 request.frame_view.orthographic,
                 request.frame_view.ortho_scale,
@@ -544,9 +547,9 @@ namespace lfs::rendering {
                 request.frame_view.far_plane);
             if (!request.frame_view.orthographic && request.frame_view.intrinsics_override) {
                 const auto& intrinsics = *request.frame_view.intrinsics_override;
-                // The point raster maps NDC endpoints to pixel indices [0, size - 1].
-                const float raster_width = static_cast<float>(std::max(request.frame_view.size.x - 1, 1));
-                const float raster_height = static_cast<float>(std::max(request.frame_view.size.y - 1, 1));
+                // The point raster maps NDC endpoints to camera pixel indices [0, size - 1].
+                const float raster_width = static_cast<float>(std::max(camera_size.x - 1, 1));
+                const float raster_height = static_cast<float>(std::max(camera_size.y - 1, 1));
                 projection[0][0] = 2.0f * intrinsics.focal_x / raster_width;
                 projection[1][1] = 2.0f * intrinsics.focal_y / raster_height;
                 projection[2][0] = 1.0f - 2.0f * intrinsics.center_x / raster_width;
@@ -561,13 +564,37 @@ namespace lfs::rendering {
             const auto point_backend = lfs::core::gpu_backend_of(positions_cuda);
             // Vulkan and Metal splat through the tensor backend's rasterizer.
             if (point_backend != lfs::core::GpuBackend::CUDA) {
+                // The backend rasterizer maps the whole camera onto its target. For a
+                // clipped target, a projective camera remaps NDC so the target window spans
+                // [-1, 1]; an equirectangular one renders the full camera and keeps the window.
+                const glm::ivec2 origin = request.frame_view.subregion_origin;
+                const bool clipped = camera_size != glm::ivec2(width, height) || origin != glm::ivec2(0);
+                const bool crop_full_camera =
+                    clipped && request.render.equirectangular && origin.x >= 0 && origin.y >= 0 &&
+                    origin.x + width <= camera_size.x && origin.y + height <= camera_size.y;
+                glm::mat4 raster_view_proj = view_proj;
+                float raster_ortho_scale = request.frame_view.ortho_scale;
+                if (clipped && !crop_full_camera) {
+                    const float target_x = static_cast<float>(std::max(width - 1, 1));
+                    const float target_y = static_cast<float>(std::max(height - 1, 1));
+                    const float scale_x = static_cast<float>(camera_size.x - 1) / target_x;
+                    const float scale_y = static_cast<float>(camera_size.y - 1) / target_y;
+                    glm::mat4 window(1.0f);
+                    window[0][0] = scale_x;
+                    window[3][0] = scale_x - 1.0f - 2.0f * static_cast<float>(origin.x) / target_x;
+                    window[1][1] = scale_y;
+                    window[3][1] = 1.0f - scale_y + 2.0f * static_cast<float>(origin.y) / target_y;
+                    raster_view_proj = window * view_proj;
+                    // Orthographic disk radii follow the camera's pixels per world unit.
+                    raster_ortho_scale *= static_cast<float>(height) / static_cast<float>(std::max(camera_size.y, 1));
+                }
                 lfs::core::PointRaster raster{
-                    .width = width,
-                    .height = height,
+                    .width = crop_full_camera ? camera_size.x : width,
+                    .height = crop_full_camera ? camera_size.y : height,
                     .orthographic = request.frame_view.orthographic,
                     .equirectangular = request.render.equirectangular,
                     .transparent_background = request.transparent_background,
-                    .ortho_scale = request.frame_view.ortho_scale,
+                    .ortho_scale = raster_ortho_scale,
                     .focal_y = request.frame_view.getCameraIntrinsics().focal_y,
                     .voxel_size = request.render.voxel_size * request.render.scaling_modifier,
                     .far_plane = request.frame_view.far_plane,
@@ -577,7 +604,7 @@ namespace lfs::rendering {
                     .crop_desaturate = request.filters.crop_desaturate,
                 };
                 std::copy_n(glm::value_ptr(view), 16, raster.view.begin());
-                std::copy_n(glm::value_ptr(view_proj), 16, raster.view_projection.begin());
+                std::copy_n(glm::value_ptr(raster_view_proj), 16, raster.view_projection.begin());
                 if (request.filters.crop_box) {
                     const auto& crop = *request.filters.crop_box;
                     raster.crop = lfs::core::PointRasterCrop::Box;
@@ -594,6 +621,16 @@ namespace lfs::rendering {
                     positions_cuda, colors_cuda, raster, optional_tensor(transforms_cuda),
                     optional_tensor(transform_indices_cuda), optional_tensor(visibility_cuda),
                     optional_tensor(deleted_mask_cuda));
+                if (crop_full_camera) {
+                    const auto window = [&](const Tensor& full) {
+                        return full
+                            .slice(1, static_cast<size_t>(origin.y), static_cast<size_t>(origin.y + height))
+                            .slice(2, static_cast<size_t>(origin.x), static_cast<size_t>(origin.x + width))
+                            .contiguous();
+                    };
+                    image_tensor = window(image_tensor);
+                    depth_tensor = window(depth_tensor);
+                }
                 return RasterImageResult{
                     .image = std::move(image_tensor),
                     .depth = std::move(depth_tensor),
@@ -651,6 +688,10 @@ namespace lfs::rendering {
             std::copy_n(glm::value_ptr(view_proj), 16, params.view_proj);
             params.width = width;
             params.height = height;
+            params.camera_width = camera_size.x;
+            params.camera_height = camera_size.y;
+            params.origin_x = request.frame_view.subregion_origin.x;
+            params.origin_y = request.frame_view.subregion_origin.y;
             params.channels = channels;
             params.equirectangular = request.render.equirectangular;
             params.orthographic = request.frame_view.orthographic;

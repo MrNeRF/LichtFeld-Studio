@@ -3241,9 +3241,11 @@ namespace lfs::vis::gui {
         NativeOverlayDrawList buttons;
         buttons.PushClipRect(viewport.pos, viewport.pos + viewport.size);
         const float button_size = 24.0f * ui_scale;
-        for (int index = 0; index < 2; ++index) {
+        // Reset Home, Home and Frame Selected, right-aligned under the widget.
+        constexpr std::array<std::string_view, 3> commands{"reset_home", "home", "frame_selected"};
+        for (int index = 0; index < 3; ++index) {
             const glm::vec2 pos{viewport.pos.x + viewport.size.x - gizmo_margin -
-                                    (2 - index) * (button_size + 4.0f * ui_scale),
+                                    (3 - index) * (button_size + 4.0f * ui_scale),
                                 viewport.pos.y + gizmo_margin + gizmo_size + 4.0f * ui_scale};
             const bool hovered = mouse_x >= pos.x && mouse_x < pos.x + button_size &&
                                  mouse_y >= pos.y && mouse_y < pos.y + button_size;
@@ -3252,6 +3254,18 @@ namespace lfs::vis::gui {
             const auto point = [&](float x, float y) { return pos + glm::vec2(x, y) * button_size; };
             const auto color = overlayColor(220, 224, 232, 255);
             if (index == 0) {
+                // Circular arrow: the built-in home that Shift+H replaced.
+                constexpr int segments = 12;
+                for (int i = 0; i < segments; ++i) {
+                    const float a0 = glm::radians(60.0f + 270.0f * i / segments);
+                    const float a1 = glm::radians(60.0f + 270.0f * (i + 1) / segments);
+                    buttons.AddLine(point(.5f + .28f * std::cos(a0), .5f - .28f * std::sin(a0)),
+                                    point(.5f + .28f * std::cos(a1), .5f - .28f * std::sin(a1)), color, 1.5f);
+                }
+                const glm::vec2 tip = point(.5f + .28f * std::cos(glm::radians(60.0f)), .5f - .28f * std::sin(glm::radians(60.0f)));
+                buttons.AddLine(tip, tip + glm::vec2(-.2f, -.02f) * button_size, color, 1.5f);
+                buttons.AddLine(tip, tip + glm::vec2(.02f, .2f) * button_size, color, 1.5f);
+            } else if (index == 1) {
                 buttons.AddLine(point(.2f, .48f), point(.5f, .2f), color, 1.5f);
                 buttons.AddLine(point(.5f, .2f), point(.8f, .48f), color, 1.5f);
                 buttons.AddLine(point(.3f, .42f), point(.3f, .78f), color, 1.5f);
@@ -3265,7 +3279,7 @@ namespace lfs::vis::gui {
                 buttons.AddLine(point(.66f, .5f), point(.88f, .5f), color, 1.5f);
             }
             if (hovered && frame_input.mouse_clicked[0] && !guiFocusState().want_capture_mouse)
-                viewer_->runViewCommand(viewport.view, index == 0 ? "home" : "frame_selected");
+                viewer_->runViewCommand(viewport.view, commands[index]);
         }
         buttons.PopClipRect();
         const bool widget_held = viewport_gizmo_dragging_ || viewport_gizmo_pressed_;
@@ -3714,7 +3728,7 @@ namespace lfs::vis::gui {
             const auto layout = panelGizmoLayout(panel);
             if (!layout)
                 continue;
-            // The home and frame buttons sit in a 28 dp strip below the widget.
+            // The reset-home, home and frame buttons sit in a 28 dp strip below the widget.
             const glm::vec2 strip_min(layout->top_left.x, layout->top_left.y + layout->size);
             const glm::vec2 strip_max = strip_min + glm::vec2(layout->size, 28.0f * viewportGizmoUiScale());
             if (layout->discContains(point) ||

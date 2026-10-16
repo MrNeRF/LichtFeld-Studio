@@ -165,15 +165,14 @@ namespace nvjpeg {
                   ,
                   device_allocator_desc_(device_allocator_desc ? *device_allocator_desc : nvimgcodecDeviceAllocator_t{NVIMGCODEC_STRUCTURE_TYPE_DEVICE_ALLOCATOR, sizeof(nvimgcodecDeviceAllocator_t), nullptr, nullptr, nullptr, nullptr, 0}) {
                 nvimgcodec::DeviceGuard device_guard(device_id_);
-                // Use the V2 allocator API when either allocator is fully populated;
-                // nvJPEG uses its default allocator for any nullptr side.
+                // nvjpegCreateExV2 requires both allocators; partial allocators use the legacy defaults.
                 bool has_device_allocator = device_allocator_.dev_malloc && device_allocator_.dev_free;
                 bool has_pinned_allocator = pinned_allocator_.pinned_malloc && pinned_allocator_.pinned_free;
-                if ((has_device_allocator || has_pinned_allocator) && nvjpegIsSymbolAvailable("nvjpegCreateExV2")) {
+                if (has_device_allocator && has_pinned_allocator && nvjpegIsSymbolAvailable("nvjpegCreateExV2")) {
                     XM_CHECK_NVJPEG(nvjpegCreateExV2(
                         NVJPEG_BACKEND_HARDWARE,
-                        has_device_allocator ? &device_allocator_ : nullptr,
-                        has_pinned_allocator ? &pinned_allocator_ : nullptr,
+                        &device_allocator_,
+                        &pinned_allocator_,
                         nvjpeg_flags,
                         &handle_));
                 } else {

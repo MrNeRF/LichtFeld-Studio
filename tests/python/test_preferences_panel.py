@@ -162,7 +162,15 @@ def preferences_panel_module(monkeypatch):
         }
 
     lf_stub = ModuleType("lichtfeld")
+    state.marketplace_preferences = {"view": "list", "git_checkout": False}
+    state.marketplace_notifications = []
     lf_stub.ui = SimpleNamespace(
+        get_marketplace_preferences=lambda: dict(state.marketplace_preferences),
+        set_marketplace_view=lambda value: state.marketplace_preferences.update(view=value),
+        set_marketplace_git_checkout=lambda value: state.marketplace_preferences.update(git_checkout=value),
+        reset_marketplace_preferences=lambda: state.marketplace_preferences.update(view="list", git_checkout=False),
+        get_panel_object=lambda _panel_id: SimpleNamespace(
+            reload_marketplace_preferences=lambda: state.marketplace_notifications.append(True)),
         clear_startup_sidebar=lambda: state.sidebar_clear_calls.append(True),
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
         PanelHeightMode=SimpleNamespace(FILL="fill"),
@@ -429,8 +437,6 @@ def preferences_panel_module(monkeypatch):
         return False
 
     lf_stub.get_render_settings = lambda: state.render_settings
-    lf_stub.project_auto_save_on_close_enabled = lambda: True
-    lf_stub.project_set_auto_save_on_close = lambda _enabled: None
     state.navigation_up_axis = "legacy_y"
     state.navigation_up_calls = []
     state.new_project_axis = "legacy_y"
@@ -459,6 +465,7 @@ def preferences_panel_module(monkeypatch):
     lf_stub.file_association_set = file_association_set
 
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
+    sys.modules.pop("lfs_plugins.marketplace_preferences", None)
     sys.modules.pop("lfs_plugins.preferences_panel", None)
     sys.modules.pop("lfs_plugins.rendering_defaults", None)
     sys.modules.pop("lfs_plugins.keymap_bindings", None)
@@ -1094,7 +1101,9 @@ def test_safe_mode_reset_does_not_stage_mcp_changes(preferences_panel_module):
     module.lf.set_camera_navigation_mode = lambda *_a, **_k: None
     module.lf.set_camera_view_snap_enabled = lambda *_a, **_k: None
 
+    state.marketplace_preferences.update(view="card", git_checkout=True)
     panel._on_reset_all_settings(None, None, None)
+    assert state.marketplace_preferences == {"view": "list", "git_checkout": False}
     assert state.sidebar_clear_calls == [True]
 
     assert state.set_mcp_calls == []
@@ -1540,3 +1549,50 @@ def test_window_mode_change_refreshes_preferences_state(preferences_panel_module
     panel._handle = SimpleNamespace(dirty=dirty.append)
     panel._dirty_selection()
     assert 'native_floating_windows' in dirty
+
+
+def test_save_on_close_change_invalidates_preferences_state(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    before = panel._state()
+    module.lf.project_set_auto_save_on_close(True)
+    assert state.auto_save_on_close is True
+    assert panel._state() != before
+
+
+def test_default_app_settings_preserve_registration_step(preferences_panel_module):
+    module, _state = preferences_panel_module
+    calls = []
+    module.lf.ui.register_file_associations = lambda: calls.append("register")
+    module.lf.ui.open_file_association_settings = lambda: calls.append("open")
+    module.PreferencesPanel._open_default_app_settings()
+    assert calls == ["register", "open"]
+
+
+def test_marketplace_preferences_apply_and_reset_independently(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_marketplace_preference("view", "card")
+    panel._set_marketplace_preference("git_checkout", True)
+    assert state.marketplace_preferences == {"view": "card", "git_checkout": True}
+    assert len(state.marketplace_notifications) == 2
+    panel._reset_section("marketplace")
+    assert state.marketplace_preferences == {"view": "list", "git_checkout": False}
+    assert len(state.marketplace_notifications) == 3
+    assert state.set_language_calls == []
+
+
+@pytest.mark.parametrize("git_available", [False, True])
+def test_marketplace_git_checkout_requires_git_without_changing_saved_choice(preferences_panel_module, monkeypatch, git_available):
+    module, state = preferences_panel_module
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/usr/bin/git" if git_available else None)
+    panel = module.PreferencesPanel()
+    assert panel._marketplace_git_available is git_available
+    panel._set_marketplace_preference("git_checkout", True)
+    assert state.marketplace_preferences["git_checkout"] is git_available
+    state.marketplace_preferences["git_checkout"] = True
+    reopened = module.PreferencesPanel()
+    assert reopened._marketplace_git_available is git_available
+    assert state.marketplace_preferences["git_checkout"] is True
+    reopened._set_marketplace_preference("git_checkout", False)
+    assert state.marketplace_preferences["git_checkout"] is False

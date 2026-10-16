@@ -184,11 +184,11 @@ namespace lfs::io {
         void remove_stale_run_spill_directories() {
             const auto base = run_spill_base();
             std::error_code ec;
-            if (!std::filesystem::is_directory(base, ec) || ec)
+            if (!lfs::core::native_fs::is_directory(base, ec) || ec)
                 return;
 
             constexpr std::string_view prefix = "ppl_run_";
-            for (const auto& entry : std::filesystem::directory_iterator(base, ec)) {
+            for (const auto& entry : std::filesystem::directory_iterator(lfs::core::native_fs::traversal_path(base), ec)) {
                 if (ec)
                     break;
                 if (!entry.is_directory(ec) || ec) {
@@ -210,10 +210,11 @@ namespace lfs::io {
                     continue;
 
                 std::error_code remove_ec;
-                std::filesystem::remove_all(entry.path(), remove_ec);
+                lfs::core::native_fs::remove_all(entry.path(), remove_ec);
                 if (remove_ec) {
                     LOG_WARN("[PipelinedImageLoader] Failed to remove stale run spill {}: {}",
-                             lfs::core::path_to_utf8(entry.path()), remove_ec.message());
+                             lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(base, entry.path())),
+                             remove_ec.message());
                 }
             }
         }
@@ -227,11 +228,11 @@ namespace lfs::io {
                 return false;
             }
             std::error_code ec;
-            const bool exists = std::filesystem::exists(path, ec);
+            const bool exists = lfs::core::native_fs::exists(path, ec);
             if (ec || !exists) {
                 return false;
             }
-            const bool regular = std::filesystem::is_regular_file(path, ec);
+            const bool regular = lfs::core::native_fs::is_regular_file(path, ec);
             return !ec && regular;
         }
 
@@ -265,12 +266,12 @@ namespace lfs::io {
         if (cuda_run) {
             const auto base = run_spill_base();
             std::error_code ec;
-            std::filesystem::create_directories(base, ec);
+            lfs::core::native_fs::create_directories(base, ec);
             if (!ec) {
                 run_spill_folder_ = base /
                                     ("ppl_run_" + std::to_string(current_process_id()) + "_" +
                                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-                std::filesystem::create_directories(run_spill_folder_, ec);
+                lfs::core::native_fs::create_directories(run_spill_folder_, ec);
             }
             if (ec) {
                 LOG_WARN("[PipelinedImageLoader] Run spill folder creation failed: {}", ec.message());
@@ -664,7 +665,7 @@ namespace lfs::io {
         if (config_.backend == lfs::core::GpuBackend::CUDA) {
             if (!decodes_16bit(params) && !decodes_float(path, params) && !load_params_need_processing(params))
                 return std::nullopt;
-            std::ifstream file(path, std::ios::binary);
+            std::ifstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
             unsigned char signature[2]{};
             file.read(reinterpret_cast<char*>(signature), sizeof(signature));
             if ((file.gcount() == 2 && signature[0] == 0xff && signature[1] == 0xd8) ||
@@ -821,7 +822,7 @@ namespace lfs::io {
             if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
                 spill_cache_bytes_ -= it->second.size_bytes;
                 std::error_code ec;
-                std::filesystem::remove(it->second.path, ec);
+                lfs::core::native_fs::remove(it->second.path, ec);
                 spill_cache_.erase(it);
             }
             return nullptr;
@@ -841,7 +842,7 @@ namespace lfs::io {
             if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
                 spill_cache_bytes_ -= it->second.size_bytes;
                 std::error_code ec;
-                std::filesystem::remove(it->second.path, ec);
+                lfs::core::native_fs::remove(it->second.path, ec);
                 spill_cache_.erase(it);
             }
             evict_jpeg_cache_if_needed(size);
@@ -863,7 +864,7 @@ namespace lfs::io {
         if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
             spill_cache_bytes_ -= it->second.size_bytes;
             std::error_code ec;
-            std::filesystem::remove(it->second.path, ec);
+            lfs::core::native_fs::remove(it->second.path, ec);
             spill_cache_.erase(it);
         }
     }
@@ -960,7 +961,7 @@ namespace lfs::io {
         if (run_spill_folder_.empty())
             return;
         std::error_code ec;
-        std::filesystem::remove_all(run_spill_folder_, ec);
+        lfs::core::native_fs::remove_all(run_spill_folder_, ec);
         if (ec) {
             LOG_WARN("[PipelinedImageLoader] Failed to remove run spill {}: {}",
                      lfs::core::path_to_utf8(run_spill_folder_), ec.message());

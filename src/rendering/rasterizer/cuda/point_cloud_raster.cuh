@@ -43,6 +43,13 @@ namespace lfs::rendering::pcraster {
         float view_proj[16];
         int width;
         int height;
+        // A clipped target keeps the full camera: points project into
+        // camera_width x camera_height and land at pixel - origin in the target.
+        // A zero camera size means the target is the whole camera.
+        int camera_width;
+        int camera_height;
+        int origin_x;
+        int origin_y;
         int channels;
         bool equirectangular;
         bool orthographic;

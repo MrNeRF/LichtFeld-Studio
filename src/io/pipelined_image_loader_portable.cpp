@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -33,6 +35,38 @@ namespace lfs::io {
         constexpr float UINT16_SCALE = 1.0f / 65535.0f;
 
         using ReleaseFn = void (*)(void*);
+
+        // stb's filename API copies the path into a fixed buffer and opens it plainly, so long paths go
+        // through lfs::core::open_file and stb's FILE readers instead.
+        class StbFile {
+        public:
+            explicit StbFile(const std::filesystem::path& path) : file_(lfs::core::open_file(path, "rb")) {}
+            ~StbFile() {
+                if (file_)
+                    std::fclose(file_);
+            }
+            StbFile(const StbFile&) = delete;
+            StbFile& operator=(const StbFile&) = delete;
+            std::FILE* get() const { return file_; }
+
+        private:
+            std::FILE* file_;
+        };
+
+        bool stb_is_16_bit(const std::filesystem::path& path) {
+            const StbFile file(path);
+            return file.get() && stbi_is_16_bit_from_file(file.get());
+        }
+
+        stbi_uc* stb_load(const std::filesystem::path& path, int* w, int* h, int* channels, const int desired) {
+            const StbFile file(path);
+            return file.get() ? stbi_load_from_file(file.get(), w, h, channels, desired) : nullptr;
+        }
+
+        stbi_us* stb_load_16(const std::filesystem::path& path, int* w, int* h, int* channels, const int desired) {
+            const StbFile file(path);
+            return file.get() ? stbi_load_from_file_16(file.get(), w, h, channels, desired) : nullptr;
+        }
 
         TensorShape image_shape(const int height, const int width, const int channels) {
             if (channels == 1)
@@ -311,8 +345,7 @@ namespace lfs::io {
                                       finish_mask(std::move(alpha), item.alpha_mask_params));
                 } else if (item.is_mask) {
                     int width = 0, height = 0, channels = 0;
-                    stbi_uc* const gray = stbi_load(lfs::core::path_to_utf8(item.path).c_str(),
-                                                    &width, &height, &channels, 1);
+                    stbi_uc* const gray = stb_load(item.path, &width, &height, &channels, 1);
                     if (!gray)
                         throw std::runtime_error("Failed to decode mask");
                     const auto [target_w, target_h] = sidecar_target_size(item, width, height);
@@ -338,19 +371,18 @@ namespace lfs::io {
                     try_complete_pair(item.sequence_id, item.loader_generation, std::nullopt,
                                       finish_mask(std::move(mask), item.mask_params));
                 } else if (item.is_depth || item.is_normal) {
-                    const std::string path_utf8 = lfs::core::path_to_utf8(item.path);
                     const int channels = item.is_depth ? 1 : 3;
-                    const bool sixteen_bit = stbi_is_16_bit(path_utf8.c_str()) != 0;
+                    const bool sixteen_bit = stb_is_16_bit(item.path);
                     int width = 0, height = 0, source_channels = 0;
                     Tensor samples;
                     if (sixteen_bit) {
-                        stbi_us* const data = stbi_load_16(path_utf8.c_str(), &width, &height, &source_channels, channels);
+                        stbi_us* const data = stb_load_16(item.path, &width, &height, &source_channels, channels);
                         if (!data)
                             throw std::runtime_error(item.is_depth ? "Failed to decode 16-bit depth"
                                                                    : "Failed to decode 16-bit normal map");
                         samples = host_uint16(data, image_shape(height, width, channels), stbi_image_free);
                     } else {
-                        stbi_uc* const data = stbi_load(path_utf8.c_str(), &width, &height, &source_channels, channels);
+                        stbi_uc* const data = stb_load(item.path, &width, &height, &source_channels, channels);
                         if (data) {
                             samples = host_uint8(data, image_shape(height, width, channels), stbi_image_free);
                         } else {

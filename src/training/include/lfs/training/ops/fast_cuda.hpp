@@ -14,6 +14,8 @@ namespace lfs::training {
         std::uint64_t frame_id = 0;
         cudaStream_t completion_stream = nullptr;
         const unsigned* primitive_work_indices = nullptr;
+        // Per-instance primitive indices in depth-sorted tile order.
+        const unsigned* sorted_primitive_indices = nullptr;
     };
 
     [[nodiscard]] CudaFastFrameView cuda_fast_frame_view(const lfs::gpu_ops::FastSaved& saved) noexcept;

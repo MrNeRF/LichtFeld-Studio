@@ -3,6 +3,8 @@
 add_library(lfs_file_io SHARED ../atomic_file.cpp)
 target_compile_definitions(lfs_file_io PRIVATE LFS_FILE_IO_EXPORTS)
 target_include_directories(lfs_file_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../include")
+# path_utils.hpp includes core/native_fs.hpp from src/.
+target_include_directories(lfs_file_io PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_link_libraries(lfs_file_io PUBLIC lfs_error)
 target_compile_features(lfs_file_io PUBLIC cxx_std_23)
 set_target_properties(lfs_file_io PROPERTIES POSITION_INDEPENDENT_CODE ON

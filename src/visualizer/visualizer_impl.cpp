@@ -1017,6 +1017,12 @@ namespace lfs::vis {
             rendering_manager_->markCameraCut(id);
             return changed();
         }
+        if (command == "reset_home") {
+            view->camera.camera.resetHomePosition();
+            view->camera.camera.resetToHome();
+            rendering_manager_->markCameraCut(id);
+            return changed();
+        }
         if (command == "frame_all" || command == "frame_selected") {
             activateView(id);
             return input_controller_ && input_controller_->frameView(id, command == "frame_selected");
