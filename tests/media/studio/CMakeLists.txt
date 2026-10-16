@@ -11,6 +11,12 @@ if(APPLE)
     target_link_options(media_linear_video_contracts PRIVATE "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
     target_link_libraries(media_linear_video_contracts PRIVATE lfs_python_embed)
 endif()
+if(MSVC)
+    # The CPU contract runs on Windows CI without a display driver; static video/io code
+    # references the driver API, so load nvcuda.dll only when a GPU backend calls it.
+    target_link_options(media_linear_video_contracts PRIVATE "/DELAYLOAD:nvcuda.dll")
+    target_link_libraries(media_linear_video_contracts PRIVATE delayimp)
+endif()
 add_test(NAME MediaTensorVideoCpuContracts COMMAND media_linear_video_contracts cpu)
 set_tests_properties(MediaTensorVideoCpuContracts PROPERTIES LABELS "media;cpu;video" TIMEOUT 120)
 if(WIN32)
