@@ -2,9 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ssog.hpp"
 #include "core/file_extensions.hpp"
-#include "core/native_fs.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "formats/archive_member_names.hpp"
 #include "io/atomic_output.hpp"
 #include "io/splat_decimate.hpp"
 #include "sogs.hpp"
@@ -160,7 +161,7 @@ namespace lfs::io {
                 while ((status = archive_read_next_header(reader.get(), &entry)) == ARCHIVE_OK) {
                     if (++count > 1000000)
                         throw std::runtime_error("Too many SSOG archive entries");
-                    const auto* raw_name = archive_entry_pathname_utf8(entry);
+                    const auto* raw_name = archive_member_name(entry);
                     if (!raw_name)
                         throw std::runtime_error("Missing SSOG archive entry name");
                     const auto name = safe_name(raw_name);

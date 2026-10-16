@@ -5,6 +5,7 @@
 #include "usdz.hpp"
 #include "core/native_fs.hpp"
 #include "crate.hpp"
+#include "formats/archive_member_names.hpp"
 #include "usda_read.hpp"
 #include <algorithm>
 #include <archive.h>
@@ -48,7 +49,7 @@ namespace lfs::io::usd_flat {
         std::vector<std::uint8_t> bytes;
         archive_entry* entry = nullptr;
         while (archive_read_next_header(archive, &entry) == ARCHIVE_OK) {
-            const char* name = archive_entry_pathname_utf8(entry);
+            const char* name = archive_member_name(entry);
             if (!name) {
                 archive_read_data_skip(archive);
                 continue;

@@ -10,11 +10,12 @@
 #endif
 
 #include "formats/nurec_usdz.hpp"
-#include "core/native_fs.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/tensor.hpp"
+#include "formats/archive_member_names.hpp"
 #include "formats/usd_flat/half.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
@@ -445,7 +446,7 @@ namespace lfs::io {
             UsdzEntries entries;
             struct archive_entry* entry = nullptr;
             while (archive_read_next_header(archive, &entry) == ARCHIVE_OK) {
-                const char* entry_name = archive_entry_pathname_utf8(entry);
+                const char* entry_name = archive_member_name(entry);
                 if (!entry_name) {
                     archive_read_free(archive);
                     return std::unexpected("USDZ archive entry is missing a path name");
@@ -478,7 +479,7 @@ namespace lfs::io {
 
                 archive_write_add_filter_none(archive_);
                 if (archive_write_set_format_zip(archive_) != ARCHIVE_OK ||
-                    archive_write_set_format_option(archive_, "zip", "hdrcharset", "UTF-8") != ARCHIVE_OK) {
+                    !use_utf8_zip_member_names(archive_)) {
                     const std::string error = archive_error_string(archive_) ? archive_error_string(archive_) : "unknown error";
                     archive_write_free(archive_);
                     archive_ = nullptr;
@@ -529,7 +530,7 @@ namespace lfs::io {
                     return std::unexpected("Failed to allocate archive entry");
                 }
 
-                archive_entry_set_pathname_utf8(entry, filename.c_str());
+                set_archive_member_name(entry, filename.c_str());
                 archive_entry_set_size(entry, static_cast<la_int64_t>(data.size()));
                 archive_entry_set_filetype(entry, AE_IFREG);
                 archive_entry_set_perm(entry, 0644);

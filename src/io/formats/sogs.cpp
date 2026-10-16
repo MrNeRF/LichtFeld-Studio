@@ -12,8 +12,8 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/error_reporter.hpp"
 #include "core/file_extensions.hpp"
-#include "core/native_fs.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/sh_value_quant_kernels.hpp"
@@ -22,6 +22,7 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "cuda/kmeans.hpp"
 #include "cuda/morton_encoding.hpp"
+#include "formats/archive_member_names.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include <algorithm>
@@ -1046,7 +1047,7 @@ namespace lfs::io {
                         return std::unexpected(std::format(
                             "SOG archive contains more than {} entries", MAX_ARCHIVE_ENTRIES));
                     }
-                    const char* const pathname = archive_entry_pathname_utf8(entry);
+                    const char* const pathname = archive_member_name(entry);
                     if (!pathname) {
                         return std::unexpected("SOG archive entry has no valid pathname");
                     }
@@ -1386,7 +1387,7 @@ namespace lfs::io {
                 }
 
                 if (archive_write_set_format_zip(a_) != ARCHIVE_OK ||
-                    archive_write_set_format_option(a_, "zip", "hdrcharset", "UTF-8") != ARCHIVE_OK) {
+                    !use_utf8_zip_member_names(a_)) {
                     return make_error(ErrorCode::ARCHIVE_CREATION_FAILED,
                                       std::format("Failed to set ZIP format: {}", archive_error_string(a_) ? archive_error_string(a_) : "unknown error"), output_path_);
                 }
@@ -1451,7 +1452,7 @@ namespace lfs::io {
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t = std::chrono::system_clock::to_time_t(now);
 
-                archive_entry_set_pathname_utf8(entry, filename.c_str());
+                set_archive_member_name(entry, filename.c_str());
                 archive_entry_set_size(entry, static_cast<la_int64_t>(size));
                 archive_entry_set_filetype(entry, AE_IFREG);
                 archive_entry_set_perm(entry, 0644);
