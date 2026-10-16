@@ -1009,19 +1009,25 @@ namespace {
                     return true;
                 };
                 size_t boundary = 0;
-                double stable_max = 0;
+                double stable_max = 0, stable_squared = 0;
                 for (size_t i = 0; i < pixels.numel(); i += 3) {
                     const bool edge = (matches(a + i, marker) && matches(b + i, marker * .4f)) ||
                                       (matches(b + i, marker) && matches(a + i, marker * .4f));
                     if (edge)
                         ++boundary;
                     else
-                        for (size_t c = 0; c < 3; ++c)
-                            stable_max = std::max(stable_max, std::abs(double(a[i + c]) - b[i + c]));
+                        for (size_t c = 0; c < 3; ++c) {
+                            const double error = std::abs(double(a[i + c]) - b[i + c]);
+                            stable_max = std::max(stable_max, error);
+                            stable_squared += error * error;
+                        }
                 }
+                const size_t stable_values = pixels.numel() - 3 * boundary;
                 difference["marker_boundary_disagreement_pixels"] = boundary;
                 difference["marker_boundary_disagreement_fraction"] = 3. * boundary / pixels.numel();
                 difference["marker_stable_max_error"] = stable_max;
+                // Flipped boundary pixels have their own budget above; RMS covers the rest.
+                difference["marker_stable_rmse"] = stable_values ? std::sqrt(stable_squared / stable_values) : 0.;
             }
             if (o.transparent) {
                 auto rgba = core::Tensor::empty({size_t(o.height), size_t(o.width), 4}, core::Device::CPU, core::DataType::Float32);
@@ -1274,8 +1280,10 @@ namespace {
                                        : o.transparent                        ? double(difference["transparent_valid_max_error"])
                                        : o.equirect && o.overlay == "markers" ? double(difference["marker_stable_max_error"])
                                                                               : double(difference["max_error"]);
-            const double rms_error = double(difference[o.depth ? "depth_valid_rmse" : o.transparent ? "transparent_visible_rmse"
-                                                                                                    : "rmse"]);
+            const double rms_error = double(difference[o.depth                                ? "depth_valid_rmse"
+                                                       : o.transparent                        ? "transparent_visible_rmse"
+                                                       : o.equirect && o.overlay == "markers" ? "marker_stable_rmse"
+                                                                                              : "rmse"]);
             if (o.verify_parity && (local_error > 4. / 255 + 1e-7 ||
                                     double(difference["depth_coverage_disagreement_fraction"]) > .001 ||
                                     (difference.contains("marker_boundary_disagreement_fraction") && double(difference["marker_boundary_disagreement_fraction"]) > .001) ||
