@@ -1880,61 +1880,20 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] static GridUniform makeGridUniform(const VulkanViewportGridOverlay& grid) {
-            const glm::mat4 view_inv = glm::inverse(grid.view);
-            const glm::vec3 cam_pos = glm::vec3(view_inv[3]);
-            const glm::vec3 cam_right = glm::vec3(view_inv[0]);
-            const glm::vec3 cam_up = glm::vec3(view_inv[1]);
-            const glm::vec3 cam_forward = -glm::vec3(view_inv[2]);
-
-            // Pixel rays across the screen, from the bottom-left corner. Directions are kept apart from
-            // the origin: two far-away points subtracted in float lose the direction when zoomed out.
-            glm::vec3 ray_origin = cam_pos;
-            glm::vec3 ray_origin_x{0.0f};
-            glm::vec3 ray_origin_y{0.0f};
-            glm::vec3 ray_dir = cam_forward;
-            glm::vec3 ray_dir_x{0.0f};
-            glm::vec3 ray_dir_y{0.0f};
-            // The grid fades out on a floor around the pivot, sized in visible half-heights there.
-            constexpr float kGridFloorRadius = 3.5f;
-            float pivot_half_height = 0.0f;
-            if (grid.orthographic) {
-                const float half_width = 1.0f / grid.projection[0][0];
-                const float half_height = 1.0f / std::abs(grid.projection[1][1]);
-                const glm::vec3 right_offset = cam_right * half_width;
-                const glm::vec3 up_offset = cam_up * half_height;
-                constexpr float kRayNear = -1000.0f;
-
-                ray_origin = cam_pos + cam_forward * kRayNear - right_offset - up_offset;
-                ray_origin_x = right_offset * 2.0f;
-                ray_origin_y = up_offset * 2.0f;
-                pivot_half_height = half_height;
-            } else {
-                const float fov_y = 2.0f * std::atan(1.0f / std::abs(grid.projection[1][1]));
-                const float aspect = std::abs(grid.projection[1][1] / grid.projection[0][0]);
-                const float half_height = std::tan(fov_y * 0.5f);
-                const float half_width = half_height * aspect;
-                const glm::vec3 right_offset = cam_right * half_width;
-                const glm::vec3 up_offset = cam_up * half_height;
-
-                ray_dir = cam_forward - right_offset - up_offset;
-                ray_dir_x = right_offset * 2.0f;
-                ray_dir_y = up_offset * 2.0f;
-                pivot_half_height = glm::length(grid.pivot - cam_pos) * half_height;
-            }
-
+            const auto rays = gridRays(grid.view, grid.projection, grid.pivot, grid.orthographic);
             GridUniform uniform{};
             uniform.view_projection = grid.view_projection;
             uniform.view_position_plane = glm::vec4(grid.view_position,
                                                     static_cast<float>(std::clamp(grid.plane, 0, 2)));
             uniform.opacity_ortho = glm::vec4(std::clamp(grid.opacity, 0.0f, 1.0f), grid.orthographic ? 1.0f : 0.0f,
                                               0.0f, 0.0f);
-            uniform.pivot_radius = glm::vec4(grid.pivot, kGridFloorRadius * pivot_half_height);
-            uniform.ray_origin = glm::vec4(ray_origin, 0.0f);
-            uniform.ray_origin_x = glm::vec4(ray_origin_x, 0.0f);
-            uniform.ray_origin_y = glm::vec4(ray_origin_y, 0.0f);
-            uniform.ray_dir = glm::vec4(ray_dir, 0.0f);
-            uniform.ray_dir_x = glm::vec4(ray_dir_x, 0.0f);
-            uniform.ray_dir_y = glm::vec4(ray_dir_y, 0.0f);
+            uniform.pivot_radius = glm::vec4(grid.pivot, rays.floor_radius);
+            uniform.ray_origin = glm::vec4(rays.origin, 0.0f);
+            uniform.ray_origin_x = glm::vec4(rays.origin_x, 0.0f);
+            uniform.ray_origin_y = glm::vec4(rays.origin_y, 0.0f);
+            uniform.ray_dir = glm::vec4(rays.dir, 0.0f);
+            uniform.ray_dir_x = glm::vec4(rays.dir_x, 0.0f);
+            uniform.ray_dir_y = glm::vec4(rays.dir_y, 0.0f);
             return uniform;
         }
 
