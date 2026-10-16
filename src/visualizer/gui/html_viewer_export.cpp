@@ -15,7 +15,8 @@ namespace lfs::vis::gui {
             .output_path = options.output_path,
             .kmeans_iterations = 10,
             .progress_callback = options.progress_callback,
-            .provenance = options.provenance};
+            .provenance = options.provenance,
+            .background_color = options.background_color};
 
         auto result = lfs::io::export_html(splat_data, io_options);
         if (!result) {

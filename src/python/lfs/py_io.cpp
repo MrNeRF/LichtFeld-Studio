@@ -1533,12 +1533,23 @@ namespace lfs::python {
         m.def(
             "export_html",
             [](const PySplatData& data, const LogicalPath& path, int kmeans_iterations, nb::object progress,
-               bool include_provenance) {
+               bool include_provenance, nb::object background_color) {
                 io::HtmlExportOptions options;
                 options.output_path = path;
                 options.kmeans_iterations = kmeans_iterations;
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
+                if (background_color && !background_color.is_none()) {
+                    if (nb::isinstance<nb::sequence>(background_color)) {
+                        auto seq = nb::cast<nb::sequence>(background_color);
+                        if (nb::len(seq) == 3) {
+                            options.background_color = glm::vec3(
+                                nb::cast<float>(seq[0]),
+                                nb::cast<float>(seq[1]),
+                                nb::cast<float>(seq[2]));
+                        }
+                    }
+                }
 
                 if (progress && !progress.is_none()) {
                     PyExportProgressCallback py_progress{nb::cast<nb::object>(progress)};
@@ -1555,7 +1566,7 @@ namespace lfs::python {
                     throw_io_error(result.error(), "Failed to export HTML");
             },
             nb::arg("data"), nb::arg("path"), nb::arg("kmeans_iterations") = 10, nb::arg("progress") = nb::none(),
-            nb::arg("include_provenance") = true,
+            nb::arg("include_provenance") = true, nb::arg("background_color") = nb::none(),
             "Export splat data as self-contained HTML viewer. "
             "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 

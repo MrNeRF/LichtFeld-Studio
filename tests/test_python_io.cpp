@@ -2109,6 +2109,26 @@ TEST_F(PythonIOTest, HtmlExportCancellationKeepsExistingTarget) {
     expect_existing_target_and_no_temp_files(output_path, existing_contents);
 }
 
+TEST_F(PythonIOTest, HtmlExportEmbedsBackgroundColor) {
+    auto splat = create_test_splat(200, 0);
+    const fs::path output_path = temp_dir / "custom_bg.html";
+
+    HtmlExportOptions options;
+    options.output_path = output_path;
+    options.kmeans_iterations = 1;
+    options.background_color = glm::vec3(0.2f, 0.4f, 0.6f);
+
+    auto result = export_html(splat, options);
+    ASSERT_TRUE(result.has_value()) << "Failed to export HTML: " << result.error().format();
+    EXPECT_TRUE(fs::exists(output_path));
+
+    std::ifstream file(output_path);
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_TRUE(content.find("\"background\":{\"color\":[0.200000,0.400000,0.600000]}") != std::string::npos)
+        << "Should embed the specified background color";
+}
+
 TEST_F(PythonIOTest, RadSaveCancellationKeepsExistingTarget) {
     auto splat = create_test_splat(200, 0);
     const fs::path output_path = temp_dir / "keep_existing_on_cancel.rad";

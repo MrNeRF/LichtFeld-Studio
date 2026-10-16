@@ -237,7 +237,8 @@ namespace lfs::vis {
                                   bool rad_streamable,
                                   int spz_version,
                                   lfs::core::ProvenanceStamp provenance,
-                                  int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations);
+                                  int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations,
+                                  std::optional<glm::vec3> background_color = std::nullopt);
             void startColmapExport(const std::filesystem::path& path);
             void startGalleryPublicationExport(GalleryScenePublishRequest publication,
                                                std::optional<GalleryProjectExportRequest> source = std::nullopt);

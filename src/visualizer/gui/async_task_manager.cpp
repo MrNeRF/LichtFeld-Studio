@@ -1823,6 +1823,28 @@ namespace lfs::vis::gui {
         auto provenance = include_provenance ? make_gui_export_stamp(*scene_manager)
                                              : core::make_minimal_provenance_stamp();
 
+        std::optional<glm::vec3> background_color;
+        if (auto* rendering = services().renderingOrNull()) {
+            const auto vp_bg = rendering->getSettings().background_color;
+            if (vp_bg != glm::vec3(0.0f)) {
+                background_color = vp_bg;
+            }
+        }
+        if (!background_color) {
+            if (auto* trainer_mgr = services().trainerOrNull(); trainer_mgr && trainer_mgr->hasTrainer()) {
+                if (auto* trainer = trainer_mgr->getTrainer()) {
+                    const auto train_bg = trainer->getParams().optimization.bg_color;
+                    background_color = glm::vec3(train_bg[0], train_bg[1], train_bg[2]);
+                }
+            } else if (auto* params = services().paramsOrNull(); params && params->isLoaded()) {
+                const auto train_bg = params->getActiveParams().bg_color;
+                background_color = glm::vec3(train_bg[0], train_bg[1], train_bg[2]);
+            }
+        }
+        if (!background_color && services().renderingOrNull()) {
+            background_color = services().renderingOrNull()->getSettings().background_color;
+        }
+
         startAsyncExport(format,
                          path,
                          std::move(splats),
@@ -1832,7 +1854,8 @@ namespace lfs::vis::gui {
                          rad_flip_y,
                          rad_streamable,
                          spz_version,
-                         std::move(provenance), lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
+                         std::move(provenance), lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations,
+                         background_color);
     }
 
     void AsyncTaskManager::startColmapExport(const std::filesystem::path& path) {
@@ -2113,7 +2136,8 @@ namespace lfs::vis::gui {
                                             bool rad_streamable,
                                             int spz_version,
                                             core::ProvenanceStamp provenance,
-                                            int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
+                                            int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations,
+                                            std::optional<glm::vec3> background_color) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
             publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA));
@@ -2156,7 +2180,7 @@ namespace lfs::vis::gui {
              rad_flip_y,
              rad_streamable,
              spz_version,
-             provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations](
+             provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations, background_color](
                 std::stop_token stop_token) mutable {
                 bool cancellation_logged = false;
                 jobs_.work(job);
@@ -2312,7 +2336,8 @@ namespace lfs::vis::gui {
                                 .output_path = path,
                                 .kmeans_iterations = 10,
                                 .progress_callback = update_progress,
-                                .provenance = provenance};
+                                .provenance = provenance,
+                                .background_color = background_color};
                             if (auto result = lfs::io::export_html(*splat_data, options); result) {
                                 success = true;
                             } else {
