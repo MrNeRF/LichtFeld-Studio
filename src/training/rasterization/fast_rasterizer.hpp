@@ -144,6 +144,7 @@ namespace lfs::training {
         float erank_reg_weight = 0.0f;
         float dc_reg_weight = 0.0f;
         float sh_rest_reg_weight = 0.0f;
+        float sb_color_reg_weight = 0.0f;
         float flatten_reg_weight = 0.0f;
         float opacity_reg_weight = 0.0f;
         float* rendered_count = nullptr;

@@ -6571,6 +6571,7 @@ namespace lfs::training {
                         fused_extra_gradients.erank_reg_weight = params_.optimization.erank_reg;
                         fused_extra_gradients.dc_reg_weight = params_.optimization.dc_reg;
                         fused_extra_gradients.sh_rest_reg_weight = params_.optimization.sh_rest_reg;
+                        fused_extra_gradients.sb_color_reg_weight = params_.optimization.sb_color_reg;
                         // Fused path shares the configured opacity_reg weight between gradient and loss accumulation.
                         fused_extra_gradients.opacity_reg_weight =
                             params_.optimization.opacity_reg;

@@ -250,6 +250,8 @@ namespace lfs::core {
             float erank_reg = 0.0f;
             float dc_reg = 0.0f;
             float sh_rest_reg = 0.0f;
+            // L1 penalty on Spherical Beta lobe colours (their view-dependent term); 0 = off.
+            float sb_color_reg = 0.0f;
             float thin_structure_weight = 0.0f;
             float gradient_loss_weight = 0.0f;
             bool opacity_decay_rendered_only = false;

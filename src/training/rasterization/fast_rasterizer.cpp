@@ -66,6 +66,7 @@ namespace lfs::training {
         fused_adam.erank_reg_weight = fused_extra_gradients.erank_reg_weight;
         fused_adam.dc_reg_weight = fused_extra_gradients.dc_reg_weight;
         fused_adam.sh_rest_reg_weight = fused_extra_gradients.sh_rest_reg_weight;
+        fused_adam.sb_color_reg_weight = fused_extra_gradients.sb_color_reg_weight;
         fused_adam.flatten_reg_weight = fused_extra_gradients.flatten_reg_weight;
         fused_adam.opacity_reg_weight = fused_extra_gradients.opacity_reg_weight;
         fused_adam.scale_reg_loss_out = fused_extra_gradients.scale_reg_loss_out;

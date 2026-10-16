@@ -214,6 +214,7 @@ void fast_lfs::rasterization::backward(
         const bool disabled_features = fused_adam.erank_reg_weight <= 0.0f &&
                                        fused_adam.dc_reg_weight <= 0.0f &&
                                        fused_adam.sh_rest_reg_weight <= 0.0f &&
+                                       fused_adam.sb_color_reg_weight <= 0.0f &&
                                        fused_adam.flatten_reg_weight <= 0.0f &&
                                        !fused_adam.scale_reg_log &&
                                        !fused_adam.per_splat_mean_step &&

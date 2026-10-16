@@ -290,6 +290,18 @@ namespace fast_lfs::rasterization::kernels::backward {
                 fused_adam, primitive_idx, sh_layout_slots,
                 sh_mean, sh_cam, sh_gc, visible, colour_reg_mask);
         }
+        if constexpr (!DISABLED_FEATURES)
+            if (in_range && fused_adam.sb_color_reg_weight > 0.0f && sb_params != nullptr && num_sb_lobes > 0 &&
+                n_primitives > 0) {
+                // L1 on the softplus lobe colours: lobes that only fit a faint tail in the training
+                // views cannot keep large colours that light up in unobserved directions.
+                const float reg_scale = fused_adam.sb_color_reg_weight /
+                                        (static_cast<float>(n_primitives) * static_cast<float>(num_sb_lobes * 3u));
+                const float* lobes = sb_params + static_cast<size_t>(primitive_idx) * num_sb_lobes * SB_PARAMS_PER_LOBE;
+                for (uint l = 0; l < num_sb_lobes; ++l)
+                    for (uint c = 0; c < 3u; ++c)
+                        sb_grads[l * SB_PARAMS_PER_LOBE + c] += reg_scale * sb_softplus_grad(lobes[l * SB_PARAMS_PER_LOBE + c]);
+            }
         if (num_sb_lobes > 0) {
             adam_step_row<12>(sb_grads, fused_adam.sb_params, primitive_idx, num_sb_lobes * 6,
                               fused_adam.beta1, fused_adam.beta2, fused_adam.eps);

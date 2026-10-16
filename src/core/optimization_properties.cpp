@@ -219,6 +219,15 @@ namespace lfs::core::param {
             .precision(4)
             .ui_step(0.001)
             .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
+            .float_prop(&OptimizationParameters::sb_color_reg,
+                        "sb_color_reg", "Spherical Beta Color Penalty", d.sb_color_reg, 0.0f, 10.0f,
+                        "Keeps the Spherical Beta lobe colors small so lobes cannot flare in colors from new viewpoints; 0 turns it off")
+            .strategies({"mrnf"})
+            .locale("training.losses.sb_color_reg")
+            .tooltip("training.tooltip.sb_color_reg")
+            .precision(4)
+            .ui_step(0.01)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
 
             .all_strategies()
             .float_prop(&OptimizationParameters::thin_structure_weight,

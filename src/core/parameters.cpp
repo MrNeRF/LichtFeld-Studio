@@ -914,6 +914,7 @@ namespace lfs::core {
                 std::pair{"erank_reg", erank_reg},
                 std::pair{"dc_reg", dc_reg},
                 std::pair{"sh_rest_reg", sh_rest_reg},
+                std::pair{"sb_color_reg", sb_color_reg},
                 std::pair{"mask_opacity_penalty_weight", mask_opacity_penalty_weight},
                 std::pair{"depth_loss_weight", depth_loss_weight},
                 std::pair{"bilateral_grid_lr", bilateral_grid_lr},
@@ -1216,6 +1217,7 @@ namespace lfs::core {
             p.erank_reg = 0.001f;
             p.dc_reg = 0.001f;
             p.sh_rest_reg = 0.001f;
+            p.sb_color_reg = 0.03f;
             p.use_error_map = true;
             p.use_edge_map = true;
             return p;
