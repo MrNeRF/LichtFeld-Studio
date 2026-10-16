@@ -310,7 +310,10 @@ namespace lfs::vis {
             if (!depth.is_valid() || depth.size(0) != height || depth.size(1) != width)
                 depth = Tensor::empty({height, width}, Device::GPU, DataType::Float32);
             const auto& splat = desc.depth_blit.depth;
-            const bool has_splat = splat && splat->is_valid() && splat->ndim() == 2 && splat->device() == Device::GPU;
+            // Split panels draw each mesh only on its own side, where no splats
+            // render; one panel's splat depth does not span the viewport.
+            const bool has_splat = desc.mesh_panels.empty() && splat && splat->is_valid() && splat->ndim() == 2 &&
+                                   splat->device() == Device::GPU;
             DepthParameters parameters{
                 .width = std::uint32_t(width),
                 .height = std::uint32_t(height),
@@ -350,6 +353,34 @@ namespace lfs::vis {
             if (seed_splat_depth)
                 seedDepth(desc, rect, destination);
 
+            // Bit i of an item's panel mask draws it in panel i; without panels
+            // every item draws once over the whole viewport.
+            struct Group {
+                glm::mat4 view_projection{1.0f};
+                Module::Scissor scissor;
+                Module::Viewport viewport;
+                std::uint32_t bit = 0;
+            };
+            const Module::Viewport full_viewport{float(rect.x), float(rect.y), float(rect.width), float(rect.height)};
+            std::vector<Group> groups;
+            if (desc.mesh_panels.empty()) {
+                groups.push_back({desc.mesh_view_projection, rect, full_viewport, 0});
+            } else {
+                const int min_x = int(rect.x), max_x = int(rect.x + rect.width);
+                for (std::size_t i = 0; i < std::min<std::size_t>(desc.mesh_panels.size(), 32); ++i) {
+                    const auto& panel = desc.mesh_panels[i];
+                    const int x0 = std::clamp(int(rect.x) + int(std::lround(panel.start_position * float(rect.width))), min_x, max_x);
+                    const int x1 = std::clamp(int(rect.x) + int(std::lround(panel.end_position * float(rect.width))), min_x, max_x);
+                    if (x1 <= x0)
+                        continue;
+                    const Module::Viewport panel_viewport{float(x0), float(rect.y), float(x1 - x0), float(rect.height)};
+                    groups.push_back({panel.view_projection,
+                                      {std::uint32_t(x0), rect.y, std::uint32_t(x1 - x0), rect.height},
+                                      panel.full_viewport_projection ? full_viewport : panel_viewport,
+                                      std::uint32_t(i)});
+                }
+            }
+
             struct Draw {
                 std::string_view vertex, fragment;
                 Mesh* mesh = nullptr;
@@ -358,11 +389,16 @@ namespace lfs::vis {
                 Module::Cull cull = Module::Cull::None;
                 bool wire = false;
                 bool shadow = false;
+                Module::Scissor scissor;
+                Module::Viewport viewport;
             };
             std::vector<Draw> draws;
             std::vector<Uniforms> uniforms;
             for (const auto& item : desc.mesh_items) {
                 if (!item.mesh)
+                    continue;
+                if (std::none_of(groups.begin(), groups.end(),
+                                 [&](const Group& group) { return (item.panel_mask >> group.bit) & 1u; }))
                     continue;
                 Mesh* mesh = prepareMesh(*item.mesh, uploads);
                 if (!mesh)
@@ -371,40 +407,45 @@ namespace lfs::vis {
                 if (item.shadow_enabled && !desc.mesh_depth_view)
                     renderShadow(*mesh, item, light_dir, uploads);
                 const bool shadow = item.shadow_enabled && !desc.mesh_depth_view && mesh->shadow.valid;
-                Uniforms base{};
-                putMatrix(base, kMvp, desc.mesh_view_projection * item.model);
-                putMatrix(base, kModel, item.model);
-                putMatrix(base, kLightVp, shadow ? mesh->shadow.light_vp : glm::mat4(1.0f));
-                base[kCamera] = {desc.mesh_camera_position.x, desc.mesh_camera_position.y, desc.mesh_camera_position.z, 0};
-                base[kLightDir] = {light_dir.x, light_dir.y, light_dir.z, 0};
-                base[kLight] = {item.light_intensity, item.ambient, shadow ? 1.0f : 0.0f,
-                                shadow ? float(mesh->shadow.resolution) : 1.0f};
-                base[kSelection] = {item.is_emphasized ? 1.0f : 0.0f, item.dim_non_emphasized ? 1.0f : 0.0f,
-                                    0.0f, item.wireframe_width};
-                base[kWireColor] = {item.wireframe_color.r, item.wireframe_color.g, item.wireframe_color.b, 1};
-                base[kCameraForward] = {-desc.mesh_camera_backward.x, -desc.mesh_camera_backward.y,
-                                        -desc.mesh_camera_backward.z, 0};
-                base[kDepthView] = {desc.mesh_depth_view ? 1.0f : 0.0f, desc.mesh_depth_view_min,
-                                    desc.mesh_depth_view_max, desc.mesh_depth_grayscale ? 1.0f : 0.0f};
-                for (const auto& submesh : mesh->submeshes) {
-                    const auto& material = mesh->materials[submesh.material];
-                    Uniforms record = base;
-                    record[kBaseColor] = material.base_color;
-                    record[kEmissiveMetallic] = material.emissive_metallic;
-                    record[kRoughnessFlags] = material.roughness_flags;
-                    record[kVertexColors] = material.vertex_colors;
-                    record[kTextureSizes] = {material.albedo.size[0], material.albedo.size[1],
-                                             material.normal.size[0], material.normal.size[1]};
-                    record[kTextureSizes2] = {material.metallic_roughness.size[0], material.metallic_roughness.size[1], 0, 0};
-                    uniforms.push_back(record);
-                    draws.push_back({"meshVertex", "meshFragment", mesh, &material, submesh.first_index,
-                                     submesh.index_count,
-                                     item.backface_culling ? Module::Cull::Back : Module::Cull::None, false, shadow});
-                }
-                if (item.wireframe_overlay && !desc.mesh_depth_view) {
-                    uniforms.push_back(base);
-                    draws.push_back({"wireVertex", "wireFragment", mesh, nullptr, 0, mesh->index_count,
-                                     Module::Cull::None, true, false});
+                for (const auto& group : groups) {
+                    if (!((item.panel_mask >> group.bit) & 1u))
+                        continue;
+                    Uniforms base{};
+                    putMatrix(base, kMvp, group.view_projection * item.model);
+                    putMatrix(base, kModel, item.model);
+                    putMatrix(base, kLightVp, shadow ? mesh->shadow.light_vp : glm::mat4(1.0f));
+                    base[kCamera] = {desc.mesh_camera_position.x, desc.mesh_camera_position.y, desc.mesh_camera_position.z, 0};
+                    base[kLightDir] = {light_dir.x, light_dir.y, light_dir.z, 0};
+                    base[kLight] = {item.light_intensity, item.ambient, shadow ? 1.0f : 0.0f,
+                                    shadow ? float(mesh->shadow.resolution) : 1.0f};
+                    base[kSelection] = {item.is_emphasized ? 1.0f : 0.0f, item.dim_non_emphasized ? 1.0f : 0.0f,
+                                        0.0f, item.wireframe_width};
+                    base[kWireColor] = {item.wireframe_color.r, item.wireframe_color.g, item.wireframe_color.b, 1};
+                    base[kCameraForward] = {-desc.mesh_camera_backward.x, -desc.mesh_camera_backward.y,
+                                            -desc.mesh_camera_backward.z, 0};
+                    base[kDepthView] = {desc.mesh_depth_view ? 1.0f : 0.0f, desc.mesh_depth_view_min,
+                                        desc.mesh_depth_view_max, desc.mesh_depth_grayscale ? 1.0f : 0.0f};
+                    for (const auto& submesh : mesh->submeshes) {
+                        const auto& material = mesh->materials[submesh.material];
+                        Uniforms record = base;
+                        record[kBaseColor] = material.base_color;
+                        record[kEmissiveMetallic] = material.emissive_metallic;
+                        record[kRoughnessFlags] = material.roughness_flags;
+                        record[kVertexColors] = material.vertex_colors;
+                        record[kTextureSizes] = {material.albedo.size[0], material.albedo.size[1],
+                                                 material.normal.size[0], material.normal.size[1]};
+                        record[kTextureSizes2] = {material.metallic_roughness.size[0], material.metallic_roughness.size[1], 0, 0};
+                        uniforms.push_back(record);
+                        draws.push_back({"meshVertex", "meshFragment", mesh, &material, submesh.first_index,
+                                         submesh.index_count,
+                                         item.backface_culling ? Module::Cull::Back : Module::Cull::None, false, shadow,
+                                         group.scissor, group.viewport});
+                    }
+                    if (item.wireframe_overlay && !desc.mesh_depth_view) {
+                        uniforms.push_back(base);
+                        draws.push_back({"wireVertex", "wireFragment", mesh, nullptr, 0, mesh->index_count,
+                                         Module::Cull::None, true, false, group.scissor, group.viewport});
+                    }
                 }
             }
             if (draws.empty())
@@ -416,7 +457,6 @@ namespace lfs::vis {
             std::vector<std::array<Module::Binding, 7>> bindings(draws.size());
             std::vector<Module::Draw> raster;
             raster.reserve(draws.size());
-            const Module::Viewport viewport{float(rect.x), float(rect.y), float(rect.width), float(rect.height)};
             for (std::size_t i = 0; i < draws.size(); ++i) {
                 const auto& draw = draws[i];
                 const auto& slice = slices.emplace_back(all_uniforms.slice(0, i * kRecords, (i + 1) * kRecords));
@@ -434,8 +474,8 @@ namespace lfs::vis {
                                   .color = &destination,
                                   .depth = &depth_attachment,
                                   .vertex_count = draw.index_count,
-                                  .scissor = rect,
-                                  .viewport = viewport,
+                                  .scissor = draw.scissor,
+                                  .viewport = draw.viewport,
                                   .blend = draw.wire ? Module::Blend::StraightAlpha : Module::Blend::Opaque,
                                   .cull = draw.cull,
                                   .depth_compare = Module::Compare::LessEqual,
