@@ -22,6 +22,7 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/ElementText.h>
+#include <RmlUi/Core/ElementUtilities.h>
 #include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/RenderInterface.h>
 #include <filesystem>
@@ -431,8 +432,9 @@ namespace {
             EXPECT_EQ(popup->GetDisplay(), Rml::Style::Display::None);
     }
 
-    // Fails if a toggle's checkmark slot pushes its shortcut left of the other shortcuts in a menu.
-    TEST_F(MenuBarTitleTest, ShortcutsEndInOneColumnBesideToggles) {
+    // Fails if a menu with toggles keeps its shortcuts off the right edge, as a checkmark after them
+    // did, or if its checkmarks do not line up. Shortcuts end where they do in menus without toggles.
+    TEST_F(MenuBarTitleTest, ShortcutsEndAtTheEdgeBesideToggles) {
         using Item = lfs::vis::gui::MenuItemDesc;
         using Type = Item::Type;
         const std::vector<Item> items{
@@ -440,29 +442,49 @@ namespace {
             {.type = Type::Toggle, .label = "Performance HUD", .shortcut = "F10", .callback_index = 2},
             {.type = Type::Toggle, .label = "Logging", .selected = true, .callback_index = 3},
             {.type = Type::SubMenuBegin, .label = "Appearance"},
-            {.type = Type::Toggle, .label = "Grid", .shortcut = "G", .callback_index = 4},
-            {.type = Type::Operator, .label = "Home View", .operator_id = "view.home", .shortcut = "H", .callback_index = 5},
+            {.type = Type::Toggle, .label = "Grid", .shortcut = "G", .selected = true, .callback_index = 4},
+            {.type = Type::Operator, .label = "Home View", .operator_id = "view.home", .shortcut = "Shift+H", .callback_index = 5},
             {.type = Type::SubMenuEnd},
         };
         RmlMenuBarTestAccess::dropdown(bar_, items);
         RmlMenuBarTestAccess::openPath(bar_, 3, -1, -1);
-        const auto shortcut_ends = [](Rml::Element* popup) {
-            std::vector<float> ends;
-            Rml::ElementList shortcuts;
-            popup->GetElementsByClassName(shortcuts, "shortcut");
-            for (auto* shortcut : shortcuts)
-                if (shortcut->IsVisible(true) && shortcut->GetParentNode()->GetParentNode()->GetParentNode() == popup)
-                    ends.push_back(bounds(shortcut).right);
-            return ends;
-        };
         Rml::ElementList submenus;
         el("dropdown-popup")->GetElementsByClassName(submenus, "submenu-popup");
         std::erase_if(submenus, [](Rml::Element* popup) { return popup->GetDisplay() == Rml::Style::Display::None; });
         ASSERT_EQ(submenus.size(), 1u);
         for (auto* popup : {el("dropdown-popup"), submenus.front()}) {
-            const auto ends = shortcut_ends(popup);
-            ASSERT_EQ(ends.size(), 2u);
-            EXPECT_NEAR(ends[0], ends[1], 0.5f);
+            int shortcuts = 0;
+            std::vector<float> checkmark_lefts;
+            Rml::ElementList rows;
+            popup->GetElementsByClassName(rows, "menu-item");
+            for (auto* row : rows) {
+                if (!row->IsVisible(true) || row->GetParentNode()->GetParentNode() != popup)
+                    continue;
+                const auto& box = row->GetBox();
+                const float content_right = bounds(row).right - box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Right) -
+                                            box.GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right);
+                for (int i = 0; i < row->GetNumChildren(); ++i) {
+                    auto* const child = row->GetChild(i);
+                    if (!child->IsVisible())
+                        continue;
+                    if (child->IsClassSet("label")) {
+                        EXPECT_LE(child->GetScrollWidth(), child->GetClientWidth() + 0.5f) << textContent(child);
+                    }
+                    if (child->IsClassSet("checkmark"))
+                        checkmark_lefts.push_back(bounds(child).left);
+                    if (child->IsClassSet("shortcut") && !textContent(child).empty()) {
+                        ++shortcuts;
+                        // A text node has no box width; its glyph run ends at start + string width.
+                        const float text_right = bounds(child->GetChild(0)).left +
+                                                 static_cast<float>(Rml::ElementUtilities::GetStringWidth(child, textContent(child)));
+                        EXPECT_NEAR(text_right, content_right, 1.0f) << textContent(child);
+                    }
+                }
+            }
+            EXPECT_EQ(shortcuts, 2);
+            ASSERT_GE(checkmark_lefts.size(), 2u);
+            for (const float left : checkmark_lefts)
+                EXPECT_NEAR(left, checkmark_lefts.front(), 0.5f);
         }
     }
 

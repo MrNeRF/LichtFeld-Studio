@@ -31,6 +31,8 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/ElementText.h>
+#include <RmlUi/Core/ElementUtilities.h>
 #include <SDL3/SDL_keycode.h>
 #include <SDL3/SDL_video.h>
 #include <algorithm>
@@ -51,6 +53,11 @@ namespace lfs::vis::gui {
                 auto* const child = element->GetChild(i);
                 if (!child || child->GetDisplay() == Rml::Style::Display::None)
                     continue;
+                // Text nodes have no box of their own; an access-key label is text, span, text.
+                if (auto* const text = dynamic_cast<Rml::ElementText*>(child)) {
+                    children_width += static_cast<float>(Rml::ElementUtilities::GetStringWidth(text, text->GetText()));
+                    continue;
+                }
 
                 const auto position = child->GetComputedValues().position();
                 if (position == Rml::Style::Position::Absolute ||
@@ -114,9 +121,43 @@ namespace lfs::vis::gui {
                 const auto& child_box = child->GetBox();
                 const float frame_width = child_box.GetSize(Rml::BoxArea::Margin).x -
                                           child_box.GetSize().x;
-                width += untruncatedContentWidth(child) + frame_width;
+                float content_width = untruncatedContentWidth(child);
+                // A shortcut cell keeps the popup's shared shortcut width.
+                if (child->IsClassSet("shortcut"))
+                    content_width = std::max(content_width, child_box.GetSize().x);
+                width += content_width + frame_width;
             }
             return width;
+        }
+
+        // Gives the shortcut cells of one popup the widest shortcut's width. The text is
+        // right-aligned, so shortcuts end at the popup edge and the checkmarks before them line up.
+        bool shareShortcutWidth(Rml::Element* popup) {
+            Rml::ElementList rows;
+            collectDirectMenuRows(popup, rows);
+            std::vector<Rml::Element*> cells;
+            float width = 0.0f;
+            for (auto* const row : rows) {
+                for (int i = 0; i < row->GetNumChildren(); ++i) {
+                    auto* const child = row->GetChild(i);
+                    if (!child || !child->IsClassSet("shortcut") || child->GetDisplay() == Rml::Style::Display::None)
+                        continue;
+                    cells.push_back(child);
+                    // An empty cell reports its own box, which already carries the shared width.
+                    if (child->GetNumChildren() > 0)
+                        width = std::max(width, untruncatedContentWidth(child));
+                }
+            }
+            width = std::ceil(width);
+            bool changed = false;
+            for (auto* const cell : cells) {
+                if (const auto* const current = cell->GetLocalProperty(Rml::PropertyId::MinWidth);
+                    current && current->unit == Rml::Unit::PX && current->Get<float>() == width)
+                    continue;
+                cell->SetProperty(Rml::PropertyId::MinWidth, Rml::Property(width, Rml::Unit::PX));
+                changed = true;
+            }
+            return changed;
         }
 
         float popupContentWidth(Rml::Element* popup) {
@@ -129,12 +170,15 @@ namespace lfs::vis::gui {
             return width;
         }
 
-        // Toggle rows end in a checkmark slot after the shortcut. In a popup with a toggle, every
-        // action row gets that slot, so all shortcuts end in one right-aligned column.
+        // Toggle rows show a checkmark before the shortcut. In a popup with a toggle, every action
+        // row gets the checkmark slot and, when the popup has shortcuts, a shortcut cell, so the
+        // checkmarks share a column and the shortcuts still end at the popup edge.
         template <typename View>
         std::vector<View> withSharedCheckmarkColumn(std::vector<View> views) {
             if (std::none_of(views.begin(), views.end(), [](const View& view) { return view.show_checkmark; }))
                 return views;
+            const bool has_shortcuts =
+                std::any_of(views.begin(), views.end(), [](const View& view) { return view.has_shortcut; });
             for (auto& view : views) {
                 if constexpr (requires { view.is_label; }) {
                     if (view.is_label)
@@ -145,6 +189,7 @@ namespace lfs::vis::gui {
                         continue;
                 }
                 view.show_checkmark = true;
+                view.has_shortcut = view.has_shortcut || has_shortcuts;
             }
             return views;
         }
@@ -2509,6 +2554,12 @@ namespace lfs::vis::gui {
             collapsed = true;
         }
         if (collapsed)
+            rml_context_->Update();
+
+        bool shared = false;
+        for (const auto& popup : popups)
+            shared = shareShortcutWidth(popup.element) || shared;
+        if (shared)
             rml_context_->Update();
 
         bool fitted = false;
