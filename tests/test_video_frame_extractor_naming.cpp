@@ -989,6 +989,40 @@ TEST(VideoEncoderTimingTest, EncodedFramesHaveRequestedDurationAndRate) {
     }
 }
 
+// Fails when samples one keyframe apart seek again (6 seeks at 2 fps), when samples two keyframes apart stop seeking
+// (1 seek at 0.5 fps), or when decoding on selects another frame than a seek would.
+TEST(VideoFrameExtractorOutputNaming, SparseFpsSeeksOnlyAcrossWholeKeyframeIntervals) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "Requires NVDEC";
+
+    TempDir temp("sparse_seek");
+    const std::filesystem::path video_path = temp.path / "source.mp4";
+    std::string error;
+    // The encoder writes one keyframe per second.
+    ASSERT_TRUE(writeEncodedVideo(video_path, 90, 30, error, 160, 90)) << error;
+
+    for (const auto [fps, seeks, frames] : {std::tuple{2.0, 1, 6u}, std::tuple{0.5, 2, 2u}}) {
+        SCOPED_TRACE(::testing::Message() << "fps=" << fps);
+        const std::filesystem::path output_dir = temp.path / ("frames_" + std::to_string(seeks));
+        std::filesystem::create_directories(output_dir);
+        auto params = extractionParams(video_path, output_dir);
+        params.mode = ExtractionMode::FPS;
+        params.fps = fps;
+        params.end_time = -1.0;
+
+        VideoFrameExtractor extractor;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        const auto metadata = readMetadata(output_dir);
+        const auto& selection = metadata.at("processing").at("frame_selection");
+        ASSERT_EQ(selection.at("strategy"), "keyframe_seek");
+        EXPECT_EQ(selection.at("keyframe_seek_count"), seeks);
+        const auto& written = metadata.at("frames");
+        ASSERT_EQ(written.size(), frames);
+        for (std::size_t i = 0; i < written.size(); ++i)
+            EXPECT_NEAR(written[i].at("timestamp").get<double>(), static_cast<double>(i) / fps, 1e-6);
+    }
+}
+
 TEST(VideoFrameExtractorOutputNaming, IntervalUsesSourceFrameNumbers) {
     if (!cudaAvailable())
         GTEST_SKIP() << "CUDA device required for VideoEncoder-based fixture";

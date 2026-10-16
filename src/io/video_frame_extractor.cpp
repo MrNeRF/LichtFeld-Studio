@@ -2154,6 +2154,23 @@ namespace lfs::io {
 
                 bool sparse_seek_fallback = false;
                 if (use_sparse_keyframe_seek) {
+                    int64_t last_decoded_timestamp = AV_NOPTS_VALUE;
+                    const auto index_keyframe = [&](const int64_t timestamp, const int flags) {
+                        const AVIndexEntry* const entry =
+                            avformat_index_get_entry_from_timestamp(video_stream, timestamp, flags);
+                        return entry ? std::optional<int64_t>(entry->timestamp) : std::nullopt;
+                    };
+                    // A seek flushes the decoder and restarts at the keyframe before the target. It pays off only
+                    // when a whole keyframe interval lies between the last decoded frame and that keyframe.
+                    const auto seek_skips_frames = [&](const int64_t target_timestamp) {
+                        if (last_decoded_timestamp == AV_NOPTS_VALUE)
+                            return true;
+                        const auto target_keyframe = index_keyframe(target_timestamp, AVSEEK_FLAG_BACKWARD);
+                        if (!target_keyframe)
+                            return true;
+                        const auto next_keyframe = index_keyframe(last_decoded_timestamp + 1, 0);
+                        return next_keyframe && *target_keyframe > *next_keyframe;
+                    };
                     for (std::size_t target_index = 0;
                          target_index < fps_target_count; ++target_index) {
                         throw_if_cancelled();
@@ -2161,26 +2178,28 @@ namespace lfs::io {
                             start_time, end_time, target_fps, target_index);
                         const int64_t target_timestamp =
                             stream_timestamp_for_time(target_time);
-                        const int seek_result = av_seek_frame(
-                            fmt_ctx, video_stream_idx, target_timestamp,
-                            AVSEEK_FLAG_BACKWARD);
-                        if (seek_result < 0) {
-                            LOG_WARN(
-                                "Sparse extraction seek failed at {:.6f}s ({}); "
-                                "continuing sequentially",
-                                target_time, ffmpegError(seek_result));
-                            sparse_seek_fallback = true;
-                            frame_selection_reason =
-                                "sparse_seek_failed_sequential_fallback";
-                            next_capture_time = target_time;
-                            break;
-                        }
+                        if (seek_skips_frames(target_timestamp)) {
+                            const int seek_result = av_seek_frame(
+                                fmt_ctx, video_stream_idx, target_timestamp,
+                                AVSEEK_FLAG_BACKWARD);
+                            if (seek_result < 0) {
+                                LOG_WARN(
+                                    "Sparse extraction seek failed at {:.6f}s ({}); "
+                                    "continuing sequentially",
+                                    target_time, ffmpegError(seek_result));
+                                sparse_seek_fallback = true;
+                                frame_selection_reason =
+                                    "sparse_seek_failed_sequential_fallback";
+                                next_capture_time = target_time;
+                                break;
+                            }
 
-                        ++keyframe_seek_count;
-                        avcodec_flush_buffers(codec_ctx);
-                        decoder_pump.resetAfterSeek();
-                        av_frame_unref(sparse_previous_frame);
-                        has_retained_frame = false;
+                            ++keyframe_seek_count;
+                            avcodec_flush_buffers(codec_ctx);
+                            decoder_pump.resetAfterSeek();
+                            av_frame_unref(sparse_previous_frame);
+                            has_retained_frame = false;
+                        }
                         bool found_target = false;
 
                         while (!found_target) {
@@ -2211,6 +2230,7 @@ namespace lfs::io {
                                     "Sparse extraction requires frame timestamps";
                                 throw std::runtime_error(error);
                             }
+                            last_decoded_timestamp = timestamp;
 
                             const double frame_time =
                                 static_cast<double>(timestamp) * time_base -
