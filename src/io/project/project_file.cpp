@@ -1005,15 +1005,21 @@ namespace lfs::io::project::detail {
 
     std::filesystem::path project_artifact_path(
         const std::filesystem::path& source, const std::string_view suffix) {
-        auto name = lfs::core::path_to_utf8(source.filename());
-        // Keep every legacy artifact name that fits. Its lock is bounded
-        // independently, and autosave writers hold the master's lock.
-        if (source.filename().native().size() + lfs::core::utf8_to_path(std::string(suffix)).native().size() > 255) {
-            name = lfs::core::path_to_utf8(lfs::core::detail::artifact_filename_key(source));
-            const auto key = XXH3_128bits(name.data(), name.size());
-            name = std::format(".lfs-artifact-{:016x}{:016x}", key.high64, key.low64);
+        auto name = source.filename();
+        const auto native_suffix = lfs::core::utf8_to_path(std::string(suffix));
+        // Preserve native filename bytes (including non-UTF-8 POSIX names).
+        // Bound only artifacts that exceed the filesystem component limit.
+        if (name.native().size() + native_suffix.native().size() > 255) {
+#ifdef _WIN32
+            const auto original = lfs::core::path_to_utf8(lfs::core::detail::artifact_filename_key(source));
+#else
+            const auto original = lfs::core::detail::artifact_filename_key(source).native();
+#endif
+            const auto key = XXH3_128bits(original.data(), original.size());
+            name = lfs::core::utf8_to_path(std::format(".lfs-artifact-{:016x}{:016x}", key.high64, key.low64));
         }
-        return source.parent_path() / lfs::core::utf8_to_path(name + std::string(suffix));
+        name += native_suffix;
+        return source.parent_path() / name;
     }
 
     std::filesystem::path project_lock_path(const std::filesystem::path& source) {

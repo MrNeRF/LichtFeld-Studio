@@ -9,6 +9,11 @@ import lichtfeld
 import lichtfeld.scene
 
 
+def native_path(path: str | os.PathLike, force_extended: bool = False) -> str:
+    """
+    Return a filename for filesystem I/O, including extended Windows paths. Use force_extended for recursive operations. Keep the original path for UI, JSON and external commands.
+    """
+
 class Hash128:
     def __init__(self) -> None: ...
 
@@ -958,7 +963,3 @@ def save_image(path: str | os.PathLike, image: lichtfeld.Tensor, include_provena
     """
     Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1]. include_provenance (default true) writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
     """
-
-def native_path(path: str | os.PathLike, force_extended: bool = False) -> str:
-    """Return a filename for I/O; keep the original path for UI, JSON and external commands."""
-    ...

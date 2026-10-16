@@ -4025,6 +4025,52 @@ namespace {
         EXPECT_EQ(*after, *before);
     }
 
+    TEST(ProjectDocumentTest, AutosaveWriterUsesBoundedNativeSidecarNames) {
+        TemporaryDirectory temporary;
+        std::vector<std::string> names;
+        for (size_t length = 247; length <= 255; ++length)
+            names.push_back(std::string(length - 6, 'x') + ".licht");
+#ifndef _WIN32
+        names.emplace_back("caf\xe9.licht");
+        names.emplace_back("caf\xe8.licht");
+        names.push_back(std::string(248, 'x') + "\xe9.licht");
+        names.push_back(std::string(248, 'x') + "\xe8.licht");
+#endif
+        std::unordered_set<std::string> locks;
+        std::unordered_set<std::string> sidecars;
+        for (const auto& name : names) {
+            SCOPED_TRACE(name.size());
+            const auto master = temporary.path / fs::path(name);
+            const auto sidecar = autosave_sidecar_path(master);
+            EXPECT_TRUE(locks.insert(detail::project_lock_path(master).filename().string()).second);
+            EXPECT_TRUE(sidecars.insert(sidecar.filename().string()).second);
+            if (master.filename().native().size() + 9 <= 255) {
+                auto expected = master;
+                expected += ".autosave";
+                EXPECT_EQ(sidecar, expected);
+            }
+            write_phase_a_fixture(master);
+            auto base = require_result(ProjectReader::open(master));
+            auto document = require_result_ptr(ProjectDocument::open(master));
+            require_status(document->edit_view().dom().set("recovery_marker", std::string{"native-name"}));
+            auto saved = document->save_autosave(sidecar, ProjectDocumentAutosaveOptions{
+                                                              .file_uuid = fixed_uuid(981),
+                                                              .base_explicit_commit_uuid = base.commit().commit_uuid,
+                                                              .autosave_sequence = 1,
+                                                              .snapshot_uuid = fixed_uuid(980),
+                                                              .index_compression = IndexCompression::StoredForDeterministicTests,
+                                                              .disk_reserve_bytes = 0,
+                                                          });
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+            auto overlay = require_result(ProjectReader::open(sidecar));
+            EXPECT_EQ(overlay.superblock().role, ContainerRole::AutosaveSidecar);
+            EXPECT_EQ(overlay.superblock().base_explicit_commit_uuid, base.commit().commit_uuid);
+            require_status(overlay.verify_all());
+            auto unchanged = require_result(ProjectReader::open(master));
+            EXPECT_EQ(unchanged.commit().commit_uuid, base.commit().commit_uuid);
+        }
+    }
+
     TEST(ProjectDocumentTest,
          AutosaveIsCompleteBoundOverlayAndDoesNotMutateMasterOrDirtyState) {
         TemporaryDirectory temporary;

@@ -4068,8 +4068,7 @@ namespace lfs::io::project {
                 autosave->recovery_base_path
                     ? *autosave->recovery_base_path
                     : *impl_->source_path;
-            auto expected_sidecar = base_path;
-            expected_sidecar += ".autosave";
+            const auto expected_sidecar = autosave_sidecar_path(base_path);
             auto expected_normalized =
                 normalized_absolute_path(
                     expected_sidecar);

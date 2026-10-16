@@ -250,12 +250,18 @@ namespace lfs::core::native_fs {
 
     template <typename... Args>
     inline auto exists(const std::filesystem::path& path, Args&&... args) {
+#ifndef _WIN32
+        // This hot path is used by per-sample Camera sidecar checks.
+        // POSIX paths already are native: avoid copying their storage.
+        return std::filesystem::exists(path, std::forward<Args>(args)...);
+#else
         if constexpr (reports_error_code<Args...>)
             return std::filesystem::exists(native_path(path), std::forward<Args>(args)...);
         else
             return rethrow_logical("exists", path, nullptr, [&] {
                 return std::filesystem::exists(native_path(path), std::forward<Args>(args)...);
             });
+#endif
     }
 
     template <typename... Args>

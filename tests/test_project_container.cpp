@@ -3925,6 +3925,34 @@ namespace {
     }
 #endif
 
+#ifndef _WIN32
+    TEST(ProjectContainerWriter, ArtifactPathsPreserveDistinctNonUtf8NativeNames) {
+        TemporaryDirectory temporary;
+        for (const size_t padding : {0u, 245u}) {
+            const auto first = temporary.path / fs::path(std::string(padding, 'x') + "caf\xe9.licht");
+            const auto second = temporary.path / fs::path(std::string(padding, 'x') + "caf\xe8.licht");
+            const auto first_lock = detail::project_lock_path(first);
+            const auto second_lock = detail::project_lock_path(second);
+            EXPECT_NE(first_lock, second_lock);
+            EXPECT_NE(autosave_sidecar_path(first), autosave_sidecar_path(second));
+            if (!padding) {
+                auto expected_lock = first;
+                expected_lock += ".lock";
+                auto expected_sidecar = first;
+                expected_sidecar += ".autosave";
+                EXPECT_EQ(first_lock, expected_lock);
+                EXPECT_EQ(autosave_sidecar_path(first), expected_sidecar);
+                auto first_lease = require_result(WriterLockLease::acquire(first));
+                auto second_lease = require_result(WriterLockLease::acquire(second));
+                EXPECT_FALSE(WriterLockLease::acquire(first));
+                EXPECT_FALSE(WriterLockLease::acquire(second));
+            }
+            EXPECT_LE(first_lock.filename().native().size(), 255u);
+            EXPECT_LE(autosave_sidecar_path(first).filename().native().size(), 255u);
+        }
+    }
+#endif
+
     TEST(ProjectContainerWriter, MaximumLengthNameSupportsLocksAutosaveAndQuarantine) {
         LongPathTemporaryDirectory temporary;
         const auto master = temporary.path / (std::string(249, 'x') + ".licht");
