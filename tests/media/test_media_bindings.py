@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Production Media Ingest bindings: GIL, ownership, file parity and callbacks."""
 import argparse
+import concurrent.futures
 import errno
 import hashlib
 import importlib.util
@@ -30,6 +31,58 @@ MEDIA_ERROR = None
 
 
 class MediaBindings(unittest.TestCase):
+    def test_tiff_decoded_tags_and_original_source_ranges(self):
+        path = self.root / "TIFF metadata é 日本語.bin"
+        for big in (False, True):
+            for little in (False, True):
+                with self.subTest(big=big, little=little):
+                    payload = source_exif_fixture.write_tiff(path, big=big, little=little, pages=2)
+                    value = json.loads(media.MediaIngest.source_exif_json(path))
+                    source_exif_fixture.check_tiff(self, value, path, payload, big=big, little=little, pages=2)
+                    maker = source_exif_fixture.write_tiff_graph(path, big=big, little=little)
+                    value = json.loads(media.MediaIngest.source_exif_json(path))
+                    source_exif_fixture.check_tiff_graph(self, value, path, maker)
+
+    def test_tiff_concurrent_handles_keep_diagnostics_and_storage_separate(self):
+        valid = self.root / "concurrent-valid.tif"
+        invalid = self.root / "concurrent-invalid.tif"
+        source_exif_fixture.write_tiff_graph(valid, big=True)
+        invalid.write_bytes(b"II*\0")
+        expected = json.loads(media.MediaIngest.source_exif_json(valid))
+        self.assertEqual(expected["status"], "collected")
+        def read(index):
+            return index, json.loads(media.MediaIngest.source_exif_json(valid if index % 2 else invalid))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            for index, value in pool.map(read, range(32)):
+                if index % 2:
+                    self.assertEqual(value, expected)
+                else:
+                    self.assertEqual(value["status"], "malformed")
+                    self.assertTrue(value["diagnostic"])
+
+    def test_tiff_fixed_ascii_count_is_not_a_decoded_buffer_extent(self):
+        path = self.root / "short-datetime.tif"
+        source_exif_fixture.write_tiff(path, short_datetime=True)
+        result = json.loads(media.MediaIngest.source_exif_json(path))
+        self.assertIn(result["status"], ("collected", "malformed"))
+        tags = {tag["id"]: tag for tag in result["tiff"]["directories"][0]["tags"]}
+        if 306 in tags:
+            decoded = bytes.fromhex(tags[306]["bytes"])
+            self.assertEqual(tags[306]["count"], len(decoded))
+            self.assertEqual(decoded[-1:], b"\0")
+            self.assertLess(len(decoded), 20)
+
+    def test_tiff_metadata_skips_large_pixels_and_owns_results(self):
+        path = self.root / "large TIFF metadata.tif"
+        payload = source_exif_fixture.write_tiff(path, pixel_offset=16 * 1024 * 1024)
+        value = json.loads(media.MediaIngest.source_exif_json(path))
+        source_exif_fixture.check_tiff(self, value, path, payload)
+        self.assertLess(sum(len(bytes.fromhex(span["bytes"])) for span in value["tiff"]["source_ranges"]), 4096)
+        self.assertTrue(all(span["offset"] + len(bytes.fromhex(span["bytes"])) < 16 * 1024 * 1024
+                            for span in value["tiff"]["source_ranges"]))
+        path.unlink()
+        self.assertTrue(value["tiff"]["directories"])
+
     def test_png_idat_segmentation_and_ancillary_crc_recovery(self):
         path = self.root / "review PNG.png"
         for options, count, status in (({"idat_chunks": 5000}, 1, "collected"),
@@ -86,6 +139,11 @@ class MediaBindings(unittest.TestCase):
             options.transfer = transfer
             options.overwrite = True
             media.ImageOutput.write_tiff16(path, frame, options)
+            archive = json.loads(media.MediaIngest.source_exif_json(path))
+            self.assertEqual(archive["status"], "collected", archive)
+            self.assertEqual(archive["tiff"]["directories"][0]["kind"], "image")
+            self.assertTrue(any(tag["id"] == 270 and b"tiff16-sdr-v1" in bytes.fromhex(tag["bytes"])
+                                for tag in archive["tiff"]["directories"][0]["tags"]))
             result = subprocess.run([ffmpeg, "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "rgb48le", "-"],
                                     check=True, capture_output=True, timeout=30)
             actual = struct.unpack("<6H", result.stdout)

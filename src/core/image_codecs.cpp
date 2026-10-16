@@ -33,7 +33,9 @@
 #include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #ifndef _WIN32
@@ -1744,11 +1746,462 @@ namespace lfs::core::image_codecs {
                     return result;
             }
         }
+
+        // Metadata-only client I/O preserves the exact spans the existing TIFF
+        // reader requests. It never rewrites offsets or synthesizes EXIF bytes.
+        struct TiffMetadataReader {
+            std::ifstream& input;
+            const MetadataLimits& limits;
+            SourceExif& result;
+            uint64_t size = 0, position = 0;
+            size_t reads = 0, read_bytes = 0, retained = 0, values = 0, entries = 0;
+            bool stopped = false;
+            const char* callback_failure = nullptr;
+            void finish() {
+                if (callback_failure)
+                    result.diagnostic = callback_failure;
+            }
+            void fail(MetadataStatus status, const char* message) {
+                if (stopped)
+                    return;
+                if ((result.status == MetadataStatus::Malformed && (status == MetadataStatus::Malformed || status == MetadataStatus::Unsupported)) ||
+                    (result.status == MetadataStatus::Unsupported && status == MetadataStatus::Unsupported))
+                    return;
+                result.status = status;
+                result.diagnostic = message;
+                stopped = status == MetadataStatus::Limited || status == MetadataStatus::IoError;
+            }
+            static tmsize_t read(thandle_t handle, void* data, tmsize_t length) noexcept {
+                auto& self = *static_cast<TiffMetadataReader*>(handle);
+                try {
+                    if (self.stopped || length < 0)
+                        return -1;
+                    const auto count = static_cast<size_t>(length);
+                    if (self.position > self.size || count > self.size - self.position) {
+                        self.fail(MetadataStatus::Malformed, "TIFF read outside source extent");
+                        return -1;
+                    }
+                    bool already_retained = false;
+                    for (const auto& span : self.result.tiff->source_ranges)
+                        if (self.position >= span.offset && self.position - span.offset <= span.bytes.size() &&
+                            count <= span.bytes.size() - (self.position - span.offset)) {
+                            already_retained = true;
+                            break;
+                        }
+                    if (self.reads >= self.limits.tiff_reads || count > self.limits.tiff_read_bytes - self.read_bytes ||
+                        (!already_retained && (count > self.limits.block_bytes || count > self.limits.total_bytes - self.retained))) {
+                        self.fail(MetadataStatus::Limited, "TIFF source read or retained-byte budget exhausted");
+                        return -1;
+                    }
+                    ++self.reads;
+                    self.read_bytes += count;
+                    self.input.read(static_cast<char*>(data), static_cast<std::streamsize>(count));
+                    if (!self.input || static_cast<size_t>(self.input.gcount()) != count) {
+                        self.fail(self.input.bad() ? MetadataStatus::IoError : MetadataStatus::Malformed,
+                                  "Cannot read complete TIFF source span");
+                        return -1;
+                    }
+                    if (count && already_retained) {
+                        for (const auto& span : self.result.tiff->source_ranges)
+                            if (self.position >= span.offset && self.position - span.offset <= span.bytes.size() &&
+                                count <= span.bytes.size() - (self.position - span.offset)) {
+                                if (std::memcmp(data, span.bytes.data() + (self.position - span.offset), count)) {
+                                    self.fail(MetadataStatus::Malformed, "TIFF source changed between metadata reads");
+                                    self.stopped = true;
+                                    return -1;
+                                }
+                                break;
+                            }
+                    }
+                    if (count && !already_retained) {
+                        const auto* bytes = static_cast<const uint8_t*>(data);
+                        self.result.tiff->source_ranges.push_back({self.position, {bytes, bytes + count}});
+                        self.retained += count;
+                    }
+                    self.position += count;
+                    return length;
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): contain at the C ABI; an error
+                    // status and literal diagnostic are returned outside it.
+                    self.callback_failure = "Exception while retaining TIFF source bytes";
+                    self.stopped = true;
+                    self.result.status = MetadataStatus::Limited;
+                    return -1;
+                }
+            }
+            static toff_t seek(thandle_t handle, toff_t offset, int origin) noexcept {
+                auto& self = *static_cast<TiffMetadataReader*>(handle);
+                try {
+                    uint64_t target = offset;
+                    if (origin != SEEK_SET && origin != SEEK_CUR && origin != SEEK_END)
+                        return static_cast<toff_t>(-1);
+                    if (origin != SEEK_SET) {
+                        // libtiff uses unsigned toff_t to carry negative relative offsets.
+                        const auto delta = static_cast<int64_t>(offset);
+                        const auto base = origin == SEEK_CUR ? self.position : self.size;
+                        if ((delta < 0 && uint64_t(-(delta + 1)) + 1 > base) ||
+                            (delta >= 0 && uint64_t(delta) > self.size - base))
+                            return static_cast<toff_t>(-1);
+                        target = delta < 0 ? base - (uint64_t(-(delta + 1)) + 1) : base + uint64_t(delta);
+                    }
+                    if (self.stopped || target > self.size || target > uint64_t(std::numeric_limits<std::streamoff>::max()))
+                        return static_cast<toff_t>(-1);
+                    self.input.clear();
+                    self.input.seekg(static_cast<std::streamoff>(target));
+                    if (!self.input) {
+                        self.fail(MetadataStatus::IoError, "Cannot seek TIFF metadata source");
+                        return static_cast<toff_t>(-1);
+                    }
+                    self.position = target;
+                    return target;
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): return I/O failure and defer
+                    // diagnostic storage until outside the nonthrowing C ABI.
+                    self.callback_failure = "Exception while seeking TIFF metadata source";
+                    self.stopped = true;
+                    self.result.status = MetadataStatus::IoError;
+                    return static_cast<toff_t>(-1);
+                }
+            }
+            static int diagnostic(TIFF*, void* context, const char*, const char* format, va_list args) noexcept {
+                auto& self = *static_cast<TiffMetadataReader*>(context);
+                try {
+                    std::array<char, 512> message{};
+                    std::vsnprintf(message.data(), message.size(), format, args);
+                    // Unknown tag registration warnings are handled separately.
+                    // Other warnings can mean dropped/normalized source values.
+                    self.fail(std::strcmp(format, "%s compression support is not configured") == 0 ? MetadataStatus::Unsupported : MetadataStatus::Malformed, message.data());
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): allocation failure is observable
+                    // through Limited and a literal diagnostic stored outside C.
+                    self.callback_failure = "Cannot retain TIFF library diagnostic";
+                    self.stopped = true;
+                    self.result.status = MetadataStatus::Limited;
+                }
+                return 1;
+            }
+            static int warning(TIFF* tiff, void* context, const char* module, const char* format, va_list args) noexcept {
+                // These fields are auto-registered and collected below. Unlike
+                // normalization/damage warnings this does not indicate loss.
+                if (std::strncmp(format, "Unknown field with tag ", 23) == 0)
+                    return 1;
+                return diagnostic(tiff, context, module, format, args);
+            }
+            bool charge(size_t count, size_t width) {
+                if (stopped)
+                    return false;
+                if (entries >= limits.tiff_entries || !width || count > (limits.tiff_value_bytes - values) / width) {
+                    fail(MetadataStatus::Limited, "TIFF decoded-value budget exhausted");
+                    return false;
+                }
+                values += count * width;
+                ++entries;
+                return true;
+            }
+        };
+
+        template <typename T>
+        void copy_tiff_values(TiffSourceTag& tag, const void* data, size_t count) {
+            // memcpy avoids alignment/aliasing assumptions about library storage.
+            for (size_t i = 0; i < count; ++i) {
+                T value{};
+                std::memcpy(&value, static_cast<const uint8_t*>(data) + i * sizeof(T), sizeof(T));
+                if constexpr (std::is_floating_point_v<T>)
+                    tag.floating_values.push_back(value);
+                else if constexpr (std::is_signed_v<T>)
+                    tag.signed_values.push_back(value);
+                else
+                    tag.unsigned_values.push_back(value);
+            }
+        }
+
+        bool collect_tiff_custom(TIFF* tiff, uint32_t id, TiffMetadataReader& reader, TiffSourceDirectory& directory) {
+            const auto* field = TIFFFieldWithTag(tiff, id);
+            if (!field)
+                return true;
+            const auto type = TIFFFieldDataType(field);
+            int width = TIFFFieldSetGetSize(field);
+            const int declared = TIFFFieldReadCount(field);
+            const int count_width = TIFFFieldSetGetCountSize(field);
+            TiffSourceTag tag;
+            tag.id = id;
+            tag.type = static_cast<uint16_t>(type);
+            uint32_t count = declared > 0 ? static_cast<uint32_t>(declared) : 0;
+            void* data = nullptr;
+            std::array<uint8_t, 8> scalar{};
+            std::array<uint16_t, 2> dot_range{};
+            auto scalar_get = [&]<typename T>() {
+                T value{};
+                const bool ok = TIFFGetField(tiff, id, &value) != 0;
+                std::memcpy(scalar.data(), &value, sizeof(T));
+                data = scalar.data();
+                return ok;
+            };
+            bool got = false;
+            if (id == TIFFTAG_DOTRANGE && std::strcmp(TIFFFieldName(field), "DotRange") == 0) {
+                // This public getter is explicitly a two-scalar exception to
+                // libtiff's ordinary custom-field varargs convention.
+                got = TIFFGetField(tiff, id, &dot_range[0], &dot_range[1]) != 0;
+                data = dot_range.data();
+                count = 2;
+                width = sizeof(dot_range[0]);
+            } else if (TIFFFieldPassCount(field)) {
+                if (count_width == 4)
+                    got = TIFFGetField(tiff, id, &count, &data) != 0;
+                else if (count_width == 2) {
+                    uint16_t short_count = 0;
+                    got = TIFFGetField(tiff, id, &short_count, &data) != 0;
+                    count = short_count;
+                }
+            } else if (declared <= 0 && type != TIFF_ASCII) {
+                reader.fail(MetadataStatus::Unsupported, "TIFF tag has no public decoded count");
+                return true;
+            } else if (type == TIFF_ASCII || declared != 1) {
+                got = TIFFGetField(tiff, id, &data) != 0;
+                if (got && data && type == TIFF_ASCII) {
+                    // This is libtiff's NUL-terminated decoded string, not its
+                    // original declared byte count. Even fixed-count ASCII fields can
+                    // have shorter decoded strings after libtiff coercion.
+                    // Source spans retain the original bytes.
+                    const auto* text = static_cast<const char*>(data);
+                    const size_t cap = reader.limits.tiff_value_bytes - reader.values;
+                    size_t length = 0;
+                    while (length < cap && text[length])
+                        ++length;
+                    if (length == cap) {
+                        reader.fail(MetadataStatus::Limited, "TIFF decoded string budget exhausted");
+                        return false;
+                    }
+                    count = static_cast<uint32_t>(length + 1);
+                }
+            } else {
+                switch (type) {
+                case TIFF_BYTE:
+                case TIFF_UNDEFINED: got = scalar_get.template operator()<uint8_t>(); break;
+                case TIFF_SBYTE: got = scalar_get.template operator()<int8_t>(); break;
+                case TIFF_SHORT: got = scalar_get.template operator()<uint16_t>(); break;
+                case TIFF_SSHORT: got = scalar_get.template operator()<int16_t>(); break;
+                case TIFF_LONG:
+                case TIFF_IFD: got = scalar_get.template operator()<uint32_t>(); break;
+                case TIFF_SLONG: got = scalar_get.template operator()<int32_t>(); break;
+                case TIFF_LONG8:
+                case TIFF_IFD8: got = scalar_get.template operator()<uint64_t>(); break;
+                case TIFF_SLONG8: got = scalar_get.template operator()<int64_t>(); break;
+                case TIFF_RATIONAL:
+                case TIFF_SRATIONAL:
+                    got = width == 8 ? scalar_get.template operator()<double>() : scalar_get.template operator()<float>();
+                    break;
+                case TIFF_FLOAT: got = scalar_get.template operator()<float>(); break;
+                case TIFF_DOUBLE: got = scalar_get.template operator()<double>(); break;
+                default: break;
+                }
+            }
+            if (!got || (!data && count)) {
+                reader.fail(MetadataStatus::Unsupported, "TIFF tag getter representation is not supported");
+                return true;
+            }
+            const int expected_width = type == TIFF_RATIONAL || type == TIFF_SRATIONAL || type == TIFF_IFD ? width : type == TIFF_ASCII || type == TIFF_BYTE || type == TIFF_UNDEFINED || type == TIFF_SBYTE ? 1
+                                                                                                                 : type == TIFF_SHORT || type == TIFF_SSHORT                                                 ? 2
+                                                                                                                 : type == TIFF_LONG || type == TIFF_SLONG || type == TIFF_FLOAT                             ? 4
+                                                                                                                 : type == TIFF_LONG8 || type == TIFF_SLONG8 || type == TIFF_IFD8 || type == TIFF_DOUBLE     ? 8
+                                                                                                                                                                                                             : 0;
+            if (!expected_width || width != expected_width || ((type == TIFF_RATIONAL || type == TIFF_SRATIONAL) && width != 4 && width != 8)) {
+                reader.fail(MetadataStatus::Unsupported, "Unsupported TIFF library storage width");
+                return true;
+            }
+            if (!reader.charge(count, 8))
+                return false;
+            tag.count = count;
+            tag.decoded_storage_bytes = static_cast<size_t>(width);
+            switch (type) {
+            case TIFF_ASCII:
+            case TIFF_BYTE:
+            case TIFF_UNDEFINED:
+                if (count)
+                    tag.bytes.assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + count);
+                break;
+            case TIFF_SBYTE: copy_tiff_values<int8_t>(tag, data, count); break;
+            case TIFF_SHORT: copy_tiff_values<uint16_t>(tag, data, count); break;
+            case TIFF_SSHORT: copy_tiff_values<int16_t>(tag, data, count); break;
+            case TIFF_LONG: copy_tiff_values<uint32_t>(tag, data, count); break;
+            case TIFF_IFD:
+                // libtiff widens counted IFD arrays to its 64-bit offset type,
+                // while the scalar TIFF_IFD getter uses a uint32_t parameter.
+                if (width == 8 && data != scalar.data())
+                    copy_tiff_values<uint64_t>(tag, data, count);
+                else
+                    copy_tiff_values<uint32_t>(tag, data, count);
+                break;
+            case TIFF_SLONG: copy_tiff_values<int32_t>(tag, data, count); break;
+            case TIFF_LONG8:
+            case TIFF_IFD8: copy_tiff_values<uint64_t>(tag, data, count); break;
+            case TIFF_SLONG8: copy_tiff_values<int64_t>(tag, data, count); break;
+            case TIFF_RATIONAL:
+            case TIFF_SRATIONAL:
+                if (width == 8)
+                    copy_tiff_values<double>(tag, data, count);
+                else if (width == 4)
+                    copy_tiff_values<float>(tag, data, count);
+                break;
+            case TIFF_FLOAT: copy_tiff_values<float>(tag, data, count); break;
+            case TIFF_DOUBLE: copy_tiff_values<double>(tag, data, count); break;
+            default: reader.fail(MetadataStatus::Unsupported, "Unsupported TIFF decoded value type"); break;
+            }
+            directory.tags.push_back(std::move(tag));
+            return true;
+        }
+
+        SourceExif read_tiff_source_metadata(std::ifstream& input, const MetadataLimits& limits) {
+            SourceExif result;
+            result.scope = "tiff-libtiff-observed-metadata";
+            result.status = MetadataStatus::Collected;
+            result.tiff.emplace();
+            TiffMetadataReader reader{input, limits, result};
+            input.clear();
+            input.seekg(0, std::ios::end);
+            const auto end = input.tellg();
+            if (end < 0) {
+                result.status = MetadataStatus::IoError;
+                result.diagnostic = "Cannot determine TIFF source extent";
+                return result;
+            }
+            reader.size = static_cast<uint64_t>(end);
+            input.seekg(0);
+            std::unique_ptr<TIFFOpenOptions, decltype(&TIFFOpenOptionsFree)> options(TIFFOpenOptionsAlloc(), TIFFOpenOptionsFree);
+            if (!options) {
+                result.status = MetadataStatus::Limited;
+                result.diagnostic = "Cannot allocate TIFF open options";
+                return result;
+            }
+            TIFFOpenOptionsSetMaxSingleMemAlloc(options.get(), 8 * 1024 * 1024);
+            TIFFOpenOptionsSetMaxCumulatedMemAlloc(options.get(), 32 * 1024 * 1024);
+            TIFFOpenOptionsSetErrorHandlerExtR(options.get(), TiffMetadataReader::diagnostic, &reader);
+            TIFFOpenOptionsSetWarningHandlerExtR(options.get(), TiffMetadataReader::warning, &reader);
+            std::unique_ptr<TIFF, decltype(&TIFFClose)> tiff(TIFFClientOpenExt("metadata source", "rhmOc", &reader, TiffMetadataReader::read, [](thandle_t, void*, tmsize_t) -> tmsize_t { return -1; }, TiffMetadataReader::seek, [](thandle_t) { return 0; }, [](thandle_t handle) -> toff_t { return static_cast<TiffMetadataReader*>(handle)->size; }, [](thandle_t, void**, toff_t*) { return 0; }, [](thandle_t, void*, toff_t) {}, options.get()), TIFFClose);
+            if (!tiff) {
+                if (result.status == MetadataStatus::Collected)
+                    reader.fail(MetadataStatus::Malformed, "Cannot initialize TIFF metadata reader");
+                reader.finish();
+                return result;
+            }
+            result.tiff->big_tiff = TIFFIsBigTIFF(tiff.get());
+            result.tiff->big_endian = TIFFIsBigEndian(tiff.get());
+            struct Pending {
+                uint64_t offset;
+                std::optional<uint64_t> parent;
+                std::string kind;
+            };
+            std::vector<Pending> pending;
+            std::set<uint64_t> visited;
+            bool root = true;
+            while (!reader.stopped) {
+                Pending node{0, {}, "image"};
+                int ok = 0;
+                if (root) {
+                    // Header-only open leaves the first directory for this call.
+                    ok = TIFFReadDirectory(tiff.get());
+                    root = false;
+                } else if (!pending.empty()) {
+                    node = std::move(pending.back());
+                    pending.pop_back();
+                    if (!node.offset || visited.contains(node.offset)) {
+                        reader.fail(MetadataStatus::Unsupported, "Repeated TIFF directory offset is not revisited");
+                        continue;
+                    }
+                    ok = node.kind == "exif" || node.kind == "interoperability" ? TIFFReadEXIFDirectory(tiff.get(), node.offset) : node.kind == "gps" ? TIFFReadGPSDirectory(tiff.get(), node.offset)
+                                                                                                                                                      : TIFFSetSubDirectory(tiff.get(), node.offset);
+                } else
+                    break;
+                if (!ok) {
+                    if (result.status == MetadataStatus::Collected)
+                        reader.fail(MetadataStatus::Malformed, "Cannot read TIFF metadata directory");
+                    break;
+                }
+                node.offset = TIFFCurrentDirOffset(tiff.get());
+                if (!visited.insert(node.offset).second) {
+                    reader.fail(MetadataStatus::Unsupported, "Repeated TIFF directory offset is not revisited");
+                    break;
+                }
+                TiffSourceDirectory directory{node.offset, node.parent, node.kind, {}};
+                auto child = [&](uint64_t offset, const char* kind) {
+                    if (offset)
+                        pending.push_back({offset, node.offset, kind});
+                };
+                // Image chains are queued before children; all offsets are owned
+                // before switching libtiff's single current-directory context.
+                if (node.kind == "image" || node.kind == "subimage") {
+                    // libtiff exposes the next main IFD by reading it. Defer that
+                    // until after harvesting this directory (see below).
+                    uint16_t count = 0;
+                    uint64_t* offsets = nullptr;
+                    if (TIFFGetField(tiff.get(), TIFFTAG_SUBIFD, &count, &offsets)) {
+                        if (count > limits.tiff_directories - visited.size()) {
+                            reader.fail(MetadataStatus::Limited, "TIFF directory budget exhausted");
+                        } else
+                            for (uint16_t i = 0; i < count; ++i)
+                                child(offsets[i], "subimage");
+                    }
+                    for (const auto id : {TIFFTAG_EXIFIFD, TIFFTAG_GPSIFD}) {
+                        uint64_t offset = 0;
+                        if (TIFFGetField(tiff.get(), id, &offset))
+                            child(offset, id == TIFFTAG_EXIFIFD ? "exif" : "gps");
+                    }
+                    // Baseline scalar tags are not in libtiff's custom tag list.
+                    for (const auto id : {TIFFTAG_IMAGEWIDTH, TIFFTAG_IMAGELENGTH, TIFFTAG_ROWSPERSTRIP}) {
+                        uint32_t value = 0;
+                        if (TIFFGetField(tiff.get(), id, &value) && reader.charge(1, 8))
+                            directory.tags.push_back({static_cast<uint32_t>(id), TIFF_LONG, 1, {value}, {}, {}, {}, sizeof(value)});
+                    }
+                    for (const auto id : {TIFFTAG_BITSPERSAMPLE, TIFFTAG_SAMPLESPERPIXEL, TIFFTAG_SAMPLEFORMAT,
+                                          TIFFTAG_ORIENTATION, TIFFTAG_PHOTOMETRIC, TIFFTAG_COMPRESSION,
+                                          TIFFTAG_PLANARCONFIG, TIFFTAG_RESOLUTIONUNIT}) {
+                        uint16_t value = 0;
+                        if (TIFFGetField(tiff.get(), id, &value) && reader.charge(1, 8))
+                            directory.tags.push_back({static_cast<uint32_t>(id), TIFF_SHORT, 1, {value}, {}, {}, {}, sizeof(value)});
+                    }
+                    for (const auto id : {TIFFTAG_XRESOLUTION, TIFFTAG_YRESOLUTION}) {
+                        float value = 0;
+                        if (TIFFGetField(tiff.get(), id, &value) && reader.charge(1, 8))
+                            directory.tags.push_back({static_cast<uint32_t>(id), TIFF_RATIONAL, 1, {}, {}, {value}, {}, sizeof(value)});
+                    }
+                }
+                const int tags = TIFFGetTagListCount(tiff.get());
+                for (int i = 0; i < tags && !reader.stopped; ++i)
+                    collect_tiff_custom(tiff.get(), TIFFGetTagListEntry(tiff.get(), i), reader, directory);
+                if (node.kind == "exif") {
+                    for (const auto& tag : directory.tags)
+                        if (tag.id == 0xa005 && tag.unsigned_values.size() == 1)
+                            child(tag.unsigned_values[0], "interoperability");
+                }
+                result.tiff->directories.push_back(std::move(directory));
+                if (visited.size() + pending.size() > limits.tiff_directories) {
+                    reader.fail(MetadataStatus::Limited, "TIFF directory budget exhausted");
+                    break;
+                }
+                // Capture the next main directory offset without a second parser.
+                if ((node.kind == "image" || node.kind == "subimage") && !TIFFLastDirectory(tiff.get())) {
+                    if (visited.size() + pending.size() >= limits.tiff_directories) {
+                        reader.fail(MetadataStatus::Limited, "TIFF directory budget exhausted");
+                        break;
+                    }
+                    if (!TIFFReadDirectory(tiff.get())) {
+                        if (result.status == MetadataStatus::Collected)
+                            reader.fail(MetadataStatus::Malformed, "Cannot read next TIFF directory");
+                        break;
+                    }
+                    pending.push_back({TIFFCurrentDirOffset(tiff.get()), node.parent, node.kind});
+                }
+            }
+            tiff.reset();
+            reader.finish();
+            return result;
+        }
+
     } // namespace
 
     SourceExif read_source_exif(const std::filesystem::path& path, const MetadataLimits& limits) {
         SourceExif result;
-        if (!limits.blocks || limits.blocks > 4096 || !limits.block_bytes || !limits.total_bytes) {
+        if (!limits.block_bytes || !limits.total_bytes) {
             result.status = MetadataStatus::Limited;
             result.diagnostic = "Invalid EXIF collection limits";
             return result;
@@ -1773,6 +2226,23 @@ namespace lfs::core::image_codecs {
             result.diagnostic = "Cannot read metadata source";
             return result;
         }
+        const bool tiff_signature = signature_size >= 4 &&
+                                    ((signature[0] == 'I' && signature[1] == 'I' && (signature[2] == 42 || signature[2] == 43) && signature[3] == 0) ||
+                                     (signature[0] == 'M' && signature[1] == 'M' && signature[2] == 0 && (signature[3] == 42 || signature[3] == 43)));
+        if (tiff_signature) {
+            if (!limits.tiff_reads || limits.tiff_reads > 65536 || !limits.tiff_read_bytes || limits.tiff_read_bytes > 1024 * 1024 * 1024 ||
+                !limits.tiff_directories || limits.tiff_directories > 256 || !limits.tiff_entries || limits.tiff_entries > 65536 || !limits.tiff_value_bytes || limits.tiff_value_bytes > 64 * 1024 * 1024) {
+                result.status = MetadataStatus::Limited;
+                result.diagnostic = "Invalid TIFF collection limits";
+                return result;
+            }
+            return read_tiff_source_metadata(input, limits);
+        }
+        if (!limits.blocks || limits.blocks > 4096) {
+            result.status = MetadataStatus::Limited;
+            result.diagnostic = "Invalid EXIF block count limit";
+            return result;
+        }
         if (is_heif(std::span(signature).first(signature_size)))
             return read_heif_exif(path, limits);
         if (signature_size >= kPngSignature.size() && std::equal(kPngSignature.begin(), kPngSignature.end(), signature.begin())) {
@@ -1786,7 +2256,7 @@ namespace lfs::core::image_codecs {
         }
         if (signature_size < 2 || signature[0] != 0xff || signature[1] != 0xd8) {
             result.status = MetadataStatus::Unsupported;
-            result.diagnostic = "EXIF collection supports JPEG, PNG and HEIF sources";
+            result.diagnostic = "EXIF collection supports JPEG, PNG, TIFF and HEIF sources";
             return result;
         }
         result.scope = "jpeg-before-sos";

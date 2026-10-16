@@ -84,6 +84,30 @@ namespace lfs::media::json_detail {
             }
             result["blocks"].push_back(std::move(item));
         }
+        if (original.tiff) {
+            const auto& tiff = *original.tiff;
+            json archive{{"representation", "libtiff-decoded-tags-and-observed-source-ranges"},
+                         {"complete_metadata_archive", false},
+                         {"relocatable_exif", false},
+                         {"big_tiff", tiff.big_tiff},
+                         {"big_endian", tiff.big_endian},
+                         {"source_ranges", json::array()},
+                         {"directories", json::array()}};
+            for (const auto& range : tiff.source_ranges)
+                archive["source_ranges"].push_back({{"offset", range.offset}, {"bytes", hexBytes(range.bytes)}});
+            for (const auto& directory : tiff.directories) {
+                json node{{"offset", directory.offset}, {"parent", optional(directory.parent)}, {"kind", directory.kind}, {"tags", json::array()}};
+                for (const auto& tag : directory.tags) {
+                    json floating = json::array();
+                    for (const auto value : tag.floating_values)
+                        floating.push_back(std::isfinite(value) ? json(value) : json(std::isnan(value) ? "nan" : value < 0 ? "-inf"
+                                                                                                                           : "+inf"));
+                    node["tags"].push_back({{"id", tag.id}, {"type", tag.type}, {"count", tag.count}, {"unsigned_values", tag.unsigned_values}, {"signed_values", tag.signed_values}, {"floating_values", floating}, {"bytes", hexBytes(tag.bytes)}, {"decoded_storage_bytes", tag.decoded_storage_bytes}});
+                }
+                archive["directories"].push_back(std::move(node));
+            }
+            result["tiff"] = std::move(archive);
+        }
         return result;
     }
     inline const char* streamKind(StreamKind kind) {
