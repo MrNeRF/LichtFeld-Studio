@@ -9,6 +9,7 @@
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <gtest/gtest.h>
@@ -50,7 +51,7 @@ namespace {
         // Draws only the XZ grid, seen from `eye` looking at `target` while orbiting `pivot`.
         // A positive `ortho_scale` (pixels per world unit) switches to an orthographic view.
         VulkanContext::WindowCapture render(const glm::vec3& eye, const glm::vec3& target, const glm::vec3& pivot,
-                                            const float ortho_scale = 0.0f) {
+                                            const float ortho_scale = 0.0f, const float focal_mm = 35.0f) {
             VulkanContext::Frame frame{};
             const VkClearValue clear{};
             EXPECT_TRUE(context->beginFrame(clear, frame)) << context->lastError();
@@ -60,7 +61,7 @@ namespace {
             grid.render_size = size;
             grid.view = lfs::rendering::makeViewMatrix(lfs::rendering::makeVisualizerLookAtRotation(eye, target), eye);
             grid.orthographic = ortho_scale > 0.0f;
-            grid.projection = lfs::rendering::createProjectionMatrixFromFocal(size, 35.0f, grid.orthographic,
+            grid.projection = lfs::rendering::createProjectionMatrixFromFocal(size, focal_mm, grid.orthographic,
                                                                               grid.orthographic ? ortho_scale : 1.0f);
             grid.view_projection = grid.projection * grid.view;
             grid.view_position = eye;
@@ -116,6 +117,47 @@ namespace {
             return 0;
         std::ranges::nth_element(red_per_column, red_per_column.begin() + red_per_column.size() / 2);
         return red_per_column[red_per_column.size() / 2];
+    }
+
+    // RMS distance in pixels between the red X axis and a straight line fitted through it.
+    double redAxisWobble(const VulkanContext::WindowCapture& image) {
+        std::vector<glm::dvec2> centres;
+        for (int x = 0; x < image.width; ++x) {
+            double sum = 0.0;
+            int count = 0;
+            for (int y = 0; y < image.height; ++y)
+                if (isRed(pixel(image, x, y), 60)) {
+                    sum += y;
+                    ++count;
+                }
+            if (count > 0)
+                centres.emplace_back(x, sum / count);
+        }
+        if (centres.size() <= static_cast<size_t>(image.width / 2))
+            return 1e9;
+        glm::dvec2 mean{0.0};
+        for (const auto& c : centres)
+            mean += c / static_cast<double>(centres.size());
+        double sxx = 0.0, sxy = 0.0;
+        for (const auto& c : centres) {
+            sxx += (c.x - mean.x) * (c.x - mean.x);
+            sxy += (c.x - mean.x) * (c.y - mean.y);
+        }
+        const double slope = sxy / sxx;
+        double squared = 0.0;
+        for (const auto& c : centres) {
+            const double residual = c.y - (mean.y + slope * (c.x - mean.x));
+            squared += residual * residual;
+        }
+        return std::sqrt(squared / static_cast<double>(centres.size()));
+    }
+
+    // Catches pixel rays rebuilt as the difference of two points near a distant camera: the float
+    // difference loses the direction and the axis breaks into a staircase of offset segments.
+    TEST_F(ViewportGridTest, AxisStaysStraightFarFromTheOrigin) {
+        const auto image = render({30000.0f, 9000.0f, 30000.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, 0.0f, 400.0f);
+        ASSERT_GT(image.width, 0);
+        EXPECT_LT(redAxisWobble(image), 0.5);
     }
 
     TEST_F(ViewportGridTest, AxesStayThinCloseToTheOrigin) {
