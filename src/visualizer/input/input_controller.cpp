@@ -100,16 +100,17 @@ namespace lfs::vis {
         // Like expandNodeWorldBounds, but hidden nodes and hidden children of a
         // container add nothing: framing follows what the viewport shows.
         void expandVisibleNodeWorldBounds(const core::Scene& scene, const core::SceneNode& node,
-                                          glm::vec3& world_min, glm::vec3& world_max) {
+                                          glm::vec3& world_min, glm::vec3& world_max,
+                                          const bool use_percentile = false) {
             if (!scene.isNodeEffectivelyVisible(node.id))
                 return;
             if (!isGeometryContainer(node)) {
-                expandNodeWorldBounds(scene, node, world_min, world_max);
+                expandNodeWorldBounds(scene, node, world_min, world_max, use_percentile);
                 return;
             }
             for (const auto child_id : node.children) {
                 if (const auto* const child = scene.getNodeById(child_id))
-                    expandVisibleNodeWorldBounds(scene, *child, world_min, world_max);
+                    expandVisibleNodeWorldBounds(scene, *child, world_min, world_max, use_percentile);
             }
         }
 
@@ -3040,16 +3041,19 @@ namespace lfs::vis {
         glm::vec3 total_max(std::numeric_limits<float>::lowest());
         bool has_bounds = false;
 
+        // Frame the trimmed splat and point-cloud boxes: a few far floaters would
+        // otherwise park the camera beyond the zoom-out limit, where only zooming
+        // in still works.
         if (selected.empty()) {
-            has_bounds = computeWholeSceneBounds(total_min, total_max);
+            has_bounds = computeWholeSceneBounds(total_min, total_max, /*use_percentile=*/true);
         } else {
             for (const auto& name : selected) {
                 if (const auto* node = scene.getNode(name))
-                    expandVisibleNodeWorldBounds(scene, *node, total_min, total_max);
+                    expandVisibleNodeWorldBounds(scene, *node, total_min, total_max, /*use_percentile=*/true);
             }
             has_bounds = total_min.x <= total_max.x;
             if (!has_bounds)
-                has_bounds = computeWholeSceneBounds(total_min, total_max);
+                has_bounds = computeWholeSceneBounds(total_min, total_max, /*use_percentile=*/true);
         }
 
         if (has_bounds) {

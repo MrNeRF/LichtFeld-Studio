@@ -930,6 +930,41 @@ namespace lfs::vis {
         expect_framed_near("hidden node");
     }
 
+    // Fails if one far floater makes F park the camera beyond the zoom-out limit.
+    TEST_F(InputControllerFocusTest, FocusFramesThroughFarFloatersAndCanZoomOut) {
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        SceneManager scene_manager;
+        ToolContext tool_context(nullptr, &scene_manager, &viewport, nullptr);
+        controller.setToolContext(&tool_context);
+
+        constexpr size_t count = 500;
+        std::vector<float> means(count * 3, 0.0f), rotations(count * 4, 0.0f);
+        for (size_t i = 0; i < count; ++i) {
+            means[i * 3] = static_cast<float>(i % 10) * 0.2f - 1.0f;
+            means[i * 3 + 1] = static_cast<float>((i / 10) % 10) * 0.2f - 1.0f;
+            rotations[i * 4] = 1.0f;
+        }
+        means[0] = 90000.0f; // one floater
+        scene_manager.getScene().addSplat(
+            "model",
+            std::make_unique<lfs::core::SplatData>(
+                0, Tensor::from_vector(means, {count, size_t{3}}, Device::CPU),
+                Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::zeros({count, size_t{0}, size_t{3}}, Device::CPU),
+                Tensor::zeros({count, size_t{3}}, Device::CPU),
+                Tensor::from_vector(rotations, {count, size_t{4}}, Device::CPU),
+                Tensor::zeros({count, size_t{1}}, Device::CPU), 1.0f));
+
+        ASSERT_TRUE(controller.focusSelection());
+        const float framed = glm::length(viewport.camera.pivot - viewport.camera.t);
+        EXPECT_LT(framed, 100.0f);
+        viewport.camera.zoom(-1.0f);
+        EXPECT_GT(glm::length(viewport.camera.pivot - viewport.camera.t), framed);
+    }
+
     TEST_F(InputControllerFocusTest, FrameAndHomeKeysWorkWhileAPanelHasKeyboardFocus) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
