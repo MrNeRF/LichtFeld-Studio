@@ -459,7 +459,6 @@ class HistogramPanel(Panel):
             nodes_changed or
             selection_generation != self._selection_generation
         )
-        sync_selection_from_scene = False
         if (scene_generation == self._scene_generation and
                 history_generation == self._history_generation and
                 trainer_state == self._trainer_state and
@@ -480,13 +479,8 @@ class HistogramPanel(Panel):
                 self._selection_owned = True
             return False
 
-        if scene_changed or history_changed or selection_changed:
-            # The panel's own commits leave the scene equal to its mask and are skipped
-            # there, so tool selections, clears and undo always reach the chart.
-            sync_selection_from_scene = True
-
         if nodes_changed:
-            self._clear_all_marks(clear_scene=False)
+            self._reset_mark_state(clear_scene=False)
 
         refresh_data = data_changed or nodes_changed or trainer_state != self._trainer_state or current_lang != self._last_lang
         self._scene_generation = scene_generation
@@ -499,8 +493,8 @@ class HistogramPanel(Panel):
         self._rebuild_metric_options()
         if refresh_data:
             self._refresh()
-        if sync_selection_from_scene and not (self._computing or self._dragging_mark or self._dragging_compare_mark):
-            self._sync_panel_selection_from_scene()
+        if scene_changed or history_changed or selection_changed:
+            self._reset_marks_after_external_selection()
         if self._handle:
             self._handle.dirty_all()
         return True
@@ -554,7 +548,7 @@ class HistogramPanel(Panel):
         metric_id = str(value)
         if metric_id not in METRIC_BY_ID or metric_id == self._metric_id:
             return
-        self._clear_all_marks(clear_scene=True)
+        self._reset_mark_state(clear_scene=True)
         self._metric_id = metric_id
         if self._compare_metric_id == metric_id:
             self._compare_metric_id = ""
@@ -694,7 +688,7 @@ class HistogramPanel(Panel):
 
     def _refresh_after_range_change(self):
         # Drop any active selection — bin indices change with the range.
-        self._clear_all_marks(clear_scene=True)
+        self._reset_mark_state(clear_scene=True)
         # Force the next on_update() to re-extract values; that path also
         # re-resolves bounds against the new custom range.
         self._scene_generation = -1
@@ -1424,7 +1418,6 @@ class HistogramPanel(Panel):
                 while len(self._histogram_cache) > _HISTOGRAM_CACHE_LIMIT:
                     self._histogram_cache.popitem(last=False)
                 self._apply_histogram_result(result)
-                self._sync_panel_selection_from_scene()
             elif kind == "empty":
                 self._apply_empty_histogram_result(result)
             elif kind == "error":
@@ -2657,42 +2650,15 @@ class HistogramPanel(Panel):
             prefix.append(running)
         return prefix
 
-    def _sync_panel_selection_from_scene(self):
-        """Keep the histogram/compare highlights in sync with external selection edits.
-
-        Global shortcuts (e.g. Ctrl+I) and viewport selection tools update the scene
-        selection mask without touching this panel's internal mark state. When that
-        happens we refresh the panel's highlighted bins/cells to match the current
-        scene selection.
-        """
-
-        if not self._show_chart or self._dragging_mark or self._dragging_compare_mark:
+    def _reset_marks_after_external_selection(self):
+        """A selection made elsewhere (tools, shortcuts, undo) clears the panel's marks."""
+        if self._dragging_mark or self._dragging_compare_mark or not self._has_any_mark():
             return
-
         scene = lf.get_scene()
-        if scene is None or not scene.is_valid():
+        scene_mask = getattr(scene, "selection_mask", None) if scene is not None and scene.is_valid() else None
+        if scene_mask is not None and self._scene_selection_matches_panel(scene_mask, self._active_mark_source):
             return
-
-        scene_mask = getattr(scene, "selection_mask", None)
-        if scene_mask is None:
-            # Nothing selected (or selection cleared) -> clear panel highlight too.
-            self._selection_owned = False
-            if self._has_any_mark():
-                self._reset_mark_state(clear_scene=False)
-            return
-
-        source = (
-            "compare"
-            if self._show_compare_chart and self._compare_finite_mask is not None and self._compare_values is not None
-            else "histogram"
-        )
-        if self._scene_selection_matches_panel(scene_mask, source):
-            return
-        self._selection_owned = False
-        if source == "compare":
-            self._commit_compare_mask_selection(scene_mask, apply_scene=False)
-        elif self._primary_finite_mask is not None and self._primary_values is not None:
-            self._commit_histogram_mask_selection(scene_mask, apply_scene=False)
+        self._reset_mark_state(clear_scene=False)
 
     def _scene_selection_matches_panel(self, scene_mask: lf.Tensor, source: str) -> bool:
         """True when the scene holds the panel's own last selection within the panel's domain."""
@@ -3974,9 +3940,6 @@ class HistogramPanel(Panel):
         self._update_compare_bin_records()
         if self._handle:
             self._handle.dirty_all()
-
-    def _clear_all_marks(self, clear_scene: bool):
-        self._reset_mark_state(clear_scene=clear_scene)
 
     def _selection_mask_for_value_bounds(self, range_min: float, range_max: float) -> lf.Tensor | None:
         if self._primary_values is None or self._primary_finite_mask is None:
