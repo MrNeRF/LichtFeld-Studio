@@ -99,7 +99,7 @@ namespace lfs::vis::input {
             ASSERT_TRUE(loaded.loadProfileFromFile(path));
             ASSERT_TRUE(loaded.saveProfileToFile(path));
             const auto upgraded = json::parse(std::ifstream(path));
-            EXPECT_EQ(upgraded.at("version"), 32);
+            EXPECT_EQ(upgraded.at("version"), test::currentProfileVersion());
             size_t brush_additions = 0;
             size_t brush_removals = 0;
             for (const auto& addition : upgraded["overrides"]["bindings"])

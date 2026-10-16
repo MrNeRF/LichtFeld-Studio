@@ -623,6 +623,12 @@ def focus_selection() -> bool:
     Focus the active viewport on the selection, or the whole scene when nothing is selected
     """
 
+def go_home() -> None:
+    """Move the active viewport to its home view"""
+
+def set_home() -> None:
+    """Make the active viewport's current view its home view"""
+
 def reset_home() -> None:
     """
     Restore the default home view of the active viewport and move the camera there

@@ -78,7 +78,7 @@ namespace lfs::vis::input {
             publishKeymapNotice(lfs::ErrorCode::InvalidArgument, std::move(message));
         }
 
-        constexpr int PROFILE_VERSION = 32; // Store changes to individual defaults.
+        constexpr int PROFILE_VERSION = 33; // Store changes to individual defaults.
 
         [[nodiscard]] std::optional<Binding> parseStoredBinding(const nlohmann::json& value);
         [[nodiscard]] std::string triggerIdentity(const Binding& binding);
@@ -139,7 +139,7 @@ namespace lfs::vis::input {
 
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
-        constexpr Action LAST_ACTION = Action::TOGGLE_PYTHON_CONSOLE;
+        constexpr Action LAST_ACTION = Action::CAMERA_RESTORE_HOME;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -2000,6 +2000,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_E, MODIFIER_NONE, true}, Action::CAMERA_MOVE_DOWN, "Down"},
             {KeyTrigger{KEY_H, MODIFIER_NONE}, Action::CAMERA_RESET_HOME, "Home"},
             {KeyTrigger{KEY_H, MODIFIER_SHIFT}, Action::CAMERA_SET_HOME, "Set home"},
+            {KeyTrigger{KEY_H, MODIFIER_CTRL}, Action::CAMERA_RESTORE_HOME, "Reset home"},
             {KeyTrigger{KEY_F, MODIFIER_NONE}, Action::CAMERA_FOCUS_SELECTION, "Focus selection"},
             {KeyTrigger{KEY_RIGHT, MODIFIER_NONE, true}, Action::CAMERA_NEXT_VIEW, "Next view"},
             {KeyTrigger{KEY_LEFT, MODIFIER_NONE, true}, Action::CAMERA_PREV_VIEW, "Prev view"},
@@ -2161,6 +2162,7 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_DOWN: return "Move Down";
         case Action::CAMERA_RESET_HOME: return "Go to Home";
         case Action::CAMERA_SET_HOME: return "Set Home";
+        case Action::CAMERA_RESTORE_HOME: return "Reset Home";
         case Action::CAMERA_FOCUS_SELECTION: return "Focus Selection";
         case Action::CAMERA_SET_PIVOT: return "Set Pivot";
         case Action::CAMERA_NEXT_VIEW: return "Next Camera View";
@@ -2255,6 +2257,7 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_DOWN: return "camera_move_down";
         case Action::CAMERA_RESET_HOME: return "camera_reset_home";
         case Action::CAMERA_SET_HOME: return "camera_set_home";
+        case Action::CAMERA_RESTORE_HOME: return "camera_restore_home";
         case Action::CAMERA_FOCUS_SELECTION: return "camera_focus_selection";
         case Action::CAMERA_SET_PIVOT: return "camera_set_pivot";
         case Action::CAMERA_NEXT_VIEW: return "camera_next_view";
@@ -2997,6 +3000,7 @@ namespace lfs::vis::input {
 
         case Action::CAMERA_RESET_HOME:
         case Action::CAMERA_SET_HOME:
+        case Action::CAMERA_RESTORE_HOME:
         case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:

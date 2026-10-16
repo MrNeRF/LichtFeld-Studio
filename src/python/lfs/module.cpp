@@ -2950,6 +2950,18 @@ NB_MODULE(lichtfeld, m) {
         },
         "Focus the active viewport on the selection, or the whole scene when nothing is selected");
     m.def(
+        "go_home", []() {
+            if (auto* const controller = lfs::vis::InputController::instance())
+                controller->goHome();
+        },
+        "Move the active viewport to its home view");
+    m.def(
+        "set_home", []() {
+            if (auto* const controller = lfs::vis::InputController::instance())
+                controller->setHome();
+        },
+        "Make the active viewport's current view its home view");
+    m.def(
         "reset_home", []() {
             if (auto* const controller = lfs::vis::InputController::instance())
                 controller->resetHome();

@@ -2111,19 +2111,15 @@ namespace lfs::vis {
             }
 
             case input::Action::CAMERA_SET_HOME:
-                activeKeyboardViewport().camera.saveHomePosition();
-                publishCameraMove(&activeKeyboardViewport());
-                if (auto* const viewer = lfs::python::get_visualizer()) {
-                    viewer->projectMarkSessionChapterCommitted("VIEW");
-                }
+                setHome();
                 return;
 
             case input::Action::CAMERA_RESET_HOME:
-                resetViewportToHome(activeKeyboardViewport(), viewport_);
-                publishCameraMove(&activeKeyboardViewport());
-                if (auto* const viewer = lfs::python::get_visualizer()) {
-                    viewer->projectMarkSessionChapterCommitted("VIEW");
-                }
+                goHome();
+                return;
+
+            case input::Action::CAMERA_RESTORE_HOME:
+                resetHome();
                 return;
 
             case input::Action::CAMERA_FOCUS_SELECTION:
@@ -3131,6 +3127,24 @@ namespace lfs::vis {
 
     bool InputController::focusSelection() {
         return handleFocusSelection(activeKeyboardViewport());
+    }
+
+    void InputController::goHome() {
+        auto& target = activeKeyboardViewport();
+        resetViewportToHome(target, viewport_);
+        publishCameraMove(&target);
+        if (auto* const viewer = lfs::python::get_visualizer()) {
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+        }
+    }
+
+    void InputController::setHome() {
+        auto& target = activeKeyboardViewport();
+        target.camera.saveHomePosition();
+        publishCameraMove(&target);
+        if (auto* const viewer = lfs::python::get_visualizer()) {
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+        }
     }
 
     void InputController::resetHome() {

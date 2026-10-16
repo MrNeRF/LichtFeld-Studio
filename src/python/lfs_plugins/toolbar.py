@@ -1273,7 +1273,8 @@ class _UtilityToolbarController:
             ),
             _button_record("util-reset-home", "reset_home", "", _icon_src("home-reset"),
                            tooltip_key="toolbar.reset_home",
-                           tooltip_text="Reset Home"),
+                           tooltip_text="Reset Home",
+                           action_id="CAMERA_RESTORE_HOME"),
         ]
 
         utility_extra_buttons = [
@@ -1343,7 +1344,10 @@ class _UtilityToolbarController:
             lf.set_camera_navigation_mode(value)
             return
         if action == "home":
-            lf.reset_camera()
+            lf.go_home()
+            return
+        if action == "set_home":
+            lf.set_home()
             return
         if action == "focus_selection":
             lf.focus_selection()
@@ -1914,6 +1918,12 @@ class _ViewportToolbarController:
             return
         action = str(args[0])
         value = str(args[1]) if len(args) > 1 else ""
+        if action == "home" and _event is not None:
+            # Shift-click sets the home, Ctrl-click restores the default, as Shift+H and Ctrl+H do.
+            if _event.get_bool_parameter("ctrl_key"):
+                action = "reset_home"
+            elif _event.get_bool_parameter("shift_key"):
+                action = "set_home"
         if action == "toggle_viewport_export":
             self._gizmo.clear_active_horizontal_tool()
             self._sync_flag("crop_roi_settings_open", False)

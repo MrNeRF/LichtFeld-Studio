@@ -2060,6 +2060,16 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     monkeypatch.setattr(lf_stub, "reset_home", lambda: reset_home_calls.append(True), raising=False)
     module._UtilityToolbarController().dispatch("reset_home", "")
     assert reset_home_calls == [True]
+    assert primary_buttons[2]["action_id"] == "CAMERA_RESTORE_HOME"
+    # Shift-click on Home sets the home and Ctrl-click restores the default, as Shift+H and Ctrl+H.
+    home_calls = []
+    for name in ("go_home", "set_home", "reset_home"):
+        monkeypatch.setattr(lf_stub, name, lambda name=name: home_calls.append(name), raising=False)
+    controller = module._toolbar_controller
+    for modifiers in ({}, {"shift_key": True}, {"ctrl_key": True}):
+        event = SimpleNamespace(get_bool_parameter=lambda key, default=False, held=modifiers: held.get(key, default))
+        controller._on_toolbar_action(None, event, ["home", ""])
+    assert home_calls == ["go_home", "set_home", "reset_home"]
     assert [button["button_id"] for button in extra_buttons] == [
         "util-asset-manager",
         "util-viewport-export",

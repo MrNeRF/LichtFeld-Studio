@@ -8,13 +8,6 @@ from .layouts.menus import keymap_shortcut, menu_action, menu_separator, registe
 __lfs_menu_classes__ = ["ViewMenu"]
 
 
-def _tr_fallback(key: str, fallback: str) -> str:
-    result = lf.ui.tr(key)
-    if result and result != key:
-        return result
-    return fallback
-
-
 @register_menu
 class ViewMenu:
     """View menu for the menu bar."""
@@ -141,7 +134,12 @@ class ViewMenu:
             )
 
         return [
-            menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
+            menu_action(tr("menu.view.home_view"), lf.go_home,
+                        shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_RESET_HOME)),
+            menu_action(tr("input_settings.action.camera_set_home"), lf.set_home,
+                        shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_SET_HOME)),
+            menu_action(tr("toolbar.reset_home"), lf.reset_home,
+                        shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_RESTORE_HOME)),
             menu_separator(),
             menu_toggle(tr("menu.view.split_view"), lf.toggle_independent_split_view,
                         lf.ui.get_split_view_mode() == "independent_dual"),
