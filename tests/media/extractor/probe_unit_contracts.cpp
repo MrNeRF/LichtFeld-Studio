@@ -114,6 +114,17 @@ namespace {
             require(read_source_exif(tiff_path, tiff_limits).status == MetadataStatus::Limited,
                     "TIFF checks decoded value storage before copying");
             tiff_limits = {};
+            size_t stored_values = 0;
+            for (const auto& entry : archived.tiff->directories[0].tags)
+                stored_values += entry.bytes.size() + 8 * (entry.unsigned_values.size() + entry.signed_values.size() + entry.floating_values.size());
+            tiff_limits.tiff_value_bytes = stored_values;
+            require(read_source_exif(tiff_path, tiff_limits).status == MetadataStatus::Collected,
+                    "TIFF decoded-value accounting accepts the exact owned-storage budget");
+            --tiff_limits.tiff_value_bytes;
+            const auto value_prefix = read_source_exif(tiff_path, tiff_limits);
+            require(value_prefix.status == MetadataStatus::Limited && !value_prefix.tiff->directories[0].tags.empty(),
+                    "TIFF decoded-value accounting rejects one byte below the owned-storage budget and retains its prefix");
+            tiff_limits = {};
             tiff_limits.total_bytes = 8;
             require(read_source_exif(tiff_path, tiff_limits).status == MetadataStatus::Limited,
                     "TIFF original range copies obey aggregate byte budget");
@@ -128,8 +139,8 @@ namespace {
             tiff_bytes[tiff_bytes.size() - 4] = 8;
             write_tiff_fixture(tiff_bytes.size());
             tiff = read_source_exif(tiff_path);
-            require(tiff.status == MetadataStatus::Malformed || tiff.status == MetadataStatus::Unsupported,
-                    "TIFF directory cycles preserve a non-success status");
+            require(tiff.status == MetadataStatus::Malformed,
+                    "TIFF directory cycles are malformed");
             require(!tiff.tiff->directories.empty(), "TIFF cycle retains the first complete directory");
             std::filesystem::remove(tiff_path);
             require(!archived.tiff->source_ranges.empty() && archived.tiff->directories.size() == 1,

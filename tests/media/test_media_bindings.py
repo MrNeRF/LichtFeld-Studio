@@ -58,14 +58,19 @@ class MediaBindings(unittest.TestCase):
                         self.assertEqual(bytes.fromhex(tags[id_]["bytes"]), blob)
                     for id_, expected in ((254, [1]), (266, [1]), (338, [2])):
                         self.assertEqual(tags[id_]["unsigned_values"], expected)
-                    source_exif_fixture.write_tiff_graph(path, big=big, little=little, subimages=70)
+                    source_exif_fixture.write_tiff_graph(path, big=big, little=little, subimages=70, blobs=[(65000, b"retained-root")])
                     value = json.loads(media.MediaIngest.source_exif_json(path))
                     self.assertEqual(value["status"], "limited")
                     tags = {tag["id"]: tag for tag in value["tiff"]["directories"][0]["tags"]}
                     self.assertEqual(tags[274]["unsigned_values"], [6])
-                    source_exif_fixture.write_tiff_graph(path, big=big, little=little, cycle=True)
+                    self.assertEqual(bytes.fromhex(tags[65000]["bytes"]), b"retained-root")
+                    for cycle in (True, "exif", "self-subimage"):
+                        source_exif_fixture.write_tiff_graph(path, big=big, little=little, cycle=cycle)
+                        value = json.loads(media.MediaIngest.source_exif_json(path))
+                        self.assertEqual(value["status"], "malformed", value.get("diagnostic"))
+                    source_exif_fixture.write_tiff_graph(path, big=big, little=little, subimages=2)
                     value = json.loads(media.MediaIngest.source_exif_json(path))
-                    self.assertEqual(value["status"], "malformed")
+                    self.assertEqual(value["status"], "unsupported", "A shared directory alias is not an ancestor cycle")
         source_exif_fixture.write_tiff_graph(path, blobs=[(700, b"x" * 1153433)])
         value = json.loads(media.MediaIngest.source_exif_json(path))
         self.assertEqual(value["status"], "collected", value.get("diagnostic"))

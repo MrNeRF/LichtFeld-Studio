@@ -218,6 +218,8 @@ def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), sub
               (2, 5, 3, b"".join(scalar(n, 4) + scalar(d, 4) for n, d in [(45, 1), (30, 1), (1, 2)]))],
              base,
              [(1, 2, 4, b"R98\0"), (2, 7, 4, b"0100")]]
+    if cycle == "self-subimage":
+        nodes[3] = base + [(330, pointer_type, 1, "subimage")]
     nodes[0].extend((id_, 1 if id_ in (700, 34377) else 7, len(value), value) for id_, value in blobs)
     if alpha:
         nodes[0] = [tag for tag in nodes[0] if tag[0] not in (277, 279)]
@@ -239,7 +241,7 @@ def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), sub
         data[table:table + count_width] = scalar(len(tags), count_width)
         for index, (id_, type_, count, value) in enumerate(sorted(tags)):
             if isinstance(value, str):
-                value = scalar(offsets["image"] if cycle and value == "subimage" else offsets[value], slot) * count
+                value = scalar(offsets["image"] if (cycle is True and value == "subimage") or cycle == value else offsets[value], slot) * count
             if len(value) > slot:
                 data.extend(bytes((-len(data)) % align))
                 stored = scalar(len(data), slot)
