@@ -279,7 +279,7 @@ namespace lfs::app {
                 params.dataset.output_path = path.parent_path();
             io::project::adopt_project_training_parameters(
                 params, std::move(*snapshot), std::move(*dataset_root),
-                std::move(images_folder));
+                std::move(images_folder), document->references(), path.parent_path());
             // dataset_project stays set: it is the save destination unless
             // -o redirects the result, exactly like --resume.
             LOG_INFO(
