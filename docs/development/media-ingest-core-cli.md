@@ -488,6 +488,12 @@ be terminated, duplicate tags may be collapsed, and rationals are already
 converted to float/double. Exact source bytes are never replaced by these values.
 Byte/string values use hex; non-finite floats use `nan`, `-inf` or `+inf` strings.
 MakerNotes remain opaque, not recursively interpreted as vendor IFDs.
+Baseline coverage includes ExtraSamples (alpha semantics), NewSubfileType
+(thumbnail flags) and FillOrder. Per-sample BitsPerSample/SampleFormat arrays
+are represented by libtiff's scalar getters; PlanarConfiguration may be a
+library default. ColorMap and JPEGTables are not copied as decoded tags.
+Byte/string payloads consume one byte per stored byte; numeric values consume
+eight bytes per widened element.
 
 Defaults bound libtiff read callbacks to 4096 calls / 64 MiB cumulatively
 (the initial signature probe reads at most 12 additional bytes), directory visits
@@ -500,8 +506,10 @@ Libtiff uses separate 8 MiB single-allocation / 32 MiB outstanding-allocation
 ceilings, with mapping and strip chopping disabled and strip/tile arrays deferred.
 These bounds are not a hard limit on total process memory or execution time.
 Library errors and non-auto-registration warnings are surfaced as malformed,
-including library allocation failures; explicitly unconfigured compression is
-unsupported, and application budget exhaustion is limited.
+except exhaustion of the configured libtiff allocation ceilings, which is limited.
+Explicitly unconfigured compression is unsupported, and application budget
+exhaustion is limited. Directory-budget exhaustion retains the decoded tags of
+the current directory within the remaining entry/value budgets.
 Complete observed spans and decoded prefixes survive later failures.
 
 This does not add metadata writing, complete archival preservation, vendor

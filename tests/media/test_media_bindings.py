@@ -43,6 +43,37 @@ class MediaBindings(unittest.TestCase):
                     value = json.loads(media.MediaIngest.source_exif_json(path))
                     source_exif_fixture.check_tiff_graph(self, value, path, maker)
 
+    def test_tiff_review_budgets_cycles_and_baseline_fields(self):
+        path = self.root / "review-budgets.tif"
+        for big in (False, True):
+            for little in (False, True):
+                with self.subTest(big=big, little=little):
+                    blobs = [(700, b"x" * (600 * 1024)), (34377, b"p" * (500 * 1024))]
+                    source_exif_fixture.write_tiff_graph(path, big=big, little=little, blobs=blobs, alpha=True)
+                    value = json.loads(media.MediaIngest.source_exif_json(path))
+                    self.assertEqual(value["status"], "collected", value.get("diagnostic"))
+                    self.assertIn("exif", {node["kind"] for node in value["tiff"]["directories"]})
+                    tags = {tag["id"]: tag for tag in value["tiff"]["directories"][0]["tags"]}
+                    for id_, blob in blobs:
+                        self.assertEqual(bytes.fromhex(tags[id_]["bytes"]), blob)
+                    for id_, expected in ((254, [1]), (266, [1]), (338, [2])):
+                        self.assertEqual(tags[id_]["unsigned_values"], expected)
+                    source_exif_fixture.write_tiff_graph(path, big=big, little=little, subimages=70)
+                    value = json.loads(media.MediaIngest.source_exif_json(path))
+                    self.assertEqual(value["status"], "limited")
+                    tags = {tag["id"]: tag for tag in value["tiff"]["directories"][0]["tags"]}
+                    self.assertEqual(tags[274]["unsigned_values"], [6])
+                    source_exif_fixture.write_tiff_graph(path, big=big, little=little, cycle=True)
+                    value = json.loads(media.MediaIngest.source_exif_json(path))
+                    self.assertEqual(value["status"], "malformed")
+        source_exif_fixture.write_tiff_graph(path, blobs=[(700, b"x" * 1153433)])
+        value = json.loads(media.MediaIngest.source_exif_json(path))
+        self.assertEqual(value["status"], "collected", value.get("diagnostic"))
+        self.assertIn("exif", {node["kind"] for node in value["tiff"]["directories"]})
+        source_exif_fixture.write_tiff_graph(path, blobs=[(37724, bytes(20 * 1024 * 1024))])
+        value = json.loads(media.MediaIngest.source_exif_json(path))
+        self.assertEqual(value["status"], "limited", value.get("diagnostic"))
+
     def test_tiff_concurrent_handles_keep_diagnostics_and_storage_separate(self):
         valid = self.root / "concurrent-valid.tif"
         invalid = self.root / "concurrent-invalid.tif"

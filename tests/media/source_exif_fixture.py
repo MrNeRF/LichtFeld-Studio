@@ -198,7 +198,7 @@ def check_tiff(test, result, path, payload, *, big=False, little=True, pages=1):
 
 
 
-def write_tiff_graph(path, *, little=True, big=False, cycle=False):
+def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), subimages=1, alpha=False):
     """Image -> EXIF/GPS/SubIFD, plus EXIF -> interoperability, all independent."""
     order = "<" if little else ">"
     byte_order = "little" if little else "big"
@@ -218,6 +218,13 @@ def write_tiff_graph(path, *, little=True, big=False, cycle=False):
               (2, 5, 3, b"".join(scalar(n, 4) + scalar(d, 4) for n, d in [(45, 1), (30, 1), (1, 2)]))],
              base,
              [(1, 2, 4, b"R98\0"), (2, 7, 4, b"0100")]]
+    nodes[0].extend((id_, 1 if id_ in (700, 34377) else 7, len(value), value) for id_, value in blobs)
+    if alpha:
+        nodes[0] = [tag for tag in nodes[0] if tag[0] not in (277, 279)]
+        nodes[0].extend([(277, 3, 1, scalar(4, 2)), (279, 4, 1, scalar(4, 4)), (338, 3, 1, scalar(2, 2)),
+                         (254, 4, 1, scalar(1, 4)), (266, 3, 1, scalar(1, 2))])
+    nodes[0] = [(id_, type_, subimages if id_ == 330 else count, value)
+                for id_, type_, count, value in nodes[0]]
     names = ["image", "exif", "gps", "subimage", "interoperability"]
     header = (b"II" if little else b"MM") + scalar(43 if big else 42, 2)
     header += scalar(8, 2) + scalar(0, 2) + scalar(16, 8) if big else scalar(8, 4)
@@ -232,7 +239,7 @@ def write_tiff_graph(path, *, little=True, big=False, cycle=False):
         data[table:table + count_width] = scalar(len(tags), count_width)
         for index, (id_, type_, count, value) in enumerate(sorted(tags)):
             if isinstance(value, str):
-                value = scalar(offsets["image"] if cycle and value == "subimage" else offsets[value], slot)
+                value = scalar(offsets["image"] if cycle and value == "subimage" else offsets[value], slot) * count
             if len(value) > slot:
                 data.extend(bytes((-len(data)) % align))
                 stored = scalar(len(data), slot)

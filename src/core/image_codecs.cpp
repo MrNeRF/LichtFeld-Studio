@@ -1870,7 +1870,12 @@ namespace lfs::core::image_codecs {
                     std::vsnprintf(message.data(), message.size(), format, args);
                     // Unknown tag registration warnings are handled separately.
                     // Other warnings can mean dropped/normalized source values.
-                    self.fail(std::strcmp(format, "%s compression support is not configured") == 0 ? MetadataStatus::Unsupported : MetadataStatus::Malformed, message.data());
+                    const bool allocation_limit =
+                        (std::strncmp(format, "Memory allocation of %", 22) == 0 && std::strstr(format, " byte limit defined in open options")) ||
+                        (std::strncmp(format, "Cumulated memory allocation of %", 32) == 0 && std::strstr(format, " cumulated byte limit defined in open options"));
+                    self.fail(allocation_limit ? MetadataStatus::Limited : std::strcmp(format, "%s compression support is not configured") == 0 ? MetadataStatus::Unsupported
+                                                                                                                                                : MetadataStatus::Malformed,
+                              message.data());
                 } catch (...) {
                     // LFS-CENSUS-OK(empty-catch): allocation failure is observable
                     // through Limited and a literal diagnostic stored outside C.
@@ -2009,7 +2014,7 @@ namespace lfs::core::image_codecs {
                 reader.fail(MetadataStatus::Unsupported, "Unsupported TIFF library storage width");
                 return true;
             }
-            if (!reader.charge(count, 8))
+            if (!reader.charge(count, type == TIFF_ASCII || type == TIFF_BYTE || type == TIFF_UNDEFINED ? 1 : 8))
                 return false;
             tag.count = count;
             tag.decoded_storage_bytes = static_cast<size_t>(width);
@@ -2105,7 +2110,19 @@ namespace lfs::core::image_codecs {
                     node = std::move(pending.back());
                     pending.pop_back();
                     if (!node.offset || visited.contains(node.offset)) {
-                        reader.fail(MetadataStatus::Unsupported, "Repeated TIFF directory offset is not revisited");
+                        bool cycle = false;
+                        auto ancestor = node.parent;
+                        while (ancestor) {
+                            if (*ancestor == node.offset) {
+                                cycle = true;
+                                break;
+                            }
+                            const auto found = std::find_if(result.tiff->directories.begin(), result.tiff->directories.end(),
+                                                            [&](const auto& value) { return value.offset == *ancestor; });
+                            ancestor = found == result.tiff->directories.end() ? std::nullopt : found->parent;
+                        }
+                        reader.fail(cycle ? MetadataStatus::Malformed : MetadataStatus::Unsupported,
+                                    cycle ? "Cyclic TIFF directory reference" : "Repeated TIFF directory offset is not revisited");
                         continue;
                     }
                     ok = node.kind == "exif" || node.kind == "interoperability" ? TIFFReadEXIFDirectory(tiff.get(), node.offset) : node.kind == "gps" ? TIFFReadGPSDirectory(tiff.get(), node.offset)
@@ -2123,6 +2140,7 @@ namespace lfs::core::image_codecs {
                     break;
                 }
                 TiffSourceDirectory directory{node.offset, node.parent, node.kind, {}};
+                bool directory_limit = false;
                 auto child = [&](uint64_t offset, const char* kind) {
                     if (offset)
                         pending.push_back({offset, node.offset, kind});
@@ -2136,7 +2154,8 @@ namespace lfs::core::image_codecs {
                     uint64_t* offsets = nullptr;
                     if (TIFFGetField(tiff.get(), TIFFTAG_SUBIFD, &count, &offsets)) {
                         if (count > limits.tiff_directories - visited.size()) {
-                            reader.fail(MetadataStatus::Limited, "TIFF directory budget exhausted");
+                            // Harvest this already-decoded directory before stopping traversal.
+                            directory_limit = true;
                         } else
                             for (uint16_t i = 0; i < count; ++i)
                                 child(offsets[i], "subimage");
@@ -2147,17 +2166,28 @@ namespace lfs::core::image_codecs {
                             child(offset, id == TIFFTAG_EXIFIFD ? "exif" : "gps");
                     }
                     // Baseline scalar tags are not in libtiff's custom tag list.
-                    for (const auto id : {TIFFTAG_IMAGEWIDTH, TIFFTAG_IMAGELENGTH, TIFFTAG_ROWSPERSTRIP}) {
+                    for (const auto id : {TIFFTAG_IMAGEWIDTH, TIFFTAG_IMAGELENGTH, TIFFTAG_ROWSPERSTRIP, TIFFTAG_SUBFILETYPE}) {
                         uint32_t value = 0;
                         if (TIFFGetField(tiff.get(), id, &value) && reader.charge(1, 8))
                             directory.tags.push_back({static_cast<uint32_t>(id), TIFF_LONG, 1, {value}, {}, {}, {}, sizeof(value)});
                     }
                     for (const auto id : {TIFFTAG_BITSPERSAMPLE, TIFFTAG_SAMPLESPERPIXEL, TIFFTAG_SAMPLEFORMAT,
                                           TIFFTAG_ORIENTATION, TIFFTAG_PHOTOMETRIC, TIFFTAG_COMPRESSION,
-                                          TIFFTAG_PLANARCONFIG, TIFFTAG_RESOLUTIONUNIT}) {
+                                          TIFFTAG_PLANARCONFIG, TIFFTAG_RESOLUTIONUNIT, TIFFTAG_FILLORDER}) {
                         uint16_t value = 0;
                         if (TIFFGetField(tiff.get(), id, &value) && reader.charge(1, 8))
                             directory.tags.push_back({static_cast<uint32_t>(id), TIFF_SHORT, 1, {value}, {}, {}, {}, sizeof(value)});
+                    }
+                    uint16_t extra_count = 0;
+                    uint16_t* extra_samples = nullptr;
+                    if (TIFFGetField(tiff.get(), TIFFTAG_EXTRASAMPLES, &extra_count, &extra_samples) && reader.charge(extra_count, 8)) {
+                        TiffSourceTag tag;
+                        tag.id = TIFFTAG_EXTRASAMPLES;
+                        tag.type = TIFF_SHORT;
+                        tag.count = extra_count;
+                        tag.decoded_storage_bytes = sizeof(uint16_t);
+                        copy_tiff_values<uint16_t>(tag, extra_samples, extra_count);
+                        directory.tags.push_back(std::move(tag));
                     }
                     for (const auto id : {TIFFTAG_XRESOLUTION, TIFFTAG_YRESOLUTION}) {
                         float value = 0;
@@ -2174,7 +2204,7 @@ namespace lfs::core::image_codecs {
                             child(tag.unsigned_values[0], "interoperability");
                 }
                 result.tiff->directories.push_back(std::move(directory));
-                if (visited.size() + pending.size() > limits.tiff_directories) {
+                if (directory_limit || visited.size() + pending.size() > limits.tiff_directories) {
                     reader.fail(MetadataStatus::Limited, "TIFF directory budget exhausted");
                     break;
                 }
