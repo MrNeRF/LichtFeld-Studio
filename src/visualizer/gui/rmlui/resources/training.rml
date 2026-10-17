@@ -140,6 +140,7 @@
                   data-event-click="toggle_step_scaling_lock">
             <img data-attr-src="steps_scaling_lock_icon" />
           </button>
+          <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
         </div>
         <input type="text" class="number-input" data-if="row.kind == 'number'"
                data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
@@ -175,6 +176,7 @@
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div data-if="dep_ppisp_params">
         <div class="setting-row" data-for="row : pv_ppisp_exif_rows"
@@ -182,6 +184,7 @@
           <span class="prop-label">{{row.label}}</span>
           <input type="checkbox" data-checked="row.checked"
                  data-event-click="pv_value_change(row.id, !row.checked)" />
+          <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
         </div>
       </div>
       <div class="setting-row" data-for="row : pv_basic_mask_mode_rows"
@@ -194,6 +197,7 @@
           <option data-for="item : pv_basic_mask_mode_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
                   data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
         </select>
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="mask-settings-group" data-if="dep_mask_mode">
         <div class="setting-row" data-for="row : pv_mask_invert_rows"
@@ -201,6 +205,7 @@
           <span class="prop-label">{{row.label}}</span>
           <input type="checkbox" data-checked="row.checked"
                  data-event-click="pv_value_change(row.id, !row.checked)" />
+          <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
         </div>
         <div class="setting-row" data-for="row : pv_mask_threshold_rows" data-if="dep_mask_threshold"
              data-attr-data-tooltip="row.tooltip_key">
@@ -212,12 +217,14 @@
                  data-event-escapecancel="pv_escape(row.id)" />
           <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+          <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
         </div>
         <div class="setting-row" data-for="row : pv_mask_alpha_rows"
              data-attr-data-tooltip="row.tooltip_key">
           <span class="prop-label">{{row.label}}</span>
           <input type="checkbox" data-checked="row.checked"
                  data-event-click="pv_value_change(row.id, !row.checked)" />
+          <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
         </div>
         <div class="mask-settings-divider" data-if="dep_mask_segment"></div>
         <div data-if="dep_mask_segment">
@@ -231,6 +238,7 @@
                    data-event-escapecancel="pv_escape(row.id)" />
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
         </div>
       </div>
@@ -244,6 +252,7 @@
           <option data-for="item : pv_basic_depth_toggle_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
                   data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
         </select>
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.depth_loss_mode" data-if="dep_depth_loss &amp;&amp; !pv_search_active">
         <span class="prop-label">{{label_depth_loss_mode}}</span>
@@ -258,6 +267,7 @@
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="setting-row" data-for="row : pv_basic_depth_weight_rows" data-if="dep_depth_loss &amp;&amp; row.kind == 'number'"
            data-attr-data-tooltip="row.tooltip_key">
@@ -269,18 +279,21 @@
                data-event-escapecancel="pv_escape(row.id)" />
         <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
         <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_toggle_rows"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'checkbox'"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'number'"
            data-attr-data-tooltip="row.tooltip_key">
@@ -292,6 +305,7 @@
                data-event-escapecancel="pv_escape(row.id)" />
         <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
         <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'select'"
            data-attr-data-tooltip="row.tooltip_key">
@@ -300,18 +314,21 @@
           <option data-for="item : pv_basic_normal_weights_options" data-if="item.prop_id == row.id"
                   data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
         </select>
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="setting-row" data-for="row : pv_basic_undistort_rows"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="setting-row" data-for="row : pv_basic_sparsity_toggle_rows"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div data-if="dep_sparsity" data-class-disabled-overlay="adv_disabled">
         <div class="setting-row" data-for="row : pv_sparsity_rows"
@@ -324,6 +341,7 @@
                  data-event-escapecancel="pv_escape(row.id)" />
           <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+          <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
         </div>
         <div class="setting-row" data-tooltip="training.tooltip.prune_ratio" data-if="!pv_search_active">
           <span class="prop-label">{{label_prune_ratio}}</span>
@@ -336,12 +354,14 @@
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="setting-row" data-for="row : pv_basic_mip_filter_rows"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="setting-row" data-for="row : pv_bg_mode_rows"
            data-attr-data-tooltip="row.tooltip_key">
@@ -350,6 +370,7 @@
           <option data-for="item : pv_bg_mode_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
                   data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
         </select>
+        <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.bg_color" data-if="dep_bg_color &amp;&amp; !pv_search_active">
         <span class="prop-label">{{label_bg_color}}</span>
@@ -441,6 +462,7 @@
             <span class="prop-label">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div data-if="dep_bilateral" data-class-disabled-overlay="adv_disabled">
             <span class="status-text status-muted" data-if="pv_bilateral_rows.size > 0 || pv_exposure_grid_start_rows.size > 0">{{pv_header_bilateral_grid}}</span>
@@ -454,6 +476,7 @@
                      data-event-escapecancel="pv_escape(row.id)" />
               <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
               <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+              <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
             </div>
             <div class="setting-row" data-for="row : pv_exposure_grid_start_rows"
                  data-if="dep_exposure_correction"
@@ -466,6 +489,7 @@
                      data-event-escapecancel="pv_escape(row.id)" />
               <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
               <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+              <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
             </div>
           </div>
           <div class="setting-row" data-for="row : pv_ppisp_toggle_rows"
@@ -473,6 +497,7 @@
             <span class="prop-label">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div data-if="dep_ppisp">
             <div class="setting-row" data-for="row : pv_ppisp_freeze_rows"
@@ -480,6 +505,7 @@
               <span class="prop-label">{{row.label}}</span>
               <input type="checkbox" data-checked="row.checked"
                      data-event-click="pv_value_change(row.id, !row.checked)" />
+              <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
             </div>
             <div data-if="dep_ppisp_frozen_sidecar &amp;&amp; !pv_search_active">
               <div class="setting-row" data-tooltip="training.tooltip.ppisp_sidecar_path">
@@ -497,6 +523,7 @@
               <span class="prop-label">{{row.label}}</span>
               <input type="checkbox" data-checked="row.checked"
                      data-event-click="pv_value_change(row.id, !row.checked)" />
+              <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
             </div>
             <div data-if="dep_ppisp_controller">
               <div class="setting-row" data-tooltip="training.tooltip.ppisp_activation_step" data-if="!pv_search_active">
@@ -518,6 +545,7 @@
                        data-event-click="pv_value_change(row.id, !row.checked)" />
                 <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
                 <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+                <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
               </div>
             </div>
           </div>
@@ -542,6 +570,7 @@
             </select>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
         </div>
       </div>
@@ -569,6 +598,7 @@
                    data-event-escapecancel="pv_escape(row.id)" />
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div class="setting-row" data-for="row : pv_refinement_grow_rows" data-if="dep_mrnf"
                data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="step_scaling_params_locked">
@@ -580,6 +610,7 @@
                    data-event-escapecancel="pv_escape(row.id)" />
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div class="setting-row" data-for="row : pv_refinement_locked_tail_rows"
                data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="step_scaling_params_locked">
@@ -591,6 +622,7 @@
                    data-event-escapecancel="pv_escape(row.id)" />
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div class="setting-row" data-for="row : pv_refinement_igs_rows" data-if="dep_igs"
                data-attr-data-tooltip="row.tooltip_key">
@@ -605,6 +637,7 @@
                    data-event-click="pv_value_change(row.id, !row.checked)" />
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div class="setting-row" data-for="row : pv_refinement_registry_rows"
                data-attr-data-tooltip="row.tooltip_key">
@@ -624,6 +657,7 @@
             </select>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
         </div>
       </div>
@@ -648,6 +682,7 @@
                    data-event-escapecancel="pv_escape(row.id)" />
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div class="setting-row" data-for="row : pv_learning_rates_registry_rows"
                data-attr-data-tooltip="row.tooltip_key">
@@ -667,6 +702,7 @@
             </select>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
         </div>
       </div>
@@ -695,6 +731,7 @@
                    data-event-escapecancel="pv_escape(row.id)" />
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div class="setting-row" data-for="row : pv_losses_registry_rows"
                data-attr-data-tooltip="row.tooltip_key">
@@ -714,6 +751,7 @@
             </select>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
         </div>
       </div>
@@ -745,6 +783,7 @@
                    data-event-click="pv_value_change(row.id, !row.checked)" />
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div data-if="dep_random">
             <div class="setting-row" data-for="row : pv_init_random_rows"
@@ -757,6 +796,7 @@
                      data-event-escapecancel="pv_escape(row.id)" />
               <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
               <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+              <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
             </div>
           </div>
           <div data-if="dep_init_mesh">
@@ -770,6 +810,7 @@
                      data-event-escapecancel="pv_escape(row.id)" />
               <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
               <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+              <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
             </div>
           </div>
         </div>
@@ -789,18 +830,21 @@
             <span class="prop-label">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_train_rows" data-if="dep_eval"
                data-attr-data-tooltip="row.tooltip_key">
             <span class="prop-label">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_flip_rows" data-if="dep_eval"
                data-attr-data-tooltip="row.tooltip_key">
             <span class="prop-label">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_space_rows" data-if="dep_undistort"
                data-attr-data-tooltip="row.tooltip_key">
@@ -809,6 +853,7 @@
               <option data-for="item : pv_dataset_eval_space_options" data-if="item.prop_id == row.id"
                       data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
             </select>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_bit_depth_rows" data-if="dep_eval"
                data-attr-data-tooltip="row.tooltip_key">
@@ -817,6 +862,7 @@
               <option data-for="item : pv_dataset_eval_bit_depth_options" data-if="item.prop_id == row.id"
                       data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
             </select>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div data-if="dep_eval &amp;&amp; !pv_search_active">
             <div class="setting-row" data-tooltip="training.tooltip.eval_mask">
@@ -869,6 +915,7 @@
                    data-event-escapecancel="pv_escape(row.id)" />
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
           <div class="setting-row" data-if="dep_eval_holdout &amp;&amp; !pv_search_active" data-tooltip="training.tooltip.test_every">
             <span class="prop-label">{{label_test_every}}</span>
@@ -936,6 +983,7 @@
             </select>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <span class="restart-required-badge" data-if="row.restart_required" data-tooltip="training.tooltip.restart_required">&#x21BB;</span>
           </div>
         </div>
       </div>

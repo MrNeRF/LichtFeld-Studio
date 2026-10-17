@@ -751,7 +751,8 @@
     "button.stop": "Detener Entrenamiento",
     "button.reset": "Restablecer Entrenamiento",
     "button.add": "Añadir",
-    "button.remove": "Quitar"
+    "button.remove": "Quitar",
+    "tooltip.restart_required": "Se requiere reiniciar para que surta efecto"
   },
   "rendering": "Renderizado",
   "scene": {

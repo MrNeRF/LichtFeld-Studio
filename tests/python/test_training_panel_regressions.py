@@ -34,6 +34,7 @@ def _install_lf_stub(monkeypatch):
     lf_stub.dataset_params = lambda: None
     lf_stub.get_scene = lambda: None
     lf_stub.start_training = lambda: None
+    lf_stub.reset_training = lambda: None
     lf_stub.training_start_overwrite_conflict = lambda: None
     lf_stub.loss_buffer = lambda: []
     lf_stub.push_loss_to_element = lambda _element, _data: (0.0, 0.0)
@@ -2439,3 +2440,90 @@ def test_external_change_refreshes_derived_activation_step(ready_panel_settings,
     change("optimization", prop, value)
     panel.on_update(None)
     assert panel._text_bufs["ppisp_activation_step_str"] == expected
+
+
+def test_section_binding_records_prop_needs_restart(training_panel_module):
+    pv = training_panel_module.property_view
+    rows = [
+        {"id": "use_bilateral_grid", "kind": "checkbox", "name": "Bilateral",
+         "label_key": "", "tooltip_key": "", "strategies": (), "items": [],
+         "needs_restart": True, "live_update": False},
+        {"id": "means_lr", "kind": "number", "name": "Means LR",
+         "label_key": "", "tooltip_key": "", "strategies": (), "items": [],
+         "needs_restart": False, "live_update": True, "is_int": False, "precision": 4},
+    ]
+    params = SimpleNamespace(use_bilateral_grid=False, means_lr=0.001)
+    text_bufs = {}
+    pending = {"use_bilateral_grid"}
+    binding = pv.SectionBinding(
+        "test_sec",
+        rows,
+        lambda: params,
+        text_bufs,
+        lambda _b: None,
+        restart_required_predicate=lambda prop_id: prop_id in pending,
+    )
+    records = binding._records()
+    by_id = {r["id"]: r for r in records}
+    assert by_id["use_bilateral_grid"]["needs_restart"] is True
+    assert by_id["use_bilateral_grid"]["restart_required"] is True
+    assert by_id["means_lr"]["needs_restart"] is False
+    assert by_id["means_lr"]["restart_required"] is False
+
+def test_training_panel_tracks_restart_required_during_active_training(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    params.use_bilateral_grid = False
+    params.use_exposure_correction = True
+    params.means_lr = 0.001
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "running")
+    monkeypatch.setattr(module.RuntimeState.iteration, "value", 500)
+
+    rows = [
+        {"id": "use_bilateral_grid", "kind": "checkbox", "name": "Bilateral",
+         "label_key": "", "tooltip_key": "", "strategies": (), "items": [],
+         "needs_restart": True, "live_update": False},
+        {"id": "means_lr", "kind": "number", "name": "Means LR",
+         "label_key": "", "tooltip_key": "", "strategies": (), "items": [],
+         "needs_restart": False, "live_update": True, "is_int": False, "precision": 4},
+    ]
+    binding = module.property_view.SectionBinding(
+        "test_sec",
+        rows,
+        lambda: params,
+        panel._text_bufs,
+        lambda _b: None,
+        restart_required_predicate=panel._is_prop_restart_required,
+    )
+    panel._pv_bindings = (binding,)
+    panel._pv_binding_by_prop = {row["id"]: binding for row in rows}
+
+    # Baseline captured at active run start
+    panel._snapshot_active_run_baselines()
+    assert panel._active_run_baseline_params["use_bilateral_grid"] is False
+    assert not panel._is_prop_restart_required("use_bilateral_grid")
+
+    # Changing a parameter with needs_restart during active training flags restart required
+    panel._set_property_view_value("use_bilateral_grid", True)
+    assert panel._is_prop_restart_required("use_bilateral_grid")
+    record = next(r for r in binding._records() if r["id"] == "use_bilateral_grid")
+    assert record["restart_required"] is True
+
+    # Changing a parameter without needs_restart does NOT flag restart required
+    panel._set_property_view_value("means_lr", 0.005)
+    assert not panel._is_prop_restart_required("means_lr")
+
+    # Reverting value back to baseline removes restart required
+    panel._set_property_view_value("use_bilateral_grid", False)
+    assert not panel._is_prop_restart_required("use_bilateral_grid")
+    record = next(r for r in binding._records() if r["id"] == "use_bilateral_grid")
+    assert record["restart_required"] is False
+
+    # Resetting training clears any pending restart flags
+    panel._set_property_view_value("use_bilateral_grid", True)
+    assert panel._is_prop_restart_required("use_bilateral_grid")
+    panel._action_reset()
+    assert not panel._is_prop_restart_required("use_bilateral_grid")

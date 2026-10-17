@@ -751,7 +751,8 @@
     "button.stop": "Training stoppen",
     "button.reset": "Training zurücksetzen",
     "button.add": "Hinzufügen",
-    "button.remove": "Entfernen"
+    "button.remove": "Entfernen",
+    "tooltip.restart_required": "Neustart erforderlich, um wirksam zu werden"
   },
   "rendering": "Rendering",
   "scene": {

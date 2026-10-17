@@ -751,7 +751,8 @@
     "button.stop": "Arrêter l'Entraînement",
     "button.reset": "Réinitialiser l'Entraînement",
     "button.add": "Ajouter",
-    "button.remove": "Retirer"
+    "button.remove": "Retirer",
+    "tooltip.restart_required": "Redémarrage requis pour prendre effet"
   },
   "rendering": "Rendu",
   "scene": {
