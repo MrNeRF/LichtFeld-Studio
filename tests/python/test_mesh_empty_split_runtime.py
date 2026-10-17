@@ -10,7 +10,7 @@ import pytest
 from runtime_test_app import isolated_app
 from test_api_camera_project_runtime import _editor
 from test_render_on_demand_idle import _tool
-from viewer_mesh_test_support import setup_mesh, viewport_image
+from viewer_mesh_test_support import require_independent_dual_split, setup_mesh, viewport_image
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
@@ -30,7 +30,7 @@ def test_independent_mesh_only_cameras_update_separately(tmp_path):
     pictures.mkdir(parents=True, exist_ok=True)
     with isolated_app(tmp_path) as endpoint:
         setup_mesh(endpoint)
-        _tool(endpoint, "render_settings_set", {"split_view_mode": 3})
+        require_independent_dual_split(endpoint)
         _editor(endpoint, """\
 lf.set_camera((4.,3.,6.), (0.,.5,0.), (0.,1.,0.), panel='left')
 lf.set_camera((4.,3.,6.), (0.,.5,0.), (0.,1.,0.), panel='right')

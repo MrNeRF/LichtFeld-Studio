@@ -23,7 +23,7 @@ def test_optimization_setters_validate_contract_without_mutating_on_error(tmp_pa
     endpoint = f"http://127.0.0.1:{port}/mcp"
     home = tmp_path / "home"
     home.mkdir()
-    env = dict(os.environ, HOME=str(home))
+    env = dict(os.environ, HOME=str(home), LFS_HOME=str(home / ".lichtfeld"))
     env.pop("PYTHONPATH", None)
     env.setdefault("DISPLAY", ":92")
     python_home = os.environ.get("LFS_PYTHON_HOME")

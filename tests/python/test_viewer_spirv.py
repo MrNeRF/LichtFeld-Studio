@@ -28,6 +28,8 @@ class ViewerSpirv(unittest.TestCase):
     def test_compiled_modules(self):
         modules = {}
         table = BUILD / 'lfs_tensor_spv/lfs_tensor_shader_table.cpp'
+        if not table.exists():
+            self.skipTest('build has no Vulkan tensor shaders (pure Metal)')
         for name, body in re.findall(r'(kWords_\w+)\s*\{([^}]+)\}', table.read_text()):
             words = [int(w, 16) for w in re.findall(r'0x[0-9a-fA-F]+', body)]
             if words and words[0] == 0x07230203:

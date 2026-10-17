@@ -76,6 +76,16 @@ def pytest_configure(config):
         "LFS_ASSET_MANAGER_ASSETS_DIR", str(session_catalog / "assets")
     )
 
+    # Launched apps get an isolated HOME and config home, which hides the user's
+    # Vulkan ICD manifests (MoltenVK on macOS). Name them for every launcher.
+    user_icds = sorted(
+        (Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "vulkan" / "icd.d").glob("*.json")
+    )
+    if user_icds and not any(
+        key in os.environ for key in ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "VK_ADD_DRIVER_FILES")
+    ):
+        os.environ["VK_ADD_DRIVER_FILES"] = os.pathsep.join(map(str, user_icds))
+
 
 @pytest.fixture(scope="session", autouse=True)
 def guard_production_asset_catalog():

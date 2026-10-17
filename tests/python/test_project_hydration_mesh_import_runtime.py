@@ -25,7 +25,7 @@ def test_mesh_import_during_hydration_preserves_project_splats(tmp_path):
     endpoint = f"http://127.0.0.1:{port}/mcp"
     home = tmp_path / "home"
     home.mkdir()
-    env = dict(os.environ, HOME=str(home))
+    env = dict(os.environ, HOME=str(home), LFS_HOME=str(home / ".lichtfeld"))
     env.pop("PYTHONPATH", None)
     python_home = os.environ.get("LFS_PYTHON_HOME")
     if not python_home:

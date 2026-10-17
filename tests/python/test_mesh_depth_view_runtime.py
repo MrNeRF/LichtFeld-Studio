@@ -20,6 +20,10 @@ def test_mesh_depth_view_gray_palette_and_off(tmp_path):
     pictures.mkdir(parents=True, exist_ok=True)
     with isolated_app(tmp_path) as endpoint:
         setup_mesh(endpoint)
+        scale_path = tmp_path / "ui_scale.txt"
+        _editor(endpoint, f"open({str(scale_path)!r}, 'w').write(str(lf.ui.get_ui_scale()))")
+        # The viewport gizmo sits in the top-right corner; its size follows the UI scale.
+        scale = float(scale_path.read_text())
         _tool(endpoint, "camera_set_view", {
             "eye": [4, 3, 6], "target": [0, .5, 0], "up": [0, 1, 0],
         })
@@ -42,8 +46,9 @@ def test_mesh_depth_view_gray_palette_and_off(tmp_path):
         r, g, b = rgb
         return g > 1.5 * max(r, b) and g > 80
 
-    green = [y * width + x for y in range(110, height - 50)
-             for x in range(60, width - 60)
+    top, bottom, side = round(110 * scale), round(50 * scale), round(60 * scale)
+    green = [y * width + x for y in range(top, height - bottom)
+             for x in range(side, width - side)
              if is_mesh_green(normal_pixels[y * width + x])]
     assert len(green) > 1000, "Generated mesh did not cover the viewport"
     gray_pixels = list(gray.getdata())

@@ -59,7 +59,7 @@ def test_direct_scene_export_path_contract(tmp_path: Path):
     endpoint = f"http://127.0.0.1:{port}/mcp"
     home = tmp_path / "home"
     home.mkdir()
-    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"),
+    env = dict(os.environ, HOME=str(home), LFS_HOME=str(home / ".lichtfeld"), XDG_CONFIG_HOME=str(home / "config"),
                XDG_CACHE_HOME=str(home / "cache"), XDG_DATA_HOME=str(home / "data"),
                SDL_VIDEODRIVER="x11", HTTP_PROXY="http://127.0.0.1:9",
                HTTPS_PROXY="http://127.0.0.1:9", NO_PROXY="127.0.0.1,localhost")

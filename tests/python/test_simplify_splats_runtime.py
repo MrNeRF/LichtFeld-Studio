@@ -22,7 +22,7 @@ def test_simplify_splats_returns_and_editor_remains_responsive(tmp_path):
     endpoint = f"http://127.0.0.1:{port}/mcp"
     home = tmp_path / "home"
     home.mkdir()
-    env = dict(os.environ, HOME=str(home))
+    env = dict(os.environ, HOME=str(home), LFS_HOME=str(home / ".lichtfeld"))
 
     with (tmp_path / "app.log").open("w") as log:
         app = subprocess.Popen(

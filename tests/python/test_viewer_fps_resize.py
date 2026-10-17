@@ -75,7 +75,7 @@ def test_fps_resize_scale_and_background_updates(tmp_path):
     port = endpoint.split(":")[-1].split("/")[0]
     home = tmp_path / "home"
     home.mkdir()
-    env = dict(os.environ, HOME=str(home), DISPLAY=display)
+    env = dict(os.environ, HOME=str(home), LFS_HOME=str(home / ".lichtfeld"), DISPLAY=display)
     fixture = tmp_path / "points.ply"
     fixture.write_text(
         "ply\nformat ascii 1.0\nelement vertex 400\nproperty float x\n"
