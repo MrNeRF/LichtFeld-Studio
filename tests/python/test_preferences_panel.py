@@ -1438,3 +1438,16 @@ def test_splat_drag_preferences_convert_ui_values_and_respect_safe_mode(preferen
     panel._mcp_safe_mode = True
     panel._set_splat_drag_preference("spz_sh", "1")
     assert state.splat_drag_preferences["spz_sh"] == 2
+
+
+def test_quick_export_offers_only_ply_and_spz_with_plain_translated_labels():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/preferences.rml")
+    select = next(element for element in document.iter("select")
+                  if element.get("data-value") == "splat_drag_format")
+    assert [option.get("value") for option in select] == ["ply", "spz"]
+    for path in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
+        preferences = json.loads(path.read_text(encoding="utf-8"))
+        assert preferences["preferences.drag_ply"] == "PLY", path.name
+        assert preferences["preferences.drag_spz"] == "SPZ", path.name

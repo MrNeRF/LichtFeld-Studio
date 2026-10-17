@@ -31,8 +31,10 @@ namespace lfs::vis::gui {
         void pump();
         [[nodiscard]] std::optional<NativeDragPointer> pointer(SDL_Window* window);
         [[nodiscard]] FileDragResult drag(FileProvider files, SDL_Window* window);
+        [[nodiscard]] bool dropPerformed() const;
     };
     [[nodiscard]] std::optional<bool> pointerOutsideApplication(SDL_Window* source);
+    [[nodiscard]] bool mayShowTransferProgress(const NativeDragContext* context);
 
     enum class FileDragStatus { Copied,
                                 Cancelled,

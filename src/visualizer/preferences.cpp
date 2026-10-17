@@ -967,7 +967,7 @@ namespace lfs::vis {
         return lfs::core::persisted_settings::field<bool>(impl_->values, "remember_camera_view_snap", false);
     }
     void UserPreferences::setSplatDrag(const SplatDragPreferenceState& state) {
-        if (state.format != "ply" && state.format != "spz" && state.format != "sog")
+        if (state.format != "ply" && state.format != "spz")
             return;
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
@@ -983,7 +983,7 @@ namespace lfs::vis {
             return state;
         using lfs::core::persisted_settings::field;
         state.format = field<std::string>(*it, "format", "ply");
-        if (state.format != "ply" && state.format != "spz" && state.format != "sog")
+        if (state.format != "ply" && state.format != "spz")
             state.format = "ply";
         state.maximum_quality = field<bool>(*it, "maximum_quality", true);
         state.blender_axes = field<bool>(*it, "blender_axes", true);

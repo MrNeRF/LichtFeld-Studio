@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "native_file_drag.hpp"
 #include <SDL3/SDL.h>
+#include <array>
 #include <atomic>
 #include <core/native_fs.hpp>
 #include <limits>
@@ -10,6 +11,7 @@
 
 #include <vector>
 #ifdef __linux__
+#include "native_drop_pause.hpp"
 #include <gdk/gdkx.h>
 #include <gtk/gtk.h>
 #endif
@@ -26,6 +28,21 @@
 #endif
 
 namespace lfs::vis::gui {
+    bool mayShowTransferProgress(const NativeDragContext* context) {
+#ifdef _WIN32
+        (void)context;
+        return !(GetAsyncKeyState(VK_LBUTTON) & 0x8000);
+#elif defined(__linux__)
+        const auto* driver = SDL_GetCurrentVideoDriver();
+        if (driver && std::string_view(driver) == "wayland")
+            return context && context->dropPerformed();
+        float x = 0, y = 0;
+        return !(SDL_GetGlobalMouseState(&x, &y) & SDL_BUTTON_LMASK);
+#else
+        (void)context;
+        return false;
+#endif
+    }
 #ifdef _WIN32
     namespace {
         template <class T>
@@ -38,7 +55,40 @@ namespace lfs::vis::gui {
         template <class T>
         using ComPtr = std::unique_ptr<T, ComRelease<T>>;
         class CopySource final : public IDropSource {
+            static HCURSOR makeCopyCursor() {
+                std::array<unsigned char, 128> mask, pixels{};
+                mask.fill(0xff);
+                const auto pixel = [&](int x, int y, bool white) {
+                    const auto index = y * 4 + x / 8;
+                    const auto bit = static_cast<unsigned char>(0x80 >> (x % 8));
+                    mask[index] &= static_cast<unsigned char>(~bit);
+                    if (white)
+                        pixels[index] |= bit;
+                };
+                // A native monochrome arrow plus a copy badge. No per-feedback
+                // allocations, and no dependency on undocumented OLE resources.
+                for (int y = 0; y < 19; ++y)
+                    for (int x = 0; x <= y / 2; ++x)
+                        pixel(x, y, x > 0 && x < y / 2 && y < 18);
+                for (int y = 16; y < 25; ++y)
+                    for (int x = 5; x < 9; ++x)
+                        pixel(x, y, x == 6 || x == 7);
+                for (int y = 18; y < 31; ++y)
+                    for (int x = 17; x < 30; ++x)
+                        pixel(x, y, x > 17 && x < 29 && y > 18 && y < 30 && !((x >= 22 && x <= 24 && y >= 21 && y <= 27) || (y >= 23 && y <= 25 && x >= 20 && x <= 26)));
+                return CreateCursor(GetModuleHandle(nullptr), 0, 0, 32, 32, mask.data(), pixels.data());
+            }
+            HCURSOR previous_cursor_ = GetCursor();
+            HCURSOR copy_cursor_ = makeCopyCursor();
+
         public:
+            ~CopySource() {
+                if (copy_cursor_) {
+                    if (GetCursor() == copy_cursor_)
+                        SetCursor(previous_cursor_);
+                    DestroyCursor(copy_cursor_);
+                }
+            }
             HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override {
                 if (!out)
                     return E_POINTER;
@@ -61,8 +111,12 @@ namespace lfs::vis::gui {
                     return DRAGDROP_S_CANCEL;
                 return (keys & MK_LBUTTON) ? S_OK : DRAGDROP_S_DROP;
             }
-            HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override {
-                return DRAGDROP_S_USEDEFAULTCURSORS;
+            HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD effect) override {
+                const auto cursor = effect & DROPEFFECT_COPY ? copy_cursor_ : LoadCursor(nullptr, IDC_NO);
+                if (!cursor)
+                    return DRAGDROP_S_USEDEFAULTCURSORS;
+                SetCursor(cursor);
+                return S_OK;
             }
 
         private:
@@ -352,6 +406,7 @@ namespace lfs::vis::gui {
         // A Wayland source requires the compositor's original input serial; an
         // unrelated GTK connection cannot safely manufacture that serial.
         const auto* driver = SDL_GetCurrentVideoDriver();
+        NativeDropPause pause;
         if (driver && std::string_view(driver) == "wayland" && context)
             return context->drag([resolve = std::move(resolve)]() mutable { return resolve(); }, window);
         if (!window || !driver || std::string_view(driver) != "x11")
@@ -494,6 +549,7 @@ namespace lfs::vis::gui {
         if (FAILED(ole.result))
             return 1;
         for (int i = 0; i < 1000; ++i) {
+            ComPtr<IDropSource> source(new CopySource());
             int calls = 0;
             auto* delayed = new DeferredData([&] {
                 ++calls;

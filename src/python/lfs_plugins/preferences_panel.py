@@ -231,7 +231,7 @@ class PreferencesPanel(Panel):
             lf.ui.scene_graph_selection_markers,
             self._set_scene_graph_selection_markers,
         )
-        for key in ("format", "maximum_quality", "blender_axes", "ply_sh", "spz_sh", "sog_sh", "sog_iterations"):
+        for key in ("format", "maximum_quality", "blender_axes", "ply_sh", "spz_sh"):
             model.bind("splat_drag_" + key,
                        lambda k=key: self._get_splat_drag_preference(k),
                        lambda value, k=key: self._set_splat_drag_preference(k, value))

@@ -722,7 +722,7 @@ namespace lfs::vis::gui {
                 lock.reset(); // Owned CPU snapshot, no live model lock during IO.
                 auto files = waitForFileTransfer(future, *progress, [gui, window, progress, started = std::chrono::steady_clock::now(), shown = false](int value) mutable {
                     gui->asyncTasks().reportDragExport(value / 1000.0f);
-                    if (!shown && std::chrono::steady_clock::now() - started >= std::chrono::milliseconds(250)) {
+                    if (!shown && mayShowTransferProgress(&window->nativeFileDragContext()) && std::chrono::steady_clock::now() - started >= std::chrono::milliseconds(250)) {
                         shown = true;
                         PanelRegistry::instance().set_panel_enabled("lfs.export", true);
                     }

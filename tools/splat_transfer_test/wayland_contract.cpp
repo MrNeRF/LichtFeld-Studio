@@ -24,6 +24,10 @@ namespace {
     std::atomic<int> mode{0};
     std::atomic<bool> serial_ok{false};
     std::atomic<bool> payload_ready{false};
+    std::atomic<int> icon_commits{0};
+    std::atomic<bool> icon_ok{false};
+    std::atomic<uint32_t> first_icon_buffer{0};
+    std::atomic<bool> distinct_icon_buffers{false};
     wl_resource* server_surface;
     void destroyed(wl_resource*) { --resources; }
     wl_resource* resource(wl_client* c, const wl_interface* i, int v, uint32_t id, const void* impl) {
@@ -33,8 +37,28 @@ namespace {
         return r;
     }
     void destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
-    const struct wl_surface_interface surface_impl = {.destroy = destroy};
-    void createSurface(wl_client* c, wl_resource*, uint32_t id) { server_surface = resource(c, &wl_surface_interface, 1, id, &surface_impl); }
+    void attach(wl_client*, wl_resource* surface, wl_resource* buffer, int32_t, int32_t) {
+        if (buffer && surface != server_surface) {
+            const auto id = wl_resource_get_id(buffer);
+            if (!first_icon_buffer)
+                first_icon_buffer = id;
+            else if (first_icon_buffer != id)
+                distinct_icon_buffers = true;
+        }
+        if (buffer && !wl_shm_buffer_get(buffer))
+            std::abort();
+    }
+    void damage(wl_client*, wl_resource*, int32_t, int32_t, int32_t, int32_t) {}
+    void commit(wl_client*, wl_resource* r) {
+        if (r != server_surface)
+            ++icon_commits;
+    }
+    const struct wl_surface_interface surface_impl = {.destroy = destroy, .attach = attach, .damage = damage, .commit = commit};
+    void createSurface(wl_client* c, wl_resource*, uint32_t id) {
+        auto* surface = resource(c, &wl_surface_interface, 1, id, &surface_impl);
+        if (!server_surface)
+            server_surface = surface;
+    }
     const struct wl_compositor_interface compositor_impl = {.create_surface = createSurface};
     void bindCompositor(wl_client* c, void*, uint32_t, uint32_t id) { resource(c, &wl_compositor_interface, 1, id, &compositor_impl); }
     const struct wl_pointer_interface pointer_impl = {.release = destroy};
@@ -54,7 +78,10 @@ namespace {
     void actions(wl_client*, wl_resource*, uint32_t) {}
     const struct wl_data_source_interface source_impl = {.offer = offer, .destroy = destroy, .set_actions = actions};
     void createSource(wl_client* c, wl_resource*, uint32_t id) { resource(c, &wl_data_source_interface, 3, id, &source_impl); }
-    void startDrag(wl_client* c, wl_resource*, wl_resource* source, wl_resource* origin, wl_resource*, uint32_t serial) {
+    void startDrag(wl_client* c, wl_resource*, wl_resource* source, wl_resource* origin, wl_resource* icon, uint32_t serial) {
+        icon_ok = icon && icon != origin;
+        wl_data_source_send_target(source, "text/uri-list");
+        wl_data_source_send_action(source, WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
         serial_ok = serial == 7 && origin == server_surface;
         if (mode == 1) {
             wl_data_source_send_cancelled(source);
@@ -110,6 +137,12 @@ namespace {
             throw std::runtime_error(message);
     }
 } // namespace
+static bool drop_files = true, drop_text = false;
+extern "C" bool SDL_EventEnabled(Uint32 type) { return type == SDL_EVENT_DROP_FILE ? drop_files : drop_text; }
+extern "C" void SDL_SetEventEnabled(Uint32 type, bool enabled) {
+    (type == SDL_EVENT_DROP_FILE ? drop_files : drop_text) = enabled;
+}
+extern "C" void SDL_FlushEvents(Uint32, Uint32) {}
 extern "C" const char* SDL_GetCurrentVideoDriver() { return "wayland"; }
 extern "C" SDL_PropertiesID SDL_GetGlobalProperties() { return 1; }
 extern "C" SDL_PropertiesID SDL_GetWindowProperties(SDL_Window*) { return 2; }
@@ -137,7 +170,13 @@ int main() {
             mode = iteration % 5;
             serial_ok = false;
             payload_ready = false;
+            server_surface = nullptr;
+            icon_commits = 0;
+            icon_ok = false;
+            first_icon_buffer = 0;
+            distinct_icon_buffers = false;
             auto* server = wl_display_create();
+            check(wl_display_init_shm(server) == 0, "server shm initialization failed");
             wl_global_create(server, &wl_compositor_interface, 1, nullptr, bindCompositor);
             wl_global_create(server, &wl_seat_interface, 5, nullptr, bindSeat);
             wl_global_create(server, &wl_data_device_manager_interface, 3, nullptr, bindManager);
@@ -159,13 +198,16 @@ int main() {
                 check(pointer && pointer->held && pointer->outside, "pointer serial/focus not observed on own queue");
                 int calls = 0;
                 const auto result = dragFiles([&] {
+                    check(!drop_files && !drop_text, "self-drop reception remained enabled during source transfer");
                     ++calls;
                     if (mode == 3)
                         throw std::runtime_error("synthetic export failure");
                     return std::vector<std::filesystem::path>{path};
                 },
                                               reinterpret_cast<SDL_Window*>(1), &context);
+                check(drop_files && !drop_text, "drop event state not restored after native gesture");
                 check(calls == (mode == 1 ? 0 : 1), "provider ran before needed or more than once");
+                check(icon_ok, "native drag icon surface missing");
                 check(serial_ok, "source did not use the original surface and real press serial");
                 check(result.status == ((mode == 0 || mode == 4) ? FileDragStatus::Copied : mode == 3 ? FileDragStatus::Failed
                                                                                                       : FileDragStatus::Cancelled),
@@ -182,9 +224,11 @@ int main() {
             }
             check(wl_display_roundtrip(client_display) >= 0, "context release roundtrip failed");
             // wl_data_device_manager has no protocol destructor: its bound
-            // server resource lives until disconnect. Every releasable resource
+            // server resources live until disconnect. Every releasable resource
             // (seat, pointer, device, source) must already have been released.
-            check(resources == baseline_resources + 1, "drag resources survived context destruction");
+            check(distinct_icon_buffers, "copy and forbidden feedback did not use distinct native images");
+            check(icon_commits > 0, "native drag icon never committed a buffer");
+            check(resources == baseline_resources + 2, "drag resources survived context destruction");
             wl_surface_destroy(client_surface);
             wl_compositor_destroy(client_compositor);
             wl_registry_destroy(registry);

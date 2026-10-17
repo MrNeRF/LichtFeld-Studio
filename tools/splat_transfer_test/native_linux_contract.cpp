@@ -8,6 +8,12 @@
 #include <iostream>
 #include <stdexcept>
 static const char* driver = nullptr;
+static bool drop_files = true, drop_text = false;
+extern "C" bool SDL_EventEnabled(Uint32 type) { return type == SDL_EVENT_DROP_FILE ? drop_files : drop_text; }
+extern "C" void SDL_SetEventEnabled(Uint32 type, bool enabled) {
+    (type == SDL_EVENT_DROP_FILE ? drop_files : drop_text) = enabled;
+}
+extern "C" void SDL_FlushEvents(Uint32, Uint32) {}
 extern "C" const char* SDL_GetCurrentVideoDriver() { return driver; }
 extern "C" SDL_MouseButtonFlags SDL_GetGlobalMouseState(float* x, float* y) {
     *x = *y = 0;
@@ -34,6 +40,8 @@ int main() {
     check(dragReadyFiles(files, window).status == FileDragStatus::Unsupported);
     driver = "x11";
     check(dragReadyFiles(files, window).status == FileDragStatus::Cancelled);
+    check(drop_files && !drop_text);
+    check(mayShowTransferProgress(nullptr));
     std::filesystem::remove(path);
     check(dragReadyFiles(files, window).status == FileDragStatus::Failed);
     std::cout << "PASS: empty/missing payload, no video driver, Wayland gate, released gesture\n";

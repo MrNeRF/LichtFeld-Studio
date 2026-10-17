@@ -1300,6 +1300,10 @@ namespace lfs::vis {
         }
 
         case SDL_EVENT_DROP_FILE:
+            if (gui::NativeDragScheduler::outgoingDragActive()) {
+                pending_drop_files_.clear();
+                break;
+            }
             LOG_DEBUG("SDL drop file: window={} data={}", event.drop.windowID,
                       event.drop.data ? event.drop.data : "(null)");
             if (!eventTargetsWindow(event, main_window_id))
@@ -1321,6 +1325,10 @@ namespace lfs::vis {
             break;
 
         case SDL_EVENT_DROP_COMPLETE:
+            if (gui::NativeDragScheduler::outgoingDragActive()) {
+                pending_drop_files_.clear();
+                break;
+            }
             LOG_DEBUG("SDL drop complete: window={} pending_files={}", event.drop.windowID,
                       pending_drop_files_.size());
             if (!eventTargetsWindow(event, main_window_id))

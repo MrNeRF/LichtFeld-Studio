@@ -29,7 +29,7 @@
     }
   },
   "python_tests": {
-    "passed": 90
+    "passed": 91
   },
   "linux": "Native Wayland protocol and X11 guard contracts passed; physical desktop interoperability pending",
   "blender": {
@@ -84,17 +84,27 @@
   "resource_checks": {
     "windows_com_cycles": 6000,
     "wayland": "50 protocol cycles plus context reuse; resource teardown checked with sanitizers",
-    "cursor": "UI cursor ownership restored by native-action scope, including exceptions"
+    "cursor": "Windows copy/forbidden cursor, GUI resource counts checked; GTK native feedback; Wayland themed icon surface with real SHM protocol test"
   },
   "progress": {
     "ui": "Existing lfs.export panel and AsyncTaskManager job; separate native progress dialog removed",
     "dispatch": "Native operation queued until a frame has completed; modal wait advances guarded complete application frames",
     "delay_ms": 250,
     "snapshot_progress": "CPU snapshot remains synchronous under lock, without granular progress",
-    "visual_validation": "Physical drag and visual responsiveness still require desktop validation"
+    "visual_validation": "Physical drag and visual responsiveness still require desktop validation",
+    "release_gate": "No auto-open while pointer button remains held; Wayland uses dnd_drop_performed"
   },
   "filenames": {
     "staging": "Readable sanitized node names in exclusively reserved UUID directories; existing staging files preserved",
     "destination_collisions": "Controlled by receiving file manager, not overridden by LichtFeld"
-  }
+  },
+  "quick_export": {
+    "formats": [
+      "ply",
+      "spz"
+    ],
+    "labels": "Plain format names in all 10 locales",
+    "legacy_sog": "Normalized to PLY; manual SOG export retained"
+  },
+  "self_drop": "Windows rejects before GetData; Linux pauses SDL file/text reception and restores prior flags; SDL queued drops discarded"
 }

@@ -17,6 +17,7 @@ namespace lfs::vis::gui {
 
     public:
         [[nodiscard]] bool busy() const { return active_ || bool(pending_); }
+        [[nodiscard]] static bool outgoingDragActive() { return active_count_ != 0; }
         [[nodiscard]] static bool ownsNativeCursor() { return active_count_ != 0; }
         std::future<FileDragResult> enqueue(std::function<FileDragResult()> action) {
             if (!action)

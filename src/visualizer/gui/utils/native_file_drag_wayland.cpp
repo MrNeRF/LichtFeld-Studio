@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <vector>
 #include <wayland-client.h>
+#include <wayland-cursor.h>
 #endif
 namespace lfs::vis::gui {
     struct NativeDragContext::Impl {
@@ -49,10 +50,41 @@ namespace lfs::vis::gui {
         uint32_t manager_name = 0;
         std::vector<std::unique_ptr<Seat>> seats;
         wl_data_source* source = nullptr;
+        wl_compositor* compositor = nullptr;
+        wl_shm* shm = nullptr;
+        wl_cursor_theme* cursor_theme = nullptr;
+        wl_surface* drag_icon = nullptr;
+        static void shmFormat(void*, wl_shm*, uint32_t) {}
+        static constexpr wl_shm_listener shm_listener = {shmFormat};
+        void updateIcon(bool accepted) {
+            if (!drag_icon || !cursor_theme)
+                return;
+            auto* cursor = wl_cursor_theme_get_cursor(cursor_theme, accepted ? "dnd-copy" : "dnd-none");
+            if (!cursor)
+                cursor = wl_cursor_theme_get_cursor(cursor_theme, accepted ? "copy" : "not-allowed");
+            if (!cursor || !cursor->image_count)
+                return;
+            auto* image = cursor->images[0];
+            auto* buffer = wl_cursor_image_get_buffer(image);
+            if (!buffer)
+                return;
+            wl_surface_attach(drag_icon, buffer, 0, 0);
+            wl_surface_damage(drag_icon, 0, 0, image->width, image->height);
+            wl_surface_commit(drag_icon);
+        }
+        void createIcon() {
+            if (!compositor || !shm)
+                return;
+            if (!cursor_theme)
+                cursor_theme = wl_cursor_theme_load(nullptr, 32, shm);
+            if (cursor_theme)
+                drag_icon = wl_compositor_create_surface(compositor);
+        }
         bool attempted = false, done = false, failed = false, active = false, broken = false, provider_failed = false;
         std::string payload;
         FileProvider provider;
         bool dispatching = false;
+        bool dropped = false;
 
         static void enter(void* data, wl_pointer*, uint32_t, wl_surface* surface, wl_fixed_t x, wl_fixed_t y) {
             auto& s = *static_cast<Seat*>(data);
@@ -165,7 +197,13 @@ namespace lfs::vis::gui {
         static void global(void* data, wl_registry* registry, uint32_t name, const char* interface, uint32_t version) noexcept {
             auto& self = *static_cast<Impl*>(data);
             try {
-                if (!std::strcmp(interface, wl_data_device_manager_interface.name) && version >= 3 && !self.manager) {
+                if (!std::strcmp(interface, wl_compositor_interface.name) && !self.compositor) {
+                    self.compositor = static_cast<wl_compositor*>(wl_registry_bind(registry, name, &wl_compositor_interface, 1));
+                } else if (!std::strcmp(interface, wl_shm_interface.name) && !self.shm) {
+                    self.shm = static_cast<wl_shm*>(wl_registry_bind(registry, name, &wl_shm_interface, 1));
+                    if (self.shm)
+                        wl_shm_add_listener(self.shm, &shm_listener, &self);
+                } else if (!std::strcmp(interface, wl_data_device_manager_interface.name) && version >= 3 && !self.manager) {
                     self.manager = static_cast<wl_data_device_manager*>(wl_registry_bind(registry, name, &wl_data_device_manager_interface, 3));
                     self.manager_name = name;
                     if (!self.manager)
@@ -338,20 +376,31 @@ namespace lfs::vis::gui {
                 self.done = true;
             }
         }
-        static void target(void*, wl_data_source*, const char*) {}
+        static void target(void* data, wl_data_source*, const char* mime) {
+            static_cast<Impl*>(data)->updateIcon(mime && !std::strcmp(mime, "text/uri-list"));
+        }
         static void cancelled(void* data, wl_data_source*) {
             auto& s = *static_cast<Impl*>(data);
             s.failed = true;
             s.done = true;
         }
-        static void dropped(void*, wl_data_source*) {}
+        static void dropPerformed(void* data, wl_data_source*) { static_cast<Impl*>(data)->dropped = true; }
         static void finished(void* data, wl_data_source*) { static_cast<Impl*>(data)->done = true; }
         static void action(void* data, wl_data_source*, uint32_t action) {
+            static_cast<Impl*>(data)->updateIcon(action == WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
             if (action != WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY && action != WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE)
                 static_cast<Impl*>(data)->failed = true;
         }
-        static constexpr wl_data_source_listener source_listener = {target, send, cancelled, dropped, finished, action};
+        static constexpr wl_data_source_listener source_listener = {target, send, cancelled, dropPerformed, finished, action};
         ~Impl() {
+            if (drag_icon)
+                wl_surface_destroy(drag_icon);
+            if (cursor_theme)
+                wl_cursor_theme_destroy(cursor_theme);
+            if (shm)
+                wl_shm_destroy(shm);
+            if (compositor)
+                wl_compositor_destroy(compositor);
             if (source)
                 wl_data_source_destroy(source);
             seats.clear();
@@ -413,12 +462,16 @@ namespace lfs::vis::gui {
         self.done = false;
         self.failed = false;
         self.provider_failed = false;
+        self.dropped = false;
         struct Scope {
             Impl& s;
             ~Scope() {
                 if (s.source)
                     wl_data_source_destroy(s.source);
                 s.source = nullptr;
+                if (s.drag_icon)
+                    wl_surface_destroy(s.drag_icon);
+                s.drag_icon = nullptr;
                 s.active = false;
                 s.payload.clear();
                 s.provider = {};
@@ -427,7 +480,9 @@ namespace lfs::vis::gui {
         wl_data_source_add_listener(self.source, &Impl::source_listener, &self);
         wl_data_source_offer(self.source, "text/uri-list");
         wl_data_source_set_actions(self.source, WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
-        wl_data_device_start_drag(seat->device, self.source, surface, nullptr, seat->serial);
+        self.createIcon();
+        wl_data_device_start_drag(seat->device, self.source, surface, self.drag_icon, seat->serial);
+        self.updateIcon(false);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
         while (!self.done && std::chrono::steady_clock::now() < deadline) {
             while (wl_display_prepare_read_queue(self.display, self.queue) != 0) {
@@ -467,6 +522,13 @@ namespace lfs::vis::gui {
         (void)files;
         (void)window;
         return {FileDragStatus::Unsupported, "Wayland drag not built"};
+#endif
+    }
+    bool NativeDragContext::dropPerformed() const {
+#ifdef LFS_HAS_WAYLAND_DRAG
+        return impl_->dropped;
+#else
+        return false;
 #endif
     }
 } // namespace lfs::vis::gui
