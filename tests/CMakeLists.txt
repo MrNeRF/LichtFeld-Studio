@@ -430,6 +430,13 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         target_link_options(lichtfeld_rmlui_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
         target_link_libraries(lichtfeld_rmlui_tests PRIVATE delayimp)
     endif()
+    if(APPLE)
+        # The visualizer resolves CPython from the host process; see lichtfeld_visualizer_tests.
+        find_package(Python REQUIRED COMPONENTS Development.Embed)
+        target_link_options(lichtfeld_rmlui_tests PRIVATE
+            "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+        target_link_libraries(lichtfeld_rmlui_tests PRIVATE lfs_python_embed)
+    endif()
     add_test(NAME lichtfeld.rmlui COMMAND lichtfeld_rmlui_tests)
     set_tests_properties(lichtfeld.rmlui PROPERTIES LABELS "fast;cpu;ui" TIMEOUT 120
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

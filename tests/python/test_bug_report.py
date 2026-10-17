@@ -15,7 +15,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from lfs_plugins import bug_report, bug_report_panel, portal_account
+from lfs_plugins import bug_report, bug_report_panel, credential_storage, portal_account
+
+
+@pytest.fixture(autouse=True)
+def file_credential_storage(monkeypatch):
+    # Keep test credentials out of the OS keychain; OS storage is tested separately.
+    monkeypatch.setattr(credential_storage, "default_backend", credential_storage.FileBackend)
 
 
 class Value:

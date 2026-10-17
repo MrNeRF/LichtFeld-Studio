@@ -932,7 +932,7 @@ def test_redesigned_rml_preserves_locks_and_groups_all_controls():
         "masking": ("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties"),
         "depth": ("basic_depth_weight",),
         "normal": ("basic_normal_weights",),
-        "background": ("basic_background", "bg_mode"),
+        "background": ("bg_mode",),
         "ppisp": ("appearance_tuning",),
         "bilateral": ("bilateral",),
         "random-init": ("init_random",),

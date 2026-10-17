@@ -7,6 +7,7 @@ import os
 import select
 import socket
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -55,6 +56,40 @@ def isolated_app(directory):
         port = str(reservation.getsockname()[1])
     port = os.environ.get("LFS_TEST_MCP_PORT", port)
     endpoint = f"http://127.0.0.1:{port}/mcp"
+    with _display(directory) as display:
+        if display:
+            env["DISPLAY"] = display
+        with (directory / "app.log").open("w") as log:
+            app = subprocess.Popen(
+                [str(executable), "--no-splash", "--no-download", "--mcp-port", port],
+                env=env, stdout=log, stderr=subprocess.STDOUT,
+            )
+            try:
+                deadline = time.monotonic() + 90
+                while time.monotonic() < deadline:
+                    assert app.poll() is None, f"App exited; see {directory / 'app.log'}"
+                    try:
+                        _initialize(endpoint)
+                        break
+                    except (OSError, AssertionError):
+                        time.sleep(0.1)
+                else:
+                    raise AssertionError(f"MCP did not start; see {directory / 'app.log'}")
+                _call(endpoint, "tools/list")
+                _call(endpoint, "resources/list")
+                for uri in ("runtime/catalog", "runtime/state", "ui/state", "scene/state", "selection/current"):
+                    _call(endpoint, "resources/read", {"uri": f"lichtfeld://{uri}"})
+                yield endpoint
+            finally:
+                _stop(app)
+
+
+@contextmanager
+def _display(directory):
+    """An Xvfb display on Linux; macOS and Windows windows need no virtual display."""
+    if not sys.platform.startswith("linux"):
+        yield None
+        return
     with (directory / "xvfb.log").open("w") as display_log:
         read_fd, write_fd = os.pipe()
         display = subprocess.Popen(
@@ -67,30 +102,7 @@ def isolated_app(directory):
             assert select.select([read_fd], [], [], 15)[0], "Xvfb did not start"
             number = os.read(read_fd, 32).decode().strip()
             assert number.isdigit(), f"Xvfb failed; see {directory / 'xvfb.log'}"
-            env["DISPLAY"] = f":{number}"
-            with (directory / "app.log").open("w") as log:
-                app = subprocess.Popen(
-                    [str(executable), "--no-splash", "--no-download", "--mcp-port", port],
-                    env=env, stdout=log, stderr=subprocess.STDOUT,
-                )
-                try:
-                    deadline = time.monotonic() + 90
-                    while time.monotonic() < deadline:
-                        assert app.poll() is None, f"App exited; see {directory / 'app.log'}"
-                        try:
-                            _initialize(endpoint)
-                            break
-                        except (OSError, AssertionError):
-                            time.sleep(0.1)
-                    else:
-                        raise AssertionError(f"MCP did not start; see {directory / 'app.log'}")
-                    _call(endpoint, "tools/list")
-                    _call(endpoint, "resources/list")
-                    for uri in ("runtime/catalog", "runtime/state", "ui/state", "scene/state", "selection/current"):
-                        _call(endpoint, "resources/read", {"uri": f"lichtfeld://{uri}"})
-                    yield endpoint
-                finally:
-                    _stop(app)
+            yield f":{number}"
         finally:
             os.close(read_fd)
             _stop(display)

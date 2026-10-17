@@ -14,8 +14,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from lfs_plugins import http, portal_gallery
+from lfs_plugins import credential_storage, http, portal_gallery
 from lfs_plugins.portal_account import PortalHTTPError, PortalProtocolError
+
+
+@pytest.fixture(autouse=True)
+def file_credential_storage(monkeypatch):
+    # Keep test credentials out of the OS keychain; OS storage is tested separately.
+    monkeypatch.setattr(credential_storage, "default_backend", credential_storage.FileBackend)
 
 
 @pytest.mark.parametrize("representation", [False, True], ids=["legacy", "representation"])
