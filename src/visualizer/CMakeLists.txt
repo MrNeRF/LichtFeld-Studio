@@ -189,6 +189,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/menu_bar.cpp
         gui/panels/menu_bar.hpp
         gui/utils/native_file_dialog.cpp
+        gui/utils/native_file_drag.cpp
+        gui/utils/splat_transfer.cpp
+        gui/utils/splat_export_request.cpp
         gui/utils/drag_drop_native.cpp
         gui/utils/file_association.cpp
 
@@ -498,6 +501,7 @@ if (WIN32)
     )
     target_link_libraries(lfs_visualizer PRIVATE
             Advapi32    # Read the Windows application light/dark preference
+            Uuid
             Ole32       # OLE drag-drop (IDropTarget)
             Shell32     # SHChangeNotify (file association)
             dxgi        # DXGI per-process VRAM query

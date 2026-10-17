@@ -22,8 +22,12 @@
 #include "gui/panel_registry.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "gui/utils/native_file_drag.hpp"
+#include "gui/utils/splat_export_request.hpp"
+#include "gui/utils/splat_transfer.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "preferences.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -31,6 +35,7 @@
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include <SDL3/SDL.h>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Context.h>
@@ -51,6 +56,7 @@
 #include <glm/mat4x4.hpp>
 #include <optional>
 #include <ranges>
+#include <shared_mutex>
 #include <sstream>
 
 namespace lfs::vis::gui {
@@ -555,6 +561,7 @@ namespace lfs::vis::gui {
     void SceneGraphElement::OnUpdate() {
         claimRenameTextInputFocus();
         ensureDom();
+        updateExternalTransfer();
         const auto now = std::chrono::steady_clock::now();
         if (ghost_fade_pending_ && drag_ghost_) {
             drag_ghost_->SetProperty("opacity", "1");
@@ -620,6 +627,245 @@ namespace lfs::vis::gui {
                 event.StopPropagation();
             }
         }
+    }
+
+    SceneGraphElement::~SceneGraphElement() {
+        external_lifetime_.reset();
+        if (external_cancel_)
+            external_cancel_->store(true);
+    }
+
+    void SceneGraphElement::requestExternalFormat() {
+        external_armed_ = false;
+        const auto id = external_node_;
+        auto* manager = services().sceneOrNull();
+        const auto* node = manager ? manager->getScene().getNodeById(id) : nullptr;
+        auto* gui = services().guiOrNull();
+        if (!node || !gui)
+            return;
+        const auto uuid = node->uuid;
+        cancelDrag();
+        if (auto* ctx = GetContext())
+            ctx->ProcessMouseButtonCancel(0, 0);
+        SDL_CaptureMouse(false);
+        lfs::core::ModalRequest request;
+        request.title = tr("preferences.drag_title");
+        request.body_rml = encode(tr("preferences.drag_format_hint"));
+        request.buttons = {{tr(string_keys::Common::CANCEL), "secondary"}, {"PLY", "primary"}, {"SPZ", "secondary"}, {"SOG", "secondary"}};
+        request.on_result = [this, weak = std::weak_ptr<int>(external_lifetime_), id, uuid, ids = external_candidate_ids_, generation = manager->getScene().renderGeneration()](const lfs::core::ModalResult& result) {
+            if (weak.expired())
+                return;
+            auto* live = services().sceneOrNull();
+            const auto* n = live ? live->getScene().getNodeById(id) : nullptr;
+            if (!n || n->uuid != uuid || live->getScene().renderGeneration() != generation)
+                return;
+            if (result.button_label != "PLY" && result.button_label != "SPZ" && result.button_label != "SOG")
+                return;
+            external_format_ = result.button_label == "PLY" ? "ply" : result.button_label == "SPZ" ? "spz"
+                                                                                                   : "sog";
+            external_format_approved_ = true;
+            beginExternalTransfer(id, true, ids);
+            external_armed_ = false;
+        };
+        gui->enqueueModal(std::move(request));
+    }
+
+    void SceneGraphElement::beginExternalTransfer(const core::NodeId id, const bool outside_only, std::vector<core::NodeId> ids) {
+#if defined(_WIN32) || defined(__linux__)
+        if (external_native_active_)
+            return;
+        auto* manager = services().sceneOrNull();
+        if (!manager)
+            return;
+        auto& scene = manager->getScene();
+        const auto* node = scene.getNodeById(id);
+        if (!node || node->type != core::NodeType::SPLAT || !node->model)
+            return;
+        if (const auto* trainer = services().trainerOrNull(); trainer && trainer->isRunning()) {
+            if (auto* gui = services().guiOrNull())
+                gui->enqueueToast({.title = "Splat transfer", .message = "Pause training before dragging splats"});
+            return;
+        }
+        if (ids.empty())
+            ids.push_back(id);
+        std::string selection_key;
+        for (const auto candidate_id : ids) {
+            const auto* candidate = scene.getNodeById(candidate_id);
+            if (!candidate || candidate->type != core::NodeType::SPLAT || !candidate->model)
+                return;
+            selection_key += candidate->uuid.to_string();
+        }
+        external_candidate_ids_ = ids;
+        const auto prefs = UserPreferences::instance().splatDrag();
+        external_ask_ = prefs.ask;
+        if (!external_format_approved_)
+            external_format_ = prefs.format;
+        const int degree = prefs.maximum_quality ? -1 : external_format_ == "spz" ? prefs.spz_sh
+                                                    : external_format_ == "sog"   ? prefs.sog_sh
+                                                                                  : prefs.ply_sh;
+        const std::string options_key = selection_key + std::format("{}:{}:{}:{}:{}", external_format_, degree, prefs.maximum_quality, prefs.sog_iterations, prefs.blender_axes);
+        const bool same_generation = external_revision_ == scene.renderGeneration() && external_options_key_ == options_key;
+        float x, y;
+        SDL_GetGlobalMouseState(&x, &y);
+        external_origin_ = {x, y};
+        external_outside_only_ = outside_only;
+        if (outside_only) {
+            auto* window = SDL_GetMouseFocus();
+            if (!window)
+                window = SDL_GetKeyboardFocus();
+            external_window_ = window;
+            int wx, wy, ww, wh;
+            if (!window || !SDL_GetWindowPosition(window, &wx, &wy) ||
+                !SDL_GetWindowSize(window, &ww, &wh))
+                return;
+            external_window_bounds_ = {wx, wy, wx + ww, wy + wh};
+        }
+        external_armed_ = true;
+        if (external_ask_ && !external_format_approved_) {
+            external_node_ = id;
+            return;
+        }
+        if (external_future_.valid() && external_node_ == id && external_uuid_ == node->uuid &&
+            same_generation && external_cancel_ && !external_cancel_->load())
+            return;
+        if (external_node_ == id && external_uuid_ == node->uuid &&
+            same_generation && !external_ready_.empty())
+            return;
+        // Do not destroy a running std::async future on the UI thread.
+        if (external_future_.valid()) {
+            if (external_cancel_)
+                external_cancel_->store(true);
+            external_armed_ = false;
+            return;
+        }
+        if (external_cancel_)
+            external_cancel_->store(true);
+        external_ready_.clear();
+        external_node_ = id;
+        external_uuid_ = node->uuid;
+        external_revision_ = scene.renderGeneration();
+        external_options_key_ = options_key;
+        external_cancel_ = std::make_shared<std::atomic<bool>>(false);
+        try {
+            std::optional<std::shared_lock<std::shared_mutex>> model_lock;
+            if (auto* mutex = scene.liveModelMutex())
+                model_lock.emplace(*mutex);
+            std::vector<std::future<std::filesystem::path>> futures;
+            for (const auto candidate_id : ids) {
+                const auto* candidate = scene.getNodeById(candidate_id);
+                futures.push_back(prepareSplatTransfer(*candidate->model, scene.getWorldTransform(candidate_id), external_cancel_,
+                                                       {.format = external_format_, .name = ids.size() > 1 ? candidate->name + "-" + candidate->uuid.to_string().substr(0, 8) : candidate->name, .sh_degree = degree, .sog_iterations = prefs.maximum_quality ? 100 : prefs.sog_iterations, .z_up = external_format_ == "ply" && prefs.blender_axes}));
+            }
+            external_future_ = std::async(std::launch::async, [jobs = std::move(futures), cancel = external_cancel_]() mutable {
+                std::vector<std::filesystem::path> paths;
+                try {
+                    for (auto& job : jobs)
+                        paths.push_back(job.get());
+                } catch (...) {
+                    cancel->store(true);
+                    throw;
+                }
+                return paths;
+            });
+            external_status_ = "Preparing splats";
+            LOG_INFO("[splat-transfer] preparing node={}", node->name);
+        } catch (const std::exception& error) {
+            external_armed_ = false;
+            external_status_ = error.what();
+            if (auto* gui = services().guiOrNull())
+                gui->enqueueToast({.title = "Splat transfer", .message = external_status_});
+        }
+        markStateDirty();
+#endif
+    }
+
+    void SceneGraphElement::updateExternalTransfer() {
+#if defined(_WIN32) || defined(__linux__)
+        if (external_native_active_ || (!external_armed_ && !external_future_.valid()))
+            return;
+        float x, y;
+        const auto buttons = SDL_GetGlobalMouseState(&x, &y);
+        if (!(buttons & SDL_BUTTON_LMASK))
+            external_armed_ = false;
+        const auto* keyboard = SDL_GetKeyboardState(nullptr);
+        if (keyboard[SDL_SCANCODE_ESCAPE]) {
+            external_armed_ = false;
+            external_format_approved_ = false;
+            if (external_cancel_)
+                external_cancel_->store(true);
+            external_ready_.clear();
+        }
+        if (external_future_.valid() &&
+            external_future_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            try {
+                external_ready_ = external_future_.get();
+                external_status_ = "Ready: drag again if the button was released";
+                LOG_INFO("[splat-transfer] ready path={}", external_ready_.front().string());
+                if (!(buttons & SDL_BUTTON_LMASK))
+                    if (auto* gui = services().guiOrNull())
+                        gui->enqueueToast({.title = tr("preferences.drag_title"), .message = tr("preferences.drag_ready")});
+            } catch (const std::exception& error) {
+                external_armed_ = false;
+                external_ready_.clear();
+                external_status_ = error.what();
+                if (auto* gui = services().guiOrNull())
+                    gui->enqueueToast({.title = "Splat transfer", .message = external_status_});
+            }
+            markStateDirty();
+        }
+        bool outside = x < external_window_bounds_.x || y < external_window_bounds_.y ||
+                       x >= external_window_bounds_.z || y >= external_window_bounds_.w;
+        // Query the actual topmost target: overlapping app windows must work,
+        // and another LichtFeld floating window remains an internal destination.
+        if (external_armed_)
+            if (const auto native_outside = pointerOutsideApplication(external_window_))
+                outside = *native_outside;
+        if (external_armed_ && external_ask_ && !external_format_approved_ && outside) {
+            requestExternalFormat();
+            return;
+        }
+        if (!external_armed_ || external_ready_.empty() ||
+            glm::length(glm::vec2(x, y) - external_origin_) < 6.0f)
+            return;
+        if (external_outside_only_ && !outside)
+            return;
+        auto* live_manager = services().sceneOrNull();
+        const auto* live_node = live_manager ? live_manager->getScene().getNodeById(external_node_) : nullptr;
+        if (!live_node || live_node->uuid != external_uuid_ ||
+            live_manager->getScene().renderGeneration() != external_revision_) {
+            external_armed_ = false;
+            external_ready_.clear();
+            if (auto* gui = services().guiOrNull())
+                gui->enqueueToast({.title = "Splat transfer", .message = "The scene changed while preparing the file. Drag again."});
+            return;
+        }
+        // Do not dispatch RmlUi events or retain row pointers across the nested
+        // OLE loop. Scene edits cannot invalidate the owned file snapshot.
+        external_armed_ = false;
+        external_native_active_ = true;
+        const auto files = external_ready_;
+        cancelDrag();
+        if (auto* context = GetContext())
+            context->ProcessMouseButtonCancel(0, 0);
+        SDL_CaptureMouse(false);
+        LOG_INFO("[splat-transfer] native_drag_started path={}", external_ready_.front().string());
+        FileDragResult result;
+        try {
+            result = dragReadyFiles(files, external_window_);
+        } catch (const std::exception& error) { result = {FileDragStatus::Failed, error.what()}; }
+        external_native_active_ = false;
+        external_format_approved_ = false;
+        if (auto* context = GetContext())
+            context->ProcessMouseButtonCancel(0, 0);
+        external_status_ = result.status == FileDragStatus::Copied ? "File delivered" : result.status == FileDragStatus::Cancelled ? "Drag cancelled"
+                                                                                                                                   : result.error;
+        LOG_INFO("[splat-transfer] native_drag_finished status={} message={}",
+                 static_cast<int>(result.status), external_status_);
+        if (result.status == FileDragStatus::Failed || result.status == FileDragStatus::Unsupported)
+            if (auto* gui = services().guiOrNull())
+                gui->enqueueToast({.title = "Splat transfer", .message = external_status_});
+        markStateDirty();
+#endif
     }
 
     void SceneGraphElement::ensureDom() {
@@ -1014,7 +1260,8 @@ namespace lfs::vis::gui {
             const auto parent_it = snapshots.find(snapshot.parent_id);
             const bool parent_is_dataset =
                 parent_it != snapshots.end() && parent_it->second.type == core::NodeType::DATASET;
-            snapshot.draggable = canDrag(snapshot.type, parent_is_dataset, snapshot.locked);
+            snapshot.draggable = canDrag(snapshot.type, parent_is_dataset, snapshot.locked) ||
+                                 snapshot.type == core::NodeType::SPLAT;
             snapshot.can_delete = isDeletable(snapshot.type, parent_is_dataset);
             snapshot.delete_enabled = snapshot.can_delete &&
                                       !snapshot.locked &&
@@ -2226,6 +2473,12 @@ namespace lfs::vis::gui {
                 return false;
         }
         for (const core::NodeId source_id : drag_node_ids_) {
+            const auto source = node_snapshots_.find(source_id);
+            if (source == node_snapshots_.end() || source->second.locked)
+                return false;
+            const auto parent = node_snapshots_.find(source->second.parent_id);
+            if (parent != node_snapshots_.end() && parent->second.type == core::NodeType::DATASET)
+                return false;
             core::NodeId walk = container_id;
             while (walk != core::NULL_NODE) {
                 if (walk == source_id)
@@ -2242,7 +2495,7 @@ namespace lfs::vis::gui {
     std::vector<core::NodeId> SceneGraphElement::selectedDraggableNodeIds() const {
         std::vector<core::NodeId> result;
         for (const auto& row : flat_rows_) {
-            if (!selected_ids_.contains(row.id) || !row.draggable)
+            if (!selected_ids_.contains(row.id) || !row.draggable || node_snapshots_.at(row.id).locked)
                 continue;
             bool covered_by_selected_ancestor = false;
             for (core::NodeId parent = node_snapshots_.at(row.id).parent_id;
@@ -2263,6 +2516,26 @@ namespace lfs::vis::gui {
     }
 
     std::vector<core::NodeId> SceneGraphElement::draggedNodeIds() const {
+        const auto source = node_snapshots_.find(drag_source_id_);
+        if (source != node_snapshots_.end() && source->second.type == core::NodeType::SPLAT) {
+            if (selected_ids_.contains(drag_source_id_)) {
+                std::vector<core::NodeId> splats;
+                bool all_splats = true;
+                for (const auto& row : flat_rows_) {
+                    if (!selected_ids_.contains(row.id))
+                        continue;
+                    if (row.type != core::NodeType::SPLAT) {
+                        all_splats = false;
+                        break;
+                    }
+                    splats.push_back(row.id);
+                }
+                if (all_splats && !splats.empty())
+                    return splats;
+            }
+            if (source->second.locked)
+                return {drag_source_id_};
+        }
         if (drag_source_id_ == core::NULL_NODE)
             return {};
         if (selected_ids_.contains(drag_source_id_)) {
@@ -2832,6 +3105,10 @@ namespace lfs::vis::gui {
                    });
         };
 
+        if (node->type == core::NodeType::SPLAT) {
+            items.push_back(makeAction(tr("export.export") + "...",
+                                       prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
+        }
         if (selected_ids_.size() > 1) {
             items.push_back(makeAction(tr("scene.select_hierarchy"),
                                        prefixedAction("select_hierarchy")));
@@ -2975,7 +3252,7 @@ namespace lfs::vis::gui {
                     prefixedAction(std::format("ungroup:{}", node_id)), true));
             }
 
-            if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
+            if (node->type == core::NodeType::POINTCLOUD) {
                 items.push_back(makeAction(
                     tr("scene.save_to_disk"),
                     prefixedAction(std::format("save_node:{}", node_id)),
@@ -3049,7 +3326,7 @@ namespace lfs::vis::gui {
         core::NodeId parent_id = core::NULL_NODE;
         for (const core::NodeId id : selected_ids_) {
             const auto it = node_snapshots_.find(id);
-            if (it == node_snapshots_.end() || !it->second.draggable)
+            if (it == node_snapshots_.end() || !it->second.draggable || it->second.locked)
                 return;
             if (ids.empty())
                 parent_id = it->second.parent_id;
@@ -3266,6 +3543,28 @@ namespace lfs::vis::gui {
                 }
             };
             gui->enqueueModal(std::move(request));
+        } else if (kind == "export_splat" && parts.size() >= 2) {
+            core::NodeId id = core::NULL_NODE;
+            if (!parseNodeId(parts[1], id))
+                return;
+            const auto* node = scene->getNodeById(id);
+            if (!node || node->type != core::NodeType::SPLAT)
+                return;
+            if (!selected_ids_.contains(id)) {
+                scene_manager->clearSelection();
+                scene_manager->selectNode(node->name);
+            }
+            std::vector<std::string> names{node->name};
+            if (selected_ids_.contains(id) && selected_ids_.size() > 1) {
+                names.clear();
+                for (const auto selected : selected_ids_) {
+                    const auto* candidate = scene->getNodeById(selected);
+                    if (candidate && candidate->type == core::NodeType::SPLAT && candidate->model)
+                        names.push_back(candidate->name);
+                }
+            }
+            requestSplatExport(std::move(names));
+            PanelRegistry::instance().set_panel_enabled("lfs.export", true);
         } else if (kind == "save_node" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (!parseNodeId(parts[1], node_id))
@@ -3485,6 +3784,8 @@ namespace lfs::vis::gui {
                 return;
             }
             drag_node_ids_ = draggedNodeIds();
+            if (!drag_node_ids_.empty() && source_it->second.type == core::NodeType::SPLAT)
+                beginExternalTransfer(drag_source_id_, true, drag_node_ids_);
             auto_expanded_group_id_ = core::NULL_NODE;
             auto_expand_hovered_group_id_ = core::NULL_NODE;
             dropped_into_auto_expanded_group_id_ = core::NULL_NODE;
@@ -3497,6 +3798,7 @@ namespace lfs::vis::gui {
                           event.GetParameter("mouse_y", 0.0f));
             markStateDirty();
         } else if (type == "dragend") {
+            external_armed_ = false;
             if (auto_expanded_group_id_ != core::NULL_NODE &&
                 dropped_into_auto_expanded_group_id_ != auto_expanded_group_id_) {
                 collapsed_ids_.insert(auto_expanded_group_id_);

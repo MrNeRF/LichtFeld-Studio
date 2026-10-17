@@ -966,6 +966,34 @@ namespace lfs::vis {
         impl_->loadLocked();
         return lfs::core::persisted_settings::field<bool>(impl_->values, "remember_camera_view_snap", false);
     }
+    void UserPreferences::setSplatDrag(const SplatDragPreferenceState& state) {
+        if (state.format != "ply" && state.format != "spz" && state.format != "sog")
+            return;
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["splat_drag"] = {{"ask", state.ask}, {"format", state.format}, {"maximum_quality", state.maximum_quality}, {"blender_axes", state.blender_axes}, {"ply_sh", std::clamp(state.ply_sh, -1, 3)}, {"spz_sh", std::clamp(state.spz_sh, -1, 3)}, {"sog_sh", std::clamp(state.sog_sh, -1, 3)}, {"sog_iterations", std::clamp(state.sog_iterations, 1, 100)}};
+        impl_->saveLocked();
+    }
+    SplatDragPreferenceState UserPreferences::splatDrag() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        SplatDragPreferenceState state;
+        const auto it = impl_->values.find("splat_drag");
+        if (it == impl_->values.end() || !it->is_object())
+            return state;
+        using lfs::core::persisted_settings::field;
+        state.ask = field<bool>(*it, "ask", false);
+        state.format = field<std::string>(*it, "format", "ply");
+        if (state.format != "ply" && state.format != "spz" && state.format != "sog")
+            state.format = "ply";
+        state.maximum_quality = field<bool>(*it, "maximum_quality", true);
+        state.blender_axes = field<bool>(*it, "blender_axes", true);
+        state.ply_sh = std::clamp(field<int>(*it, "ply_sh", -1), -1, 3);
+        state.spz_sh = std::clamp(field<int>(*it, "spz_sh", -1), -1, 3);
+        state.sog_sh = std::clamp(field<int>(*it, "sog_sh", -1), -1, 3);
+        state.sog_iterations = std::clamp(field<int>(*it, "sog_iterations", 30), 1, 100);
+        return state;
+    }
     void UserPreferences::setSceneGraphSelectionMarkers(const bool enabled) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();

@@ -229,6 +229,12 @@ def remember_camera_view_snap() -> bool:
 def set_remember_camera_view_snap(enabled: bool) -> None:
     """Enable or disable camera view snap persistence"""
 
+def take_splat_export_request() -> list[str]: ...
+
+def get_splat_drag_preferences() -> dict: ...
+
+def set_splat_drag_preferences(arg: dict, /) -> None: ...
+
 def scene_graph_selection_markers() -> bool:
     """Return whether Scene Graph selection markers are visible"""
 

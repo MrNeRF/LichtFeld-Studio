@@ -38,6 +38,7 @@ def _install_lf_stub(monkeypatch):
     state = SimpleNamespace(
         language=["en"],
         nodes=[],
+        splat_export_requests=[],
         content_type="splat_files",
         active_camera_count=0,
         export_state={"active": False},
@@ -59,6 +60,7 @@ def _install_lf_stub(monkeypatch):
         PanelOption=panel_option,
         tr=lambda key: key,
         get_current_language=lambda: state.language[0],
+        take_splat_export_request=lambda: state.splat_export_requests.pop(0) if state.splat_export_requests else [],
         get_export_state=lambda: dict(state.export_state),
         set_panel_enabled=lambda panel_id, enabled: state.set_panel_enabled_calls.append((panel_id, enabled)),
         cancel_export=lambda: setattr(state, "cancel_calls", state.cancel_calls + 1),
@@ -379,7 +381,7 @@ def test_export_panel_uses_colmap_folder_picker_without_selected_models(export_p
     assert state.export_calls == [
         (int(module.ExportFormat.COLMAP), str(tmp_path), (), 3),
     ]
-    assert state.folder_dialog_calls == ["/datasets/source/sparse"]
+    assert state.folder_dialog_calls == [str(Path("/datasets/source/sparse"))]
     assert state.confirm_calls == []
 
 
@@ -652,3 +654,22 @@ def test_export_panel_group_selects_nested_models(export_panel_module):
     loose.parent_id, outer.children = 1, [2, 3, 6]
     panel.on_update(None)
     assert writes == ["models", "models"]
+
+
+@pytest.mark.parametrize("requested", [("B",), ("A", "B")])
+def test_tree_export_request_selects_only_requested_splats(export_panel_module, requested):
+    module, state = export_panel_module
+    state.nodes = [_make_node(module.lf.scene.NodeType.SPLAT, name, 64) for name in ("A", "B", "Other")]
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    panel._format = module.ExportFormat.COLMAP
+    panel._selected_nodes = {"Other"}
+    panel._selection_seeded = True
+    state.splat_export_requests.append(list(requested))
+    panel.on_update(None)
+    assert panel._format == module.ExportFormat.PLY
+    assert panel._selected_nodes == set(requested)
+    assert {row["name"] for row in panel._handle.records["models"] if row["selected"]} == set(requested)
+    panel.on_update(None)
+    assert panel._selected_nodes == set(requested)
+    assert not state.splat_export_requests

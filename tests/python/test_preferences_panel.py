@@ -40,6 +40,8 @@ def preferences_panel_module(monkeypatch):
 
     state = SimpleNamespace(
         language="it",
+        splat_drag_preferences={"ask": False, "format": "ply", "maximum_quality": True,
+            "blender_axes": True, "ply_sh": -1, "spz_sh": -1, "sog_sh": -1, "sog_iterations": 30},
         sidebar_clear_calls=[],
         set_language_calls=[],
         mcp_preferences={
@@ -144,6 +146,8 @@ def preferences_panel_module(monkeypatch):
     state.marketplace_preferences = {"view": "list", "git_checkout": False}
     state.marketplace_notifications = []
     lf_stub.ui = SimpleNamespace(
+        get_splat_drag_preferences=lambda: dict(state.splat_drag_preferences),
+        set_splat_drag_preferences=lambda values: state.splat_drag_preferences.update(values),
         get_marketplace_preferences=lambda: dict(state.marketplace_preferences),
         set_marketplace_view=lambda value: state.marketplace_preferences.update(view=value),
         set_marketplace_git_checkout=lambda value: state.marketplace_preferences.update(git_checkout=value),
@@ -1044,7 +1048,11 @@ def test_safe_mode_disables_preferences_and_status_bar_mcp_controls():
     preferences = (resources / "preferences.rml").read_text(encoding="utf-8")
     status_bar = (resources / "statusbar.rml").read_text(encoding="utf-8")
 
-    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 8
+    import re
+    drag_controls = re.findall(r'<(?:input|select)\b[^>]*splat_drag_[^>]*>', preferences)
+    assert drag_controls
+    assert all('data-attrif-disabled="mcp_safe_mode"' in control for control in drag_controls)
+    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') - len(drag_controls) == 8
     assert preferences.count('data-class-disabled="mcp_safe_mode"') == 2
     assert (
         '<button id="mcp-toggle" data-class-is-on="mcp_server_enabled" '
@@ -1419,3 +1427,14 @@ def test_marketplace_git_checkout_requires_git_without_changing_saved_choice(pre
     assert state.marketplace_preferences["git_checkout"] is True
     reopened._set_marketplace_preference("git_checkout", False)
     assert state.marketplace_preferences["git_checkout"] is False
+
+
+def test_splat_drag_preferences_convert_ui_values_and_respect_safe_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("spz_sh", "2")
+    assert state.splat_drag_preferences["spz_sh"] == 2
+    assert panel._get_splat_drag_preference("spz_sh") == "2"
+    panel._mcp_safe_mode = True
+    panel._set_splat_drag_preference("spz_sh", "1")
+    assert state.splat_drag_preferences["spz_sh"] == 2

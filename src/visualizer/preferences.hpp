@@ -19,6 +19,17 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API std::string renderingDefaultsFromSettings(const RenderSettings& settings);
     [[nodiscard]] LFS_VIS_API lfs::Status applyRenderingDefaults(RenderSettings& settings, std::string_view serialized);
 
+    struct SplatDragPreferenceState {
+        bool ask = false;
+        std::string format = "ply";
+        bool maximum_quality = true;
+        bool blender_axes = true;
+        int ply_sh = -1;
+        int spz_sh = -1;
+        int sog_sh = -1;
+        int sog_iterations = 30;
+    };
+
     struct McpPreferenceState {
         bool enabled = true;
         bool expose_network = false;
@@ -98,6 +109,9 @@ namespace lfs::vis {
         void setProjectManagerState(std::string_view serialized_state);
         [[nodiscard]] std::string projectManagerState();
         void resetProjectManagerPreferences();
+
+        void setSplatDrag(const SplatDragPreferenceState& state);
+        [[nodiscard]] SplatDragPreferenceState splatDrag();
 
         void setMcp(const McpPreferenceState& state);
         [[nodiscard]] McpPreferenceState mcp();

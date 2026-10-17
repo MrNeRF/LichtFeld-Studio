@@ -484,6 +484,31 @@
             <input type="checkbox" data-checked="scene_graph_selection_markers" data-attrif-disabled="mcp_safe_mode" />
           </div>
           <span class="preferences-description">@tr:preferences.scene_graph_selection_markers_description</span>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.drag_ask</span>
+            <input type="checkbox" data-attrif-disabled="mcp_safe_mode" data-checked="splat_drag_ask" />
+          </div>
+          <span class="preferences-description">@tr:preferences.drag_ask_hint</span>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.drag_default</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_format"><option value="ply">@tr:preferences.drag_ply</option><option value="spz">@tr:preferences.drag_spz</option><option value="sog">@tr:preferences.drag_sog</option></select>
+          </div>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.drag_maximum</span>
+            <input type="checkbox" data-attrif-disabled="mcp_safe_mode" data-checked="splat_drag_maximum_quality" />
+          </div>
+          <span class="preferences-description">@tr:preferences.drag_quality_hint</span>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.drag_blender_axes</span>
+            <input type="checkbox" data-attrif-disabled="mcp_safe_mode" data-checked="splat_drag_blender_axes" />
+          </div>
+          <span class="preferences-description">@tr:preferences.drag_axes_hint</span>
+          <div data-if="!splat_drag_maximum_quality">
+            <div class="preferences-row"><span class="preferences-label">@tr:preferences.drag_ply_sh</span><select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_ply_sh"><option value="-1">@tr:preferences.drag_all_sh</option><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
+            <div class="preferences-row"><span class="preferences-label">@tr:preferences.drag_spz_sh</span><select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_spz_sh"><option value="-1">@tr:preferences.drag_all_sh</option><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
+            <div class="preferences-row"><span class="preferences-label">@tr:preferences.drag_sog_sh</span><select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_sog_sh"><option value="-1">@tr:preferences.drag_all_sh</option><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
+            <div class="preferences-row"><span class="preferences-label">@tr:preferences.drag_iterations</span><input type="number" min="1" max="100" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_sog_iterations" /></div>
+          </div>
         </div>
       </div>
 

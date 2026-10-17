@@ -393,6 +393,18 @@ class ExportPanel(Panel):
             return True
 
         dirty = False
+        requested = lf.ui.take_splat_export_request()
+        if requested:
+            self._selected_nodes = set(requested)
+            self._selection_seeded = True
+            self._pinned_sh_degree = True
+            self._last_node_key = None
+            if self._format == ExportFormat.COLMAP:
+                self._format = ExportFormat.PLY
+                self._rebuild_format_records()
+                self._dirty_model()
+            self._dirty_model("export_label", "can_export", "export_error_text")
+            dirty = True
         current_lang = lf.ui.get_current_language()
         if current_lang != self._last_lang:
             self._last_lang = current_lang

@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-17",
+  "base": "d161094a9eac9cd1f22f8c280549d2b5dc3c63e8",
+  "windows_build": "passed",
+  "ctest": "splat_transfer_contract passed",
+  "python_tests": {
+    "passed": 89
+  },
+  "linux": "GCC/GTK3/X11 linked; headless guards passed; physical drag not tested",
+  "blender": {
+    "blender": "5.3.0 Beta",
+    "hash": "346d005c9994",
+    "addons_used": false,
+    "results": [
+      {
+        "degree": 0,
+        "points": 2,
+        "position_error": 1.9073486345888568e-07,
+        "native_import": "passed"
+      },
+      {
+        "degree": 1,
+        "points": 2,
+        "position_error": 1.9073486345888568e-07,
+        "native_import": "passed"
+      },
+      {
+        "degree": 2,
+        "points": 2,
+        "position_error": 1.9073486345888568e-07,
+        "native_import": "passed"
+      },
+      {
+        "degree": 3,
+        "points": 2,
+        "position_error": 1.9073486345888568e-07,
+        "native_import": "passed"
+      }
+    ]
+  },
+  "physical_drag": "pending graphical session"
+}

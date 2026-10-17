@@ -231,6 +231,10 @@ class PreferencesPanel(Panel):
             lf.ui.scene_graph_selection_markers,
             self._set_scene_graph_selection_markers,
         )
+        for key in ("ask", "format", "maximum_quality", "blender_axes", "ply_sh", "spz_sh", "sog_sh", "sog_iterations"):
+            model.bind("splat_drag_" + key,
+                       lambda k=key: self._get_splat_drag_preference(k),
+                       lambda value, k=key: self._set_splat_drag_preference(k, value))
         model.bind("mcp_enabled", lambda: self._mcp_enabled, self._set_mcp_enabled)
         model.bind("mcp_expose_network", lambda: self._mcp_expose_network, self._set_mcp_expose_network)
         model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
@@ -889,6 +893,22 @@ class PreferencesPanel(Panel):
         if enabled:
             lf.set_camera_view_snap_enabled(lf.get_camera_view_snap_enabled())
         self._refresh_selection()
+
+    def _get_splat_drag_preference(self, key):
+        value = lf.ui.get_splat_drag_preferences()[key]
+        return value if key in ("ask", "maximum_quality", "blender_axes", "format") else str(value)
+
+    def _set_splat_drag_preference(self, key, value):
+        if self._mcp_safe_mode:
+            return
+        if key not in ("ask", "maximum_quality", "blender_axes", "format"):
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                return
+        lf.ui.set_splat_drag_preferences({key: value})
+        if self._handle:
+            self._handle.dirty("splat_drag_" + key)
 
     def _set_scene_graph_selection_markers(self, enabled):
         if self._mcp_safe_mode:
@@ -1673,6 +1693,8 @@ class PreferencesPanel(Panel):
             lf.ui.set_native_floating_windows(False)
             if not self._mcp_safe_mode:
                 lf.ui.set_scene_graph_selection_markers(False)
+                lf.ui.set_splat_drag_preferences({"ask": False, "format": "ply", "maximum_quality": True,
+                    "blender_axes": True, "ply_sh": -1, "spz_sh": -1, "sog_sh": -1, "sog_iterations": 30})
             return lf.ui.reset_layout()
         elif section == "mcp":
             if not self._mcp_safe_mode:
