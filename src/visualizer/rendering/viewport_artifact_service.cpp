@@ -4,11 +4,22 @@
 
 #include "viewport_artifact_service.hpp"
 #include "core/tensor.hpp"
+#include "rendering/image_layout.hpp"
 #include "rendering/rendering.hpp"
 #include "visualizer/app_store.hpp"
 #include <cmath>
 
 namespace lfs::vis {
+
+    std::shared_ptr<lfs::core::Tensor> makeViewportCaptureImageHwc(lfs::core::Tensor image) {
+        if (!image.is_valid() || image.ndim() != 3) {
+            return std::make_shared<lfs::core::Tensor>(std::move(image));
+        }
+        if (lfs::rendering::detectImageLayout(image) == lfs::rendering::ImageLayout::CHW) {
+            image = image.permute({1, 2, 0});
+        }
+        return std::make_shared<lfs::core::Tensor>(image.cpu().contiguous());
+    }
 
     namespace {
 

@@ -7130,6 +7130,9 @@ namespace lfs::vis::gui {
                         viewport_desc = buildViewportFrameDesc(
                             id, {graphics_frame.width, graphics_frame.height}, graphics_frame.frame_slot);
                     }
+                    viewport_desc.capture_scene = !viewport_desc.mesh_items.empty() && viewer_ &&
+                                                  viewer_->hasActiveSceneCaptureJob() &&
+                                                  id == rendering->activeViewId();
                     if (!compositor)
                         compositor = createViewportReferenceRenderer(
                             *window_manager->getGraphicsContext(),

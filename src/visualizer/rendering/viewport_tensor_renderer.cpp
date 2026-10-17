@@ -775,6 +775,8 @@ namespace lfs::vis {
             meshes.record(*destination, desc,
                           Module::Scissor{std::uint32_t(rect.x), std::uint32_t(rect.y), rect.width, rect.height},
                           uploads);
+            if (desc.capture_scene)
+                graphics->snapshotSceneCapture(frame);
             const std::size_t post_count = std::min<std::size_t>(
                 desc.post_ui_overlay_vertex_count, desc.overlay_triangles.size());
             const std::size_t base_count = desc.overlay_triangles.size() - post_count;

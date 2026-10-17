@@ -120,6 +120,8 @@ namespace lfs::vis {
         float mesh_depth_view_max = 1.0f;
         bool mesh_depth_grayscale = false;
         std::vector<ViewportMeshDrawItem> mesh_items;
+        // A mesh capture is pending: keep the scene composite before overlays.
+        bool capture_scene = false;
         std::vector<ViewportMeshPanel> mesh_panels;
 
         // GPU-rendered equirect environment background. Replaces the old CPU

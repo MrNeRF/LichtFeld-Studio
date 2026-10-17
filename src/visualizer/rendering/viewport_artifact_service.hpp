@@ -13,6 +13,9 @@
 
 namespace lfs::vis {
 
+    // A composited viewport capture as a CPU HWC tensor, the layout captures publish.
+    [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeViewportCaptureImageHwc(lfs::core::Tensor image);
+
     class LFS_VIS_API ViewportArtifactService {
     public:
         ViewportArtifactService() = default;
