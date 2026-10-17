@@ -950,7 +950,13 @@ namespace lfs::core::internal {
             }
             return true;
         });
-        if (released.empty()) {
+#ifdef __APPLE__
+        // Without a freed-memory hold, held_ only parks buffers that waited for an idle queue.
+        const bool release_parked = freed_memory_holds_ == 0 && !held_.empty();
+#else
+        constexpr bool release_parked = false;
+#endif
+        if (released.empty() && !release_parked) {
             return;
         }
         const auto destroy = [&] {
@@ -959,12 +965,24 @@ namespace lfs::core::internal {
                                  record->allocation);
             }
             released.clear();
+            if (release_parked) {
+                for (auto& [size, record] : held_) {
+                    (void)size;
+                    vmaDestroyBuffer(context_.allocator(), record->buffer, record->allocation);
+                }
+                held_.clear();
+            }
         };
 #ifdef __APPLE__
         // See run_while_queue_idle: memory is freed only with nothing in flight.
+        // A training queue can stay busy for many steps; park completed direct
+        // buffers for same-size reuse instead of letting each step add new ones.
         if (!context_.run_while_queue_idle(destroy)) {
             for (auto& record : released) {
-                retired_.push_back(std::move(record));
+                if (record->holdable && !record->shared_outside_queue)
+                    held_.emplace(record->allocated_size, std::move(record));
+                else
+                    retired_.push_back(std::move(record));
             }
         }
 #else
