@@ -240,6 +240,8 @@ namespace lfs::io {
             }
             put_in_jpeg_cache(key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
         } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): the helper logs once; optional cache
+            // failure preserves the prepared image returned to training.
             warn_portable_cache_failure(e.what());
         }
     }
@@ -281,6 +283,8 @@ namespace lfs::io {
                     return image;
                 }
             } catch (const std::exception& e) {
+                // LFS-CENSUS-OK(empty-catch): invalidate the failed blob, log
+                // once through the helper, then prepare the original source.
                 if (!prepared_key.empty())
                     invalidate_cache_entry(prepared_key);
                 warn_portable_cache_failure(e.what());
