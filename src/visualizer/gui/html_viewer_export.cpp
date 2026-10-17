@@ -54,8 +54,7 @@ namespace lfs::vis::gui {
             .kmeans_iterations = 10,
             .progress_callback = options.progress_callback,
             .provenance = options.provenance,
-            .background_color = options.background_color ? options.background_color
-                                                         : resolve_html_export_background_color()};
+            .background_color = options.background_color};
 
         auto result = lfs::io::export_html(splat_data, io_options);
         if (!result) {
