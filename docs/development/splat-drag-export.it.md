@@ -2,7 +2,7 @@
 
 ## Branch e ambito
 
-Solo locale, branch `feat/splat-drag-export`, worktree `D:/repos/LichtFeld-Studio/.worktrees/splat-drag-export`. Base master ufficiale `c18db2a79ced0850151df5b874083125804246d1` del 17 ottobre 2026, riallineata senza conflitti. Nessun push, PR o modifica a Blender per questo lavoro. L’importazione nativa di riferimento è Blender 5.3; il precedente “3.5” è stato interpretato come refuso, non come una versione verificata.
+Branch `feat/splat-drag-export`, destinato a `master`. Base master ufficiale `c18db2a79ced0850151df5b874083125804246d1` del 17 ottobre 2026, riallineata senza conflitti. Questa modifica riguarda LichtFeld; la correzione Blender è una contribuzione separata. L’importazione nativa di riferimento è Blender 5.3.
 
 ## Comportamento
 
@@ -119,3 +119,9 @@ La suite CPU Python estesa su Windows ha prodotto 3.762 pass, 66 segnalazioni di
 È stata inoltre osservata una race intermittente nel log del compilatore fittizio del test preesistente `test_shader_header_target.py`. Il test resta invariato: un’eventuale correzione appartiene a un branch separato. Nessuna baseline del debito o regola di controllo è stata indebolita.
 
 Compatibilità nativa: [note di rilascio Blender 5.3](https://developer.blender.org/docs/release_notes/5.3/rendering/).
+
+## Problema SPZ SH0 nella beta Blender
+
+La beta Blender 5.3 usata nei test richiede almeno sei stream attributo per gli SPZ v4 e inizializza sempre il lettore SH aggiuntivo. Il codec Niantic produce invece cinque stream per SH0, senza coefficienti SH aggiuntivi: questi file validi vengono rifiutati dall’importatore della beta. Non si tratta di cinque o sei bande SH, ma di stream attributo nel contenitore SPZ.
+
+La correzione separata [Blender #165139: Fix: SPZ: Import SH0 files with five attribute streams](https://projects.blender.org/blender/blender/pulls/165139) è stata presentata e risulta aperta, non mergiata, alla verifica del 17 ottobre 2026 tramite API ufficiale. Richiede cinque stream per SH0, evita il lettore SH aggiuntivo in quel caso e conserva la compatibilità con SH0 a sei stream e con il minimo di sei stream per gradi superiori. Non viene inclusa né richiesta una build Blender modificata da questo branch. PLY è il percorso verificato per usare subito il drag con la beta originale senza addon; SPZ SH0 verso una beta non corretta può ancora fallire per questo problema a valle.
