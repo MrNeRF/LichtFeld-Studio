@@ -2,7 +2,7 @@
 
 ## Branch e ambito
 
-Solo locale, branch `feat/splat-drag-export`, worktree `D:/repos/LichtFeld-Studio/.worktrees/splat-drag-export`. Base master ufficiale `d161094a9eac9cd1f22f8c280549d2b5dc3c63e8` del 17 ottobre 2026. Nessun push, PR o modifica a Blender per questo lavoro. L’importazione nativa di riferimento è Blender 5.3; il precedente “3.5” è stato interpretato come refuso, non come una versione verificata.
+Solo locale, branch `feat/splat-drag-export`, worktree `D:/repos/LichtFeld-Studio/.worktrees/splat-drag-export`. Base master ufficiale `c18db2a79ced0850151df5b874083125804246d1` del 17 ottobre 2026, riallineata senza conflitti. Nessun push, PR o modifica a Blender per questo lavoro. L’importazione nativa di riferimento è Blender 5.3; il precedente “3.5” è stato interpretato come refuso, non come una versione verificata.
 
 ## Comportamento
 
@@ -106,7 +106,7 @@ Controlli progetto: `tools/check_locale_completeness.py`, `tools/check_ui_hardco
 
 Non si promette trasformazione SH esatta per scale non uniformi, shear o riflessioni: un grado SH esportato maggiore di zero viene rifiutato in questi casi per evitare colori corrotti. SH0 supporta geometria affine non singolare, anche quando proviene da una sorgente di grado superiore ridotta mediante il limite SH. Trasformazioni non finite, singolari o prospettiche vengono rifiutate. Le LOD caricate parzialmente non vengono spacciate per l’intero modello.
 
-Le applicazioni di test sono state avviate per l’utente; l’automazione non ha completato un drag fisico della nuova versione con pannello export condiviso e frame modali. Restano da verificare fisicamente: riga → Explorer/Desktop e Blender 5.3 originale su Windows; riga → file manager/Blender in X11 e Wayland GNOME/KDE; selezione multipla, Escape, cambio finestra, oggetti grandi, nomi Unicode e conflitti di nome. I sanitizer e i test di protocollo non sostituiscono questi destinatari reali. Una CI completa Linux Release/Debug non è stata eseguita su questa macchina Windows; sono stati compilati ed eseguiti i backend Linux isolati con GCC 14 e sanitizer.
+L’utente ha confermato che il trascinamento su Windows funziona. Si tratta di una conferma manuale generale, senza una matrice registrata dei singoli destinatari e delle condizioni limite. L’automazione non ha completato un drag fisico della nuova versione. Restano da verificare fisicamente i destinatari Linux: file manager/Blender in X11 e Wayland GNOME/KDE. Non sono certificati individualmente Escape, cambio finestra, oggetti grandi, nomi Unicode e conflitti di nome su ogni destinatario. I sanitizer e i test di protocollo non sostituiscono questi destinatari reali. Una CI completa Linux Release/Debug non è stata eseguita su questa macchina Windows; sono stati compilati ed eseguiti i backend Linux isolati con GCC 14 e sanitizer.
 
 ## Risultati locali del 17 ottobre 2026
 
