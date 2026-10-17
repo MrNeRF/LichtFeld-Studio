@@ -349,8 +349,7 @@ namespace lfs::vis {
             const SplitViewMode current_mode = getSettings().split_view_mode;
             if (splitViewUsesPLYComparison(current_mode)) {
                 if (auto* const scene_manager = services().sceneOrNull()) {
-                    const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();
-                    if (visible_nodes.size() < 2) {
+                    if (plyComparisonNodes(scene_manager->getScene()).size() < 2) {
                         cancelDepthWindowDragBeforeSplitModeChange(
                             current_mode, SplitViewMode::Disabled);
                     }
@@ -417,8 +416,7 @@ namespace lfs::vis {
         const SplitViewMode current_mode = getSettings().split_view_mode;
         if (splitViewUsesPLYComparison(current_mode)) {
             if (auto* const scene_manager = services().sceneOrNull()) {
-                const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();
-                if (visible_nodes.size() < 2) {
+                if (plyComparisonNodes(scene_manager->getScene()).size() < 2) {
                     cancelDepthWindowDragBeforeSplitModeChange(
                         current_mode, SplitViewMode::Disabled);
                 }
