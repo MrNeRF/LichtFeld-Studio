@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "input/injected_pointer.hpp"
@@ -238,7 +237,6 @@ namespace lfs::vis {
             services().clear();
             gui::guiFocusState().reset();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
 
         void TearDown() override {
@@ -246,7 +244,6 @@ namespace lfs::vis {
             services().clear();
             gui::guiFocusState().reset();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             setHome(previous_home_);
         }
 

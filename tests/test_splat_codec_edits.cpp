@@ -1,7 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/sh_value_quant.hpp"
@@ -26,7 +25,6 @@ namespace {
         void TearDown() override {
             lfs::vis::op::undoHistory().clear();
             lfs::vis::services().clear();
-            lfs::core::event::bus().clear_all();
             lfs::event::EventBridge::instance().clear_all();
             sh_value_quant::set_enabled_for_testing(std::nullopt);
         }

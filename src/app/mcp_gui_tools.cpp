@@ -2104,7 +2104,11 @@ namespace lfs::app {
                 break;
             }
             case core::ExportFormat::HTML_VIEWER: {
-                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{.output_path = path, .provenance = stamp}); !result)
+                const auto bg_color = vis::gui::resolve_html_export_background_color();
+                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{
+                        .output_path = path,
+                        .provenance = stamp,
+                        .background_color = bg_color}); !result)
                     return std::unexpected(result.error());
                 break;
             }

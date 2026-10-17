@@ -1,9 +1,6 @@
-<!-- SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
-     SPDX-License-Identifier: GPL-3.0-or-later -->
-<!--
-tags: [orthographic, projection, parallel, cube]
--->
+<!-- @license lucide-static v1.59.0 - ISC -->
 <svg
+  class="lucide lucide-grid-3x3"
   xmlns="http://www.w3.org/2000/svg"
   width="24"
   height="24"
@@ -14,9 +11,9 @@ tags: [orthographic, projection, parallel, cube]
   stroke-linecap="round"
   stroke-linejoin="round"
 >
-  <path d="M4 8h12v12h-12z" />
-  <path d="M8 4h12v12" />
-  <path d="M4 8l4 -4" />
-  <path d="M16 8l4 -4" />
-  <path d="M16 20l4 -4" />
+  <rect width="18" height="18" x="3" y="3" rx="2" />
+  <path d="M3 9h18" />
+  <path d="M3 15h18" />
+  <path d="M9 3v18" />
+  <path d="M15 3v18" />
 </svg>

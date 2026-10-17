@@ -578,6 +578,9 @@ EXPECTED_ADVANCED_IDS = (
     "max_screen_share",
     "screen_share_penalty",
     "use_edge_map",
+    "ppisp_lr",
+    "ppisp_reg_weight",
+    "ppisp_warmup_steps",
     "ppisp_holdout_appearance",
 )
 
@@ -601,7 +604,6 @@ def _all_rows(lf):
 
 EXPECTED_RENDERED_PROP_IDS = (
     set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
-    | {"ppisp_lr", "ppisp_reg_weight", "ppisp_warmup_steps"}
 ) - set(property_view.BESPOKE_OR_HIDDEN)
 
 
@@ -655,6 +657,24 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
         "future_scalar",
         "future_enum",
     )
+
+
+def test_registry_placement_groups_auto_rows_and_leaves_new_ones_in_more_parameters(lf):
+    group_info = lf.ui.property_group_info("optimization")
+    resolved = {run.id: run.prop_ids for run in property_view.resolve_runs(group_info)}
+    placed = [
+        prop_id
+        for run_id in property_view.REGISTRY_PLACEMENT
+        for prop_id in resolved[run_id]
+    ]
+    assert sorted(placed) == sorted(EXPECTED_ADVANCED_IDS)
+    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == ()
+
+    future_group = {
+        "properties": [*group_info["properties"], {"id": "future_scalar", "type": "float"}]
+    }
+    resolved = {run.id: run.prop_ids for run in property_view.resolve_runs(future_group)}
+    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == ("future_scalar",)
 
 
 def test_strategy_applicability_filters_auto_rows_and_search(lf):
@@ -937,8 +957,8 @@ def test_focused_numeric_sync_preserves_drafts_but_accepts_authoritative_changes
 
 
 @pytest.mark.parametrize("prop_id,section", [
-    ("means_lr", "optimization"), ("use_normal_loss", "normal"),
-    ("use_exposure_correction", "appearance"),
+    ("means_lr", "learning_rates"), ("use_bilateral_grid", "appearance"), ("random", "init"),
+    ("use_normal_loss", "basic_params"), ("use_exposure_correction", "basic_params"),
 ])
 def test_search_ownership_and_advanced_ancestor(prop_id, section):
     run = next(run for spec in property_view.SECTIONS for run in spec.runs if prop_id in run.prop_ids)
@@ -946,20 +966,22 @@ def test_search_ownership_and_advanced_ancestor(prop_id, section):
         run.id, [{**_number_row(), "id": prop_id}], {prop_id: 0.25}, {}, lambda _binding: None,
         search_accessor=lambda: prop_id,
     )
+    advanced = section != "basic_params"
     assert property_view.section_is_visible((binding,), section)
-    assert property_view.section_is_visible((binding,), "advanced_params") == (section not in {"camera", "appearance"})
-    assert not property_view.section_is_visible((binding,), "basic_params")
+    assert property_view.section_is_visible((binding,), "advanced_params") == advanced
+    assert property_view.section_is_visible((binding,), "basic_params") == (not advanced)
 
 
 @pytest.mark.parametrize("query", ["bilateral", "use_bilateral_grid"])
 @pytest.mark.parametrize("enabled", [False, True])
 def test_bilateral_search_keeps_toggle_and_advanced_ancestor_visible(lf, query, enabled):
-    section = next(spec for spec in property_view.SECTIONS if spec.id == "bilateral")
+    section = next(spec for spec in property_view.SECTIONS if spec.id == "appearance")
     group_info = lf.ui.property_group_info("optimization")
     defaults = lf.optimization_params()
+    runs = [run for run in section.runs if run.id in ("bilateral_toggle", "bilateral")]
     params = {
         prop_id: defaults.get(prop_id)
-        for run in section.runs for prop_id in run.prop_ids
+        for run in runs for prop_id in run.prop_ids
     }
     params["use_bilateral_grid"] = enabled
     bindings = [
@@ -975,7 +997,7 @@ def test_bilateral_search_keeps_toggle_and_advanced_ancestor_visible(lf, query, 
                 enabled if condition == "dep_bilateral" else False
             ),
         )
-        for run in section.runs
+        for run in runs
     ]
 
     records = [record for binding in bindings for record in binding._records()]
@@ -983,7 +1005,7 @@ def test_bilateral_search_keeps_toggle_and_advanced_ancestor_visible(lf, query, 
     assert toggle["checked"] is enabled
     if not enabled or query == "use_bilateral_grid":
         assert [record["id"] for record in records] == ["use_bilateral_grid"]
-    assert property_view.section_is_visible(bindings, "bilateral")
+    assert property_view.section_is_visible(bindings, "appearance")
     assert property_view.section_is_visible(bindings, "advanced_params")
 
 
@@ -1142,7 +1164,7 @@ def test_search_auto_expand_does_not_mutate_collapse_state(monkeypatch):
     assert panel._collapsed == {"losses"}
 
 
-@pytest.mark.parametrize("prop_id,section", [("means_lr", "optimization"), ("use_normal_loss", "normal")])
+@pytest.mark.parametrize("prop_id,section", [("means_lr", "learning_rates"), ("use_bilateral_grid", "appearance")])
 def test_search_opens_advanced_and_restores_collapsed_sections(monkeypatch, prop_id, section):
     from lfs_plugins import training_panel
 

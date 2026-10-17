@@ -1779,6 +1779,8 @@ namespace lfs::io {
         return backend == lfs::core::GpuBackend::CUDA && lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
     }
 
+    std::string_view PipelinedImageLoader::jpeg_decoder() { return NvCodecImageLoader::jpeg_decoder(); }
+
     bool PipelinedImageLoader::attach_cuda_decode_stage() {
         if (config_.backend != lfs::core::GpuBackend::CUDA)
             return false;

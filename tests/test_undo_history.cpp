@@ -4,7 +4,6 @@
 #include "core/camera.hpp"
 #include "core/editor_context.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
@@ -304,7 +303,6 @@ class UndoHistoryTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
         lfs::vis::op::undoHistory().setMaxBytes(lfs::vis::op::UndoHistory::MAX_BYTES);
@@ -314,7 +312,6 @@ protected:
         lfs::vis::op::undoHistory().clear();
         lfs::vis::op::undoHistory().setMaxBytes(lfs::vis::op::UndoHistory::MAX_BYTES);
         lfs::vis::services().clear();
-        lfs::core::event::bus().clear_all();
         lfs::event::EventBridge::instance().clear_all();
     }
 };
@@ -4142,7 +4139,6 @@ TEST_F(UndoHistoryTest, SiblingReorderRestoresExactOrderBothWays) {
         lfs::vis::op::undoHistory().clear();
         lfs::vis::services().clear();
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
     }
 }
 
@@ -4295,7 +4291,6 @@ TEST_F(UndoHistoryTest, CropCommandsRespectTargetLocks) {
                 lfs::vis::op::undoHistory().clear();
                 lfs::vis::services().clear();
                 lfs::event::EventBridge::instance().clear_all();
-                lfs::core::event::bus().clear_all();
             }
         }
     }

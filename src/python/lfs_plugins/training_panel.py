@@ -205,23 +205,14 @@ RENDER_SYNC = {
 
 SECTIONS = [
     "basic_params",
-    "camera",
-    "background",
-    "appearance",
-    "masking",
-    "dataset",
     "advanced_params",
-    "depth",
-    "normal",
-    "ppisp",
-    "bilateral",
-    "exposure",
-    "evaluation",
-    "optimization",
+    "dataset",
+    "appearance",
+    "refinement",
+    "learning_rates",
     "losses",
     "init",
-    "random_init",
-    "sparsity",
+    "evaluation",
     "save_steps",
     "advanced_registry",
 ]
@@ -229,11 +220,13 @@ SECTIONS = [
 INITIALLY_COLLAPSED = {
     "advanced_params",
     "advanced_registry",
-    "optimization",
-    "bilateral",
+    "dataset",
+    "appearance",
+    "refinement",
+    "learning_rates",
     "losses",
     "init",
-    "sparsity",
+    "evaluation",
     "save_steps",
 }
 
@@ -327,7 +320,7 @@ class TrainingPanel(Panel):
 
     def capture_chrome(self):
         return {
-            "collapsed": sorted(self._collapsed),
+            "expanded": sorted(set(SECTIONS) - self._collapsed),
             "property_search": self._pv_search_query,
             "steps_scaling_lock": bool(self._auto_scale_steps_locked),
         }
@@ -340,9 +333,9 @@ class TrainingPanel(Panel):
             if self._handle:
                 self._handle.dirty_all()
             return
-        collapsed = payload.get("collapsed")
-        if isinstance(collapsed, (list, tuple)):
-            self._collapsed = {str(name) for name in collapsed}
+        expanded = payload.get("expanded")
+        if isinstance(expanded, (list, tuple)):
+            self._collapsed = set(INITIALLY_COLLAPSED) - {str(name) for name in expanded}
         search = payload.get("property_search")
         if isinstance(search, str):
             self._pv_search_query = search
@@ -559,15 +552,15 @@ class TrainingPanel(Panel):
         "strategy": ("basic_params", "strategy mrnf igs+ mcmc", ("training_params.strategy",)),
         "backend": ("basic_params", "raster backend 3dgs 3dgut gut", ("training.backend",)),
         "sh_degree": ("basic_params", "sh_degree spherical harmonics", ("training_params.sh_degree",)),
-        "depth_loss_mode": ("depth", "depth_loss_mode ssi disparity", ("training.tooltip.depth_loss_mode",)),
-        "background_fields": ("background", "bg_color bg_image background color image", ("training.tooltip.bg_color", "training.tooltip.bg_image_path")),
-        "appearance": ("ppisp", "ppisp", ("training.section.appearance",)),
-        "appearance_fields": ("ppisp", "ppisp sidecar path controller activation step", ("training.tooltip.ppisp_sidecar_path", "training.tooltip.ppisp_activation_step")),
+        "depth_loss_mode": ("basic_params", "depth_loss_mode ssi disparity", ("training.tooltip.depth_loss_mode",)),
+        "background_fields": ("basic_params", "bg_color bg_image background color image", ("training.tooltip.bg_color", "training.tooltip.bg_image_path")),
+        "appearance": ("appearance", "ppisp", ("training.section.appearance",)),
+        "appearance_fields": ("appearance", "ppisp sidecar path controller activation step", ("training.tooltip.ppisp_sidecar_path", "training.tooltip.ppisp_activation_step")),
         "dataset_fields": ("dataset", "dataset path images output resize_factor max_width cpu_cache use_16bit_color", ("training.tooltip.dataset_path", "training.tooltip.dataset_images", "training.tooltip.resize_factor", "training.tooltip.max_width", "training.tooltip.cpu_cache", "training.tooltip.use_16bit_color", "training.tooltip.dataset_output")),
         "evaluation_fields": ("evaluation", "test_every evaluation", ("training.tooltip.test_every",)),
         "lambda_dssim": ("losses", "lambda_dssim ssim", ("training.tooltip.lambda_dssim",)),
         "init_opacity": ("init", "init_opacity", ("training.tooltip.init_opacity",)),
-        "prune_ratio": ("sparsity", "prune_ratio", ("training.tooltip.prune_ratio",)),
+        "prune_ratio": ("basic_params", "prune_ratio", ("training.tooltip.prune_ratio",)),
         "save_steps": ("save_steps", "save_steps eval_steps", ("training_panel.save_eval_steps",)),
     }
 
@@ -2597,11 +2590,11 @@ class TrainingPanel(Panel):
                     if other_binding is not None:
                         other_binding.set_value(other, False)
                 # The enable flag is authoritative; opening its settings is a UI effect.
+                # Depth, normal and sparsity settings show inline in the base block.
                 sections = {
-                    "use_depth_loss": "depth", "use_normal_loss": "normal",
-                    "use_bilateral_grid": "bilateral", "ppisp": "ppisp",
-                    "use_exposure_correction": "exposure", "enable_sparsity": "sparsity",
-                    "random": "random_init", "enable_eval": "evaluation",
+                    "use_bilateral_grid": "appearance", "ppisp": "appearance",
+                    "use_exposure_correction": "appearance",
+                    "random": "init", "enable_eval": "evaluation",
                 }
                 section = sections.get(prop)
                 params = lf.optimization_params()
