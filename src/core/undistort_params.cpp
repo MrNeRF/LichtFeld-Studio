@@ -26,9 +26,7 @@ namespace lfs::core {
 
         constexpr float PIXEL_CENTER_OFFSET = 0.5f;
         constexpr float NEWTON_EPSILON = 1e-6f;
-        constexpr float MAX_FISHEYE_THETA = 1.56079632679f;
         constexpr int MAX_NEWTON_ITERATIONS = 20;
-        constexpr int THIN_PRISM_SEED_ITERATIONS = 5;
         constexpr float INVERSE_RESIDUAL_PIXELS = 5.0e-4f;
         // Float32 Newton stalls near 6e-4 px at 8k image scales; accepting up to 1e-2 px keeps
         // those pixels valid while the geometric error stays far below sampling resolution.
@@ -110,89 +108,6 @@ namespace lfs::core {
             dy = vv + vv * radial + ty;
         }
 
-        bool solve_fisheye_theta(
-            const float theta_d, const float* __restrict__ dist, float& theta) {
-            theta = fminf(theta_d, MAX_FISHEYE_THETA);
-            for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
-                const float theta2 = theta * theta;
-                const float theta4 = theta2 * theta2;
-                const float theta6 = theta4 * theta2;
-                const float theta8 = theta4 * theta4;
-                const float residual = theta * (1.0f + dist[0] * theta2 + dist[1] * theta4 +
-                                                dist[2] * theta6 + dist[3] * theta8) -
-                                       theta_d;
-                const float slope = 1.0f + 3.0f * dist[0] * theta2 + 5.0f * dist[1] * theta4 +
-                                    7.0f * dist[2] * theta6 + 9.0f * dist[3] * theta8;
-                if (!std::isfinite(residual) || !std::isfinite(slope) || fabsf(slope) < NEWTON_EPSILON)
-                    return false;
-                const float step = residual / slope;
-                theta -= step;
-                if (fabsf(step) < 1e-7f)
-                    break;
-            }
-            return theta > 0.0f && theta < MAX_FISHEYE_THETA;
-        }
-
-        bool inverse_fisheye_radial(
-            const float xd, const float yd, const float* __restrict__ dist,
-            float& ux, float& uy) {
-            const float theta_d = sqrtf(xd * xd + yd * yd);
-            if (theta_d < 1e-8f) {
-                ux = xd;
-                uy = yd;
-                return true;
-            }
-            float theta;
-            if (!solve_fisheye_theta(theta_d, dist, theta))
-                return false;
-            const float scale = tanf(theta) / theta_d;
-            ux = xd * scale;
-            uy = yd * scale;
-            return true;
-        }
-
-        bool inverse_thin_prism_seed(
-            const float xd, const float yd, const float* __restrict__ dist, const int num_dist,
-            float& ux, float& uy) {
-            float wx = xd;
-            float wy = yd;
-            float theta = 0.0f;
-            for (int iter = 0; iter < THIN_PRISM_SEED_ITERATIONS; ++iter) {
-                float tx, ty;
-                thin_prism_increment(wx, wy, dist, num_dist, tx, ty);
-                const float zx = xd - tx;
-                const float zy = yd - ty;
-                const float theta_d = hypotf(zx, zy);
-                if (theta_d < 1e-8f) {
-                    wx = zx;
-                    wy = zy;
-                    theta = theta_d;
-                    continue;
-                }
-                if (!solve_fisheye_theta(theta_d, dist, theta))
-                    return false;
-                wx = zx * theta / theta_d;
-                wy = zy * theta / theta_d;
-            }
-            const float scale = theta > 1e-8f ? tanf(theta) / theta : 1.0f;
-            ux = wx * scale;
-            uy = wy * scale;
-            return true;
-        }
-
-        bool seed_inverse_distortion(
-            const float xd, const float yd, const CameraModelType model,
-            const float* __restrict__ dist, const int num_dist,
-            float& ux, float& uy) {
-            if (model == CameraModelType::THIN_PRISM_FISHEYE && num_dist > 4)
-                return inverse_thin_prism_seed(xd, yd, dist, num_dist, ux, uy);
-            if (model == CameraModelType::FISHEYE || model == CameraModelType::THIN_PRISM_FISHEYE)
-                return inverse_fisheye_radial(xd, yd, dist, ux, uy);
-            ux = xd;
-            uy = yd;
-            return true;
-        }
-
         void apply_distortion_cpu(
             const float x, const float y,
             const CameraModelType model,
@@ -243,222 +158,6 @@ namespace lfs::core {
             }
         }
 
-        bool cam_from_img_pinhole_cpu(
-            const float img_x, const float img_y,
-            const float fx, const float fy,
-            const float cx, const float cy,
-            const float* dist, const int num_dist,
-            float& ux, float& uy) {
-
-            if (num_dist <= 0) {
-                ux = (img_x - cx) / fx;
-                uy = (img_y - cy) / fy;
-                return true;
-            }
-
-            const float xd = (img_x - cx) / fx;
-            const float yd = (img_y - cy) / fy;
-            ux = xd;
-            uy = yd;
-
-            for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
-                const float r2 = ux * ux + uy * uy;
-                const float r4 = r2 * r2;
-                const float r6 = r4 * r2;
-
-                const float k1 = dist[0];
-                const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-                const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-                const bool rational = num_dist >= 6;
-                const float k4 = rational ? dist[3] : 0.0f;
-                const float k5 = rational ? dist[4] : 0.0f;
-                const float k6 = rational ? dist[5] : 0.0f;
-                const int tangential_offset = rational ? 6 : 3;
-                const float p1 = num_dist > tangential_offset ? dist[tangential_offset] : 0.0f;
-                const float p2 = num_dist > tangential_offset + 1 ? dist[tangential_offset + 1] : 0.0f;
-
-                const float numerator = 1.0f + k1 * r2 + k2 * r4 + k3 * r6;
-                const float d_numerator_dr2 = k1 + 2.0f * k2 * r2 + 3.0f * k3 * r4;
-                float radial = numerator;
-                float d_radial_dr2 = d_numerator_dr2;
-                if (rational) {
-                    const float denominator = 1.0f + k4 * r2 + k5 * r4 + k6 * r6;
-                    if (!std::isfinite(denominator) ||
-                        std::fabs(denominator) < NEWTON_EPSILON) {
-                        return false;
-                    }
-                    const float d_denominator_dr2 =
-                        k4 + 2.0f * k5 * r2 + 3.0f * k6 * r4;
-                    radial = numerator / denominator;
-                    d_radial_dr2 =
-                        (d_numerator_dr2 * denominator -
-                         numerator * d_denominator_dr2) /
-                        (denominator * denominator);
-                }
-                if (!std::isfinite(radial) || !std::isfinite(d_radial_dr2)) {
-                    return false;
-                }
-                const float d_radial_dx = 2.0f * ux * d_radial_dr2;
-                const float d_radial_dy = 2.0f * uy * d_radial_dr2;
-
-                const float fx_residual =
-                    ux * radial + 2.0f * p1 * ux * uy + p2 * (r2 + 2.0f * ux * ux) - xd;
-                const float fy_residual =
-                    uy * radial + p1 * (r2 + 2.0f * uy * uy) + 2.0f * p2 * ux * uy - yd;
-
-                const float j00 = radial + ux * d_radial_dx + 2.0f * p1 * uy + 6.0f * p2 * ux;
-                const float j01 = ux * d_radial_dy + 2.0f * p1 * ux + 2.0f * p2 * uy;
-                const float j10 = uy * d_radial_dx + 2.0f * p2 * uy + 2.0f * p1 * ux;
-                const float j11 = radial + uy * d_radial_dy + 6.0f * p1 * uy + 2.0f * p2 * ux;
-
-                const float det = j00 * j11 - j01 * j10;
-                if (std::fabs(det) < NEWTON_EPSILON) {
-                    return false;
-                }
-
-                const float step_x = (j11 * fx_residual - j01 * fy_residual) / det;
-                const float step_y = (-j10 * fx_residual + j00 * fy_residual) / det;
-                ux -= step_x;
-                uy -= step_y;
-
-                if (std::fabs(step_x) < NEWTON_EPSILON && std::fabs(step_y) < NEWTON_EPSILON) {
-                    return std::isfinite(ux) && std::isfinite(uy);
-                }
-            }
-
-            return std::isfinite(ux) && std::isfinite(uy);
-        }
-
-        bool cam_from_img_fisheye_cpu(
-            const float img_x, const float img_y,
-            const float fx, const float fy,
-            const float cx, const float cy,
-            const float* dist, const int num_dist,
-            float& ux, float& uy) {
-
-            const float xd = (img_x - cx) / fx;
-            const float yd = (img_y - cy) / fy;
-            const float rd = std::sqrt(xd * xd + yd * yd);
-            if (rd < NEWTON_EPSILON) {
-                ux = 0.0f;
-                uy = 0.0f;
-                return true;
-            }
-
-            float theta = rd;
-            for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
-                const float theta2 = theta * theta;
-                const float theta4 = theta2 * theta2;
-                const float theta6 = theta4 * theta2;
-                const float theta8 = theta4 * theta4;
-
-                const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-                const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-                const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-                const float k4 = num_dist > 3 ? dist[3] : 0.0f;
-
-                const float theta_d =
-                    theta * (1.0f + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8);
-                const float derivative =
-                    1.0f + 3.0f * k1 * theta2 + 5.0f * k2 * theta4 + 7.0f * k3 * theta6 +
-                    9.0f * k4 * theta8;
-                if (std::fabs(derivative) < NEWTON_EPSILON) {
-                    return false;
-                }
-
-                const float step = (theta_d - rd) / derivative;
-                theta -= step;
-                if (std::fabs(step) < NEWTON_EPSILON) {
-                    break;
-                }
-            }
-
-            if (!std::isfinite(theta) || theta < 0.0f || theta >= MAX_FISHEYE_THETA) {
-                return false;
-            }
-
-            const float r = std::tan(theta);
-            const float scale = r / rd;
-            ux = xd * scale;
-            uy = yd * scale;
-            return std::isfinite(ux) && std::isfinite(uy);
-        }
-
-        bool cam_from_img_generic_cpu(
-            const float img_x, const float img_y,
-            const float fx, const float fy,
-            const float cx, const float cy,
-            const CameraModelType model,
-            const float* dist, const int num_dist,
-            float& ux, float& uy) {
-
-            const float xd = (img_x - cx) / fx;
-            const float yd = (img_y - cy) / fy;
-            if (!seed_inverse_distortion(xd, yd, model, dist, num_dist, ux, uy))
-                return false;
-
-            for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
-                float fx_eval, fy_eval;
-                apply_distortion_cpu(ux, uy, model, dist, num_dist, fx_eval, fy_eval);
-
-                const float residual_x = fx_eval - xd;
-                const float residual_y = fy_eval - yd;
-                if (std::fabs(residual_x) < NEWTON_EPSILON &&
-                    std::fabs(residual_y) < NEWTON_EPSILON) {
-                    return std::isfinite(ux) && std::isfinite(uy);
-                }
-
-                constexpr float jacobian_step = 1e-4f;
-                float fx_dx, fy_dx;
-                float fx_dy, fy_dy;
-                apply_distortion_cpu(ux + jacobian_step, uy, model, dist, num_dist, fx_dx, fy_dx);
-                apply_distortion_cpu(ux, uy + jacobian_step, model, dist, num_dist, fx_dy, fy_dy);
-
-                const float j00 = (fx_dx - fx_eval) / jacobian_step;
-                const float j10 = (fy_dx - fy_eval) / jacobian_step;
-                const float j01 = (fx_dy - fx_eval) / jacobian_step;
-                const float j11 = (fy_dy - fy_eval) / jacobian_step;
-
-                const float det = j00 * j11 - j01 * j10;
-                if (std::fabs(det) < NEWTON_EPSILON) {
-                    return false;
-                }
-
-                const float step_x = (j11 * residual_x - j01 * residual_y) / det;
-                const float step_y = (-j10 * residual_x + j00 * residual_y) / det;
-                ux -= step_x;
-                uy -= step_y;
-
-                if (std::fabs(step_x) < NEWTON_EPSILON && std::fabs(step_y) < NEWTON_EPSILON) {
-                    return std::isfinite(ux) && std::isfinite(uy);
-                }
-            }
-
-            return std::isfinite(ux) && std::isfinite(uy);
-        }
-
-        bool cam_from_img_cpu(
-            const float img_x, const float img_y,
-            const float fx, const float fy,
-            const float cx, const float cy,
-            const CameraModelType model,
-            const float* dist, const int num_dist,
-            float& ux, float& uy) {
-
-            switch (model) {
-            case CameraModelType::PINHOLE:
-                return cam_from_img_pinhole_cpu(img_x, img_y, fx, fy, cx, cy, dist, num_dist, ux, uy);
-            case CameraModelType::FISHEYE:
-                return cam_from_img_fisheye_cpu(img_x, img_y, fx, fy, cx, cy, dist, num_dist, ux, uy);
-            case CameraModelType::THIN_PRISM_FISHEYE:
-                return cam_from_img_generic_cpu(img_x, img_y, fx, fy, cx, cy, model, dist, num_dist, ux, uy);
-            default:
-                ux = (img_x - cx) / fx;
-                uy = (img_y - cy) / fy;
-                return true;
-            }
-        }
-
         // Host twin of the branch-aware inverse in undistort.cu, so the crop matches the CUDA warps
         // on every backend. Pixels past the first turning point of the lens map, or past the
         // horizon, have no ray.
@@ -466,10 +165,7 @@ namespace lfs::core {
         constexpr int BRANCH_SAMPLES = 1024;
         constexpr float NO_BOUND = std::numeric_limits<float>::infinity();
 
-        struct RadialBranch {
-            float bound;
-            float maximum;
-        };
+        using RadialBranch = UndistortRadialBranch;
 
         void radial_mapping(const float r, const UndistortParams& params,
                             float& value, float& derivative, float& denominator) {
@@ -719,15 +415,18 @@ namespace lfs::core {
 
     } // namespace
 
-    void distort_normalized_point(
+    UndistortRadialBranch undistort_radial_branch(const UndistortParams& params) {
+        return radial_branch(params);
+    }
+
+    bool undistort_normalized_point(
         const UndistortParams& params,
-        const float x,
-        const float y,
-        float& distorted_x,
-        float& distorted_y) {
-        apply_distortion_cpu(
-            x, y, params.model_type, params.distortion, params.num_distortion,
-            distorted_x, distorted_y);
+        const UndistortRadialBranch& branch,
+        const float distorted_x,
+        const float distorted_y,
+        float& normalized_x,
+        float& normalized_y) {
+        return branch_inverse_distortion(distorted_x, distorted_y, params, branch, normalized_x, normalized_y);
     }
 
     bool undistort_image_point(
@@ -736,11 +435,9 @@ namespace lfs::core {
         const float image_y,
         float& normalized_x,
         float& normalized_y) {
-        return cam_from_img_cpu(
-            image_x, image_y,
-            params.src_fx, params.src_fy, params.src_cx, params.src_cy,
-            params.model_type, params.distortion, params.num_distortion,
-            normalized_x, normalized_y);
+        return branch_inverse_distortion(
+            (image_x - params.src_cx) / params.src_fx, (image_y - params.src_cy) / params.src_fy,
+            params, radial_branch(params), normalized_x, normalized_y);
     }
 
     UndistortParams detail::initialize_undistort_params(

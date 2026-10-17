@@ -897,6 +897,7 @@ if(NOT LFS_HAS_CUDA)
         test_viewport.cpp
         test_tensor_metal.cpp
         test_camera_priors_portable.cpp
+        test_undistort_portable.cpp
         test_pipelined_loader_backends.cpp
         test_viewer_no_cuda.cpp
     )
