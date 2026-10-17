@@ -687,10 +687,13 @@ namespace lfs::core::image_codecs {
             std::span<const std::uint8_t> bytes() const noexcept {
                 return output ? std::span<const std::uint8_t>(output->bytes) : input;
             }
+            void describe(const char* text) noexcept {
+                std::strncpy(message.data(), text, message.size() - 1);
+                message.back() = '\0';
+            }
             void fail(const char* text) noexcept {
                 failed = true;
-                if (!message[0])
-                    std::strncpy(message.data(), text, message.size() - 1);
+                describe(text);
             }
             static tmsize_t read(thandle_t handle, void* data, tmsize_t size) noexcept {
                 auto& self = *static_cast<TiffMemory*>(handle);
@@ -753,13 +756,15 @@ namespace lfs::core::image_codecs {
             }
             static int diagnostic(TIFF*, void* context, const char*, const char* format, va_list args) noexcept {
                 auto& self = *static_cast<TiffMemory*>(context);
-                self.failed = true;
+                // libtiff can report a recoverable tag error and still decode.
+                // Only client I/O callbacks mark the input as failed.
                 std::array<char, 512> text{};
                 std::vsnprintf(text.data(), text.size(), format ? format : "TIFF codec error", args);
                 if (std::strstr(text.data(), "memory") || std::strstr(text.data(), "alloc") || std::strstr(text.data(), "No space") ||
                     std::strstr(text.data(), "Insertion in tif_map_"))
                     self.allocation_failed = true;
-                self.fail(text.data());
+                if (!self.failed)
+                    self.describe(text.data());
                 return 1;
             }
             TIFF* open(const char* mode) {
@@ -771,7 +776,7 @@ namespace lfs::core::image_codecs {
                 }
                 TIFFOpenOptionsSetErrorHandlerExtR(options.get(), diagnostic, this);
                 TIFFOpenOptionsSetWarningHandlerExtR(options.get(), tiff_warning_handler_ext_r, nullptr);
-                return TIFFClientOpenExt("memory TIFF", mode, this, read, write, seek, [](thandle_t) { return 0; }, [](thandle_t handle) -> toff_t { return static_cast<TiffMemory*>(handle)->bytes().size(); }, [](thandle_t, void**, toff_t*) { return 0; }, [](thandle_t, void*, toff_t) {}, options.get());
+                return TIFFClientOpenExt("TIFF buffer", mode, this, read, write, seek, [](thandle_t) { return 0; }, [](thandle_t handle) -> toff_t { return static_cast<TiffMemory*>(handle)->bytes().size(); }, [](thandle_t, void**, toff_t*) { return 0; }, [](thandle_t, void*, toff_t) {}, options.get());
             }
         };
 
@@ -1078,14 +1083,15 @@ namespace lfs::core::image_codecs {
         }
 
         bool decode_tiff_memory(std::span<const std::uint8_t> input, Image& result, std::string& error) {
+            error.clear();
             TiffMemory source{input};
             std::unique_ptr<TIFF, decltype(&TIFFClose)> tiff(source.open("rm"), TIFFClose);
             Image staged;
             const bool decoded = tiff && decode_tiff_samples(tiff.get(), staged, error);
             tiff.reset();
             if (!decoded || source.failed) {
-                if (source.message[0])
-                    error = source.message.data();
+                if (error.empty())
+                    error = source.message[0] ? source.message.data() : "TIFF memory decode failed";
                 return false;
             }
             result = std::move(staged);
@@ -1094,12 +1100,13 @@ namespace lfs::core::image_codecs {
 
         bool decode_tiff_memory_to_buffer(std::span<const std::uint8_t> input, DecodeTarget& target,
                                           Probe& result, std::string& error) {
+            error.clear();
             TiffMemory source{input};
             std::unique_ptr<TIFF, decltype(&TIFFClose)> tiff(source.open("rm"), TIFFClose);
             const bool decoded = tiff && decode_tiff_samples_to_buffer(tiff.get(), target, result, error);
             tiff.reset();
-            if (source.message[0])
-                error = source.message.data();
+            if ((!decoded || source.failed) && error.empty())
+                error = source.message[0] ? source.message.data() : "TIFF memory decode failed";
             return decoded && !source.failed;
         }
 
@@ -3437,7 +3444,9 @@ namespace lfs::core::image_codecs {
             // The shared writer explicitly finalizes the directory and flushes.
             // Release all codec state before publishing the owned destination.
             tiff.reset();
-            if (!encoded || destination.failed) {
+            // Preserve the writer's strict diagnostic policy; readers instead
+            // follow libtiff's return value for recoverable metadata errors.
+            if (!encoded || destination.failed || destination.message[0]) {
                 if (memory.failure != EncodedMemory::Failure::None || destination.allocation_failed)
                     return failure(ErrorCode::ResourceExhausted, memory.failure == EncodedMemory::Failure::Limit
                                                                      ? "TIFF encoded-byte limit exhausted"

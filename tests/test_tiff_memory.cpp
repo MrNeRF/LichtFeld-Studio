@@ -345,6 +345,85 @@ namespace {
                         }
     }
 
+    TEST(TiffMemory, RecoverablePaddingEntryMatchesFileAndKeepsFatalDiagnostics) {
+        TemporaryTiff temporary;
+        for (const auto mode : {"wl", "wb", "w8l", "w8b"})
+            for (int bits : {8, 16})
+                for (int channels : {1, 3}) {
+                    SCOPED_TRACE(::testing::Message() << mode << " bits=" << bits << " channels=" << channels);
+                    const auto pixels = samples(1, 1, channels, bits);
+                    {
+                        std::unique_ptr<TIFF, decltype(&TIFFClose)> file(TIFFOpen(temporary.path.string().c_str(), mode), TIFFClose);
+                        ASSERT_NE(file, nullptr);
+                        ASSERT_TRUE(TIFFSetField(file.get(), TIFFTAG_IMAGEWIDTH, 1));
+                        ASSERT_TRUE(TIFFSetField(file.get(), TIFFTAG_IMAGELENGTH, 1));
+                        ASSERT_TRUE(TIFFSetField(file.get(), TIFFTAG_SAMPLESPERPIXEL, channels));
+                        ASSERT_TRUE(TIFFSetField(file.get(), TIFFTAG_BITSPERSAMPLE, bits));
+                        ASSERT_TRUE(TIFFSetField(file.get(), TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT));
+                        ASSERT_TRUE(TIFFSetField(file.get(), TIFFTAG_PHOTOMETRIC, channels == 1 ? PHOTOMETRIC_MINISBLACK : PHOTOMETRIC_RGB));
+                        ASSERT_TRUE(TIFFSetField(file.get(), TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG));
+                        ASSERT_TRUE(TIFFSetField(file.get(), TIFFTAG_DOCUMENTNAME, "padding entry"));
+                        auto row = pixels;
+                        ASSERT_GE(TIFFWriteScanline(file.get(), row.data(), 0, 0), 0);
+                        ASSERT_TRUE(TIFFWriteDirectory(file.get()));
+                    }
+                    auto encoded = read_bytes(temporary.path);
+                    const bool little = encoded[0] == 'I', big = mode[1] == '8';
+                    const auto integer = [&](size_t offset, size_t count) {
+                        uint64_t value = 0;
+                        for (size_t i = 0; i < count; ++i)
+                            value |= uint64_t(encoded.at(offset + i)) << (8 * (little ? i : count - 1 - i));
+                        return value;
+                    };
+                    const size_t directory = static_cast<size_t>(integer(big ? 8 : 4, big ? 8 : 4));
+                    const size_t count = static_cast<size_t>(integer(directory, big ? 8 : 2));
+                    const size_t entry_size = big ? 20 : 12;
+                    size_t padding = 0, sample_format = 0;
+                    for (size_t i = 0; i < count; ++i) {
+                        const size_t entry = directory + (big ? 8 : 2) + i * entry_size;
+                        const auto tag = integer(entry, 2);
+                        if (tag == TIFFTAG_DOCUMENTNAME)
+                            padding = entry;
+                        if (tag == TIFFTAG_SAMPLEFORMAT)
+                            sample_format = entry;
+                    }
+                    ASSERT_NE(padding, 0);
+                    ASSERT_NE(sample_format, 0);
+                    std::fill_n(encoded.begin() + padding, entry_size, 0);
+                    save_bytes(temporary.path, encoded);
+                    codec::Image file, memory;
+                    std::string file_error, error = "stale diagnostic";
+                    ASSERT_TRUE(codec::decode(temporary.path, file, file_error)) << file_error;
+                    EXPECT_EQ(file.data, pixels);
+                    ASSERT_TRUE(codec::decode_memory(encoded.data(), encoded.size(), memory, error)) << error;
+                    EXPECT_EQ(memory.data, file.data);
+                    EXPECT_TRUE(error.empty());
+                    check_pixels(encoded, pixels, 1, 1, channels, bits);
+                    if (channels != 1)
+                        continue;
+                    // A recoverable tag-0 error precedes a real sample-format
+                    // rejection; the latter must be the reported cause.
+                    const size_t value = sample_format + (big ? 12 : 8);
+                    encoded.at(value) = little ? SAMPLEFORMAT_INT : 0;
+                    encoded.at(value + 1) = little ? 0 : SAMPLEFORMAT_INT;
+                    save_bytes(temporary.path, encoded);
+                    ASSERT_FALSE(codec::decode(temporary.path, file, file_error));
+                    EXPECT_EQ(file_error, "Unsupported TIFF sample format");
+                    error = "stale diagnostic";
+                    const auto previous = memory.data;
+                    ASSERT_FALSE(codec::decode_memory(encoded.data(), encoded.size(), memory, error));
+                    EXPECT_EQ(error, file_error);
+                    EXPECT_EQ(memory.data, previous);
+                    std::vector<uint8_t> target_bytes(pixels.size(), 0xcd);
+                    codec::DecodeTarget target{channels, bits == 8 ? codec::SampleType::UInt8 : codec::SampleType::UInt16, target_bytes.data()};
+                    codec::Probe info;
+                    ASSERT_FALSE(codec::decode_to_buffer(temporary.path, target, info, file_error));
+                    ASSERT_FALSE(codec::decode_memory_to_buffer(encoded.data(), encoded.size(), target, info, error));
+                    EXPECT_EQ(error, file_error);
+                    EXPECT_EQ(target_bytes, std::vector<uint8_t>(pixels.size(), 0xcd));
+                }
+    }
+
     TEST(TiffMemory, WhiteIsZeroPreservesExistingNativeSamplePolicy) {
         TemporaryTiff temporary;
         for (int bits : {8, 16}) {
