@@ -105,6 +105,22 @@ namespace lfs::core::image_codecs {
                                          int width, int height, int channels, int quality,
                                          const std::optional<std::string>& comment, std::string& error,
                                          bool full_chroma);
+    struct PngEncodeOptions {
+        int compression_level = 6;          // Clamped to [0, 9], matching the file writer.
+        std::optional<std::string> comment; // Latin-1 tEXt bytes, without NUL.
+        std::size_t max_output_bytes = 256 * 1024 * 1024;
+    };
+    // Borrowed interleaved gray/gray-alpha/RGB/RGBA UINT8 or native-endian
+    // UINT16 samples, with an explicit byte stride (unaligned rows supported).
+    // No color, alpha or orientation conversion. Owns output on success only;
+    // failures preserve the previous output, including input/output aliasing.
+    // Uses the file writer's serial/parallel policy. The encoded-byte limit
+    // bounds output production, not encoder working memory or concurrent calls.
+    [[nodiscard]] LFS_IMAGE_CODECS_API Status encode_png_memory(
+        std::span<const std::uint8_t> data, int width, int height, int channels,
+        int bit_depth, std::size_t row_stride, std::vector<std::uint8_t>& output,
+        const PngEncodeOptions& options = {});
+
     LFS_IMAGE_CODECS_API bool write_png(const std::filesystem::path& path, const void* data,
                                         int width, int height, int channels, int bit_depth,
                                         int compression_level, const std::optional<std::string>& comment,
