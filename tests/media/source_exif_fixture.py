@@ -180,6 +180,8 @@ def check_tiff(test, result, path, payload, *, big=False, little=True, pages=1):
     for directory in tiff["directories"]:
         tags = {tag["id"]: tag for tag in directory["tags"]}
         test.assertEqual(tags[274]["unsigned_values"], [6])
+        test.assertNotIn(318, tags)
+        test.assertNotIn(319, tags)
         test.assertEqual(tags[336]["unsigned_values"], [0, 255])
         test.assertEqual(tags[65002]["signed_values"], [-128, 127])
         test.assertEqual(tags[65003]["signed_values"], [-32768, -1, 32767])
@@ -211,6 +213,8 @@ def write_tiff_graph(path, *, little=True, big=False, cycle=False, blobs=(), sub
             (258, 3, 1, scalar(8, 2)), (259, 3, 1, scalar(1, 2)),
             (262, 3, 1, scalar(2, 2)), (273, 16 if big else 4, 1, scalar(1048576, slot)),
             (274, 3, 1, scalar(6, 2)), (277, 3, 1, scalar(3, 2)), (279, 4, 1, scalar(3, 4))]
+    base += [(318, 5, 2, b"".join(scalar(n, 4) + scalar(10000, 4) for n in (3457, 3585))),
+             (319, 5, 6, b"".join(scalar(n, 4) + scalar(10000, 4) for n in (7080, 2920, 1700, 7970, 1310, 460)))]
     maker = b"II*\0\x08\0\0\0maker\xff\0"
     nodes = [base + [(330, pointer_type, 1, "subimage"), (34665, pointer_type, 1, "exif"), (34853, pointer_type, 1, "gps")],
              [(33434, 5, 1, scalar(1, 4) + scalar(125, 4)), (37500, 7, len(maker), maker), (40965, pointer_type, 1, "interoperability")],
@@ -262,6 +266,15 @@ def check_tiff_graph(test, result, path, maker):
     for kind in ("exif", "gps", "subimage"):
         test.assertEqual(dirs[kind]["parent"], dirs["image"]["offset"])
     test.assertEqual(dirs["interoperability"]["parent"], dirs["exif"]["offset"])
+    for kind in ("image", "subimage"):
+        tags = {tag["id"]: tag for tag in dirs[kind]["tags"]}
+        for id_, numerators in ((318, (3457, 3585)), (319, (7080, 2920, 1700, 7970, 1310, 460))):
+            tag = tags[id_]
+            test.assertEqual(tag["type"], 5)
+            test.assertEqual(tag["count"], len(numerators))
+            test.assertEqual(tag["decoded_storage_bytes"], 4)
+            expected = [struct.unpack("f", struct.pack("f", n / 10000))[0] for n in numerators]
+            test.assertEqual(tag["floating_values"], expected)
     exif = {tag["id"]: tag for tag in dirs["exif"]["tags"]}
     test.assertEqual(bytes.fromhex(exif[37500]["bytes"]), maker)
     test.assertAlmostEqual(exif[33434]["floating_values"][0], 1 / 125, places=8)

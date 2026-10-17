@@ -180,6 +180,13 @@ class MediaBindings(unittest.TestCase):
             self.assertEqual(archive["tiff"]["directories"][0]["kind"], "image")
             self.assertTrue(any(tag["id"] == 270 and b"tiff16-sdr-v1" in bytes.fromhex(tag["bytes"])
                                 for tag in archive["tiff"]["directories"][0]["tags"]))
+            tags = {tag["id"]: tag for tag in archive["tiff"]["directories"][0]["tags"]}
+            for id_, expected in ((318, (.3127, .3290)), (319, (.64, .33, .30, .60, .15, .06))):
+                self.assertEqual(tags[id_]["type"], 5)
+                self.assertEqual(tags[id_]["count"], len(expected))
+                self.assertEqual(len(tags[id_]["floating_values"]), len(expected))
+                for actual_value, expected_value in zip(tags[id_]["floating_values"], expected):
+                    self.assertAlmostEqual(actual_value, expected_value, delta=1e-6)
             result = subprocess.run([ffmpeg, "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "rgb48le", "-"],
                                     check=True, capture_output=True, timeout=30)
             actual = struct.unpack("<6H", result.stdout)

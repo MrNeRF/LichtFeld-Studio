@@ -489,7 +489,10 @@ converted to float/double. Exact source bytes are never replaced by these values
 Byte/string values use hex; non-finite floats use `nan`, `-inf` or `+inf` strings.
 MakerNotes remain opaque, not recursively interpreted as vendor IFDs.
 Baseline coverage includes ExtraSamples (alpha semantics), NewSubfileType
-(thumbnail flags) and FillOrder. Per-sample BitsPerSample/SampleFormat arrays
+(thumbnail flags) and FillOrder. WhitePoint (318) and PrimaryChromaticities (319)
+are collected when present through libtiff's generic custom-field getters, as
+arrays of two and six floating values. Their original rational bytes remain in
+`source_ranges`; no color conversion is applied by metadata inspection. Per-sample BitsPerSample/SampleFormat arrays
 are represented by libtiff's scalar getters; PlanarConfiguration may be a
 library default. ColorMap and JPEGTables are not copied as decoded tags.
 Byte/string payloads consume one byte per stored byte; numeric values consume
