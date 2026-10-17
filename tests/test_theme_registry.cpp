@@ -261,7 +261,7 @@ TEST(Localization, IndexMatchesLocaleLanguageNames) {
 TEST(ThemeRegistry, CatalogIsStableAndSelfDescribing) {
     const auto infos = themePresetInfos();
 
-    ASSERT_EQ(infos.size(), 8u);
+    ASSERT_EQ(infos.size(), 9u);
 
     int previous_order = 0;
     std::set<std::string> ids;
@@ -286,6 +286,7 @@ TEST(ThemeRegistry, CatalogIsStableAndSelfDescribing) {
     EXPECT_TRUE(ids.contains("catppuccin_mocha"));
     EXPECT_TRUE(ids.contains("catppuccin_latte"));
     EXPECT_TRUE(ids.contains("nord"));
+    EXPECT_TRUE(ids.contains("graphite"));
 }
 
 TEST(ThemeRegistry, CurrentThemeUsesStablePresetId) {

@@ -1,0 +1,245 @@
+{
+  "schema_version": 2,
+  "id": "graphite",
+  "name": "Graphite",
+  "_description": "Flat neutral graphite surfaces with a single blue accent for active tools, modes and selection",
+  "variants": {
+    "dark": {
+      "id": "graphite",
+      "name": "Graphite",
+      "label_key": "menu.view.theme.graphite",
+      "fallback": "dark",
+      "palette": {
+        "background": [
+          0.043,
+          0.051,
+          0.063,
+          1.0
+        ],
+        "surface": [
+          0.075,
+          0.086,
+          0.102,
+          1.0
+        ],
+        "surface_bright": [
+          0.114,
+          0.133,
+          0.157,
+          1.0
+        ],
+        "primary": [
+          0.298,
+          0.553,
+          1.0,
+          1.0
+        ],
+        "primary_dim": [
+          0.231,
+          0.455,
+          0.851,
+          1.0
+        ],
+        "secondary": [
+          0.561,
+          0.706,
+          1.0,
+          1.0
+        ],
+        "text": [
+          0.91,
+          0.922,
+          0.937,
+          1.0
+        ],
+        "text_dim": [
+          0.647,
+          0.678,
+          0.722,
+          1.0
+        ],
+        "border": [
+          0.149,
+          0.173,
+          0.2,
+          1.0
+        ],
+        "success": [
+          0.235,
+          0.769,
+          0.549,
+          1.0
+        ],
+        "warning": [
+          0.949,
+          0.71,
+          0.267,
+          1.0
+        ],
+        "error": [
+          0.949,
+          0.408,
+          0.369,
+          1.0
+        ],
+        "info": [
+          0.298,
+          0.553,
+          1.0,
+          1.0
+        ],
+        "row_even": [
+          1.0,
+          1.0,
+          1.0,
+          0.025
+        ],
+        "row_odd": [
+          0.0,
+          0.0,
+          0.0,
+          0.1
+        ]
+      },
+      "sizes": {
+        "window_rounding": 12.0,
+        "frame_rounding": 6.0,
+        "popup_rounding": 9.0,
+        "scrollbar_rounding": 4.0,
+        "grab_rounding": 6.0,
+        "tab_rounding": 6.0,
+        "border_size": 0.0,
+        "child_border_size": 1.0,
+        "popup_border_size": 1.0,
+        "window_padding": [
+          8.0,
+          8.0
+        ],
+        "frame_padding": [
+          8.0,
+          4.0
+        ],
+        "item_spacing": [
+          8.0,
+          5.0
+        ],
+        "item_inner_spacing": [
+          5.0,
+          4.0
+        ],
+        "indent_spacing": 20.0,
+        "scrollbar_size": 6.0,
+        "grab_min_size": 12.0,
+        "toolbar_button_size": 24.0,
+        "toolbar_padding": 5.0,
+        "toolbar_spacing": 4.0
+      },
+      "menu": {
+        "bg_lighten": 0.0,
+        "hover_lighten": 0.06,
+        "active_alpha": 0.35,
+        "popup_lighten": 0.02,
+        "popup_rounding": 8.0,
+        "popup_border_size": 1.0,
+        "border_alpha": 0.8,
+        "bottom_border_darken": 0.03,
+        "frame_padding": [
+          12.0,
+          8.0
+        ],
+        "item_spacing": [
+          12.0,
+          6.0
+        ],
+        "popup_padding": [
+          6.0,
+          6.0
+        ]
+      },
+      "context_menu": {
+        "rounding": 8.0,
+        "header_alpha": 0.3,
+        "header_hover_alpha": 0.45,
+        "header_active_alpha": 0.6,
+        "padding": [
+          12.0,
+          8.0
+        ],
+        "item_spacing": [
+          10.0,
+          6.0
+        ]
+      },
+      "viewport": {
+        "corner_radius": 8.0,
+        "border_size": 1.0,
+        "border_alpha": 0.6,
+        "border_darken": 0.0
+      },
+      "shadows": {
+        "enabled": true,
+        "offset": [
+          0.0,
+          6.0
+        ],
+        "blur": 16.0,
+        "alpha": 0.4
+      },
+      "vignette": {
+        "enabled": false,
+        "intensity": 0.2,
+        "radius": 0.78,
+        "softness": 0.48
+      },
+      "button": {
+        "tint_normal": 0.4,
+        "tint_hover": 0.55,
+        "tint_active": 0.7
+      },
+      "overlay": {
+        "background": [
+          0.075,
+          0.086,
+          0.102,
+          1.0
+        ],
+        "text": [
+          0.91,
+          0.922,
+          0.937,
+          1.0
+        ],
+        "text_dim": [
+          0.541,
+          0.576,
+          0.62,
+          1.0
+        ],
+        "border": [
+          0.149,
+          0.173,
+          0.2,
+          1.0
+        ],
+        "icon": [
+          0.788,
+          0.82,
+          0.859,
+          1.0
+        ],
+        "highlight": [
+          0.298,
+          0.553,
+          1.0,
+          1.0
+        ],
+        "selection": [
+          0.184,
+          0.373,
+          0.722,
+          1.0
+        ]
+      }
+    }
+  }
+}
