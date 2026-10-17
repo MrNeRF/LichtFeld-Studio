@@ -2293,6 +2293,16 @@ namespace lfs::io {
                 bool sparse_seek_fallback = false;
                 if (use_sparse_keyframe_seek) {
                     double observed_seek_preroll = 0.0;
+                    int64_t last_decoded_timestamp = AV_NOPTS_VALUE;
+                    // A seek flushes the decoder and restarts at the keyframe before the target. It pays off only
+                    // when a whole keyframe interval lies between the last decoded frame and that keyframe.
+                    const auto seek_skips_keyframe_interval = [&](const int64_t target_keyframe_timestamp) {
+                        if (last_decoded_timestamp == AV_NOPTS_VALUE)
+                            return true;
+                        const AVIndexEntry* const next_keyframe =
+                            avformat_index_get_entry_from_timestamp(video_stream, last_decoded_timestamp + 1, 0);
+                        return next_keyframe && target_keyframe_timestamp > next_keyframe->timestamp;
+                    };
                     for (std::size_t target_index = 0;
                          target_index < fps_target_count; ++target_index) {
                         throw_if_cancelled();
@@ -2301,8 +2311,8 @@ namespace lfs::io {
                         const int64_t target_timestamp = fps_timestamp_for_index(target_index);
                         const AVIndexEntry* target_keyframe = avformat_index_get_entry_from_timestamp(
                             video_stream, target_timestamp, AVSEEK_FLAG_BACKWARD);
-                        // Prefer the demuxer index: seeking helps only when it
-                        // lands beyond the frame already retained by the decoder.
+                        // Prefer the demuxer index; without one, the observed seek
+                        // preroll estimates where a seek would land.
                         bool seek_to_target = !has_retained_frame;
                         const bool retained_at_or_after_target =
                             has_retained_frame &&
@@ -2312,8 +2322,7 @@ namespace lfs::io {
                         if (has_retained_frame && !retained_at_or_after_target) {
                             if (target_keyframe && (target_keyframe->flags & AVINDEX_KEYFRAME) &&
                                 target_keyframe->timestamp <= target_timestamp) {
-                                seek_to_target = target_keyframe->timestamp >
-                                                 stream_timestamp_for_time(retained_frame_time);
+                                seek_to_target = seek_skips_keyframe_interval(target_keyframe->timestamp);
                             } else {
                                 seek_to_target = target_time - retained_frame_time >
                                                  observed_seek_preroll + 1.0 / video_fps;
@@ -2388,6 +2397,7 @@ namespace lfs::io {
                                     "Sparse extraction requires frame timestamps";
                                 throw std::runtime_error(error);
                             }
+                            last_decoded_timestamp = timestamp;
 
                             const double frame_time = frameTimestampSeconds(
                                 frame, time_base, decoded_frame_count - 1,

@@ -327,6 +327,9 @@ jobs:
       - name: Enforce backend neutrality
         run: python3 tools/check_backend_neutrality.py
 
+      - name: Enforce printf-style logging in CUDA sources
+        run: python3 tools/check_cuda_log_format.py
+
       - name: Upload error-debt census
         if: always()
         uses: actions/upload-artifact@v7

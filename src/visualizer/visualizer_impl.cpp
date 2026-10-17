@@ -1017,6 +1017,10 @@ namespace lfs::vis {
             rendering_manager_->markCameraCut(id);
             return changed();
         }
+        if (command == "set_home") {
+            view->camera.camera.saveHomePosition();
+            return changed();
+        }
         if (command == "reset_home") {
             view->camera.camera.resetHomePosition();
             view->camera.camera.resetToHome();

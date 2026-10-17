@@ -20595,4 +20595,23 @@ namespace lfs::vis {
         EXPECT_FALSE(viewer.hasPendingRenderWork());
         EXPECT_EQ(viewer.frame_state_.state(), FrameStateMachine::State::RendererDead);
     }
+    // Fails if Shift-click on a view's Home button (set_home) does not store the current view as
+    // its home, or Ctrl-click (reset_home) does not restore the default home.
+    TEST_F(VisualizerImplResetTest, HomeButtonCommandsSetAndRestoreTheViewHome) {
+        VisualizerImpl viewer(projectOptions());
+        auto& screens = viewer.screens();
+        const auto view = screens.screen().activeView();
+        auto& camera = screens.view3D(view)->camera.camera;
+        const std::remove_cvref_t<decltype(camera)> defaults{};
+
+        camera.pivot = glm::vec3(7.0f);
+        ASSERT_TRUE(viewer.runViewCommand(view.value, "set_home"));
+        EXPECT_EQ(camera.home_pivot, glm::vec3(7.0f));
+        camera.pivot = glm::vec3(1.0f);
+        ASSERT_TRUE(viewer.runViewCommand(view.value, "home"));
+        EXPECT_EQ(camera.getPivot(), glm::vec3(7.0f));
+        ASSERT_TRUE(viewer.runViewCommand(view.value, "reset_home"));
+        EXPECT_EQ(camera.home_pivot, defaults.home_pivot);
+        EXPECT_EQ(camera.getPivot(), defaults.home_pivot);
+    }
 } // namespace lfs::vis

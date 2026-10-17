@@ -3278,8 +3278,15 @@ namespace lfs::vis::gui {
                 buttons.AddLine(point(.12f, .5f), point(.34f, .5f), color, 1.5f);
                 buttons.AddLine(point(.66f, .5f), point(.88f, .5f), color, 1.5f);
             }
-            if (hovered && frame_input.mouse_clicked[0] && !guiFocusState().want_capture_mouse)
-                viewer_->runViewCommand(viewport.view, commands[index]);
+            if (hovered && frame_input.mouse_clicked[0] && !guiFocusState().want_capture_mouse) {
+                // On Home, Shift-click sets the home and Ctrl-click restores the default, as Shift+H and Ctrl+H.
+                std::string_view command = commands[index];
+                if (index == 1 && (frame_input.key_mods & SDL_KMOD_CTRL))
+                    command = "reset_home";
+                else if (index == 1 && (frame_input.key_mods & SDL_KMOD_SHIFT))
+                    command = "set_home";
+                viewer_->runViewCommand(viewport.view, command);
+            }
         }
         buttons.PopClipRect();
         const bool widget_held = viewport_gizmo_dragging_ || viewport_gizmo_pressed_;

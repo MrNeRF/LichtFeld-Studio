@@ -305,9 +305,10 @@ Accepted-frame and manifest counts include verified retained images as well as
 newly published images; progress describes the replayed selection.
 
 Sparse hardware FPS extraction can continue decoding between nearby targets
-instead of seeking repeatedly into the same GOP. The demuxer index determines
-whether the target keyframe is beyond the retained decoder position; only then
-does another seek help. Without a usable index, observed seek preroll is the
+instead of seeking repeatedly into the same GOP. A seek flushes the decoder and
+restarts at the keyframe before the target, so it pays off only when a whole
+keyframe interval lies between the last decoded frame and that keyframe; the
+demuxer index decides this. Without a usable index, observed seek preroll is the
 fallback and is refreshed when forward decoding encounters a keyframe. This applies to ordinary extraction and replay,
 preserves the first-frame-at-or-after-target selection, and does not enable
 sparse seeking for sharpness, interval, software or Dolby Vision paths.

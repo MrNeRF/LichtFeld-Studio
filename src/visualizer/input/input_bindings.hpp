@@ -170,6 +170,7 @@ namespace lfs::vis::input {
         TOGGLE_MAXIMIZE_AREA,
         TOGGLE_NODE_EDITOR,
         TOGGLE_PYTHON_CONSOLE,
+        CAMERA_RESTORE_HOME,
 
     };
 

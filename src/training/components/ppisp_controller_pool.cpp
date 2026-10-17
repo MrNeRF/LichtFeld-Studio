@@ -222,7 +222,7 @@ namespace lfs::training {
                                      fc4_b_m_.numel() * 2) *
                                     sizeof(float);
 
-        LOG_INFO("[PPISPControllerPool] Created for %d cameras: %.1f MB/camera, %.1f MB shared", num_cameras,
+        LOG_INFO("[PPISPControllerPool] Created for {} cameras: {:.1f} MB/camera, {:.1f} MB shared", num_cameras,
                  per_cam_bytes / (1024.0 * 1024.0), shared_bytes / (1024.0 * 1024.0));
     }
 
@@ -238,7 +238,7 @@ namespace lfs::training {
         buf_w_ = max_w;
 
         const size_t buf_bytes = buf_pool2_.numel() * sizeof(float);
-        LOG_INFO("[PPISPControllerPool] Fixed pooled CNN buffer 1x%dx%dx%d: %.1f KiB; max image bounds %zux%zu",
+        LOG_INFO("[PPISPControllerPool] Fixed pooled CNN buffer 1x{}x{}x{}: {:.1f} KiB; max image bounds {}x{}",
                  CNN_CH3, POOL2_SIZE, POOL2_SIZE, buf_bytes / 1024.0, max_h, max_w);
     }
 

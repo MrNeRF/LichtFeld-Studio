@@ -448,7 +448,8 @@ class StudioBackends(unittest.TestCase):
                 subprocess.run(command + ["-c:v", "libx264", "-g", str(gop),
                                           "-keyint_min", str(gop), "-sc_threshold", "0",
                                           "-pix_fmt", "yuv420p", str(self.source)], check=True, timeout=30)
-                fps = 1 if label == "two-second" else 2 if variable or label == "one-second" else 5
+                # The short clip samples one keyframe in five, so whole keyframe intervals lie between targets.
+                fps = 1 if label in ("two-second", "short") else 2 if variable or label == "one-second" else 5
                 _, output = self.invoke(fps=fps, end_seconds=4)
                 metadata = json.loads((output / "extraction_metadata.json").read_text())
                 self.assertEqual(metadata["performance"]["selected_frames"], 4 * fps)
@@ -467,21 +468,19 @@ class StudioBackends(unittest.TestCase):
                     self.assertAlmostEqual(frame["timestamp"], expected, places=6)
                     self.assertEqual(frame["source_pts"], source_pts[expected])
                     self.assertEqual(frame["timestamp_origin"], "best_effort")
-                if label == "long":
-                    self.assertLessEqual(metadata["performance"]["decoded_frames"], 150)
+                decoded = metadata["performance"]["decoded_frames"]
+                seeks = metadata["processing"]["frame_selection"]["keyframe_seek_count"]
+                last_target = (4 * fps - 1) / fps
+                last = timestamps.index(next(value for value in timestamps if value + 1e-7 >= last_target))
+                # A seek restarts at the keyframe before its target and only moves forward, so no frame is
+                # decoded twice and nothing past the last target is read.
+                self.assertLessEqual(decoded, last + 1)
                 if label in ("one-second", "two-second"):
-                    # Independent per-target seeking visits the keyframe through
-                    # the first frame at/after the requested time, inclusive.
-                    keyframes = [float(frame["best_effort_timestamp_time"])
-                                 for frame in probe["frames"] if frame.get("key_frame") == 1]
-                    baseline = sum(sum(key <= value <= next(
-                        value for value in timestamps if value + 1e-7 >= index / fps)
-                        for value in timestamps)
-                        for index in range(4 * fps)
-                        for key in [max(value for value in keyframes if value <= index / fps)])
-                    self.assertLessEqual(metadata["performance"]["decoded_frames"], baseline)
+                    # Targets one keyframe interval apart decode on instead of seeking again.
+                    self.assertLessEqual(seeks, 1)
                 if label == "short":
-                    self.assertGreater(metadata["processing"]["frame_selection"]["keyframe_seek_count"], 2)
+                    # Targets several keyframe intervals apart still seek.
+                    self.assertGreater(seeks, 2)
 
     def test_verified_gpu_jpeg_resume(self):
         work = Path(tempfile.mkdtemp(dir=self.root))
