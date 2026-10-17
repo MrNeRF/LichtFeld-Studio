@@ -484,11 +484,6 @@
             <input type="checkbox" data-checked="scene_graph_selection_markers" data-attrif-disabled="mcp_safe_mode" />
           </div>
           <span class="preferences-description">@tr:preferences.scene_graph_selection_markers_description</span>
-          <div class="preferences-row preferences-checkbox-row">
-            <span class="preferences-label">@tr:preferences.drag_ask</span>
-            <input type="checkbox" data-attrif-disabled="mcp_safe_mode" data-checked="splat_drag_ask" />
-          </div>
-          <span class="preferences-description">@tr:preferences.drag_ask_hint</span>
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.drag_default</span>
             <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_format"><option value="ply">@tr:preferences.drag_ply</option><option value="spz">@tr:preferences.drag_spz</option><option value="sog">@tr:preferences.drag_sog</option></select>

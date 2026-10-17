@@ -40,7 +40,7 @@ def preferences_panel_module(monkeypatch):
 
     state = SimpleNamespace(
         language="it",
-        splat_drag_preferences={"ask": False, "format": "ply", "maximum_quality": True,
+        splat_drag_preferences={"format": "ply", "maximum_quality": True,
             "blender_axes": True, "ply_sh": -1, "spz_sh": -1, "sog_sh": -1, "sog_iterations": 30},
         sidebar_clear_calls=[],
         set_language_calls=[],

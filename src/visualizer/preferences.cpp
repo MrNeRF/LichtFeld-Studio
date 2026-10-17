@@ -971,7 +971,7 @@ namespace lfs::vis {
             return;
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        impl_->values["splat_drag"] = {{"ask", state.ask}, {"format", state.format}, {"maximum_quality", state.maximum_quality}, {"blender_axes", state.blender_axes}, {"ply_sh", std::clamp(state.ply_sh, -1, 3)}, {"spz_sh", std::clamp(state.spz_sh, -1, 3)}, {"sog_sh", std::clamp(state.sog_sh, -1, 3)}, {"sog_iterations", std::clamp(state.sog_iterations, 1, 100)}};
+        impl_->values["splat_drag"] = {{"format", state.format}, {"maximum_quality", state.maximum_quality}, {"blender_axes", state.blender_axes}, {"ply_sh", std::clamp(state.ply_sh, -1, 3)}, {"spz_sh", std::clamp(state.spz_sh, -1, 3)}, {"sog_sh", std::clamp(state.sog_sh, -1, 3)}, {"sog_iterations", std::clamp(state.sog_iterations, 1, 100)}};
         impl_->saveLocked();
     }
     SplatDragPreferenceState UserPreferences::splatDrag() {
@@ -982,7 +982,6 @@ namespace lfs::vis {
         if (it == impl_->values.end() || !it->is_object())
             return state;
         using lfs::core::persisted_settings::field;
-        state.ask = field<bool>(*it, "ask", false);
         state.format = field<std::string>(*it, "format", "ply");
         if (state.format != "ply" && state.format != "spz" && state.format != "sog")
             state.format = "ply";

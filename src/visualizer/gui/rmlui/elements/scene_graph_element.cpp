@@ -630,44 +630,8 @@ namespace lfs::vis::gui {
     }
 
     SceneGraphElement::~SceneGraphElement() {
-        external_lifetime_.reset();
         if (external_cancel_)
             external_cancel_->store(true);
-    }
-
-    void SceneGraphElement::requestExternalFormat() {
-        external_armed_ = false;
-        const auto id = external_node_;
-        auto* manager = services().sceneOrNull();
-        const auto* node = manager ? manager->getScene().getNodeById(id) : nullptr;
-        auto* gui = services().guiOrNull();
-        if (!node || !gui)
-            return;
-        const auto uuid = node->uuid;
-        cancelDrag();
-        if (auto* ctx = GetContext())
-            ctx->ProcessMouseButtonCancel(0, 0);
-        SDL_CaptureMouse(false);
-        lfs::core::ModalRequest request;
-        request.title = tr("preferences.drag_title");
-        request.body_rml = encode(tr("preferences.drag_format_hint"));
-        request.buttons = {{tr(string_keys::Common::CANCEL), "secondary"}, {"PLY", "primary"}, {"SPZ", "secondary"}, {"SOG", "secondary"}};
-        request.on_result = [this, weak = std::weak_ptr<int>(external_lifetime_), id, uuid, ids = external_candidate_ids_, generation = manager->getScene().renderGeneration()](const lfs::core::ModalResult& result) {
-            if (weak.expired())
-                return;
-            auto* live = services().sceneOrNull();
-            const auto* n = live ? live->getScene().getNodeById(id) : nullptr;
-            if (!n || n->uuid != uuid || live->getScene().renderGeneration() != generation)
-                return;
-            if (result.button_label != "PLY" && result.button_label != "SPZ" && result.button_label != "SOG")
-                return;
-            external_format_ = result.button_label == "PLY" ? "ply" : result.button_label == "SPZ" ? "spz"
-                                                                                                   : "sog";
-            external_format_approved_ = true;
-            beginExternalTransfer(id, true, ids);
-            external_armed_ = false;
-        };
-        gui->enqueueModal(std::move(request));
     }
 
     void SceneGraphElement::beginExternalTransfer(const core::NodeId id, const bool outside_only, std::vector<core::NodeId> ids) {
@@ -695,11 +659,8 @@ namespace lfs::vis::gui {
                 return;
             selection_key += candidate->uuid.to_string();
         }
-        external_candidate_ids_ = ids;
         const auto prefs = UserPreferences::instance().splatDrag();
-        external_ask_ = prefs.ask;
-        if (!external_format_approved_)
-            external_format_ = prefs.format;
+        external_format_ = prefs.format;
         const int degree = prefs.maximum_quality ? -1 : external_format_ == "spz" ? prefs.spz_sh
                                                     : external_format_ == "sog"   ? prefs.sog_sh
                                                                                   : prefs.ply_sh;
@@ -721,10 +682,6 @@ namespace lfs::vis::gui {
             external_window_bounds_ = {wx, wy, wx + ww, wy + wh};
         }
         external_armed_ = true;
-        if (external_ask_ && !external_format_approved_) {
-            external_node_ = id;
-            return;
-        }
         if (external_future_.valid() && external_node_ == id && external_uuid_ == node->uuid &&
             same_generation && external_cancel_ && !external_cancel_->load())
             return;
@@ -790,7 +747,6 @@ namespace lfs::vis::gui {
         const auto* keyboard = SDL_GetKeyboardState(nullptr);
         if (keyboard[SDL_SCANCODE_ESCAPE]) {
             external_armed_ = false;
-            external_format_approved_ = false;
             if (external_cancel_)
                 external_cancel_->store(true);
             external_ready_.clear();
@@ -820,10 +776,6 @@ namespace lfs::vis::gui {
         if (external_armed_)
             if (const auto native_outside = pointerOutsideApplication(external_window_))
                 outside = *native_outside;
-        if (external_armed_ && external_ask_ && !external_format_approved_ && outside) {
-            requestExternalFormat();
-            return;
-        }
         if (!external_armed_ || external_ready_.empty() ||
             glm::length(glm::vec2(x, y) - external_origin_) < 6.0f)
             return;
@@ -854,7 +806,6 @@ namespace lfs::vis::gui {
             result = dragReadyFiles(files, external_window_);
         } catch (const std::exception& error) { result = {FileDragStatus::Failed, error.what()}; }
         external_native_active_ = false;
-        external_format_approved_ = false;
         if (auto* context = GetContext())
             context->ProcessMouseButtonCancel(0, 0);
         external_status_ = result.status == FileDragStatus::Copied ? "File delivered" : result.status == FileDragStatus::Cancelled ? "Drag cancelled"

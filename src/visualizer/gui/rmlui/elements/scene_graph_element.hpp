@@ -177,10 +177,6 @@ namespace lfs::vis::gui {
             bool visible = false;
         };
 
-        void requestExternalFormat();
-        std::shared_ptr<int> external_lifetime_ = std::make_shared<int>(0);
-        bool external_ask_ = false;
-        bool external_format_approved_ = false;
         std::string external_format_ = "ply";
         std::string external_options_key_;
         SDL_Window* external_window_ = nullptr;
@@ -189,7 +185,6 @@ namespace lfs::vis::gui {
         std::future<std::vector<std::filesystem::path>> external_future_;
         std::shared_ptr<std::atomic<bool>> external_cancel_;
         std::vector<std::filesystem::path> external_ready_;
-        std::vector<core::NodeId> external_candidate_ids_;
         core::NodeId external_node_ = core::NULL_NODE;
         core::Uuid external_uuid_;
         uint64_t external_revision_ = 0;

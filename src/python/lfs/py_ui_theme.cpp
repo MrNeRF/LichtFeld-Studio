@@ -155,7 +155,6 @@ namespace lfs::python {
         m.def("get_splat_drag_preferences", []() {
             const auto s = lfs::vis::UserPreferences::instance().splatDrag();
             nb::dict result;
-            result["ask"] = s.ask;
             result["format"] = s.format;
             result["maximum_quality"] = s.maximum_quality;
             result["blender_axes"] = s.blender_axes;
@@ -167,8 +166,6 @@ namespace lfs::python {
         });
         m.def("set_splat_drag_preferences", [](nb::dict values) {
             auto s = lfs::vis::UserPreferences::instance().splatDrag();
-            if (values.contains("ask"))
-                s.ask = nb::cast<bool>(values["ask"]);
             if (values.contains("format"))
                 s.format = nb::cast<std::string>(values["format"]);
             if (values.contains("maximum_quality"))

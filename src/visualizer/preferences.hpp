@@ -20,7 +20,6 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API lfs::Status applyRenderingDefaults(RenderSettings& settings, std::string_view serialized);
 
     struct SplatDragPreferenceState {
-        bool ask = false;
         std::string format = "ply";
         bool maximum_quality = true;
         bool blender_axes = true;
