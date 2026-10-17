@@ -1439,6 +1439,36 @@ def test_splat_drag_preferences_convert_ui_values_and_respect_safe_mode(preferen
     assert state.splat_drag_preferences["sh_degree"] == 2
 
 
+@pytest.mark.parametrize("key,value", [("format", "spz"), ("sh_degree", 1), ("blender_axes", False)])
+def test_external_drag_preference_changes_refresh_open_panel(preferences_panel_module, key, value):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._last_state = panel._state()
+    state.splat_drag_preferences[key] = value
+    assert panel._state() != panel._last_state
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    panel._dirty_selection()
+    assert {"splat_drag_format", "splat_drag_sh_degree", "splat_drag_blender_axes"} <= set(dirty)
+
+
+@pytest.mark.parametrize("safe_mode", [False, True])
+def test_interface_reset_refreshes_drag_controls_and_respects_safe_mode(preferences_panel_module, safe_mode):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = safe_mode
+    customized = {"format": "spz", "sh_degree": 1, "blender_axes": False}
+    state.splat_drag_preferences.update(customized)
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    events = []
+    panel._refresh_selection = lambda: events.append("refresh")
+    module.lf.ui.reset_layout = lambda: events.append("layout")
+    panel._reset_section("interface")
+    expected = customized if safe_mode else {"format": "ply", "sh_degree": 3, "blender_axes": True}
+    assert state.splat_drag_preferences == expected
+    assert events == ["refresh", "layout"]
+
+
 def test_quick_export_offers_only_ply_and_spz_with_plain_translated_labels():
     from xml.etree import ElementTree
     root = Path(__file__).resolve().parents[2]
