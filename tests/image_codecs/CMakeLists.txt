@@ -31,6 +31,7 @@ if(NOT TARGET lfs_image_codecs)
     # The EXR writer uses the same typed-error provider as the root build.
     find_package(nlohmann_json CONFIG REQUIRED)
     find_package(spdlog CONFIG REQUIRED)
+    find_package(xxHash CONFIG REQUIRED)
     if(NOT TARGET lfs_diagnostics)
         add_subdirectory(${LFS_CODEC_ROOT}/src/diagnostics ${CMAKE_CURRENT_BINARY_DIR}/diagnostics)
     endif()

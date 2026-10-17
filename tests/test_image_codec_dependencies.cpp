@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <jpeglib.h>
+#include <limits>
 #include <memory>
 #include <png.h>
 #include <stdexcept>
@@ -668,6 +669,136 @@ namespace {
                 jpeg_destroy_decompress(&info);
             }
         }
+    }
+    TEST(ProductionJpeg, MemoryOutputMatchesFilesWithPaddedRowsAndBinaryComments) {
+        TemporaryDirectory temporary;
+        for (int channels : {1, 3}) {
+            for (const auto dimensions : {std::pair{1, 1}, std::pair{19, 17}, std::pair{257, 241}}) {
+                const auto [width, height] = dimensions;
+                const size_t row_bytes = size_t(width) * channels;
+                const size_t stride = row_bytes + 11;
+                std::vector<uint8_t> packed(row_bytes * height);
+                std::vector<uint8_t> padded(stride * (height - 1) + row_bytes, 0xcd);
+                uint32_t random = 314159;
+                for (int y = 0; y < height; ++y)
+                    for (size_t x = 0; x < row_bytes; ++x) {
+                        random = random * 1664525u + 1013904223u;
+                        padded[size_t(y) * stride + x] = packed[size_t(y) * row_bytes + x] = uint8_t(random >> 24);
+                    }
+                const auto original = padded;
+                for (int quality : {0, 1, 95, 100, 101}) {
+                    for (bool full_chroma : {false, true}) {
+                        codec::JpegEncodeOptions options;
+                        options.quality = quality;
+                        options.full_chroma = full_chroma;
+                        options.comment = quality == 100 ? std::string(65540, 'x') : std::string("memory\0jpeg", 11);
+                        const auto path = temporary.path / "reference.jpg";
+                        std::string error;
+                        ASSERT_TRUE(codec::write_jpeg(path, packed.data(), width, height, channels, quality, options.comment, error, full_chroma)) << error;
+                        std::ifstream file(path, std::ios::binary);
+                        const std::vector<uint8_t> expected{std::istreambuf_iterator<char>(file), {}};
+                        std::vector<uint8_t> encoded{42};
+                        ASSERT_TRUE(codec::encode_jpeg_memory(padded, width, height, channels, stride, encoded, options));
+                        EXPECT_EQ(encoded, expected);
+                        EXPECT_EQ(padded, original);
+                        jpeg_decompress_struct info{};
+                        jpeg_error_mgr jpeg_error{};
+                        info.err = jpeg_std_error(&jpeg_error);
+                        jpeg_create_decompress(&info);
+                        jpeg_mem_src(&info, encoded.data(), static_cast<unsigned long>(encoded.size()));
+                        jpeg_save_markers(&info, JPEG_COM, 65535);
+                        ASSERT_EQ(jpeg_read_header(&info, TRUE), JPEG_HEADER_OK);
+                        EXPECT_EQ(info.image_width, unsigned(width));
+                        EXPECT_EQ(info.image_height, unsigned(height));
+                        EXPECT_EQ(info.num_components, channels);
+                        EXPECT_EQ(info.comp_info[0].h_samp_factor, channels == 1 || full_chroma ? 1 : 2);
+                        EXPECT_EQ(info.comp_info[0].v_samp_factor, channels == 1 || full_chroma ? 1 : 2);
+                        ASSERT_NE(info.marker_list, nullptr);
+                        EXPECT_EQ(info.marker_list->data_length, std::min<size_t>(options.comment->size(), 65533));
+                        EXPECT_EQ(std::memcmp(info.marker_list->data, options.comment->data(), info.marker_list->data_length), 0);
+                        jpeg_destroy_decompress(&info);
+                    }
+                }
+            }
+        }
+    }
+    TEST(ProductionJpeg, MemoryByteLimitKeepsPreviousOutputAndEncoderCanBeReused) {
+        for (const int dimension : {1, 129}) {
+            std::vector<uint8_t> pixels(size_t(dimension) * dimension * 3);
+            uint32_t random = 1234;
+            for (auto& value : pixels) {
+                random = random * 1664525u + 1013904223u;
+                value = uint8_t(random >> 24);
+            }
+            codec::JpegEncodeOptions options;
+            options.full_chroma = true;
+            std::vector<uint8_t> expected;
+            ASSERT_TRUE(codec::encode_jpeg_memory(pixels, dimension, dimension, 3, size_t(dimension) * 3, expected, options));
+            if (dimension > 1)
+                ASSERT_GT(expected.size(), 4096);
+            options.max_output_bytes = expected.size();
+            std::vector<uint8_t> output;
+            ASSERT_TRUE(codec::encode_jpeg_memory(pixels, dimension, dimension, 3, size_t(dimension) * 3, output, options));
+            EXPECT_EQ(output, expected);
+            for (size_t limit : {size_t{1}, expected.size() - 1}) {
+                options.max_output_bytes = limit;
+                const auto result = codec::encode_jpeg_memory(pixels, dimension, dimension, 3, size_t(dimension) * 3, output, options);
+                ASSERT_FALSE(result);
+                EXPECT_EQ(result.error().code(), lfs::ErrorCode::ResourceExhausted);
+                EXPECT_EQ(output, expected);
+            }
+            options.max_output_bytes = expected.size();
+            ASSERT_TRUE(codec::encode_jpeg_memory(pixels, dimension, dimension, 3, size_t(dimension) * 3, output, options));
+            EXPECT_EQ(output, expected);
+        }
+    }
+    TEST(ProductionJpeg, MemoryInputValidationRejectsTruncationOverflowAndUnsupportedChannels) {
+        const std::vector<uint8_t> pixels(19 * 17 * 3, 128);
+        std::vector<uint8_t> output{7, 8, 9};
+        const auto invalid = [&](std::span<const uint8_t> bytes, int width, int height, int channels, size_t stride, codec::JpegEncodeOptions options = {}) {
+            const auto result = codec::encode_jpeg_memory(bytes, width, height, channels, stride, output, options);
+            ASSERT_FALSE(result);
+            EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(output, (std::vector<uint8_t>{7, 8, 9}));
+        };
+        invalid({}, 19, 17, 3, 57);
+        invalid(pixels, 0, 17, 3, 57);
+        invalid(pixels, 19, -1, 3, 57);
+        invalid(pixels, JPEG_MAX_DIMENSION + 1, 17, 3, 57);
+        invalid(pixels, 19, 17, 2, 57);
+        invalid(pixels, 19, 17, 4, 76);
+        invalid(pixels, 19, 17, 3, 0);
+        invalid(pixels, 19, 17, 3, 56);
+        invalid(std::span(pixels).first(pixels.size() - 1), 19, 17, 3, 57);
+        invalid(pixels, 19, 2, 3, std::numeric_limits<size_t>::max());
+        codec::JpegEncodeOptions options;
+        options.max_output_bytes = 0;
+        invalid(pixels, 19, 17, 3, 57, options);
+        options.max_output_bytes = std::numeric_limits<size_t>::max();
+        invalid(pixels, 19, 17, 3, 57, options);
+    }
+    TEST(ProductionJpeg, MemoryAliasingAndConcurrentCallsKeepOwnedIndependentResults) {
+        std::vector<uint8_t> aliased(19 * 17 * 3, 128);
+        ASSERT_TRUE(codec::encode_jpeg_memory(aliased, 19, 17, 3, 57, aliased));
+        codec::Image decoded;
+        std::string error;
+        ASSERT_TRUE(codec::decode_memory(aliased.data(), aliased.size(), decoded, error)) << error;
+        EXPECT_EQ(decoded.data, (std::vector<uint8_t>(19 * 17 * 3, 128)));
+        std::vector<std::future<bool>> jobs;
+        for (int i = 0; i < 8; ++i)
+            jobs.emplace_back(std::async(std::launch::async, [i] {
+                std::vector<uint8_t> pixels(19 * 17 * 3, uint8_t(32 + i));
+                std::vector<uint8_t> encoded;
+                codec::JpegEncodeOptions options;
+                options.full_chroma = true;
+                if (!codec::encode_jpeg_memory(pixels, 19, 17, 3, 57, encoded, options))
+                    return false;
+                codec::Image decoded;
+                std::string error;
+                return codec::decode_memory(encoded.data(), encoded.size(), decoded, error) && decoded.data == pixels;
+            }));
+        for (auto& job : jobs)
+            EXPECT_TRUE(job.get());
     }
     TEST(ProductionJpeg, ConcurrentEncodersHaveIndependentState) {
         TemporaryDirectory temporary;
