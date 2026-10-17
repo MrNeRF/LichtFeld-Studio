@@ -3,11 +3,15 @@
 #include "formats/ply.hpp"
 #include "gui/utils/splat_transfer.hpp"
 #include <cmath>
+#include <core/uuid.hpp>
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <iostream>
+#include <limits>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <thread>
 using namespace lfs::core;
 static void require(bool yes, const char* message) {
     if (!yes)
@@ -36,19 +40,18 @@ int main(int argc, char** argv) {
         require(argc == 2, "Pass output manifest path");
         lfs::io::LoadOptions options;
         options.splat_tensor_allocator = [](TensorShape shape, size_t, DataType type, std::string_view) { return Tensor::empty(std::move(shape), Device::CPU, type); };
-        std::ofstream manifest(argv[1]);
-        manifest << "{\"exports\":[";
+        nlohmann::json manifest = {{"exports", nlohmann::json::array()}};
         for (int degree = 0; degree <= 3; ++degree) {
             auto model = fixture(degree);
             const auto original_rest = model.shN_canonical_cpu();
             model.set_active_sh_degree(0); // Export all stored SH even if the viewport displays only DC.
             auto world = glm::translate(glm::mat4(1), glm::vec3(1, 2, 3)) * glm::scale(glm::mat4(1), glm::vec3(2));
-            auto future = lfs::vis::gui::prepareSplatTransfer(model, world, std::make_shared<std::atomic<bool>>(false));
+            auto future = lfs::vis::gui::prepareSplatTransfer(model, world, std::make_shared<std::atomic<bool>>(false), {.name = degree == 2 ? "scena-è-東京" : "splat"});
             model.means().fill_(999);
             const auto path = future.get();
             require(std::filesystem::is_regular_file(path), "No committed PLY");
             for (const auto& entry : std::filesystem::directory_iterator(path.parent_path()))
-                require(entry.path().filename().string().find(".partial.") == std::string::npos, "Partial remains");
+                require(entry.path().filename().u8string().find(u8".partial.") == std::u8string::npos, "Partial remains");
             auto loaded = lfs::io::load_ply(path, options);
             if (!loaded)
                 throw std::runtime_error(lfs::format_for_developer(loaded.error()));
@@ -87,9 +90,8 @@ int main(int argc, char** argv) {
                     checkNear(a[6 + c], b[6 + c]);
                 }
             }
-            if (degree)
-                manifest << ',';
-            manifest << "{\"degree\":" << degree << ",\"path\":\"" << path.generic_string() << "\",\"points\":2}";
+            const auto utf8_path = path.generic_u8string();
+            manifest["exports"].push_back({{"degree", degree}, {"path", std::string(utf8_path.begin(), utf8_path.end())}, {"points", 2}});
             auto cancelled = std::make_shared<std::atomic<bool>>(true);
             bool rejected = false;
             try {
@@ -134,8 +136,106 @@ int main(int argc, char** argv) {
                                  .get();
             require(std::filesystem::file_size(sog) > 32, "No SOG exported");
         }
-        manifest << "],\"snapshot_deleted_world_covariance_sh1_cancel_lod\":\"passed\"}";
-        manifest.close();
+
+        {
+            const auto rejected = [](auto&& work) {
+                bool failed = false;
+                try {
+                    work();
+                } catch (const std::exception&) { failed = true; }
+                require(failed, "Invalid transfer accepted");
+            };
+            rejected([] { lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), nullptr); });
+            rejected([] { auto m = glm::mat4(1); m[0][0] = std::numeric_limits<float>::quiet_NaN(); lfs::vis::gui::prepareSplatTransfer(fixture(0), m, std::make_shared<std::atomic<bool>>(false)); });
+            rejected([] { lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(0), std::make_shared<std::atomic<bool>>(false)); });
+            rejected([] { lfs::vis::gui::prepareSplatTransfer(fixture(1), glm::scale(glm::mat4(1), glm::vec3(1, 2, 3)), std::make_shared<std::atomic<bool>>(false)); });
+            rejected([] { lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false), {.format = "bad"}); });
+            rejected([] { lfs::vis::gui::prepareSplatTransferBatch({}, std::make_shared<std::atomic<bool>>(false)); });
+            auto model = fixture(0);
+            const lfs::vis::gui::SplatTransferSource sources[] = {{&model, glm::mat4(1), {.name = "first"}}, {&model, glm::mat4(1), {.name = "second"}}};
+            const auto paths = lfs::vis::gui::prepareSplatTransferBatch(sources, std::make_shared<std::atomic<bool>>(false)).get();
+            require(paths.size() == 2 && paths[0] != paths[1], "Batch files collided");
+            for (const auto& path : paths)
+                require(std::filesystem::is_regular_file(path), "Batch did not commit every file");
+            auto cancel = std::make_shared<std::atomic<bool>>(false);
+            bool reached = false;
+            rejected([&] { lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), cancel,
+                                                               {.format = "spz", .progress = [&](float fraction) { if (fraction >= .4f) { reached = true; cancel->store(true); return false; } return true; }})
+                               .get(); });
+            require(reached && cancel->load(), "Cancellation during export was not exercised");
+        }
+        {
+            // A forgotten future must not join a still-running export on the UI
+            // thread; queue admission must remain bounded while it is running.
+            std::promise<void> entered, release;
+            auto gate = release.get_future().share();
+            std::atomic<bool> signalled{false};
+            std::atomic<bool> released{false};
+            auto active = lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false),
+                                                              {.progress = [&](float) { if (!signalled.exchange(true)) entered.set_value(); gate.wait(); return true; }});
+            require(entered.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready, "Worker did not run");
+            auto queued = lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false));
+            bool busy = false;
+            try {
+                lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false));
+            } catch (const std::exception&) { busy = true; }
+            std::jthread watchdog([&] { if (gate.wait_for(std::chrono::seconds(1)) != std::future_status::ready && !released.exchange(true)) release.set_value(); });
+            const auto before = std::chrono::steady_clock::now();
+            active = {};
+            const auto elapsed = std::chrono::steady_clock::now() - before;
+            if (!released.exchange(true))
+                release.set_value();
+            queued.get();
+            require(busy, "Unbounded transfer queue");
+            require(elapsed < std::chrono::milliseconds(500), "Future destruction blocked the UI thread");
+        }
+        {
+            const auto root = std::filesystem::temp_directory_path() / ("lichtfeld-transfer-test-" + generate_uuid_v4().to_string());
+            const auto old = root / generate_uuid_v4().to_string();
+            const auto fresh = root / generate_uuid_v4().to_string();
+            const auto unmarked = root / generate_uuid_v4().to_string();
+            std::filesystem::create_directories(root / std::filesystem::path(std::u8string(u8"東京")));
+            for (const auto& dir : {old, fresh, unmarked})
+                std::filesystem::create_directories(dir);
+            std::ofstream(old / ".lichtfeld-transfer") << "owned";
+            std::ofstream(fresh / ".lichtfeld-transfer") << "owned";
+            std::ofstream(old / "file.ply") << "data";
+            std::ofstream(unmarked / "user-file") << "preserve";
+            std::filesystem::last_write_time(old / ".lichtfeld-transfer", std::filesystem::file_time_type::clock::now() - std::chrono::hours(24 * 8));
+            lfs::vis::gui::cleanupSplatTransfers(root);
+            require(!std::filesystem::exists(old), "Expired transfer retained");
+            require(std::filesystem::exists(fresh), "Fresh transfer removed");
+            require(std::filesystem::exists(unmarked / "user-file"), "Unmarked data removed");
+            // This is a unique test-owned root created above, never a user path.
+            std::filesystem::remove_all(root);
+        }
+
+        {
+            const auto root = std::filesystem::temp_directory_path() / ("lichtfeld-rollback-test-" + generate_uuid_v4().to_string());
+            std::filesystem::create_directories(root);
+            auto model = fixture(0);
+            const lfs::vis::gui::SplatTransferSource sources[] = {
+                {&model, glm::mat4(1), {.name = "first", .staging_root = root}},
+                {&model, glm::mat4(1), {.name = "second", .progress = [](float) -> bool { throw std::runtime_error("Synthetic writer failure"); }, .staging_root = root}}};
+            bool rejected = false;
+            try {
+                lfs::vis::gui::prepareSplatTransferBatch(sources, std::make_shared<std::atomic<bool>>(false)).get();
+            } catch (const std::exception&) { rejected = true; }
+            require(rejected && std::filesystem::is_empty(root), "Failed batch leaked partial or committed siblings");
+            const auto blocker = root / "not-a-directory";
+            std::ofstream(blocker) << "preserve";
+            rejected = false;
+            try {
+                lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), std::make_shared<std::atomic<bool>>(false), {.staging_root = blocker}).get();
+            } catch (const std::exception&) { rejected = true; }
+            require(rejected && std::filesystem::is_regular_file(blocker), "IO failure damaged an existing file");
+            std::filesystem::remove_all(root); // Unique test-owned root above.
+        }
+        manifest["snapshot_deleted_world_covariance_sh1_cancel_lod"] = "passed";
+        std::ofstream output(argv[1]);
+        output << manifest.dump(2);
+        if (!output)
+            throw std::runtime_error("Cannot write test manifest");
         std::cout << "PASS snapshot, deleted mask, world axes, covariance, opacity, SH0-3 and cancellation\n";
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';

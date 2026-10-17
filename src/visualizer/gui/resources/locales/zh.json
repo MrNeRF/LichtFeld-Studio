@@ -3249,5 +3249,21 @@
     "discarded": "丢弃 {discarded}"
   },
   "project.session.newer_settings.title": "来自较新版本的项目设置",
-  "project.session.newer_settings.message": "此项目包含当前版本无法识别的设置。以下项目使用了默认值：{}"
+  "project.session.newer_settings.message": "此项目包含当前版本无法识别的设置。以下项目使用了默认值：{}",
+  "preferences.drag_blender_axes": "PLY：Blender Z 轴向上坐标系",
+  "preferences.drag_axes_hint": "仅适用于 PLY：将场景坐标转换为 Blender 坐标系。禁用以保留源坐标。SPZ 和 SOG 保留各自格式的约定。",
+  "preferences.drag_default": "拖放默认格式",
+  "preferences.drag_ply": "PLY — 完整精度 / Blender",
+  "preferences.drag_spz": "SPZ v4 — 压缩",
+  "preferences.drag_sog": "SOG — 压缩",
+  "preferences.drag_maximum": "格式最高质量",
+  "preferences.drag_quality_hint": "保留所有可用的 SH 系数和未删除的高斯点。压缩格式仍有损。无需插件导入 Blender 时请使用 PLY。",
+  "preferences.drag_all_sh": "所有可用系数",
+  "preferences.drag_iterations": "SOG 聚类迭代次数 (1–100)",
+  "preferences.drag_title": "高斯点传输",
+  "preferences.drag_ply_sh": "PLY SH 阶数",
+  "preferences.drag_spz_sh": "SPZ SH 阶数",
+  "preferences.drag_sog_sh": "SOG SH 阶数",
+  "preferences.drag_pause": "拖动高斯点前请暂停训练。",
+  "preferences.drag_failed": "高斯点导出失败。详情请查看应用程序日志。"
 }

@@ -23,6 +23,9 @@ namespace lfs::vis {
 
     class InputController;
     class VulkanContext;
+    namespace gui {
+        class NativeDragContext;
+    }
 
     class LFS_VIS_API WindowManager {
     public:
@@ -73,6 +76,7 @@ namespace lfs::vis {
         void refreshResizeCursor();
         [[nodiscard]] unsigned manualResizeEdgeMask() const;
 
+        gui::NativeDragContext& nativeFileDragContext();
         SDL_Window* getWindow() const { return window_; }
         VulkanContext* getVulkanContext() const { return vulkan_context_.get(); }
         glm::ivec2 getWindowSize() const { return window_size_; }
@@ -119,6 +123,7 @@ namespace lfs::vis {
 
         SDL_Window* window_ = nullptr;
         std::unique_ptr<VulkanContext> vulkan_context_;
+        std::unique_ptr<gui::NativeDragContext> native_file_drag_;
         GraphicsBackend graphics_backend_ = GraphicsBackend::Vulkan;
         std::string title_;
         glm::ivec2 window_size_;

@@ -2,7 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "native_file_drag.hpp"
 #include <SDL3/SDL.h>
+#include <atomic>
+#include <core/native_fs.hpp>
 #include <limits>
+#include <memory>
+#include <stdexcept>
+
 #include <vector>
 #ifdef __linux__
 #include <gdk/gdkx.h>
@@ -23,6 +28,15 @@
 namespace lfs::vis::gui {
 #ifdef _WIN32
     namespace {
+        template <class T>
+        struct ComRelease {
+            void operator()(T* value) const noexcept {
+                if (value)
+                    value->Release();
+            }
+        };
+        template <class T>
+        using ComPtr = std::unique_ptr<T, ComRelease<T>>;
         class CopySource final : public IDropSource {
         public:
             HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override {
@@ -52,7 +66,7 @@ namespace lfs::vis::gui {
             }
 
         private:
-            ULONG refs_ = 1;
+            std::atomic<ULONG> refs_{1};
         };
 
         struct OleScope {
@@ -111,6 +125,100 @@ namespace lfs::vis::gui {
             *out = data;
             return S_OK;
         }
+        class DeferredData final : public IDataObject {
+            std::atomic<ULONG> refs_{1};
+            FileProvider provider_;
+            ComPtr<IDataObject> data_;
+            bool failed_ = false;
+            bool cancelled_ = false;
+
+        public:
+            bool failed() const { return failed_; }
+            void cancel() noexcept {
+                cancelled_ = true;
+                provider_ = {};
+                data_.reset();
+            }
+            explicit DeferredData(FileProvider provider) : provider_(std::move(provider)) {}
+            HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override {
+                if (!out)
+                    return E_POINTER;
+                *out = nullptr;
+                if (id != IID_IUnknown && id != IID_IDataObject)
+                    return E_NOINTERFACE;
+                *out = static_cast<IDataObject*>(this);
+                AddRef();
+                return S_OK;
+            }
+            ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
+            ULONG STDMETHODCALLTYPE Release() override {
+                auto n = --refs_;
+                if (!n)
+                    delete this;
+                return n;
+            }
+            HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC* f) override {
+                if (!f)
+                    return E_POINTER;
+                return f->cfFormat == CF_HDROP && f->dwAspect == DVASPECT_CONTENT && (f->tymed & TYMED_HGLOBAL) && f->lindex == -1 ? S_OK : DV_E_FORMATETC;
+            }
+            HRESULT STDMETHODCALLTYPE GetData(FORMATETC* f, STGMEDIUM* out) override {
+                if (!out)
+                    return E_POINTER;
+                *out = {};
+                if (cancelled_)
+                    return E_ABORT;
+                if (FAILED(QueryGetData(f)))
+                    return DV_E_FORMATETC;
+                try {
+                    if (!data_) {
+                        auto provider = std::move(provider_); // Once only, including failure/reentrancy.
+                        if (!provider)
+                            return E_FAIL;
+                        const auto files = provider();
+                        IDataObject* result = nullptr;
+                        const auto hr = createData(files, &result);
+                        if (FAILED(hr)) {
+                            failed_ = true;
+                            return hr;
+                        }
+                        data_.reset(result);
+                    }
+                    const auto hr = data_->GetData(f, out);
+                    if (FAILED(hr))
+                        failed_ = true;
+                    return hr;
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): HRESULT is the COM failure contract; never unwind into OLE.
+                    failed_ = true;
+                    return E_FAIL;
+                }
+            }
+            HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD direction, IEnumFORMATETC** out) override {
+                if (!out)
+                    return E_POINTER;
+                *out = nullptr;
+                if (direction != DATADIR_GET)
+                    return E_NOTIMPL;
+                FORMATETC f{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+                return SHCreateStdEnumFmtEtc(1, &f, out);
+            }
+            HRESULT STDMETHODCALLTYPE GetDataHere(FORMATETC*, STGMEDIUM*) override { return DATA_E_FORMATETC; }
+            HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(FORMATETC*, FORMATETC* out) override {
+                if (!out)
+                    return E_POINTER;
+                out->ptd = nullptr;
+                return DATA_S_SAMEFORMATETC;
+            }
+            HRESULT STDMETHODCALLTYPE SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+            HRESULT STDMETHODCALLTYPE DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
+            HRESULT STDMETHODCALLTYPE DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+            HRESULT STDMETHODCALLTYPE EnumDAdvise(IEnumSTATDATA** out) override {
+                if (out)
+                    *out = nullptr;
+                return OLE_E_ADVISENOTSUPPORTED;
+            }
+        };
     } // namespace
 #endif
 
@@ -162,20 +270,39 @@ namespace lfs::vis::gui {
 #endif
     }
 
-    FileDragResult dragReadyFiles(std::span<const std::filesystem::path> files, SDL_Window* window) {
+    FileDragResult dragReadyFiles(std::span<const std::filesystem::path> files, SDL_Window* window, NativeDragContext* context) {
         if (files.empty())
             return {FileDragStatus::Failed, "No files prepared"};
-        std::vector<std::filesystem::path> absolute;
-        absolute.reserve(files.size());
-        for (const auto& file : files) {
+        std::vector<std::filesystem::path> owned(files.begin(), files.end());
+        for (const auto& file : owned) {
             std::error_code ec;
-            auto path = std::filesystem::absolute(file, ec);
-            if (ec || !std::filesystem::is_regular_file(path, ec) || ec)
-                return {FileDragStatus::Failed, "Drag requires existing, committed regular files"};
-            absolute.push_back(std::move(path));
+            if (!core::native_fs::is_regular_file(file, ec) || ec)
+                return {FileDragStatus::Failed, "Missing committed file"};
         }
+        return dragFiles([owned = std::move(owned)] { return owned; }, window, context);
+    }
+    FileDragResult dragFiles(FileProvider provider, SDL_Window* window, NativeDragContext* context) {
+        if (!provider)
+            return {FileDragStatus::Failed, "Missing file provider"};
+        auto resolve = [provider = std::move(provider), cached = std::optional<std::vector<std::filesystem::path>>{}]() mutable -> const std::vector<std::filesystem::path>& {
+            if (!cached) {
+                auto files = provider();
+                if (files.empty())
+                    throw std::runtime_error("No files prepared");
+                for (auto& file : files) {
+                    std::error_code ec;
+                    file = std::filesystem::absolute(file, ec);
+                    if (ec || !core::native_fs::is_regular_file(file, ec) || ec)
+                        throw std::runtime_error("Missing committed file");
+                }
+                cached = std::move(files);
+                provider = {};
+            }
+            return *cached;
+        };
 #ifdef _WIN32
         (void)window;
+        (void)context;
         // Preparation may have outlasted the original press. Never manufacture
         // a drop when the user has already released the gesture.
         if (!(GetAsyncKeyState(VK_LBUTTON) & 0x8000))
@@ -192,17 +319,18 @@ namespace lfs::vis::gui {
         OleScope ole;
         if (FAILED(ole.result))
             return {FileDragStatus::Failed, "OLE initialization failed on the calling UI thread"};
-        IDataObject* data = nullptr;
-        if (FAILED(createData(absolute, &data)))
-            return {FileDragStatus::Failed, "Cannot create the native CF_HDROP payload"};
-        auto* source = new CopySource();
+        auto* deferred = new DeferredData([resolve = std::move(resolve)]() mutable { return resolve(); });
+        ComPtr<IDataObject> owned_data(deferred);
+        ComPtr<IDropSource> source(new CopySource());
         DWORD effect = DROPEFFECT_NONE;
         // SDL and GHOST can hold automatic capture while the button is down.
         // Hand it to OLE explicitly so the pointer can enter another app.
         ReleaseCapture();
-        const auto hr = DoDragDrop(data, source, DROPEFFECT_COPY, &effect);
-        source->Release();
-        data->Release();
+        const auto hr = DoDragDrop(owned_data.get(), source.get(), DROPEFFECT_COPY, &effect);
+        if (hr != DRAGDROP_S_DROP || !(effect & DROPEFFECT_COPY) || deferred->failed())
+            deferred->cancel();
+        if (deferred->failed())
+            return {FileDragStatus::Failed, "Deferred file preparation failed"};
         if (hr == DRAGDROP_S_DROP && (effect & DROPEFFECT_COPY))
             return {FileDragStatus::Copied, {}};
         if (hr == DRAGDROP_S_CANCEL || (hr == DRAGDROP_S_DROP && effect == DROPEFFECT_NONE))
@@ -214,6 +342,8 @@ namespace lfs::vis::gui {
         // A Wayland source requires the compositor's original input serial; an
         // unrelated GTK connection cannot safely manufacture that serial.
         const auto* driver = SDL_GetCurrentVideoDriver();
+        if (driver && std::string_view(driver) == "wayland" && context)
+            return context->drag([resolve = std::move(resolve)]() mutable { return resolve(); }, window);
         if (!window || !driver || std::string_view(driver) != "x11")
             return {FileDragStatus::Unsupported, "Splat drag currently requires Linux X11 / XWayland (SDL_VIDEODRIVER=x11)"};
         float mouse_x, mouse_y;
@@ -221,46 +351,91 @@ namespace lfs::vis::gui {
             return {FileDragStatus::Cancelled, {}};
         if (!gtk_init_check(nullptr, nullptr))
             return {FileDragStatus::Failed, "Cannot initialize GTK for file drag"};
-        if (!GDK_IS_X11_DISPLAY(gdk_display_get_default()))
-            return {FileDragStatus::Unsupported, "GTK must use X11 for splat drag (GDK_BACKEND=x11)"};
+        auto* x11 = static_cast<Display*>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr));
+        if (!x11)
+            return {FileDragStatus::Failed, "SDL X11 display unavailable"};
+        auto* display = gdk_display_get_default();
+        bool close_display = false;
+        if (!GDK_IS_X11_DISPLAY(display) || std::string_view(DisplayString(gdk_x11_display_get_xdisplay(display))) != DisplayString(x11)) {
+            // A Wayland desktop may give GTK a different default backend than
+            // SDL. Open only our matching X11 connection; never replace GTK's
+            // global default display or rewrite GDK_BACKEND for other dialogs.
+            display = gdk_display_open(DisplayString(x11));
+            close_display = display && display != gdk_display_get_default();
+        }
+        struct DisplayScope {
+            GdkDisplay* display;
+            bool owned;
+            ~DisplayScope() {
+                if (display && owned)
+                    gdk_display_close(display);
+            }
+        } display_scope{display, close_display};
+        if (!display || !GDK_IS_X11_DISPLAY(display))
+            return {FileDragStatus::Unsupported, "GTK cannot open SDL's X11 display; allow X11 in GDK_BACKEND"};
         static thread_local bool active = false;
         if (active)
             return {FileDragStatus::Failed, "A file drag is already active"};
-        active = true;
+        struct ActiveScope {
+            bool& flag;
+            explicit ActiveScope(bool& f) : flag(f) { flag = true; }
+            ~ActiveScope() { flag = false; }
+        } active_scope(active);
         struct State {
             bool done = false;
             bool failed = false;
+            bool provider_failed = false;
             std::vector<std::string> uris;
+            std::vector<gchar*> pointers;
+            FileProvider provider;
+            std::string error;
         } state;
-        for (const auto& path : absolute) {
-            auto* uri = g_filename_to_uri(path.c_str(), nullptr, nullptr);
-            if (!uri) {
-                active = false;
-                return {FileDragStatus::Failed, "Cannot encode file URI"};
-            }
-            state.uris.emplace_back(uri);
-            g_free(uri);
-        }
-        auto* widget = gtk_invisible_new();
+        state.provider = [resolve = std::move(resolve)]() mutable { return resolve(); };
+        auto* widget = gtk_invisible_new_for_screen(gdk_display_get_default_screen(display));
+        if (!widget)
+            return {FileDragStatus::Failed, "Cannot create GTK drag source"};
+        struct WidgetScope {
+            GtkWidget* widget;
+            ~WidgetScope() { gtk_widget_destroy(widget); }
+        } widget_scope{widget};
         gtk_widget_realize(widget);
         gtk_widget_show(widget);
-        g_signal_connect(widget, "drag-data-get", G_CALLBACK(+[](GtkWidget*, GdkDragContext*, GtkSelectionData* selection, guint, guint, gpointer data) {
+        g_signal_connect(widget, "drag-data-get", G_CALLBACK((+[](GtkWidget*, GdkDragContext*, GtkSelectionData* selection, guint, guint, gpointer data) {
                              auto& s = *static_cast<State*>(data);
-                             std::vector<gchar*> uris;
-                             for (auto& uri : s.uris)
-                                 uris.push_back(uri.data());
-                             uris.push_back(nullptr);
-                             gtk_selection_data_set_uris(selection, uris.data());
-                         }),
+                             if (s.failed || s.provider_failed)
+                                 return;
+                             try {
+                                 if (s.pointers.empty()) {
+                                     auto provider = std::move(s.provider);
+                                     if (!provider)
+                                         return;
+                                     for (const auto& path : provider()) {
+                                         std::unique_ptr<gchar, decltype(&g_free)> uri(g_filename_to_uri(path.c_str(), nullptr, nullptr), g_free);
+                                         if (!uri)
+                                             throw std::runtime_error("Cannot encode file URI");
+                                         s.uris.emplace_back(uri.get());
+                                     }
+                                     for (auto& uri : s.uris)
+                                         s.pointers.push_back(uri.data());
+                                     s.pointers.push_back(nullptr);
+                                 }
+                                 gtk_selection_data_set_uris(selection, s.pointers.data());
+                             } catch (...) {
+                                 // LFS-CENSUS-OK(empty-catch): GTK receives an empty failed selection; never unwind across C.
+                                 s.failed = true;
+                                 s.provider_failed = true;
+                                 s.pointers.clear();
+                             }
+                         })),
                          &state);
-        g_signal_connect(widget, "drag-failed", G_CALLBACK(+[](GtkWidget*, GdkDragContext*, GtkDragResult, gpointer data) -> gboolean {
+        g_signal_connect(widget, "drag-failed", G_CALLBACK((+[](GtkWidget*, GdkDragContext*, GtkDragResult, gpointer data) -> gboolean {
                              static_cast<State*>(data)->failed = true;
                              return FALSE;
-                         }),
+                         })),
                          &state);
-        g_signal_connect(widget, "drag-end", G_CALLBACK(+[](GtkWidget*, GdkDragContext*, gpointer data) {
+        g_signal_connect(widget, "drag-end", G_CALLBACK((+[](GtkWidget*, GdkDragContext*, gpointer data) {
                              static_cast<State*>(data)->done = true;
-                         }),
+                         })),
                          &state);
         auto* targets = gtk_target_list_new(nullptr, 0);
         gtk_target_list_add_uri_targets(targets, 0);
@@ -268,17 +443,101 @@ namespace lfs::vis::gui {
         gtk_target_list_unref(targets);
         if (drag) {
             gtk_drag_set_icon_name(drag, "text-x-generic", 0, 0);
+            struct Timeout {
+                State* state;
+                GdkDragContext* drag;
+            } timeout{&state, drag};
+            const auto timer = g_timeout_add_seconds(120, +[](gpointer value) -> gboolean {
+                auto& timeout = *static_cast<Timeout*>(value);
+                timeout.state->failed = true;
+                gtk_drag_cancel(timeout.drag);
+                timeout.state->done = true;
+                return G_SOURCE_CONTINUE; // Removed by scope, including this path.
+            },
+                                                     &timeout);
+            struct TimerScope {
+                guint id;
+                ~TimerScope() {
+                    if (id)
+                        g_source_remove(id);
+                }
+            } timer_scope{timer};
             while (!state.done)
                 g_main_context_iteration(nullptr, TRUE);
         }
-        gtk_widget_destroy(widget);
-        active = false;
         if (!drag)
             return {FileDragStatus::Failed, "Cannot start GTK file drag"};
+        if (state.provider_failed)
+            return {FileDragStatus::Failed, "Deferred file preparation failed"};
         return {state.failed ? FileDragStatus::Cancelled : FileDragStatus::Copied, {}};
 #else
         (void)window;
+        (void)context;
+        (void)resolve;
         return {FileDragStatus::Unsupported, "Native drag source is not implemented for this platform"};
 #endif
     }
+
+#if defined(_WIN32) && defined(LFS_NATIVE_DRAG_TESTS)
+    int nativeDragDataContract(const std::filesystem::path& path) {
+        OleScope ole;
+        if (FAILED(ole.result))
+            return 1;
+        for (int i = 0; i < 1000; ++i) {
+            int calls = 0;
+            auto* delayed = new DeferredData([&] {
+                ++calls;
+                if (i % 4 == 3)
+                    throw std::runtime_error("Synthetic provider failure");
+                return std::vector<std::filesystem::path>{path};
+            });
+            ComPtr<IDataObject> data(delayed);
+            FORMATETC format{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+            if (FAILED(data->QueryGetData(&format)) || calls)
+                return 2;
+            IEnumFORMATETC* enumeration = nullptr;
+            if (FAILED(data->EnumFormatEtc(DATADIR_GET, &enumeration)))
+                return 3;
+            ComPtr<IEnumFORMATETC> formats(enumeration);
+            FORMATETC item{};
+            ULONG count = 0;
+            if (formats->Next(1, &item, &count) != S_OK || count != 1 || item.cfFormat != CF_HDROP || calls)
+                return 4;
+            if (item.ptd)
+                CoTaskMemFree(item.ptd);
+            if (i % 4 == 1) {
+                delayed->cancel();
+                STGMEDIUM cancelled{};
+                if (SUCCEEDED(data->GetData(&format, &cancelled)) || calls)
+                    return 14;
+                continue; // A retained object must not generate after cancellation.
+            }
+            STGMEDIUM storage{};
+            const auto hr = data->GetData(&format, &storage);
+            if (i % 4 == 3) {
+                if (SUCCEEDED(hr) || calls != 1)
+                    return 5;
+                if (SUCCEEDED(data->GetData(&format, &storage)) || calls != 1)
+                    return 6;
+                continue;
+            }
+            if (FAILED(hr) || calls != 1)
+                return 7;
+            if (DragQueryFileW(static_cast<HDROP>(storage.hGlobal), 0xFFFFFFFF, nullptr, 0) != 1)
+                return 8;
+            STGMEDIUM second{};
+            if (FAILED(data->GetData(&format, &second)) || calls != 1)
+                return 9;
+            ReleaseStgMedium(&storage);
+            const auto length = DragQueryFileW(static_cast<HDROP>(second.hGlobal), 0, nullptr, 0);
+            std::vector<wchar_t> decoded(length + 1);
+            if (DragQueryFileW(static_cast<HDROP>(second.hGlobal), 0, decoded.data(), static_cast<UINT>(decoded.size())) != length)
+                return 12;
+            if (std::wstring(decoded.data(), length) != path.native())
+                return 13;
+            ReleaseStgMedium(&second);
+        }
+        return 0;
+    }
+#endif
 } // namespace lfs::vis::gui

@@ -3249,5 +3249,21 @@
     "discarded": "{discarded} verworfen"
   },
   "project.session.newer_settings.title": "Projekteinstellungen aus einer neueren Version",
-  "project.session.newer_settings.message": "Dieses Projekt enthält Einstellungen, die diese Version nicht erkennt. Verwendete Standardwerte für: {}"
+  "project.session.newer_settings.message": "Dieses Projekt enthält Einstellungen, die diese Version nicht erkennt. Verwendete Standardwerte für: {}",
+  "preferences.drag_blender_axes": "PLY: Blender-Achsen mit Z nach oben",
+  "preferences.drag_axes_hint": "Nur PLY: Szenenkoordinaten in Blender-Achsen umwandeln. Deaktivieren, um die Quellkoordinaten beizubehalten. SPZ und SOG behalten ihre Formatkonventionen bei.",
+  "preferences.drag_default": "Standardformat beim Ziehen",
+  "preferences.drag_ply": "PLY — volle Genauigkeit / Blender",
+  "preferences.drag_spz": "SPZ v4 — komprimiert",
+  "preferences.drag_sog": "SOG — komprimiert",
+  "preferences.drag_maximum": "Höchste Formatqualität",
+  "preferences.drag_quality_hint": "Alle verfügbaren SH-Koeffizienten und alle nicht gelöschten Splats beibehalten. Komprimierte Formate bleiben verlustbehaftet. Für Blender ohne Erweiterung PLY verwenden.",
+  "preferences.drag_all_sh": "Alle verfügbaren",
+  "preferences.drag_iterations": "SOG-Clustering-Iterationen (1–100)",
+  "preferences.drag_title": "Splat-Übertragung",
+  "preferences.drag_ply_sh": "PLY-SH-Grad",
+  "preferences.drag_spz_sh": "SPZ-SH-Grad",
+  "preferences.drag_sog_sh": "SOG-SH-Grad",
+  "preferences.drag_pause": "Vor dem Ziehen der Splats das Training pausieren.",
+  "preferences.drag_failed": "Splat-Export fehlgeschlagen. Details stehen im Anwendungsprotokoll."
 }

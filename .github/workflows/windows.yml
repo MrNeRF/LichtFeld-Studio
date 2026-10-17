@@ -203,6 +203,10 @@ jobs:
         shell: cmd
         run: ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^lichtfeld\.python_runtime_state$"
 
+      - name: Run splat drag contracts
+        shell: cmd
+        run: ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^(splat_transfer_contract|native_drag_contract)$"
+
       - name: Provision a network share for path tests
         shell: pwsh
         run: |

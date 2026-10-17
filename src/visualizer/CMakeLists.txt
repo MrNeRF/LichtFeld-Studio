@@ -190,6 +190,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/menu_bar.hpp
         gui/utils/native_file_dialog.cpp
         gui/utils/native_file_drag.cpp
+        gui/utils/native_file_drag_wayland.cpp
         gui/utils/splat_transfer.cpp
         gui/utils/splat_export_request.cpp
         gui/utils/drag_drop_native.cpp
@@ -280,6 +281,9 @@ set_property(SOURCE
 # cmake/SetupNativeFileDialog.cmake.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET PkgConfig::LFS_GTK3)
     target_link_libraries(lfs_visualizer PRIVATE PkgConfig::LFS_GTK3)
+    pkg_check_modules(LFS_DRAG_WAYLAND REQUIRED IMPORTED_TARGET wayland-client)
+    target_link_libraries(lfs_visualizer PRIVATE PkgConfig::LFS_DRAG_WAYLAND)
+    target_compile_definitions(lfs_visualizer PRIVATE LFS_HAS_WAYLAND_DRAG=1)
 endif()
 
 target_sources(lfs_visualizer

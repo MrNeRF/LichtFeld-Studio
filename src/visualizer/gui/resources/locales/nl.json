@@ -3249,5 +3249,21 @@
     "discarded": "{discarded} verwijderd"
   },
   "project.session.newer_settings.title": "Projectinstellingen van een nieuwere versie",
-  "project.session.newer_settings.message": "Dit project bevat instellingen die deze versie niet herkent. Standaardwaarden gebruikt voor: {}"
+  "project.session.newer_settings.message": "Dit project bevat instellingen die deze versie niet herkent. Standaardwaarden gebruikt voor: {}",
+  "preferences.drag_blender_axes": "PLY: Blender-assen met Z omhoog",
+  "preferences.drag_axes_hint": "Alleen PLY: zet scènecoördinaten om naar Blender-assen. Schakel uit om broncoördinaten te behouden. SPZ en SOG behouden de conventies van hun formaat.",
+  "preferences.drag_default": "Standaardformaat bij slepen",
+  "preferences.drag_ply": "PLY — volledige precisie / Blender",
+  "preferences.drag_spz": "SPZ v4 — gecomprimeerd",
+  "preferences.drag_sog": "SOG — gecomprimeerd",
+  "preferences.drag_maximum": "Maximale formaatkwaliteit",
+  "preferences.drag_quality_hint": "Behoud alle beschikbare SH-coëfficiënten en alle niet-verwijderde splats. Gecomprimeerde formaten blijven verliesgevend. Gebruik PLY voor Blender zonder add-on.",
+  "preferences.drag_all_sh": "Alle beschikbare",
+  "preferences.drag_iterations": "SOG-clusteriteraties (1–100)",
+  "preferences.drag_title": "Splats overdragen",
+  "preferences.drag_ply_sh": "PLY SH-graad",
+  "preferences.drag_spz_sh": "SPZ SH-graad",
+  "preferences.drag_sog_sh": "SOG SH-graad",
+  "preferences.drag_pause": "Pauzeer de training voordat u splats sleept.",
+  "preferences.drag_failed": "Exporteren van splats mislukt. Zie het toepassingslogboek voor details."
 }

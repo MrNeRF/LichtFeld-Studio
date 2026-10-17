@@ -3249,5 +3249,21 @@
     "discarded": "Odrzucono {discarded}"
   },
   "project.session.newer_settings.title": "Ustawienia projektu z nowszej wersji",
-  "project.session.newer_settings.message": "Ten projekt zawiera ustawienia nierozpoznawane przez tę wersję. Użyto wartości domyślnych dla: {}"
+  "project.session.newer_settings.message": "Ten projekt zawiera ustawienia nierozpoznawane przez tę wersję. Użyto wartości domyślnych dla: {}",
+  "preferences.drag_blender_axes": "PLY: osie Blendera z osią Z w górę",
+  "preferences.drag_axes_hint": "Tylko PLY: przekształć współrzędne sceny na osie Blendera. Wyłącz, aby zachować współrzędne źródłowe. SPZ i SOG zachowują konwencje swoich formatów.",
+  "preferences.drag_default": "Domyślny format przeciągania",
+  "preferences.drag_ply": "PLY — pełna precyzja / Blender",
+  "preferences.drag_spz": "SPZ v4 — skompresowany",
+  "preferences.drag_sog": "SOG — skompresowany",
+  "preferences.drag_maximum": "Maksymalna jakość formatu",
+  "preferences.drag_quality_hint": "Zachowaj wszystkie dostępne współczynniki SH i nieusunięte splaty. Formaty skompresowane pozostają stratne. Użyj PLY dla Blendera bez dodatku.",
+  "preferences.drag_all_sh": "Wszystkie dostępne",
+  "preferences.drag_iterations": "Iteracje klastrowania SOG (1–100)",
+  "preferences.drag_title": "Przesyłanie splatów",
+  "preferences.drag_ply_sh": "Stopień SH PLY",
+  "preferences.drag_spz_sh": "Stopień SH SPZ",
+  "preferences.drag_sog_sh": "Stopień SH SOG",
+  "preferences.drag_pause": "Wstrzymaj trening przed przeciągnięciem splatów.",
+  "preferences.drag_failed": "Eksport splatów nie powiódł się. Szczegóły znajdują się w dzienniku aplikacji."
 }

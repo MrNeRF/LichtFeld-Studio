@@ -2,11 +2,33 @@
   "date": "2026-10-17",
   "base": "d161094a9eac9cd1f22f8c280549d2b5dc3c63e8",
   "windows_build": "passed",
-  "ctest": "splat_transfer_contract passed",
+  "ctest": {
+    "windows": {
+      "passed": 2,
+      "tests": [
+        "splat_transfer_contract",
+        "native_drag_contract"
+      ]
+    },
+    "linux_standalone": {
+      "passed": 2,
+      "tests": [
+        "wayland_drag_contract",
+        "x11_drag_guard_contract"
+      ],
+      "compiler": "GCC 14",
+      "sanitizers": [
+        "address",
+        "undefined",
+        "leak"
+      ],
+      "full_application_build": false
+    }
+  },
   "python_tests": {
     "passed": 89
   },
-  "linux": "GCC/GTK3/X11 linked; headless guards passed; physical drag not tested",
+  "linux": "Native Wayland protocol and X11 guard contracts passed; physical desktop interoperability pending",
   "blender": {
     "blender": "5.3.0 Beta",
     "hash": "346d005c9994",
@@ -36,7 +58,28 @@
         "position_error": 1.9073486345888568e-07,
         "native_import": "passed"
       }
-    ]
+    ],
+    "unicode_filename": "passed"
   },
-  "physical_drag": "pending graphical session"
+  "physical_drag": "pending graphical session",
+  "clang_format": {
+    "version": "18.1.3",
+    "configuration": ".clang-format",
+    "result": "passed"
+  },
+  "broad_python_cpu_suite": {
+    "passed": 3762,
+    "failure_reports": 66,
+    "skipped": 40,
+    "deselected": 410,
+    "unique_failed_ids": 61,
+    "reproduced_on_baseline_sources": 61,
+    "baseline_runtime_scope": "Same compiled local runtime and Windows environment; not a separate baseline native build",
+    "unrelated_failures_modified": false
+  },
+  "known_unrelated_flake": "Existing shader header fake compiler concurrent append log; test unchanged",
+  "resource_checks": {
+    "windows_com_cycles": 6000,
+    "wayland": "50 protocol cycles plus context reuse; resource teardown checked with sanitizers"
+  }
 }

@@ -174,6 +174,13 @@ jobs:
         # The default app build also builds this isolated, SDL-free test executable.
         run: ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.sdl_coordinates$'
 
+      - name: Run splat drag contracts
+        run: |
+          mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
+          ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
+          LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            ctest --test-dir build --output-on-failure --no-tests=error -R '^(splat_transfer_contract|wayland_drag_contract)$'
+
       - name: Build and run CPU-only format tests
         run: |
           cmake --build build --target lichtfeld_format_tests -j $(nproc)

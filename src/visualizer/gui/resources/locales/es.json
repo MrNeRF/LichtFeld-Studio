@@ -3249,5 +3249,21 @@
     "discarded": "{discarded} descartadas"
   },
   "project.session.newer_settings.title": "Ajustes del proyecto de una versión más reciente",
-  "project.session.newer_settings.message": "Este proyecto contiene ajustes que esta versión no reconoce. Se usaron valores predeterminados para: {}"
+  "project.session.newer_settings.message": "Este proyecto contiene ajustes que esta versión no reconoce. Se usaron valores predeterminados para: {}",
+  "preferences.drag_blender_axes": "PLY: ejes de Blender con Z hacia arriba",
+  "preferences.drag_axes_hint": "Solo PLY: convierte las coordenadas de la escena a los ejes de Blender. Desactiva para conservar las coordenadas originales. SPZ y SOG mantienen las convenciones de su formato.",
+  "preferences.drag_default": "Formato predeterminado al arrastrar",
+  "preferences.drag_ply": "PLY — precisión completa / Blender",
+  "preferences.drag_spz": "SPZ v4 — comprimido",
+  "preferences.drag_sog": "SOG — comprimido",
+  "preferences.drag_maximum": "Calidad máxima del formato",
+  "preferences.drag_quality_hint": "Conserva todos los coeficientes SH disponibles y los splats no eliminados. Los formatos comprimidos siguen teniendo pérdidas. Usa PLY para Blender sin complemento.",
+  "preferences.drag_all_sh": "Todos los disponibles",
+  "preferences.drag_iterations": "Iteraciones de agrupamiento SOG (1–100)",
+  "preferences.drag_title": "Transferencia de splats",
+  "preferences.drag_ply_sh": "Grado SH de PLY",
+  "preferences.drag_spz_sh": "Grado SH de SPZ",
+  "preferences.drag_sog_sh": "Grado SH de SOG",
+  "preferences.drag_pause": "Pausa el entrenamiento antes de arrastrar los splats.",
+  "preferences.drag_failed": "Error al exportar los splats. Consulta el registro de la aplicación para ver los detalles."
 }

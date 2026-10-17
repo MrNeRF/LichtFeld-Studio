@@ -3249,5 +3249,21 @@
     "discarded": "삭제 {discarded}"
   },
   "project.session.newer_settings.title": "최신 버전의 프로젝트 설정",
-  "project.session.newer_settings.message": "이 프로젝트에 현재 버전에서 인식할 수 없는 설정이 있습니다. 다음 항목에 기본값을 사용했습니다: {}"
+  "project.session.newer_settings.message": "이 프로젝트에 현재 버전에서 인식할 수 없는 설정이 있습니다. 다음 항목에 기본값을 사용했습니다: {}",
+  "preferences.drag_blender_axes": "PLY: Z축이 위쪽인 Blender 좌표계",
+  "preferences.drag_axes_hint": "PLY만 해당: 장면 좌표를 Blender 좌표계로 변환합니다. 원본 좌표를 유지하려면 비활성화하세요. SPZ와 SOG는 각 형식의 규칙을 유지합니다.",
+  "preferences.drag_default": "드래그 기본 형식",
+  "preferences.drag_ply": "PLY — 전체 정밀도 / Blender",
+  "preferences.drag_spz": "SPZ v4 — 압축",
+  "preferences.drag_sog": "SOG — 압축",
+  "preferences.drag_maximum": "형식의 최고 품질",
+  "preferences.drag_quality_hint": "사용 가능한 모든 SH 계수와 삭제되지 않은 스플랫을 유지합니다. 압축 형식에는 손실이 있습니다. 애드온 없이 Blender를 사용하려면 PLY를 선택하세요.",
+  "preferences.drag_all_sh": "사용 가능한 모두",
+  "preferences.drag_iterations": "SOG 군집화 반복 횟수 (1–100)",
+  "preferences.drag_title": "스플랫 전송",
+  "preferences.drag_ply_sh": "PLY SH 차수",
+  "preferences.drag_spz_sh": "SPZ SH 차수",
+  "preferences.drag_sog_sh": "SOG SH 차수",
+  "preferences.drag_pause": "스플랫을 드래그하기 전에 학습을 일시 중지하세요.",
+  "preferences.drag_failed": "스플랫 내보내기에 실패했습니다. 자세한 내용은 애플리케이션 로그를 확인하세요."
 }

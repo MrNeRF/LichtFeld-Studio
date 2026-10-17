@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/utils/native_file_drag.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
@@ -544,7 +545,16 @@ namespace lfs::vis {
           monitor_size_(monitor_width, monitor_height) {
     }
 
+    gui::NativeDragContext& WindowManager::nativeFileDragContext() {
+        if (!native_file_drag_)
+            native_file_drag_ = std::make_unique<gui::NativeDragContext>();
+        return *native_file_drag_;
+    }
+
     WindowManager::~WindowManager() {
+        // Release our Wayland proxies/queue while SDL's borrowed display is
+        // still alive. One context also avoids rebinding globals on panel reload.
+        native_file_drag_.reset();
         SDL_RemoveEventWatch(watchEvent, this);
 #if defined(__linux__)
         if (g_x11_error_owner == this) {

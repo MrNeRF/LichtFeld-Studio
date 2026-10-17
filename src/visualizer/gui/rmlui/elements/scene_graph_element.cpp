@@ -35,6 +35,7 @@
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "window/window_manager.hpp"
 #include <SDL3/SDL.h>
 
 #include <RmlUi/Core.h>
@@ -559,6 +560,11 @@ namespace lfs::vis::gui {
     void SceneGraphElement::OnResize() { dom_dirty_ = true; }
 
     void SceneGraphElement::OnUpdate() {
+        external_context_ = nullptr;
+        if (auto* window = services().windowOrNull()) {
+            external_context_ = &window->nativeFileDragContext();
+            external_context_->pump();
+        }
         claimRenameTextInputFocus();
         ensureDom();
         updateExternalTransfer();
@@ -629,192 +635,130 @@ namespace lfs::vis::gui {
         }
     }
 
-    SceneGraphElement::~SceneGraphElement() {
-        if (external_cancel_)
-            external_cancel_->store(true);
-    }
+    SceneGraphElement::~SceneGraphElement() = default;
 
     void SceneGraphElement::beginExternalTransfer(const core::NodeId id, const bool outside_only, std::vector<core::NodeId> ids) {
 #if defined(_WIN32) || defined(__linux__)
-        if (external_native_active_)
+        if (external_native_active_ || !external_context_)
             return;
         auto* manager = services().sceneOrNull();
         if (!manager)
             return;
-        auto& scene = manager->getScene();
-        const auto* node = scene.getNodeById(id);
-        if (!node || node->type != core::NodeType::SPLAT || !node->model)
-            return;
+        const auto& scene = manager->getScene();
         if (const auto* trainer = services().trainerOrNull(); trainer && trainer->isRunning()) {
             if (auto* gui = services().guiOrNull())
-                gui->enqueueToast({.title = "Splat transfer", .message = "Pause training before dragging splats"});
+                gui->enqueueToast({.title = tr("preferences.drag_title"), .message = tr("preferences.drag_pause")});
             return;
         }
         if (ids.empty())
             ids.push_back(id);
-        std::string selection_key;
+        std::vector<std::pair<core::NodeId, core::Uuid>> identity;
         for (const auto candidate_id : ids) {
-            const auto* candidate = scene.getNodeById(candidate_id);
-            if (!candidate || candidate->type != core::NodeType::SPLAT || !candidate->model)
+            const auto* node = scene.getNodeById(candidate_id);
+            if (!node || node->type != core::NodeType::SPLAT || !node->model)
                 return;
-            selection_key += candidate->uuid.to_string();
+            identity.emplace_back(candidate_id, node->uuid);
         }
-        const auto prefs = UserPreferences::instance().splatDrag();
-        external_format_ = prefs.format;
-        const int degree = prefs.maximum_quality ? -1 : external_format_ == "spz" ? prefs.spz_sh
-                                                    : external_format_ == "sog"   ? prefs.sog_sh
-                                                                                  : prefs.ply_sh;
-        const std::string options_key = selection_key + std::format("{}:{}:{}:{}:{}", external_format_, degree, prefs.maximum_quality, prefs.sog_iterations, prefs.blender_axes);
-        const bool same_generation = external_revision_ == scene.renderGeneration() && external_options_key_ == options_key;
-        float x, y;
+        auto* window = SDL_GetMouseFocus();
+        if (!window)
+            window = SDL_GetKeyboardFocus();
+        int width = 0, height = 0, wx = 0, wy = 0;
+        if (!window || !SDL_GetWindowSize(window, &width, &height))
+            return;
+        external_window_ = window;
+        SDL_GetWindowPosition(window, &wx, &wy);
+        external_window_bounds_ = {wx, wy, wx + width, wy + height};
+        float x = 0, y = 0;
         SDL_GetGlobalMouseState(&x, &y);
+        if (const auto pointer = external_context_->pointer(window)) {
+            x = pointer->x;
+            y = pointer->y;
+        }
         external_origin_ = {x, y};
-        external_outside_only_ = outside_only;
-        if (outside_only) {
-            auto* window = SDL_GetMouseFocus();
-            if (!window)
-                window = SDL_GetKeyboardFocus();
-            external_window_ = window;
-            int wx, wy, ww, wh;
-            if (!window || !SDL_GetWindowPosition(window, &wx, &wy) ||
-                !SDL_GetWindowSize(window, &ww, &wh))
-                return;
-            external_window_bounds_ = {wx, wy, wx + ww, wy + wh};
-        }
-        external_armed_ = true;
-        if (external_future_.valid() && external_node_ == id && external_uuid_ == node->uuid &&
-            same_generation && external_cancel_ && !external_cancel_->load())
-            return;
-        if (external_node_ == id && external_uuid_ == node->uuid &&
-            same_generation && !external_ready_.empty())
-            return;
-        // Do not destroy a running std::async future on the UI thread.
-        if (external_future_.valid()) {
-            if (external_cancel_)
-                external_cancel_->store(true);
-            external_armed_ = false;
-            return;
-        }
-        if (external_cancel_)
-            external_cancel_->store(true);
-        external_ready_.clear();
-        external_node_ = id;
-        external_uuid_ = node->uuid;
-        external_revision_ = scene.renderGeneration();
-        external_options_key_ = options_key;
-        external_cancel_ = std::make_shared<std::atomic<bool>>(false);
-        try {
-            std::optional<std::shared_lock<std::shared_mutex>> model_lock;
-            if (auto* mutex = scene.liveModelMutex())
-                model_lock.emplace(*mutex);
-            std::vector<std::future<std::filesystem::path>> futures;
-            for (const auto candidate_id : ids) {
-                const auto* candidate = scene.getNodeById(candidate_id);
-                futures.push_back(prepareSplatTransfer(*candidate->model, scene.getWorldTransform(candidate_id), external_cancel_,
-                                                       {.format = external_format_, .name = ids.size() > 1 ? candidate->name + "-" + candidate->uuid.to_string().substr(0, 8) : candidate->name, .sh_degree = degree, .sog_iterations = prefs.maximum_quality ? 100 : prefs.sog_iterations, .z_up = external_format_ == "ply" && prefs.blender_axes}));
-            }
-            external_future_ = std::async(std::launch::async, [jobs = std::move(futures), cancel = external_cancel_]() mutable {
-                std::vector<std::filesystem::path> paths;
-                try {
-                    for (auto& job : jobs)
-                        paths.push_back(job.get());
-                } catch (...) {
-                    cancel->store(true);
-                    throw;
+        const auto prefs = UserPreferences::instance().splatDrag();
+        // No scene/model pointer or Element is retained by a receiver's data
+        // object. Resolve identities again on the UI thread when data is read.
+        external_provider_ = [identity = std::move(identity), revision = scene.renderGeneration(), prefs] {
+            try {
+                auto* live = services().sceneOrNull();
+                if (!live || live->getScene().renderGeneration() != revision)
+                    throw std::runtime_error("Scene changed before transfer");
+                if (const auto* trainer = services().trainerOrNull(); trainer && trainer->isRunning())
+                    throw std::runtime_error("Training resumed before transfer");
+                auto& scene = live->getScene();
+                std::optional<std::shared_lock<std::shared_mutex>> lock;
+                if (auto* mutex = scene.liveModelMutex())
+                    lock.emplace(*mutex);
+                std::vector<SplatTransferSource> sources;
+                for (const auto& [id, uuid] : identity) {
+                    const auto* node = scene.getNodeById(id);
+                    if (!node || node->uuid != uuid || !node->model)
+                        throw std::runtime_error("Transfer source no longer exists");
+                    const int degree = prefs.maximum_quality ? -1 : prefs.format == "spz" ? prefs.spz_sh
+                                                                : prefs.format == "sog"   ? prefs.sog_sh
+                                                                                          : prefs.ply_sh;
+                    sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string().substr(0, 8) : node->name, .sh_degree = degree, .sog_iterations = prefs.maximum_quality ? 100 : prefs.sog_iterations, .z_up = prefs.format == "ply" && prefs.blender_axes}});
                 }
-                return paths;
-            });
-            external_status_ = "Preparing splats";
-            LOG_INFO("[splat-transfer] preparing node={}", node->name);
-        } catch (const std::exception& error) {
-            external_armed_ = false;
-            external_status_ = error.what();
-            if (auto* gui = services().guiOrNull())
-                gui->enqueueToast({.title = "Splat transfer", .message = external_status_});
-        }
-        markStateDirty();
+                auto cancelled = std::make_shared<std::atomic<bool>>(false);
+                auto future = prepareSplatTransferBatch(sources, cancelled);
+                lock.reset(); // Owned CPU snapshot, no live model lock during IO.
+                return future.get();
+            } catch (const std::exception& error) {
+                LOG_ERROR("[splat-transfer] deferred export failed: {}", error.what());
+                throw;
+            }
+        };
+        external_outside_only_ = outside_only;
+        external_armed_ = true;
 #endif
     }
 
     void SceneGraphElement::updateExternalTransfer() {
 #if defined(_WIN32) || defined(__linux__)
-        if (external_native_active_ || (!external_armed_ && !external_future_.valid()))
+        if (external_native_active_ || !external_armed_ || !external_context_)
             return;
-        float x, y;
-        const auto buttons = SDL_GetGlobalMouseState(&x, &y);
-        if (!(buttons & SDL_BUTTON_LMASK))
-            external_armed_ = false;
+        float x = 0, y = 0;
+        auto buttons = SDL_GetGlobalMouseState(&x, &y);
+        const auto native_pointer = external_context_->pointer(external_window_);
+        if (native_pointer) {
+            x = native_pointer->x;
+            y = native_pointer->y;
+            buttons = native_pointer->held ? SDL_BUTTON_LMASK : 0;
+        }
         const auto* keyboard = SDL_GetKeyboardState(nullptr);
-        if (keyboard[SDL_SCANCODE_ESCAPE]) {
+        if (!(buttons & SDL_BUTTON_LMASK) || keyboard[SDL_SCANCODE_ESCAPE]) {
             external_armed_ = false;
-            if (external_cancel_)
-                external_cancel_->store(true);
-            external_ready_.clear();
-        }
-        if (external_future_.valid() &&
-            external_future_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            try {
-                external_ready_ = external_future_.get();
-                external_status_ = "Ready: drag again if the button was released";
-                LOG_INFO("[splat-transfer] ready path={}", external_ready_.front().string());
-                if (!(buttons & SDL_BUTTON_LMASK))
-                    if (auto* gui = services().guiOrNull())
-                        gui->enqueueToast({.title = tr("preferences.drag_title"), .message = tr("preferences.drag_ready")});
-            } catch (const std::exception& error) {
-                external_armed_ = false;
-                external_ready_.clear();
-                external_status_ = error.what();
-                if (auto* gui = services().guiOrNull())
-                    gui->enqueueToast({.title = "Splat transfer", .message = external_status_});
-            }
-            markStateDirty();
-        }
-        bool outside = x < external_window_bounds_.x || y < external_window_bounds_.y ||
-                       x >= external_window_bounds_.z || y >= external_window_bounds_.w;
-        // Query the actual topmost target: overlapping app windows must work,
-        // and another LichtFeld floating window remains an internal destination.
-        if (external_armed_)
-            if (const auto native_outside = pointerOutsideApplication(external_window_))
-                outside = *native_outside;
-        if (!external_armed_ || external_ready_.empty() ||
-            glm::length(glm::vec2(x, y) - external_origin_) < 6.0f)
-            return;
-        if (external_outside_only_ && !outside)
-            return;
-        auto* live_manager = services().sceneOrNull();
-        const auto* live_node = live_manager ? live_manager->getScene().getNodeById(external_node_) : nullptr;
-        if (!live_node || live_node->uuid != external_uuid_ ||
-            live_manager->getScene().renderGeneration() != external_revision_) {
-            external_armed_ = false;
-            external_ready_.clear();
-            if (auto* gui = services().guiOrNull())
-                gui->enqueueToast({.title = "Splat transfer", .message = "The scene changed while preparing the file. Drag again."});
+            external_provider_ = {};
             return;
         }
-        // Do not dispatch RmlUi events or retain row pointers across the nested
-        // OLE loop. Scene edits cannot invalidate the owned file snapshot.
+        bool outside = x < external_window_bounds_.x || y < external_window_bounds_.y || x >= external_window_bounds_.z || y >= external_window_bounds_.w;
+        if (native_pointer)
+            outside = native_pointer->outside;
+        else if (const auto native_outside = pointerOutsideApplication(external_window_))
+            outside = *native_outside;
+        if (glm::length(glm::vec2(x, y) - external_origin_) < 6.0f || (external_outside_only_ && !outside))
+            return;
         external_armed_ = false;
         external_native_active_ = true;
-        const auto files = external_ready_;
         cancelDrag();
         if (auto* context = GetContext())
             context->ProcessMouseButtonCancel(0, 0);
         SDL_CaptureMouse(false);
-        LOG_INFO("[splat-transfer] native_drag_started path={}", external_ready_.front().string());
+        LOG_INFO("[splat-transfer] native drag started (deferred files)");
         FileDragResult result;
         try {
-            result = dragReadyFiles(files, external_window_);
-        } catch (const std::exception& error) { result = {FileDragStatus::Failed, error.what()}; }
+            result = dragFiles(std::move(external_provider_), external_window_, external_context_);
+        } catch (const std::exception& error) {
+            LOG_ERROR("[splat-transfer] native drag failed: {}", error.what());
+            result = {FileDragStatus::Failed, error.what()};
+        }
         external_native_active_ = false;
         if (auto* context = GetContext())
             context->ProcessMouseButtonCancel(0, 0);
-        external_status_ = result.status == FileDragStatus::Copied ? "File delivered" : result.status == FileDragStatus::Cancelled ? "Drag cancelled"
-                                                                                                                                   : result.error;
-        LOG_INFO("[splat-transfer] native_drag_finished status={} message={}",
-                 static_cast<int>(result.status), external_status_);
+        LOG_INFO("[splat-transfer] native drag finished: {} {}", static_cast<int>(result.status), result.error);
         if (result.status == FileDragStatus::Failed || result.status == FileDragStatus::Unsupported)
             if (auto* gui = services().guiOrNull())
-                gui->enqueueToast({.title = "Splat transfer", .message = external_status_});
+                gui->enqueueToast({.title = tr("preferences.drag_title"), .message = tr("preferences.drag_failed")});
         markStateDirty();
 #endif
     }

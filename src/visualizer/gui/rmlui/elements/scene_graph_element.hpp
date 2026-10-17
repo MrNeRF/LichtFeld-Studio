@@ -12,7 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <future>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -31,6 +31,7 @@ namespace lfs::vis {
 namespace lfs::vis::gui {
 
     struct PanelDrawContext;
+    class NativeDragContext;
 
     class SceneGraphElement : public Rml::Element {
     public:
@@ -54,7 +55,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool syncFromScene(const PanelDrawContext& ctx);
         [[nodiscard]] bool executeContextMenuAction(std::string_view action);
         [[nodiscard]] bool needsAnimationFrame() const {
-            return external_armed_ || external_future_.valid() || (drag_source_id_ != core::NULL_NODE && auto_expand_deadline_ != std::chrono::steady_clock::time_point{}) ||
+            return external_armed_ || (drag_source_id_ != core::NULL_NODE && auto_expand_deadline_ != std::chrono::steady_clock::time_point{}) ||
                    !just_moved_ids_.empty();
         }
 
@@ -177,23 +178,16 @@ namespace lfs::vis::gui {
             bool visible = false;
         };
 
-        std::string external_format_ = "ply";
-        std::string external_options_key_;
+        NativeDragContext* external_context_ = nullptr;
+        std::function<std::vector<std::filesystem::path>()> external_provider_;
         SDL_Window* external_window_ = nullptr;
         void beginExternalTransfer(core::NodeId id, bool outside_only = false, std::vector<core::NodeId> ids = {});
         void updateExternalTransfer();
-        std::future<std::vector<std::filesystem::path>> external_future_;
-        std::shared_ptr<std::atomic<bool>> external_cancel_;
-        std::vector<std::filesystem::path> external_ready_;
-        core::NodeId external_node_ = core::NULL_NODE;
-        core::Uuid external_uuid_;
-        uint64_t external_revision_ = 0;
         glm::vec2 external_origin_{0.0f};
         bool external_outside_only_ = false;
         glm::vec4 external_window_bounds_{};
         bool external_armed_ = false;
         bool external_native_active_ = false;
-        std::string external_status_;
         void ensureDom();
         void ensureRowPool(size_t count);
         void clear();

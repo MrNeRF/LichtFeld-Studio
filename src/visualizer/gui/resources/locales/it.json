@@ -1,16 +1,15 @@
 {
-  "preferences.drag_ready": "File pronto. Trascina nuovamente la stessa riga per trasferirlo.",
   "preferences.drag_blender_axes": "PLY: assi Blender con Z verso l’alto",
-  "preferences.drag_axes_hint": "Solo PLY: converti gli assi dei dati negli assi Blender. Disabilita per conservare le coordinate sorgenti per altri programmi. SPZ e SOG mantengono le convenzioni del formato.",
+  "preferences.drag_axes_hint": "Solo PLY: converti le coordinate della scena negli assi Blender. Disattiva per conservare le coordinate sorgenti. SPZ e SOG mantengono le convenzioni del formato.",
   "preferences.drag_default": "Formato predefinito del trascinamento",
   "preferences.drag_ply": "PLY — precisione completa / Blender",
   "preferences.drag_spz": "SPZ v4 — compresso",
   "preferences.drag_sog": "SOG — compresso",
   "preferences.drag_maximum": "Massima qualità del formato",
-  "preferences.drag_quality_hint": "Mantieni tutti i coefficienti SH disponibili e tutti gli splat non eliminati. La compressione può comunque perdere precisione. Usa PLY per Blender senza estensioni.",
-  "preferences.drag_all_sh": "Tutti i coefficienti disponibili",
+  "preferences.drag_quality_hint": "Conserva tutti i coefficienti SH disponibili e tutti gli splat non eliminati. I formati compressi restano con perdita. Usa PLY per Blender senza componenti aggiuntivi.",
+  "preferences.drag_all_sh": "Tutti i disponibili",
   "preferences.drag_iterations": "Iterazioni di clustering SOG (1–100)",
-  "preferences.drag_title": "Esporta lo splat trascinato",
+  "preferences.drag_title": "Trasferimento splat",
   "preferences.drag_ply_sh": "Grado SH PLY",
   "preferences.drag_spz_sh": "Grado SH SPZ",
   "preferences.drag_sog_sh": "Grado SH SOG",
@@ -3264,5 +3263,7 @@
     "discarded": "{discarded} scartati"
   },
   "project.session.newer_settings.title": "Impostazioni del progetto da una versione più recente",
-  "project.session.newer_settings.message": "Questo progetto contiene impostazioni non riconosciute da questa versione. Valori predefiniti usati per: {}"
+  "project.session.newer_settings.message": "Questo progetto contiene impostazioni non riconosciute da questa versione. Valori predefiniti usati per: {}",
+  "preferences.drag_pause": "Metti in pausa l’addestramento prima di trascinare gli splat.",
+  "preferences.drag_failed": "Esportazione splat non riuscita. Consulta il registro dell’applicazione per i dettagli."
 }
