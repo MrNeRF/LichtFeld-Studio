@@ -722,18 +722,6 @@ namespace lfs::io {
                 << undistort_cache_hash(params, decodes_16bit(params), 0x726762ULL);
             if (params.decode_float)
                 key << "_f32";
-            if (config_.backend != lfs::core::GpuBackend::CUDA) {
-                // One derived-blob key, including source identity and encoder policy.
-                std::error_code ec;
-                const auto stamp = lfs::core::native_fs::last_write_time(path, ec);
-                if (ec)
-                    return {};
-                const auto bytes = lfs::core::native_fs::file_size(path, ec);
-                if (ec)
-                    return {};
-                key << ":jpeg:" << config_.cache_jpeg_quality << ':'
-                    << static_cast<int64_t>(stamp.time_since_epoch().count()) << ':' << bytes;
-            }
             return key.str();
         }
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);

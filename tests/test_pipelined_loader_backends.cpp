@@ -6,6 +6,7 @@
 #include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/shared_image_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "io/cuda/masked_image_fill.hpp"
@@ -62,6 +63,24 @@ namespace {
     constexpr int HEIGHT = 9;
     constexpr float UINT8_SCALE = 1.0f / 255.0f;
     constexpr float UINT16_SCALE = 1.0f / 65535.0f;
+
+    class DebugLogHandler {
+    public:
+        explicit DebugLogHandler(LogHandler handler)
+            : level_(Logger::get().level()), token_(Logger::get().add_log_handler(std::move(handler))) {
+            Logger::get().set_level(LogLevel::Debug);
+        }
+        ~DebugLogHandler() {
+            Logger::get().remove_log_handler(token_);
+            Logger::get().set_level(level_);
+        }
+        DebugLogHandler(const DebugLogHandler&) = delete;
+        DebugLogHandler& operator=(const DebugLogHandler&) = delete;
+
+    private:
+        LogLevel level_;
+        LogHandlerToken token_;
+    };
 
     std::filesystem::path fixture_directory() {
 #ifdef _WIN32
@@ -483,7 +502,7 @@ namespace {
         EXPECT_EQ(*actual, expected);
     }
 
-    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheInvalidatesChangedFilesAndHonorsBudget) {
+    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheUsesSharedRunScopedKeyAndHonorsBudget) {
         if (GetParam() == GpuBackend::CUDA)
             GTEST_SKIP();
         const GpuBackendScope scope(GetParam());
@@ -494,16 +513,22 @@ namespace {
         config.backend = GetParam();
         config.max_cache_bytes = 1024;
         PipelinedImageLoader loader(config);
-        const auto file = path("cache-replaced.png");
-        std::filesystem::copy_file(path("rgb8.png"), file, std::filesystem::copy_options::overwrite_existing);
+        const auto file = path("rgb8.png");
         (void)loader.load_image_immediate(file, params);
         const auto key = CacheAccess::key(loader, file, params);
-        const auto stamp = std::filesystem::last_write_time(file);
-        const auto replacement = samples<uint8_t>(3, 255, 101);
-        ASSERT_TRUE(save_png(file, replacement.data(), WIDTH, HEIGHT, 3, 8, 1));
-        std::filesystem::last_write_time(file, stamp + std::chrono::seconds(2));
-        EXPECT_NE(CacheAccess::key(loader, file, params), key);
-        (void)loader.load_image_immediate(file, params);
+        EXPECT_TRUE(key.starts_with(lfs::core::path_to_utf8(file) + ":udr4_"));
+        EXPECT_EQ(key.find(":jpeg:"), std::string::npos);
+        const auto missing = path("missing-cache-key-source.png");
+        EXPECT_EQ(CacheAccess::key(loader, missing, params),
+                  lfs::core::path_to_utf8(missing) + key.substr(lfs::core::path_to_utf8(file).size()));
+        {
+            // Quality is fixed per loader; separate runs own separate blob caches.
+            auto other_config = config;
+            other_config.cache_jpeg_quality = 83;
+            PipelinedImageLoader other(other_config);
+            EXPECT_EQ(CacheAccess::key(other, file, params), key);
+            EXPECT_EQ(other.get_stats().jpeg_cache_entries, 0u);
+        }
         expect_close(loader.load_image_immediate(file, params), decoded_prepared_blob(loader, file, params), 0.f);
         EXPECT_LE(loader.get_stats().jpeg_cache_bytes, config.max_cache_bytes);
         EXPECT_GT(loader.release_host_cache(std::numeric_limits<size_t>::max()), 0u);
@@ -672,14 +697,21 @@ namespace {
         const auto expected = image.cpu();
         params.skip_blob_cache = false;
         const auto key = CacheAccess::key(loader, path("rgb8.png"), params);
-        std::string warning;
-        const auto handler = Logger::get().add_log_handler([&](LogLevel, const SourceSite&, std::string_view message) {
-            if (message.find("Optional prepared JPEG cache") != std::string_view::npos)
-                warning = message;
-        });
-        CacheAccess::encode(loader, key, image, 1); // Actual encoder ResourceExhausted.
-        Logger::get().remove_log_handler(handler);
-        EXPECT_FALSE(warning.empty());
+        std::atomic<size_t> warnings{0}, debug_failures{0};
+        {
+            const DebugLogHandler handler([&](LogLevel level, const SourceSite&, std::string_view message) {
+                if (message.find("Optional prepared JPEG cache") == std::string_view::npos)
+                    return;
+                if (level == LogLevel::Warn)
+                    ++warnings;
+                if (level == LogLevel::Debug)
+                    ++debug_failures;
+            });
+            CacheAccess::encode(loader, key, image, 1); // Actual encoder ResourceExhausted.
+            CacheAccess::encode(loader, key, image, 1);
+        }
+        EXPECT_EQ(warnings.load(), 1u);
+        EXPECT_EQ(debug_failures.load(), 2u);
         EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 0u);
         expect_close(image, expected, 0.f);
         (void)loader.load_image_immediate(path("rgb8.png"), params);
@@ -701,8 +733,23 @@ namespace {
         const auto expected = loader.load_image_immediate(path("rgb8.png"), params).cpu();
         params.skip_blob_cache = false;
         const auto key = CacheAccess::key(loader, path("rgb8.png"), params);
-        CacheAccess::put(loader, key, {0xff, 0xd8, 0xff, 0xd9});
-        expect_close(loader.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
+        std::atomic<size_t> warnings{0}, debug_failures{0};
+        {
+            const DebugLogHandler handler([&](LogLevel level, const SourceSite&, std::string_view message) {
+                if (message.find("Optional prepared JPEG cache") == std::string_view::npos)
+                    return;
+                if (level == LogLevel::Warn)
+                    ++warnings;
+                if (level == LogLevel::Debug)
+                    ++debug_failures;
+            });
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                CacheAccess::put(loader, key, {0xff, 0xd8, 0xff, 0xd9});
+                expect_close(loader.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
+            }
+        }
+        EXPECT_EQ(warnings.load(), 1u);
+        EXPECT_EQ(debug_failures.load(), 2u);
         EXPECT_EQ(loader.get_stats().hot_path_hits, 0u);
         expect_close(loader.load_image_immediate(path("rgb8.png"), params), decoded_prepared_blob(loader, path("rgb8.png"), params), 0.f);
     }

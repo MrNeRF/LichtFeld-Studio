@@ -235,13 +235,13 @@ namespace lfs::io {
                 interleaved, static_cast<int>(width), static_cast<int>(height), 3,
                 width * 3, bytes, options);
             if (!status) {
+                LOG_DEBUG("[PipelinedImageLoader] Optional prepared JPEG cache encoding failed for {}: {}", key, status.error().detail());
                 warn_portable_cache_failure(status.error().detail());
                 return;
             }
             put_in_jpeg_cache(key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
         } catch (const std::exception& e) {
-            // LFS-CENSUS-OK(empty-catch): the helper logs once; optional cache
-            // failure preserves the prepared image returned to training.
+            LOG_DEBUG("[PipelinedImageLoader] Optional prepared JPEG cache store failed for {}: {}", key, e.what());
             warn_portable_cache_failure(e.what());
         }
     }
@@ -283,8 +283,7 @@ namespace lfs::io {
                     return image;
                 }
             } catch (const std::exception& e) {
-                // LFS-CENSUS-OK(empty-catch): invalidate the failed blob, log
-                // once through the helper, then prepare the original source.
+                LOG_DEBUG("[PipelinedImageLoader] Optional prepared JPEG cache read failed for {}: {}", lfs::core::path_to_utf8(path), e.what());
                 if (!prepared_key.empty())
                     invalidate_cache_entry(prepared_key);
                 warn_portable_cache_failure(e.what());
