@@ -751,7 +751,8 @@
     "button.stop": "トレーニングを停止",
     "button.reset": "トレーニングをリセット",
     "button.add": "追加",
-    "button.remove": "削除"
+    "button.remove": "削除",
+    "tooltip.restart_required": "変更を適用するには再起動が必要です"
   },
   "rendering": "レンダリング",
   "scene": {

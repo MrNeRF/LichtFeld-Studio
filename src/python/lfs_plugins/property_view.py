@@ -614,6 +614,12 @@ def build_rows(group_info, prop_ids, params_accessor):
             "strategies": tuple(
                 str(strategy) for strategy in meta.get("strategies", ())
             ),
+            "needs_restart": bool(
+                meta.get("needs_restart") or (int(meta.get("flags", 0)) & 4)
+            ),
+            "live_update": bool(
+                meta.get("live_update") or (int(meta.get("flags", 0)) & 2)
+            ),
         }
         if row["kind"] == "number":
             try:
@@ -649,6 +655,7 @@ class SectionBinding:
         search_accessor: Optional[Callable] = None,
         visibility_condition_id: Optional[str] = None,
         visibility_predicate: Optional[Callable] = None,
+        restart_required_predicate: Optional[Callable] = None,
     ):
         self.section_id = str(section_id)
         self.rows = tuple(rows)
@@ -664,6 +671,7 @@ class SectionBinding:
         self._search_accessor = search_accessor
         self._visibility_condition_id = visibility_condition_id
         self._visibility_predicate = visibility_predicate
+        self._restart_required_predicate = restart_required_predicate
         self._handle = None
         self._edit_snapshots = {}
         self.sync_text_bufs(publish=False)
@@ -906,6 +914,11 @@ class SectionBinding:
                 "text": "",
                 "checked": False,
                 "value": "",
+                "needs_restart": bool(row.get("needs_restart", False)),
+                "restart_required": bool(
+                    callable(self._restart_required_predicate)
+                    and self._restart_required_predicate(row["id"])
+                ),
             }
             if row["kind"] == "number":
                 record["text"] = str(
@@ -982,6 +995,7 @@ def bind_run(
     group_info=None,
     search_accessor=None,
     visibility_predicate=None,
+    restart_required_predicate=None,
 ):
     """Bind one ordered registry-backed row run and return its runtime state."""
     if group_info is None:
@@ -997,6 +1011,7 @@ def bind_run(
         search_accessor,
         run_spec.visibility_condition_id,
         visibility_predicate,
+        restart_required_predicate,
     )
     model.bind_record_list(binding.model_key)
     model.bind_record_list(binding.options_model_key)
@@ -1038,6 +1053,7 @@ def bind_sections(
     value_setter=None,
     search_accessor=None,
     visibility_predicate=None,
+    restart_required_predicate=None,
 ):
     """Bind the complete training property-view schema."""
     bind_headers(model)
@@ -1053,6 +1069,7 @@ def bind_sections(
             group_info,
             search_accessor,
             visibility_predicate,
+            restart_required_predicate,
         )
         for run in resolve_runs(group_info)
     )

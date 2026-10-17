@@ -294,3 +294,12 @@ loss-graph {
     height: 1dp;
     margin: 4dp 0 2dp;
 }
+
+.restart-required-badge {
+    display: inline-block;
+    color: #fab387;
+    font-size: 11dp;
+    font-weight: bold;
+    margin-left: 4dp;
+    cursor: help;
+}

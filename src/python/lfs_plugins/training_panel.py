@@ -283,6 +283,8 @@ class TrainingPanel(Panel):
             self._get_scrub_value,
             self._set_scrub_value,
         )
+        self._pending_restart_props = set()
+        self._active_run_baseline_params = {}
 
     def capture_chrome(self):
         return {
@@ -338,6 +340,7 @@ class TrainingPanel(Panel):
             value_setter=self._set_property_view_value,
             search_accessor=lambda: self._pv_search_query,
             visibility_predicate=self._property_view_condition_visible,
+            restart_required_predicate=self._is_prop_restart_required,
         )
         self._pv_binding_by_prop = {
             row["id"]: binding
@@ -1508,6 +1511,8 @@ class TrainingPanel(Panel):
         if generation != self._params_subscription_generation:
             return
         self._params_changed.add(path)
+        prop = path.split(".")[-1]
+        self._check_prop_needs_restart(prop, _new)
         # API batches emit one notification per property. Refresh once, on the
         # UI update, after all values have been applied.
         if not self._params_refresh_pending:
@@ -1628,9 +1633,15 @@ class TrainingPanel(Panel):
             dirty = True
         state = RuntimeState.trainer_state.value
         if state != self._last_state:
+            old_state = self._last_state
             self._last_state = state
             if state == "ready":
                 _rate_tracker.clear()
+                self._pending_restart_props.clear()
+                self._active_run_baseline_params.clear()
+            elif state in ("starting", "running") and old_state in ("ready", "completed", "stopped", "error", None):
+                self._pending_restart_props.clear()
+                self._snapshot_active_run_baselines()
             self._sync_text_bufs()
             self._handle.dirty_all()
             dirty = True
@@ -2035,23 +2046,85 @@ class TrainingPanel(Panel):
         except (ValueError, TypeError, RuntimeError):
             pass
 
+    def _is_training_active(self):
+        state = RuntimeState.trainer_state.value
+        if state in ("preparing", "starting", "running", "paused", "stopping"):
+            return True
+        if state != "ready" and not _trainer_run_is_finished():
+            return True
+        return RuntimeState.iteration.value > 0
+
+    def _is_prop_restart_required(self, prop_id):
+        return str(prop_id) in self._pending_restart_props
+
+    def _snapshot_active_run_baselines(self):
+        params = lf.optimization_params()
+        if not params or (hasattr(params, "has_params") and not params.has_params()):
+            return
+        self._active_run_baseline_params.clear()
+        for prop, binding in getattr(self, "_pv_binding_by_prop", {}).items():
+            row = binding._rows_by_id.get(prop)
+            if row and row.get("needs_restart"):
+                try:
+                    self._active_run_baseline_params[prop] = getattr(params, prop)
+                except Exception:
+                    pass
+
+    def _check_prop_needs_restart(self, prop, new_value):
+        binding = getattr(self, "_pv_binding_by_prop", {}).get(prop)
+        row = binding._rows_by_id.get(prop) if binding else None
+        if not row or not row.get("needs_restart"):
+            return
+
+        if not self._is_training_active():
+            if prop in self._pending_restart_props:
+                self._pending_restart_props.remove(prop)
+                if binding:
+                    binding.publish()
+            return
+
+        baseline = self._active_run_baseline_params.get(prop)
+        if baseline is None:
+            params = lf.optimization_params()
+            if params and hasattr(params, prop):
+                baseline = getattr(params, prop)
+                self._active_run_baseline_params[prop] = baseline
+
+        if baseline is not None and new_value == baseline:
+            if prop in self._pending_restart_props:
+                self._pending_restart_props.remove(prop)
+                if binding:
+                    binding.publish()
+                self._request_reactive_update()
+        else:
+            if prop not in self._pending_restart_props:
+                self._pending_restart_props.add(prop)
+                if binding:
+                    binding.publish()
+                self._request_reactive_update()
+
     def _set_property_view_value(self, prop, value):
         params = lf.optimization_params()
-        if not params or not params.has_params():
+        if not params or (hasattr(params, "has_params") and not params.has_params()):
             return False
+        success = False
         if prop in property_view.BOOL_PROPS:
-            return self._set_bool_prop(prop, bool(value))
-        if prop == "mask_mode":
-            return self._set_mask_mode(value)
-        if prop == "bg_mode":
-            return self._set_bg_mode(value)
-        if prop == "iterations":
-            return self._set_iterations(params, int(value))
-        try:
-            params.set(prop, value)
-        except (ValueError, TypeError, OverflowError, RuntimeError):
-            return False
-        return True
+            success = self._set_bool_prop(prop, bool(value))
+        elif prop == "mask_mode":
+            success = self._set_mask_mode(value)
+        elif prop == "bg_mode":
+            success = self._set_bg_mode(value)
+        elif prop == "iterations":
+            success = self._set_iterations(params, int(value))
+        else:
+            try:
+                params.set(prop, value)
+                success = True
+            except (ValueError, TypeError, OverflowError, RuntimeError):
+                return False
+        if success:
+            self._check_prop_needs_restart(prop, value)
+        return success
 
     def _set_iterations(self, params, val):
         if val <= 0:
@@ -2676,6 +2749,8 @@ class TrainingPanel(Panel):
     def _action_reset(self):
         def _reset(_stop_training):
             _restore_stored_session_if_needed()
+            self._pending_restart_props.clear()
+            self._active_run_baseline_params.clear()
             lf.reset_training()
 
         confirm_discard_work_then(
@@ -2706,6 +2781,8 @@ class TrainingPanel(Panel):
         # until Reset returns it to a fresh dataset.
         if _trainer_run_is_finished():
             lf.reset_training()
+        self._pending_restart_props.clear()
+        self._snapshot_active_run_baselines()
         params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
@@ -2717,9 +2794,11 @@ class TrainingPanel(Panel):
                 p = lf.optimization_params()
                 if button == _mcmc:
                     p.set_strategy("mcmc")
+                    self._snapshot_active_run_baselines()
                     lf.start_training()
                 elif button == _gut:
                     p.gut = False
+                    self._snapshot_active_run_baselines()
                     lf.start_training()
 
             lf.ui.confirm_dialog(

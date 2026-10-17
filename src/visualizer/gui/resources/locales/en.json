@@ -747,7 +747,8 @@
     "button.stop": "Stop Training",
     "button.reset": "Reset Training",
     "button.add": "Add",
-    "button.remove": "Remove"
+    "button.remove": "Remove",
+    "tooltip.restart_required": "Restart required to take effect"
   },
   "rendering": "Rendering",
   "scene": {

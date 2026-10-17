@@ -751,7 +751,8 @@
     "button.stop": "停止训练",
     "button.reset": "重置训练",
     "button.add": "添加",
-    "button.remove": "移除"
+    "button.remove": "移除",
+    "tooltip.restart_required": "需要重新启动才能生效"
   },
   "rendering": "渲染",
   "scene": {

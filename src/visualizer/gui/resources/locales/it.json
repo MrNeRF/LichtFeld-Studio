@@ -751,7 +751,8 @@
     "button.stop": "Interrompi Training",
     "button.reset": "Resetta Training",
     "button.add": "Aggiungi",
-    "button.remove": "Rimuovi"
+    "button.remove": "Rimuovi",
+    "tooltip.restart_required": "Riavvio richiesto per avere effetto"
   },
   "rendering": "Rendering",
   "scene": {

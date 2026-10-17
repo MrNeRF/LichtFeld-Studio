@@ -751,7 +751,8 @@
     "button.stop": "학습 중지",
     "button.reset": "학습 재설정",
     "button.add": "추가",
-    "button.remove": "제거"
+    "button.remove": "제거",
+    "tooltip.restart_required": "적용하려면 다시 시작해야 합니다"
   },
   "rendering": "렌더링",
   "scene": {
