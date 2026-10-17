@@ -16,6 +16,12 @@ enforced during encoding, before growing the destination; it is not a limit on
 libjpeg's internal working memory. Invalid layouts return `InvalidArgument`;
 exceeding the output limit or allocation failure returns `ResourceExhausted`.
 Each call owns its encoder state and can run independently on another thread.
+High-entropy 8K RGB at quality 100 with 4:4:4 can exceed the default encoded-byte
+limit. Consumers must select an appropriate explicit limit or handle
+`ResourceExhausted`; the encoder does not silently reduce quality. Peak memory
+also includes input, the previous output retained until success, destination
+growth and libjpeg working storage. Concurrent calls multiply those costs;
+their scheduling and aggregate budget remain the caller's responsibility.
 
 This CPU codec operation creates no temporary file and performs no orientation,
 color-space, float quantization or alpha conversion. Callers prepare those

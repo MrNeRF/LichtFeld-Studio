@@ -72,8 +72,12 @@ if(WIN32 AND MSVC)
     target_sources(lichtfeld_image_codec_tests PRIVATE ../native_filesystem_test.manifest)
     target_compile_definitions(lichtfeld_image_codec_tests PRIVATE LFS_REQUIRE_LONG_PATHS_DISABLED)
 endif()
-add_test(NAME lichtfeld_image_codec_tests COMMAND lichtfeld_image_codec_tests)
+add_test(NAME lichtfeld_image_codec_tests COMMAND lichtfeld_image_codec_tests
+    --gtest_filter=-ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits)
 set_tests_properties(lichtfeld_image_codec_tests PROPERTIES LABELS "fast;image;cpu" TIMEOUT 120)
+add_test(NAME lichtfeld_jpeg_large_memory_test COMMAND lichtfeld_image_codec_tests
+    --gtest_filter=ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits)
+set_tests_properties(lichtfeld_jpeg_large_memory_test PROPERTIES LABELS "stress;image;cpu" TIMEOUT 180)
 
 if(TARGET lfs_io)
     add_executable(lichtfeld_image_discovery_tests ../test_image_format_discovery.cpp)
@@ -101,6 +105,6 @@ add_test(NAME lichtfeld_codec_exports_test COMMAND lichtfeld_codec_exports_test)
 set_tests_properties(lichtfeld_codec_exports_test PROPERTIES LABELS "fast;image;cpu" TIMEOUT 30)
 if(WIN32)
     # Project DLLs live beside the app, not beside these nested test executables.
-    set_tests_properties(lichtfeld_image_codec_tests lichtfeld_codec_exports_test PROPERTIES
+    set_tests_properties(lichtfeld_image_codec_tests lichtfeld_jpeg_large_memory_test lichtfeld_codec_exports_test PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_image_codecs>")
 endif()
