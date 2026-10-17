@@ -347,6 +347,7 @@ def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *arguments],
         cwd=root,
+        env={**os.environ, "GIT_CEILING_DIRECTORIES": str(root.parent)},
         check=False,
         capture_output=True,
         text=True,
