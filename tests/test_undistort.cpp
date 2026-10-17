@@ -1837,7 +1837,23 @@ TEST(UndistortRegion, PreservesProducerOrderingOnRequestedNonblockingStream) {
             {size_t{3}, size_t{24}, size_t{32}}, Device::GPU);
     }
     ASSERT_EQ(source.stream(), producer);
-    ASSERT_EQ(cudaStreamSynchronize(producer), cudaSuccess);
+
+    auto params = make_region_test_params(CameraModelType::PINHOLE);
+    for (float& coefficient : params.distortion) {
+        coefficient = 0.0f;
+    }
+    params.num_distortion = 0;
+
+    // Lazy CUDA module loading waits for running kernels, so a first launch behind the gate
+    // would block the host until it opens. Load the fill kernel (zero takes the memset path),
+    // the copy and the delay kernel first.
+    ASSERT_EQ(tensor_hardening::launch_delay_kernel(gate_holder, 1), cudaSuccess);
+    {
+        CUDAStreamGuard guard(producer);
+        source.fill_(0.5f, producer);
+    }
+    (void)undistort_image_region(source, params, 8, 6, 8, 6, execution);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     ASSERT_EQ(
         tensor_hardening::launch_delay_kernel(gate_holder, 100000000ULL),
@@ -1849,11 +1865,6 @@ TEST(UndistortRegion, PreservesProducerOrderingOnRequestedNonblockingStream) {
         source.fill_(0.625f, producer);
     }
 
-    auto params = make_region_test_params(CameraModelType::PINHOLE);
-    for (float& coefficient : params.distortion) {
-        coefficient = 0.0f;
-    }
-    params.num_distortion = 0;
     auto region = undistort_image_region(
         source, params, 8, 6, 8, 6, execution);
     EXPECT_EQ(region.stream(), execution);
