@@ -20,6 +20,7 @@
   "io.dataset_image_unreadable_many": "No se pueden leer {} imágenes del conjunto de datos (ejemplos: {}). Sus cámaras permanecen en la escena, pero el entrenamiento puede fallar al usarlas.",
   "training.unreadable_image": "No se pudo leer una imagen de entrenamiento. Abra Detalles para ver el archivo y el error del decodificador.",
   "training.reset_before_strategy_change": "Reinicia el entrenamiento antes de cambiar de estrategia.",
+  "training.reset_before_param_change": "Reinicia el entrenamiento antes de cambiar {}.",
   "io.mesh_no_triangle_faces": "El archivo de malla no contiene caras triangulares.",
   "io.no_finite_seed_points": "La nube de puntos no contiene puntos iniciales finitos. Se utilizará una inicialización aleatoria.",
   "io.dataset_camera_invalid_focal": "Se omitieron {} cámaras del conjunto de datos con una distancia focal cero, negativa o no finita (ejemplos: {}).",

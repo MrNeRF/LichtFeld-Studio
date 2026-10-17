@@ -20,6 +20,7 @@
   "io.dataset_image_unreadable_many": "无法读取 {} 张数据集图像（例如：{}）。对应的相机仍保留在场景中，但使用这些图像时训练可能失败。",
   "training.unreadable_image": "无法读取训练图像。打开“详细信息”查看文件和解码器错误。",
   "training.reset_before_strategy_change": "更改策略前请重置训练。",
+  "training.reset_before_param_change": "更改{}前请重置训练。",
   "io.mesh_no_triangle_faces": "网格文件不包含三角形面。",
   "io.no_finite_seed_points": "点云中没有坐标为有限值的初始点。将使用随机初始化。",
   "io.dataset_camera_invalid_focal": "已跳过 {} 个焦距为零、负数或非有限值的数据集相机（示例：{}）。",
