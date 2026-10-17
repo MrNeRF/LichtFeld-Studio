@@ -1750,7 +1750,7 @@ def get_camera() -> CameraState | None:
     Get current viewport camera state (eye, target, up, fov) or None if unavailable.
     """
 
-def set_camera(eye: tuple[float, float, float], target: tuple[float, float, float], up: tuple[float, float, float] = (0.0, 1.0, 0.0)) -> None:
+def set_camera(eye: tuple[float, float, float], target: tuple[float, float, float], up: tuple[float, float, float] = (0.0, 1.0, 0.0), panel: str = 'main') -> None:
     """
     Move the viewport camera to look from eye toward target.
 
@@ -1758,6 +1758,8 @@ def set_camera(eye: tuple[float, float, float], target: tuple[float, float, floa
         eye: camera position (x, y, z).
         target: look-at target (x, y, z).
         up: world up vector (default (0, 1, 0)).
+        panel: 'main' (default), 'left', or 'right'. Every panel moves the active
+            view; use lf.ui.screen.set_view_camera for a specific screen view.
     """
 
 def set_camera_fov(fov: float) -> None:

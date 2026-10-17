@@ -1246,6 +1246,21 @@ namespace lfs::app {
                 }
             };
 
+            // Enum-backed fields reject values outside their declared range.
+            std::string choice_error;
+            const auto set_choice = [&args, &touched, &choice_error](const char* key, int& field, const int count) {
+                if (!args.contains(key))
+                    return true;
+                const int value = args[key].get<int>();
+                if (value < 0 || value >= count) {
+                    choice_error = std::format("{} must be in [0, {}] (got {})", key, count - 1, value);
+                    return false;
+                }
+                field = value;
+                touched = true;
+                return true;
+            };
+
             const auto set_float = [&args, &touched](const char* key, float& field) {
                 if (args.contains(key)) {
                     field = args[key].get<float>();
@@ -1364,18 +1379,22 @@ namespace lfs::app {
                 settings.depth_filter_viz_mode = args["hide_outside_depth_box"].get<bool>() ? 2 : 0;
                 touched = true;
             }
-            set_int("depth_filter_viz_mode", settings.depth_filter_viz_mode);
+            if (!set_choice("depth_filter_viz_mode", settings.depth_filter_viz_mode, 3))
+                return std::unexpected(choice_error);
             set_bool("crop_filter_for_selection", settings.crop_filter_for_selection);
             set_bool("apply_appearance_correction", settings.apply_appearance_correction);
-            set_int("ppisp_mode", settings.ppisp_mode);
-            set_int("environment_mode", settings.environment_mode);
+            if (!set_choice("ppisp_mode", settings.ppisp_mode, 2))
+                return std::unexpected(choice_error);
+            if (!set_choice("environment_mode", settings.environment_mode, 2))
+                return std::unexpected(choice_error);
             set_string("environment_map_path", settings.environment_map_path);
             set_float("environment_exposure", settings.environment_exposure);
             set_float("environment_rotation_degrees", settings.environment_rotation_degrees);
             set_bool("show_coord_axes", settings.show_coord_axes);
             set_float("axes_size", settings.axes_size);
             set_bool("show_grid", settings.show_grid);
-            set_int("grid_plane", settings.grid_plane);
+            if (!set_choice("grid_plane", settings.grid_plane, 3))
+                return std::unexpected(choice_error);
             set_float("grid_opacity", settings.grid_opacity);
             set_bool("point_cloud_mode", settings.point_cloud_mode);
             set_float("voxel_size", settings.voxel_size);
@@ -1385,7 +1404,8 @@ namespace lfs::app {
             set_bool("show_camera_frustums", settings.show_camera_frustums);
             set_float("camera_frustum_scale", settings.camera_frustum_scale);
             set_bool("show_pivot", settings.show_pivot);
-            set_int("split_view_mode", settings.split_view_mode);
+            if (!set_choice("split_view_mode", settings.split_view_mode, 3))
+                return std::unexpected(choice_error);
             set_bool("gt_comparison_actual_size", settings.gt_comparison_actual_size);
             set_float("split_position", settings.split_position);
             if (args.contains("split_view_offset")) {
@@ -1400,7 +1420,8 @@ namespace lfs::app {
             set_bool("depth_view", settings.depth_view);
             set_float("depth_view_min", settings.depth_view_min);
             set_float("depth_view_max", settings.depth_view_max);
-            set_int("depth_visualization_mode", settings.depth_visualization_mode);
+            if (!set_choice("depth_visualization_mode", settings.depth_visualization_mode, 2))
+                return std::unexpected(choice_error);
             set_bool("depth_clip_enabled", settings.depth_clip_enabled);
             set_float("depth_clip_far", settings.depth_clip_far);
             set_bool("mesh_wireframe", settings.mesh_wireframe);

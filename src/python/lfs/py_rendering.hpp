@@ -48,7 +48,8 @@ namespace lfs::python {
     [[nodiscard]] std::optional<PyCameraState> get_camera();
     void set_camera(const std::tuple<float, float, float>& eye,
                     const std::tuple<float, float, float>& target,
-                    const std::tuple<float, float, float>& up);
+                    const std::tuple<float, float, float>& up,
+                    const std::string& panel);
     void set_camera_fov(float fov_degrees);
 
     [[nodiscard]] std::optional<PyViewportRender> get_viewport_render();

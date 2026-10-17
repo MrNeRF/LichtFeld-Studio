@@ -41,9 +41,11 @@
 #include <cstring>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <functional>
 #include <numbers>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <variant>
@@ -1451,7 +1453,12 @@ namespace lfs::python {
 
     void set_camera(const std::tuple<float, float, float>& eye,
                     const std::tuple<float, float, float>& target,
-                    const std::tuple<float, float, float>& up) {
+                    const std::tuple<float, float, float>& up,
+                    const std::string& panel) {
+        // Independent views are screen areas with their own cameras
+        // (lf.ui.screen.set_view_camera); every panel name moves the active view.
+        if (panel != "main" && panel != "left" && panel != "right")
+            throw std::invalid_argument(std::format("panel must be 'main', 'left', or 'right' (got '{}')", panel));
         const vis::SetViewParams params{
             .eye = {std::get<0>(eye), std::get<1>(eye), std::get<2>(eye)},
             .target = {std::get<0>(target), std::get<1>(target), std::get<2>(target)},
@@ -2140,6 +2147,7 @@ Get current viewport camera state (eye, target, up, fov) or None if unavailable.
         m.def("set_camera", &set_camera,
               nb::arg("eye"), nb::arg("target"),
               nb::arg("up") = std::make_tuple(0.0f, 1.0f, 0.0f),
+              nb::arg("panel") = std::string{"main"},
               R"doc(
 Move the viewport camera to look from eye toward target.
 
@@ -2147,6 +2155,8 @@ Args:
     eye: camera position (x, y, z).
     target: look-at target (x, y, z).
     up: world up vector (default (0, 1, 0)).
+    panel: 'main' (default), 'left', or 'right'. Every panel moves the active
+        view; use lf.ui.screen.set_view_camera for a specific screen view.
 )doc");
 
         m.def("set_camera_fov", &set_camera_fov,
