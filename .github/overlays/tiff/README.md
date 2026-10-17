@@ -21,15 +21,25 @@ the private harness is not linked into production or CI targets.
 
 Checked against libtiff master
 [d23249978a7a99ea2e0752a476611914501577de](https://gitlab.com/libtiff/libtiff/-/commit/d23249978a7a99ea2e0752a476611914501577de).
-Master already uses a temporary realloc pointer. Its failure branch still
-clears tif_nfields, so keeping the pointer alone does not retain usable fields
-or normal cleanup. The prepared upstream change retains that count and adds
-the default-field initialization/ordinary/custom-read checks. Its regression
-fails against that master and passes with the change; test_open_options and
-test_directory pass afterward.
+[!775](https://gitlab.com/libtiff/libtiff/-/merge_requests/775) addressed the
+original NULL field-table dereference. [!865](https://gitlab.com/libtiff/libtiff/-/merge_requests/865)
+subsequently preserved the old realloc pointer, but its failure path still
+clears tif_nfields and makes existing fields inaccessible.
 
-Upstream submission/link is pending; do not treat a prepared patch as a merged
-or submitted fix. At the next libtiff bump, remove this overlay only after
-verifying all of: preserved pointer AND count on failed field-table growth,
-failed default-field setup propagation, and checks in ordinary/custom readers.
-Keep the allocation-budget and file/memory regressions when removing it.
+[Upstream !989](https://gitlab.com/libtiff/libtiff/-/merge_requests/989) preserves
+that count and adds a public allocation-budget regression. The regression fails
+on the unmodified master and passes with the fix. The fork's basic-build-fork
+CI passed. This MR is open; it is not an integrated upstream fix.
+
+!989 covers field-table growth only. The default-field initialization and
+ordinary/custom directory-read guards in this 4.7.1 backport are not included
+in that MR. Their absence has not been demonstrated to cause the original
+4.7.1 crash on current master. They remain downstream changes requiring
+separate upstream evaluation. Merging !989 alone is not enough to remove the
+whole overlay.
+
+At the next libtiff bump, verify preserved pointer AND count on failed field-table
+growth, failed default-field setup propagation, and ordinary/custom-reader
+handling before dropping the corresponding backport hunks. Remove the overlay
+only once all retained hunks are covered or shown unnecessary for the new
+provider. Keep the allocation-budget and file/memory regressions.
