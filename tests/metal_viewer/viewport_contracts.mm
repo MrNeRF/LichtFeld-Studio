@@ -341,6 +341,55 @@ static void multi_target_auto_contract(vis::VulkanContext& context,
         require(adapter->render(model, request_for(1), true, ids[1], false, true).has_value(), "Native renderer did not recover after an invalid request");
     }
 }
+static void preview_readback_overflow_contract(vis::VulkanContext& context,
+                                               vis::GraphicsContext& graphics) {
+    using core::Device;
+    using core::Tensor;
+    constexpr size_t count = 512, center = (64 * 128 + 64) * 3;
+    std::vector<float> means(count * 3, 0.f), colors(count * 3, -1.772454f), rotations(count * 4, 0.f);
+    for (size_t n = 0; n < count; ++n) {
+        means[n * 3 + 2] = -3.f;
+        colors[n * 3] = 1.772454f;
+        rotations[n * 4] = 1.f;
+    }
+    // Full-frame splats cover 64 tiles each, well beyond count * 2 + 4096.
+    core::SplatData dense(0,
+                          Tensor::from_vector(means, {count, 3}, Device::GPU),
+                          Tensor::from_vector(colors, {count, 1, 3}, Device::GPU), {},
+                          Tensor::full({count, 3}, 1.f, Device::GPU),
+                          Tensor::from_vector(rotations, {count, 4}, Device::GPU),
+                          Tensor::full({count, 1}, 10.f, Device::GPU), 1.f);
+    core::SplatData green(0,
+                          Tensor::from_vector(std::vector<float>{0, 0, -3}, {1, 3}, Device::GPU),
+                          Tensor::from_vector(std::vector<float>{-1.772454f, 1.772454f, -1.772454f}, {1, 1, 3}, Device::GPU), {},
+                          Tensor::full({1, 3}, -2.f, Device::GPU),
+                          Tensor::from_vector(std::vector<float>{1, 0, 0, 0}, {1, 4}, Device::GPU),
+                          Tensor::full({1, 1}, 10.f, Device::GPU), 1.f);
+    rendering::ViewportRenderRequest request;
+    request.frame_view.size = {128, 128};
+    request.sh_degree = 0;
+    vis::MetalViewportRenderer raw;
+    const vis::RenderTargetId fixture{61}, cold{62}, warm{63};
+    require(raw.render(context, dense, request, fixture).has_value(), "Preview overflow fixture render failed");
+    const auto complete = raw.outputComplete(fixture);
+    require(complete.has_value() && !*complete, "Preview overflow fixture did not overflow a cold reservation");
+    require(raw.release(fixture).has_value(), "Preview overflow fixture release failed");
+    auto adapter = vis::createSceneRenderer(graphics);
+    request.require_complete_output = true;
+    // The preview call shape: one non-deterministic render, then a readback.
+    const auto center_is = [&](const core::SplatData& model, vis::RenderTargetId target, int channel) {
+        if (!adapter->render(model, request, false, target))
+            return false;
+        const auto image = adapter->readOutputImage(target);
+        const auto pixel = image ? (*image)->ptr<float>() + center : nullptr;
+        return pixel && pixel[channel] > .9f && pixel[(channel + 1) % 3] < .1f && pixel[(channel + 2) % 3] < .1f;
+    };
+    require(center_is(dense, cold, 0), "Cold preview readback returned black instead of red after overflow");
+    require(center_is(green, warm, 1), "Warm preview fixture did not produce green");
+    require(center_is(dense, warm, 0), "Warm preview readback returned stale green instead of red after overflow");
+    require(adapter->releaseRenderTarget(cold), "Cold preview target release failed");
+    require(adapter->releaseRenderTarget(warm), "Warm preview target release failed");
+}
 static void bound_vulkan_contract(vis::VulkanContext& context) {
     core::GpuBackendScope scope(core::GpuBackend::Vulkan);
     using core::Device;
@@ -803,6 +852,7 @@ static void run(bool compare_vulkan) {
     require(!point_auto->render(points, vis::RenderTargetId{19}).has_value(), "Closed point target ID was reused");
     require(point_auto->readOutputImage(vis::RenderTargetId{300003}).has_value(), "Closing one point view damaged another");
     multi_target_auto_contract(context, graphics, compare_vulkan);
+    preview_readback_overflow_contract(context, graphics);
     transparent_threshold_contract(context);
     partial_selection_mask_contract(context, graphics);
     std::puts("Native viewport texture, resident storage, camera, depth, resize and slot reuse contracts passed.");

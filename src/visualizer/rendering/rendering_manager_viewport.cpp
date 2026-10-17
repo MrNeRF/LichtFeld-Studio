@@ -1526,6 +1526,7 @@ namespace lfs::vis {
 
         auto request = buildViewportRenderRequest(frame_ctx, frame_ctx.render_size);
         request.capture_float_color = capture_float_color;
+        request.require_complete_output = true;
         if (capture_float_color)
             request.depth_view = false;
         if (transparent_background_override) {
@@ -1552,8 +1553,8 @@ namespace lfs::vis {
             scene_renderer_ = createSceneRenderer(*last_graphics_context_);
         }
 
-        // Preview/export uses the renderer's exact two-batch count gate; one
-        // render is complete for this view and can be read back immediately.
+        // Preview/export output is read back right after this call, so the
+        // renderer returns only a complete frame for this view.
         auto render_result = scene_renderer_->render(
             model,
             request,
