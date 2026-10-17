@@ -31,6 +31,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -175,6 +177,17 @@ namespace lfs::core::image_codecs {
             return target.data;
         }
 
+        struct PngReadOwner {
+            png_structp png = nullptr;
+            png_infop info = nullptr;
+            FILE* file = nullptr;
+            ~PngReadOwner() {
+                png_destroy_read_struct(&png, &info, nullptr);
+                if (file)
+                    std::fclose(file);
+            }
+        };
+
         struct PngReadContext {
             const std::uint8_t* data = nullptr;
             std::size_t size = 0;
@@ -196,15 +209,6 @@ namespace lfs::core::image_codecs {
                 return false;
             png_read_image(png, rows);
             png_read_end(png, info);
-            return true;
-        }
-
-        bool write_png_pixels(png_structp png, png_infop info, png_bytepp rows) {
-            // Keep the caller's row buffer alive when libpng reports an I/O error.
-            if (setjmp(png_jmpbuf(png)))
-                return false;
-            png_write_image(png, rows);
-            png_write_end(png, info);
             return true;
         }
 
@@ -238,7 +242,7 @@ namespace lfs::core::image_codecs {
             const int output_channels = png_get_channels(png, info);
             const int output_bit_depth = png_get_bit_depth(png, info);
             const int expected_bit_depth = target.sample_type == SampleType::UInt16 ? 16 : 8;
-            if (output_channels != target.channels || output_bit_depth != expected_bit_depth) {
+            if (output_channels != (compact_gray ? 1 : target.channels) || output_bit_depth != expected_bit_depth) {
                 error = "PNG target layout mismatch";
                 return false;
             }
@@ -260,14 +264,13 @@ namespace lfs::core::image_codecs {
                 return false;
             }
             if (compact_gray) {
-                auto* output = static_cast<std::uint16_t*>(target.data);
-                const auto* gray = output;
+                auto* output = static_cast<std::uint8_t*>(target.data);
                 const auto pixels = static_cast<std::size_t>(width) * height;
                 for (std::size_t pixel = pixels; pixel-- > 0;) {
-                    const auto value = gray[pixel];
-                    output[pixel * 3 + 0] = value;
-                    output[pixel * 3 + 1] = value;
-                    output[pixel * 3 + 2] = value;
+                    std::array<std::uint8_t, 2> value;
+                    std::memcpy(value.data(), output + pixel * 2, 2);
+                    for (std::size_t channel = 0; channel < 3; ++channel)
+                        std::memcpy(output + (pixel * 3 + channel) * 2, value.data(), 2);
                 }
             }
             return true;
@@ -286,7 +289,9 @@ namespace lfs::core::image_codecs {
                 int width = 0;
                 int height = 0;
                 int source_channels = 0;
-                if (is_16_bit_png) {
+                // STB owns its allocation. Keep that fast path only when the
+                // caller did not supply a buffer or an allocator to honor.
+                if (is_16_bit_png && !target.data && !target.allocate) {
                     auto* decoded = stbi_load_16_from_memory(file_data.data(), static_cast<int>(file_data.size()),
                                                              &width, &height, &source_channels, target.channels);
                     if (decoded && source_channels != 2 && !png_gray_has_transparency(file_data)) {
@@ -303,39 +308,34 @@ namespace lfs::core::image_codecs {
                 error = "Could not open file " + path_to_utf8(path);
                 return false;
             }
-            png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
-            png_infop info = png ? png_create_info_struct(png) : nullptr;
+            PngReadOwner owner;
+            owner.file = file;
+            png_structp png = owner.png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+            png_infop info = owner.info = png ? png_create_info_struct(png) : nullptr;
             if (!png || !info) {
-                png_destroy_read_struct(&png, &info, nullptr);
-                std::fclose(file);
                 error = "Could not allocate PNG decoder";
                 return false;
             }
             if (setjmp(png_jmpbuf(png))) {
-                png_destroy_read_struct(&png, &info, nullptr);
-                std::fclose(file);
                 error = "PNG decode failed";
                 return false;
             }
             png_init_io(png, file);
             png_read_info(png, info);
             const bool success = configure_png_target(png, info, target, result, error);
-            png_destroy_read_struct(&png, &info, nullptr);
-            std::fclose(file);
             return success;
         }
 
         bool decode_png_memory_to_buffer(const std::uint8_t* data, const std::size_t size,
                                          DecodeTarget& target, Probe& result, std::string& error) {
-            png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
-            png_infop info = png ? png_create_info_struct(png) : nullptr;
+            PngReadOwner owner;
+            png_structp png = owner.png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+            png_infop info = owner.info = png ? png_create_info_struct(png) : nullptr;
             if (!png || !info) {
-                png_destroy_read_struct(&png, &info, nullptr);
                 error = "Could not allocate PNG decoder";
                 return false;
             }
             if (setjmp(png_jmpbuf(png))) {
-                png_destroy_read_struct(&png, &info, nullptr);
                 error = "PNG decode failed";
                 return false;
             }
@@ -343,7 +343,6 @@ namespace lfs::core::image_codecs {
             png_set_read_fn(png, &input, png_read_callback);
             png_read_info(png, info);
             const bool success = configure_png_target(png, info, target, result, error);
-            png_destroy_read_struct(&png, &info, nullptr);
             return success;
         }
 
@@ -352,15 +351,14 @@ namespace lfs::core::image_codecs {
                 error = "Invalid PNG signature";
                 return false;
             }
-            png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
-            png_infop info = png ? png_create_info_struct(png) : nullptr;
+            PngReadOwner owner;
+            png_structp png = owner.png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+            png_infop info = owner.info = png ? png_create_info_struct(png) : nullptr;
             if (!png || !info) {
-                png_destroy_read_struct(&png, &info, nullptr);
                 error = "Could not allocate PNG decoder";
                 return false;
             }
             if (setjmp(png_jmpbuf(png))) {
-                png_destroy_read_struct(&png, &info, nullptr);
                 error = "PNG decode failed";
                 return false;
             }
@@ -383,7 +381,6 @@ namespace lfs::core::image_codecs {
             const int channels = png_get_channels(png, info);
             bit_depth = png_get_bit_depth(png, info);
             if (width == 0 || height == 0 || channels < 1 || channels > 4 || (bit_depth != 8 && bit_depth != 16)) {
-                png_destroy_read_struct(&png, &info, nullptr);
                 error = "Unsupported PNG layout";
                 return false;
             }
@@ -402,7 +399,6 @@ namespace lfs::core::image_codecs {
             for (png_uint_32 y = 0; y < height; ++y)
                 rows[y] = result.data.data() + static_cast<std::size_t>(y) * row_bytes;
             const bool success = read_png_pixels(png, info, rows.data());
-            png_destroy_read_struct(&png, &info, nullptr);
             if (!success)
                 error = "PNG decode failed";
             return success;
@@ -1551,41 +1547,49 @@ namespace lfs::core::image_codecs {
     }
 
     namespace {
+        // Shared bounded ownership for encoded destinations. C callbacks can
+        // record allocation failure without unwinding through a codec ABI.
+        struct EncodedMemory {
+            enum class Failure { None,
+                                 Limit,
+                                 Allocation };
+            Failure failure = Failure::None;
+            std::vector<std::uint8_t> bytes;
+            std::size_t limit = 0;
+
+            bool append(const std::uint8_t* data, std::size_t count) noexcept {
+                if (count > limit - bytes.size()) {
+                    failure = Failure::Limit;
+                    return false;
+                }
+                try {
+                    const auto required = bytes.size() + count;
+                    if (required > bytes.capacity()) {
+                        const auto doubled = bytes.capacity() > limit / 2 ? limit : bytes.capacity() * 2;
+                        bytes.reserve(std::max(required, doubled));
+                    }
+                    if (count)
+                        bytes.insert(bytes.end(), data, data + count);
+                    return true;
+                } catch (const std::bad_alloc&) {
+                    // LFS-CENSUS-OK(empty-catch): retain the failure at the C
+                    // boundary; the caller returns ResourceExhausted.
+                    failure = Failure::Allocation;
+                    return false;
+                }
+            }
+        };
+
         struct JpegEncodeState {
             jpeg_compress_struct codec{};
             JpegError error{};
             std::FILE* file = nullptr;
             bool created = false;
             bool owns_file = true;
-            enum class MemoryFailure { None,
-                                       Limit,
-                                       Allocation };
-            MemoryFailure memory_failure = MemoryFailure::None;
+            EncodedMemory memory;
             jpeg_destination_mgr destination{};
             std::array<JOCTET, 4096> chunk{};
-            std::vector<std::uint8_t> bytes;
-            std::size_t output_limit = 0;
 
-            bool append_output(std::size_t count) noexcept {
-                if (count > output_limit - bytes.size()) {
-                    memory_failure = MemoryFailure::Limit;
-                    return false;
-                }
-                try {
-                    const auto required = bytes.size() + count;
-                    if (required > bytes.capacity()) {
-                        const auto doubled = bytes.capacity() > output_limit / 2 ? output_limit : bytes.capacity() * 2;
-                        bytes.reserve(std::max(required, doubled));
-                    }
-                    bytes.insert(bytes.end(), chunk.data(), chunk.data() + count);
-                    return true;
-                } catch (const std::bad_alloc&) {
-                    // LFS-CENSUS-OK(empty-catch): retain a failure code at the C
-                    // boundary; encode_jpeg_memory returns ResourceExhausted.
-                    memory_failure = MemoryFailure::Allocation;
-                    return false;
-                }
-            }
             static void init_output(j_compress_ptr codec) noexcept {
                 auto& self = *static_cast<JpegEncodeState*>(codec->client_data);
                 self.destination.next_output_byte = self.chunk.data();
@@ -1593,16 +1597,16 @@ namespace lfs::core::image_codecs {
             }
             static boolean flush_output(j_compress_ptr codec) noexcept {
                 auto& self = *static_cast<JpegEncodeState*>(codec->client_data);
-                // append_output returns before jumping: no exception or C++
+                // append returns before jumping: no exception or C++
                 // destructor-bearing frame is crossed by libjpeg's error jump.
-                if (!self.append_output(self.chunk.size()))
+                if (!self.memory.append(self.chunk.data(), self.chunk.size()))
                     std::longjmp(self.error.jump, 1);
                 init_output(codec);
                 return TRUE;
             }
             static void finish_output(j_compress_ptr codec) noexcept {
                 auto& self = *static_cast<JpegEncodeState*>(codec->client_data);
-                if (!self.append_output(self.chunk.size() - self.destination.free_in_buffer))
+                if (!self.memory.append(self.chunk.data(), self.chunk.size() - self.destination.free_in_buffer))
                     std::longjmp(self.error.jump, 1);
             }
             ~JpegEncodeState() {
@@ -1674,18 +1678,18 @@ namespace lfs::core::image_codecs {
             return failure(ErrorCode::InvalidArgument, "Invalid JPEG encoded-byte limit");
         try {
             auto state = std::make_unique<JpegEncodeState>();
-            state->output_limit = options.max_output_bytes;
+            state->memory.limit = options.max_output_bytes;
             if (!encode_jpeg(state.get(), data.data(), width, height, channels, options.quality,
                              options.comment ? options.comment->data() : nullptr,
                              options.comment ? options.comment->size() : 0, options.full_chroma, row_stride)) {
-                if (state->memory_failure != JpegEncodeState::MemoryFailure::None)
-                    return failure(ErrorCode::ResourceExhausted, state->memory_failure == JpegEncodeState::MemoryFailure::Limit
+                if (state->memory.failure != EncodedMemory::Failure::None)
+                    return failure(ErrorCode::ResourceExhausted, state->memory.failure == EncodedMemory::Failure::Limit
                                                                      ? "JPEG encoded-byte limit exhausted"
                                                                      : "Cannot allocate JPEG output buffer");
                 return failure(state->error.base.msg_code == JERR_OUT_OF_MEMORY ? ErrorCode::ResourceExhausted : ErrorCode::Unavailable,
                                std::string("JPEG encode failed: ") + state->error.message);
             }
-            output = std::move(state->bytes);
+            output = std::move(state->memory.bytes);
             return {};
         } catch (const std::bad_alloc&) {
             return failure(ErrorCode::ResourceExhausted, "Cannot allocate JPEG encoder state");
@@ -2543,18 +2547,36 @@ namespace lfs::core::image_codecs {
             out.push_back(static_cast<std::uint8_t>(value));
         }
 
-        bool write_png_chunk(std::FILE* file, const char* type, const std::uint8_t* data, const std::size_t size) {
-            std::vector<std::uint8_t> header;
-            append_u32(header, static_cast<std::uint32_t>(size));
-            header.insert(header.end(), type, type + 4);
+        struct PngOutput {
+            std::FILE* file = nullptr; // Borrowed; ownership stays outside C callbacks.
+            EncodedMemory* memory = nullptr;
+            bool write(const std::uint8_t* data, std::size_t size) noexcept {
+                return memory ? memory->append(data, size)
+                              : !size || std::fwrite(data, 1, size, file) == size;
+            }
+        };
+
+        struct PngFileCloser {
+            void operator()(FILE* file) const noexcept { std::fclose(file); }
+        };
+
+        bool write_png_chunk(PngOutput& output, const char* type, const std::uint8_t* data, const std::size_t size,
+                             std::span<const std::uint8_t> tail = {}) {
+            if (size > PNG_UINT_31_MAX || tail.size() > PNG_UINT_31_MAX - size)
+                return false;
+            const auto length = static_cast<std::uint32_t>(size + tail.size());
+            const std::array<std::uint8_t, 8> header{
+                std::uint8_t(length >> 24), std::uint8_t(length >> 16), std::uint8_t(length >> 8), std::uint8_t(length),
+                std::uint8_t(type[0]), std::uint8_t(type[1]), std::uint8_t(type[2]), std::uint8_t(type[3])};
             uLong crc = crc32(0L, reinterpret_cast<const Bytef*>(type), 4);
-            if (size > 0)
+            if (size)
                 crc = crc32_z(crc, data, size);
-            std::vector<std::uint8_t> trailer;
-            append_u32(trailer, static_cast<std::uint32_t>(crc));
-            return std::fwrite(header.data(), 1, header.size(), file) == header.size() &&
-                   (size == 0 || std::fwrite(data, 1, size, file) == size) &&
-                   std::fwrite(trailer.data(), 1, trailer.size(), file) == trailer.size();
+            if (!tail.empty())
+                crc = crc32_z(crc, tail.data(), tail.size());
+            const std::array<std::uint8_t, 4> trailer{
+                std::uint8_t(crc >> 24), std::uint8_t(crc >> 16), std::uint8_t(crc >> 8), std::uint8_t(crc)};
+            return output.write(header.data(), header.size()) && output.write(data, size) &&
+                   output.write(tail.data(), tail.size()) && output.write(trailer.data(), trailer.size());
         }
 
         std::uint8_t paeth_predictor(const int a, const int b, const int c) {
@@ -2599,35 +2621,50 @@ namespace lfs::core::image_codecs {
             uLong adler = 1;
             std::size_t filtered_bytes = 0;
             bool ok = false;
+            std::exception_ptr exception;
         };
 
         void encode_png_stripe(const std::uint8_t* pixels, const int width, const int channels, const int y_begin,
-                               const int y_end, const bool last, const int level, PngStripe& stripe) {
+                               const int y_end, const bool last, const int level, const std::size_t row_stride, PngStripe& stripe) {
             const auto row_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
             const auto rows = static_cast<std::size_t>(y_end - y_begin);
+            if (row_bytes == std::numeric_limits<std::size_t>::max() ||
+                rows > std::numeric_limits<uInt>::max() / (row_bytes + 1))
+                return;
             std::vector<std::uint8_t> filtered(rows * (row_bytes + 1));
             std::array<std::vector<std::uint8_t>, 5> candidates;
             for (auto& candidate : candidates)
                 candidate.resize(row_bytes);
             for (int y = y_begin; y < y_end; ++y) {
-                const auto* row = pixels + static_cast<std::size_t>(y) * row_bytes;
-                const auto* prev = y > 0 ? row - row_bytes : nullptr;
+                const auto* row = pixels + static_cast<std::size_t>(y) * row_stride;
+                const auto* prev = y > 0 ? row - row_stride : nullptr;
                 filter_png_row(row, prev, row_bytes, static_cast<std::size_t>(channels),
                                filtered.data() + static_cast<std::size_t>(y - y_begin) * (row_bytes + 1), candidates);
             }
 
             z_stream stream{};
-            if (deflateInit2(&stream, level, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
+            const int initialized = deflateInit2(&stream, level, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
+            if (initialized == Z_MEM_ERROR)
+                throw std::bad_alloc();
+            if (initialized != Z_OK)
                 return;
-            stripe.deflated.resize(deflateBound(&stream, static_cast<uLong>(filtered.size())) + 64);
+            struct DeflateGuard {
+                z_stream* stream;
+                ~DeflateGuard() { deflateEnd(stream); }
+            } guard{&stream};
+            const auto bound = deflateBound(&stream, static_cast<uLong>(filtered.size()));
+            if (bound > std::numeric_limits<uInt>::max() - 64)
+                return;
+            stripe.deflated.resize(bound + 64);
             stream.next_in = filtered.data();
             stream.avail_in = static_cast<uInt>(filtered.size());
             stream.next_out = stripe.deflated.data();
             stream.avail_out = static_cast<uInt>(stripe.deflated.size());
             const int status = deflate(&stream, last ? Z_FINISH : Z_SYNC_FLUSH);
+            if (status == Z_MEM_ERROR)
+                throw std::bad_alloc();
             const bool done = last ? status == Z_STREAM_END : (status == Z_OK && stream.avail_in == 0);
             stripe.deflated.resize(stream.total_out);
-            deflateEnd(&stream);
             stripe.adler = adler32_z(1L, filtered.data(), filtered.size());
             stripe.filtered_bytes = filtered.size();
             stripe.ok = done;
@@ -2635,12 +2672,13 @@ namespace lfs::core::image_codecs {
 
         bool write_png_parallel(const std::filesystem::path& path, const std::uint8_t* pixels, const int width,
                                 const int height, const int channels, const int compression_level,
-                                const std::optional<std::string>& comment, std::string& error, FILE* borrowed) {
+                                const std::optional<std::string>& comment, std::string& error, FILE* borrowed,
+                                std::size_t row_stride, EncodedMemory* memory = nullptr) {
             const auto row_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
             const unsigned threads = std::max(1u, std::thread::hardware_concurrency());
             // About 8 MiB of pixels per stripe keeps every core busy without hurting the ratio.
             const int stripe_rows = std::max(16, static_cast<int>((std::size_t{8} << 20) / std::max<std::size_t>(row_bytes, 1)));
-            const int stripe_count = (height + stripe_rows - 1) / stripe_rows;
+            const int stripe_count = 1 + (height - 1) / stripe_rows;
             const int level = std::clamp(compression_level, 0, 9);
 
             std::vector<PngStripe> stripes(static_cast<std::size_t>(stripe_count));
@@ -2648,12 +2686,19 @@ namespace lfs::core::image_codecs {
             const auto worker = [&] {
                 for (int s = next.fetch_add(1); s < stripe_count; s = next.fetch_add(1)) {
                     const int y_begin = s * stripe_rows;
-                    const int y_end = std::min(height, y_begin + stripe_rows);
-                    encode_png_stripe(pixels, width, channels, y_begin, y_end, s == stripe_count - 1, level,
-                                      stripes[static_cast<std::size_t>(s)]);
+                    const int y_end = y_begin + std::min(height - y_begin, stripe_rows);
+                    auto& stripe = stripes[static_cast<std::size_t>(s)];
+                    try {
+                        encode_png_stripe(pixels, width, channels, y_begin, y_end, s == stripe_count - 1, level,
+                                          row_stride, stripe);
+                    } catch (...) {
+                        // LFS-CENSUS-OK(empty-catch): forward the worker exception
+                        // after every worker has joined, never terminate a thread.
+                        stripe.exception = std::current_exception();
+                    }
                 }
             };
-            std::vector<std::thread> pool;
+            std::vector<std::jthread> pool;
             const unsigned pool_size = std::min<unsigned>(threads, static_cast<unsigned>(stripe_count));
             pool.reserve(pool_size);
             for (unsigned t = 1; t < pool_size; ++t)
@@ -2661,6 +2706,9 @@ namespace lfs::core::image_codecs {
             worker();
             for (auto& thread : pool)
                 thread.join();
+            for (const auto& stripe : stripes)
+                if (stripe.exception)
+                    std::rethrow_exception(stripe.exception);
             if (std::any_of(stripes.begin(), stripes.end(), [](const PngStripe& stripe) { return !stripe.ok; })) {
                 error = "PNG deflate failed";
                 return false;
@@ -2670,8 +2718,10 @@ namespace lfs::core::image_codecs {
             for (std::size_t s = 1; s < stripes.size(); ++s)
                 adler = adler32_combine(adler, stripes[s].adler, static_cast<z_off_t>(stripes[s].filtered_bytes));
 
-            std::FILE* file = borrowed ? borrowed : open_output_file(path);
-            if (!file) {
+            std::FILE* file = memory ? nullptr : borrowed ? borrowed
+                                                          : open_output_file(path);
+            std::unique_ptr<FILE, PngFileCloser> owned(borrowed || memory ? nullptr : file);
+            if (!memory && !file) {
                 error = "Could not open PNG output " + path_to_utf8(path);
                 return false;
             }
@@ -2683,32 +2733,115 @@ namespace lfs::core::image_codecs {
                                                             : channels == 3   ? 2
                                                                               : 6;
             ihdr.insert(ihdr.end(), {8, color_type, 0, 0, 0});
-            bool ok = std::fwrite(signature.data(), 1, signature.size(), file) == signature.size() &&
-                      write_png_chunk(file, "IHDR", ihdr.data(), ihdr.size());
+            PngOutput output{file, memory};
+            bool ok = output.write(signature.data(), signature.size()) &&
+                      write_png_chunk(output, "IHDR", ihdr.data(), ihdr.size());
             if (ok && comment && !comment->empty()) {
-                std::vector<std::uint8_t> text = {'C', 'o', 'm', 'm', 'e', 'n', 't', 0};
-                text.insert(text.end(), comment->begin(), comment->end());
-                ok = write_png_chunk(file, "tEXt", text.data(), text.size());
+                constexpr std::array<std::uint8_t, 8> key{'C', 'o', 'm', 'm', 'e', 'n', 't', 0};
+                ok = write_png_chunk(output, "tEXt", key.data(), key.size(),
+                                     {reinterpret_cast<const std::uint8_t*>(comment->data()), comment->size()});
             }
             const std::uint8_t level_bits = level < 2 ? 0 : level < 6 ? 1
                                                         : level == 6  ? 2
                                                                       : 3;
             std::uint8_t zlib_header[2] = {0x78, static_cast<std::uint8_t>(level_bits << 6)};
             zlib_header[1] = static_cast<std::uint8_t>(zlib_header[1] + (31 - (zlib_header[0] * 256 + zlib_header[1]) % 31));
-            ok = ok && write_png_chunk(file, "IDAT", zlib_header, sizeof(zlib_header));
+            ok = ok && write_png_chunk(output, "IDAT", zlib_header, sizeof(zlib_header));
             for (const auto& stripe : stripes) {
                 if (!ok)
                     break;
-                ok = write_png_chunk(file, "IDAT", stripe.deflated.data(), stripe.deflated.size());
+                ok = write_png_chunk(output, "IDAT", stripe.deflated.data(), stripe.deflated.size());
             }
             std::vector<std::uint8_t> checksum;
             append_u32(checksum, static_cast<std::uint32_t>(adler));
-            ok = ok && write_png_chunk(file, "IDAT", checksum.data(), checksum.size()) &&
-                 write_png_chunk(file, "IEND", nullptr, 0);
-            const bool closed = borrowed ? !std::ferror(borrowed) : std::fclose(file) == 0;
+            ok = ok && write_png_chunk(output, "IDAT", checksum.data(), checksum.size()) &&
+                 write_png_chunk(output, "IEND", nullptr, 0);
+            const bool closed = memory || (borrowed ? !std::ferror(borrowed) : std::fclose(owned.release()) == 0);
             if (!ok || !closed)
                 error = "Could not write PNG output " + path_to_utf8(path);
             return ok && closed;
+        }
+    } // namespace
+
+    namespace {
+        struct PngEncodeState {
+            png_structp png = nullptr;
+            png_infop info = nullptr;
+            PngOutput output;
+            std::vector<png_bytep> rows;
+            bool allocation_failed = false;
+            std::array<char, 256> message{};
+
+            static png_voidp allocate(png_structp png, png_alloc_size_t size) noexcept {
+                auto& self = *static_cast<PngEncodeState*>(png_get_mem_ptr(png));
+                void* result = std::malloc(size);
+                if (!result)
+                    self.allocation_failed = true;
+                return result;
+            }
+            static void release(png_structp, png_voidp pointer) noexcept { std::free(pointer); }
+            static void error(png_structp png, png_const_charp message) noexcept {
+                auto& self = *static_cast<PngEncodeState*>(png_get_error_ptr(png));
+                std::strncpy(self.message.data(), message, self.message.size() - 1);
+                png_longjmp(png, 1);
+            }
+            static void write(png_structp png, png_bytep data, png_size_t size) noexcept {
+                auto& self = *static_cast<PngEncodeState*>(png_get_io_ptr(png));
+                // append returns before png_error: no C++ owner or exception
+                // crosses the longjmp boundary.
+                if (!self.output.write(data, size))
+                    png_error(png, "PNG destination write failed");
+            }
+            static void flush(png_structp) noexcept {}
+            bool initialize() {
+                png = png_create_write_struct_2(PNG_LIBPNG_VER_STRING, this, error, nullptr,
+                                                this, allocate, release);
+                info = png ? png_create_info_struct(png) : nullptr;
+                if (!png || !info) {
+                    allocation_failed = true;
+                    return false;
+                }
+                return true;
+            }
+            ~PngEncodeState() { png_destroy_write_struct(&png, &info); }
+        };
+
+        // Codec jumps stay in this scalar-only frame. All C++ owners and mutable
+        // state live in the caller, including the row-pointer array.
+        bool encode_png_serial(PngEncodeState* state, const std::uint8_t* data,
+                               int width, int height, int channels, int bit_depth,
+                               std::size_t row_stride, int compression_level,
+                               const std::optional<std::string>& comment) {
+            if (!state->png && !state->initialize())
+                return false;
+            if (setjmp(png_jmpbuf(state->png)))
+                return false;
+            png_set_write_fn(state->png, state, PngEncodeState::write, PngEncodeState::flush);
+            const int color_type = channels == 1 ? PNG_COLOR_TYPE_GRAY : channels == 2 ? PNG_COLOR_TYPE_GRAY_ALPHA
+                                                                     : channels == 3   ? PNG_COLOR_TYPE_RGB
+                                                                                       : PNG_COLOR_TYPE_RGBA;
+            png_set_IHDR(state->png, state->info, width, height, bit_depth, color_type, PNG_INTERLACE_NONE,
+                         PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+            png_set_compression_level(state->png, std::clamp(compression_level, 0, 9));
+            png_set_compression_strategy(state->png, Z_DEFAULT_STRATEGY);
+            png_text text{};
+            if (comment && !comment->empty()) {
+                text.compression = PNG_TEXT_COMPRESSION_NONE;
+                text.key = const_cast<png_charp>("Comment");
+                text.text = const_cast<png_charp>(comment->c_str());
+                png_set_text(state->png, state->info, &text, 1);
+            }
+            png_write_info(state->png, state->info);
+            if constexpr (std::endian::native == std::endian::little) {
+                if (bit_depth == 16)
+                    png_set_swap(state->png);
+            }
+            state->rows.resize(height);
+            for (int y = 0; y < height; ++y)
+                state->rows[y] = const_cast<png_bytep>(data + static_cast<std::size_t>(y) * row_stride);
+            png_write_image(state->png, state->rows.data());
+            png_write_end(state->png, state->info);
+            return true;
         }
     } // namespace
 
@@ -2716,67 +2849,95 @@ namespace lfs::core::image_codecs {
                                  const int width, const int height, const int channels, const int bit_depth,
                                  const int compression_level, const std::optional<std::string>& comment,
                                  std::string& error, FILE* borrowed) {
-        if (!data || width <= 0 || height <= 0 || channels < 1 || channels > 4 || (bit_depth != 8 && bit_depth != 16)) {
+        if (!data || width <= 0 || height <= 0 || channels < 1 || channels > 4 || (bit_depth != 8 && bit_depth != 16) ||
+            static_cast<std::size_t>(width) > std::numeric_limits<std::size_t>::max() / channels / (bit_depth / 8)) {
             error = "Unsupported PNG layout";
             return false;
         }
-        if (bit_depth == 8 && static_cast<std::size_t>(width) * static_cast<std::size_t>(height) >= kParallelPngMinPixels) {
+        const auto row_bytes = static_cast<std::size_t>(width) * channels * (bit_depth / 8);
+        if (bit_depth == 8 && static_cast<std::size_t>(width) * height >= kParallelPngMinPixels)
             return write_png_parallel(path, static_cast<const std::uint8_t*>(data), width, height, channels,
-                                      compression_level, comment, error, borrowed);
-        }
-        png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
-        png_infop info = png ? png_create_info_struct(png) : nullptr;
-        if (!png || !info) {
-            png_destroy_write_struct(&png, &info);
+                                      compression_level, comment, error, borrowed, row_bytes);
+        // Preserve the file writer's preflight: failure to create the codec
+        // must not open/truncate the destination.
+        PngEncodeState state;
+        if (!state.initialize()) {
             error = "Could not allocate PNG encoder";
             return false;
         }
         std::FILE* file = borrowed ? borrowed : open_output_file(path);
+        std::unique_ptr<FILE, PngFileCloser> owned(borrowed ? nullptr : file);
         if (!file) {
-            png_destroy_write_struct(&png, &info);
             error = "Could not open PNG output " + path_to_utf8(path);
             return false;
         }
-        if (setjmp(png_jmpbuf(png))) {
-            if (!borrowed)
-                std::fclose(file);
-            png_destroy_write_struct(&png, &info);
-            error = "PNG encode failed";
-            return false;
-        }
-        png_init_io(png, file);
-        const int color_type = channels == 1 ? PNG_COLOR_TYPE_GRAY : channels == 2 ? PNG_COLOR_TYPE_GRAY_ALPHA
-                                                                 : channels == 3   ? PNG_COLOR_TYPE_RGB
-                                                                                   : PNG_COLOR_TYPE_RGBA;
-        png_set_IHDR(png, info, width, height, bit_depth, color_type, PNG_INTERLACE_NONE,
-                     PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
-        png_set_compression_level(png, std::clamp(compression_level, 0, 9));
-        png_set_compression_strategy(png, Z_DEFAULT_STRATEGY);
-        png_text text{};
-        if (comment && !comment->empty()) {
-            text.compression = PNG_TEXT_COMPRESSION_NONE;
-            text.key = const_cast<png_charp>("Comment");
-            text.text = const_cast<png_charp>(comment->c_str());
-            png_set_text(png, info, &text, 1);
-        }
-        png_write_info(png, info);
-        if constexpr (std::endian::native == std::endian::little) {
-            if (bit_depth == 16)
-                png_set_swap(png);
-        }
-        const auto row_bytes = static_cast<std::size_t>(width) * channels * (bit_depth / 8);
-        std::vector<png_bytep> rows(height);
-        auto* bytes = static_cast<png_bytep>(const_cast<void*>(data));
-        for (int y = 0; y < height; ++y)
-            rows[y] = bytes + static_cast<std::size_t>(y) * row_bytes;
-        const bool encoded = write_png_pixels(png, info, rows.data());
-        png_destroy_write_struct(&png, &info);
-        const bool closed = borrowed ? !std::ferror(borrowed) : std::fclose(file) == 0;
+        state.output.file = file;
+        const bool encoded = encode_png_serial(&state, static_cast<const std::uint8_t*>(data), width, height,
+                                               channels, bit_depth, row_bytes, compression_level, comment);
+        const bool closed = borrowed ? !std::ferror(borrowed) : std::fclose(owned.release()) == 0;
         if (!encoded)
             error = "PNG encode failed";
         else if (!closed)
             error = "Could not write PNG output " + path_to_utf8(path);
         return encoded && closed;
+    }
+
+    Status encode_png_memory(std::span<const std::uint8_t> data, int width, int height, int channels,
+                             int bit_depth, std::size_t row_stride, std::vector<std::uint8_t>& output,
+                             const PngEncodeOptions& options) {
+        const auto failure = [](ErrorCode code, std::string message) -> Status {
+            return Status::failure(make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()}));
+        };
+        const auto invalid = [&](std::string_view reason) -> Status {
+            return failure(ErrorCode::InvalidArgument,
+                           std::format("{} (width={}, height={}, channels={}, depth={}, stride={}, span_bytes={}, limit={})",
+                                       reason, width, height, channels, bit_depth, row_stride, data.size(), options.max_output_bytes));
+        };
+        if (width <= 0 || height <= 0 || channels < 1 || channels > 4 || (bit_depth != 8 && bit_depth != 16) ||
+            static_cast<std::size_t>(width) > std::numeric_limits<std::size_t>::max() / channels / (bit_depth / 8))
+            return invalid("Unsupported PNG layout");
+        const auto row_bytes = static_cast<std::size_t>(width) * channels * (bit_depth / 8);
+        if (row_stride < row_bytes || static_cast<std::size_t>(height - 1) > (std::numeric_limits<std::size_t>::max() - row_bytes) / row_stride ||
+            data.size() < row_stride * (height - 1) + row_bytes)
+            return invalid("Unsupported PNG buffer size or stride");
+        if (!options.max_output_bytes || options.max_output_bytes > output.max_size())
+            return invalid("Invalid PNG encoded-byte limit");
+        if (options.comment && (options.comment->find('\0') != std::string::npos || options.comment->size() > PNG_UINT_31_MAX - 8))
+            return invalid("Invalid PNG Comment text");
+        try {
+            EncodedMemory memory;
+            memory.limit = options.max_output_bytes;
+            bool encoded;
+            bool allocation_failed = false;
+            std::string error;
+            if (bit_depth == 8 && static_cast<std::size_t>(width) * height >= kParallelPngMinPixels) {
+                encoded = write_png_parallel({}, data.data(), width, height, channels, options.compression_level,
+                                             options.comment, error, nullptr, row_stride, &memory);
+            } else {
+                PngEncodeState state;
+                state.output.memory = &memory;
+                encoded = encode_png_serial(&state, data.data(), width, height, channels, bit_depth, row_stride,
+                                            options.compression_level, options.comment);
+                allocation_failed = state.allocation_failed;
+                if (allocation_failed)
+                    encoded = false;
+                if (!encoded)
+                    error = state.message.data();
+            }
+            if (!encoded) {
+                if (allocation_failed || memory.failure != EncodedMemory::Failure::None)
+                    return failure(ErrorCode::ResourceExhausted, memory.failure == EncodedMemory::Failure::Limit
+                                                                     ? "PNG encoded-byte limit exhausted"
+                                                                     : "Cannot allocate PNG encoder or output");
+                return failure(ErrorCode::Unavailable, "PNG encode failed: " + error);
+            }
+            output = std::move(memory.bytes);
+            return {};
+        } catch (const std::bad_alloc&) {
+            return failure(ErrorCode::ResourceExhausted, "Cannot allocate PNG encoder or output");
+        } catch (const std::system_error& error) {
+            return failure(ErrorCode::Unavailable, std::string("PNG worker creation failed: ") + error.what());
+        }
     }
 
     bool write_png(const std::filesystem::path& path, const void* data,

@@ -1,5 +1,54 @@
 # Shared Media Ingest module and optional CLI
 
+## PNG encoding to memory
+
+`lfs::core::image_codecs::encode_png_memory` accepts borrowed interleaved UInt8
+or native-endian UInt16 gray, gray-alpha, RGB and RGBA rows, with an explicit
+byte stride. Unaligned input and odd padding are supported; the final row needs
+only its sample bytes. Encoding is synchronous, preserves the input, and
+replaces the owning output vector only on success. Input/output aliasing is
+supported, including preservation of the original vector on failure.
+
+`PngEncodeOptions` defaults to compression level 6 (clamped to 0–9), no comment
+and a 256 MiB encoded-byte limit. The optional `Comment` is Latin-1 PNG tEXt;
+embedded NUL is rejected rather than silently truncating the memory API's text.
+The existing file writer's comment behavior is retained. No orientation, gamma,
+ICC, alpha association, exposure or precision conversion is applied, and source
+metadata is not copied automatically. UInt16 samples are written with PNG byte
+order without changing the borrowed native-endian samples. Alpha samples,
+including color values underneath fully transparent pixels, are preserved.
+Callers supply straight-alpha samples for PNG's interpretation; the encoder
+does not unpremultiply premultiplied input.
+
+Memory and file destinations share the existing encoding paths: libpng for
+UInt16 and small UInt8 images, and the parallel filter/deflate stripe writer for
+UInt8 images of at least 1,048,576 pixels. At equal dimensions, samples, level
+and valid comment, they produce the same encoded bytes. No temporary file,
+additional codec, GPU requirement or training cache is introduced.
+
+Invalid layouts, truncated spans, stride overflow and invalid options return
+`InvalidArgument`. Exceeding the encoded-byte limit or a handled allocation
+failure returns `ResourceExhausted`; codec or worker-creation failures return
+`Unavailable`. A failed worker is joined and its exception reported on the
+calling thread. The cap is checked before appending to the owned destination;
+it is not a total-RAM limit. Input, the previous output, libpng/zlib working
+storage and compressed parallel stripes also consume memory, and concurrent
+calls require a caller-managed aggregate budget. The encoder does not lower
+precision, remove alpha or change compression settings to satisfy a limit.
+
+The existing owning `decode`/`decode_memory` APIs preserve the PNG channel count
+and UInt8/UInt16 sample type. `decode_to_buffer`/`decode_memory_to_buffer` retain
+their separate RGB preparation contract; they are not an alpha-preserving
+replacement. Both direct paths honor a supplied RGB buffer or allocator. The
+STB fast path for a UInt16 file remains available when neither is supplied.
+
+The standalone codec CTest suite includes lossless/independent decoding, exact
+file/buffer comparisons, bounded output, aliasing, concurrent calls, allocator
+ownership and deterministic layout tests. Large 4K/8K and multi-stripe cases are
+registered separately as `lichtfeld_png_memory_stress_test` (`stress;image;cpu`).
+This C++ API does not change Python/MCP bindings or generated stubs. Other
+formats' memory encoders and loader/cache integration remain separate work.
+
 ## JPEG encoding to memory
 
 `lfs::core::image_codecs::encode_jpeg_memory` uses the existing libjpeg-turbo
