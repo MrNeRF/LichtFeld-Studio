@@ -940,6 +940,88 @@ TEST_F(FastGSKernelTest, EdgeWeightedContributionUsesFloatMapInMainBackward) {
                 std::max(1.0e-3f, expected_total_contribution * 1.0e-4f));
 }
 
+// The optional dominance output is each splat's peak per-pixel blend weight
+// (alpha x transmittance). Solo renders give exact references: alone, a splat's
+// blend weight is the rendered alpha; behind another it is alpha_back * (1 - alpha_front).
+TEST(FastGSDominanceTest, PeakBlendWeightMatchesSoloRenders) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    constexpr int width = 64, height = 48;
+    auto R = Tensor::eye(3, Device::CUDA);
+    std::vector<float> t_data{0.0f, 0.0f, 4.0f};
+    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto camera = Camera(R, T, 60.0f, 60.0f, width / 2.0f, height / 2.0f,
+                         Tensor(), Tensor(), CameraModelType::PINHOLE,
+                         "dominance", "", std::filesystem::path{}, width, height, 0);
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+
+    // A wide splat (many lanes of a warp contribute, so the max reduction runs), a wide
+    // splat right behind it, and a small splat far off to the side (few contributors).
+    struct Row {
+        float x, y, z, log_scale, opacity;
+    };
+    const std::vector<Row> rows{{0.0f, 0.0f, 0.0f, -1.6f, 0.7f},
+                                {0.05f, 0.0f, 0.5f, -1.6f, 0.6f},
+                                {1.2f, 0.4f, 0.0f, -5.0f, 0.9f}};
+
+    auto make_model = [&](const std::vector<size_t>& keep) {
+        const size_t n = keep.size();
+        std::vector<float> means, scales, opacities, rotations(n * 4, 0.0f);
+        for (size_t k = 0; k < n; ++k) {
+            const auto& row = rows[keep[k]];
+            means.insert(means.end(), {row.x, row.y, row.z});
+            scales.insert(scales.end(), {row.log_scale, row.log_scale, row.log_scale});
+            opacities.push_back(std::log(row.opacity / (1.0f - row.opacity)));
+            rotations[k * 4] = 1.0f;
+        }
+        return std::make_unique<SplatData>(
+            0,
+            Tensor::from_blob(means.data(), {n, size_t{3}}, Device::CPU, DataType::Float32).to(Device::CUDA),
+            Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA),
+            Tensor::zeros({n, size_t{0}, size_t{3}}, Device::CUDA),
+            Tensor::from_blob(scales.data(), {n, size_t{3}}, Device::CPU, DataType::Float32).to(Device::CUDA),
+            Tensor::from_blob(rotations.data(), {n, size_t{4}}, Device::CPU, DataType::Float32).to(Device::CUDA),
+            Tensor::from_blob(opacities.data(), {n}, Device::CPU, DataType::Float32).to(Device::CUDA),
+            1.0f);
+    };
+    auto solo_alpha = [&](const size_t row) {
+        auto model = make_model({row});
+        auto r = fast_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, false);
+        EXPECT_TRUE(r.has_value());
+        return r.has_value() ? r->first.alpha.clone() : Tensor::zeros({size_t{height}, size_t{width}}, Device::CUDA);
+    };
+    const auto alpha_front = solo_alpha(0);
+    const auto alpha_back = solo_alpha(1);
+    const auto alpha_small = solo_alpha(2);
+
+    auto model = make_model({0, 1, 2});
+    auto forward = fast_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, false);
+    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
+    AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
+    AdamOptimizer opt(*model, cfg);
+    opt.allocate_gradients();
+    opt.zero_grad(0);
+
+    auto dominance = Tensor::zeros({size_t{3}}, Device::CUDA, DataType::Float32);
+    FastGSFusedExtraGradients fused;
+    fused.dominance_out = dominance.ptr<float>();
+    fast_rasterize_backward(forward->second, Tensor::zeros_like(forward->first.image), *model, opt,
+                            {}, {}, DensificationType::None, 1, fused);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto actual = dominance.to(Device::CPU);
+    const float expected_front = alpha_front.max().item<float>();
+    const float expected_back = alpha_back.sub(alpha_back.mul(alpha_front)).max().item<float>();
+    const float expected_small = alpha_small.max().item<float>();
+    ASSERT_GT(expected_back, 0.0f) << "the back splat must be partly visible";
+    EXPECT_NEAR(actual.ptr<float>()[0], expected_front, 1.0e-4f);
+    EXPECT_NEAR(actual.ptr<float>()[1], expected_back, 1.0e-4f);
+    EXPECT_NEAR(actual.ptr<float>()[2], expected_small, 1.0e-4f);
+    EXPECT_LT(actual.ptr<float>()[1], expected_front) << "occlusion must lower the back splat's peak";
+}
+
 TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForCenteredSplat) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";

@@ -21,6 +21,9 @@ class MRNFStrategyTest_DensificationInfoShapeIsTwoRows_Test;
 class MRNFStrategyTest_ZeroVisibilityProducesNoGrowth_Test;
 class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
 class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
+class MRNFStrategyTest_GrowthExchangeFreesOnlySplatsLowInCoverageAndPeak_Test;
+class MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;
+class MRNFStrategyTest_RemoveGaussiansKeepsGrowthExchangeStateAligned_Test;
 
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
@@ -1442,6 +1445,117 @@ TEST(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
     strategy.visibility_accumulator().fill_(1.0f);
     strategy.grow_and_split(100, 0);
     EXPECT_GT(strategy.active_count(), active);
+}
+
+namespace {
+    param::OptimizationParameters growth_exchange_test_params() {
+        auto opt = vanilla_mrnf_params();
+        opt.iterations = 10'000;
+        opt.sh_degree_interval = 10'000;
+        opt.max_cap = 32;
+        opt.grow_fraction = 1.0f;
+        opt.grow_until_iter = 10'000;
+        opt.growth_exchange = 0.02f;
+        return opt;
+    }
+
+    // Row 0 is a large soft splat (high coverage, low peak), row 1 a small opaque one (low
+    // coverage, high peak); rows 2 and 3 rank low on both.
+    const std::vector<float> kExchangeCoverage{1000.0f, 1.0f, 0.5f, 0.6f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f};
+    const std::vector<float> kExchangePeak{0.01f, 0.95f, 0.02f, 0.03f, 0.40f, 0.41f, 0.42f, 0.43f, 0.44f, 0.45f};
+
+    std::vector<bool> free_rows(const Tensor& free_mask, const size_t n) {
+        const auto cpu = free_mask.slice(0, 0, n).cpu();
+        const bool* is_free = cpu.ptr<bool>();
+        return std::vector<bool>(is_free, is_free + n);
+    }
+} // namespace
+
+TEST(MRNFStrategyTest, GrowthExchangeFreesOnlySplatsLowInCoverageAndPeak) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(growth_exchange_test_params());
+
+    const size_t n = splat_data.size();
+    strategy._exchange_coverage = Tensor::from_vector(kExchangeCoverage, TensorShape({n}), Device::CUDA);
+    strategy._exchange_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+
+    EXPECT_EQ(strategy.exchange_least_important(2, Tensor::ones_bool({n}, Device::CUDA)), 2u);
+    const auto is_free = free_rows(strategy._free_mask, n);
+    EXPECT_FALSE(is_free[0]);
+    EXPECT_FALSE(is_free[1]);
+    EXPECT_TRUE(is_free[2]);
+    EXPECT_TRUE(is_free[3]);
+    EXPECT_EQ(strategy.free_count(), 2u);
+}
+
+TEST(MRNFStrategyTest, GrowthExchangeSkipsNewbornsUntilScored) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(growth_exchange_test_params());
+
+    const size_t n = splat_data.size();
+    strategy._exchange_coverage = Tensor::from_vector(kExchangeCoverage, TensorShape({n}), Device::CUDA);
+    strategy._exchange_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+
+    // Rows 2 and 3 were free before growth and hold children now.
+    const auto filled = Tensor::from_vector(std::vector<int>{2, 3}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+    strategy._exchange_free_before_growth = Tensor::zeros_bool({n}, Device::CUDA);
+    strategy._exchange_free_before_growth.index_put_(filled, Tensor::ones_bool({2}, Device::CUDA));
+    strategy.record_exchange_births();
+
+    const auto candidates = Tensor::ones_bool({n}, Device::CUDA);
+    EXPECT_EQ(strategy.exchange_least_important(2, candidates), 2u);
+    auto is_free = free_rows(strategy._free_mask, n);
+    EXPECT_FALSE(is_free[2]);
+    EXPECT_FALSE(is_free[3]);
+    EXPECT_TRUE(is_free[4]);
+    EXPECT_TRUE(is_free[5]);
+
+    // After a full pass the newborns rank by what they were scored since birth (nothing here).
+    strategy._exchange_windows += strategy.exchange_warmup_windows() + 1;
+    EXPECT_EQ(strategy.exchange_least_important(2, candidates), 2u);
+    is_free = free_rows(strategy._free_mask, n);
+    EXPECT_TRUE(is_free[2]);
+    EXPECT_TRUE(is_free[3]);
+    EXPECT_FALSE(is_free[0]);
+    EXPECT_FALSE(is_free[1]);
+}
+
+TEST(MRNFStrategyTest, RemoveGaussiansKeepsGrowthExchangeStateAligned) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(growth_exchange_test_params());
+    splat_data._densification_info = Tensor::ones({2, static_cast<size_t>(splat_data.size())}, Device::CUDA);
+
+    const size_t n = splat_data.size();
+    strategy._exchange_coverage = Tensor::from_vector(kExchangeCoverage, TensorShape({n}), Device::CUDA);
+    strategy._exchange_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+
+    const auto mask = Tensor::from_vector(
+        std::vector<bool>{true, false, false, false, false, false, false, false, false, true},
+        TensorShape({10}),
+        Device::CUDA);
+    strategy.remove_gaussians(mask);
+
+    ASSERT_EQ(splat_data.size(), 8u);
+    ASSERT_EQ(strategy._exchange_coverage.numel(), 8u);
+    ASSERT_EQ(strategy._exchange_peak.numel(), 8u);
+    ASSERT_EQ(strategy._exchange_birth.numel(), 8u);
+    const auto coverage = strategy._exchange_coverage.cpu().to_vector();
+    EXPECT_EQ(coverage, std::vector<float>(kExchangeCoverage.begin() + 1, kExchangeCoverage.end() - 1));
+    // The kept rows rank as before: rows 2 and 3 (now 1 and 2) are still the ones exchanged.
+    EXPECT_EQ(strategy.exchange_least_important(2, Tensor::ones_bool({8}, Device::CUDA)), 2u);
+    const auto is_free = free_rows(strategy._free_mask, 8);
+    EXPECT_TRUE(is_free[1]);
+    EXPECT_TRUE(is_free[2]);
+    EXPECT_EQ(strategy.free_count(), 2u);
 }
 
 namespace {
