@@ -196,10 +196,10 @@ namespace lfs::vis {
 
         // Matches viewport_grid.slang's Parameters.
         struct alignas(16) GridParameters {
-            std::array<float, 4> view_position_plane{};
-            std::array<float, 4> opacity{};
-            std::array<float, 4> near_origin{}, near_x{}, near_y{};
-            std::array<float, 4> far_origin{}, far_x{}, far_y{};
+            std::array<float, 4> plane_opacity_ortho{};
+            std::array<float, 4> pivot_radius{};
+            std::array<float, 4> ray_origin{}, ray_origin_x{}, ray_origin_y{};
+            std::array<float, 4> ray_dir{}, ray_dir_x{}, ray_dir_y{};
         };
         static_assert(sizeof(GridParameters) == 128);
 
@@ -211,16 +211,17 @@ namespace lfs::vis {
         }
 
         GridParameters gridParameters(const ViewportGridOverlay& grid) {
-            const auto corners = gridFrustumCorners(grid.view, grid.projection, grid.orthographic);
+            const auto rays = gridRays(grid.view, grid.projection, grid.pivot, grid.orthographic);
             return {
-                .view_position_plane = array3(grid.view_position, float(std::clamp(grid.plane, 0, 2))),
-                .opacity = {std::clamp(grid.opacity, 0.0f, 1.0f), 0, 0, 0},
-                .near_origin = array3(corners.near_origin),
-                .near_x = array3(corners.near_x),
-                .near_y = array3(corners.near_y),
-                .far_origin = array3(corners.far_origin),
-                .far_x = array3(corners.far_x),
-                .far_y = array3(corners.far_y),
+                .plane_opacity_ortho = {float(std::clamp(grid.plane, 0, 2)), std::clamp(grid.opacity, 0.0f, 1.0f),
+                                        grid.orthographic ? 1.0f : 0.0f, 0.0f},
+                .pivot_radius = array3(grid.pivot, rays.floor_radius),
+                .ray_origin = array3(rays.origin),
+                .ray_origin_x = array3(rays.origin_x),
+                .ray_origin_y = array3(rays.origin_y),
+                .ray_dir = array3(rays.dir),
+                .ray_dir_x = array3(rays.dir_x),
+                .ray_dir_y = array3(rays.dir_y),
             };
         }
 
@@ -696,6 +697,7 @@ namespace lfs::vis {
                                  .projection = desc.grid_projection,
                                  .view_projection = desc.grid_view_projection,
                                  .view_position = desc.grid_view_position,
+                                 .pivot = desc.grid_pivot,
                                  .plane = desc.grid_plane,
                                  .opacity = desc.grid_opacity,
                                  .orthographic = desc.grid_orthographic});
