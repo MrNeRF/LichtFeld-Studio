@@ -1,5 +1,36 @@
 # Shared Media Ingest module and optional CLI
 
+## JPEG encoding to memory
+
+`lfs::core::image_codecs::encode_jpeg_memory` uses the existing libjpeg-turbo
+encoder and settings shared with the file writer. It accepts a borrowed span of
+interleaved UInt8 grayscale or RGB samples, dimensions and an explicit byte row
+stride. Padding is supported; the last row only needs its actual sample bytes.
+The call is synchronous and replaces the owning output vector only on success,
+including when the input span aliases that vector.
+
+`JpegEncodeOptions` defaults to quality 95, RGB 4:2:0 and a 64 MiB encoded-byte
+limit. Quality is clamped to 1–100; `full_chroma` selects RGB 4:4:4. Optional COM
+bytes follow the file writer's 65,533-byte truncation policy. The byte limit is
+enforced during encoding, before growing the destination; it is not a limit on
+libjpeg's internal working memory. Invalid layouts return `InvalidArgument`;
+exceeding the output limit or allocation failure returns `ResourceExhausted`.
+Each call owns its encoder state and can run independently on another thread.
+High-entropy 8K RGB at quality 100 with 4:4:4 can exceed the default encoded-byte
+limit. Consumers must select an appropriate explicit limit or handle
+`ResourceExhausted`; the encoder does not silently reduce quality. Peak memory
+also includes input, the previous output retained until success, destination
+growth and libjpeg working storage. Concurrent calls multiply those costs;
+their scheduling and aggregate budget remain the caller's responsibility.
+
+This CPU codec operation creates no temporary file and performs no orientation,
+color-space, float quantization or alpha conversion. Callers prepare those
+samples and choose quality/chroma explicitly. It exposes compressed bytes for
+existing cache or transport consumers without introducing another cache or a
+dependency from core to media. It does not automatically copy source metadata,
+change training loaders, or add a Python binding. Memory encoding for other
+formats remains separate work.
+
 ## Original image EXIF
 
 `media-ingest source-exif INPUT` explicitly reads JPEG APP1 EXIF before the first

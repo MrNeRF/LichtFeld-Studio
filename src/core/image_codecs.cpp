@@ -10,6 +10,7 @@
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 
+#include <jerror.h>
 #include <jpeglib.h>
 #include <png.h>
 #define STB_IMAGE_STATIC
@@ -1556,6 +1557,54 @@ namespace lfs::core::image_codecs {
             std::FILE* file = nullptr;
             bool created = false;
             bool owns_file = true;
+            enum class MemoryFailure { None,
+                                       Limit,
+                                       Allocation };
+            MemoryFailure memory_failure = MemoryFailure::None;
+            jpeg_destination_mgr destination{};
+            std::array<JOCTET, 4096> chunk{};
+            std::vector<std::uint8_t> bytes;
+            std::size_t output_limit = 0;
+
+            bool append_output(std::size_t count) noexcept {
+                if (count > output_limit - bytes.size()) {
+                    memory_failure = MemoryFailure::Limit;
+                    return false;
+                }
+                try {
+                    const auto required = bytes.size() + count;
+                    if (required > bytes.capacity()) {
+                        const auto doubled = bytes.capacity() > output_limit / 2 ? output_limit : bytes.capacity() * 2;
+                        bytes.reserve(std::max(required, doubled));
+                    }
+                    bytes.insert(bytes.end(), chunk.data(), chunk.data() + count);
+                    return true;
+                } catch (const std::bad_alloc&) {
+                    // LFS-CENSUS-OK(empty-catch): retain a failure code at the C
+                    // boundary; encode_jpeg_memory returns ResourceExhausted.
+                    memory_failure = MemoryFailure::Allocation;
+                    return false;
+                }
+            }
+            static void init_output(j_compress_ptr codec) noexcept {
+                auto& self = *static_cast<JpegEncodeState*>(codec->client_data);
+                self.destination.next_output_byte = self.chunk.data();
+                self.destination.free_in_buffer = self.chunk.size();
+            }
+            static boolean flush_output(j_compress_ptr codec) noexcept {
+                auto& self = *static_cast<JpegEncodeState*>(codec->client_data);
+                // append_output returns before jumping: no exception or C++
+                // destructor-bearing frame is crossed by libjpeg's error jump.
+                if (!self.append_output(self.chunk.size()))
+                    std::longjmp(self.error.jump, 1);
+                init_output(codec);
+                return TRUE;
+            }
+            static void finish_output(j_compress_ptr codec) noexcept {
+                auto& self = *static_cast<JpegEncodeState*>(codec->client_data);
+                if (!self.append_output(self.chunk.size() - self.destination.free_in_buffer))
+                    std::longjmp(self.error.jump, 1);
+            }
             ~JpegEncodeState() {
                 if (created)
                     jpeg_destroy_compress(&codec);
@@ -1567,7 +1616,7 @@ namespace lfs::core::image_codecs {
         // The jump stays inside a scalar-only frame; ownership lives in the caller.
         bool encode_jpeg(JpegEncodeState* state, const std::uint8_t* data,
                          int width, int height, int channels, int quality,
-                         const char* comment, std::size_t comment_size, bool full_chroma) {
+                         const char* comment, std::size_t comment_size, bool full_chroma, std::size_t row_stride) {
             state->codec.err = jpeg_std_error(&state->error.base);
             state->error.base.error_exit = jpeg_error_exit;
             if (setjmp(state->error.jump)) {
@@ -1575,7 +1624,15 @@ namespace lfs::core::image_codecs {
             }
             state->created = true;
             jpeg_create_compress(&state->codec);
-            jpeg_stdio_dest(&state->codec, state->file);
+            if (state->file)
+                jpeg_stdio_dest(&state->codec, state->file);
+            else {
+                state->codec.client_data = state;
+                state->destination.init_destination = JpegEncodeState::init_output;
+                state->destination.empty_output_buffer = JpegEncodeState::flush_output;
+                state->destination.term_destination = JpegEncodeState::finish_output;
+                state->codec.dest = &state->destination;
+            }
             state->codec.image_width = width;
             state->codec.image_height = height;
             state->codec.input_components = channels;
@@ -1592,13 +1649,48 @@ namespace lfs::core::image_codecs {
                                   static_cast<unsigned int>(std::min<std::size_t>(comment_size, 65533)));
             }
             while (state->codec.next_scanline < state->codec.image_height) {
-                JSAMPROW row = const_cast<JSAMPROW>(data + static_cast<std::size_t>(state->codec.next_scanline) * static_cast<std::size_t>(width) * static_cast<std::size_t>(channels));
+                JSAMPROW row = const_cast<JSAMPROW>(data + static_cast<std::size_t>(state->codec.next_scanline) * row_stride);
                 jpeg_write_scanlines(&state->codec, &row, 1);
             }
             jpeg_finish_compress(&state->codec);
             return true;
         }
     } // namespace
+
+    Status encode_jpeg_memory(std::span<const std::uint8_t> data, int width, int height, int channels,
+                              std::size_t row_stride, std::vector<std::uint8_t>& output,
+                              const JpegEncodeOptions& options) {
+        const auto failure = [](ErrorCode code, std::string message) -> Status {
+            return Status::failure(make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()}));
+        };
+        if (width <= 0 || height <= 0 || width > JPEG_MAX_DIMENSION || height > JPEG_MAX_DIMENSION ||
+            (channels != 1 && channels != 3))
+            return failure(ErrorCode::InvalidArgument, "Unsupported JPEG layout");
+        const auto row_bytes = static_cast<std::size_t>(width) * channels;
+        if (row_stride < row_bytes || static_cast<std::size_t>(height - 1) > (std::numeric_limits<std::size_t>::max() - row_bytes) / row_stride ||
+            data.size() < row_stride * (height - 1) + row_bytes)
+            return failure(ErrorCode::InvalidArgument, "Unsupported JPEG buffer size or stride");
+        if (!options.max_output_bytes || options.max_output_bytes > output.max_size())
+            return failure(ErrorCode::InvalidArgument, "Invalid JPEG encoded-byte limit");
+        try {
+            auto state = std::make_unique<JpegEncodeState>();
+            state->output_limit = options.max_output_bytes;
+            if (!encode_jpeg(state.get(), data.data(), width, height, channels, options.quality,
+                             options.comment ? options.comment->data() : nullptr,
+                             options.comment ? options.comment->size() : 0, options.full_chroma, row_stride)) {
+                if (state->memory_failure != JpegEncodeState::MemoryFailure::None)
+                    return failure(ErrorCode::ResourceExhausted, state->memory_failure == JpegEncodeState::MemoryFailure::Limit
+                                                                     ? "JPEG encoded-byte limit exhausted"
+                                                                     : "Cannot allocate JPEG output buffer");
+                return failure(state->error.base.msg_code == JERR_OUT_OF_MEMORY ? ErrorCode::ResourceExhausted : ErrorCode::Unavailable,
+                               std::string("JPEG encode failed: ") + state->error.message);
+            }
+            output = std::move(state->bytes);
+            return {};
+        } catch (const std::bad_alloc&) {
+            return failure(ErrorCode::ResourceExhausted, "Cannot allocate JPEG encoder state");
+        }
+    }
 
     bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
                     const int width, const int height, const int channels, const int quality,
@@ -2420,7 +2512,8 @@ namespace lfs::core::image_codecs {
             return false;
         }
         if (!encode_jpeg(state.get(), data, width, height, channels, quality,
-                         comment ? comment->data() : nullptr, comment ? comment->size() : 0, full_chroma)) {
+                         comment ? comment->data() : nullptr, comment ? comment->size() : 0, full_chroma,
+                         static_cast<std::size_t>(width) * channels)) {
             const auto message = "JPEG encode failed for " + path_to_utf8(path);
             set_error(error, message.c_str(), state->error.message);
             return false;

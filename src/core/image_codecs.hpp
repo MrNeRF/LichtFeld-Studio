@@ -82,6 +82,21 @@ namespace lfs::core::image_codecs {
     LFS_IMAGE_CODECS_API bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
     LFS_IMAGE_CODECS_API bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);
 
+    struct JpegEncodeOptions {
+        int quality = 95; // Clamped to [1, 100], matching the file writer.
+        bool full_chroma = false;
+        std::optional<std::string> comment;
+        std::size_t max_output_bytes = 64 * 1024 * 1024;
+    };
+    // Synchronous encoding of borrowed interleaved UINT8 gray/RGB rows. No color,
+    // orientation or alpha conversion. Output is replaced only on success and
+    // owns its bytes; the encoded-byte limit is enforced while producing them.
+    // Uses the same encoder/settings as write_jpeg; no temporary file or GPU.
+    [[nodiscard]] LFS_IMAGE_CODECS_API Status encode_jpeg_memory(
+        std::span<const std::uint8_t> data, int width, int height, int channels,
+        std::size_t row_stride, std::vector<std::uint8_t>& output,
+        const JpegEncodeOptions& options = {});
+
     // RGB uses 4:2:0 by default; full_chroma selects 4:4:4 for high-quality exports.
     LFS_IMAGE_CODECS_API bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
                                          int width, int height, int channels, int quality,
