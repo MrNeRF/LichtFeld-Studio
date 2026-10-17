@@ -374,6 +374,7 @@ namespace lfs::vis {
                                context.scene_manager->getTrainerManager()->isRunning(),
             .depth_window_drag_preview = depthWindowDragPreview(context.view),
             .gaussian_selection_visible = gaussian_selection_visible_,
+            .exact_surface_picking = exact_surface_picking_,
             .cursor_preview = view.viewport_overlay_service_.cursorPreview(),
             .gizmo = gizmo_state_,
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),

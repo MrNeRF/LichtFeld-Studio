@@ -183,7 +183,8 @@ kernel void shared_image_rgba_split(constant SharedImageRgbaParams& p [[buffer(0
         else
             ((device float*)p.rgb)[k * p.pixels + index] = float(src[k]) * kImageScaleU8;
     }
-    p.alpha[index] = float(src[3]) * kImageScaleU8;
+    // Alpha is a mask: correctly rounded, as kMaskU8HWToF32HW.
+    p.alpha[index] = float(src[3]) / 255.0f;
 }
 
 struct SharedImageMaskParams {
