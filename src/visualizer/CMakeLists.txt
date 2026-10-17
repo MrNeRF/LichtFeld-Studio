@@ -359,6 +359,7 @@ target_sources(lfs_visualizer
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:gui/rmlui/rmlui_vk_backend.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:gui/rmlui/rmlui_tensor_backend.cpp>
         gui/rmlui/rml_image_file.cpp
+        gui/rmlui/rml_preview_texture.cpp
         rendering/scene_renderer.cpp
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/vksplat_input_packer.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/vulkan_external_tensor.cpp>

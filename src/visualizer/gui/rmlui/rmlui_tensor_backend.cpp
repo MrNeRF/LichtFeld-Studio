@@ -8,6 +8,7 @@
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/rml_image_file.hpp"
+#include "gui/rmlui/rml_preview_texture.hpp"
 #include "gui/rmlui/tensor_frosted_glass.hpp"
 #include "gui/ui_texture.hpp"
 #include "rendering/tensor_frame_uploads.hpp"
@@ -51,6 +52,7 @@ namespace lfs::vis::gui {
             std::string name;
             // Generated textures (glyph atlases) sample nearest, like the Vulkan renderer.
             bool linear = true;
+            bool preview = false;
         };
         struct Layer {
             Tensor image;
@@ -138,6 +140,7 @@ namespace lfs::vis::gui {
         TensorFrostedGlassBackdrop frosted_glass;
         uint64_t texture_generation = 0;
         bool preview_used = false;
+        PreviewTextureLoader previews;
 
         // Draws into one target are submitted together. Each entry owns its
         // tensors, so geometry and textures may be released before the flush.
@@ -309,6 +312,8 @@ namespace lfs::vis::gui {
                         texture->image = std::move(current);
                         preview_used = true;
                     }
+            if (texture && texture->preview)
+                preview_used = true;
             if (texture && texture->image && texture->image->is_valid()) {
                 parameters.texture_size = {uint32_t(texture->image->size(1)),
                                            uint32_t(texture->image->size(0))};
@@ -386,6 +391,7 @@ namespace lfs::vis::gui {
     void TensorRmlUiRenderer::shutdown() {
         if (!impl_)
             return;
+        impl_->previews.stop();
         impl_->pending.clear();
         impl_->pending_target = nullptr;
         for (const auto& quad : impl_->texture_quads)
@@ -409,6 +415,24 @@ namespace lfs::vis::gui {
         if (!impl_->graphics || !impl_->draw_program || !impl_->composite_program ||
             !impl_->mask_program)
             return false;
+        impl_->previews.uploadReady([this](Rml::TextureHandle handle, const Rml::String& source,
+                                           PreviewTexturePixels& pixels) {
+            auto* texture = reinterpret_cast<Texture*>(handle);
+            try {
+                auto image = std::make_shared<Tensor>(impl_->uploads.upload(
+                    std::as_bytes(std::span(pixels.pixels)),
+                    {std::size_t(pixels.height), std::size_t(pixels.width), 4}, DataType::UInt8));
+                image->set_name("ui.preview_texture");
+                if (texture->image)
+                    impl_->texture_bytes -= std::min(impl_->texture_bytes, texture->image->bytes());
+                impl_->texture_bytes += image->bytes();
+                texture->image = std::move(image);
+                return true;
+            } catch (const std::exception& error) {
+                LOG_ERROR("Could not upload tensor RmlUi preview texture '{}': {}", source, error.what());
+                return false;
+            }
+        });
         impl_->base = impl_->graphics->finalImageTensor(frame);
         impl_->layer_stack = {0};
         impl_->pending.clear();
@@ -530,6 +554,21 @@ namespace lfs::vis::gui {
 
     Rml::TextureHandle TensorRmlUiRenderer::LoadTexture(Rml::Vector2i& dimensions,
                                                         const Rml::String& source) {
+        if (isPreviewTextureSource(source)) {
+            const auto request = parsePreviewTextureRequest(source);
+            if (!request)
+                return {};
+            dimensions = request->layoutDimensions();
+            static constexpr Rml::byte transparent_pixel[4] = {0, 0, 0, 0};
+            const auto handle = GenerateTexture({transparent_pixel, sizeof(transparent_pixel)}, {1, 1});
+            auto* texture = reinterpret_cast<Texture*>(handle);
+            if (!texture)
+                return {};
+            texture->linear = true;
+            texture->preview = true;
+            impl_->previews.load(handle, source, *request);
+            return handle;
+        }
         if (const auto id = tensorUrlId(source)) {
             auto image = uiTextureImage(*id);
             if (!image)
@@ -551,6 +590,7 @@ namespace lfs::vis::gui {
     }
 
     void TensorRmlUiRenderer::ReleaseTexture(Rml::TextureHandle handle) {
+        impl_->previews.cancel(handle);
         std::unique_ptr<Texture> texture(reinterpret_cast<Texture*>(handle));
         if (texture && texture->image)
             impl_->texture_bytes -= std::min(impl_->texture_bytes, texture->image->bytes());
@@ -776,7 +816,7 @@ namespace lfs::vis::gui {
         impl_->capture_area.reset();
     }
     uint64_t TensorRmlUiRenderer::previewTextureGeneration() const {
-        return impl_->texture_generation + uiTextureGeneration();
+        return impl_->texture_generation + uiTextureGeneration() + impl_->previews.generation();
     }
     bool TensorRmlUiRenderer::currentContextUsedPreviewTexture() const { return impl_->preview_used; }
     UiRendererMemoryStatistics TensorRmlUiRenderer::memoryStatistics() const {

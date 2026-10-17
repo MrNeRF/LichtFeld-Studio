@@ -7,6 +7,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/vulkan_queue_sync.hpp"
+#include "gui/rmlui/rml_preview_texture.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "gui/vulkan_ui_texture.hpp"
 #include "window/vulkan_context.hpp"
@@ -29,9 +30,6 @@ class RenderInterfaceVKTestAccess {
 public:
     using Pool = RenderInterface_VK::MemoryPool;
     using Allocation = decltype(RenderInterface_VK::geometry_handle_t{}.m_p_vertex_allocation);
-    static auto decode(const std::filesystem::path& path) {
-        return RenderInterface_VK::DecodePreviewTexture(path, 256, true);
-    }
     static RenderInterface_VK::frame_state_t frame(const RenderInterface_VK& backend) {
         return backend.CaptureFrameState();
     }
@@ -78,7 +76,7 @@ namespace {
     // Catches a catalog entry whose file was deleted flooding the log with a warning and stack on every start.
     TEST_F(PreviewDecodeTest, MissingProjectHasNoPreviewAndNoWarning) {
         WarningCapture warnings;
-        const auto result = RenderInterfaceVKTestAccess::decode(directory_ / "deleted.licht");
+        const auto result = lfs::vis::gui::decodePreviewTexture(directory_ / "deleted.licht", 256, true);
         EXPECT_TRUE(result.pixels.empty());
         EXPECT_EQ(warnings.count(), 0u);
     }
@@ -88,7 +86,7 @@ namespace {
         const auto damaged = directory_ / "damaged.licht";
         std::ofstream(damaged, std::ios::binary) << "not a project";
         WarningCapture warnings;
-        const auto result = RenderInterfaceVKTestAccess::decode(damaged);
+        const auto result = lfs::vis::gui::decodePreviewTexture(damaged, 256, true);
         EXPECT_TRUE(result.pixels.empty());
         EXPECT_EQ(warnings.count(), 1u);
     }
