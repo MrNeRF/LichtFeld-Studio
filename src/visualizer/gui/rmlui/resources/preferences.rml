@@ -479,11 +479,10 @@
           <span class="text-accent">@tr:preferences.scene_graph</span>
         </div>
         <div class="section-content" data-if="scene_graph_expanded">
-          <div class="preferences-row preferences-checkbox-row preferences-interface-option">
+          <div class="preferences-row preferences-checkbox-row preferences-interface-option" data-tooltip="preferences.scene_graph_selection_markers_description">
             <span class="preferences-label">@tr:preferences.scene_graph_selection_markers</span>
             <input type="checkbox" data-checked="scene_graph_selection_markers" data-attrif-disabled="mcp_safe_mode" />
           </div>
-          <span class="preferences-description">@tr:preferences.scene_graph_selection_markers_description</span>
           <div class="preferences-row" data-tooltip="preferences.drag_format_hint">
             <span class="preferences-label">@tr:preferences.drag_default</span>
             <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_format"><option value="ply">@tr:preferences.drag_ply</option><option value="spz">@tr:preferences.drag_spz</option></select>

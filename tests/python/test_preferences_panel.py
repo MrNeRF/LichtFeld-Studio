@@ -1474,6 +1474,13 @@ def test_drag_settings_use_one_sh_cap_and_localized_tooltips():
     inline = " ".join("".join(element.itertext()) for element in document.iter("span")
                       if "preferences-description" in element.get("class", ""))
     assert not any(key in inline for key in tooltip_keys)
+    marker_hint = "preferences.scene_graph_selection_markers_description"
+    marker_row = next(element for element in document.iter("div")
+                      if element.get("data-tooltip") == marker_hint)
+    marker = next(element for element in marker_row.iter("input")
+                  if element.get("data-checked") == "scene_graph_selection_markers")
+    assert marker.get("data-attrif-disabled") == "mcp_safe_mode"
+    assert marker_hint not in inline
     axes = next(element for element in document.iter()
                 if element.get("data-tooltip") == "preferences.drag_axes_hint")
     assert axes.get("data-if") == "splat_drag_format == 'ply'"
@@ -1481,3 +1488,4 @@ def test_drag_settings_use_one_sh_cap_and_localized_tooltips():
         data = json.loads(path.read_text(encoding="utf-8"))
         assert all(data.get(key) for key in tooltip_keys), path.name
         assert not any("SOG" in data[key].upper() for key in tooltip_keys), path.name
+        assert data["preferences"]["scene_graph_selection_markers_description"].strip(), path.name
