@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "gui/gui_manager.hpp"
 #include "licht_test_support.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -27,12 +26,10 @@ namespace lfs::vis {
             (void)setenv("LFS_HOME", temporary_.path.string().c_str(), 1);
 #endif
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
 
         void TearDown() override {
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
 #ifdef _WIN32
             (void)_putenv_s("LFS_HOME", previous_home_ ? previous_home_->c_str() : "");
 #else

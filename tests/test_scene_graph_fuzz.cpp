@@ -3,7 +3,6 @@
 
 #include "app/include/app/mcp_app_utils.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/mesh_data.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
@@ -225,7 +224,6 @@ namespace {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             lfs::vis::services().clear();
             lfs::vis::op::undoHistory().clear();
             manager_ = std::make_unique<lfs::vis::SceneManager>();
@@ -240,7 +238,6 @@ namespace {
             lfs::vis::services().clear();
             rendering_.reset();
             manager_.reset();
-            lfs::core::event::bus().clear_all();
             lfs::event::EventBridge::instance().clear_all();
         }
 

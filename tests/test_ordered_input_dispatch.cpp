@@ -3,7 +3,6 @@
 #include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
@@ -574,7 +573,6 @@ namespace lfs::vis {
             gui_ = viewer_->getGuiManager();
             if (!keepSceneHandlers()) {
                 lfs::event::EventBridge::instance().clear_all();
-                lfs::core::event::bus().clear_all();
             }
             window_->window_ = SDL_CreateWindow("Input dispatch", 400, 300, SDL_WINDOW_HIDDEN);
             ASSERT_NE(window_->window_, nullptr);

@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "operation/undo_history.hpp"
@@ -39,7 +38,6 @@ namespace lfs::vis {
         void TearDown() override {
             setHome(old_home_.value_or(""));
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
         static void setHome(const std::string& home) {
 #ifdef _WIN32
@@ -129,7 +127,6 @@ namespace {
             ~EventGuard() { clear(); }
             static void clear() {
                 lfs::event::EventBridge::instance().clear_all();
-                lfs::core::event::bus().clear_all();
             }
         } event_guard;
         Viewport viewport(640, 480);
@@ -498,7 +495,6 @@ namespace lfs::vis::op {
             context_.reset();
             manager_.reset();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
 
         OperatorResult action(Services::AlignUiAction action) {
