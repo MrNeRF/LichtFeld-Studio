@@ -16,7 +16,7 @@ Questo elimina il precedente prerequisito di attendere la preparazione prima di 
 
 ## Preferenze e dati
 
-Interfaccia → Albero della scena: PLY, SPZ v4 oppure SOG; qualità massima o grado SH per formato; iterazioni SOG personalizzate 1–100; conversione assi Blender per PLY. Qualità massima mantiene tutti gli SH memorizzati e tutti gli splat non eliminati, anche con SH ridotti nel viewport. PLY è binario float32. SPZ/SOG restano compressi con perdita; il preset SOG usa 100 iterazioni, senza promettere ottimalità matematica.
+Interfaccia → Albero della scena: PLY, SPZ v4 oppure SOG; qualità massima o grado SH per formato; iterazioni SOG personalizzate 1-100; conversione assi Blender per PLY. Qualità massima mantiene tutti gli SH memorizzati e tutti gli splat non eliminati, anche con SH ridotti nel viewport. PLY è binario float32. SPZ/SOG restano compressi con perdita; il preset SOG usa 100 iterazioni, senza promettere ottimalità matematica.
 
 PLY per Blender converte RDF in `(x, z, -y)` e trasforma insieme geometria, covarianza e SH. SPZ e SOG mantengono le convenzioni dei writer. Per Blender senza add-on usare PLY; SOG non viene dichiarato formato nativo Blender. SPZ SH0 sul Blender originale può richiedere la correzione upstream separata.
 
@@ -52,7 +52,7 @@ Windows: configurare `BUILD_SPLAT_TRANSFER_TESTS=ON`, compilare e usare:
 ctest --test-dir .local/build --output-on-failure -R "^(splat_transfer_contract|native_drag_contract)$"
 ```
 
-Il contratto export usa i writer reali: SH0–3, snapshot indipendente, maschera eliminati, assi e trasformazioni mondo, covarianza, opacità/DC, rotazione numerica SH1, LOD foglie, riduzione SH, nomi portabili, SPZ/SOG, input invalidi, annullamento durante scrittura, batch, rollback, errore IO, coda satura, future non bloccante e temporanei scaduti. SPZ/SOG sono verifiche di produzione del file, non round-trip numerici completi di tutti i coefficienti compressi.
+Il contratto export usa i writer reali: SH0-3, snapshot indipendente, maschera eliminati, assi e trasformazioni mondo, covarianza, opacità/DC, rotazione numerica SH1, LOD foglie, riduzione SH, nomi portabili, SPZ/SOG, input invalidi, annullamento durante scrittura, batch, rollback, errore IO, coda satura, future non bloccante e temporanei scaduti. SPZ/SOG sono verifiche di produzione del file, non round-trip numerici completi di tutti i coefficienti compressi.
 
 Il contratto COM esegue 6.000 cicli: enumerazione senza generazione, generazione una sola volta, letture ripetute con storage indipendente, annullamento senza dati ed errore del provider. Dopo riscaldamento misura handle e memoria privata. Questo non certifica ogni percorso di ogni applicazione ricevente.
 
@@ -82,7 +82,7 @@ Nessuna sessione grafica dell’utente è stata aperta. Restano da verificare fi
 
 Build Windows completata; contratti CTest Windows 2/2 e Linux standalone 2/2 superati. Su Linux GCC 14 compila i backend con warning come errori e ASan/UBSan; il controllo delle perdite è abilitato. Il test COM copre 6.000 cicli; non sostituisce una prova fisica con Explorer. I test Python mirati a export e preferenze sono 89 superati.
 
-Blender originale 5.3.0 Beta, build `346d005c9994`, importa senza addon i PLY SH0–3 generati dal contratto, inclusi nomi Unicode. Due punti per fixture; errore massimo sulle posizioni circa 1,91e-7. Questo verifica l’importatore nativo, non un gesto fisico tra finestre.
+Blender originale 5.3.0 Beta, build `346d005c9994`, importa senza addon i PLY SH0-3 generati dal contratto, inclusi nomi Unicode. Due punti per fixture; errore massimo sulle posizioni circa 1,91e-7. Questo verifica l’importatore nativo, non un gesto fisico tra finestre.
 
 La suite CPU Python estesa su Windows ha prodotto 3.762 pass, 66 segnalazioni di fallimento, 40 skip e 410 deselezioni. I 61 identificatori unici falliti sono stati rieseguiti sui sorgenti della base `d161094a9eac9cd1f22f8c280549d2b5dc3c63e8`: tutti e 61 falliscono anche lì, usando lo stesso ambiente Windows e lo stesso runtime compilato locale. Non è una build nativa indipendente del master e non prova la correttezza di ogni percorso runtime. Questi problemi non sono stati corretti in questo branch, come richiesto dall’utente.
 
