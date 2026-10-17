@@ -732,7 +732,7 @@ def test_scene_tree_aligns_hierarchy_and_keeps_row_actions_trailing():
     assert "margin-right: 6dp;" in scene_view_rule
 
     tree_rule = _rule_body(scene_rcss, "#tree-container")
-    assert "overflow-y: scroll;" in tree_rule
+    assert "overflow-y: auto;" in tree_rule
 
     node_name_rule = _rule_body(scene_rcss, ".node-name")
     assert "flex-grow: 1;" in node_name_rule
