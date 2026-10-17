@@ -227,6 +227,10 @@ namespace lfs::rendering {
         // Export-only capture before RGBA8 presentation; interactive/default
         // renders retain their current allocation and readback behavior.
         bool capture_float_color = false;
+        // The caller reads this output back right after render() returns.
+        // Renderers that grow their reservation from measured demand must
+        // re-render until it fits instead of publishing the overflow fallback.
+        bool require_complete_output = false;
         // Occlusion consumers need per-pixel depth, not HiGS batch-leading depth.
         bool require_exact_depth = false;
         // Optional row-major bitset of 4x4 pixel regions (rounded up at edges).

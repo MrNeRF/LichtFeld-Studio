@@ -100,10 +100,14 @@ namespace lfs::vis {
                 try {
                     auto& n = native();
                     n.setLodSettings(pool_, fraction_, fade_);
-                    auto result = legacyMetalResult(n.render(context_, m, r, t, expected_, deterministic || capture_, content_changed));
+                    // A fresh target's first frame can overflow its instance
+                    // reservation; read back as-is it holds the previous image
+                    // of that extent, or nothing at all.
+                    const bool complete_output = deterministic || capture_ || r.require_complete_output;
+                    auto result = legacyMetalResult(n.render(context_, m, r, t, expected_, complete_output, content_changed));
                     if (!result)
                         return result;
-                    if (deterministic || capture_) {
+                    if (complete_output) {
                         for (int attempt = 0;; ++attempt) {
                             auto complete = legacyMetalResult(n.outputComplete(t));
                             if (!complete)
@@ -111,7 +115,7 @@ namespace lfs::vis {
                             if (*complete)
                                 break;
                             if (attempt == 4)
-                                return std::unexpected(std::format("Metal export reservation did not converge (target={}, attempts={})", t.value, attempt + 1));
+                                return std::unexpected(std::format("Metal output reservation did not converge (target={}, attempts={})", t.value, attempt + 1));
                             result = legacyMetalResult(n.render(context_, m, r, t, expected_, true));
                             if (!result)
                                 return result;
