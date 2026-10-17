@@ -668,15 +668,21 @@ namespace lfs::vis::gui {
         });
         if (selected.error != SplatDragError::None || selected.splats.empty()) {
             LOG_INFO("[splat-transfer] source hierarchy rejected: reason={} splats={}", static_cast<int>(selected.error), selected.splats.size());
+            if (const auto* rejected = scene.getNodeById(selected.failed_node.value_or(id))) {
+                external_progress_ = std::make_shared<FileTransferProgressState>(std::make_shared<std::atomic<bool>>(false));
+                external_progress_->error_message = LOCF("preferences.drag_rejected_node", rejected->name);
+            }
             // Delay user-visible rejection until the gesture actually leaves
             // the app; ordinary internal moves must not show export errors.
         }
         std::vector<std::pair<core::NodeId, core::Uuid>> identity;
+        std::vector<std::string> labels;
         for (const auto candidate_id : selected.splats) {
             const auto* node = scene.getNodeById(candidate_id);
             if (!node || node->type != core::NodeType::SPLAT || !node->model)
                 return;
             identity.emplace_back(candidate_id, node->uuid);
+            labels.push_back(node->name);
         }
         auto* window = SDL_GetMouseFocus();
         if (!window)
@@ -703,7 +709,7 @@ namespace lfs::vis::gui {
         // No scene/model pointer or Element is retained by a receiver's data
         // object. Resolve identities again on the UI thread when data is read.
         external_progress_ = std::make_shared<FileTransferProgressState>(std::make_shared<std::atomic<bool>>(false));
-        external_provider_ = [identity = std::move(identity), revision = scene.renderGeneration(), prefs, progress = external_progress_] {
+        external_provider_ = [identity = std::move(identity), labels = std::move(labels), revision = scene.renderGeneration(), prefs, progress = external_progress_] {
             const auto cancelled = progress->cancelled;
             bool job_started = false;
             try {
@@ -716,6 +722,7 @@ namespace lfs::vis::gui {
                 job_started = gui->asyncTasks().beginDragExport(format, [progress] { progress->requestCancel(); });
                 if (!job_started)
                     throw std::runtime_error("Another export is active");
+                gui->asyncTasks().reportDragExport(0, LOCF("preferences.drag_item", 1, labels.size(), labels.front()));
                 const auto worker_start = gui->asyncTasks().dragExportWorkerStart();
                 auto* live = services().sceneOrNull();
                 if (!live || live->getScene().renderGeneration() != revision)
@@ -730,7 +737,7 @@ namespace lfs::vis::gui {
                 for (const auto& [id, uuid] : identity) {
                     const auto* node = scene.getNodeById(id);
                     if (!node || node->uuid != uuid || !node->model)
-                        throw std::runtime_error("Transfer source no longer exists");
+                        throw SplatTransferError(sources.size(), "Transfer source no longer exists");
                     const int degree = prefs.maximum_quality ? -1 : prefs.format == "spz" ? prefs.spz_sh
                                                                 : prefs.format == "sog"   ? prefs.sog_sh
                                                                                           : prefs.ply_sh;
@@ -742,8 +749,9 @@ namespace lfs::vis::gui {
                 }
                 auto future = prepareSplatTransferBatch(sources, cancelled);
                 lock.reset(); // Owned CPU snapshot, no live model lock during IO.
-                auto files = waitForFileTransfer(future, *progress, [gui, window, progress, started = std::chrono::steady_clock::now(), shown = false](int value) mutable {
-                    gui->asyncTasks().reportDragExport(value / 1000.0f);
+                auto files = waitForFileTransfer(future, *progress, [gui, window, progress, labels, started = std::chrono::steady_clock::now(), shown = false](int value) mutable {
+                    const auto index = std::min(progress->current_item.load(), labels.size() - 1);
+                    gui->asyncTasks().reportDragExport(value / 1000.0f, LOCF("preferences.drag_item", index + 1, labels.size(), labels[index]));
                     if (!shown && mayShowTransferProgress(&window->nativeFileDragContext()) && std::chrono::steady_clock::now() - started >= std::chrono::milliseconds(250)) {
                         shown = true;
                         PanelRegistry::instance().set_panel_enabled("lfs.export", true);
@@ -753,14 +761,24 @@ namespace lfs::vis::gui {
                 gui->asyncTasks().finishDragExport(false);
                 return files;
             } catch (const std::exception& error) {
+                progress->error_message = tr("preferences.drag_failed");
+                if (const auto* item = dynamic_cast<const SplatTransferError*>(&error); item && item->item_index < labels.size())
+                    progress->error_message = LOCF("preferences.drag_failed_item", item->item_index + 1, labels.size(), labels[item->item_index]);
                 if (job_started)
                     if (auto* gui = services().guiOrNull())
-                        gui->asyncTasks().finishDragExport(progress->user_cancelled.load(), tr("preferences.drag_failed"));
+                        gui->asyncTasks().finishDragExport(progress->user_cancelled.load(), progress->error_message);
                 if (progress->user_cancelled.load())
                     LOG_INFO("[splat-transfer] deferred export cancelled");
                 else
                     LOG_ERROR("[splat-transfer] deferred export failed: {}", error.what());
                 throw;
+            } catch (...) {
+                progress->error_message = tr("preferences.drag_failed");
+                if (job_started)
+                    if (auto* gui = services().guiOrNull())
+                        gui->asyncTasks().finishDragExport(progress->user_cancelled.load(), progress->error_message);
+                LOG_ERROR("[splat-transfer] unknown deferred export failure");
+                throw std::runtime_error("Unknown deferred export failure");
             }
         };
         external_outside_only_ = outside_only;
@@ -803,7 +821,8 @@ namespace lfs::vis::gui {
         if (!external_provider_) {
             external_armed_ = false;
             if (auto* gui = services().guiOrNull())
-                gui->enqueueToast({.title = tr("preferences.drag_title"), .message = tr("preferences.drag_failed")});
+                gui->enqueueToast({.title = tr("preferences.drag_title"), .message = external_progress_ && !external_progress_->error_message.empty() ? external_progress_->error_message : tr("preferences.drag_failed")});
+            external_progress_.reset();
             return;
         }
         auto* window_manager = services().windowOrNull();
@@ -834,7 +853,7 @@ namespace lfs::vis::gui {
             LOG_INFO("[splat-transfer] native drag finished: {} {}", static_cast<int>(result.status), result.error);
             if (result.status == FileDragStatus::Failed || result.status == FileDragStatus::Unsupported)
                 if (auto* gui = services().guiOrNull())
-                    gui->enqueueToast({.title = tr("preferences.drag_title"), .message = tr("preferences.drag_failed")});
+                    gui->enqueueToast({.title = tr("preferences.drag_title"), .message = progress->error_message.empty() ? tr("preferences.drag_failed") : progress->error_message});
             return result;
         });
         markStateDirty();

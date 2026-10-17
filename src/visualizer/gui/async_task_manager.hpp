@@ -97,7 +97,7 @@ namespace lfs::vis {
             void cancelExport();
             bool beginDragExport(lfs::core::ExportFormat format, std::function<void()> cancel);
             std::function<void()> dragExportWorkerStart() const;
-            void reportDragExport(float progress);
+            void reportDragExport(float progress, std::string stage = {});
             void finishDragExport(bool cancelled, std::string error = {});
             [[nodiscard]] bool isDragExport() const { return bool(drag_export_cancel_); }
 

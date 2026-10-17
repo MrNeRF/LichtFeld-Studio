@@ -159,6 +159,20 @@ int main(int argc, char** argv) {
             require(paths.size() == 2 && paths[0] != paths[1], "Batch files collided");
             for (const auto& path : paths)
                 require(std::filesystem::is_regular_file(path), "Batch did not commit every file");
+            const lfs::vis::gui::SplatTransferSource invalid_sources[] = {
+                {&model, glm::mat4(1), {}},
+                {&model, glm::mat4(0), {}}};
+            bool indexed_snapshot_error = false;
+            try {
+                lfs::vis::gui::prepareSplatTransferBatch(invalid_sources, std::make_shared<std::atomic<bool>>(false));
+            } catch (const lfs::vis::gui::SplatTransferError& error) { indexed_snapshot_error = error.item_index == 1; }
+            require(indexed_snapshot_error, "Snapshot failure lost its node index");
+            const lfs::vis::gui::SplatTransferSource invalid_single[] = {{&model, glm::mat4(0), {}}};
+            indexed_snapshot_error = false;
+            try {
+                lfs::vis::gui::prepareSplatTransferBatch(invalid_single, std::make_shared<std::atomic<bool>>(false));
+            } catch (const lfs::vis::gui::SplatTransferError& error) { indexed_snapshot_error = error.item_index == 0; }
+            require(indexed_snapshot_error, "Single-item failure lost its node index");
             auto cancel = std::make_shared<std::atomic<bool>>(false);
             bool reached = false;
             rejected([&] { lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), cancel,
@@ -222,8 +236,16 @@ int main(int argc, char** argv) {
             bool rejected = false;
             try {
                 lfs::vis::gui::prepareSplatTransferBatch(sources, std::make_shared<std::atomic<bool>>(false)).get();
-            } catch (const std::exception&) { rejected = true; }
+            } catch (const lfs::vis::gui::SplatTransferError& error) { rejected = error.item_index == 1; }
             require(rejected && std::filesystem::is_empty(root), "Failed batch leaked partial or committed siblings");
+            const lfs::vis::gui::SplatTransferSource single_failure[] = {
+                {&model, glm::mat4(1), {.name = "single", .progress = [](float) -> bool { throw 42; }, .staging_root = root}}};
+            rejected = false;
+            try {
+                lfs::vis::gui::prepareSplatTransferBatch(single_failure, std::make_shared<std::atomic<bool>>(false)).get();
+            } catch (const lfs::vis::gui::SplatTransferError& error) { rejected = error.item_index == 0; }
+            require(rejected && std::filesystem::is_empty(root), "Single unknown writer failure lost node identity or leaked files");
+
             const auto blocker = root / "not-a-directory";
             std::ofstream(blocker) << "preserve";
             rejected = false;

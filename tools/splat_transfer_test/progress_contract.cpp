@@ -45,12 +45,12 @@ int main() {
     check(collect({7}).splats.empty() && collect({7}).error == SplatDragError::None);
     check(collect({1, 5}).splats.empty() && collect({1, 5}).error == SplatDragError::UnsupportedRoot);
     check(collect({999}).error == SplatDragError::MissingNode);
-    check(collect({8}).error == SplatDragError::UnloadedSplat);
+    check(collect({8}).error == SplatDragError::UnloadedSplat && collect({8}).failed_node == 8);
     tree[3].children.push_back(8);
-    check(collect({1}).splats.empty() && collect({1}).error == SplatDragError::UnloadedSplat);
+    check(collect({1}).splats.empty() && collect({1}).error == SplatDragError::UnloadedSplat && collect({1}).failed_node == 8);
     tree[3].children.pop_back();
     tree[3].children.push_back(1);
-    check(collect({1}).splats.empty() && collect({1}).error == SplatDragError::Cycle);
+    check(collect({1}).splats.empty() && collect({1}).error == SplatDragError::Cycle && collect({1}).failed_node == 1);
     tree[3].children.back() = 999;
     check(collect({1}).splats.empty() && collect({1}).error == SplatDragError::MissingNode);
     tree.clear();
@@ -67,7 +67,9 @@ int main() {
     state.report(1, 2, std::numeric_limits<float>::quiet_NaN());
     check(state.completed.load() == 500);
     state.report(1, 2, .5f);
-    check(state.completed.load() == 750);
+    check(state.completed.load() == 750 && state.current_item.load() == 1);
+    state.report(0, 2, 1);
+    check(state.current_item.load() == 1);
     state.report(1, 2, 2);
     check(state.completed.load() == 1000);
     cancelled->store(true);

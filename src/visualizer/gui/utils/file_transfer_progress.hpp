@@ -17,6 +17,8 @@ namespace lfs::vis::gui {
     struct FileTransferProgressState {
         std::shared_ptr<std::atomic<bool>> cancelled;
         std::atomic<int> completed{0};
+        std::atomic<size_t> current_item{0};
+        std::string error_message; // Written/read only by the native UI thread.
         std::atomic<bool> user_cancelled{false};
 
         explicit FileTransferProgressState(std::shared_ptr<std::atomic<bool>> token) : cancelled(std::move(token)) {}
@@ -26,6 +28,8 @@ namespace lfs::vis::gui {
         }
         bool report(size_t index, size_t count, float fraction) noexcept {
             if (count && index < count && std::isfinite(fraction)) {
+                auto item = current_item.load();
+                while (index > item && !current_item.compare_exchange_weak(item, index)) {}
                 const int next = static_cast<int>(1000.0 * (static_cast<double>(index) + std::clamp(fraction, 0.0f, 1.0f)) / static_cast<double>(count));
                 int previous = completed.load();
                 while (next > previous && !completed.compare_exchange_weak(previous, next)) {}

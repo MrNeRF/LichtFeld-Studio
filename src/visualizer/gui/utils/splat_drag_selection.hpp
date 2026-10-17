@@ -25,6 +25,7 @@ namespace lfs::vis::gui {
     struct SplatDragSelection {
         std::vector<Id> splats;
         SplatDragError error = SplatDragError::None;
+        std::optional<Id> failed_node = std::nullopt;
     };
     // Resolve live hierarchy on the UI thread. An iterative walk handles deeply
     // nested groups, including collapsed UI rows, without retaining scene nodes.
@@ -42,9 +43,9 @@ namespace lfs::vis::gui {
         for (auto it = roots.rbegin(); it != roots.rend(); ++it) {
             const auto node = lookup(*it);
             if (!node)
-                return {{}, SplatDragError::MissingNode};
+                return {{}, SplatDragError::MissingNode, *it};
             if (node->kind == SplatDragKind::Other)
-                return {{}, SplatDragError::UnsupportedRoot};
+                return {{}, SplatDragError::UnsupportedRoot, *it};
             pending.push_back({*it});
         }
         while (!pending.empty()) {
@@ -55,15 +56,15 @@ namespace lfs::vis::gui {
                 continue;
             }
             if (active.contains(id))
-                return {{}, SplatDragError::Cycle};
+                return {{}, SplatDragError::Cycle, id};
             if (!visited.insert(id).second)
                 continue;
             const auto node = lookup(id);
             if (!node)
-                return {{}, SplatDragError::MissingNode};
+                return {{}, SplatDragError::MissingNode, id};
             if (node->kind == SplatDragKind::Splat) {
                 if (!node->loaded)
-                    return {{}, SplatDragError::UnloadedSplat};
+                    return {{}, SplatDragError::UnloadedSplat, id};
                 result.splats.push_back(id);
             }
             active.insert(id);

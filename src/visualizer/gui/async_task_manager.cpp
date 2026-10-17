@@ -2471,10 +2471,10 @@ namespace lfs::vis::gui {
         };
     }
 
-    void AsyncTaskManager::reportDragExport(float progress) {
+    void AsyncTaskManager::reportDragExport(float progress, std::string stage) {
         if (!drag_export_cancel_)
             return;
-        jobs_.report(export_state_.job, progress);
+        jobs_.report(export_state_.job, progress, std::move(stage));
         publishExportState();
     }
 

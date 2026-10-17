@@ -695,3 +695,35 @@ def test_tree_export_request_selects_only_requested_splats(export_panel_module, 
     panel.on_update(None)
     assert panel._selected_nodes == set(requested)
     assert not state.splat_export_requests
+
+
+def test_drag_progress_updates_node_name_without_resetting_total(export_panel_module):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    for progress, stage in [(0.25, "Esportazione 1/2: Foresta"),
+                            (0.5, "Esportazione 1/2: Foresta"),
+                            (0.5, "Esportazione 2/2: Edificio <è>")]:
+        state.export_state = {"active": True, "progress": progress, "stage": stage, "format": "PLY"}
+        assert panel._update_export_progress()
+        assert panel._get_progress_stage() == stage
+        assert panel._progress_value == str(progress)
+        assert "progress_stage" in panel._handle.dirty_fields
+    assert state.export_calls == []
+
+
+def test_drag_progress_translations_have_identical_parameters():
+    import json
+    import string
+    locales = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    paths = list(locales.glob("*.json"))
+    assert paths
+    for path in paths:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for key, count in (("preferences.drag_item", 3), ("preferences.drag_failed_item", 3),
+                           ("preferences.drag_rejected_node", 1)):
+            text = data[key]
+            parameters = [field for _literal, field, _spec, _conversion in string.Formatter().parse(text)
+                          if field is not None]
+            assert parameters == [""] * count, (path.name, key)
+            assert text.format(*((2, 5, "Scena <è>") if count == 3 else ("Scena <è>",)))

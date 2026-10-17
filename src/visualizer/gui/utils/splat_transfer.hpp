@@ -11,9 +11,15 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 namespace lfs::vis::gui {
+    class LFS_VIS_API SplatTransferError : public std::runtime_error {
+    public:
+        const size_t item_index;
+        SplatTransferError(size_t index, const std::string& detail) : std::runtime_error(detail), item_index(index) {}
+    };
     struct SplatTransferOptions {
         std::string format = "ply";
         std::string name = "splat";

@@ -246,27 +246,43 @@ namespace lfs::vis::gui {
         // float SH can be larger than the compressed source tensor.
         constexpr size_t budget = size_t(2) * 1024 * 1024 * 1024;
         size_t bytes = 0;
-        for (const auto& source : sources) {
+        for (size_t index = 0; index < sources.size(); ++index) {
+            const auto& source = sources[index];
             if (!source.model)
-                throw std::runtime_error("Missing splat source");
+                throw SplatTransferError(index, "Missing splat source");
             const auto degree = source.model->get_max_sh_degree();
             const size_t per_point = sizeof(float) * (14 + 3 * (degree + 1) * (degree + 1)) + 1;
             if (source.model->size() > (budget - bytes) / per_point)
-                throw std::runtime_error("Drag snapshot exceeds 2 GiB; use the normal export panel");
+                throw SplatTransferError(index, "Drag snapshot exceeds 2 GiB; use the normal export panel");
             bytes += source.model->size() * per_point;
         }
         auto tasks = std::make_unique<std::vector<std::packaged_task<std::filesystem::path()>>>();
         tasks->reserve(sources.size());
-        for (const auto& source : sources)
-            tasks->push_back(captureTransfer(*source.model, source.world, cancelled, source.options));
+        for (size_t index = 0; index < sources.size(); ++index) {
+            const auto& source = sources[index];
+            try {
+                tasks->push_back(captureTransfer(*source.model, source.world, cancelled, source.options));
+            } catch (const std::exception& error) {
+                throw SplatTransferError(index, error.what());
+            } catch (...) {
+                throw SplatTransferError(index, "Unknown snapshot failure");
+            }
+        }
         return transferWorker().submit([tasks = std::move(tasks), cancelled]() mutable {
             std::vector<std::filesystem::path> paths;
             try {
                 paths.reserve(tasks->size()); // Allocate bookkeeping before any file commits.
-                for (auto& task : *tasks) {
-                    auto result = task.get_future();
-                    task();
-                    paths.push_back(result.get());
+                for (size_t index = 0; index < tasks->size(); ++index) {
+                    try {
+                        auto& task = (*tasks)[index];
+                        auto result = task.get_future();
+                        task();
+                        paths.push_back(result.get());
+                    } catch (const std::exception& error) {
+                        throw SplatTransferError(index, error.what());
+                    } catch (...) {
+                        throw SplatTransferError(index, "Unknown writer failure");
+                    }
                 }
                 if (cancelled->load())
                     throw std::runtime_error("Splat batch cancelled before delivery");
