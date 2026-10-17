@@ -2009,6 +2009,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
         lambda key: {
             "toolbar.focus_selection": "Focus Selection",
             "toolbar.reset_home": "Reset Home",
+            "input_settings.action.camera_set_home": "Set Home",
             "toolbar.asset_manager": "Projects",
             "menu.tools.plugin_marketplace": "Plugins",
             "toolbar.viewport_export": "Export",
@@ -2050,17 +2051,20 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert [button["action"] for button in primary_buttons] == [
         "home",
         "focus_selection",
+        "set_home",
         "reset_home",
     ]
     assert primary_buttons[1]["icon_src"] == "../icon/focus-selection.png"
     assert primary_buttons[1]["tooltip_text"] == "Focus Selection"
-    assert primary_buttons[2]["icon_src"] == "../icon/home-reset.png"
-    assert primary_buttons[2]["tooltip_text"] == "Reset Home"
+    assert primary_buttons[2]["icon_src"] == "../icon/home-check.png"
+    assert primary_buttons[2]["action_id"] == "CAMERA_SET_HOME"
+    assert primary_buttons[3]["icon_src"] == "../icon/home-reset.png"
+    assert primary_buttons[3]["tooltip_text"] == "Reset Home"
     reset_home_calls = []
     monkeypatch.setattr(lf_stub, "reset_home", lambda: reset_home_calls.append(True), raising=False)
     module._UtilityToolbarController().dispatch("reset_home", "")
     assert reset_home_calls == [True]
-    assert primary_buttons[2]["action_id"] == "CAMERA_RESTORE_HOME"
+    assert primary_buttons[3]["action_id"] == "CAMERA_RESTORE_HOME"
     # Shift-click on Home sets the home and Ctrl-click restores the default, as Shift+H and Ctrl+H.
     home_calls = []
     for name in ("go_home", "set_home", "reset_home"):
