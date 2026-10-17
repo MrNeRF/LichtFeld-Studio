@@ -25,6 +25,7 @@
 #include "gui/utils/native_drag_scheduler.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/utils/native_file_drag.hpp"
+#include "gui/utils/splat_drag_selection.hpp"
 #include "gui/utils/splat_export_request.hpp"
 #include "gui/utils/splat_transfer.hpp"
 #include "io/exporter.hpp"
@@ -643,6 +644,9 @@ namespace lfs::vis::gui {
 #if defined(_WIN32) || defined(__linux__)
         if (external_native_active_ || !external_context_)
             return;
+        external_armed_ = false;
+        external_provider_ = {};
+        external_progress_.reset();
         auto* manager = services().sceneOrNull();
         if (!manager)
             return;
@@ -654,8 +658,21 @@ namespace lfs::vis::gui {
         }
         if (ids.empty())
             ids.push_back(id);
+        const auto selected = collectSplatDragSelection<core::NodeId>(ids, [&scene](core::NodeId candidate) -> std::optional<SplatDragNode<core::NodeId>> {
+            const auto* node = scene.getNodeById(candidate);
+            if (!node)
+                return std::nullopt;
+            return SplatDragNode<core::NodeId>{node->type == core::NodeType::SPLAT ? SplatDragKind::Splat : node->type == core::NodeType::GROUP ? SplatDragKind::Group
+                                                                                                                                                : SplatDragKind::Other,
+                                               bool(node->model), node->children};
+        });
+        if (selected.error != SplatDragError::None || selected.splats.empty()) {
+            LOG_INFO("[splat-transfer] source hierarchy rejected: reason={} splats={}", static_cast<int>(selected.error), selected.splats.size());
+            // Delay user-visible rejection until the gesture actually leaves
+            // the app; ordinary internal moves must not show export errors.
+        }
         std::vector<std::pair<core::NodeId, core::Uuid>> identity;
-        for (const auto candidate_id : ids) {
+        for (const auto candidate_id : selected.splats) {
             const auto* node = scene.getNodeById(candidate_id);
             if (!node || node->type != core::NodeType::SPLAT || !node->model)
                 return;
@@ -677,6 +694,11 @@ namespace lfs::vis::gui {
             y = pointer->y;
         }
         external_origin_ = {x, y};
+        if (identity.empty()) {
+            external_outside_only_ = outside_only;
+            external_armed_ = true;
+            return; // No provider: updateExternalTransfer rejects outside only.
+        }
         const auto prefs = UserPreferences::instance().splatDrag();
         // No scene/model pointer or Element is retained by a receiver's data
         // object. Resolve identities again on the UI thread when data is read.
@@ -712,7 +734,7 @@ namespace lfs::vis::gui {
                     const int degree = prefs.maximum_quality ? -1 : prefs.format == "spz" ? prefs.spz_sh
                                                                 : prefs.format == "sog"   ? prefs.sog_sh
                                                                                           : prefs.ply_sh;
-                    sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string().substr(0, 8) : node->name, .sh_degree = degree, .sog_iterations = prefs.maximum_quality ? 100 : prefs.sog_iterations, .z_up = prefs.format == "ply" && prefs.blender_axes}});
+                    sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string() : node->name, .sh_degree = degree, .sog_iterations = prefs.maximum_quality ? 100 : prefs.sog_iterations, .z_up = prefs.format == "ply" && prefs.blender_axes}});
                     sources.back().options.progress = [progress, worker_start, index = sources.size() - 1, count = identity.size()](float fraction) {
                         worker_start();
                         return progress->report(index, count, fraction);
@@ -778,6 +800,12 @@ namespace lfs::vis::gui {
             outside = *native_outside;
         if (glm::length(glm::vec2(x, y) - external_origin_) < 6.0f || (external_outside_only_ && !outside))
             return;
+        if (!external_provider_) {
+            external_armed_ = false;
+            if (auto* gui = services().guiOrNull())
+                gui->enqueueToast({.title = tr("preferences.drag_title"), .message = tr("preferences.drag_failed")});
+            return;
+        }
         auto* window_manager = services().windowOrNull();
         if (!window_manager || window_manager->nativeDragScheduler().busy())
             return;
@@ -1206,7 +1234,7 @@ namespace lfs::vis::gui {
             const bool parent_is_dataset =
                 parent_it != snapshots.end() && parent_it->second.type == core::NodeType::DATASET;
             snapshot.draggable = canDrag(snapshot.type, parent_is_dataset, snapshot.locked) ||
-                                 snapshot.type == core::NodeType::SPLAT;
+                                 snapshot.type == core::NodeType::SPLAT || snapshot.type == core::NodeType::GROUP;
             snapshot.can_delete = isDeletable(snapshot.type, parent_is_dataset);
             snapshot.delete_enabled = snapshot.can_delete &&
                                       !snapshot.locked &&
@@ -2462,6 +2490,8 @@ namespace lfs::vis::gui {
 
     std::vector<core::NodeId> SceneGraphElement::draggedNodeIds() const {
         const auto source = node_snapshots_.find(drag_source_id_);
+        if (source != node_snapshots_.end() && source->second.type == core::NodeType::GROUP && source->second.locked)
+            return {drag_source_id_};
         if (source != node_snapshots_.end() && source->second.type == core::NodeType::SPLAT) {
             if (selected_ids_.contains(drag_source_id_)) {
                 std::vector<core::NodeId> splats;
@@ -3729,8 +3759,16 @@ namespace lfs::vis::gui {
                 return;
             }
             drag_node_ids_ = draggedNodeIds();
-            if (!drag_node_ids_.empty() && source_it->second.type == core::NodeType::SPLAT)
-                beginExternalTransfer(drag_source_id_, true, drag_node_ids_);
+            if (source_it->second.type == core::NodeType::SPLAT || source_it->second.type == core::NodeType::GROUP) {
+                // External copies include the full selected hierarchy, even when
+                // rows are collapsed or locked. Keep internal reparenting rules.
+                std::vector<core::NodeId> roots{drag_source_id_};
+                if (selected_ids_.contains(drag_source_id_)) {
+                    roots.assign(selected_ids_.begin(), selected_ids_.end());
+                    std::ranges::sort(roots);
+                }
+                beginExternalTransfer(drag_source_id_, true, std::move(roots));
+            }
             auto_expanded_group_id_ = core::NULL_NODE;
             auto_expand_hovered_group_id_ = core::NULL_NODE;
             dropped_into_auto_expanded_group_id_ = core::NULL_NODE;

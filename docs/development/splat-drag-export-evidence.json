@@ -110,5 +110,15 @@
   "focus_activation": {
     "implementation": "SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH enabled before video initialization",
     "physical_test": "Pending first-click drag validation on Windows and Linux desktops"
+  },
+  "group_drag": {
+    "behavior": "Flatten live group descendants to one file per unique splat; nested, collapsed, hidden and locked nodes included",
+    "selection": "Splat/group roots accepted; explicitly selected unsupported types rejected; missing/unloaded/cyclic hierarchies rejected without partial payload",
+    "contracts": "Nested and overlapping roots, empty group, invalid hierarchy, 20000-level iterative traversal",
+    "progress": "Three real IO exports: monotonic aggregate progress to 100%, independent transforms and mid-batch cancellation rollback",
+    "filenames": "Full UUID suffixes and full staging UUID fallback for long names",
+    "physical_test": "Pending group drag on real Windows and Linux destinations",
+    "manual_export": "Existing merged-file behavior retained",
+    "send_to_blender": "Not implemented"
   }
 }

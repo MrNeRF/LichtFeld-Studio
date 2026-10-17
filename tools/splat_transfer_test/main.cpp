@@ -1,7 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "formats/ply.hpp"
+#include "gui/utils/file_transfer_progress.hpp"
 #include "gui/utils/splat_transfer.hpp"
+#include <algorithm>
 #include <cmath>
 #include <core/uuid.hpp>
 #include <fstream>
@@ -244,6 +246,10 @@ int main(int argc, char** argv) {
             const auto first = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = "same", .staging_root = root}).get();
             const auto second = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = "same", .staging_root = root}).get();
             require(first != second && first.filename() == second.filename(), "Readable names or isolated transfer roots changed");
+            const auto long_first = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = std::string(200, 'x'), .staging_root = root}).get();
+            const auto long_second = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = std::string(200, 'x'), .staging_root = root}).get();
+            require(long_first.filename() != long_second.filename(), "Long batch names collided after fallback");
+            require(long_first.stem().string() == "splat-" + long_first.parent_path().filename().string(), "Long filename lost its full unique staging identity");
             std::ifstream input(existing);
             std::string preserved;
             std::getline(input, preserved);
@@ -258,6 +264,54 @@ int main(int argc, char** argv) {
             std::filesystem::remove_all(root); // Unique test-owned root above.
         }
         manifest["filename_isolation_and_existing_files"] = "passed";
+        {
+            using namespace lfs::vis::gui;
+            const auto root = std::filesystem::temp_directory_path() / ("lichtfeld-batch-progress-" + generate_uuid_v4().to_string());
+            std::filesystem::create_directories(root);
+            auto model = fixture(0);
+            auto cancelled = std::make_shared<std::atomic<bool>>(false);
+            FileTransferProgressState progress(cancelled);
+            std::vector<int> observed;
+            std::vector<SplatTransferSource> sources;
+            for (size_t i = 0; i < 3; ++i) {
+                sources.push_back({&model, glm::translate(glm::mat4(1), glm::vec3(float(i), 0, 0)), {.name = "member-" + std::to_string(i), .staging_root = root}});
+                sources.back().options.progress = [&, i](float value) {
+                    const bool keep = progress.report(i, 3, value);
+                    observed.push_back(progress.completed.load());
+                    return keep;
+                };
+            }
+            const auto files = prepareSplatTransferBatch(sources, cancelled).get();
+            require(files.size() == 3 && progress.completed.load() == 1000, "Batch progress did not finish at 100 percent");
+            for (size_t i = 0; i < files.size(); ++i) {
+                auto loaded = lfs::io::load_ply(files[i], options);
+                require(bool(loaded) && loaded->value.size() == 2, "Batch lost an object or point");
+                const auto positions = loaded->value.means().to(Device::CPU).contiguous();
+                const auto source = model.means().to(Device::CPU).contiguous();
+                checkNear(positions.ptr<float>()[0], source.ptr<float>()[0] + float(i));
+            }
+            require(std::is_sorted(observed.begin(), observed.end()), "Batch progress moved backwards");
+            require(std::ranges::any_of(observed, [](int value) { return value > 0 && value < 500; }) && std::ranges::any_of(observed, [](int value) { return value >= 500 && value < 1000; }), "Batch progress omitted intermediate members");
+            std::filesystem::remove_all(root); // Unique test-owned root.
+            std::filesystem::create_directories(root);
+            progress.completed.store(0);
+            observed.clear();
+            sources[1].options.progress = [&](float value) {
+                if (value > 0) {
+                    progress.requestCancel();
+                    return false;
+                }
+                return true;
+            };
+            bool rejected = false;
+            try {
+                prepareSplatTransferBatch(sources, cancelled).get();
+            } catch (const std::exception&) { rejected = true; }
+            require(rejected && progress.user_cancelled.load() && std::filesystem::is_empty(root), "Mid-batch cancellation left exported siblings");
+            std::filesystem::remove_all(root); // Unique test-owned root.
+        }
+        manifest["batch_aggregate_progress_and_cancel_rollback"] = "passed";
+
         std::ofstream output(argv[1]);
         output << manifest.dump(2);
         if (!output)

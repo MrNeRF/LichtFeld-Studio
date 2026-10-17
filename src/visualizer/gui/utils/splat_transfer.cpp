@@ -168,7 +168,7 @@ namespace lfs::vis::gui {
         if (options.name.empty())
             options.name = "splat";
         if (options.name.size() > 120)
-            options.name = id.substr(0, 12);
+            options.name = id;
         // Prefix also avoids Windows reserved device names such as CON and AUX.
         options.name = "splat-" + options.name;
         return std::packaged_task<std::filesystem::path()>(
@@ -262,11 +262,14 @@ namespace lfs::vis::gui {
         return transferWorker().submit([tasks = std::move(tasks), cancelled]() mutable {
             std::vector<std::filesystem::path> paths;
             try {
+                paths.reserve(tasks->size()); // Allocate bookkeeping before any file commits.
                 for (auto& task : *tasks) {
                     auto result = task.get_future();
                     task();
                     paths.push_back(result.get());
                 }
+                if (cancelled->load())
+                    throw std::runtime_error("Splat batch cancelled before delivery");
                 return paths;
             } catch (...) {
                 cancelled->store(true);

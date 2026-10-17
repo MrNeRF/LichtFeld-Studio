@@ -2,8 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "gui/utils/file_transfer_progress.hpp"
 #include "gui/utils/native_drag_scheduler.hpp"
+#include "gui/utils/splat_drag_selection.hpp"
 #include <iostream>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <thread>
 
@@ -13,6 +15,50 @@ int main() {
         if (!value)
             throw std::runtime_error("File transfer progress contract failed");
     };
+    struct Node {
+        SplatDragKind kind;
+        bool loaded = true;
+        std::vector<int> children;
+    };
+    std::map<int, Node> tree = {
+        {1, {SplatDragKind::Group, true, {2, 3, 6}}},
+        {2, {SplatDragKind::Splat, true, {}}},
+        {3, {SplatDragKind::Group, true, {4, 5}}},
+        {4, {SplatDragKind::Splat, true, {}}},
+        {5, {SplatDragKind::Other, true, {}}},
+        {6, {SplatDragKind::Splat, true, {}}},
+        {7, {SplatDragKind::Group, true, {}}},
+        {8, {SplatDragKind::Splat, false, {}}},
+    };
+    const auto collect = [&](std::vector<int> roots) {
+        return collectSplatDragSelection<int>(roots, [&](int id) -> std::optional<SplatDragNode<int>> {
+            const auto found = tree.find(id);
+            if (found == tree.end())
+                return std::nullopt;
+            return SplatDragNode<int>{found->second.kind, found->second.loaded, found->second.children};
+        });
+    };
+    check(collect({1}).splats == std::vector<int>({2, 4, 6}));
+    check(collect({1, 3, 2, 1}).splats == std::vector<int>({2, 4, 6}));
+    check(collect({4, 1}).splats == std::vector<int>({4, 2, 6}));
+    check(collect({2, 6}).splats == std::vector<int>({2, 6}));
+    check(collect({7}).splats.empty() && collect({7}).error == SplatDragError::None);
+    check(collect({1, 5}).splats.empty() && collect({1, 5}).error == SplatDragError::UnsupportedRoot);
+    check(collect({999}).error == SplatDragError::MissingNode);
+    check(collect({8}).error == SplatDragError::UnloadedSplat);
+    tree[3].children.push_back(8);
+    check(collect({1}).splats.empty() && collect({1}).error == SplatDragError::UnloadedSplat);
+    tree[3].children.pop_back();
+    tree[3].children.push_back(1);
+    check(collect({1}).splats.empty() && collect({1}).error == SplatDragError::Cycle);
+    tree[3].children.back() = 999;
+    check(collect({1}).splats.empty() && collect({1}).error == SplatDragError::MissingNode);
+    tree.clear();
+    for (int id = 1; id < 20000; ++id)
+        tree.emplace(id, Node{SplatDragKind::Group, true, {id + 1}});
+    tree.emplace(20000, Node{SplatDragKind::Splat, true, {}});
+    check(collect({1}).splats == std::vector<int>({20000}));
+
     auto cancelled = std::make_shared<std::atomic<bool>>(false);
     FileTransferProgressState state(cancelled);
     check(state.report(0, 2, 1));
