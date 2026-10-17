@@ -1149,7 +1149,8 @@
     "scale": "Skalieren",
     "mirror": "Spiegeln",
     "crop": "Zuschneiden",
-    "align": "Ausrichten"
+    "align": "Ausrichten",
+    "distance_scale": "Distance Scale"
   },
   "toolbar": {
     "selection": "Auswahl",
@@ -1213,7 +1214,13 @@
     "resize_bounds": "Grenzen ändern",
     "reset_default": "Auf Standard zurücksetzen",
     "fullscreen": "Vollbild",
-    "toggle_ui": "UI umschalten"
+    "toggle_ui": "UI umschalten",
+    "distance_scale": "Distance Scale",
+    "distance_scale_tool": "Distance Tool",
+    "distance_scale_measured": "Measured:",
+    "distance_scale_set": "Set Distance:",
+    "distance_scale_apply": "Confirm scale",
+    "distance_scale_reset": "Reset points"
   },
   "transform": {
     "node": "Knoten: %s",
@@ -3249,5 +3256,8 @@
     "discarded": "{discarded} verworfen"
   },
   "project.session.newer_settings.title": "Projekteinstellungen aus einer neueren Version",
-  "project.session.newer_settings.message": "Dieses Projekt enthält Einstellungen, die diese Version nicht erkennt. Verwendete Standardwerte für: {}"
+  "project.session.newer_settings.message": "Dieses Projekt enthält Einstellungen, die diese Version nicht erkennt. Verwendete Standardwerte für: {}",
+  "distance_scale": {
+    "status_invalid_distance": "Distance must be greater than zero."
+  }
 }

@@ -2345,6 +2345,23 @@ def get_align_edge_to_axis() -> bool:
 def set_align_edge_to_axis(enabled: bool) -> None:
     """Enable or disable align edge-to-+X in-plane yaw (session lifetime)"""
 
+def can_apply_distance_scale() -> bool:
+    """True when 2 valid points are picked for distance scale"""
+
+def get_distance_scale_measured() -> float:
+    """Get the measured distance between the 2 picked points"""
+
+def apply_distance_scale(target_distance: float) -> bool:
+    """
+    Request the running distance scale modal to rescale the scene to target distance
+    """
+
+def clear_distance_scale() -> None:
+    """Request the running distance scale modal to clear picked points"""
+
+def get_distance_scale_points() -> list["std::array<float, 3ul>"]:
+    """Get the picked points for the distance scale tool"""
+
 def fit_crop_tool(use_percentile: bool = False) -> None:
     """
     Fit the active crop tool primitive through the node-backed crop command path

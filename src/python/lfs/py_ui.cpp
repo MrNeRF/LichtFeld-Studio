@@ -3668,6 +3668,8 @@ namespace lfs::python {
                     {"scale", ToolType::Scale},
                     {"mirror", ToolType::Mirror},
                     {"align", ToolType::Align},
+                    {"distance_scale", ToolType::ScaleDistance},
+                    {"scale_distance", ToolType::ScaleDistance},
                 };
 
                 std::string lower_name = tool_name;
@@ -4003,6 +4005,7 @@ namespace lfs::python {
                 case vis::ToolType::Scale: return "builtin.scale";
                 case vis::ToolType::Mirror: return "builtin.mirror";
                 case vis::ToolType::Align: return "builtin.align";
+                case vis::ToolType::ScaleDistance: return "builtin.distance_scale";
                 default: return "";
                 }
             },
@@ -4025,6 +4028,7 @@ namespace lfs::python {
                     {"builtin.scale", vis::ToolType::Scale},
                     {"builtin.mirror", vis::ToolType::Mirror},
                     {"builtin.align", vis::ToolType::Align},
+                    {"builtin.distance_scale", vis::ToolType::ScaleDistance},
                 };
                 const auto it = tool_map.find(id);
                 if (it == tool_map.end()) {
@@ -4044,6 +4048,7 @@ namespace lfs::python {
                     {"builtin.scale", vis::ToolType::Scale},
                     {"builtin.mirror", vis::ToolType::Mirror},
                     {"builtin.align", vis::ToolType::Align},
+                    {"builtin.distance_scale", vis::ToolType::ScaleDistance},
                 };
                 auto it = tool_map.find(id);
                 if (it != tool_map.end()) {
@@ -4503,6 +4508,73 @@ namespace lfs::python {
             },
             nb::arg("enabled"),
             "Enable or disable align edge-to-+X in-plane yaw (session lifetime)");
+
+        m.def(
+            "can_apply_distance_scale",
+            []() -> bool {
+                const auto& pts = lfs::vis::services().getScaleDistancePickedPoints();
+                if (pts.size() != 2)
+                    return false;
+                const float dist = glm::length(pts[1] - pts[0]);
+                return std::isfinite(dist) && dist > 1e-6f;
+            },
+            "True when 2 valid points are picked for distance scale");
+
+        m.def(
+            "get_distance_scale_measured",
+            []() -> float {
+                const auto& pts = lfs::vis::services().getScaleDistancePickedPoints();
+                if (pts.size() != 2)
+                    return 0.0f;
+                const float dist = glm::length(pts[1] - pts[0]);
+                return std::isfinite(dist) ? dist : 0.0f;
+            },
+            "Get the measured distance between the 2 picked points");
+
+        m.def(
+            "apply_distance_scale",
+            [](const float target_distance) -> bool {
+                if (lfs::vis::op::operators().activeModalId() !=
+                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::ScaleDistancePickPoint)) {
+                    return false;
+                }
+                lfs::vis::services().requestScaleDistanceUiAction(
+                    lfs::vis::Services::ScaleDistanceUiAction::Apply, target_distance);
+                lfs::vis::op::ModalEvent evt{};
+                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
+                lfs::vis::op::operators().dispatchModalEvent(evt);
+                return true;
+            },
+            nb::arg("target_distance"),
+            "Request the running distance scale modal to rescale the scene to target distance");
+
+        m.def(
+            "clear_distance_scale",
+            []() {
+                if (lfs::vis::op::operators().activeModalId() !=
+                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::ScaleDistancePickPoint)) {
+                    return;
+                }
+                lfs::vis::services().requestScaleDistanceUiAction(
+                    lfs::vis::Services::ScaleDistanceUiAction::Clear);
+                lfs::vis::op::ModalEvent evt{};
+                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
+                lfs::vis::op::operators().dispatchModalEvent(evt);
+            },
+            "Request the running distance scale modal to clear picked points");
+
+        m.def(
+            "get_distance_scale_points",
+            []() -> std::vector<std::array<float, 3>> {
+                const auto& pts = lfs::vis::services().getScaleDistancePickedPoints();
+                std::vector<std::array<float, 3>> out;
+                out.reserve(pts.size());
+                for (const auto& p : pts) {
+                    out.push_back({p.x, p.y, p.z});
+                }
+                return out;
+            },
+            "Get the picked points for the distance scale tool");
 
         m.def(
             "fit_crop_tool",

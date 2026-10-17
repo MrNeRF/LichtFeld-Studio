@@ -21,6 +21,7 @@ namespace lfs::vis::op {
         TransformApplyBatch,
 
         AlignPickPoint,
+        ScaleDistancePickPoint,
 
         Undo,
         Redo,
@@ -46,6 +47,7 @@ namespace lfs::vis::op {
         Scale,
         Mirror,
         Align,
+        ScaleDistance,
 
         _Count
     };

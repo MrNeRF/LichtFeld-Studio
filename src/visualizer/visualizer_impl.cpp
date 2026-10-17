@@ -36,6 +36,7 @@
 #include "operator/ops/scene_ops.hpp"
 #include "operator/ops/selection_ops.hpp"
 #include "operator/ops/transform_ops.hpp"
+#include "operator/ops/scale_distance_ops.hpp"
 #include "preferences.hpp"
 #include "project/project_switch_error.hpp"
 #include "python/python_runtime.hpp"
@@ -47,6 +48,7 @@
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/builtin_tools.hpp"
+#include "tools/scale_distance_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/training_setup.hpp"
@@ -368,6 +370,7 @@ namespace lfs::vis {
         op::operators().setSceneManager(scene_manager_.get());
         op::registerTransformOperators();
         op::registerAlignOperators();
+        op::registerScaleDistanceOperators();
         op::registerSelectionOperators();
         op::registerEditOperators();
         op::registerSceneOperators();
@@ -402,6 +405,7 @@ namespace lfs::vis {
         op::unregisterEditOperators();
         op::unregisterSceneOperators();
         op::unregisterSelectionOperators();
+        op::unregisterScaleDistanceOperators();
         op::unregisterAlignOperators();
         op::unregisterTransformOperators();
         op::operators().clear();
@@ -459,6 +463,14 @@ namespace lfs::vis {
             align_tool_.reset();
         } else if (input_controller_) {
             input_controller_->setAlignTool(align_tool_);
+        }
+
+        scale_distance_tool_ = std::make_shared<tools::ScaleDistanceTool>();
+        if (!scale_distance_tool_->initialize(*tool_context_)) {
+            LOG_ERROR("Failed to initialize scale distance tool");
+            scale_distance_tool_.reset();
+        } else if (input_controller_) {
+            input_controller_->setScaleDistanceTool(scale_distance_tool_);
         }
 
         selection_tool_ = std::make_shared<tools::SelectionTool>();
@@ -2307,6 +2319,9 @@ namespace lfs::vis {
         }
         if (align_tool_ && align_tool_->isEnabled() && tool_context_) {
             align_tool_->update(*tool_context_);
+        }
+        if (scale_distance_tool_ && scale_distance_tool_->isEnabled() && tool_context_) {
+            scale_distance_tool_->update(*tool_context_);
         }
 
         if (!gui_frame_rendered_) {

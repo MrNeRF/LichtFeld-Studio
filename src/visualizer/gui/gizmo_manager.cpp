@@ -26,6 +26,7 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
+#include "tools/scale_distance_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer/app_store.hpp"
@@ -1256,6 +1257,7 @@ namespace lfs::vis::gui {
     void GizmoManager::updateToolState(const UIContext& ctx, bool ui_hidden) {
         auto* const scene_manager = ctx.viewer->getSceneManager();
         auto* const align_tool = ctx.viewer->getAlignTool();
+        auto* const scale_distance_tool = ctx.viewer->getScaleDistanceTool();
         auto* const selection_tool = ctx.viewer->getSelectionTool();
         auto* const rendering_manager = ctx.viewer->getRenderingManager();
         const bool has_selected_node = scene_manager && scene_manager->hasSelectedNode();
@@ -1274,6 +1276,7 @@ namespace lfs::vis::gui {
         stamp.has_scene_manager = scene_manager != nullptr;
         stamp.has_selected_node = has_selected_node;
         stamp.align_tool = align_tool;
+        stamp.scale_distance_tool = scale_distance_tool;
         stamp.selection_tool = selection_tool;
         stamp.rendering_manager = rendering_manager;
         stamp.active_tool_id = active_tool_id;
@@ -1329,9 +1332,12 @@ namespace lfs::vis::gui {
             }
 
             const bool is_align_mode = (active_tool_id == "builtin.align");
+            const bool is_scale_distance_mode = (active_tool_id == "builtin.distance_scale");
 
             if (align_tool)
                 align_tool->setEnabled(is_align_mode && has_selected_node && !selected_crop_volume);
+            if (scale_distance_tool)
+                scale_distance_tool->setEnabled(is_scale_distance_mode && has_selected_node && !selected_crop_volume);
             if (selection_tool)
                 selection_tool->setEnabled(is_selection_mode && !selected_crop_volume);
 
