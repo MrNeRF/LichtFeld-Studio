@@ -58,7 +58,10 @@ namespace lfs::training {
             if (const auto found = cache.find(key); found != cache.end())
                 return found->second;
             const auto modules = vulkan::embedded_training_shaders();
-            const auto module = std::ranges::find(modules, std::string_view("bilateral"), &vulkan::EmbeddedShader::name);
+            const std::string_view module_name = operation == 2 && context->caps().shader_atomic_float
+                                                     ? "bilateral_atomic"
+                                                     : "bilateral";
+            const auto module = std::ranges::find(modules, module_name, &vulkan::EmbeddedShader::name);
             LFS_ASSERT_MSG(module != modules.end(), "Vulkan bilateral shader module is missing");
             VkShaderModuleCreateInfo shader_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
             shader_info.codeSize = module->words.size_bytes();

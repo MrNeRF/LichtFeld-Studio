@@ -124,8 +124,13 @@ void finishGradient(Params p, uint i, int x, int y, float m[4]) {
 // Both separable passes stay in one workgroup. Preserve the original FMA
 // order and half-rounded partials, including zero padding at image edges.
 // Keep the existing device workspace sizes to preserve allocation placement.
-groupshared float verticalTile[7][576];
-groupshared float fusedInput[4][676];
+// The horizontal pass writes 16 columns across 26 halo rows (416 entries).
+// Specialize scratch fields to avoid reserving masked/decoupled workspace
+// for paths that never access it; arithmetic and sample order stay unchanged.
+static const uint tileFields = PHOTO_MOMENTS != 0 ? ((operation >> 3u) >= 4 ? 7 : 6) : (((operation >> 3u) == 3 || (operation >> 3u) == 5) ? 4 : 3);
+groupshared float verticalTile[tileFields][416];
+static const uint inputFields = PHOTO_MOMENTS != 0 && (operation >> 3u) < 4 ? 3 : 4;
+groupshared float fusedInput[inputFields][676];
 void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
     uint columns = (p.width + 15) / 16, rows = (p.height + 15) / 16;
     uint tiles = columns * rows * p.batch * p.channels, pixels = p.width * p.height;

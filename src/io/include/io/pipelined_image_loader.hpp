@@ -23,6 +23,7 @@
 #include <queue>
 #include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -281,6 +282,7 @@ namespace lfs::io {
 
     private:
         friend struct PipelinedImageLoaderTestAccess;
+        friend struct PipelinedPreparedCacheTestAccess;
 
         struct PrefetchedImage {
             size_t sequence_id;
@@ -455,7 +457,10 @@ namespace lfs::io {
         lfs::core::Tensor decode_portable_rgb(const std::filesystem::path& path,
                                               const LoadParams& params,
                                               lfs::core::TensorUpload& upload,
-                                              const std::vector<uint8_t>* encoded = nullptr) const;
+                                              const std::vector<uint8_t>* encoded = nullptr);
+        void cache_portable_prepared_image(const std::string& key, const lfs::core::Tensor& image,
+                                           size_t max_output_bytes = 64u << 20);
+        void warn_portable_cache_failure(std::string_view message);
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
         bool decodes_16bit(const LoadParams& params) const { return config_.use_16bit_color || params.decode_16bit; }
@@ -618,6 +623,12 @@ namespace lfs::io {
         // Cleared on the first failed JPEG 2000 encode (e.g. nvjpeg2k extension not
         // built) so 16-bit runs degrade to uncached decoding with a single error.
         std::atomic<bool> jpeg2k_cache_available_{true};
+
+        // Full-resolution float sources can dwarf the prepared image. Keep
+        // expensive portable preparation bounded while CPU decoding stays parallel.
+        mutable std::mutex portable_large_prepare_mutex_;
+        mutable bool portable_large_prepare_logged_ = false;
+        std::atomic<bool> portable_cache_warning_logged_{false};
 
         mutable std::mutex stats_mutex_;
         mutable CacheStats stats_;

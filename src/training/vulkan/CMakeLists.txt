@@ -260,21 +260,27 @@ add_custom_command(
     COMMENT "slangc training/mesh_mask.spv"
     VERBATIM)
 set(_bilateral_source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/bilateral.slang")
-set(_bilateral_raw "${LFS_TRAINING_SPV_DIR}/bilateral.raw.spv")
-set(_bilateral_spv "${LFS_TRAINING_SPV_DIR}/bilateral.spv")
-set(_bilateral_manifest "${LFS_TRAINING_SPV_DIR}/bilateral.json")
-add_custom_command(
-    OUTPUT "${_bilateral_spv}" "${_bilateral_manifest}"
-    BYPRODUCTS "${_bilateral_raw}"
-    COMMAND ${LFS_TENSOR_SLANGC} "${_bilateral_source}"
-            -entry main -stage compute -O -fp-mode precise
-            -line-directive-mode none -target spirv -profile glsl_460
-            -emit-spirv-directly
-            -o "${_bilateral_raw}"
-    COMMAND lfs_tensor_spirv_finalize "${_bilateral_raw}" "${_bilateral_spv}" "${_bilateral_manifest}"
-    DEPENDS "${_bilateral_source}" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ppisp_math.slangh" lfs_tensor_spirv_finalize
-    COMMENT "slangc training/bilateral.spv"
-    VERBATIM)
+set(_bilateral_spv "${LFS_TRAINING_SPV_DIR}/bilateral.spv" "${LFS_TRAINING_SPV_DIR}/bilateral_atomic.spv")
+foreach(_variant IN ITEMS bilateral bilateral_atomic)
+    if(_variant STREQUAL "bilateral_atomic")
+        set(_native 1)
+    else()
+        set(_native 0)
+    endif()
+    add_custom_command(
+        OUTPUT "${LFS_TRAINING_SPV_DIR}/${_variant}.spv" "${LFS_TRAINING_SPV_DIR}/${_variant}.json"
+        BYPRODUCTS "${LFS_TRAINING_SPV_DIR}/${_variant}.raw.spv"
+        COMMAND ${LFS_TENSOR_SLANGC} "${_bilateral_source}"
+                -entry main -stage compute -O -fp-mode precise
+                -line-directive-mode none -target spirv -profile glsl_460
+                -emit-spirv-directly -D BILATERAL_NATIVE_ATOMIC=${_native}
+                -o "${LFS_TRAINING_SPV_DIR}/${_variant}.raw.spv"
+        COMMAND lfs_tensor_spirv_finalize "${LFS_TRAINING_SPV_DIR}/${_variant}.raw.spv"
+                "${LFS_TRAINING_SPV_DIR}/${_variant}.spv" "${LFS_TRAINING_SPV_DIR}/${_variant}.json"
+        DEPENDS "${_bilateral_source}" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ppisp_math.slangh" lfs_tensor_spirv_finalize
+        COMMENT "slangc training/${_variant}.spv"
+        VERBATIM)
+endforeach()
 set(_controller_source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/controller.slang")
 set(_controller_raw "${LFS_TRAINING_SPV_DIR}/controller.raw.spv")
 set(_controller_spv "${LFS_TRAINING_SPV_DIR}/controller.spv")
@@ -529,18 +535,19 @@ add_custom_command(
             lpips "${_lpips_spv}" lpips_coop "${_lpips_coop_spv}" lpips_halo "${_lpips_halo_spv}"
             masks "${_masks_spv}"
             mesh_mask "${_mesh_mask_spv}"
-            bilateral "${_bilateral_spv}"
+            bilateral "${LFS_TRAINING_SPV_DIR}/bilateral.spv"
+            bilateral_atomic "${LFS_TRAINING_SPV_DIR}/bilateral_atomic.spv"
             controller "${_controller_spv}"
             ppisp "${_ppisp_spv}"
             geometry "${_geometry_spv}" geometry_fp32 "${_geometry_fp32_spv}"
     DEPENDS "${_blob_spv}" "${_structure_spv}" "${_flip_spv}" "${LFS_TRAINING_SPV_DIR}/fast_backward.spv" "${LFS_TRAINING_SPV_DIR}/fast_backward_atomic.spv" "${_gsplat_forward_spv}" "${LFS_TRAINING_SPV_DIR}/gsplat_backward.spv" "${LFS_TRAINING_SPV_DIR}/gsplat_backward_atomic.spv"
             "${LFS_TRAINING_SPV_DIR}/photometric_fused.spv" "${LFS_TRAINING_SPV_DIR}/photometric_fused_gradient.spv"
             "${_fast_forward_spv}" "${_photometric_spv}" "${_pair_sort_spv}" "${_pair_sort_match_spv}" lfs_tensor_spirv_finalize
-            "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_training_image_spv}" "${_refine_spv}" "${_mrnf_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_mesh_mask_spv}" "${_bilateral_spv}" "${_controller_spv}" "${_ppisp_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}"
+            "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_training_image_spv}" "${_refine_spv}" "${_mrnf_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_mesh_mask_spv}" ${_bilateral_spv} "${_controller_spv}" "${_ppisp_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}"
             "${CMAKE_CURRENT_SOURCE_DIR}/training_shader_table.hpp"
     COMMENT "embed training shaders"
     VERBATIM)
-add_custom_target(lfs_training_vulkan_shaders DEPENDS "${_pair_sort_spv}" "${_pair_sort_match_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}" "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_mesh_mask_spv}" "${_bilateral_spv}" "${_controller_spv}" "${_ppisp_spv}" "${_photometric_spv}" "${_fast_forward_spv}" "${_gsplat_forward_spv}" "${_training_image_spv}" "${_refine_spv}" "${_mrnf_spv}" "${_training_shader_table}")
+add_custom_target(lfs_training_vulkan_shaders DEPENDS "${_pair_sort_spv}" "${_pair_sort_match_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}" "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_mesh_mask_spv}" ${_bilateral_spv} "${_controller_spv}" "${_ppisp_spv}" "${_photometric_spv}" "${_fast_forward_spv}" "${_gsplat_forward_spv}" "${_training_image_spv}" "${_refine_spv}" "${_mrnf_spv}" "${_training_shader_table}")
 add_dependencies(lfs_training_vulkan lfs_training_vulkan_shaders)
 target_sources(lfs_training_vulkan PRIVATE "${_training_shader_table}")
 target_include_directories(lfs_training_vulkan

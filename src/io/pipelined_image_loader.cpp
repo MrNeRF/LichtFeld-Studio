@@ -243,9 +243,7 @@ namespace lfs::io {
         : config_(std::move(config)),
           output_queue_(std::max<size_t>(1, config_.output_queue_size)) {
 
-        const bool cuda_run = config_.backend == lfs::core::GpuBackend::CUDA;
-        if (cuda_run)
-            cleanup_stale_run_spill_directories();
+        cleanup_stale_run_spill_directories();
         config_.jpeg_batch_size = std::clamp<size_t>(config_.jpeg_batch_size, 1, 12);
         if (config_.decode_frame_ring_capacity == 0) {
             config_.decode_frame_ring_capacity = DECODE_FRAME_RING_CAPACITY;
@@ -264,7 +262,7 @@ namespace lfs::io {
 
         ledger_.reserve(std::max(config_.prefetch_count, config_.output_queue_size) * 2);
 
-        if (cuda_run) {
+        {
             const auto base = run_spill_base();
             std::error_code ec;
             lfs::core::native_fs::create_directories(base, ec);
@@ -673,7 +671,12 @@ namespace lfs::io {
                 (!params.skip_blob_cache && load_cached_jpeg_blob(make_cache_key(path, params))))
                 return std::nullopt;
         }
-        if (params.undistort || decodes_float(path, params))
+        if (config_.backend != lfs::core::GpuBackend::CUDA && params.undistort &&
+            !params.skip_blob_cache && !params.masked_fill && !decodes_16bit(params) &&
+            !params.decode_float && load_cached_jpeg_blob(make_cache_key(path, params)))
+            return std::nullopt;
+        if (decodes_float(path, params) || (params.undistort && decodes_16bit(params)) ||
+            (config_.backend == lfs::core::GpuBackend::CUDA && params.undistort))
             return HostDecodeKind::Float32;
         return decodes_16bit(params) ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
     }
@@ -1563,9 +1566,8 @@ namespace lfs::io {
             }
 
             if (!cuda_run) {
-                // As on CUDA, the run cache keeps each JPEG's encoded bytes and
-                // every request decodes them. Other formats, alpha masks and
-                // 16-bit color decode the file in the worker.
+                // Derived warps are encoded/decoded by the portable worker using
+                // this same blob cache. Never store original bytes under a derived key.
                 PrefetchedImage result;
                 result.sequence_id = request.sequence_id;
                 result.loader_generation = request.loader_generation;
@@ -1575,10 +1577,12 @@ namespace lfs::io {
                 result.alpha_as_mask = request.extract_alpha_as_mask;
                 result.alpha_mask_params = request.alpha_mask_params;
                 result.undistort = request.undistort;
-                if (!request.extract_alpha_as_mask && !config_.use_16bit_color) {
+                if (!request.extract_alpha_as_mask && !config_.use_16bit_color &&
+                    !request.params.undistort && !request.undistort) {
                     try {
                         result.cache_key = make_cache_key(request.path, request.params);
-                        result.jpeg_data = load_cached_jpeg_blob(result.cache_key);
+                        if (!request.params.skip_blob_cache)
+                            result.jpeg_data = load_cached_jpeg_blob(result.cache_key);
                         if (!result.jpeg_data) {
                             auto bytes = read_file(request.path);
                             {
@@ -1587,7 +1591,8 @@ namespace lfs::io {
                             }
                             if (is_jpeg_data(bytes)) {
                                 result.jpeg_data = std::make_shared<std::vector<uint8_t>>(std::move(bytes));
-                                put_in_jpeg_cache(result.cache_key, result.jpeg_data);
+                                if (!request.params.skip_blob_cache)
+                                    put_in_jpeg_cache(result.cache_key, result.jpeg_data);
                             }
                         }
                     } catch (const std::exception& e) {

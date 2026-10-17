@@ -53,8 +53,24 @@ typedef Ptr<uint8_t, Access.Read> ImageSource;
 #include "byte_read.slangh"
 typedef uint64_t ImageSource;
 #endif
+#ifndef LFS_WARP_GPU_PROGRAM
+[SpecializationConstant] const uint warpMode = 0;
+[SpecializationConstant] const uint warpInverse = 0;
+[SpecializationConstant] const uint warpChannels = 3;
+[SpecializationConstant] const uint warpQuadrature = 8;
+[SpecializationConstant] const uint warpModel = 0;
+#define WARP_MODE int(warpMode)
+#define WARP_INVERSE int(warpInverse)
+#define WARP_CHANNELS int(warpChannels)
+#define WARP_QUADRATURE int(warpQuadrature)
+#else
+#define WARP_MODE pc.mode
+#define WARP_INVERSE pc.inverse
+#define WARP_CHANNELS pc.channels
+#define WARP_QUADRATURE pc.quadrature
+#endif
 float read_image_sample(ImageSource source, int index) {
-    if ((pc.mode & 256) != 0) {
+    if ((WARP_MODE & 256) != 0) {
 #ifdef LFS_WARP_GPU_PROGRAM
         return float(uint(source[index])) / 255.0f;
 #else
@@ -64,7 +80,7 @@ float read_image_sample(ImageSource source, int index) {
     return ((Ptr<float, Access.Read>)source)[index];
 }
 ImageSource offset_image_source(ImageSource source, int elements) {
-    return source + elements * ((pc.mode & 256) != 0 ? 1u : 4u);
+    return source + elements * ((WARP_MODE & 256) != 0 ? 1u : 4u);
 }
 
 float bilinear_sample_renormalized(
@@ -579,28 +595,31 @@ void distort_area_to_source_kernel(
 #endif
 [numthreads(256, 1, 1)] void main(uint3 tid : SV_DispatchThreadID, uint3 groups : SV_GroupID) {
     UndistortParams params = ((Ptr<UndistortParams, Access.Read>)pc.camera)[0];
+#ifndef LFS_WARP_GPU_PROGRAM
+    params.model_type = int(warpModel);
+#endif
     ImageSource src = (ImageSource)pc.input;
     Ptr<float, Access.ReadWrite> dst = (Ptr<float, Access.ReadWrite>)pc.output;
     const uint count = uint(pc.width * pc.height);
     const uint stride = min(65535u, (count + 255u) / 256u) * 256u;
     for (uint index = tid.x; index < count; index += stride) {
         int x = int(index) % pc.width, y = int(index) / pc.width;
-        if ((pc.mode & 255) == 4) {
+        if ((WARP_MODE & 255) == 4) {
             float ux, uy;
             const bool valid = inverse_distortion((float(x) + 0.5 - params.src_cx) / params.src_fx,
                                                   (float(y) + 0.5 - params.src_cy) / params.src_fy, params, ux, uy);
             dst[2 * index] = valid ? ux : asfloat(0x7fc00000u);
             dst[2 * index + 1] = valid ? uy : asfloat(0x7fc00000u);
-        } else if ((pc.mode & 255) == 0) {
-            if (pc.inverse != 0)
-                distort_image_to_source_kernel(src, dst, (Ptr<int, Access.ReadWrite>)pc.validity, pc.channels, x, y, params);
+        } else if ((WARP_MODE & 255) == 0) {
+            if (WARP_INVERSE != 0)
+                distort_image_to_source_kernel(src, dst, (Ptr<int, Access.ReadWrite>)pc.validity, WARP_CHANNELS, x, y, params);
             else
-                undistort_image_kernel(src, dst, pc.channels, x, y, pc.quadrature, params);
+                undistort_image_kernel(src, dst, WARP_CHANNELS, x, y, WARP_QUADRATURE, params);
         } else {
-            if (pc.inverse != 0)
-                distort_area_to_source_kernel(src, dst, pc.channels, (pc.mode & 255) - 1, x, y, params);
+            if (WARP_INVERSE != 0)
+                distort_area_to_source_kernel(src, dst, WARP_CHANNELS, (WARP_MODE & 255) - 1, x, y, params);
             else
-                undistort_area_kernel(src, dst, pc.channels, (pc.mode & 255) - 1, x, y, pc.quadrature, params);
+                undistort_area_kernel(src, dst, WARP_CHANNELS, (WARP_MODE & 255) - 1, x, y, WARP_QUADRATURE, params);
         }
     }
 }

@@ -8,6 +8,7 @@
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor/backend/vulkan/vk_recorder.hpp"
 #include "core/tensor_backend_vulkan.hpp"
+#include "core/tensor_image.hpp"
 #include "core/tensor_rad.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
@@ -16,7 +17,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <future>
 #include <memory>
@@ -628,6 +631,28 @@ namespace {
         where_into(output, mask, 13.0f, output);
         verify(output, {13, 2, 13, 4});
         verify(source, {1, 2, 3, 4});
+    }
+
+    TEST_F(TensorVulkanBufferQuery, ImageWarpSpecializationSeparatesCameraChannelsAndSampling) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        for (const auto model : {CameraModelType::PINHOLE, CameraModelType::FISHEYE, CameraModelType::THIN_PRISM_FISHEYE}) {
+            for (const size_t channels : {1u, 3u, 4u}) {
+                std::vector<float> values(channels * 11 * 13);
+                for (size_t i = 0; i < values.size(); ++i)
+                    values[i] = float(i % 29) / 29.f;
+                const auto host = Tensor::from_vector(values, {channels, 11, 13}, Device::CPU);
+                const auto device = host.to(Device::GPU);
+                for (const float ratio : {1.5f, 8.25f, 1.5f}) {
+                    UndistortParams p{.src_fx = 15, .src_fy = 14, .src_cx = 6, .src_cy = 5, .dst_fx = 15 / ratio, .dst_fy = 14 / ratio, .dst_cx = 4, .dst_cy = 3, .src_width = 13, .src_height = 11, .dst_width = 9, .dst_height = 7, .model_type = model, .distortion = {.03f, -.01f, .001f, -.002f}, .num_distortion = 4};
+                    const auto expected = undistort_image(host, p, nullptr).to_vector();
+                    const auto actual = undistort_image(device, p, nullptr).to_vector();
+                    ASSERT_EQ(actual.size(), expected.size());
+                    for (size_t i = 0; i < actual.size(); ++i)
+                        ASSERT_NEAR(actual[i], expected[i], 3e-5f) << "model=" << int(model)
+                                                                   << " channels=" << channels << " ratio=" << ratio << " pixel=" << i;
+                }
+            }
+        }
     }
 
     INSTANTIATE_TEST_SUITE_P(TensorBackends, TensorWhereInto,
