@@ -816,39 +816,27 @@ TEST(UndistortInverse, ThinPrismFullCoefficientsWideAngleRoundTrip) {
     expect_thin_prism_wide_angle_round_trip({k[0], k[1], k[2], k[3], t[0], t[1], t[2], 0.0f, t[3], 0.0f});
 }
 
-namespace {
-    template <typename Inverse>
-    void expect_thin_prism_wide_rays_round_trip(const Inverse& inverse) {
-        const auto params = make_full_thin_prism_params(1000.0f, 1000.0f, 2000.0f, 2000.0f, 4000, 4000);
-        for (const float theta : {1.0f, 1.3f, 1.45f, 1.5f, 1.54f}) {
-            for (const float azimuth : {0.0f, 1.1f, 2.5f, 4.2f}) {
-                const float r = std::tan(theta);
-                float dx, dy;
-                forward_point(params, r * std::cos(azimuth), r * std::sin(azimuth), dx, dy);
-                const float image_x = dx * params.src_fx + params.src_cx;
-                const float image_y = dy * params.src_fy + params.src_cy;
-                float nx, ny;
-                ASSERT_TRUE(inverse(params, image_x, image_y, nx, ny))
-                    << "theta " << theta << " azimuth " << azimuth;
-                float rx, ry;
-                forward_point(params, nx, ny, rx, ry);
-                EXPECT_NEAR(rx * params.src_fx + params.src_cx, image_x, 1.0e-2f)
-                    << "theta " << theta << " azimuth " << azimuth;
-                EXPECT_NEAR(ry * params.src_fy + params.src_cy, image_y, 1.0e-2f)
-                    << "theta " << theta << " azimuth " << azimuth;
-            }
-        }
-    }
-} // namespace
-
 // Catches the shared GPU inverse rejecting or mis-solving wide thin-prism rays.
 TEST(UndistortInverse, ThinPrismWideRaysRoundTrip) {
-    expect_thin_prism_wide_rays_round_trip(sample_image_point);
-}
-
-// Catches the host inverse behind CPU sample maps rejecting or mis-solving wide thin-prism rays.
-TEST(UndistortInverse, CpuThinPrismWideRaysRoundTrip) {
-    expect_thin_prism_wide_rays_round_trip(undistort_image_point);
+    const auto params = make_full_thin_prism_params(1000.0f, 1000.0f, 2000.0f, 2000.0f, 4000, 4000);
+    for (const float theta : {1.0f, 1.3f, 1.45f, 1.5f, 1.54f}) {
+        for (const float azimuth : {0.0f, 1.1f, 2.5f, 4.2f}) {
+            const float r = std::tan(theta);
+            float dx, dy;
+            forward_point(params, r * std::cos(azimuth), r * std::sin(azimuth), dx, dy);
+            const float image_x = dx * params.src_fx + params.src_cx;
+            const float image_y = dy * params.src_fy + params.src_cy;
+            float nx, ny;
+            ASSERT_TRUE(sample_image_point(params, image_x, image_y, nx, ny))
+                << "theta " << theta << " azimuth " << azimuth;
+            float rx, ry;
+            forward_point(params, nx, ny, rx, ry);
+            EXPECT_NEAR(rx * params.src_fx + params.src_cx, image_x, 1.0e-2f)
+                << "theta " << theta << " azimuth " << azimuth;
+            EXPECT_NEAR(ry * params.src_fy + params.src_cy, image_y, 1.0e-2f)
+                << "theta " << theta << " azimuth " << azimuth;
+        }
+    }
 }
 
 // The mesh evaluation mask samples coverage at these points; each must map back onto its

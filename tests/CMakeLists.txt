@@ -1414,6 +1414,7 @@ set(TEST_FILES
     test_camera_mask_threshold.cpp
     test_camera_thumbnail_policy.cpp
     test_undistort.cpp
+    test_undistort_portable.cpp
     gut_camera_model_cuda.cu
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp

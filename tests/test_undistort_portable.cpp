@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// The branch-aware undistort inverse of #3610 on the portable paths: the host inverse behind CPU
-// sample maps and warps, and image_warp.slang on Vulkan and Metal.
+// The branch-aware undistort inverse of #3610 on the portable paths: image_warp.slang on Vulkan and
+// Metal, which also serves the crop and CPU images.
 
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
@@ -128,11 +128,6 @@ namespace {
         expect_crop_border_inside(params);
     }
 
-    // The CPU sample-map path inverts through the host twin of the CUDA inverse.
-    bool host_point(const UndistortParams& params, const float x, const float y, float& ux, float& uy) {
-        return undistort_image_point(params, x, y, ux, uy);
-    }
-
     class UndistortInversePortable : public testing::TestWithParam<GpuBackend> {
     protected:
         void SetUp() override {
@@ -164,9 +159,6 @@ namespace {
         ASSERT_TRUE(point(params, x, y, ux, uy));
         EXPECT_NEAR(std::atan(std::hypot(ux, uy)), 1.35f, 1e-4f);
         EXPECT_FALSE(point(params, fold_x, params.src_cy, ux, uy));
-        ASSERT_TRUE(host_point(params, x, y, ux, uy));
-        EXPECT_NEAR(std::atan(std::hypot(ux, uy)), 1.35f, 1e-4f);
-        EXPECT_FALSE(host_point(params, fold_x, params.src_cy, ux, uy));
     }
 
     // Catches the shared inverse rejecting or mis-solving wide thin-prism rays.
@@ -178,22 +170,18 @@ namespace {
                 const auto [dx, dy] = distort(r * std::cos(azimuth), r * std::sin(azimuth), params);
                 const float x = dx * params.src_fx + params.src_cx;
                 const float y = dy * params.src_fy + params.src_cy;
-                for (const bool host : {false, true}) {
-                    float nx, ny;
-                    ASSERT_TRUE(host ? host_point(params, x, y, nx, ny) : point(params, x, y, nx, ny))
-                        << "theta " << theta << " azimuth " << azimuth << " host " << host;
-                    const auto [rx, ry] = distort(nx, ny, params);
-                    EXPECT_NEAR(rx * params.src_fx + params.src_cx, x, 1.0e-2f)
-                        << "theta " << theta << " azimuth " << azimuth << " host " << host;
-                    EXPECT_NEAR(ry * params.src_fy + params.src_cy, y, 1.0e-2f)
-                        << "theta " << theta << " azimuth " << azimuth << " host " << host;
-                }
+                float nx, ny;
+                ASSERT_TRUE(point(params, x, y, nx, ny)) << "theta " << theta << " azimuth " << azimuth;
+                const auto [rx, ry] = distort(nx, ny, params);
+                EXPECT_NEAR(rx * params.src_fx + params.src_cx, x, 1.0e-2f) << "theta " << theta << " azimuth " << azimuth;
+                EXPECT_NEAR(ry * params.src_fy + params.src_cy, y, 1.0e-2f) << "theta " << theta << " azimuth " << azimuth;
             }
         }
     }
 
-    // Catches the GPU warp and the host inverse disagreeing on which pixels have a ray.
-    TEST_P(UndistortInversePortable, SampleMapMatchesTheHostInverse) {
+    // Catches sample-map rays that do not project back onto their pixels, or rays past the fold of a
+    // radial-only lens.
+    TEST_P(UndistortInversePortable, SampleMapRaysProjectBackOntoTheirPixels) {
         for (const auto& params : {fisheye_fold(), pinhole_fold(), thin_prism_wide()}) {
             auto map = params;
             map.src_width = 48;
@@ -202,6 +190,7 @@ namespace {
             map.src_fy *= 36.0f / params.src_height;
             map.src_cx *= 48.0f / params.src_width;
             map.src_cy *= 36.0f / params.src_height;
+            const auto branch = undistort_radial_branch(map);
             const GpuBackendScope scope(GetParam());
             const auto samples = inverse_distortion_sample_map(map, nullptr).cpu().contiguous();
             const float* values = samples.ptr<float>();
@@ -210,24 +199,44 @@ namespace {
                 for (int x = 0; x < map.src_width; ++x) {
                     const float gx = values[2 * (y * map.src_width + x)];
                     const float gy = values[2 * (y * map.src_width + x) + 1];
-                    float hx, hy;
-                    const bool host = host_point(map, x + 0.5f, y + 0.5f, hx, hy);
+                    const float xd = (x + 0.5f - map.src_cx) / map.src_fx;
+                    const float yd = (y + 0.5f - map.src_cy) / map.src_fy;
+                    const bool ray = std::isfinite(gx) && std::isfinite(gy);
                     const auto where = std::format("model {} pixel {},{}", int(map.model_type), x, y);
-                    ASSERT_EQ(std::isfinite(gx) && std::isfinite(gy), host) << where;
-                    if (!host)
+                    const float rd = std::hypot(xd, yd);
+                    if (map.model_type == CameraModelType::FISHEYE && std::abs(rd - branch.maximum) > 1e-4f * branch.maximum)
+                        EXPECT_EQ(ray, rd < branch.maximum) << where;
+                    if (!ray)
                         continue;
                     ++valid;
-                    // Compare ray directions: normalized coordinates near the horizon amplify
-                    // float rounding of tan(theta) without moving the ray.
-                    const double cross = std::hypot(std::hypot(double(gy) - hy, double(hx) - gx),
-                                                    double(gx) * hy - double(gy) * hx);
-                    const double dot = double(gx) * hx + double(gy) * hy + 1.0;
-                    EXPECT_LT(std::atan2(cross, dot), 1e-5)
-                        << where << " gpu " << gx << "," << gy << " host " << hx << "," << hy;
+                    const auto [dx, dy] = distort(gx, gy, map);
+                    EXPECT_LT(std::hypot((dx - xd) * map.src_fx, (dy - yd) * map.src_fy), 1e-2f)
+                        << where << " ray " << gx << "," << gy;
                 }
             }
             EXPECT_GT(valid, map.src_width * map.src_height / 4) << "model " << int(map.model_type);
         }
+    }
+
+    // Catches CPU images losing the GPU inverse: their inverse warps round-trip through it.
+    TEST_P(UndistortInversePortable, CpuImagesMatchTheGpuInverse) {
+        auto params = fisheye_fold();
+        params = prepare_undistort_params(params, 96, 72, 1, 64);
+        std::vector<float> values(size_t(3) * params.dst_height * params.dst_width);
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = float(i % 29) / 29.0f;
+        const auto host = Tensor::from_vector(values, {3, size_t(params.dst_height), size_t(params.dst_width)}, Device::CPU);
+        const GpuBackendScope scope(GetParam());
+        Tensor gpu_validity, cpu_validity;
+        const auto gpu = distort_image_to_source(host.to(Device::GPU), params, gpu_validity, nullptr).cpu();
+        const auto cpu = distort_image_to_source(host, params, cpu_validity, nullptr);
+        ASSERT_EQ(cpu.device(), Device::CPU);
+        ASSERT_EQ(cpu_validity.device(), Device::CPU);
+        EXPECT_EQ(cpu.to_vector(), gpu.to_vector());
+        EXPECT_EQ(cpu_validity.to(DataType::Float32).to_vector(), gpu_validity.cpu().to(DataType::Float32).to_vector());
+        const auto mask = host.slice(0, 0, 1).squeeze(0).contiguous();
+        EXPECT_EQ(distort_mask_to_source_area(mask, params, nullptr).to_vector(),
+                  distort_mask_to_source_area(mask.to(Device::GPU), params, nullptr).cpu().to_vector());
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, UndistortInversePortable, testing::Values(GpuBackend::Vulkan, GpuBackend::Metal),
