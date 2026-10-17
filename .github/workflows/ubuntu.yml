@@ -278,7 +278,7 @@ jobs:
       - name: Enforce I/O discipline
         run: python3 tools/check_io_discipline.py
 
-      - name: Enforce printf-style logging in CUDA sources
+      - name: Enforce LOG placeholders (printf in CUDA, std::format elsewhere)
         run: python3 tools/check_cuda_log_format.py
 
       - name: Upload error-debt census
