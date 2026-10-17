@@ -52,6 +52,7 @@ SIZES = {
     "gallery-progress-ring.png": 24,
     "layout-grid.png": 64,
     "layout-list.png": 64,
+    "lichtfeld.png": 96,
 }
 
 
