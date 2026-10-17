@@ -22,7 +22,8 @@ except ImportError:
 class WindowsBuildPreflightTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary_directory.name)
+        # The tool resolves paths; resolve the root too (macOS /var is /private/var).
+        self.root = Path(self.temporary_directory.name).resolve()
         (self.root / ".git").mkdir()
         (self.root / "src" / "visualizer" / "gui").mkdir(parents=True)
         (self.root / "tests").mkdir()

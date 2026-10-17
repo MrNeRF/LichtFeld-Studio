@@ -454,11 +454,15 @@ namespace lfs::io::project {
         std::size_t device_bytes = 0;
         bool needs_cuda_stream = false;
         bool has_gpu_tensor = false;
+        std::optional<lfs::core::GpuBackend> gpu_backend;
         for (const auto* tensor : tensors) {
             if (!tensor->is_valid() || tensor->device() != lfs::core::Device::GPU) {
                 continue;
             }
             has_gpu_tensor = true;
+            if (!gpu_backend) {
+                gpu_backend = lfs::core::gpu_backend_of(*tensor);
+            }
             needs_cuda_stream |= lfs::core::tensor_uses_cuda_storage(*tensor);
             if (tensor->bytes() > std::numeric_limits<std::size_t>::max() - device_bytes) {
                 return splat_error(
@@ -472,17 +476,15 @@ namespace lfs::io::project {
             return std::unique_ptr<AsyncSplatCapture>{};
         }
 
-        const auto& pressure = lfs::core::MemoryPressureCoordinator::instance();
+        const lfs::core::OperationMemoryPlan plan{
+            .operation = "SPLT async capture",
+            .persistent_device_bytes = device_bytes,
+        };
+        const auto domain = lfs::core::device_memory_domain(
+            gpu_backend.value_or(lfs::core::default_gpu_backend()));
         const bool has_headroom = splat_capture_no_headroom_override
                                       ? !*splat_capture_no_headroom_override
-                                      : pressure
-                                            .preflight({
-                                                .operation = "SPLT async capture",
-                                                .persistent_device_bytes = device_bytes,
-                                                .temporary_device_bytes = 0,
-                                                .old_new_overlap_bytes = 0,
-                                            })
-                                            .ok;
+                                      : lfs::core::MemoryPressureCoordinator::instance().preflight(plan, domain).ok;
         if (!has_headroom) {
             LOG_WARN(
                 "SPLT async capture falling back to synchronous capture: "

@@ -169,6 +169,10 @@ namespace lfs::vis {
             std::optional<TimelinePoint> wait;
             VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
             std::optional<TimelinePoint> signal;
+            // The image was created after the active frame began recording, so
+            // that frame cannot reference it and the transition may be
+            // submitted ahead of the frame.
+            bool new_image = false;
 
             [[nodiscard]] static ImmediateTransitionOptions waitOn(
                 TimelinePoint point,
