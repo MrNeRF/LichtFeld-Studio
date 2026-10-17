@@ -71,13 +71,15 @@ namespace lfs::core::internal {
         }
         const bool scalar = input.ndim() == 2;
         const int channels = scalar ? 1 : int(input.size(0));
+        const auto branch = undistort_radial_branch(p);
         if (mode == 4) {
             auto samples = Tensor::empty({size_t(p.src_height), size_t(p.src_width), 2}, Device::CPU);
             auto* values = samples.ptr<float>();
             for (int y = 0; y < p.src_height; ++y) {
                 for (int x = 0; x < p.src_width; ++x) {
                     float nx, ny;
-                    if (!undistort_image_point(p, x + 0.5f, y + 0.5f, nx, ny))
+                    if (!undistort_normalized_point(p, branch, (x + 0.5f - p.src_cx) / p.src_fx,
+                                                    (y + 0.5f - p.src_cy) / p.src_fy, nx, ny))
                         nx = ny = std::numeric_limits<float>::quiet_NaN();
                     const auto i = 2 * (size_t(y) * p.src_width + x);
                     values[i] = nx;
@@ -96,7 +98,7 @@ namespace lfs::core::internal {
             for (int x = 0; x < width; ++x) {
                 if (mode == 0) {
                     if (inverse)
-                        warp_math::distort_image_to_source_kernel(source.ptr<float>(), output.ptr<float>(), validity->ptr<uint8_t>(), channels, x, y, p);
+                        warp_math::distort_image_to_source_kernel(source.ptr<float>(), output.ptr<float>(), validity->ptr<uint8_t>(), channels, x, y, p, branch);
                     else if (rgb8)
                         warp_math::undistort_image_kernel(source.ptr<uint8_t>(), output.ptr<float>(), channels, x, y, quadrature, p);
                     else
@@ -104,7 +106,7 @@ namespace lfs::core::internal {
                 } else {
                     const auto filter = static_cast<warp_math::AreaFilterMode>(mode - 1);
                     if (inverse)
-                        warp_math::distort_area_to_source_kernel(source.ptr<float>(), output.ptr<float>(), channels, filter, x, y, p);
+                        warp_math::distort_area_to_source_kernel(source.ptr<float>(), output.ptr<float>(), channels, filter, x, y, p, branch);
                     else
                         warp_math::undistort_area_kernel(source.ptr<float>(), output.ptr<float>(), channels, filter, x, y, quadrature, p);
                 }
