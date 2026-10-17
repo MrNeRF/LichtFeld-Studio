@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <core/uuid.hpp>
+#include <cuda_runtime_api.h>
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -40,7 +41,23 @@ static SplatData fixture(int degree) {
 }
 int main(int argc, char** argv) {
     try {
-        require(argc == 2, "Pass output manifest path");
+        require(argc == 2 || (argc == 3 && std::string_view(argv[2]) == "--require-cuda"), "Pass output manifest path and optional --require-cuda");
+        // CPU input tensors do not make this an accelerator-free contract:
+        // snapshot hydration and resident SH storage use the core CUDA path.
+        int device_count = 0;
+        const auto cuda_status = cudaGetDeviceCount(&device_count);
+        const bool unavailable = (cuda_status == cudaSuccess && device_count == 0) ||
+                                 cuda_status == cudaErrorNoDevice ||
+                                 cuda_status == cudaErrorInsufficientDriver ||
+                                 cuda_status == cudaErrorInitializationError ||
+                                 cuda_status == cudaErrorStubLibrary;
+        if (unavailable) {
+            std::cerr << (argc == 3 ? "FAIL" : "SKIP")
+                      << ": splat transfer contract requires a working CUDA device: "
+                      << cudaGetErrorString(cuda_status) << ", device_count=" << device_count << '\n';
+            return argc == 3 ? 1 : 77;
+        }
+        require(cuda_status == cudaSuccess, "Unexpected CUDA error while probing export test availability");
         lfs::io::LoadOptions options;
         options.splat_tensor_allocator = [](TensorShape shape, size_t, DataType type, std::string_view) { return Tensor::empty(std::move(shape), Device::CPU, type); };
         nlohmann::json manifest = {{"exports", nlohmann::json::array()}};
