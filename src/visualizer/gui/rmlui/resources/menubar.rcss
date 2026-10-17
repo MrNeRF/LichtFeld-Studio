@@ -464,7 +464,7 @@ body {
     margin-left: 24dp;
     flex-shrink: 0;
     white-space: nowrap;
-    text-align: right;
+    text-align: left;
 }
 
 .menu-item .submenu-arrow {
