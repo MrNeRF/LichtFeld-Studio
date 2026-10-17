@@ -439,7 +439,9 @@ namespace lfs::app {
                 {"id", "training.main"},
                 {"label", "Training"},
                 {"kind", "training"},
-                {"active", preparing || trainer->isTrainingActive()},
+                // A stopped run stays active while its worker publishes the final
+                // snapshot; dataset loads are refused until then.
+                {"active", preparing || trainer->isTrainingActive() || trainer->isCompletionPending()},
                 {"status",
                  state == vis::TrainingState::Finished && !trainer->getLastError().empty()
                      ? "failed"
