@@ -49,6 +49,7 @@ endif()
 add_executable(lichtfeld_image_codec_tests
     ../test_heif_codecs.cpp
     ../test_exr_codecs.cpp
+    ../test_exr_memory.cpp
     ../test_image_codec_dependencies.cpp
     ../test_png_memory.cpp
     ../test_tiff_memory.cpp
@@ -75,7 +76,7 @@ if(WIN32 AND MSVC)
     target_compile_definitions(lichtfeld_image_codec_tests PRIVATE LFS_REQUIRE_LONG_PATHS_DISABLED)
 endif()
 add_test(NAME lichtfeld_image_codec_tests COMMAND lichtfeld_image_codec_tests
-    --gtest_filter=-ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits:PngMemory.ParallelStripesMatchFileBytesAndKeepInputUnmodified:PngMemory.LargeImagesPreserveSamplesAndRecoverFromOutputLimits:TiffMemory.LargeImagesPreserveSamplesAndRecoverFromOutputLimits)
+    --gtest_filter=-ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits:PngMemory.ParallelStripesMatchFileBytesAndKeepInputUnmodified:PngMemory.LargeImagesPreserveSamplesAndRecoverFromOutputLimits:TiffMemory.LargeImagesPreserveSamplesAndRecoverFromOutputLimits:ExrMemory.LargeImagesPreserveSamplesAndRecoverFromLimits)
 set_tests_properties(lichtfeld_image_codec_tests PROPERTIES LABELS "fast;image;cpu" TIMEOUT 120)
 add_test(NAME lichtfeld_jpeg_large_memory_test COMMAND lichtfeld_image_codec_tests
     --gtest_filter=ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits)
@@ -87,6 +88,10 @@ set_tests_properties(lichtfeld_png_memory_stress_test PROPERTIES LABELS "stress;
 add_test(NAME lichtfeld_tiff_memory_stress_test COMMAND lichtfeld_image_codec_tests
     --gtest_filter=TiffMemory.LargeImagesPreserveSamplesAndRecoverFromOutputLimits)
 set_tests_properties(lichtfeld_tiff_memory_stress_test PROPERTIES LABELS "stress;image;cpu" TIMEOUT 180)
+
+add_test(NAME lichtfeld_exr_memory_stress_test COMMAND lichtfeld_image_codec_tests
+    --gtest_filter=ExrMemory.LargeImagesPreserveSamplesAndRecoverFromLimits)
+set_tests_properties(lichtfeld_exr_memory_stress_test PROPERTIES LABELS "stress;image;cpu" TIMEOUT 180)
 
 if(TARGET lfs_io)
     add_executable(lichtfeld_image_discovery_tests ../test_image_format_discovery.cpp)
