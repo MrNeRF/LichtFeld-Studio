@@ -443,7 +443,7 @@
                    data-event-click="pv_value_change(row.id, !row.checked)" />
           </div>
           <div data-if="dep_bilateral" data-class-disabled-overlay="adv_disabled">
-            <span class="status-text status-muted" data-if="!pv_search_active">{{pv_header_bilateral_grid}}</span>
+            <span class="status-text status-muted" data-if="pv_bilateral_rows.size > 0 || pv_exposure_grid_start_rows.size > 0">{{pv_header_bilateral_grid}}</span>
             <div class="setting-row" data-for="row : pv_bilateral_rows"
                  data-attr-data-tooltip="row.tooltip_key">
               <span class="prop-label">{{row.label}}</span>
@@ -523,7 +523,7 @@
           </div>
         </div>
         <div data-if="dep_ppisp_params" data-class-disabled-overlay="adv_disabled">
-          <span class="status-text status-muted" data-if="!pv_search_active">{{pv_header_ppisp_correction}}</span>
+          <span class="status-text status-muted" data-if="pv_ppisp_registry_rows.size > 0">{{pv_header_ppisp_correction}}</span>
           <div class="setting-row" data-for="row : pv_ppisp_registry_rows"
                data-attr-data-tooltip="row.tooltip_key">
             <span class="prop-label">{{row.label}}</span>
