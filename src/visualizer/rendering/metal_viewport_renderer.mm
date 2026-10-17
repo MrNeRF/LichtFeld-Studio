@@ -187,8 +187,9 @@ namespace lfs::vis {
                 view_info.format = format;
                 view_info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 check(vkCreateImageView(device, &view_info, nullptr, &view), "Native viewport image view");
+                // Preview and capture renders allocate slots while a GUI frame records.
                 if (!context.transitionImageLayoutImmediate(image, VK_IMAGE_LAYOUT_UNDEFINED,
-                                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, {}))
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, { .new_image = true }))
                     throw std::runtime_error(context.lastError());
             }
         };

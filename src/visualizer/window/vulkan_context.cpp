@@ -4267,9 +4267,11 @@ namespace lfs::vis {
                 vkHandleValue(graphics_queue_),
                 transitions.size()));
         }
-        if (frame_active_) {
+        if (frame_active_ && !std::ranges::all_of(transitions, [](const ImmediateLayoutTransition& t) {
+                return t.options.new_image && t.old_layout == VK_IMAGE_LAYOUT_UNDEFINED;
+            })) {
             return fail(std::format(
-                "Immediate image transition cannot run during an active frame (frame_active={}, frame_slot={}, image_index={}, count={})",
+                "Immediate image transition cannot run during an active frame unless every image is new (frame_active={}, frame_slot={}, image_index={}, count={})",
                 frame_active_,
                 active_frame_index_,
                 active_image_index_,

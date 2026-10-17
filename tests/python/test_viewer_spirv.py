@@ -33,7 +33,7 @@ class ViewerSpirv(unittest.TestCase):
             if words and words[0] == 0x07230203:
                 modules['tensor/' + name] = words
         self.assertGreaterEqual(len(modules), 36)
-        for directory, pattern in [('src/rendering/rasterizer/vulkan/shader', '*.spv'),
+        for directory, pattern in [('src/rendering/rasterizer/vulkan', '*.spv'),
                                    ('src/visualizer/generated/shaders', '*.spv.h')]:
             paths = list((BUILD / directory).rglob(pattern))
             self.assertTrue(paths, directory)

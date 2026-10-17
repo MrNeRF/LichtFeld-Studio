@@ -714,7 +714,7 @@ namespace {
         try {
             lfs::core::param::ensure_optimization_properties_registered();
             ::args::ArgumentParser parser(
-                "LichtFeld Studio: High-performance CUDA implementation of 3D Gaussian Splatting algorithm.\n",
+                "LichtFeld Studio: High-performance GPU implementation of 3D Gaussian Splatting.\n",
                 "\nSUBCOMMANDS:\n"
                 "convert -- Convert between .ply, .sog, .ssog, .spz, .usd/.usda/.usdc, .html\n"
                 "compare -- Score test images against reference images\n"
