@@ -130,8 +130,8 @@ namespace lfs::vis::gui {
             return width;
         }
 
-        // Gives the shortcut cells of one popup the widest shortcut's width. The text is
-        // right-aligned, so shortcuts end at the popup edge and the checkmarks before them line up.
+        // Gives the shortcut cells of one popup the widest shortcut's width, so the shortcuts form
+        // one left-aligned column at the popup edge and the checkmarks before them line up.
         bool shareShortcutWidth(Rml::Element* popup) {
             Rml::ElementList rows;
             collectDirectMenuRows(popup, rows);
