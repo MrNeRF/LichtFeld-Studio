@@ -55,11 +55,11 @@ namespace lfs::core {
         const auto profiler = lfs::diagnostics::VramProfiler::instance().snapshot();
         const auto& process = profiler.process;
         LOG_ERROR(
-            "Arena VRAM failure snapshot label=%s cuda_free=%zu MiB cuda_total=%zu MiB "
-            "arena_committed=%zu MiB frame_peak=%zu MiB exportable_splat=%zu MiB "
-            "shared_scratch=%zu MiB cuda_default_pool_reserved=%zu MiB "
-            "cuda_default_pool_used=%zu MiB",
-            label_text.c_str(),
+            "Arena VRAM failure snapshot label={} cuda_free={} MiB cuda_total={} MiB "
+            "arena_committed={} MiB frame_peak={} MiB exportable_splat={} MiB "
+            "shared_scratch={} MiB cuda_default_pool_reserved={} MiB "
+            "cuda_default_pool_used={} MiB",
+            label_text,
             free_bytes >> 20, total_bytes >> 20,
             committed_bytes >> 20, frame_peak_bytes >> 20,
             process.exportable_splat_bytes >> 20,
