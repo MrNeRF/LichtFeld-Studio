@@ -9,6 +9,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/display.h>
 }
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -33,6 +34,118 @@ namespace {
         } directory{std::filesystem::temp_directory_path() /
                     ("lfs-source-exif-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))};
         require(std::filesystem::create_directory(directory.path), "create metadata fixture directory");
+
+        {
+            // Independent classic TIFF fixture: RGB framing plus an opaque unknown
+            // tag. Pixels deliberately live beyond the metadata range.
+            std::vector<uint8_t> tiff_bytes{'I', 'I', 42, 0, 8, 0, 0, 0};
+            auto put = [&](uint32_t value, unsigned width) {
+                for (unsigned i = 0; i < width; ++i)
+                    tiff_bytes.push_back(static_cast<uint8_t>(value >> (8 * i)));
+            };
+            put(10, 2);
+            auto tag = [&](uint16_t id, uint16_t type, uint32_t count, uint32_t value) {
+                put(id, 2);
+                put(type, 2);
+                put(count, 4);
+                put(value, 4);
+            };
+            tag(256, 4, 1, 1);
+            tag(257, 4, 1, 1);
+            tag(258, 3, 1, 8);
+            tag(259, 3, 1, 1);
+            tag(262, 3, 1, 2);
+            tag(273, 4, 1, 1024);
+            tag(274, 3, 1, 6);
+            tag(277, 3, 1, 3);
+            tag(279, 4, 1, 3);
+            tag(65000, 7, 4, 0xff004100);
+            put(0, 4);
+            const auto tiff_path = directory.path / "source-metadata.bin";
+            auto write_tiff_fixture = [&](size_t count) {
+                std::ofstream file(tiff_path, std::ios::binary | std::ios::trunc);
+                file.write(reinterpret_cast<const char*>(tiff_bytes.data()), static_cast<std::streamsize>(count));
+            };
+            write_tiff_fixture(tiff_bytes.size());
+            auto tiff = read_source_exif(tiff_path);
+            require(tiff.status == MetadataStatus::Collected && tiff.tiff && tiff.blocks.empty() &&
+                        tiff.tiff->directories.size() == 1,
+                    "TIFF metadata does not require available pixel strips");
+            const auto archived = tiff;
+            // Unconfigured pixel compression is not damaged metadata and must
+            // not require installing a decoder just to return the read prefix.
+            tiff_bytes[8 + 2 + 3 * 12 + 8] = 0x51;
+            tiff_bytes[8 + 2 + 3 * 12 + 9] = 0xc3; // WebP compression, 50001.
+            write_tiff_fixture(tiff_bytes.size());
+            const auto unconfigured = read_source_exif(tiff_path);
+            require(unconfigured.status == MetadataStatus::Collected || unconfigured.status == MetadataStatus::Unsupported,
+                    "unconfigured TIFF pixel compression is unsupported, not malformed");
+            tiff_bytes[8 + 2 + 3 * 12 + 8] = 1;
+            tiff_bytes[8 + 2 + 3 * 12 + 9] = 0;
+            write_tiff_fixture(tiff_bytes.size());
+            for (const auto& range : tiff.tiff->source_ranges)
+                require(range.offset <= tiff_bytes.size() && range.bytes.size() <= tiff_bytes.size() - range.offset &&
+                            std::equal(range.bytes.begin(), range.bytes.end(), tiff_bytes.begin() + range.offset),
+                        "TIFF source spans preserve exact bytes and original offsets");
+            require(std::any_of(tiff.tiff->directories[0].tags.begin(), tiff.tiff->directories[0].tags.end(), [](const auto& entry) {
+                        return entry.id == 65000 && entry.bytes == std::vector<uint8_t>{0, 0x41, 0, 0xff};
+                    }),
+                    "TIFF unknown byte tags retain NUL and invalid UTF8 through libtiff");
+            MetadataLimits tiff_limits;
+            tiff_limits.jpeg_header_bytes = 0;
+            tiff_limits.png_chunks = 0;
+            tiff_limits.blocks = 0;
+            require(read_source_exif(tiff_path, tiff_limits).status == MetadataStatus::Collected,
+                    "TIFF ignores unrelated JPEG and PNG budgets");
+            tiff_limits = {};
+            tiff_limits.tiff_reads = 1;
+            const auto limited_tiff = read_source_exif(tiff_path, tiff_limits);
+            require(limited_tiff.status == MetadataStatus::Limited && limited_tiff.tiff &&
+                        !limited_tiff.tiff->source_ranges.empty(),
+                    "TIFF source budget retains complete header spans");
+            tiff_limits = {};
+            tiff_limits.tiff_entries = 1;
+            tiff = read_source_exif(tiff_path, tiff_limits);
+            require(tiff.status == MetadataStatus::Limited && tiff.tiff->directories.size() == 1 &&
+                        tiff.tiff->directories[0].tags.size() == 1,
+                    "TIFF entry budget retains decoded prefix");
+            tiff_limits = {};
+            tiff_limits.tiff_value_bytes = 7;
+            require(read_source_exif(tiff_path, tiff_limits).status == MetadataStatus::Limited,
+                    "TIFF checks decoded value storage before copying");
+            tiff_limits = {};
+            size_t stored_values = 0;
+            for (const auto& entry : archived.tiff->directories[0].tags)
+                stored_values += entry.bytes.size() + 8 * (entry.unsigned_values.size() + entry.signed_values.size() + entry.floating_values.size());
+            tiff_limits.tiff_value_bytes = stored_values;
+            require(read_source_exif(tiff_path, tiff_limits).status == MetadataStatus::Collected,
+                    "TIFF decoded-value accounting accepts the exact owned-storage budget");
+            --tiff_limits.tiff_value_bytes;
+            const auto value_prefix = read_source_exif(tiff_path, tiff_limits);
+            require(value_prefix.status == MetadataStatus::Limited && !value_prefix.tiff->directories[0].tags.empty(),
+                    "TIFF decoded-value accounting rejects one byte below the owned-storage budget and retains its prefix");
+            tiff_limits = {};
+            tiff_limits.total_bytes = 8;
+            require(read_source_exif(tiff_path, tiff_limits).status == MetadataStatus::Limited,
+                    "TIFF original range copies obey aggregate byte budget");
+            for (size_t count = 4; count < tiff_bytes.size(); ++count) {
+                write_tiff_fixture(count);
+                const auto truncated = read_source_exif(tiff_path);
+                require(truncated.status != MetadataStatus::Collected && truncated.status != MetadataStatus::Absent,
+                        "every incomplete TIFF directory framing is diagnosed");
+            }
+            write_tiff_fixture(tiff_bytes.size());
+            // A libtiff-reported cycle is bounded and never silently treated as EOF.
+            tiff_bytes[tiff_bytes.size() - 4] = 8;
+            write_tiff_fixture(tiff_bytes.size());
+            tiff = read_source_exif(tiff_path);
+            require(tiff.status == MetadataStatus::Malformed,
+                    "TIFF directory cycles are malformed");
+            require(!tiff.tiff->directories.empty(), "TIFF cycle retains the first complete directory");
+            std::filesystem::remove(tiff_path);
+            require(!archived.tiff->source_ranges.empty() && archived.tiff->directories.size() == 1,
+                    "TIFF originals and decoded tags own their storage after source removal");
+        }
         const auto path = directory.path / "source.jpg";
         const uint8_t pixel[]{20, 80, 160};
         std::string error;

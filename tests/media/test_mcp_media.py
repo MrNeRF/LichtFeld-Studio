@@ -18,6 +18,26 @@ _exif_spec.loader.exec_module(source_exif_fixture)
 
 
 class McpMedia(unittest.TestCase):
+    def test_tiff_decoded_tags_and_original_source_ranges(self):
+        path = self.root / "TIFF metadata é 日本語.bin"
+        for big in (False, True):
+            for little in (False, True):
+                with self.subTest(big=big, little=little):
+                    payload = source_exif_fixture.write_tiff(path, big=big, little=little, pages=2)
+                    request = self.root / "tiff-request.json"
+                    request.write_text(json.dumps({"operation": "source-exif", "arguments": {"input": str(path)}}), encoding="utf-8")
+                    response = subprocess.run([str(RUNNER), str(request)], capture_output=True, check=True, timeout=30)
+                    self.assertEqual(response.stderr, b"")
+                    value = json.loads(response.stdout)["exif"]
+                    source_exif_fixture.check_tiff(self, value, path, payload, big=big, little=little, pages=2)
+                    maker = source_exif_fixture.write_tiff_graph(path, big=big, little=little)
+                    request = self.root / "tiff-request.json"
+                    request.write_text(json.dumps({"operation": "source-exif", "arguments": {"input": str(path)}}), encoding="utf-8")
+                    response = subprocess.run([str(RUNNER), str(request)], capture_output=True, check=True, timeout=30)
+                    self.assertEqual(response.stderr, b"")
+                    value = json.loads(response.stdout)["exif"]
+                    source_exif_fixture.check_tiff_graph(self, value, path, maker)
+
     def test_png_idat_segmentation_and_ancillary_crc_recovery(self):
         path = self.root / "review PNG.png"
         request = self.root / "review-png.json"

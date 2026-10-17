@@ -65,6 +65,22 @@ def defined_symbols(path, exports=False):
 def ffmpeg_public(name):
     return re.match(r"^(av|avcodec|avformat|avutil|avfilter|avdevice|avio|swscale|swresample|sws|swr)_",name)
 class IngestCLI(unittest.TestCase):
+    def test_tiff_decoded_tags_and_original_source_ranges(self):
+        path = self.root / "TIFF metadata é 日本語.bin"
+        for big in (False, True):
+            for little in (False, True):
+                with self.subTest(big=big, little=little):
+                    payload = source_exif_fixture.write_tiff(path, big=big, little=little, pages=2)
+                    result, stderr = self.invoke("source-exif", path)
+                    self.assertEqual(stderr, b"")
+                    value = result["exif"]
+                    source_exif_fixture.check_tiff(self, value, path, payload, big=big, little=little, pages=2)
+                    maker = source_exif_fixture.write_tiff_graph(path, big=big, little=little)
+                    result, stderr = self.invoke("source-exif", path)
+                    self.assertEqual(stderr, b"")
+                    value = result["exif"]
+                    source_exif_fixture.check_tiff_graph(self, value, path, maker)
+
     def test_png_idat_segmentation_and_ancillary_crc_recovery(self):
         path = self.root / "review PNG.png"
         for options, count, status in (({"idat_chunks": 5000}, 1, "collected"),
