@@ -5,6 +5,7 @@
 #include "io/loader_service.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
@@ -247,7 +248,7 @@ namespace lfs::io {
                     "  - transforms.json (or transforms_train.json)",
                     filename);
             } else {
-                auto ext = path.extension().string();
+                auto ext = lfs::core::path_to_utf8(path.extension());
                 message = std::format(
                     "Cannot open '{}' - unsupported file format.\n\n"
                     "Supported formats:\n"

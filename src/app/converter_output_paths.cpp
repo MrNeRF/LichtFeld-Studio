@@ -21,7 +21,7 @@ namespace lfs::app {
 
         const std::string extension(
             lfs::core::param::output_format_extension(format));
-        const auto working_directory = std::filesystem::current_path();
+        const auto working_directory = lfs::core::native_fs::current_path();
         auto converted_name = input.stem();
         converted_name += suffix;
         converted_name += extension;

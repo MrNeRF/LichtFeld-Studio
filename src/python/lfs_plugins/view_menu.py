@@ -10,15 +10,15 @@ __lfs_menu_classes__ = ["ViewMenu"]
 _STREAMING_PANEL = "lfs.tiles3d"
 
 
-def _toggle_streaming_settings():
-    lf.ui.set_panel_enabled(_STREAMING_PANEL, not lf.ui.is_panel_enabled(_STREAMING_PANEL))
-
-
 def _tr_fallback(key: str, fallback: str) -> str:
     result = lf.ui.tr(key)
     if result and result != key:
         return result
     return fallback
+
+
+def _toggle_streaming_settings():
+    lf.ui.set_panel_enabled(_STREAMING_PANEL, not lf.ui.is_panel_enabled(_STREAMING_PANEL))
 
 
 @register_menu
@@ -164,7 +164,12 @@ class ViewMenu:
                 lf.ui.is_panel_enabled(_STREAMING_PANEL),
                 enabled=lf.get_tiles_mode() == "stream",
             ),
-            menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
+            menu_action(tr("menu.view.home_view"), lf.go_home,
+                        shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_RESET_HOME)),
+            menu_action(tr("input_settings.action.camera_set_home"), lf.set_home,
+                        shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_SET_HOME)),
+            menu_action(tr("toolbar.reset_home"), lf.reset_home,
+                        shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_RESTORE_HOME)),
             menu_action(_tr_fallback("main_panel.console", "Console"), lf.ui.toggle_system_console),
             menu_toggle(
                 tr("scene.logging"),

@@ -627,6 +627,12 @@ def reset_camera() -> None:
 def focus_selection() -> bool:
     """Frame the selection or the whole scene in the active view."""
 
+def go_home() -> None:
+    """Move the active viewport to its home view"""
+
+def set_home() -> None:
+    """Make the active viewport's current view its home view"""
+
 def reset_home() -> None:
     """
     Restore the default home view of the active viewport and move the camera there
@@ -2827,6 +2833,12 @@ class DatasetParams:
     @property
     def images(self) -> str:
         """Subfolder name containing images"""
+
+    @property
+    def init_path(self) -> str:
+        """
+        Training initialization file; empty when training starts from the dataset's points
+        """
 
     @property
     def test_every(self) -> int:

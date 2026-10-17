@@ -142,6 +142,9 @@ def _install_lichtfeld_stub(monkeypatch):
             TOGGLE_PERFORMANCE_HUD="toggle_performance_hud",
             TOGGLE_PYTHON_CONSOLE="toggle_python_console",
             TOGGLE_UI="toggle_ui",
+            CAMERA_RESET_HOME="camera_reset_home",
+            CAMERA_SET_HOME="camera_set_home",
+            CAMERA_RESTORE_HOME="camera_restore_home",
         ),
         ToolMode=SimpleNamespace(GLOBAL="global"),
         is_bound=lambda _action, _mode: True,
@@ -157,6 +160,9 @@ def _install_lichtfeld_stub(monkeypatch):
             "open_preferences": "Ctrl+,",
             "toggle_performance_hud": "F10",
             "toggle_python_console": "Ctrl+`",
+            "camera_reset_home": "H",
+            "camera_set_home": "Shift+H",
+            "camera_restore_home": "Ctrl+H",
         }.get(action, "Unbound"),
     )
 
@@ -164,6 +170,9 @@ def _install_lichtfeld_stub(monkeypatch):
     lf_stub.ui = ui
     lf_stub.keymap = keymap
     lf_stub.reset_camera = lambda: None
+    lf_stub.go_home = lambda: state.setdefault("home_calls", []).append("go")
+    lf_stub.set_home = lambda: state.setdefault("home_calls", []).append("set")
+    lf_stub.reset_home = lambda: state.setdefault("home_calls", []).append("reset")
     lf_stub.get_tiles_mode = lambda: state["tiles_mode"]
     lf_stub.undo = SimpleNamespace(
         can_undo=lambda: True,
@@ -350,7 +359,8 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert [item["label"] for item in theme_families[0]["items"]] == ["Dark", "Light"]
     assert [item["label"] for item in theme_families[1]["items"]] == ["Night", "Day"]
     assert view_items[1]["items"][1]["label"] == "100%"
-    # theme, ui_scale, separator, performance_hud, streaming_settings, reset_view, console, logging
+    # theme, ui_scale, separator, performance_hud, streaming_settings, home view, set home, reset home,
+    # console, logging
     assert view_items[3]["label"] == "tr:menu.view.performance_hud"
     assert view_items[3]["shortcut"] == "F10"
     view_items[3]["callback"]()
@@ -366,9 +376,16 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert state["panel_enabled"][-1] == ("lfs.tiles3d", True)
     assert view_mod.ViewMenu().menu_items()[4]["selected"] is True
     state["tiles_mode"] = None
-    assert view_items[5]["label"] == "tr:image_preview.reset_view"
-    assert view_items[6]["label"] == "tr:main_panel.console"
-    view_items[6]["callback"]()
+    assert [(item["label"], item["shortcut"]) for item in view_items[5:8]] == [
+        ("tr:menu.view.home_view", "H"),
+        ("tr:input_settings.action.camera_set_home", "Shift+H"),
+        ("tr:toolbar.reset_home", "Ctrl+H"),
+    ]
+    for item in view_items[5:8]:
+        item["callback"]()
+    assert state["home_calls"] == ["go", "set", "reset"]
+    assert view_items[8]["label"] == "tr:main_panel.console"
+    view_items[8]["callback"]()
     # The tools menu already opened the console once above.
     assert state["python_console_shown"] == 2
 

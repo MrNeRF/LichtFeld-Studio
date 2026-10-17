@@ -377,25 +377,19 @@ namespace lfs::vis {
                 in_flight = active;
             }
 
-            const auto stale = std::max_element(
-                gt_comparison_image_cache_.begin(), gt_comparison_image_cache_.end(),
-                [&source_key](const auto& lhs, const auto& rhs) {
-                    const auto rank = [&source_key](const auto& entry) {
-                        if (!entry.image || !entry.image->is_valid()) {
-                            return 0;
-                        }
-                        return entry.camera_uid == source_key.camera_uid &&
-                                       entry.image_path == source_key.image_path
-                                   ? 2
-                                   : 1;
-                    };
-                    const int lhs_rank = rank(lhs);
-                    const int rhs_rank = rank(rhs);
-                    return lhs_rank != rhs_rank ? lhs_rank < rhs_rank
-                                                : lhs.last_used < rhs.last_used;
-                });
-            if (stale != gt_comparison_image_cache_.end() && stale->image &&
-                stale->image->is_valid()) {
+            // Only an earlier image of the SAME camera, at any resolution, may stand in
+            // while the request is in flight: another camera's ground truth beside this
+            // camera's render reads as a misaligned frame.
+            const GTComparisonImageCacheEntry* stale = nullptr;
+            for (const auto& entry : gt_comparison_image_cache_) {
+                if (entry.image && entry.image->is_valid() &&
+                    entry.camera_uid == source_key.camera_uid &&
+                    entry.image_path == source_key.image_path &&
+                    (!stale || stale->last_used < entry.last_used)) {
+                    stale = &entry;
+                }
+            }
+            if (stale) {
                 result.stale_image = stale->image;
             }
             result.grace_elapsed =

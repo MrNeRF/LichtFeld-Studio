@@ -5,6 +5,7 @@
 #include "sogs_loader.hpp"
 #include "core/file_extensions.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "formats/sogs.hpp"

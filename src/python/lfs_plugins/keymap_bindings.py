@@ -41,6 +41,7 @@ class KeymapBindingsSection:
         "navigation_global": [
             lf.keymap.Action.CAMERA_RESET_HOME,
             lf.keymap.Action.CAMERA_SET_HOME,
+            lf.keymap.Action.CAMERA_RESTORE_HOME,
             lf.keymap.Action.CAMERA_FOCUS_SELECTION,
             lf.keymap.Action.CAMERA_NEXT_VIEW,
             lf.keymap.Action.CAMERA_PREV_VIEW,

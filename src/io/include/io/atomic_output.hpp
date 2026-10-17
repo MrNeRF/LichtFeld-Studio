@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "io/atomic_output_path.hpp"
 #include "io/error.hpp"
@@ -157,7 +158,7 @@ namespace lfs::io {
         // Preserve the existing Windows write-through behavior for all atomic
         // outputs. Durable mode additionally flushes the file handle first.
         const DWORD flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
-        if (!MoveFileExW(temp_w.c_str(), output_w.c_str(), flags)) {
+        if (!MoveFileExW(lfs::core::native_fs::native_path(temp_w.c_str()).c_str(), lfs::core::native_fs::native_path(output_w.c_str()).c_str(), flags)) {
             return std::unexpected(Error{
                 ErrorCode::WRITE_FAILURE,
                 std::format("Failed to replace '{}' with temporary export '{}': Windows error {}",

@@ -492,9 +492,14 @@ namespace lfs::vis {
             frame_rates_.countPresented(plan);
             frame_demand_ledger_.countPresented(plan);
         }
-        void countViewRendered(const FramePlan& plan) {
+        // One viewport frame for the FPS readout; each view that rendered for the ledger.
+        void countViewsRendered(const ViewMask views, const FramePlan& plan) {
+            if (!views)
+                return;
             frame_rates_.countView();
-            frame_demand_ledger_.countViewRendered(plan.render_views, plan);
+            for (std::size_t v = 0; v < kMaxViews; ++v)
+                if (views & (ViewMask{1} << v))
+                    frame_demand_ledger_.countViewRendered(ViewMask{1} << v, plan);
         }
         std::optional<FrameClock::time_point> fpsIdleDeadline() const { return frame_rates_.idleDeadline(); }
         void refreshIdleFps(const FrameClock::time_point now) {
@@ -1169,6 +1174,7 @@ namespace lfs::vis {
 
         lfs::event::ScopedHandler event_handlers_;
 
+        friend struct SplitOutputLifetimeTestAccess;
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class RenderingManagerActualSizeStateTest_PublishesOnlyAtCommitAndRetainsAcrossResourceInvalidation_Test;
         friend class RenderingManagerActualSizeCacheTest_RetainsReadySourceAcrossTogglesAndClearsOnContextChanges_Test;

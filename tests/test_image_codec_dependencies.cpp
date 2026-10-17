@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/image_codecs.hpp"
+#include "core/native_fs.hpp"
 #include "long_path_test_support.hpp"
 #include <array>
 #include <chrono>
@@ -12,6 +13,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <jpeglib.h>
+#include <limits>
 #include <memory>
 #include <png.h>
 #include <stdexcept>
@@ -108,7 +110,7 @@ namespace {
         }
         ~TemporaryDirectory() {
             std::error_code error;
-            std::filesystem::remove_all(path, error);
+            lfs::core::native_fs::remove_all(path, error);
         }
     };
     TEST(ProductionTiff, WritesExactUint16SamplesAndPreservesBorrowedRows) {
@@ -451,6 +453,73 @@ namespace {
             EXPECT_EQ((std::string{std::istreambuf_iterator<char>(file), {}}), "keep");
         }
     }
+    TEST(ProductionImagePaths, PngJpegAndTiffRoundTripLongUnicodePaths) {
+        namespace fs = lfs::core::native_fs;
+#ifdef LFS_REQUIRE_LONG_PATHS_DISABLED
+        ASSERT_EQ(fs::process_long_paths_enabled(), std::optional<bool>(false));
+#endif
+        TemporaryDirectory temporary;
+        auto directory = temporary.path;
+        for (int i = 0; i < 12; ++i)
+            directory /= fs::path(u8"directory_\u6e2c\u8a66_01234567890123456789");
+        fs::create_directories(directory);
+        constexpr int width = 19, height = 17, channels = 3;
+        std::vector<std::uint8_t> pixels(width * height * channels);
+        for (size_t i = 0; i < pixels.size(); ++i)
+            pixels[i] = static_cast<std::uint8_t>(i * 17);
+        for (const auto* extension : {".png", ".jpg", ".tif"}) {
+            SCOPED_TRACE(extension);
+            auto path = directory / fs::path(u8"image_\u6e2c\u8a66");
+            path += extension;
+            std::string error;
+            if (std::string(extension) == ".png")
+                ASSERT_TRUE(codec::write_png(path, pixels.data(), width, height, channels, 8, 6, std::nullopt, error)) << error;
+            else if (std::string(extension) == ".jpg")
+                ASSERT_TRUE(codec::write_jpeg(path, pixels.data(), width, height, channels, 95, std::nullopt, error)) << error;
+            else
+                ASSERT_TRUE(codec::write_tiff(path, pixels.data(), width, height, channels, error)) << error;
+            codec::Image image;
+            ASSERT_TRUE(codec::decode(path, image, error)) << error;
+            EXPECT_EQ(image.width, width);
+            EXPECT_EQ(image.height, height);
+            EXPECT_EQ(image.channels, channels);
+            if (std::string(extension) != ".jpg")
+                EXPECT_EQ(image.data, pixels);
+        }
+    }
+    TEST(ProductionImagePaths, TiffErrorsNameTheCallersLongPath) {
+        namespace fs = lfs::core::native_fs;
+        TemporaryDirectory temporary;
+        auto directory = temporary.path;
+        for (int i = 0; i < 12; ++i)
+            directory /= fs::path(u8"directory_\u6e2c\u8a66_01234567890123456789");
+        fs::create_directories(directory);
+        const auto path = directory / "corrupt.tif";
+        {
+            std::ofstream file(fs::native_path(path), std::ios::binary);
+            file << "II*" << '\0' << "not a tiff directory";
+        }
+        codec::Image image;
+        std::string error;
+        ASSERT_FALSE(codec::decode(path, image, error));
+        EXPECT_EQ(error.find(R"(\\?\)"), std::string::npos) << error;
+    }
+    // Fails if a TIFF that libtiff cannot open reports a generic codec failure instead of the reason.
+    TEST(ProductionImagePaths, TiffOpenErrorsCarryLibtiffsReason) {
+        namespace fs = lfs::core::native_fs;
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "corrupt.tif";
+        {
+            std::ofstream file(fs::native_path(path), std::ios::binary);
+            file << "II*" << '\0' << "not a tiff directory";
+        }
+        codec::Image image;
+        std::string error;
+        ASSERT_FALSE(codec::decode(path, image, error));
+        EXPECT_TRUE(error.starts_with("TIFF open failed: ")) << error;
+        EXPECT_NE(error.find("TIFFReadDirectory: "), std::string::npos) << error;
+    }
+
     TEST(ProductionPng, AllChannelsAndDepthsRoundTripWithCommentsAndUnicodePaths) {
         TemporaryDirectory temporary;
         for (int channels : {1, 2, 3, 4}) {
@@ -601,6 +670,251 @@ namespace {
             }
         }
     }
+    TEST(ProductionJpeg, MemoryOutputMatchesFilesWithPaddedRowsAndBinaryComments) {
+        TemporaryDirectory temporary;
+        for (int channels : {1, 3}) {
+            for (const auto dimensions : {std::pair{1, 1}, std::pair{19, 17}, std::pair{257, 241}}) {
+                const auto [width, height] = dimensions;
+                const size_t row_bytes = size_t(width) * channels;
+                const size_t stride = row_bytes + 11;
+                std::vector<uint8_t> packed(row_bytes * height);
+                std::vector<uint8_t> padded(stride * (height - 1) + row_bytes, 0xcd);
+                uint32_t random = 314159;
+                for (int y = 0; y < height; ++y)
+                    for (size_t x = 0; x < row_bytes; ++x) {
+                        random = random * 1664525u + 1013904223u;
+                        padded[size_t(y) * stride + x] = packed[size_t(y) * row_bytes + x] = uint8_t(random >> 24);
+                    }
+                const auto original = padded;
+                for (int quality : {0, 1, 95, 100, 101}) {
+                    for (bool full_chroma : {false, true}) {
+                        codec::JpegEncodeOptions options;
+                        options.quality = quality;
+                        options.full_chroma = full_chroma;
+                        options.comment = quality == 100 ? std::string(65540, 'x') : std::string("memory\0jpeg", 11);
+                        const auto path = temporary.path / "reference.jpg";
+                        std::string error;
+                        ASSERT_TRUE(codec::write_jpeg(path, packed.data(), width, height, channels, quality, options.comment, error, full_chroma)) << error;
+                        std::ifstream file(path, std::ios::binary);
+                        const std::vector<uint8_t> expected{std::istreambuf_iterator<char>(file), {}};
+                        std::vector<uint8_t> encoded{42};
+                        ASSERT_TRUE(codec::encode_jpeg_memory(padded, width, height, channels, stride, encoded, options));
+                        EXPECT_EQ(encoded, expected);
+                        EXPECT_EQ(padded, original);
+                        jpeg_decompress_struct info{};
+                        jpeg_error_mgr jpeg_error{};
+                        info.err = jpeg_std_error(&jpeg_error);
+                        jpeg_create_decompress(&info);
+                        jpeg_mem_src(&info, encoded.data(), static_cast<unsigned long>(encoded.size()));
+                        jpeg_save_markers(&info, JPEG_COM, 65535);
+                        ASSERT_EQ(jpeg_read_header(&info, TRUE), JPEG_HEADER_OK);
+                        EXPECT_EQ(info.image_width, unsigned(width));
+                        EXPECT_EQ(info.image_height, unsigned(height));
+                        EXPECT_EQ(info.num_components, channels);
+                        EXPECT_EQ(info.comp_info[0].h_samp_factor, channels == 1 || full_chroma ? 1 : 2);
+                        EXPECT_EQ(info.comp_info[0].v_samp_factor, channels == 1 || full_chroma ? 1 : 2);
+                        ASSERT_NE(info.marker_list, nullptr);
+                        EXPECT_EQ(info.marker_list->data_length, std::min<size_t>(options.comment->size(), 65533));
+                        EXPECT_EQ(std::memcmp(info.marker_list->data, options.comment->data(), info.marker_list->data_length), 0);
+                        jpeg_destroy_decompress(&info);
+                    }
+                }
+            }
+        }
+    }
+    TEST(ProductionJpeg, MemoryByteLimitKeepsPreviousOutputAndEncoderCanBeReused) {
+        for (const int dimension : {1, 129}) {
+            std::vector<uint8_t> pixels(size_t(dimension) * dimension * 3);
+            uint32_t random = 1234;
+            for (auto& value : pixels) {
+                random = random * 1664525u + 1013904223u;
+                value = uint8_t(random >> 24);
+            }
+            codec::JpegEncodeOptions options;
+            options.full_chroma = true;
+            std::vector<uint8_t> expected;
+            ASSERT_TRUE(codec::encode_jpeg_memory(pixels, dimension, dimension, 3, size_t(dimension) * 3, expected, options));
+            if (dimension > 1)
+                ASSERT_GT(expected.size(), 4096);
+            options.max_output_bytes = expected.size();
+            std::vector<uint8_t> output;
+            ASSERT_TRUE(codec::encode_jpeg_memory(pixels, dimension, dimension, 3, size_t(dimension) * 3, output, options));
+            EXPECT_EQ(output, expected);
+            for (size_t limit : {size_t{1}, expected.size() - 1}) {
+                options.max_output_bytes = limit;
+                const auto result = codec::encode_jpeg_memory(pixels, dimension, dimension, 3, size_t(dimension) * 3, output, options);
+                ASSERT_FALSE(result);
+                EXPECT_EQ(result.error().code(), lfs::ErrorCode::ResourceExhausted);
+                EXPECT_EQ(output, expected);
+            }
+            options.max_output_bytes = expected.size();
+            ASSERT_TRUE(codec::encode_jpeg_memory(pixels, dimension, dimension, 3, size_t(dimension) * 3, output, options));
+            EXPECT_EQ(output, expected);
+        }
+    }
+    TEST(ProductionJpeg, MemoryDeterministicStressPreservesRowsAndLimitBoundaries) {
+        TemporaryDirectory temporary;
+        uint32_t random = 0x4a504547;
+        const auto next = [&] {
+            random = random * 1664525u + 1013904223u;
+            return random;
+        };
+        for (int iteration = 0; iteration < 512; ++iteration) {
+            SCOPED_TRACE(iteration);
+            const int width = 1 + next() % 97, height = 1 + next() % 83;
+            const int channels = next() & 0x100 ? 1 : 3;
+            const size_t row_bytes = size_t(width) * channels;
+            const size_t stride = row_bytes + next() % 33;
+            // Offset input and omit final-row padding to expose accidental
+            // alignment assumptions and reads beyond the declared sample span.
+            std::vector<uint8_t> storage(1 + stride * (height - 1) + row_bytes, 0xcd);
+            std::vector<uint8_t> packed(row_bytes * height);
+            for (int y = 0; y < height; ++y)
+                for (size_t x = 0; x < row_bytes; ++x)
+                    storage[1 + size_t(y) * stride + x] = packed[size_t(y) * row_bytes + x] = uint8_t(next() >> 24);
+            const auto original = storage;
+            const auto input = std::span<const uint8_t>(storage).subspan(1);
+            codec::JpegEncodeOptions options;
+            options.quality = int(next() % 105) - 2;
+            options.full_chroma = next() & 0x100;
+            if (iteration % 3 == 0)
+                options.comment = std::string(next() % 129, char(next() >> 24));
+            std::vector<uint8_t> reference;
+            ASSERT_TRUE(codec::encode_jpeg_memory(input, width, height, channels, stride, reference, options));
+            const auto path = temporary.path / "stress.jpg";
+            std::string error;
+            ASSERT_TRUE(codec::write_jpeg(path, packed.data(), width, height, channels, options.quality, options.comment, error, options.full_chroma)) << error;
+            std::ifstream file(path, std::ios::binary);
+            EXPECT_EQ(reference, (std::vector<uint8_t>{std::istreambuf_iterator<char>(file), {}}));
+            for (const size_t limit : {size_t{1}, size_t{4095}, size_t{4096}, size_t{4097}, reference.size() - 1, reference.size(), reference.size() + 1}) {
+                options.max_output_bytes = limit;
+                std::vector<uint8_t> output{7, 8, 9};
+                const auto result = codec::encode_jpeg_memory(input, width, height, channels, stride, output, options);
+                ASSERT_EQ(bool(result), limit >= reference.size());
+                if (result)
+                    EXPECT_EQ(output, reference);
+                else {
+                    EXPECT_EQ(result.error().code(), lfs::ErrorCode::ResourceExhausted);
+                    EXPECT_EQ(output, (std::vector<uint8_t>{7, 8, 9}));
+                }
+            }
+            EXPECT_EQ(storage, original);
+            options.max_output_bytes = reference.size();
+            if (height == 1) {
+                std::vector<uint8_t> output;
+                ASSERT_TRUE(codec::encode_jpeg_memory(input, width, height, channels, std::numeric_limits<size_t>::max(), output, options));
+                EXPECT_EQ(output, reference);
+            }
+            auto aliased = packed;
+            options.max_output_bytes = 1;
+            EXPECT_FALSE(codec::encode_jpeg_memory(aliased, width, height, channels, row_bytes, aliased, options));
+            EXPECT_EQ(aliased, packed);
+        }
+    }
+    TEST(ProductionJpeg, MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits) {
+        TemporaryDirectory temporary;
+        for (const auto dimensions : {std::pair{3840, 2160}, std::pair{7680, 4320}}) {
+            const auto [width, height] = dimensions;
+            SCOPED_TRACE(::testing::Message() << width << 'x' << height);
+            std::vector<uint8_t> pixels(size_t(width) * height * 3);
+            uint32_t random = 42;
+            for (auto& value : pixels) {
+                random = random * 1664525u + 1013904223u;
+                value = uint8_t(random >> 24);
+            }
+            codec::JpegEncodeOptions options;
+            options.quality = 100;
+            options.full_chroma = true;
+            options.max_output_bytes = 256 * 1024 * 1024;
+            std::vector<uint8_t> encoded;
+            ASSERT_TRUE(codec::encode_jpeg_memory(pixels, width, height, 3, size_t(width) * 3, encoded, options));
+            const auto path = temporary.path / "large.jpg";
+            std::string error;
+            ASSERT_TRUE(codec::write_jpeg(path, pixels.data(), width, height, 3, options.quality, {}, error, options.full_chroma)) << error;
+            std::ifstream file(path, std::ios::binary);
+            std::array<char, 4096> block;
+            size_t offset = 0;
+            while (file.read(block.data(), block.size()) || file.gcount()) {
+                const auto count = size_t(file.gcount());
+                ASSERT_LE(count, encoded.size() - offset);
+                ASSERT_EQ(std::memcmp(encoded.data() + offset, block.data(), count), 0);
+                offset += count;
+            }
+            ASSERT_TRUE(file.eof());
+            ASSERT_EQ(offset, encoded.size());
+            codec::Image decoded;
+            ASSERT_TRUE(codec::decode_memory(encoded.data(), encoded.size(), decoded, error)) << error;
+            EXPECT_EQ(decoded.width, width);
+            EXPECT_EQ(decoded.height, height);
+            EXPECT_EQ(decoded.channels, 3);
+            EXPECT_EQ(decoded.data.size(), pixels.size());
+            decoded = {};
+            if (width == 7680)
+                ASSERT_GT(encoded.size(), codec::JpegEncodeOptions{}.max_output_bytes);
+            std::vector<size_t> limits{4096, encoded.size() - 1};
+            if (width == 7680)
+                limits.push_back(codec::JpegEncodeOptions{}.max_output_bytes);
+            for (const auto limit : limits) {
+                options.max_output_bytes = limit;
+                std::vector<uint8_t> output{7, 8, 9};
+                const auto result = codec::encode_jpeg_memory(pixels, width, height, 3, size_t(width) * 3, output, options);
+                ASSERT_FALSE(result);
+                EXPECT_EQ(result.error().code(), lfs::ErrorCode::ResourceExhausted);
+                EXPECT_EQ(output, (std::vector<uint8_t>{7, 8, 9}));
+            }
+            // A failed large encode must not poison the next independent call.
+            std::vector<uint8_t> output;
+            ASSERT_TRUE(codec::encode_jpeg_memory(std::span<const uint8_t>(pixels).first(3), 1, 1, 3, 3, output));
+        }
+    }
+    TEST(ProductionJpeg, MemoryInputValidationRejectsTruncationOverflowAndUnsupportedChannels) {
+        const std::vector<uint8_t> pixels(19 * 17 * 3, 128);
+        std::vector<uint8_t> output{7, 8, 9};
+        const auto invalid = [&](std::span<const uint8_t> bytes, int width, int height, int channels, size_t stride, codec::JpegEncodeOptions options = {}) {
+            const auto result = codec::encode_jpeg_memory(bytes, width, height, channels, stride, output, options);
+            ASSERT_FALSE(result);
+            EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(output, (std::vector<uint8_t>{7, 8, 9}));
+        };
+        invalid({}, 19, 17, 3, 57);
+        invalid(pixels, 0, 17, 3, 57);
+        invalid(pixels, 19, -1, 3, 57);
+        invalid(pixels, JPEG_MAX_DIMENSION + 1, 17, 3, 57);
+        invalid(pixels, 19, 17, 2, 57);
+        invalid(pixels, 19, 17, 4, 76);
+        invalid(pixels, 19, 17, 3, 0);
+        invalid(pixels, 19, 17, 3, 56);
+        invalid(std::span(pixels).first(pixels.size() - 1), 19, 17, 3, 57);
+        invalid(pixels, 19, 2, 3, std::numeric_limits<size_t>::max());
+        codec::JpegEncodeOptions options;
+        options.max_output_bytes = 0;
+        invalid(pixels, 19, 17, 3, 57, options);
+        options.max_output_bytes = std::numeric_limits<size_t>::max();
+        invalid(pixels, 19, 17, 3, 57, options);
+    }
+    TEST(ProductionJpeg, MemoryAliasingAndConcurrentCallsKeepOwnedIndependentResults) {
+        std::vector<uint8_t> aliased(19 * 17 * 3, 128);
+        ASSERT_TRUE(codec::encode_jpeg_memory(aliased, 19, 17, 3, 57, aliased));
+        codec::Image decoded;
+        std::string error;
+        ASSERT_TRUE(codec::decode_memory(aliased.data(), aliased.size(), decoded, error)) << error;
+        EXPECT_EQ(decoded.data, (std::vector<uint8_t>(19 * 17 * 3, 128)));
+        std::vector<std::future<bool>> jobs;
+        for (int i = 0; i < 8; ++i)
+            jobs.emplace_back(std::async(std::launch::async, [i] {
+                std::vector<uint8_t> pixels(19 * 17 * 3, uint8_t(32 + i));
+                std::vector<uint8_t> encoded;
+                codec::JpegEncodeOptions options;
+                options.full_chroma = true;
+                if (!codec::encode_jpeg_memory(pixels, 19, 17, 3, 57, encoded, options))
+                    return false;
+                codec::Image decoded;
+                std::string error;
+                return codec::decode_memory(encoded.data(), encoded.size(), decoded, error) && decoded.data == pixels;
+            }));
+        for (auto& job : jobs)
+            EXPECT_TRUE(job.get());
+    }
     TEST(ProductionJpeg, ConcurrentEncodersHaveIndependentState) {
         TemporaryDirectory temporary;
         std::vector<std::uint8_t> rgb(std::size_t{19} * 17 * 3, 128);
@@ -684,6 +998,38 @@ namespace {
     TEST(ProductionCodecs, WritersAndReadersWorkOnBothSidesOfTheExtendedPathSwitch) {
         lfs::test::long_paths::LongPathDirectory temporary;
         round_trip_images_around_the_extended_path_switch(temporary.path);
+    }
+
+    // Fails on Windows if atomic publishing hands the OS a plain path: its temporary name is longer
+    // than the target, so a write fails from about 230 units on.
+    TEST(ProductionCodecs, AtomicWritersWorkOnBothSidesOfTheExtendedPathSwitch) {
+        using namespace lfs::test::long_paths;
+        LongPathDirectory temporary;
+        constexpr int width = 7, height = 5, channels = 3;
+        std::vector<std::uint8_t> pixels(std::size_t(width) * height * channels);
+        for (std::size_t i = 0; i < pixels.size(); ++i)
+            pixels[i] = static_cast<std::uint8_t>(i * 29);
+        std::vector<std::uint8_t> samples(pixels.size() * 2);
+        for (std::size_t i = 0; i < samples.size(); ++i)
+            samples[i] = static_cast<std::uint8_t>(i * 13);
+        for (const auto length : kLengthsAroundExtendedPathSwitch) {
+            for (const std::string extension : {".png", ".tif"}) {
+                SCOPED_TRACE(::testing::Message() << length << extension);
+                const auto path = with_native_length(temporary.path / unicode_folder() / std::to_string(length), length,
+                                                     lfs::core::utf8_to_path("bild 🙂" + extension));
+                ASSERT_EQ(path.native().size(), length);
+                const auto written =
+                    extension == ".png"
+                        ? codec::write_image_u8(path, pixels.data(), width, height, channels, 95, std::nullopt, {})
+                        : codec::write_tiff_u16(path, samples, width, height, channels,
+                                                std::size_t(width) * channels * 2, std::nullopt, {});
+                ASSERT_TRUE(written) << written.error().detail();
+                codec::Image decoded;
+                std::string error;
+                ASSERT_TRUE(codec::decode(path, decoded, error)) << error;
+                EXPECT_EQ(decoded.data, extension == ".png" ? pixels : samples);
+            }
+        }
     }
 
 #ifdef _WIN32

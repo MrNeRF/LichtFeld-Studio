@@ -19,6 +19,7 @@
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "internal/viewport.hpp"
+#include "keymap_history_helpers.hpp"
 #include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -32,6 +33,7 @@
 #include "visualizer_impl.hpp"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <nlohmann/json.hpp>
 
 #include <cmath>
@@ -48,6 +50,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -84,6 +87,23 @@ namespace lfs::vis {
 
             std::string name_;
             std::optional<std::string> previous_;
+        };
+
+        int python_console_toggle_calls = 0;
+
+        void recordPythonConsoleToggle() {
+            ++python_console_toggle_calls;
+        }
+
+        class RestorePythonConsoleCallback {
+        public:
+            RestorePythonConsoleCallback() {
+                python_console_toggle_calls = 0;
+                lfs::python::set_show_python_console_callback(&recordPythonConsoleToggle);
+            }
+            ~RestorePythonConsoleCallback() {
+                lfs::python::set_show_python_console_callback(nullptr);
+            }
         };
 
         class InputControllerFocusTest : public ::testing::Test {
@@ -970,6 +990,42 @@ namespace lfs::vis {
         expect_framed_near("hidden node");
     }
 
+    // Fails if one far floater makes F park the camera beyond the zoom-out limit.
+    TEST_F(InputControllerFocusTest, FocusFramesThroughFarFloatersAndCanZoomOut) {
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        SceneManager scene_manager;
+        ToolContext tool_context(nullptr, &scene_manager, &controller_views, nullptr);
+        controller.setToolContext(&tool_context);
+
+        constexpr size_t count = 500;
+        std::vector<float> means(count * 3, 0.0f), rotations(count * 4, 0.0f);
+        for (size_t i = 0; i < count; ++i) {
+            means[i * 3] = static_cast<float>(i % 10) * 0.2f - 1.0f;
+            means[i * 3 + 1] = static_cast<float>((i / 10) % 10) * 0.2f - 1.0f;
+            rotations[i * 4] = 1.0f;
+        }
+        means[0] = 90000.0f; // one floater
+        scene_manager.getScene().addSplat(
+            "model",
+            std::make_unique<lfs::core::SplatData>(
+                0, Tensor::from_vector(means, {count, size_t{3}}, Device::CPU),
+                Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::zeros({count, size_t{0}, size_t{3}}, Device::CPU),
+                Tensor::zeros({count, size_t{3}}, Device::CPU),
+                Tensor::from_vector(rotations, {count, size_t{4}}, Device::CPU),
+                Tensor::zeros({count, size_t{1}}, Device::CPU), 1.0f));
+
+        ASSERT_TRUE(controller.focusSelection());
+        const float framed = glm::length(viewport.camera.pivot - viewport.camera.t);
+        EXPECT_LT(framed, 100.0f);
+        viewport.camera.zoom(-1.0f);
+        EXPECT_GT(glm::length(viewport.camera.pivot - viewport.camera.t), framed);
+    }
+
     TEST_F(InputControllerFocusTest, FrameAndHomeKeysWorkWhileAPanelHasKeyboardFocus) {
         Viewport viewport(200, 200);
         TestViewTargets controller_views{viewport};
@@ -1009,6 +1065,67 @@ namespace lfs::vis {
         focus.want_text_input = true;
         controller.handleKey(input::KEY_F, input::ACTION_PRESS, input::KEYMOD_NONE);
         EXPECT_EQ(viewport.camera.getPivot(), defaults.home_pivot);
+    }
+
+    // Fails if Ctrl+H does not restore the default home, as the Reset Home button does.
+    TEST_F(InputControllerFocusTest, CtrlHRestoresTheDefaultHome) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        const decltype(viewport.camera) defaults{};
+
+        viewport.camera.pivot = glm::vec3(7.0f);
+        controller.handleKey(input::KEY_H, input::ACTION_PRESS, input::KEYMOD_SHIFT);
+        ASSERT_NE(viewport.camera.home_pivot, defaults.home_pivot);
+
+        controller.handleKey(input::KEY_H, input::ACTION_PRESS, input::KEYMOD_CTRL);
+        EXPECT_EQ(viewport.camera.home_t, defaults.home_t);
+        EXPECT_EQ(viewport.camera.home_pivot, defaults.home_pivot);
+        EXPECT_EQ(viewport.camera.getPivot(), defaults.home_pivot);
+    }
+
+    // Fails if WASD, Shift speed-up or the speed keys stop while a panel row holds keyboard focus.
+    TEST_F(InputControllerFocusTest, NavigationKeysWorkWhileAPanelHasKeyboardFocus) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.initialize();
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.any_item_active = true;
+        ASSERT_FALSE(router.isViewportKeyboardFocused());
+
+        // Hold W for half a second. Without a window the release cannot be read
+        // back from SDL, so focus loss clears the held key as it does in the app.
+        const auto travel = [&](const int mods) {
+            SDL_SetModState(mods & input::KEYMOD_SHIFT ? SDL_KMOD_LSHIFT : SDL_KMOD_NONE);
+            const glm::vec3 start = viewport.camera.t;
+            controller.handleKey(input::KEY_W, input::ACTION_PRESS, mods);
+            for (int i = 0; i < 30; ++i)
+                controller.update(1.0f / 60.0f);
+            const float distance = glm::length(viewport.camera.t - start);
+            controller.onWindowFocusLost();
+            viewport.camera.clearWasdMomentum();
+            SDL_SetModState(SDL_KMOD_NONE);
+            return distance;
+        };
+        const float plain = travel(input::KEYMOD_NONE);
+        EXPECT_GT(plain, 0.0f);
+        EXPECT_GT(travel(input::KEYMOD_SHIFT), plain * 1.5f);
+
+        const float speed = viewport.camera.getWasdSpeed();
+        controller.handleKey(input::KEY_EQUAL, input::ACTION_PRESS, input::KEYMOD_CTRL);
+        EXPECT_GT(viewport.camera.getWasdSpeed(), speed);
+
+        // A focused text field keeps its keys.
+        focus.want_text_input = true;
+        EXPECT_EQ(travel(input::KEYMOD_NONE), 0.0f);
     }
 
     TEST_F(InputControllerFocusTest, DeleteNodeShortcutFiresWhenViewportFocused) {
@@ -2263,7 +2380,8 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 34"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": " + std::to_string(input::test::currentProfileVersion())),
+                  std::string::npos);
         EXPECT_NE(contents.find("Gallery Primary Action"), std::string::npos);
         EXPECT_NE(contents.find("Copy Gallery Link"), std::string::npos);
         EXPECT_NE(contents.find("Refresh Assets"), std::string::npos);
@@ -2331,7 +2449,7 @@ namespace lfs::vis {
         const auto version_key = contents.find("\"version\":");
         ASSERT_NE(version_key, std::string::npos);
         EXPECT_EQ(contents.find("\"version\":", version_key + 1), std::string::npos);
-        EXPECT_NE(contents.find("\"version\": 34"), std::string::npos);
+        EXPECT_NE(contents.find("\"version\": " + std::to_string(input::test::currentProfileVersion())), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Server"), std::string::npos);
         EXPECT_NE(contents.find("Window size"), std::string::npos);
         EXPECT_NE(contents.find("Window drag"), std::string::npos);
@@ -2466,6 +2584,136 @@ namespace lfs::vis {
         EXPECT_EQ(bindings.getActionForScroll(ToolMode::SELECTION, MODIFIER_SHIFT | MODIFIER_ALT), Action::DEPTH_ADJUST_SIZE);
         EXPECT_EQ(bindings.getActionForDrag(ToolMode::SELECTION, MouseButton::LEFT, MODIFIER_SHIFT | MODIFIER_ALT), Action::DEPTH_WINDOW_DRAG);
         std::filesystem::remove(path);
+    }
+
+    TEST_F(InputControllerFocusTest, MenuAcceleratorsResolveAndDispatchThroughInputBindings) {
+        using namespace input;
+        RestorePythonConsoleCallback restore_console_callback;
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        const auto& bindings = controller.getBindings();
+
+        struct MenuAccelerator {
+            std::string source;
+            Action action = Action::NONE;
+            bool save_project = false;
+        };
+        const auto menu_root = std::filesystem::path(PROJECT_ROOT_PATH) / "src/python/lfs_plugins";
+        std::vector<MenuAccelerator> menu_accelerators;
+        for (const auto& entry : std::filesystem::directory_iterator(menu_root)) {
+            if (entry.path().extension() != ".py" ||
+                !entry.path().filename().string().ends_with("_menu.py"))
+                continue;
+            std::ifstream input(entry.path());
+            ASSERT_TRUE(input.good()) << entry.path();
+            std::string line;
+            while (std::getline(input, line)) {
+                const auto start = line.find("shortcut=");
+                if (start == std::string::npos)
+                    continue;
+                if (line.find("\"Ctrl+S\"", start) != std::string::npos) {
+                    menu_accelerators.push_back(
+                        {.source = entry.path().filename().string(),
+                         .save_project = true});
+                    continue;
+                }
+                auto action_start = line.find("Action.", start);
+                if (action_start == std::string::npos)
+                    action_start = line.find("action.", start);
+                ASSERT_NE(action_start, std::string::npos)
+                    << entry.path().filename().string() << ": " << line;
+                action_start += 7;
+                auto action_end = action_start;
+                while (action_end < line.size() &&
+                       (std::isalnum(static_cast<unsigned char>(line[action_end])) ||
+                        line[action_end] == '_'))
+                    ++action_end;
+                const auto action = actionFromName(
+                    std::string_view(line).substr(action_start, action_end - action_start));
+                ASSERT_TRUE(action)
+                    << entry.path().filename().string() << ": " << line;
+                menu_accelerators.push_back(
+                    {.source = entry.path().filename().string(), .action = *action});
+            }
+        }
+        ASSERT_FALSE(menu_accelerators.empty());
+
+        lfs::event::ScopedHandler handlers;
+        std::map<Action, int> dispatched;
+        const auto record = [&](const Action action) {
+            return [&, action](const auto&) { ++dispatched[action]; };
+        };
+        handlers.subscribe<core::events::cmd::Undo>(record(Action::UNDO));
+        handlers.subscribe<core::events::cmd::Redo>(record(Action::REDO));
+        handlers.subscribe<core::events::cmd::CopySelection>(record(Action::COPY_SELECTION));
+        handlers.subscribe<core::events::cmd::CutSelection>(record(Action::CUT_SELECTION));
+        handlers.subscribe<core::events::cmd::PasteSelection>(record(Action::PASTE_SELECTION));
+        handlers.subscribe<core::events::cmd::InvertSelection>(record(Action::INVERT_SELECTION));
+        handlers.subscribe<core::events::cmd::SelectAll>(record(Action::SELECT_ALL));
+        handlers.subscribe<core::events::cmd::DeselectAll>(record(Action::DESELECT_ALL));
+        handlers.subscribe<core::events::ui::ToggleVramHud>(record(Action::TOGGLE_PERFORMANCE_HUD));
+        handlers.subscribe<core::events::ui::ToggleUI>(record(Action::TOGGLE_UI));
+        handlers.subscribe<core::events::cmd::ProjectSave>(record(Action::NONE));
+
+        const auto default_profile = InputBindings::createDefaultProfile();
+        for (const auto& accelerator : menu_accelerators) {
+            SCOPED_TRACE(accelerator.source);
+            if (accelerator.save_project) {
+                const auto before = dispatched[Action::NONE];
+                const int physical_key = sdlScancodeToAppKey(SDL_SCANCODE_S);
+                const int logical_key = sdlShortcutKeyToAppKey(
+                    SDL_SCANCODE_S,
+                    SDL_GetKeyFromScancode(SDL_SCANCODE_S, SDL_KMOD_NONE, false));
+                EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, logical_key,
+                                                   MODIFIER_CTRL),
+                          Action::NONE);
+                controller.handleKey(physical_key, logical_key, SDL_SCANCODE_S,
+                                     ACTION_PRESS, MODIFIER_CTRL);
+                EXPECT_EQ(dispatched[Action::NONE], before + 1);
+                continue;
+            }
+
+            const auto binding = std::ranges::find_if(
+                default_profile.bindings, [&](const auto& candidate) {
+                    return candidate.mode == ToolMode::GLOBAL &&
+                           candidate.action == accelerator.action;
+                });
+            ASSERT_NE(binding, default_profile.bindings.end())
+                << getActionName(accelerator.action);
+            const auto* trigger = std::get_if<KeyTrigger>(&binding->trigger);
+            ASSERT_NE(trigger, nullptr) << getActionName(accelerator.action);
+            const auto scancode = appKeyToSdlScancode(trigger->key);
+            ASSERT_NE(scancode, SDL_SCANCODE_UNKNOWN)
+                << getActionName(accelerator.action);
+            const int physical_key = sdlScancodeToAppKey(scancode);
+            const int logical_key = sdlShortcutKeyToAppKey(
+                scancode, SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false));
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, logical_key,
+                                               trigger->modifiers),
+                      accelerator.action);
+            const auto before = dispatched[accelerator.action];
+            const int console_before = python_console_toggle_calls;
+            // The home keys move the viewport camera instead of publishing a command.
+            const bool home_action = accelerator.action == Action::CAMERA_RESET_HOME ||
+                                     accelerator.action == Action::CAMERA_SET_HOME ||
+                                     accelerator.action == Action::CAMERA_RESTORE_HOME;
+            if (home_action)
+                viewport.camera.pivot = glm::vec3(3.0f);
+            const auto camera_before = std::pair{viewport.camera.getPivot(), viewport.camera.home_pivot};
+            controller.handleKey(physical_key, logical_key, scancode,
+                                 ACTION_PRESS, trigger->modifiers);
+            controller.handleKey(physical_key, logical_key, scancode,
+                                 ACTION_RELEASE, trigger->modifiers);
+            if (home_action)
+                EXPECT_NE(std::pair(viewport.camera.getPivot(), viewport.camera.home_pivot), camera_before)
+                    << getActionName(accelerator.action);
+            else if (accelerator.action == Action::TOGGLE_PYTHON_CONSOLE)
+                EXPECT_EQ(python_console_toggle_calls, console_before + 1);
+            else if (accelerator.action != Action::OPEN_PREFERENCES)
+                EXPECT_EQ(dispatched[accelerator.action], before + 1)
+                    << getActionName(accelerator.action);
+        }
     }
 
     TEST_F(InputControllerFocusTest, GalleryActionsHaveRebindableNativeDefaults) {

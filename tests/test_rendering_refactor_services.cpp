@@ -37,6 +37,7 @@
 #include "screen/screen_service.hpp"
 #include "selection/selection_service.hpp"
 #include "tools/selection_tool.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -594,9 +595,13 @@ namespace lfs::vis {
             lfs::core::event::bus().clear_all();
             services().clear();
             op::undoHistory().clear();
+            UnifiedToolRegistry::instance().clearActiveTool();
         }
 
         void TearDown() override {
+            // The crop commands activate the crop box tool in the process-wide registry; a
+            // later input test would otherwise route its drags to the crop box.
+            UnifiedToolRegistry::instance().clearActiveTool();
             op::undoHistory().clear();
             services().clear();
             lfs::event::EventBridge::instance().clear_all();
@@ -5687,6 +5692,43 @@ namespace lfs::vis {
         EXPECT_FALSE(lfs::vis::op::operators().hasModalOperator());
         EXPECT_FALSE(lfs::vis::op::depthWindowOverlayState().visible);
         EXPECT_EQ(lfs::vis::op::depthWindowOverlayState().hovered_handle, lfs::vis::op::DepthWindowHandle::None);
+    }
+
+    // Catches the scene-change handler counting splat models only: a splat and a mesh
+    // are a valid split pair, so an unrelated visibility change must keep the drag.
+    TEST_F(DepthWindowGtHookTest, VisibilityChangeKeepsDragWhileSplitPairsSplatWithMesh) {
+        auto& scene = viewer_->getSceneManager()->getScene();
+        auto mesh = std::make_shared<lfs::core::MeshData>();
+        mesh->vertices = lfs::core::Tensor::from_vector(
+            std::vector<float>{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f}, {3, 3}, lfs::core::Device::CPU);
+        mesh->indices = lfs::core::Tensor::from_vector(
+            std::vector<int32_t>{0, 1, 2}, {1, 3}, lfs::core::Device::CPU);
+        scene.addMesh("split_mesh", mesh);
+        const auto spare = scene.addMesh("spare_mesh", mesh);
+        scene.setNodeVisibility(spare, false);
+        ASSERT_EQ(plyComparisonNodes(scene).size(), 2u);
+
+        auto settings = rendering_manager_->getSettings();
+        settings.split_view_mode = SplitViewMode::PLYComparison;
+        rendering_manager_->updateSettings(settings);
+        ASSERT_TRUE(startDepthDrag());
+        const op::ModalEvent move{
+            .type = op::ModalEvent::Type::MOUSE_MOVE,
+            .data = MouseMoveEvent{
+                .position = {60.0, 60.0},
+                .delta = {50.0, 50.0},
+            },
+        };
+        ASSERT_EQ(op::operators().dispatchModalEvent(move), op::OperatorResult::RUNNING_MODAL);
+        ASSERT_TRUE(rendering_manager_->depthWindowDragPreview());
+
+        scene.setNodeVisibility(spare, true);
+        scene.setNodeVisibility(spare, false);
+
+        EXPECT_TRUE(rendering_manager_->depthWindowDragPreview());
+        EXPECT_TRUE(op::operators().hasModalOperator());
+        EXPECT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::PLYComparison);
+        op::operators().cancelModalOperator();
     }
 
     TEST_F(DepthWindowGtHookTest, GtToggleLeavesUnrelatedSelectionStrokeModalActive) {

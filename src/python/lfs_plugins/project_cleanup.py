@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Preview and run atomic project cleanup without blocking the UI."""
 from html import escape
-from pathlib import Path
+from _lfs_path_io import Path
 import threading
 
 import lichtfeld as lf

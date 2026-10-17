@@ -6,7 +6,10 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "formats/ply.hpp"
+#include "formats/spz.hpp"
 #include "io/error.hpp"
 #include "io/mesh/texture_loader.hpp"
 #include <algorithm>
@@ -98,7 +101,14 @@ namespace lfs::io {
             return mat;
         }
 
-        MeshData convert_ai_mesh(const aiMesh* ai_mesh, const bool geometry_only,
+        // glTF defines COLOR_0 as linear; other formats store vertex colors as display values.
+        bool vertex_colors_are_srgb(const std::filesystem::path& path) {
+            auto ext = lfs::core::path_to_utf8(path.extension());
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            return ext != ".gltf" && ext != ".glb";
+        }
+
+        MeshData convert_ai_mesh(const aiMesh* ai_mesh, const bool geometry_only, const bool srgb_colors,
                                  const aiMatrix4x4& transform) {
             assert(ai_mesh);
             const int nv = static_cast<int>(ai_mesh->mNumVertices);
@@ -251,11 +261,15 @@ namespace lfs::io {
             if (!geometry_only && ai_mesh->HasVertexColors(0)) {
                 mesh.colors = Tensor::empty({static_cast<size_t>(nv), size_t{4}}, Device::CPU, DataType::Float32);
                 auto cacc = mesh.colors.accessor<float, 2>();
+                // Renderers and Mesh2Splat encode with a 2.2 power, so decode with the same curve.
+                const auto linear = [srgb_colors](const float value) {
+                    return srgb_colors ? std::pow(std::clamp(value, 0.0f, 1.0f), 2.2f) : value;
+                };
                 for (int i = 0; i < nv; ++i) {
                     const auto& c = ai_mesh->mColors[0][i];
-                    cacc(i, 0) = c.r;
-                    cacc(i, 1) = c.g;
-                    cacc(i, 2) = c.b;
+                    cacc(i, 0) = linear(c.r);
+                    cacc(i, 1) = linear(c.g);
+                    cacc(i, 2) = linear(c.b);
                     cacc(i, 3) = c.a;
                 }
             }
@@ -413,7 +427,7 @@ namespace lfs::io {
             options.progress(0.0f, "Loading mesh file...");
         }
 
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND, "Mesh file does not exist", path);
         }
 
@@ -432,7 +446,7 @@ namespace lfs::io {
 
         Assimp::Importer importer;
         const aiScene* scene = importer.ReadFile(
-            path_str, options.mesh_geometry_only ? GEOMETRY_IMPORT_FLAGS : IMPORT_FLAGS);
+            lfs::core::path_to_native_utf8(path), options.mesh_geometry_only ? GEOMETRY_IMPORT_FLAGS : IMPORT_FLAGS);
 
         if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
             return make_error(ErrorCode::CORRUPTED_DATA,
@@ -459,10 +473,11 @@ namespace lfs::io {
         std::vector<unsigned int> mesh_material_indices;
         sub_meshes.reserve(scene->mNumMeshes);
         mesh_material_indices.reserve(scene->mNumMeshes);
+        const bool srgb_colors = vertex_colors_are_srgb(path);
         const auto append_mesh = [&](const unsigned int i, const aiMatrix4x4& transform) {
             if (scene->mMeshes[i]->mNumVertices == 0)
                 return;
-            sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i], options.mesh_geometry_only, transform));
+            sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i], options.mesh_geometry_only, srgb_colors, transform));
             mesh_material_indices.push_back(scene->mMeshes[i]->mMaterialIndex);
             LOG_DEBUG("  mesh[{}]: {} verts, {} faces, material_index={}",
                       i, scene->mMeshes[i]->mNumVertices, scene->mMeshes[i]->mNumFaces,
@@ -601,11 +616,11 @@ namespace lfs::io {
     }
 
     bool MeshLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path) || std::filesystem::is_directory(path)) {
+        if (!lfs::core::native_fs::exists(path) || lfs::core::native_fs::is_directory(path)) {
             return false;
         }
 
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
         for (const auto& e : MESH_EXTENSIONS) {
@@ -633,6 +648,16 @@ namespace lfs::io {
 
     int MeshLoader::priority() const {
         return 5;
+    }
+
+    bool is_mesh_file(const std::filesystem::path& filepath) {
+        auto ext = lfs::core::path_to_utf8(filepath.extension());
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext == ".ply")
+            return ply_has_faces(filepath);
+        if (ext == ".glb")
+            return lfs::core::native_fs::exists(filepath) && !is_spz_glb(filepath);
+        return lfs::core::native_fs::exists(filepath) && std::ranges::find(MESH_EXTENSIONS, ext) != MESH_EXTENSIONS.end();
     }
 
 } // namespace lfs::io

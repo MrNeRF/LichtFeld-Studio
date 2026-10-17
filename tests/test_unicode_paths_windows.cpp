@@ -40,7 +40,11 @@
 
 #include <stb_image.h>
 
-namespace fs = std::filesystem;
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
+namespace fs = lfs::core::native_fs;
 using namespace lfs::core;
 
 // ============================================================================
@@ -64,7 +68,12 @@ protected:
     void SetUp() override {
         // Create test root with short name to maximize path budget for realistic test scenarios
         // The Unicode testing happens in the actual test paths, not the root directory
-        test_root_ = fs::temp_directory_path() / "lfs_uni_test";
+#ifdef _WIN32
+        const auto process_id = GetCurrentProcessId();
+#else
+        const auto process_id = getpid();
+#endif
+        test_root_ = fs::temp_directory_path() / ("lfsu" + std::to_string(process_id));
         fs::create_directories(test_root_);
     }
 
@@ -1294,7 +1303,7 @@ TEST_F(UnicodePathTest, Utf8RoundTrip) {
     // Iterate and convert paths (like file_browser.cpp does)
     for (const auto& entry : fs::directory_iterator(utf8_to_path(current_path_str))) {
         // This is what file_browser does: store UTF-8 string
-        std::string selected_file_str = path_to_utf8(entry.path());
+        std::string selected_file_str = path_to_utf8(fs::entry_path(unicode_dir, entry.path()));
         EXPECT_FALSE(selected_file_str.empty()) << "path_to_utf8 failed for entry";
 
         // Convert back to path (for filesystem operations)
@@ -1307,7 +1316,7 @@ TEST_F(UnicodePathTest, Utf8RoundTrip) {
         EXPECT_FALSE(dirname_utf8.empty()) << "path_to_utf8 failed for filename";
 
         // Verify the comparison would work
-        std::string entry_path_utf8 = path_to_utf8(entry.path());
+        std::string entry_path_utf8 = path_to_utf8(fs::entry_path(unicode_dir, entry.path()));
         EXPECT_EQ(selected_file_str, entry_path_utf8)
             << "UTF-8 path comparison would fail in file browser";
     }
@@ -1347,7 +1356,7 @@ TEST_F(UnicodePathTest, DirectoryIterationWithPathToUtf8) {
         if (entry.is_directory()) {
             // This is exactly what the fixed file_browser.cpp does:
             std::string dirname = path_to_utf8(entry.path().filename());
-            std::string full_path = path_to_utf8(entry.path());
+            std::string full_path = path_to_utf8(fs::entry_path(test_dir, entry.path()));
 
             iteration_results.push_back({dirname, full_path});
 
@@ -1404,7 +1413,7 @@ TEST_F(UnicodePathTest, PathComparisonForSelection) {
     // Iterate and check selection (like file_browser does)
     int selected_count = 0;
     for (const auto& entry : fs::directory_iterator(test_dir)) {
-        std::string entry_path_utf8 = path_to_utf8(entry.path());
+        std::string entry_path_utf8 = path_to_utf8(fs::entry_path(test_dir, entry.path()));
         bool is_selected = (selected_file == entry_path_utf8);
 
         if (is_selected) {
@@ -2484,7 +2493,7 @@ TEST_F(UnicodePathTest, CheckpointSaveLoad) {
             << "Project file missing: " << path_to_utf8(project_path);
         EXPECT_FALSE(fs::exists(temp_project_path))
             << "Temporary project file not cleaned up: " << path_to_utf8(temp_project_path);
-        EXPECT_EQ(std::distance(fs::directory_iterator(output_dir), fs::directory_iterator()), 1);
+        EXPECT_EQ(std::distance(fs::directory_iterator(output_dir), std::filesystem::directory_iterator()), 1);
     }
 }
 
@@ -2990,7 +2999,7 @@ TEST_F(UnicodePathTest, CompleteExportWorkflow) {
 
     // Verify complete workflow succeeded
     EXPECT_TRUE(fs::exists(output_dir / "project.licht"));
-    EXPECT_EQ(fs::directory_iterator(exports_dir) != fs::directory_iterator(), true);
+    EXPECT_EQ(fs::directory_iterator(exports_dir) != std::filesystem::directory_iterator(), true);
 }
 
 // ============================================================================

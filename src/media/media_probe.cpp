@@ -250,7 +250,8 @@ namespace lfs::media {
             return failure(AVERROR(ENOMEM), "Allocate input", false);
         auto close = [](AVFormatContext* context) { avformat_close_input(&context); };
         raw->interrupt_callback = {Deadline::interrupt, &deadline};
-        const int opened = avformat_open_input(&raw, utf8.c_str(), nullptr, nullptr);
+        const auto native = core::path_to_native_utf8(path);
+        const int opened = avformat_open_input(&raw, native.c_str(), nullptr, nullptr);
         std::unique_ptr<AVFormatContext, decltype(close)> context(raw, close);
         if (opened < 0)
             return failure(opened, "Open input", deadline.expired);

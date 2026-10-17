@@ -5,6 +5,7 @@
 #include "gui/panels/python_console_panel.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_focus_state.hpp"

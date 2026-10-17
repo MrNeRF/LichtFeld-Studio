@@ -5,6 +5,7 @@
 #include "media/video_frame_extractor.hpp"
 #include "core/atomic_file.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "decoded_video_frame_ffmpeg.hpp"
 #include "io/video/probed_stream_rewind.hpp"
@@ -482,7 +483,7 @@ namespace lfs::io {
         }
 
         void write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
-            std::ofstream file(path, std::ios::binary);
+            std::ofstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
             if (!file)
                 throw std::runtime_error("Failed to open JPEG output: " + lfs::core::path_to_utf8(path));
             file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
@@ -982,8 +983,8 @@ namespace lfs::io {
         const std::filesystem::path& directory, std::string_view pattern) {
         const auto metadata = directory / "extraction_metadata.json";
         std::unordered_set<std::filesystem::path> previous;
-        if (std::filesystem::is_regular_file(std::filesystem::symlink_status(metadata))) {
-            std::ifstream stream(metadata, std::ios::binary);
+        if (lfs::core::native_fs::is_regular_file(lfs::core::native_fs::symlink_status(metadata))) {
+            std::ifstream stream(lfs::core::native_fs::native_path(metadata), std::ios::binary);
             const auto manifest = nlohmann::json::parse(stream, nullptr, false);
             if (manifest.is_object() && manifest.contains("frames") && manifest["frames"].is_array()) {
                 for (const auto& frame : manifest["frames"]) {
@@ -998,14 +999,14 @@ namespace lfs::io {
         }
         std::vector<std::filesystem::path> files;
         std::error_code ec;
-        for (std::filesystem::directory_iterator it(directory, ec), end; !ec && it != end; it.increment(ec)) {
+        for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(directory), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code type_ec;
-            if (!std::filesystem::is_regular_file(it->symlink_status(type_ec)))
+            if (!lfs::core::native_fs::is_regular_file(it->symlink_status(type_ec)))
                 continue;
             const auto name = it->path().filename();
             if (name == "extraction_metadata.json" || previous.contains(name) ||
                 isGeneratedFrameFilename(pattern, core::path_to_utf8(name), true))
-                files.push_back(it->path());
+                files.push_back(lfs::core::native_fs::entry_path(directory, it->path()));
         }
         return files;
     }
@@ -2292,6 +2293,16 @@ namespace lfs::io {
                 bool sparse_seek_fallback = false;
                 if (use_sparse_keyframe_seek) {
                     double observed_seek_preroll = 0.0;
+                    int64_t last_decoded_timestamp = AV_NOPTS_VALUE;
+                    // A seek flushes the decoder and restarts at the keyframe before the target. It pays off only
+                    // when a whole keyframe interval lies between the last decoded frame and that keyframe.
+                    const auto seek_skips_keyframe_interval = [&](const int64_t target_keyframe_timestamp) {
+                        if (last_decoded_timestamp == AV_NOPTS_VALUE)
+                            return true;
+                        const AVIndexEntry* const next_keyframe =
+                            avformat_index_get_entry_from_timestamp(video_stream, last_decoded_timestamp + 1, 0);
+                        return next_keyframe && target_keyframe_timestamp > next_keyframe->timestamp;
+                    };
                     for (std::size_t target_index = 0;
                          target_index < fps_target_count; ++target_index) {
                         throw_if_cancelled();
@@ -2300,8 +2311,8 @@ namespace lfs::io {
                         const int64_t target_timestamp = fps_timestamp_for_index(target_index);
                         const AVIndexEntry* target_keyframe = avformat_index_get_entry_from_timestamp(
                             video_stream, target_timestamp, AVSEEK_FLAG_BACKWARD);
-                        // Prefer the demuxer index: seeking helps only when it
-                        // lands beyond the frame already retained by the decoder.
+                        // Prefer the demuxer index; without one, the observed seek
+                        // preroll estimates where a seek would land.
                         bool seek_to_target = !has_retained_frame;
                         const bool retained_at_or_after_target =
                             has_retained_frame &&
@@ -2311,8 +2322,7 @@ namespace lfs::io {
                         if (has_retained_frame && !retained_at_or_after_target) {
                             if (target_keyframe && (target_keyframe->flags & AVINDEX_KEYFRAME) &&
                                 target_keyframe->timestamp <= target_timestamp) {
-                                seek_to_target = target_keyframe->timestamp >
-                                                 stream_timestamp_for_time(retained_frame_time);
+                                seek_to_target = seek_skips_keyframe_interval(target_keyframe->timestamp);
                             } else {
                                 seek_to_target = target_time - retained_frame_time >
                                                  observed_seek_preroll + 1.0 / video_fps;
@@ -2387,6 +2397,7 @@ namespace lfs::io {
                                     "Sparse extraction requires frame timestamps";
                                 throw std::runtime_error(error);
                             }
+                            last_decoded_timestamp = timestamp;
 
                             const double frame_time = frameTimestampSeconds(
                                 frame, time_base, decoded_frame_count - 1,

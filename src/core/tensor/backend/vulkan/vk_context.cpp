@@ -7,6 +7,7 @@
 #include "core/assert.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
 #include "core/vulkan_helpers.hpp"
@@ -144,7 +145,7 @@ namespace lfs::core::internal {
         }
 
         std::vector<char> read_binary_file(const std::filesystem::path& path) {
-            std::ifstream stream(path, std::ios::binary | std::ios::ate);
+            std::ifstream stream(lfs::core::native_fs::native_path(path), std::ios::binary | std::ios::ate);
             if (!stream) {
                 return {};
             }
@@ -817,7 +818,7 @@ namespace lfs::core::internal {
             const std::filesystem::path directory =
                 paths->cacheDir() / "tensor_vulkan";
             std::error_code error;
-            std::filesystem::create_directories(directory, error);
+            lfs::core::native_fs::create_directories(directory, error);
             pipeline_cache_path_ =
                 (directory / std::format("{}_{}_{}.bin",
                                          uuid_string(caps_.device_uuid),
@@ -839,7 +840,7 @@ namespace lfs::core::internal {
             LOG_WARN("Discarding the Vulkan pipeline cache '{}': it failed to load ({})",
                      pipeline_cache_path_, static_cast<int>(result));
             std::error_code error;
-            std::filesystem::remove(pipeline_cache_path_, error);
+            lfs::core::native_fs::remove(pipeline_cache_path_, error);
             create_info.initialDataSize = 0;
             create_info.pInitialData = nullptr;
             result = vkCreatePipelineCache(device_, &create_info, nullptr, &pipeline_cache_);
@@ -870,19 +871,19 @@ namespace lfs::core::internal {
             const std::filesystem::path temporary =
                 destination.string() + std::format(".tmp.{}", context_id_);
             {
-                std::ofstream stream(temporary,
+                std::ofstream stream(lfs::core::native_fs::native_path(temporary),
                                      std::ios::binary | std::ios::trunc);
                 stream.write(data.data(), static_cast<std::streamsize>(data.size()));
                 if (!stream) {
-                    std::filesystem::remove(temporary, error);
+                    lfs::core::native_fs::remove(temporary, error);
                     return;
                 }
             }
-            std::filesystem::rename(temporary, destination, error);
+            lfs::core::native_fs::rename(temporary, destination, error);
             if (error) {
-                std::filesystem::remove(destination, error);
+                lfs::core::native_fs::remove(destination, error);
                 error.clear();
-                std::filesystem::rename(temporary, destination, error);
+                lfs::core::native_fs::rename(temporary, destination, error);
             }
         } catch (const std::exception& failure) {
             LOG_WARN("Vulkan pipeline cache not saved: {}", failure.what());

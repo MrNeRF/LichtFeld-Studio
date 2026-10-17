@@ -8,6 +8,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/shared_image_ops.hpp"

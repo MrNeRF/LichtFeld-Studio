@@ -60,6 +60,7 @@ namespace lfs::vis {
         glm::mat4 projection{1.0f};
         glm::mat4 view_projection{1.0f};
         glm::vec3 view_position{0.0f, 0.0f, 0.0f};
+        glm::vec3 pivot{0.0f, 0.0f, 0.0f};
         int plane = 2;
         float opacity = 1.0f;
         bool orthographic = false;

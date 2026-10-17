@@ -10,6 +10,11 @@ import lichtfeld.media
 import lichtfeld.scene
 
 
+def native_path(path: str | os.PathLike, force_extended: bool = False) -> str:
+    """
+    Return a filename for filesystem I/O, including extended Windows paths. Use force_extended for recursive operations. Keep the original path for UI, JSON and external commands.
+    """
+
 class Hash128:
     def __init__(self) -> None: ...
 
@@ -951,6 +956,9 @@ def is_gaussian_splat_ply(path: str | os.PathLike) -> bool:
     """
     Check if PLY file is a 3D Gaussian splat (has opacity, scale_0, rot_0 properties)
     """
+
+def is_mesh_file(path: str | os.PathLike) -> bool:
+    """Check if the loader reads a file as a triangle mesh"""
 
 def get_supported_formats() -> list[str]:
     """Get list of supported file format names"""

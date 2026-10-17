@@ -66,6 +66,7 @@ NUMBER_PROPS = (
     "init_origin_x",
     "init_origin_y",
     "init_origin_z",
+    "init_mesh_resolution",
     "min_opacity",
     "prune_opacity",
     "sparsify_steps",
@@ -286,6 +287,10 @@ LOSS_RUNS = (_run("loss_numbers", "opacity_reg", "scale_reg", "tv_loss_weight"),
 
 INIT_RUNS = (
     _run("init_main", "init_scaling"),
+    _run("init_mesh", "init_mesh_resolution", visibility_condition_id="dep_init_mesh"),
+)
+
+RANDOM_INIT_RUNS = (
     _run(
         "init_random",
         "init_num_pts",
@@ -344,14 +349,14 @@ SECTIONS = (
     SectionSpec("bilateral", "training.section.bilateral_grid", _basic_runs("basic_bilateral_toggle") + BILATERAL_RUNS),
     SectionSpec("exposure", "training_params.exposure_correction"),
     SectionSpec("evaluation", "training_params.enable_eval", EVALUATION_RUNS),
-    SectionSpec("random_init", "training_params.random_init", (_run("feature_random", "random"),) + INIT_RUNS[1:]),
+    SectionSpec("random_init", "training_params.random_init", (_run("feature_random", "random"),) + RANDOM_INIT_RUNS),
     SectionSpec("sparsity", "training_panel.sparsity", _basic_runs("basic_sparsity_toggle") + SPARSITY_RUNS),
     SectionSpec("advanced_params", "training.section.advanced_params"),
     SectionSpec("optimization", "training.section.optimization", OPTIMIZATION_RUNS),
     SectionSpec("learning_rates", "training.opt.learning_rates"),
     SectionSpec("refinement", "training.section.refinement"),
     SectionSpec("losses", "training.section.losses", LOSS_RUNS),
-    SectionSpec("init", "training.section.initialization", INIT_RUNS[:1]),
+    SectionSpec("init", "training.section.initialization", INIT_RUNS),
     SectionSpec("save_steps", "training_panel.save_eval_steps"),
     SectionSpec("advanced_registry", "training.section.advanced_registry", (_run(AUTO_ADVANCED_RUN_ID),)),
 )

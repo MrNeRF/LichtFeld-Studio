@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/input/input_bindings.hpp"
@@ -116,6 +117,7 @@ namespace lfs::python {
             .value("CAMERA_MOVE_DOWN", Action::CAMERA_MOVE_DOWN)
             .value("CAMERA_RESET_HOME", Action::CAMERA_RESET_HOME)
             .value("CAMERA_SET_HOME", Action::CAMERA_SET_HOME)
+            .value("CAMERA_RESTORE_HOME", Action::CAMERA_RESTORE_HOME)
             .value("CAMERA_FOCUS_SELECTION", Action::CAMERA_FOCUS_SELECTION)
             .value("CAMERA_SET_PIVOT", Action::CAMERA_SET_PIVOT)
             .value("CAMERA_NEXT_VIEW", Action::CAMERA_NEXT_VIEW)
@@ -564,8 +566,8 @@ namespace lfs::python {
                     return;
                 if (const auto config_dir = InputBindings::getConfigDir()) {
                     const auto saved_path = *config_dir / "Default.json";
-                    if (std::filesystem::exists(saved_path)) {
-                        std::filesystem::remove(saved_path);
+                    if (lfs::core::native_fs::exists(saved_path)) {
+                        lfs::core::native_fs::remove(saved_path);
                     }
                 }
                 get_keymap_bindings()->loadProfile("Default");

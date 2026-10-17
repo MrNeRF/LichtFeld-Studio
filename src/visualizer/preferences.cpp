@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "preferences.hpp"
+#include "core/native_fs.hpp"
 #include "rendering/rendering_types.hpp"
 #include "visualizer/navigation_up_axis.hpp"
 
@@ -176,7 +177,7 @@ namespace lfs::vis {
                     expanded);
             }
             absolute = absolute.lexically_normal();
-            std::filesystem::create_directories(absolute, error);
+            lfs::core::native_fs::create_directories(absolute, error);
             if (error) {
                 return preferencePathError(
                     lfs::ErrorCode::PermissionDenied,
@@ -184,7 +185,7 @@ namespace lfs::vis {
                     error.message(),
                     absolute);
             }
-            if (!std::filesystem::is_directory(absolute, error) || error) {
+            if (!lfs::core::native_fs::is_directory(absolute, error) || error) {
                 return preferencePathError(
                     lfs::ErrorCode::InvalidArgument,
                     display_name + " path is not a directory.",
@@ -202,7 +203,7 @@ namespace lfs::vis {
                  std::to_string(
                      std::chrono::steady_clock::now().time_since_epoch().count()));
             {
-                std::ofstream output(probe, std::ios::binary | std::ios::trunc);
+                std::ofstream output(lfs::core::native_fs::native_path(probe), std::ios::binary | std::ios::trunc);
                 if (!output) {
                     return preferencePathError(
                         lfs::ErrorCode::PermissionDenied,
@@ -214,7 +215,7 @@ namespace lfs::vis {
                 output.flush();
                 if (!output) {
                     std::error_code ignored;
-                    std::filesystem::remove(probe, ignored);
+                    lfs::core::native_fs::remove(probe, ignored);
                     return preferencePathError(
                         lfs::ErrorCode::PermissionDenied,
                         display_name + " is not writable.",
@@ -222,7 +223,7 @@ namespace lfs::vis {
                         absolute);
                 }
             }
-            std::filesystem::remove(probe, error);
+            lfs::core::native_fs::remove(probe, error);
             if (error) {
                 return preferencePathError(
                     lfs::ErrorCode::PermissionDenied,
@@ -242,14 +243,13 @@ namespace lfs::vis {
 
         [[nodiscard]] bool containsLichtProject(const std::filesystem::path& directory) {
             std::error_code error;
-            if (!std::filesystem::is_directory(directory, error) || error)
+            if (!lfs::core::native_fs::is_directory(directory, error) || error)
                 return false;
 
             constexpr int max_depth = 4;
-            std::filesystem::recursive_directory_iterator iterator(
-                directory,
-                std::filesystem::directory_options::skip_permission_denied,
-                error);
+            std::filesystem::recursive_directory_iterator iterator(lfs::core::native_fs::traversal_path(directory),
+                                                                   std::filesystem::directory_options::skip_permission_denied,
+                                                                   error);
             const std::filesystem::recursive_directory_iterator end;
             while (iterator != end) {
                 if (error) {
@@ -464,7 +464,7 @@ namespace lfs::vis {
             persisted_values = json::object();
             reset_project_manager_on_save = false;
 
-            std::ifstream input(path);
+            std::ifstream input(lfs::core::native_fs::native_path(path));
             if (!input)
                 return;
 
@@ -1533,7 +1533,7 @@ namespace lfs::vis {
         const auto resolved = lfs::core::UserPaths::resolve();
         if (!resolved)
             return {};
-        std::ifstream input(resolved->preferencesFile());
+        std::ifstream input(lfs::core::native_fs::native_path(resolved->preferencesFile()));
         if (!input)
             return {};
         try {

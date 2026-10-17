@@ -3,6 +3,7 @@
 
 #include "core/image_io.hpp"
 #include "core/color_transfer.h"
+#include "core/native_fs.hpp"
 
 #include "image_codecs.hpp"
 #include "image_heif.hpp"
@@ -45,7 +46,7 @@ namespace image_codecs = lfs::core::image_codecs;
 namespace {
 
     bool decode_display_image(const std::filesystem::path& path, image_codecs::Image& image, std::string& error) {
-        auto extension = path.extension().string();
+        auto extension = lfs::core::path_to_utf8(path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         if (extension == ".avif" || extension == ".heic" || extension == ".heif")
             return image_codecs::decode_heif(path, image, error, true);
@@ -53,7 +54,7 @@ namespace {
     }
 
     bool decode_display_to_buffer(const std::filesystem::path& path, image_codecs::DecodeTarget& target, image_codecs::Probe& info, std::string& error) {
-        auto extension = path.extension().string();
+        auto extension = lfs::core::path_to_utf8(path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         if (extension == ".avif" || extension == ".heic" || extension == ".heif")
             return image_codecs::decode_heif_to_buffer(path, target, info, error, true);
@@ -65,7 +66,7 @@ namespace {
     };
 
     std::optional<TiffDisplayEncoding> tiff_display_encoding(const std::filesystem::path& path) {
-        auto extension = path.extension().string();
+        auto extension = lfs::core::path_to_utf8(path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
         if (extension != ".tif" && extension != ".tiff")
             return {};
@@ -449,7 +450,7 @@ namespace {
 
         const std::string path_utf8 = lfs::core::path_to_utf8(path);
         LOG_INFO("Saving image: {} shape: [{}, {}, {}]", path_utf8, height, width, channels);
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
         if (ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".tif" && ext != ".tiff")
             throw std::runtime_error("Unsupported image extension: " + ext);
@@ -665,7 +666,7 @@ namespace {
         T* base = nullptr;
         std::optional<JpegExifData> exif;
         if (prefer_embedded_thumbnail && max_width > 0) {
-            auto extension = p.extension().string();
+            auto extension = lfs::core::path_to_utf8(p.extension());
             std::transform(extension.begin(), extension.end(), extension.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (extension == ".jpg" || extension == ".jpeg")

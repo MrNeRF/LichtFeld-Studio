@@ -4,6 +4,7 @@
  */
 
 #include "training_snapshot_service.hpp"
+#include "core/native_fs.hpp"
 
 #include "checkpoint.hpp"
 #include "core/gpu_elapsed.hpp"
@@ -286,7 +287,7 @@ namespace lfs::training {
 
         std::uint64_t read_rss_bytes() {
 #if defined(__linux__)
-            std::ifstream input("/proc/self/status");
+            std::ifstream input(lfs::core::native_fs::native_path("/proc/self/status"));
             std::string line;
             while (std::getline(input, line)) {
                 if (!line.starts_with("VmRSS:")) {
@@ -334,7 +335,7 @@ namespace lfs::training {
                 };
             }
 #elif defined(__linux__)
-            std::ifstream input("/proc/meminfo");
+            std::ifstream input(lfs::core::native_fs::native_path("/proc/meminfo"));
             std::string line;
             while (std::getline(input, line)) {
                 unsigned long long kib = 0;
@@ -1477,8 +1478,13 @@ namespace lfs::training {
         }
 
         void shutdown() {
-            for (auto& worker : drain_threads)
-                worker.request_stop();
+            {
+                // Under the mutex, so a drain thread between its predicate check and
+                // its wait cannot miss the stop and sleep through the notify.
+                std::scoped_lock lock(ring_mutex);
+                for (auto& worker : drain_threads)
+                    worker.request_stop();
+            }
             ring_condition.notify_all();
             for (auto& worker : drain_threads) {
                 if (worker.joinable())

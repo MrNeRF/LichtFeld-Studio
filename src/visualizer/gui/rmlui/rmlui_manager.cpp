@@ -6,6 +6,7 @@
 #include "config.h"
 #include "core/environment.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -24,6 +25,7 @@
 #include "gui/rmlui/elements/viewport_select.hpp"
 #include "gui/rmlui/elements/vram_timeline_element.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
+#include "gui/rmlui/rml_file_interface.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
@@ -638,6 +640,8 @@ namespace lfs::vis::gui {
         ui_renderer_ = ui_renderer;
         text_input_handler_ = std::make_unique<RmlTextInputHandler>([this] { return accepts_text_activation_; });
 
+        file_interface_ = std::make_unique<RmlFileInterface>();
+        Rml::SetFileInterface(file_interface_.get());
         Rml::SetSystemInterface(system_interface_.get());
         Rml::SetRenderInterface(owned_render_interface_.get());
         Rml::SetTextInputHandler(text_input_handler_.get());
@@ -707,7 +711,7 @@ namespace lfs::vis::gui {
                 futures[i] = std::async(std::launch::async, [asset]() {
                     LoadedFont out;
                     out.path = lfs::vis::getAssetPath(asset);
-                    std::ifstream f(out.path, std::ios::binary | std::ios::ate);
+                    std::ifstream f(lfs::core::native_fs::native_path(out.path), std::ios::binary | std::ios::ate);
                     if (!f)
                         return out;
                     const auto sz = f.tellg();
@@ -732,7 +736,7 @@ namespace lfs::vis::gui {
                 Rml::Span<const Rml::byte> data{
                     reinterpret_cast<const Rml::byte*>(blob.data()), blob.size()};
                 if (!Rml::LoadFontFace(data, specs[i].family, specs[i].style, specs[i].weight, specs[i].fallback)) {
-                    LOG_WARN("RmlUI: failed to register {}", loaded.path.string());
+                    LOG_WARN("RmlUI: failed to register {}", lfs::core::path_to_utf8(loaded.path));
                 }
             }
         } catch (const std::exception& e) {
@@ -768,7 +772,7 @@ namespace lfs::vis::gui {
                 LoadedFont out;
                 try {
                     out.path = lfs::vis::getAssetPath(asset);
-                    std::ifstream f(out.path, std::ios::binary | std::ios::ate);
+                    std::ifstream f(lfs::core::native_fs::native_path(out.path), std::ios::binary | std::ios::ate);
                     if (!f)
                         return out;
                     const auto sz = f.tellg();
@@ -799,7 +803,7 @@ namespace lfs::vis::gui {
                                   Rml::Style::FontWeight::Normal, true)) {
                 any_loaded = true;
             } else {
-                LOG_WARN("RmlUI: failed to register {}", loaded.path.string());
+                LOG_WARN("RmlUI: failed to register {}", lfs::core::path_to_utf8(loaded.path));
                 font_blobs_.pop_back();
             }
         }
@@ -815,7 +819,7 @@ namespace lfs::vis::gui {
             const std::filesystem::path candidate =
                 std::filesystem::path(windir ? windir : "C:\\Windows") / "Fonts" / "seguiemj.ttf";
             std::error_code ec;
-            return std::filesystem::is_regular_file(candidate, ec) ? lfs::core::path_to_utf8(candidate) : std::string{};
+            return lfs::core::native_fs::is_regular_file(candidate, ec) ? lfs::core::path_to_utf8(candidate) : std::string{};
 #elif defined(__APPLE__)
             // Apple Color Emoji is a collection of roughly 180 MB; holding it in memory is not worth a fallback.
             return {};
@@ -831,7 +835,7 @@ namespace lfs::vis::gui {
             };
             for (const char* const candidate : candidates) {
                 std::error_code ec;
-                if (std::filesystem::is_regular_file(candidate, ec))
+                if (lfs::core::native_fs::is_regular_file(candidate, ec))
                     return candidate;
             }
             return {};
@@ -840,7 +844,7 @@ namespace lfs::vis::gui {
 
         std::vector<std::byte> readFontFile(const std::string& path) {
             std::vector<std::byte> bytes;
-            std::ifstream f(lfs::core::utf8_to_path(path), std::ios::binary | std::ios::ate);
+            std::ifstream f(lfs::core::native_fs::native_path(lfs::core::utf8_to_path(path)), std::ios::binary | std::ios::ate);
             if (!f)
                 return bytes;
             const auto size = f.tellg();
@@ -918,6 +922,8 @@ namespace lfs::vis::gui {
         if (Rml::GetTextInputHandler() == text_input_handler_.get())
             Rml::SetTextInputHandler(nullptr);
         Rml::Shutdown();
+        Rml::SetFileInterface(nullptr);
+        file_interface_.reset();
         if (ui_renderer_)
             ui_renderer_->shutdown();
         owned_render_interface_.reset();

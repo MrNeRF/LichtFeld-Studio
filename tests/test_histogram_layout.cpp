@@ -16,6 +16,11 @@
 #include <vector>
 
 namespace {
+    // RmlUi parses a document source as a URL, so a Windows drive colon takes its '|' form.
+    std::string rmlSourceUrl(const std::filesystem::path& path) {
+        return Rml::StringUtilities::Replace(path.generic_string(), ':', '|');
+    }
+
     class HistogramRenderInterface final : public Rml::RenderInterface {
     public:
         Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
@@ -64,7 +69,7 @@ namespace {
                 "<body class=\"docked-panel\"><div id=\"histogram-shell\" >"
                 "<div id=\"histogram-card\">" +
                     row + "</div></div></body></rml>",
-                (resources / "histogram_layout_test.rml").string());
+                rmlSourceUrl(resources / "histogram_layout_test.rml"));
             ASSERT_NE(document_, nullptr);
             document_->Show();
         }
@@ -130,7 +135,7 @@ namespace {
                 "<link type=\"text/rcss\" href=\"histogram_panel.rcss\"/></head>"
                 "<body class=\"docked-panel\">" +
                     source + "</body></rml>",
-                (resources / "histogram_layout_test.rml").string());
+                rmlSourceUrl(resources / "histogram_layout_test.rml"));
             ASSERT_NE(document_, nullptr);
             document_->SetProperty("height", "100%");
             document_->SetProperty("width", "100%");

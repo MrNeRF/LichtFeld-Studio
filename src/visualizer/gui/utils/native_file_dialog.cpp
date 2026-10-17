@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/utils/native_file_dialog.hpp"
+#include "core/native_fs.hpp"
 #include "gui/utils/file_dialog_path.hpp"
 
 #include "core/logger.hpp"
@@ -164,7 +165,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::filesystem::path absoluteDialogDirectory(
             const std::filesystem::path& directory) {
             std::error_code ec;
-            auto canonical = std::filesystem::weakly_canonical(directory, ec);
+            auto canonical = lfs::core::native_fs::weakly_canonical(directory, ec);
             if (!ec && !canonical.empty()) {
                 return canonical;
             }
@@ -185,16 +186,16 @@ namespace lfs::vis::gui {
             }
 
             std::error_code ec;
-            if (std::filesystem::exists(inputPath, ec)) {
-                if (std::filesystem::is_directory(inputPath, ec)) {
+            if (lfs::core::native_fs::exists(inputPath, ec)) {
+                if (lfs::core::native_fs::is_directory(inputPath, ec)) {
                     return absoluteDialogDirectory(inputPath);
                 }
                 return absoluteDialogDirectory(inputPath.parent_path());
             }
 
             const std::filesystem::path parent = inputPath.parent_path();
-            if (!parent.empty() && std::filesystem::exists(parent, ec) &&
-                std::filesystem::is_directory(parent, ec)) {
+            if (!parent.empty() && lfs::core::native_fs::exists(parent, ec) &&
+                lfs::core::native_fs::is_directory(parent, ec)) {
                 return absoluteDialogDirectory(parent);
             }
             return {};
@@ -496,6 +497,12 @@ namespace lfs::vis::gui {
                                {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".ply"})};
         }
 
+        [[nodiscard]] std::vector<DialogFilter> initFilters() {
+            return {makeFilter("Splat, Point Cloud and Mesh Files",
+                               {".ply", ".sog", ".ssog", ".spz", ".glb", ".rad", ".usd", ".usda", ".usdc", ".usdz",
+                                ".obj", ".fbx", ".gltf", ".stl", ".dae", ".3ds"})};
+        }
+
         [[nodiscard]] std::vector<DialogFilter> checkpointFilters() {
             return {makeFilter("Checkpoint Files", {".resume"})};
         }
@@ -699,6 +706,12 @@ namespace lfs::vis::gui {
     std::filesystem::path OpenMeshFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(meshFilters(), defaultPath), result);
+        return result;
+    }
+
+    std::filesystem::path OpenInitFileDialog(const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest(initFilters(), defaultPath), result);
         return result;
     }
 

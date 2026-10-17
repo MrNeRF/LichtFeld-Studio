@@ -6,6 +6,7 @@
 #include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/provenance.hpp"

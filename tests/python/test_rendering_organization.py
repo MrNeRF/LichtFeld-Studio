@@ -98,6 +98,28 @@ def test_default_text_saves_on_commit_not_per_keystroke(preferences_panel_module
     assert state.rendering_defaults["axes_size"] == 4.0
 
 
+def test_default_colors_are_picked_from_a_swatch_and_saved_on_release(preferences_panel_module):
+    from types import SimpleNamespace
+    root = ET.parse(RESOURCES / "preferences.rml").getroot()
+    for prop in ("selection_color_preview", "selection_color_center_marker"):
+        assert root.find(f".//*[@data-event-click=\"default_color_click('{prop}')\"]") is not None
+    module, state = preferences_panel_module
+    state.rendering_defaults = {"selection_color_preview": [0.0, 0.871, 0.298]}
+    section = module.PreferencesPanel()._rendering_defaults
+    model = _BindingModelStub()
+    section.bind(model)
+    model.events["default_color_click"](None, None, ["selection_color_preview"])
+    assert model.func_bindings["default_color_editing"]() == "selection_color_preview"
+    assert model.func_bindings["default_picker_g"]() == pytest.approx(0.871)
+    picked = {"red": "1", "green": "0.5", "blue": "0"}
+    model.events["default_picker_change"](None, SimpleNamespace(get_parameter=lambda name, _d: picked[name]), [])
+    # Dragging previews the colour without saving it.
+    assert state.rendering_defaults["selection_color_preview"] == [0.0, 0.871, 0.298]
+    assert model.func_bindings["default_selection_color_preview_swatch"]() == "rgb(255,128,0)"
+    model.events["default_color_commit"](None, None, [])
+    assert state.rendering_defaults["selection_color_preview"] == pytest.approx([1.0, 128 / 255, 0.0])
+
+
 def test_apply_defaults_requires_explicit_confirmation(rendering_panel_module):
     module = rendering_panel_module
     panel = module.RenderingPanel()

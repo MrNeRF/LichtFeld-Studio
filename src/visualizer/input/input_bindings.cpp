@@ -6,6 +6,7 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/source_site.hpp"
 #include "core/user_paths.hpp"
@@ -77,7 +78,7 @@ namespace lfs::vis::input {
             publishKeymapNotice(lfs::ErrorCode::InvalidArgument, std::move(message));
         }
 
-        constexpr int PROFILE_VERSION = 34; // Dev node editor and Python Console defaults.
+        constexpr int PROFILE_VERSION = 35; // Dev with master's Reset Home (Ctrl+H).
 
         [[nodiscard]] std::optional<Binding> parseStoredBinding(const nlohmann::json& value);
         [[nodiscard]] std::string triggerIdentity(const Binding& binding);
@@ -138,7 +139,7 @@ namespace lfs::vis::input {
 
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
-        constexpr Action LAST_ACTION = Action::TOGGLE_PYTHON_CONSOLE;
+        constexpr Action LAST_ACTION = Action::CAMERA_RESTORE_HOME;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -633,7 +634,7 @@ namespace lfs::vis::input {
             std::string selected = "Default";
             std::ifstream marker;
             const auto marker_path = *config_dir / ".active-profile";
-            if (std::filesystem::exists(marker_path) &&
+            if (lfs::core::native_fs::exists(marker_path) &&
                 lfs::core::open_file_for_read(marker_path, marker)) {
                 std::getline(marker, selected);
                 if (!isValidProfileName(selected))
@@ -641,8 +642,8 @@ namespace lfs::vis::input {
             }
             for (const auto& name : {selected, std::string("Default")}) {
                 const auto saved_path = *config_dir / (name + ".json");
-                if (!std::filesystem::is_symlink(saved_path) &&
-                    std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path)) {
+                if (!lfs::core::native_fs::is_symlink(saved_path) &&
+                    lfs::core::native_fs::exists(saved_path) && loadProfileFromFile(saved_path)) {
                     current_profile_name_ = name;
                     return;
                 }
@@ -674,7 +675,7 @@ namespace lfs::vis::input {
         const auto path = profilePath(name);
         if (!path)
             return;
-        if (std::filesystem::exists(*path) && loadProfileFromFile(*path)) {
+        if (lfs::core::native_fs::exists(*path) && loadProfileFromFile(*path)) {
             const bool corrected_name = current_profile_name_ != name;
             current_profile_name_ = name;
             persistActiveProfileName();
@@ -728,7 +729,7 @@ namespace lfs::vis::input {
             return std::nullopt;
         }
         auto path = *config_dir / (std::string(name) + ".json");
-        if (std::filesystem::is_symlink(path)) {
+        if (lfs::core::native_fs::is_symlink(path)) {
             LOG_WARN("Refusing symbolic link input profile '{}': file is outside the keymap directory", name);
             return std::nullopt;
         }
@@ -828,8 +829,8 @@ namespace lfs::vis::input {
         using json = nlohmann::json;
 
         std::error_code file_error;
-        if (std::filesystem::exists(path, file_error)) {
-            if (std::filesystem::is_symlink(path, file_error) || file_error) {
+        if (lfs::core::native_fs::exists(path, file_error)) {
+            if (lfs::core::native_fs::is_symlink(path, file_error) || file_error) {
                 LOG_WARN("Refusing to overwrite symbolic link input profile '{}': file is unchanged",
                          lfs::core::path_to_utf8(path));
                 return false;
@@ -852,7 +853,7 @@ namespace lfs::vis::input {
                 const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
                 auto backup = path;
                 backup += ".damaged-" + std::to_string(stamp) + ".bak";
-                const bool backed_up = std::filesystem::copy_file(
+                const bool backed_up = lfs::core::native_fs::copy_file(
                     path, backup, std::filesystem::copy_options::none, file_error);
                 if (!backed_up || file_error) {
                     LOG_ERROR("Could not preserve damaged input profile '{}'; file is unchanged",
@@ -1277,7 +1278,7 @@ namespace lfs::vis::input {
                                                 ? std::optional<std::filesystem::path>(*config_dir / "Default.json")
                                                 : std::nullopt;
                 if (g_persistence_enabled.load(std::memory_order_acquire) &&
-                    config_default && std::filesystem::equivalent(path, *config_default, ec)) {
+                    config_default && lfs::core::native_fs::equivalent(path, *config_default, ec)) {
                     saveProfileToFile(*config_default);
                 }
             }
@@ -1464,8 +1465,8 @@ namespace lfs::vis::input {
             return profiles;
 
         const auto config_dir = getConfigDir();
-        if (config_dir && std::filesystem::exists(*config_dir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(*config_dir)) {
+        if (config_dir && lfs::core::native_fs::exists(*config_dir)) {
+            for (const auto& entry : lfs::core::native_fs::directory_iterator(*config_dir)) {
                 if (entry.path().extension() == ".json") {
                     const std::string name = lfs::core::path_to_utf8(entry.path().stem());
                     if (name != "Default" && isValidProfileName(name)) {
@@ -2040,6 +2041,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_E, MODIFIER_NONE, true}, Action::CAMERA_MOVE_DOWN, "Down"},
             {KeyTrigger{KEY_H, MODIFIER_NONE}, Action::CAMERA_RESET_HOME, "Home"},
             {KeyTrigger{KEY_H, MODIFIER_SHIFT}, Action::CAMERA_SET_HOME, "Set home"},
+            {KeyTrigger{KEY_H, MODIFIER_CTRL}, Action::CAMERA_RESTORE_HOME, "Reset home"},
             {KeyTrigger{KEY_F, MODIFIER_NONE}, Action::CAMERA_FOCUS_SELECTION, "Focus selection"},
             {KeyTrigger{KEY_RIGHT, MODIFIER_NONE, true}, Action::CAMERA_NEXT_VIEW, "Next view"},
             {KeyTrigger{KEY_LEFT, MODIFIER_NONE, true}, Action::CAMERA_PREV_VIEW, "Prev view"},
@@ -2224,6 +2226,7 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_DOWN: return "Move Down";
         case Action::CAMERA_RESET_HOME: return "Go to Home";
         case Action::CAMERA_SET_HOME: return "Set Home";
+        case Action::CAMERA_RESTORE_HOME: return "Reset Home";
         case Action::CAMERA_FOCUS_SELECTION: return "Focus Selection";
         case Action::CAMERA_SET_PIVOT: return "Set Pivot";
         case Action::CAMERA_NEXT_VIEW: return "Next Camera View";
@@ -2331,6 +2334,7 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_DOWN: return "camera_move_down";
         case Action::CAMERA_RESET_HOME: return "camera_reset_home";
         case Action::CAMERA_SET_HOME: return "camera_set_home";
+        case Action::CAMERA_RESTORE_HOME: return "camera_restore_home";
         case Action::CAMERA_FOCUS_SELECTION: return "camera_focus_selection";
         case Action::CAMERA_SET_PIVOT: return "camera_set_pivot";
         case Action::CAMERA_NEXT_VIEW: return "camera_next_view";
@@ -3095,6 +3099,7 @@ namespace lfs::vis::input {
 
         case Action::CAMERA_RESET_HOME:
         case Action::CAMERA_SET_HOME:
+        case Action::CAMERA_RESTORE_HOME:
         case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:
@@ -3228,24 +3233,15 @@ namespace lfs::vis::input {
         case Action::TOGGLE_MCP_BINDING:
             return ShortcutScope::Global;
 
-        case Action::CAMERA_MOVE_FORWARD:
-        case Action::CAMERA_MOVE_BACKWARD:
-        case Action::CAMERA_MOVE_LEFT:
-        case Action::CAMERA_MOVE_RIGHT:
-        case Action::CAMERA_MOVE_UP:
-        case Action::CAMERA_MOVE_DOWN:
         case Action::CAMERA_SET_PIVOT:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:
-        case Action::CAMERA_SPEED_UP:
-        case Action::CAMERA_SPEED_DOWN:
-        case Action::ZOOM_SPEED_UP:
-        case Action::ZOOM_SPEED_DOWN:
         case Action::PIE_MENU:
             return ShortcutScope::Viewport;
 
         default:
-            // Scene, tool, edit, framing and home shortcuts yield to a focused text widget.
+            // Scene, tool, edit, framing, home and camera navigation shortcuts
+            // yield to a focused text widget.
             return ShortcutScope::GlobalWhenNotTextEditing;
         }
     }

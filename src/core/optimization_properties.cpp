@@ -861,6 +861,15 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.origin_z")
             .precision(3)
             .ui_step(0.1)
+            .all_strategies()
+            .int_prop(&OptimizationParameters::init_mesh_resolution,
+                      "init_mesh_resolution", "Mesh Init Resolution", d.init_mesh_resolution,
+                      Mesh2SplatOptions::kMinResolution, kMaxInitMeshResolution,
+                      "Mesh2Splat raster resolution when the init file is a mesh; lowered automatically to fit the splat budget")
+            .locale("training.init.mesh_resolution")
+            .tooltip("training.tooltip.mesh_resolution")
+            .precision(0)
+            .ui_step(128)
 
             // Sparsity
             .all_strategies()

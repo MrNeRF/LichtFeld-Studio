@@ -7,6 +7,7 @@
 #include "components/ppisp_controller_pool.hpp"
 #include "components/sparsity_optimizer.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"

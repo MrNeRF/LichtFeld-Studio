@@ -3,6 +3,7 @@
 #include "node_canvas_element.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/native_fs.hpp"
 #include "core/nodes/tree.hpp"
 #include "gui/rmlui/elements/node_canvas_dom.hpp"
 #include "gui/rmlui/elements/node_canvas_widgets.hpp"
@@ -244,7 +245,7 @@ namespace lfs::vis::gui {
                     const auto path = OpenJsonFileDialog();
                     if (path.empty())
                         return;
-                    std::ifstream stream(path);
+                    std::ifstream stream(lfs::core::native_fs::native_path(path));
                     if (!stream)
                         throw std::runtime_error(LOC("node_editor.file_read_error"));
                     auto json = nlohmann::json::parse(stream);
@@ -255,7 +256,7 @@ namespace lfs::vis::gui {
                     const auto path = SaveJsonFileDialog(tree->name + ".json");
                     if (path.empty())
                         return;
-                    std::ofstream stream(path);
+                    std::ofstream stream(lfs::core::native_fs::native_path(path));
                     stream << tree->to_json().dump(2) << '\n';
                     stream.close();
                     if (!stream)

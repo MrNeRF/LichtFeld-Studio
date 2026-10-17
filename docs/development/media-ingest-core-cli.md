@@ -1,5 +1,36 @@
 # Shared Media Ingest module and optional CLI
 
+## JPEG encoding to memory
+
+`lfs::core::image_codecs::encode_jpeg_memory` uses the existing libjpeg-turbo
+encoder and settings shared with the file writer. It accepts a borrowed span of
+interleaved UInt8 grayscale or RGB samples, dimensions and an explicit byte row
+stride. Padding is supported; the last row only needs its actual sample bytes.
+The call is synchronous and replaces the owning output vector only on success,
+including when the input span aliases that vector.
+
+`JpegEncodeOptions` defaults to quality 95, RGB 4:2:0 and a 64 MiB encoded-byte
+limit. Quality is clamped to 1–100; `full_chroma` selects RGB 4:4:4. Optional COM
+bytes follow the file writer's 65,533-byte truncation policy. The byte limit is
+enforced during encoding, before growing the destination; it is not a limit on
+libjpeg's internal working memory. Invalid layouts return `InvalidArgument`;
+exceeding the output limit or allocation failure returns `ResourceExhausted`.
+Each call owns its encoder state and can run independently on another thread.
+High-entropy 8K RGB at quality 100 with 4:4:4 can exceed the default encoded-byte
+limit. Consumers must select an appropriate explicit limit or handle
+`ResourceExhausted`; the encoder does not silently reduce quality. Peak memory
+also includes input, the previous output retained until success, destination
+growth and libjpeg working storage. Concurrent calls multiply those costs;
+their scheduling and aggregate budget remain the caller's responsibility.
+
+This CPU codec operation creates no temporary file and performs no orientation,
+color-space, float quantization or alpha conversion. Callers prepare those
+samples and choose quality/chroma explicitly. It exposes compressed bytes for
+existing cache or transport consumers without introducing another cache or a
+dependency from core to media. It does not automatically copy source metadata,
+change training loaders, or add a Python binding. Memory encoding for other
+formats remains separate work.
+
 ## Original image EXIF
 
 `media-ingest source-exif INPUT` explicitly reads JPEG APP1 EXIF before the first
@@ -305,9 +336,10 @@ Accepted-frame and manifest counts include verified retained images as well as
 newly published images; progress describes the replayed selection.
 
 Sparse hardware FPS extraction can continue decoding between nearby targets
-instead of seeking repeatedly into the same GOP. The demuxer index determines
-whether the target keyframe is beyond the retained decoder position; only then
-does another seek help. Without a usable index, observed seek preroll is the
+instead of seeking repeatedly into the same GOP. A seek flushes the decoder and
+restarts at the keyframe before the target, so it pays off only when a whole
+keyframe interval lies between the last decoded frame and that keyframe; the
+demuxer index decides this. Without a usable index, observed seek preroll is the
 fallback and is refreshed when forward decoding encounters a keyframe. This applies to ordinary extraction and replay,
 preserves the first-frame-at-or-after-target selection, and does not enable
 sparse seeking for sharpness, interval, software or Dolby Vision paths.
@@ -459,3 +491,63 @@ On macOS, its native runner loads the complete static CPython embedding archive,
 following Studio's existing test-host convention. Shared Studio libraries resolve
 Python symbols from their host; an ordinary archive link can discard symbols
 needed at runtime before the runner enters `main`.
+
+
+### TIFF and BigTIFF source inspection
+
+The same explicit `source-exif` / `source_exif_json` / `media.source_exif`
+operation also recognizes classic TIFF and BigTIFF by signature. Its TIFF result
+has scope `tiff-libtiff-observed-metadata` and a separate `tiff` object; `blocks`
+is empty because TIFF IFDs are not standalone EXIF envelopes. Image directories,
+SubIFDs, EXIF, GPS and interoperability directories are visited with libtiff,
+without requesting pixel strips/tiles, applying orientation or changing training
+exposure. A collected result means this metadata inspection succeeded, not that
+an EXIF IFD necessarily exists or that the image pixels are valid.
+
+`source_ranges` contains exact, owned bytes at their original 64-bit file offsets
+as requested by libtiff. Ranges may overlap and remain relative to the source;
+they cannot be transplanted as EXIF or used to reconstruct a complete TIFF.
+`complete_metadata_archive` and `relocatable_exif` are explicitly false. Ignored
+fields and unvisited vendor structures are not guaranteed to have their referenced
+payloads present. No atomic snapshot of a concurrently changing file is promised;
+repeated reads of already retained spans are checked for disagreement.
+
+`directories` separately exposes library-decoded tag values, parent offsets and
+IFD kind. Tag `type` is libtiff's field type; `count` and
+`decoded_storage_bytes` describe its decoded representation, not necessarily the
+original on-disk type/count. Defaults may be supplied by the library, strings may
+be terminated, duplicate tags may be collapsed, and rationals are already
+converted to float/double. Exact source bytes are never replaced by these values.
+Byte/string values use hex; non-finite floats use `nan`, `-inf` or `+inf` strings.
+MakerNotes remain opaque, not recursively interpreted as vendor IFDs.
+Baseline coverage includes ExtraSamples (alpha semantics), NewSubfileType
+(thumbnail flags) and FillOrder. WhitePoint (318) and PrimaryChromaticities (319)
+are collected when present through libtiff's generic custom-field getters, as
+arrays of two and six floating values. Their original rational bytes remain in
+`source_ranges`; no color conversion is applied by metadata inspection. Per-sample BitsPerSample/SampleFormat arrays
+are represented by libtiff's scalar getters; PlanarConfiguration may be a
+library default. ColorMap and JPEGTables are not copied as decoded tags.
+Byte/string payloads consume one byte per stored byte; numeric values consume
+eight bytes per widened element.
+
+Defaults bound libtiff read callbacks to 4096 calls / 64 MiB cumulatively
+(the initial signature probe reads at most 12 additional bytes), directory visits
+to 64, copied decoded entries to 4096 and widened value storage to 8 MiB.
+Retained read spans also obey the shared 1 MiB per-span / 4 MiB aggregate limits;
+repeated fully covered spans are not copied again. JPEG/PNG scan budgets and
+standalone EXIF block counts do not govern TIFF inspection. Before callbacks read
+or retain data, offsets/lengths are checked against the opened source extent.
+Libtiff uses separate 8 MiB single-allocation / 32 MiB outstanding-allocation
+ceilings, with mapping and strip chopping disabled and strip/tile arrays deferred.
+These bounds are not a hard limit on total process memory or execution time.
+Library errors and non-auto-registration warnings are surfaced as malformed,
+except exhaustion of the configured libtiff allocation ceilings, which is limited.
+Explicitly unconfigured compression is unsupported, and application budget
+exhaustion is limited. Directory-budget exhaustion retains the decoded tags of
+the current directory within the remaining entry/value budgets.
+Complete observed spans and decoded prefixes survive later failures.
+
+This does not add metadata writing, complete archival preservation, vendor
+normalization, GUI controls or a new TIFF decoder. Custom-directory next-IFD
+chains and vendor-specific directory schemas are not universally traversed;
+libtiff's public directory/getter contracts determine the decoded coverage.

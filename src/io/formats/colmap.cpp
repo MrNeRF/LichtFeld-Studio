@@ -7,6 +7,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "io/atomic_output.hpp"
 #include "io/filesystem_utils.hpp"
@@ -70,7 +71,7 @@ namespace lfs::io {
     using lfs::core::PointCloud;
     using lfs::core::Tensor;
 
-    namespace fs = std::filesystem;
+    namespace fs = lfs::core::native_fs;
 
     namespace {
         [[noreturn]] void throw_colmap_error(

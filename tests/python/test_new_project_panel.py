@@ -87,6 +87,7 @@ def new_project_module(monkeypatch, tmp_path):
         confirm_dialog=confirm,
         open_dataset_folder_dialog=lambda: str(dataset),
         open_ply_file_dialog=lambda _start="": str(splat),
+        open_init_file_dialog=lambda _start="": str(splat),
         get_embed_dataset_by_default=lambda: state.embed_default,
         schedule_on_ui_thread=schedule_on_ui_thread,
         get_panel_object=lambda panel_id: state.registered_panels.get(panel_id),

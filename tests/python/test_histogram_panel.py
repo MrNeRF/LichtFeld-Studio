@@ -1396,20 +1396,23 @@ def test_histogram_ctrl_click_unhighlights_the_removed_bin_at_once(histogram_pan
     assert highlighted == {5}
 
 
-def test_histogram_follows_selection_changes_made_outside_the_panel(histogram_panel_module, lf, numpy, monkeypatch):
+def test_histogram_resets_when_the_selection_changes_outside_the_panel(histogram_panel_module, lf, numpy, monkeypatch):
     panel, scene = _three_bin_panel(histogram_panel_module, lf, numpy, monkeypatch)
     _click_bin(panel, 0)
     assert panel._selected_histogram_bins == {0}
 
-    # A viewport tool selects the second Gaussian instead.
+    # A viewport tool selects the second Gaussian instead: the panel's mark resets
+    # and the tool's selection stays in the scene.
     scene.selection_mask = lf.Tensor.from_numpy(numpy.array([False, True, False], dtype=bool))
     _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=5)
-    assert panel._selected_histogram_bins == {2}
-
-    # Clearing the selection elsewhere clears the chart too.
-    scene.clear_selection()
-    _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=6)
     assert panel._selected_histogram_bins == set()
+    assert panel._panel_selection_mask is None
+    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.array([False, True, False], dtype=bool))
+
+    # The panel's own next selection is kept across updates.
+    _click_bin(panel, 0)
+    _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=6)
+    assert panel._selected_histogram_bins == {0}
 
 
 def test_histogram_shift_click_adds_to_a_selection_made_outside_the_panel(histogram_panel_module, lf, numpy, monkeypatch):
@@ -1848,7 +1851,7 @@ def test_selection_change_updates_highlights_without_recomputing(histogram_panel
     monkeypatch.setattr(panel, '_sync_panel_space_state', lambda: False)
     calls = []
     monkeypatch.setattr(panel, '_refresh', lambda: calls.append('recompute'))
-    monkeypatch.setattr(panel, '_sync_panel_selection_from_scene', lambda: calls.append('highlight'))
+    monkeypatch.setattr(panel, '_reset_marks_after_external_selection', lambda: calls.append('highlight'))
     panel.on_scene_changed(None)
     panel.on_update(None)
     assert calls == ['highlight']
@@ -1893,8 +1896,7 @@ def pending_range_panel(histogram_panel_module, lf, numpy, monkeypatch):
     monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
     monkeypatch.setattr(panel, "_scene_data_generation_value", lambda: 1)
     monkeypatch.setattr(panel, "_scene_node_selection_signature", lambda: ())
-    monkeypatch.setattr(panel, "_clear_all_marks", lambda **_kwargs: None)
-    monkeypatch.setattr(panel, "_sync_panel_selection_from_scene", lambda: None)
+    monkeypatch.setattr(panel, "_reset_marks_after_external_selection", lambda: None)
     queued = []
     scheduled = []
     panel._ui_scheduler = scheduled.append

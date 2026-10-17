@@ -578,6 +578,7 @@ add_custom_target(lfs_python_support_copy ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:lfs_py>
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py
         ${CMAKE_CURRENT_SOURCE_DIR}/lfs_splat_lod_hierarchy.py
         $<TARGET_FILE_DIR:lfs_py>
     COMMENT "Copying internal Python support modules"
@@ -628,6 +629,7 @@ if(BUILD_PORTABLE AND NOT LFS_MACOS_PORTABLE_APP)
         FILES_MATCHING PATTERN "*.py"
     )
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py"
         DESTINATION "${CMAKE_INSTALL_BINDIR}"
     )
 else()
@@ -640,6 +642,7 @@ else()
         install(FILES ${_lfs_python_helpers} DESTINATION "${PYTHON_INSTALL_DIR}")
     else()
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py"
         DESTINATION "${PYTHON_INSTALL_DIR}"
     )
     endif()

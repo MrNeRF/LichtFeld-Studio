@@ -3,6 +3,7 @@
 #include "resumable_file_sink.hpp"
 #include "core/atomic_file.hpp"
 #include "core/image_codecs.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "git_version.h"
 #include "media/video_frame_extractor.hpp"
@@ -24,14 +25,14 @@ namespace lfs::media::detail {
             return make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()});
         }
         bool emptyReservation(const std::filesystem::path& path) {
-            return std::filesystem::is_regular_file(std::filesystem::symlink_status(path)) &&
-                   std::filesystem::file_size(path) == 0;
+            return lfs::core::native_fs::is_regular_file(lfs::core::native_fs::symlink_status(path)) &&
+                   lfs::core::native_fs::file_size(path) == 0;
         }
         SinkResult discardReservation(const std::filesystem::path& path) {
             if (!emptyReservation(path))
                 return {};
             std::error_code error;
-            std::filesystem::remove(path, error);
+            lfs::core::native_fs::remove(path, error);
             if (error)
                 return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Could not recover empty checkpoint reservation: " + core::path_to_utf8(path)));
             return {};
@@ -62,9 +63,9 @@ namespace lfs::media::detail {
             }
         };
         Result<std::string> fileDigest(const std::filesystem::path& path, const std::function<bool()>& cancelled) {
-            if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path)))
+            if (!lfs::core::native_fs::is_regular_file(lfs::core::native_fs::symlink_status(path)))
                 return checkpointError(ErrorCode::FailedPrecondition, "Checkpoint requires a regular, non-symlink file: " + core::path_to_utf8(path));
-            std::ifstream input(path, std::ios::binary);
+            std::ifstream input(lfs::core::native_fs::native_path(path), std::ios::binary);
             if (!input)
                 return checkpointError(ErrorCode::Unavailable, "Could not read checkpoint input: " + core::path_to_utf8(path));
             Sha256 digest;
@@ -80,9 +81,9 @@ namespace lfs::media::detail {
             return digest.finish();
         }
         Result<Json> readRecord(const std::filesystem::path& path) {
-            if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path)) || std::filesystem::file_size(path) > 16384)
+            if (!lfs::core::native_fs::is_regular_file(lfs::core::native_fs::symlink_status(path)) || lfs::core::native_fs::file_size(path) > 16384)
                 return checkpointError(ErrorCode::FailedPrecondition, "Invalid checkpoint record");
-            std::ifstream input(path, std::ios::binary);
+            std::ifstream input(lfs::core::native_fs::native_path(path), std::ios::binary);
             std::array<char, 16385> buffer{};
             input.read(buffer.data(), buffer.size());
             const auto size = static_cast<std::size_t>(input.gcount());
@@ -129,7 +130,7 @@ namespace lfs::media::detail {
         const auto& f = output_.files;
         const auto identity_path = checkpoint_ / "identity.json";
         std::string previous_provider;
-        if (std::filesystem::exists(identity_path) && !emptyReservation(identity_path)) {
+        if (lfs::core::native_fs::exists(identity_path) && !emptyReservation(identity_path)) {
             const auto previous = readRecord(identity_path);
             if (!previous)
                 return SinkResult::failure(previous.error());
@@ -163,20 +164,20 @@ namespace lfs::media::detail {
         if (session.output.color.units != ColorUnits::Relative)
             identity_["sample_units"] = static_cast<int>(session.output.color.units);
         identity_["hardware_decode"] = r.allow_hardware_decode;
-        std::filesystem::create_directories(f.output_directory);
-        if (std::filesystem::is_symlink(std::filesystem::symlink_status(f.output_directory)))
+        lfs::core::native_fs::create_directories(f.output_directory);
+        if (lfs::core::native_fs::is_symlink(lfs::core::native_fs::symlink_status(f.output_directory)))
             return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Resume output directory must not be a symlink"));
-        if (!std::filesystem::exists(checkpoint_)) {
+        if (!lfs::core::native_fs::exists(checkpoint_)) {
             if (!io::generatedExtractionFiles(f.output_directory, f.filename_pattern).empty())
                 return SinkResult::failure(checkpointError(ErrorCode::AlreadyExists, "Cannot adopt existing extraction output without a checkpoint"));
-            std::filesystem::create_directory(checkpoint_);
+            lfs::core::native_fs::create_directory(checkpoint_);
         }
-        if (!std::filesystem::is_directory(std::filesystem::symlink_status(checkpoint_)))
+        if (!lfs::core::native_fs::is_directory(lfs::core::native_fs::symlink_status(checkpoint_)))
             return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint must be a non-symlink directory"));
-        if (!std::filesystem::exists(identity_path) || emptyReservation(identity_path)) {
+        if (!lfs::core::native_fs::exists(identity_path) || emptyReservation(identity_path)) {
             // Before identity publication no image/record can have committed.
             // Only its own interrupted atomic temporary/reservation is recoverable.
-            for (const auto& entry : std::filesystem::directory_iterator(checkpoint_)) {
+            for (const auto& entry : lfs::core::native_fs::directory_iterator(checkpoint_)) {
                 auto name = core::path_to_utf8(entry.path().filename());
 #ifdef __APPLE__
                 // macOS may create AppleDouble companions on exFAT, including
@@ -185,7 +186,7 @@ namespace lfs::media::detail {
                     name.erase(0, 2);
 #endif
                 if ((name != "identity.json" && !name.starts_with("identity.json.tmp-")) ||
-                    !std::filesystem::is_regular_file(entry.symlink_status()))
+                    !lfs::core::native_fs::is_regular_file(lfs::core::native_fs::entry_symlink_status(checkpoint_, entry)))
                     return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Cannot adopt a nonempty checkpoint directory without its identity"));
             }
             if (auto recovered = discardReservation(identity_path); !recovered)
@@ -197,7 +198,7 @@ namespace lfs::media::detail {
         // Each record has bounded size; the sequence index is rebuilt by decoding
         // and selecting from the original start, never by guessing a seek/PTS.
         recorded_ = 0;
-        for (const auto& entry : std::filesystem::directory_iterator(checkpoint_)) {
+        for (const auto& entry : lfs::core::native_fs::directory_iterator(checkpoint_)) {
             const auto name = core::path_to_utf8(entry.path().filename());
             if (name.starts_with("frame-") && name.ends_with(".json"))
                 ++recorded_;
@@ -259,7 +260,7 @@ namespace lfs::media::detail {
             const auto& pts = *frame.info.source_timestamp;
             record["pts"] = {pts.ticks, pts.time_base.numerator, pts.time_base.denominator};
         }
-        if (std::filesystem::exists(record_path)) {
+        if (lfs::core::native_fs::exists(record_path)) {
             const auto old = readRecord(record_path);
             if (!old)
                 return SinkResult::failure(old.error());
@@ -270,7 +271,7 @@ namespace lfs::media::detail {
             record = *old;
             if (auto recovered = discardReservation(destination); !recovered)
                 return recovered;
-            if (std::filesystem::exists(destination)) {
+            if (lfs::core::native_fs::exists(destination)) {
                 const auto digest = fileDigest(destination, cancelled_);
                 if (!digest)
                     return SinkResult::failure(digest.error());
@@ -279,7 +280,7 @@ namespace lfs::media::detail {
                 ++accepted_;
                 return {};
             }
-        } else if (std::filesystem::exists(destination)) {
+        } else if (lfs::core::native_fs::exists(destination)) {
             return SinkResult::failure(checkpointError(ErrorCode::AlreadyExists, "Untracked output cannot be overwritten by resume"));
         }
         // Encode once with the existing file sink. Record the exact encoded bytes

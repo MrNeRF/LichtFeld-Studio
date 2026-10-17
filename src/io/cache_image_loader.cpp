@@ -13,6 +13,7 @@
 #include "core/host_metrics.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/shared_image_ops.hpp"
 #include "core/tensor.hpp"
@@ -471,7 +472,7 @@ namespace lfs::io {
             return image_ops->resize(input, height, width,
                                      gpu_ops::Resample::LanczosGray, 2);
         };
-        auto extension = path.extension().string();
+        auto extension = lfs::core::path_to_utf8(path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
             return static_cast<char>(std::tolower(ch));
         });
@@ -748,7 +749,7 @@ namespace lfs::io {
     }
 
     bool CacheLoader::is_jpeg_format(const std::filesystem::path& path) const {
-        std::string ext = path.extension().string();
+        std::string ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         return ext == ".jpg" || ext == ".jpeg" || ext == ".jp2";
     }

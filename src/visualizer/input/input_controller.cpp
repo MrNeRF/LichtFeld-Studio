@@ -5,6 +5,7 @@
 #include "input/input_controller.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/training_manager.hpp"
@@ -138,16 +139,17 @@ namespace lfs::vis {
         // Like expandNodeWorldBounds, but hidden nodes and hidden children of a
         // container add nothing: framing follows what the viewport shows.
         void expandVisibleNodeWorldBounds(const core::Scene& scene, const core::SceneNode& node,
-                                          glm::vec3& world_min, glm::vec3& world_max) {
+                                          glm::vec3& world_min, glm::vec3& world_max,
+                                          const bool use_percentile = false) {
             if (!scene.isNodeEffectivelyVisible(node.id))
                 return;
             if (!isGeometryContainer(node)) {
-                expandNodeWorldBounds(scene, node, world_min, world_max);
+                expandNodeWorldBounds(scene, node, world_min, world_max, use_percentile);
                 return;
             }
             for (const auto child_id : node.children) {
                 if (const auto* const child = scene.getNodeById(child_id))
-                    expandVisibleNodeWorldBounds(scene, *child, world_min, world_max);
+                    expandVisibleNodeWorldBounds(scene, *child, world_min, world_max, use_percentile);
             }
         }
 
@@ -2579,24 +2581,16 @@ namespace lfs::vis {
             }
 
             case input::Action::CAMERA_SET_HOME:
-                activeKeyboardViewport().camera.saveHomePosition();
-                publishCameraMove(&activeKeyboardViewport());
-                if (auto* const viewer = lfs::python::get_visualizer()) {
-                    viewer->projectMarkSessionChapterCommitted("VIEW");
-                }
+                setHome();
                 return;
 
-            case input::Action::CAMERA_RESET_HOME: {
-                auto& target = activeKeyboardViewport();
-                auto* const rendering = services().renderingOrNull();
-                resetViewportToHome(target, rendering, views_.viewId(target));
-                if (rendering)
-                    rendering->markCameraCut(views_.viewId(target));
-                publishCameraMove(&target);
-                if (auto* const viewer = lfs::python::get_visualizer())
-                    viewer->projectMarkSessionChapterCommitted("VIEW");
+            case input::Action::CAMERA_RESET_HOME:
+                goHome();
                 return;
-            }
+
+            case input::Action::CAMERA_RESTORE_HOME:
+                resetHome();
+                return;
 
             case input::Action::CAMERA_FOCUS_SELECTION:
                 handleFocusSelection(activeKeyboardViewport());
@@ -2835,7 +2829,7 @@ namespace lfs::vis {
             }
         }
 
-        // Movement keys only work when viewport has focus and gizmo isn't active
+        // Movement keys work unless text is being edited or a gizmo is active
         if (!shouldCameraHandleInput() || drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
             return;
 
@@ -3242,7 +3236,7 @@ namespace lfs::vis {
                 });
 
             if ((ext == ".licht" || lfs::io::video::is_supported_video_extension(ext)) &&
-                !std::filesystem::is_directory(filepath)) {
+                !lfs::core::native_fs::is_directory(filepath)) {
                 skipped_files.push_back(path_str);
                 skipped_video_or_project = true;
                 continue;
@@ -3291,7 +3285,7 @@ namespace lfs::vis {
                 }
                 skipped_files.push_back(path_str);
                 has_unrecognized_files = true;
-            } else if (std::filesystem::is_directory(filepath)) {
+            } else if (lfs::core::native_fs::is_directory(filepath)) {
                 // Check for dataset markers
                 LOG_DEBUG("Checking directory for dataset markers: {}", lfs::core::path_to_utf8(filepath));
                 if (lfs::io::Loader::isDatasetPath(filepath)) {
@@ -3305,8 +3299,8 @@ namespace lfs::vis {
                     continue;
                 } else {
                     // Check if it's a SOG directory (WebP-based format)
-                    if (std::filesystem::exists(filepath / "meta.json") &&
-                        std::filesystem::exists(filepath / "means_l.webp")) {
+                    if (lfs::core::native_fs::exists(filepath / "meta.json") &&
+                        lfs::core::native_fs::exists(filepath / "means_l.webp")) {
                         splat_files.push_back(filepath);
                         LOG_DEBUG("Detected SOG directory: {}", lfs::core::path_to_utf8(filepath));
                     } else {
@@ -3526,16 +3520,19 @@ namespace lfs::vis {
         glm::vec3 total_max(std::numeric_limits<float>::lowest());
         bool has_bounds = false;
 
+        // Frame the trimmed splat and point-cloud boxes: a few far floaters would
+        // otherwise park the camera beyond the zoom-out limit, where only zooming
+        // in still works.
         if (selected.empty()) {
-            has_bounds = computeWholeSceneBounds(total_min, total_max);
+            has_bounds = computeWholeSceneBounds(total_min, total_max, /*use_percentile=*/true);
         } else {
             for (const auto& name : selected) {
                 if (const auto* node = scene.getNode(name))
-                    expandVisibleNodeWorldBounds(scene, *node, total_min, total_max);
+                    expandVisibleNodeWorldBounds(scene, *node, total_min, total_max, /*use_percentile=*/true);
             }
             has_bounds = total_min.x <= total_max.x;
             if (!has_bounds)
-                has_bounds = computeWholeSceneBounds(total_min, total_max);
+                has_bounds = computeWholeSceneBounds(total_min, total_max, /*use_percentile=*/true);
         }
 
         if (has_bounds) {
@@ -3625,6 +3622,20 @@ namespace lfs::vis {
         publishCameraMove(&target_viewport);
     }
 
+    void InputController::goHome() {
+        handleResetCameraHome(activeKeyboardViewport());
+        if (auto* const viewer = lfs::python::get_visualizer())
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+    }
+
+    void InputController::setHome() {
+        auto& target = activeKeyboardViewport();
+        target.camera.saveHomePosition();
+        publishCameraMove(&target);
+        if (auto* const viewer = lfs::python::get_visualizer())
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+    }
+
     void InputController::resetHome() {
         auto& target = activeKeyboardViewport();
         target.camera.resetHomePosition();
@@ -3701,14 +3712,14 @@ namespace lfs::vis {
             return false;
         }
 
+        // Navigation keys work while a panel holds keyboard focus, like F and
+        // Home. Text fields and modals keep them.
         if (input_router_) {
-            return input_router_->isViewportKeyboardFocused() &&
-                   !input_router_->isTextInputActive() &&
-                   !input_router_->isModalOpen();
+            return !input_router_->isTextInputActive() && !input_router_->isModalOpen();
         }
 
         const auto& focus = gui::guiFocusState();
-        if (focus.want_text_input || focus.want_capture_keyboard)
+        if (focus.want_text_input)
             return false;
 
         return !focus.any_item_active;

@@ -17,6 +17,7 @@
 #include "core/image_loader.hpp"
 #include "core/legacy_settings_migration.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
@@ -268,6 +269,25 @@ namespace lfs::app {
                     lfs::ErrorCode::NotFound,
                     "The project's dataset is neither reachable nor embedded",
                     LFS_SOURCE_SITE_CURRENT()));
+            }
+
+            if (!params.init_path) {
+                auto initialization = document->project().training_initialization();
+                if (!initialization) {
+                    return lfs::Status::failure(std::move(initialization).error());
+                }
+                if (*initialization && (*initialization)->init_reference_uuid) {
+                    const auto& uuid = *(*initialization)->init_reference_uuid;
+                    const auto init_path = io::project::resolve_path_reference(
+                        document->references(), path.parent_path(), uuid);
+                    std::error_code error;
+                    if (init_path && core::native_fs::is_regular_file(*init_path, error)) {
+                        params.init_path = core::path_to_utf8(*init_path);
+                    } else {
+                        LOG_WARN("Training initialization file '{}' is unavailable; using the dataset point cloud.",
+                                 init_path ? core::path_to_utf8(*init_path) : uuid.to_string());
+                    }
+                }
             }
 
             // Without -o, exports land beside the project.
@@ -1313,7 +1333,7 @@ namespace lfs::app {
             // Pipeline creation does not read the scene. Overlap it with the load.
             auto loading = std::async(std::launch::async, [&]() -> std::expected<std::shared_ptr<core::SplatData>, std::string> {
                 std::shared_ptr<core::SplatData> model;
-                const auto load_ext = cfg.load_path.extension().string();
+                const auto load_ext = lfs::core::path_to_utf8(cfg.load_path.extension());
                 if (load_ext == ".resume") {
                     auto splat_result = core::load_checkpoint_splat_data(cfg.load_path);
                     if (!splat_result) {

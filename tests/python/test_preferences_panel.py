@@ -301,6 +301,7 @@ def preferences_panel_module(monkeypatch):
             ZOOM_SPEED_DOWN=SimpleNamespace(name="ZOOM_SPEED_DOWN", value=15),
             CAMERA_RESET_HOME=SimpleNamespace(name="CAMERA_RESET_HOME", value=16),
             CAMERA_SET_HOME=SimpleNamespace(name="CAMERA_SET_HOME", value=17),
+            CAMERA_RESTORE_HOME=SimpleNamespace(name="CAMERA_RESTORE_HOME", value=104),
             CAMERA_NEXT_VIEW=SimpleNamespace(name="CAMERA_NEXT_VIEW", value=18),
             CAMERA_PREV_VIEW=SimpleNamespace(name="CAMERA_PREV_VIEW", value=19),
             TOGGLE_PYTHON_CONSOLE=SimpleNamespace(name="TOGGLE_PYTHON_CONSOLE", value=103),

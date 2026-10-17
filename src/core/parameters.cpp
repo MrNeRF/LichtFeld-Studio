@@ -5,10 +5,12 @@
 #include "core/parameters.hpp"
 #include "core/file_extensions.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
 #include "core/project_path.hpp"
 #include "core/property_registry.hpp"
+#include <algorithm>
 #include <any>
 #include <array>
 #include <cassert>
@@ -579,13 +581,15 @@ namespace lfs::core {
             const auto apply = [ratio](const size_t v) {
                 return static_cast<size_t>(std::lround(static_cast<float>(v) * ratio));
             };
+            // Intervals must stay at least one step, or a short --iter run fails validation.
+            const auto apply_interval = [&apply](const size_t v) { return std::max<size_t>(1, apply(v)); };
             iterations = apply(iterations);
             start_refine = apply(start_refine);
             stop_refine = apply(stop_refine);
-            reset_every = apply(reset_every);
-            refine_every = apply(refine_every);
+            reset_every = apply_interval(reset_every);
+            refine_every = apply_interval(refine_every);
             morton_reorder_interval = apply(morton_reorder_interval);
-            sh_degree_interval = apply(sh_degree_interval);
+            sh_degree_interval = apply_interval(sh_degree_interval);
             grow_until_iter = apply(grow_until_iter);
 
             for (auto* steps : {&eval_steps, &save_steps}) {
@@ -968,6 +972,10 @@ namespace lfs::core {
                 !std::isfinite(init_origin_z))
                 return std::format("random initialization origin must be finite (got {}, {}, {})",
                                    init_origin_x, init_origin_y, init_origin_z);
+            if (init_mesh_resolution < Mesh2SplatOptions::kMinResolution ||
+                init_mesh_resolution > kMaxInitMeshResolution)
+                return std::format("init_mesh_resolution must be within [{}, {}] (got {})",
+                                   Mesh2SplatOptions::kMinResolution, kMaxInitMeshResolution, init_mesh_resolution);
             if (!std::isfinite(init_scaling) || init_scaling <= 0.0f)
                 return std::format("init_scaling must be finite and positive (got {})", init_scaling);
             if (!std::isfinite(init_opacity) || init_opacity <= 0.0f || init_opacity >= 1.0f)
@@ -1162,7 +1170,7 @@ namespace lfs::core {
                 return "--data-path project.licht and --resume are mutually exclusive";
             }
             if (project_path) {
-                auto extension = project_path->extension().string();
+                auto extension = lfs::core::path_to_utf8(project_path->extension());
                 std::ranges::transform(
                     extension, extension.begin(),
                     [](const unsigned char character) {
@@ -1178,7 +1186,7 @@ namespace lfs::core {
                 }
             }
             if (resume_project) {
-                auto resume_extension = resume_project->extension().string();
+                auto resume_extension = lfs::core::path_to_utf8(resume_project->extension());
                 std::ranges::transform(
                     resume_extension, resume_extension.begin(),
                     [](const unsigned char character) {

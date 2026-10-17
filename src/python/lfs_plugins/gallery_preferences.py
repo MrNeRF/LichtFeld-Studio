@@ -3,7 +3,7 @@
 """Device-local gallery preferences; never part of account credentials or projects."""
 import logging
 import threading
-from pathlib import Path
+from _lfs_path_io import Path
 
 from .persisted_settings import load_object, write_object
 

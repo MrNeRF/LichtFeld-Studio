@@ -8,6 +8,7 @@
 #include "core/cuda_types.hpp"
 #include "core/export.hpp"
 #include "core/image_loader.hpp"
+#include "core/native_fs.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_image.hpp"
 #include "core/uuid.hpp"
@@ -243,13 +244,13 @@ namespace lfs::core {
         std::uint64_t mask_revision() const noexcept { return _mask_revision; }
         bool has_mask() const noexcept {
             return has_in_memory_mask() ||
-                   (!_mask_path.empty() && std::filesystem::exists(_mask_path));
+                   (!_mask_path.empty() && lfs::core::native_fs::exists(_mask_path));
         }
         bool has_depth() const noexcept {
-            return !_depth_path.empty() && std::filesystem::exists(_depth_path);
+            return !_depth_path.empty() && lfs::core::native_fs::exists(_depth_path);
         }
         bool has_normal() const noexcept {
-            return !_normal_path.empty() && std::filesystem::exists(_normal_path);
+            return !_normal_path.empty() && lfs::core::native_fs::exists(_normal_path);
         }
         bool has_alpha() const noexcept { return _has_alpha; }
         void set_has_alpha(bool v) noexcept { _has_alpha = v; }

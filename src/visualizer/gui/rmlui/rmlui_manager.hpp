@@ -34,6 +34,7 @@ struct SDL_Window;
 namespace Rml {
     class Context;
     class RenderInterface;
+    class FileInterface;
 } // namespace Rml
 
 namespace lfs::vis {
@@ -333,6 +334,7 @@ namespace lfs::vis::gui {
         std::vector<ElementObserver> rejected_focus_;
 
         std::unique_ptr<RmlSystemInterface> system_interface_;
+        std::unique_ptr<Rml::FileInterface> file_interface_;
         std::unique_ptr<Rml::RenderInterface> owned_render_interface_;
         UiRenderer* ui_renderer_ = nullptr;
         std::unique_ptr<RmlTextInputHandler> text_input_handler_;

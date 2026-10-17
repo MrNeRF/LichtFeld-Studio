@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/user_paths.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/environment.hpp"
 #include "path_utils.hpp"
@@ -107,7 +108,7 @@ namespace lfs::core {
             if (!backup.value())
                 return std::optional<std::filesystem::path>{};
             std::error_code error;
-            if (!std::filesystem::remove(source, error) || error)
+            if (!lfs::core::native_fs::remove(source, error) || error)
                 return userPathError(
                     lfs::ErrorCode::PermissionDenied,
                     "The user settings file was backed up but could not be reset.",
@@ -124,7 +125,7 @@ namespace lfs::core {
                const std::filesystem::path& backup_root,
                const std::string_view category) {
         std::error_code error;
-        if (!std::filesystem::exists(source, error)) {
+        if (!lfs::core::native_fs::exists(source, error)) {
             if (error)
                 return userPathError(
                     lfs::ErrorCode::Unavailable,
@@ -134,7 +135,7 @@ namespace lfs::core {
                     source);
             return std::optional<std::filesystem::path>{};
         }
-        if (!std::filesystem::is_regular_file(source, error) || error)
+        if (!lfs::core::native_fs::is_regular_file(source, error) || error)
             return userPathError(
                 lfs::ErrorCode::InvalidArgument,
                 "The user settings file cannot be reset.",
@@ -149,7 +150,7 @@ namespace lfs::core {
                                  std::format("reset-{}-{}-{}-{}", category, millis,
                                              currentProcessId(), sequence) /
                                  source.filename();
-        std::filesystem::create_directories(destination.parent_path(), error);
+        lfs::core::native_fs::create_directories(destination.parent_path(), error);
         if (error)
             return userPathError(
                 lfs::ErrorCode::PermissionDenied,
@@ -157,14 +158,14 @@ namespace lfs::core {
                 std::format("Unable to create reset backup directory '{}': {}",
                             path_to_utf8(destination.parent_path()), error.message()),
                 destination.parent_path());
-        if (!std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, error))
+        if (!lfs::core::native_fs::copy_file(source, destination, std::filesystem::copy_options::none, error))
             return userPathError(
                 lfs::ErrorCode::DataLoss,
                 "The user settings backup could not be created.",
                 std::format("Unable to back up settings file '{}' to '{}': {}",
                             path_to_utf8(source), path_to_utf8(destination), error.message()),
                 source);
-        if (!std::filesystem::exists(destination, error) || error)
+        if (!lfs::core::native_fs::exists(destination, error) || error)
             return userPathError(
                 lfs::ErrorCode::DataLoss,
                 "The user settings backup could not be verified.",
@@ -253,7 +254,7 @@ namespace lfs::core {
             keymapDir(), presetDir(), assetLibraryDir(), pluginDataDir(), backupDir()};
         for (const auto& directory : directories) {
             std::error_code error;
-            std::filesystem::create_directories(directory, error);
+            lfs::core::native_fs::create_directories(directory, error);
             if (error)
                 return failStatus(
                     lfs::ErrorCode::PermissionDenied,
@@ -343,7 +344,7 @@ namespace lfs::core {
         const auto directory = mcpLogDir();
         const auto destination = directory / filename;
         std::error_code error;
-        std::filesystem::create_directories(directory, error);
+        lfs::core::native_fs::create_directories(directory, error);
         if (error)
             return failStatus(
                 lfs::ErrorCode::PermissionDenied,
@@ -352,7 +353,7 @@ namespace lfs::core {
                             path_to_utf8(directory), error.message()),
                 directory);
 
-        std::ofstream output(destination, std::ios::binary | std::ios::app);
+        std::ofstream output(lfs::core::native_fs::native_path(destination), std::ios::binary | std::ios::app);
         if (!output.is_open())
             return failStatus(
                 lfs::ErrorCode::PermissionDenied,

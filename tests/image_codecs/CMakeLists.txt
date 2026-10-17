@@ -31,6 +31,7 @@ if(NOT TARGET lfs_image_codecs)
     # The EXR writer uses the same typed-error provider as the root build.
     find_package(nlohmann_json CONFIG REQUIRED)
     find_package(spdlog CONFIG REQUIRED)
+    find_package(xxHash CONFIG REQUIRED)
     if(NOT TARGET lfs_diagnostics)
         add_subdirectory(${LFS_CODEC_ROOT}/src/diagnostics ${CMAKE_CURRENT_BINARY_DIR}/diagnostics)
     endif()
@@ -49,7 +50,9 @@ add_executable(lichtfeld_image_codec_tests
     ../test_heif_codecs.cpp
     ../test_exr_codecs.cpp
     ../test_image_codec_dependencies.cpp
-    ../test_tiff_orientation.cpp)
+    ../test_tiff_orientation.cpp
+    ../test_stb_paths.cpp
+    ${LFS_CODEC_ROOT}/src/io/stb_image_impl.cpp)
 target_compile_features(lichtfeld_image_codec_tests PRIVATE cxx_std_20)
 target_compile_definitions(lichtfeld_image_codec_tests PRIVATE LFS_HEIF_FIXTURES="${LFS_CODEC_ROOT}/tests/data/heif")
 target_include_directories(lichtfeld_image_codec_tests PRIVATE ${LFS_CODEC_ROOT}/src ${LFS_CODEC_ROOT}/src/core/include)
@@ -65,8 +68,16 @@ if(MSVC)
     target_compile_options(lichtfeld_image_codec_tests PRIVATE /utf-8 /W4)
     target_compile_definitions(lichtfeld_image_codec_tests PRIVATE NOMINMAX)
 endif()
-add_test(NAME lichtfeld_image_codec_tests COMMAND lichtfeld_image_codec_tests)
+if(WIN32 AND MSVC)
+    target_sources(lichtfeld_image_codec_tests PRIVATE ../native_filesystem_test.manifest)
+    target_compile_definitions(lichtfeld_image_codec_tests PRIVATE LFS_REQUIRE_LONG_PATHS_DISABLED)
+endif()
+add_test(NAME lichtfeld_image_codec_tests COMMAND lichtfeld_image_codec_tests
+    --gtest_filter=-ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits)
 set_tests_properties(lichtfeld_image_codec_tests PROPERTIES LABELS "fast;image;cpu" TIMEOUT 120)
+add_test(NAME lichtfeld_jpeg_large_memory_test COMMAND lichtfeld_image_codec_tests
+    --gtest_filter=ProductionJpeg.MemoryLargeImagesPreserveFileEncodingAndRecoverFromLimits)
+set_tests_properties(lichtfeld_jpeg_large_memory_test PROPERTIES LABELS "stress;image;cpu" TIMEOUT 180)
 
 if(TARGET lfs_io)
     add_executable(lichtfeld_image_discovery_tests ../test_image_format_discovery.cpp)
@@ -94,6 +105,6 @@ add_test(NAME lichtfeld_codec_exports_test COMMAND lichtfeld_codec_exports_test)
 set_tests_properties(lichtfeld_codec_exports_test PROPERTIES LABELS "fast;image;cpu" TIMEOUT 30)
 if(WIN32)
     # Project DLLs live beside the app, not beside these nested test executables.
-    set_tests_properties(lichtfeld_image_codec_tests lichtfeld_codec_exports_test PROPERTIES
+    set_tests_properties(lichtfeld_image_codec_tests lichtfeld_jpeg_large_memory_test lichtfeld_codec_exports_test PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_image_codecs>")
 endif()

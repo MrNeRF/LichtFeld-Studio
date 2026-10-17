@@ -62,6 +62,22 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# Deliberately no executable opt-in: exercise extended-path I/O independently
+# of the user's/runner's LongPathsEnabled registry policy.
+if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS))
+    add_executable(lichtfeld_native_filesystem_tests
+        test_native_filesystem.cpp test_native_logging.cpp native_filesystem_test.manifest)
+    target_compile_features(lichtfeld_native_filesystem_tests PRIVATE cxx_std_23)
+    target_compile_definitions(lichtfeld_native_filesystem_tests PRIVATE
+        LFS_STATIC_BUILD LFS_REQUIRE_LONG_PATHS_DISABLED)
+    target_include_directories(lichtfeld_native_filesystem_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include)
+    target_link_libraries(lichtfeld_native_filesystem_tests PRIVATE
+        GTest::gtest_main spdlog::spdlog xxHash::xxhash shell32)
+    add_test(NAME lichtfeld.native_filesystem COMMAND lichtfeld_native_filesystem_tests)
+    set_tests_properties(lichtfeld.native_filesystem PROPERTIES LABELS "cpu;windows;filesystem" TIMEOUT 30)
+endif()
+
 # Exercise a real EXE/DLL boundary: linking the same static runner into both
 # modules would pass same-module tests but split callback and initialization state.
 # Windows CI enables the focused visualizer tests without the full test suite.
@@ -316,11 +332,31 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     # The focused menu-bar suite exercises no GPU code. Windows CI installs
     # the CUDA toolkit but has no display driver, so defer loading nvcuda.dll
     # until a driver API is actually called. Application builds load the driver eagerly.
+    # lfs_mcp and the Python module call the driver API directly too, and CI imports
+    # the module from a plain Python process where nothing has loaded nvcuda.dll first.
     if(MSVC AND BUILD_VISUALIZER_TESTS)
-        target_link_options(lfs_core PRIVATE "/DELAYLOAD:nvcuda.dll")
-        target_link_libraries(lfs_core PRIVATE delayimp)
-        target_link_options(lfs_visualizer PRIVATE "/DELAYLOAD:nvcuda.dll")
-        target_link_libraries(lfs_visualizer PRIVATE delayimp)
+        foreach(_driver_user IN ITEMS lfs_core lfs_visualizer lfs_mcp lfs_py)
+            if(TARGET ${_driver_user})
+                target_link_options(${_driver_user} PRIVATE "/DELAYLOAD:nvcuda.dll")
+                target_link_libraries(${_driver_user} PRIVATE delayimp)
+            endif()
+        endforeach()
+    endif()
+
+    if(WIN32)
+        find_package(PkgConfig REQUIRED)
+        find_package(LibArchive REQUIRED)
+        pkg_check_modules(LFS_PATH_TEST_FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil)
+        add_executable(lichtfeld_native_third_party_tests
+            test_native_third_party_paths.cpp native_filesystem_test.manifest)
+        target_compile_features(lichtfeld_native_third_party_tests PRIVATE cxx_std_23)
+        target_compile_definitions(lichtfeld_native_third_party_tests PRIVATE LFS_STATIC_BUILD)
+        target_include_directories(lichtfeld_native_third_party_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include ${CMAKE_SOURCE_DIR}/src/visualizer)
+        target_link_libraries(lichtfeld_native_third_party_tests PRIVATE
+            GTest::gtest_main RmlUi::RmlUi assimp::assimp LibArchive::LibArchive PkgConfig::LFS_PATH_TEST_FFMPEG shell32)
+        add_test(NAME lichtfeld.native_third_party_paths COMMAND lichtfeld_native_third_party_tests)
+        set_tests_properties(lichtfeld.native_third_party_paths PROPERTIES LABELS "cpu;windows;filesystem" TIMEOUT 30)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
@@ -356,6 +392,9 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     # do not compile PointCloudVulkanRenderer.
     if(NOT LFS_TENSOR_METAL)
         list(APPEND LICHTFELD_VISUALIZER_TEST_SOURCES test_point_cloud_vulkan_projection.cpp)
+    endif()
+    if(LFS_GRAPHICS_VULKAN_BUILD)
+        list(APPEND LICHTFELD_VISUALIZER_TEST_SOURCES test_viewport_grid.cpp)
     endif()
     if(NOT LFS_HAS_CUDA)
         # CUDA builds run these in lichtfeld_tests.
@@ -411,11 +450,13 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     )
     if(APPLE)
         # On macOS the visualizer resolves CPython from the host process. The app
-        # pulls libpython in by embedding it; the test binary must load it whole.
+        # pulls libpython in by embedding it; both test hosts must load it whole.
         find_package(Python REQUIRED COMPONENTS Development.Embed)
-        target_link_options(lichtfeld_visualizer_tests PRIVATE
-            "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
-        target_link_libraries(lichtfeld_visualizer_tests PRIVATE lfs_python_embed)
+        foreach(_python_visualizer_test IN ITEMS lichtfeld_visualizer_tests lichtfeld_rmlui_tests)
+            target_link_options(${_python_visualizer_test} PRIVATE
+                "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+            target_link_libraries(${_python_visualizer_test} PRIVATE lfs_python_embed)
+        endforeach()
     endif()
     # The trackpad tests set SDL's modifier state. A static SDL is reached through
     # lfs_visualizer; a shared one (Windows) must be linked so both see one state.
@@ -465,6 +506,7 @@ if(BUILD_UNICODE_TEST_ONLY)
     # Standalone Unicode path tests without CUDA runtime linkage
     add_executable(unicode_path_test
         test_unicode_paths_windows.cpp
+        test_native_filesystem.cpp
         test_project_save_as_paths.cpp
         test_weight_file_paths.cpp
         test_crash_handler.cpp
@@ -618,6 +660,7 @@ set_tests_properties(lichtfeld.sdl_coordinates PROPERTIES LABELS "fast;cpu;input
 # unreferenced function sections before resolution. Keep the dependency-heavy
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
+    test_atomic_output.cpp
     test_project_save_as_paths.cpp
     test_native_fs.cpp
     test_json_chapter_dom.cpp
@@ -673,6 +716,9 @@ endif()
 add_executable(lichtfeld_format_tests ${LICHT_FORMAT_TARGET_FILES})
 target_link_libraries(lichtfeld_format_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_include_directories(lichtfeld_format_tests SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
+if(WIN32 AND MSVC)
+    target_sources(lichtfeld_format_tests PRIVATE native_filesystem_test.manifest)
+endif()
 target_include_directories(lichtfeld_format_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/include
     ${CMAKE_SOURCE_DIR}/src/io/include
@@ -851,6 +897,7 @@ if(NOT LFS_HAS_CUDA)
         test_viewport.cpp
         test_tensor_metal.cpp
         test_camera_priors_portable.cpp
+        test_undistort_portable.cpp
         test_pipelined_loader_backends.cpp
         test_viewer_no_cuda.cpp
     )
@@ -1147,6 +1194,7 @@ set(TEST_FILES
     test_usd_format.cpp
     test_nurec_usdz_format.cpp
     test_unicode_paths_windows.cpp
+    test_native_filesystem.cpp
     test_interleaved_slice_copy.cpp
     test_densification_tensor_ops.cpp
     test_tensor_zero_dimension.cpp
@@ -1278,6 +1326,7 @@ set(TEST_FILES
     test_rml_pointer_routing.cpp
     test_point_cloud_raster_orientation.cpp
     test_point_cloud_vulkan_projection.cpp
+    test_viewport_grid.cpp
     test_theme_registry.cpp
     test_viewport.cpp
     test_navigation_up_axis.cpp
@@ -1365,6 +1414,7 @@ set(TEST_FILES
     test_camera_mask_threshold.cpp
     test_camera_thumbnail_policy.cpp
     test_undistort.cpp
+    test_undistort_portable.cpp
     gut_camera_model_cuda.cu
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp

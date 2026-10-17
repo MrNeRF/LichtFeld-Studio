@@ -3241,11 +3241,12 @@ namespace lfs::vis::gui {
         NativeOverlayDrawList buttons;
         buttons.PushClipRect(viewport.pos, viewport.pos + viewport.size);
         const float button_size = 24.0f * ui_scale;
-        // Reset Home, Home and Frame Selected, right-aligned under the widget.
-        constexpr std::array<std::string_view, 3> commands{"reset_home", "home", "frame_selected"};
-        for (int index = 0; index < 3; ++index) {
+        // Reset Home, Home, Set Home and Frame Selected, right-aligned under the widget.
+        constexpr std::array<std::string_view, 4> commands{"reset_home", "home", "set_home", "frame_selected"};
+        constexpr int button_count = static_cast<int>(commands.size());
+        for (int index = 0; index < button_count; ++index) {
             const glm::vec2 pos{viewport.pos.x + viewport.size.x - gizmo_margin -
-                                    (3 - index) * (button_size + 4.0f * ui_scale),
+                                    (button_count - index) * (button_size + 4.0f * ui_scale),
                                 viewport.pos.y + gizmo_margin + gizmo_size + 4.0f * ui_scale};
             const bool hovered = mouse_x >= pos.x && mouse_x < pos.x + button_size &&
                                  mouse_y >= pos.y && mouse_y < pos.y + button_size;
@@ -3265,12 +3266,17 @@ namespace lfs::vis::gui {
                 const glm::vec2 tip = point(.5f + .28f * std::cos(glm::radians(60.0f)), .5f - .28f * std::sin(glm::radians(60.0f)));
                 buttons.AddLine(tip, tip + glm::vec2(-.2f, -.02f) * button_size, color, 1.5f);
                 buttons.AddLine(tip, tip + glm::vec2(.02f, .2f) * button_size, color, 1.5f);
-            } else if (index == 1) {
+            } else if (index == 1 || index == 2) {
                 buttons.AddLine(point(.2f, .48f), point(.5f, .2f), color, 1.5f);
                 buttons.AddLine(point(.5f, .2f), point(.8f, .48f), color, 1.5f);
                 buttons.AddLine(point(.3f, .42f), point(.3f, .78f), color, 1.5f);
                 buttons.AddLine(point(.3f, .78f), point(.7f, .78f), color, 1.5f);
                 buttons.AddLine(point(.7f, .78f), point(.7f, .42f), color, 1.5f);
+                if (index == 2) {
+                    // Set Home: the house with a check mark, like Shift+H.
+                    buttons.AddLine(point(.38f, .6f), point(.47f, .69f), color, 1.5f);
+                    buttons.AddLine(point(.47f, .69f), point(.62f, .5f), color, 1.5f);
+                }
             } else {
                 buttons.AddCircle(point(.5f, .5f), button_size * .22f, color, 16, 1.5f);
                 buttons.AddLine(point(.5f, .12f), point(.5f, .34f), color, 1.5f);
@@ -3278,8 +3284,15 @@ namespace lfs::vis::gui {
                 buttons.AddLine(point(.12f, .5f), point(.34f, .5f), color, 1.5f);
                 buttons.AddLine(point(.66f, .5f), point(.88f, .5f), color, 1.5f);
             }
-            if (hovered && frame_input.mouse_clicked[0] && !guiFocusState().want_capture_mouse)
-                viewer_->runViewCommand(viewport.view, commands[index]);
+            if (hovered && frame_input.mouse_clicked[0] && !guiFocusState().want_capture_mouse) {
+                // On Home, Shift-click sets the home and Ctrl-click restores the default, as Shift+H and Ctrl+H.
+                std::string_view command = commands[index];
+                if (index == 1 && (frame_input.key_mods & SDL_KMOD_CTRL))
+                    command = "reset_home";
+                else if (index == 1 && (frame_input.key_mods & SDL_KMOD_SHIFT))
+                    command = "set_home";
+                viewer_->runViewCommand(viewport.view, command);
+            }
         }
         buttons.PopClipRect();
         const bool widget_held = viewport_gizmo_dragging_ || viewport_gizmo_pressed_;

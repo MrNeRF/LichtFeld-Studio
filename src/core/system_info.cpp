@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/system_info.hpp"
+#include "core/native_fs.hpp"
 
 #if LFS_HAS_CUDA
 #include <cuda_runtime.h>
@@ -129,7 +130,7 @@ namespace lfs::core::system_info {
         }
 
         void collect_os(SystemInfo& info) {
-            std::ifstream release("/etc/os-release");
+            std::ifstream release(lfs::core::native_fs::native_path("/etc/os-release"));
             std::string line;
             while (std::getline(release, line)) {
                 constexpr std::string_view prefix = "PRETTY_NAME=";
@@ -145,7 +146,7 @@ namespace lfs::core::system_info {
         }
 
         std::string collect_cpu() {
-            std::ifstream cpuinfo("/proc/cpuinfo");
+            std::ifstream cpuinfo(lfs::core::native_fs::native_path("/proc/cpuinfo"));
             std::string line;
             while (std::getline(cpuinfo, line)) {
                 const auto separator = line.find(':');

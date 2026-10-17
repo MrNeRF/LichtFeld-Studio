@@ -4,7 +4,9 @@
 #include "core/file_extensions.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor_backend.hpp"
+#include "formats/archive_member_names.hpp"
 #include "io/atomic_output.hpp"
 #include "io/splat_decimate.hpp"
 #include "sogs.hpp"
@@ -44,7 +46,7 @@
 
 namespace lfs::io {
     namespace {
-        namespace fs = std::filesystem;
+        namespace fs = lfs::core::native_fs;
         using Json = nlohmann::json;
         using core::Device;
         using core::Tensor;
@@ -98,7 +100,7 @@ namespace lfs::io {
             }
 
             static std::string extension_of(const fs::path& path) {
-                auto extension = path.extension().string();
+                auto extension = lfs::core::path_to_utf8(path.extension());
                 std::transform(extension.begin(), extension.end(), extension.begin(),
                                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
                 return extension;
@@ -111,7 +113,7 @@ namespace lfs::io {
                     std::vector<fs::path> candidates;
                     for (const auto& entry : lfs::core::native_fs::directory_iterator(base_)) {
                         if (is_sog_license_member(core::path_to_utf8(entry.path().filename())) &&
-                            std::filesystem::is_regular_file(lfs::core::native_fs::entry_symlink_status(base_, entry)))
+                            lfs::core::native_fs::is_regular_file(lfs::core::native_fs::entry_symlink_status(base_, entry)))
                             candidates.push_back(lfs::core::native_fs::entry_path(base_, entry.path()));
                     }
                     std::sort(candidates.begin(), candidates.end());
@@ -166,7 +168,7 @@ namespace lfs::io {
                 while ((status = archive_read_next_header(reader.get(), &entry)) == ARCHIVE_OK) {
                     if (++count > 1000000)
                         throw std::runtime_error("Too many SSOG archive entries");
-                    const auto* raw_name = archive_entry_pathname(entry);
+                    const auto* raw_name = archive_member_name(entry);
                     if (!raw_name)
                         throw std::runtime_error("Missing SSOG archive entry name");
                     const auto name = safe_name(raw_name);
@@ -282,7 +284,7 @@ namespace lfs::io {
                         return std::unexpected(bytes.error());
                     return EntryProvider(*bytes, "meta.json", expansion_limit_).prepare("meta.json");
                 }
-                auto prefix = fs::path(manifest).parent_path().generic_string();
+                auto prefix = lfs::core::path_to_generic_utf8(fs::path(manifest).parent_path());
                 if (!prefix.empty())
                     prefix += '/';
                 return prepare_sog_entries([this](const std::string& name, size_t limit) { return read(name, limit); }, prefix);
@@ -340,7 +342,7 @@ namespace lfs::io {
                 const auto unit = core::utf8_to_path(name.get<std::string>()).lexically_normal();
                 if (!unique.insert(unit).second)
                     throw std::runtime_error("Duplicate SOG unit filename");
-                const auto meta = m.entries->unit_metadata(unit.generic_string());
+                const auto meta = m.entries->unit_metadata(lfs::core::path_to_generic_utf8(unit));
                 unit_counts.push_back(integer(meta.at("count"), "unit count"));
                 m.sh_degrees.push_back(unit_sh_degree(meta));
             }
@@ -997,12 +999,6 @@ namespace lfs::io {
             if (out == out.root_path())
                 return make_error(ErrorCode::PATH_NOT_WRITABLE, "Cannot export to filesystem root", out);
             lfs::core::native_fs::create_directories(out.parent_path());
-            static std::atomic_uint64_t sequence{0};
-#ifdef _WIN32
-            const auto pid = _getpid();
-#else
-            const auto pid = getpid();
-#endif
             const bool bundled = core::has_extension(out, ".ssog");
             std::unique_ptr<ScopedAtomicOutputFile> atomic_output;
             std::unique_ptr<SogSink> archive;
@@ -1013,7 +1009,7 @@ namespace lfs::io {
                 if (auto opened = archive->open(); !opened)
                     return opened;
             }
-            TempDirectory temp{bundled ? fs::path{} : fs::path(out.string() + std::format(".tmp-{}-{}", pid, sequence++))};
+            TempDirectory temp{bundled ? fs::path{} : make_atomic_temp_output_path(out)};
             if (!bundled && !lfs::core::native_fs::create_directory(temp.path))
                 throw std::runtime_error("Temporary export directory already exists");
             progress(o, 0, "Preparing SSOG");
@@ -1327,14 +1323,14 @@ namespace lfs::io {
                     return committed;
             } else {
                 lfs::core::native_fs::create_directories(out);
-                TempDirectory backup{fs::path(temp.path.string() + ".backup")};
+                TempDirectory backup{make_atomic_temp_output_path(out)};
                 lfs::core::native_fs::create_directory(backup.path);
                 std::vector<fs::path> old_paths, installed;
                 const bool replacing = lfs::core::native_fs::exists(out / "lod-meta.json");
                 const std::regex unit_name("[0-9]+_[0-9]+");
                 for (const auto& e : lfs::core::native_fs::directory_iterator(out)) {
                     const auto name = e.path().filename();
-                    const bool owned = name == "lod-meta.json" || name == "env" || std::regex_match(name.string(), unit_name);
+                    const bool owned = name == "lod-meta.json" || name == "env" || std::regex_match(lfs::core::path_to_utf8(name), unit_name);
                     if (owned && replacing)
                         old_paths.push_back(name);
                 }

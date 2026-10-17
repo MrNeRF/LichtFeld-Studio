@@ -7,6 +7,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
+#include "core/path_utils.hpp"
 #include "core/raster_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -529,10 +530,6 @@ namespace lfs::vis {
             import_render_result_ = std::string{};
         else
             markDirty(DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
-    }
-
-    void RenderingManager::configureSurfacePicking(FrameContext& frame) const {
-        frame.exact_surface_picking = exact_surface_picking_;
     }
 
     ViewportFrameResult RenderingManager::renderFrame(const RenderContext& context) {
@@ -3066,7 +3063,7 @@ namespace lfs::vis {
                                 .environment =
                                     {.enabled = transparent_viewer_compositing,
                                      .map_path = transparent_viewer_compositing
-                                                     ? std::filesystem::path(frame_settings.environment_map_path)
+                                                     ? lfs::core::utf8_to_path(frame_settings.environment_map_path)
                                                      : std::filesystem::path{},
                                      .exposure = frame_settings.environment_exposure,
                                      .rotation_degrees = frame_settings.environment_rotation_degrees,

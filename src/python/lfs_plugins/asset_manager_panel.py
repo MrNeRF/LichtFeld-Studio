@@ -15,7 +15,7 @@ import time
 import uuid
 import queue
 from datetime import datetime
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import quote
 

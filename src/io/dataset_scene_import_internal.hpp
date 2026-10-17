@@ -64,7 +64,8 @@ namespace lfs::training {
         }
 
         bool isPlainPointCloudPly(const std::filesystem::path& path) {
-            return path.extension().string() == ".ply" && !lfs::io::is_gaussian_splat_ply(path);
+            return lfs::core::path_to_utf8(path.extension()) == ".ply" && !lfs::io::is_gaussian_splat_ply(path) &&
+                   !lfs::io::is_mesh_file(path);
         }
 
         void centerInitializationMeans(lfs::core::Tensor& means, const glm::vec3& origin) {

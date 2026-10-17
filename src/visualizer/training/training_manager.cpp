@@ -12,6 +12,7 @@
 #include "core/gpu_device_runtime.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/reactive/store.hpp"
@@ -1188,7 +1189,7 @@ namespace lfs::vis {
         if (!trainer_->isInitialized() && params.init_path && !params.init_path->empty()) {
             std::error_code path_error;
             const auto init_path = lfs::core::utf8_to_path(*params.init_path);
-            if (!std::filesystem::exists(init_path, path_error)) {
+            if (!lfs::core::native_fs::exists(init_path, path_error)) {
                 const auto reason = path_error
                                         ? std::format("Cannot access training initialization file '{}': {}",
                                                       *params.init_path,

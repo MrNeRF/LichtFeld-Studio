@@ -32,49 +32,50 @@ namespace lfs::vis {
                 .height = static_cast<std::uint32_t>(std::max(y1 - y0, 0))};
     }
 
-    // Near and far planes of the view frustum as origin plus edge vectors; the
-    // grid shaders cast each pixel's ray between them onto the grid plane.
-    struct GridFrustumCorners {
-        glm::vec3 near_origin{0.0f}, near_x{0.0f}, near_y{0.0f};
-        glm::vec3 far_origin{0.0f}, far_x{0.0f}, far_y{0.0f};
+    // Pixel rays across the screen, from the bottom-left corner, for the grid shaders. Directions
+    // are kept apart from the origin: two far-away points subtracted in float lose the direction
+    // when zoomed out. The grid fades out on a floor around the pivot of `floor_radius`.
+    struct GridRays {
+        glm::vec3 origin{0.0f}, origin_x{0.0f}, origin_y{0.0f};
+        glm::vec3 dir{0.0f}, dir_x{0.0f}, dir_y{0.0f};
+        float floor_radius = 0.0f;
     };
 
-    inline GridFrustumCorners gridFrustumCorners(const glm::mat4& view, const glm::mat4& projection,
-                                                 const bool orthographic) {
+    inline GridRays gridRays(const glm::mat4& view, const glm::mat4& projection, const glm::vec3& pivot,
+                             const bool orthographic) {
         const glm::mat4 view_inv = glm::inverse(view);
         const glm::vec3 cam_pos = glm::vec3(view_inv[3]);
         const glm::vec3 cam_right = glm::vec3(view_inv[0]);
         const glm::vec3 cam_up = glm::vec3(view_inv[1]);
         const glm::vec3 cam_forward = -glm::vec3(view_inv[2]);
-        GridFrustumCorners corners;
+        // The floor is sized in visible half-heights at the pivot.
+        constexpr float kGridFloorRadius = 3.5f;
+        GridRays rays{.origin = cam_pos, .dir = cam_forward};
+        float pivot_half_height = 0.0f;
         if (orthographic) {
             const float half_width = 1.0f / projection[0][0];
             const float half_height = 1.0f / std::abs(projection[1][1]);
             const glm::vec3 right_offset = cam_right * half_width;
             const glm::vec3 up_offset = cam_up * half_height;
             constexpr float kRayNear = -1000.0f;
-            constexpr float kRayFar = 1000.0f;
-            corners.near_origin = cam_pos + cam_forward * kRayNear - right_offset - up_offset;
-            corners.near_x = right_offset * 2.0f;
-            corners.near_y = up_offset * 2.0f;
-            corners.far_origin = cam_pos + cam_forward * kRayFar - right_offset - up_offset;
-            corners.far_x = right_offset * 2.0f;
-            corners.far_y = up_offset * 2.0f;
+            rays.origin = cam_pos + cam_forward * kRayNear - right_offset - up_offset;
+            rays.origin_x = right_offset * 2.0f;
+            rays.origin_y = up_offset * 2.0f;
+            pivot_half_height = half_height;
         } else {
             const float fov_y = 2.0f * std::atan(1.0f / std::abs(projection[1][1]));
             const float aspect = std::abs(projection[1][1] / projection[0][0]);
             const float half_height = std::tan(fov_y * 0.5f);
             const float half_width = half_height * aspect;
-            const glm::vec3 far_center = cam_pos + cam_forward;
             const glm::vec3 right_offset = cam_right * half_width;
             const glm::vec3 up_offset = cam_up * half_height;
-            const glm::vec3 far_bl = far_center - right_offset - up_offset;
-            corners.near_origin = cam_pos;
-            corners.far_origin = far_bl;
-            corners.far_x = (far_center + right_offset - up_offset) - far_bl;
-            corners.far_y = (far_center - right_offset + up_offset) - far_bl;
+            rays.dir = cam_forward - right_offset - up_offset;
+            rays.dir_x = right_offset * 2.0f;
+            rays.dir_y = up_offset * 2.0f;
+            pivot_half_height = glm::length(pivot - cam_pos) * half_height;
         }
-        return corners;
+        rays.floor_radius = kGridFloorRadius * pivot_half_height;
+        return rays;
     }
 
     // Orthographic light frustum enclosing a mesh's world-space bounds, for its shadow map.

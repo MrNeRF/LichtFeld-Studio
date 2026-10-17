@@ -18,6 +18,7 @@
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
@@ -43,6 +44,47 @@
 #include <memory>
 #include <optional>
 #include <span>
+
+namespace lfs::python {
+    // Python's I/O-aware Path supplies a native filename through __fspath__.
+    // Public I/O APIs keep logical paths in metadata and adapt them again only
+    // when opening a file. Other native/device path forms remain unchanged.
+    struct LogicalPath : std::filesystem::path {
+        LogicalPath() = default;
+        LogicalPath(std::filesystem::path input) : std::filesystem::path(std::move(input)) {
+#ifdef _WIN32
+            if (native().starts_with(L"\\\\?\\"))
+                static_cast<std::filesystem::path&>(*this) = core::native_fs::display_path(*this);
+#endif
+        }
+    };
+} // namespace lfs::python
+
+namespace nanobind::detail {
+    template <>
+    struct type_caster<lfs::python::LogicalPath> {
+        using Base = type_caster<std::filesystem::path>;
+        NB_TYPE_CASTER(lfs::python::LogicalPath, Base::Name)
+        bool from_python(handle source, uint8_t flags, cleanup_list* cleanup) noexcept {
+            Base base;
+            if (!base.from_python(source, flags, cleanup))
+                return false;
+            try {
+                value = lfs::python::LogicalPath(std::move(base.value));
+                return true;
+            } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): nanobind's noexcept conversion probe
+                // rejects this overload by returning false; it must not unwind
+                // a C++ path-conversion exception through Python argument dispatch.
+                return false;
+            }
+        }
+        static handle from_cpp(const lfs::python::LogicalPath& path, rv_policy policy,
+                               cleanup_list* cleanup) noexcept {
+            return Base::from_cpp(path, policy, cleanup);
+        }
+    };
+} // namespace nanobind::detail
 
 namespace lfs::python {
 
@@ -324,6 +366,8 @@ namespace lfs::python {
 
     void register_io(nb::module_& m) {
         namespace project = io::project;
+        m.def("native_path", [](const std::filesystem::path& path, const bool force_extended) { return core::path_to_utf8(core::native_fs::native_path(path, force_extended)); }, nb::arg("path"), nb::arg("force_extended") = false, "Return a filename for filesystem I/O, including extended Windows paths. "
+                                                                                                                                                                                                                                      "Use force_extended for recursive operations. Keep the original path for UI, JSON and external commands.");
 
         nb::class_<project::Hash128>(m, "Hash128")
             .def(nb::init<>())
@@ -424,7 +468,7 @@ namespace lfs::python {
             .def(
                 "verify_and_refresh",
                 [](project::ReferencesChapter& value, const std::string& uuid,
-                   const std::filesystem::path& path) {
+                   const LogicalPath& path) {
                     const auto parsed = parse_reference_uuid(uuid);
                     std::optional<lfs::Result<project::FingerprintCheck>> result;
                     {
@@ -437,7 +481,7 @@ namespace lfs::python {
             .def(
                 "relink",
                 [](project::ReferencesChapter& value, const std::string& uuid,
-                   const project::ReferenceLocator& locator, const std::filesystem::path& path,
+                   const project::ReferenceLocator& locator, const LogicalPath& path,
                    const bool accept_content_change) {
                     const auto parsed = parse_reference_uuid(uuid);
                     lfs::Status result;
@@ -452,7 +496,7 @@ namespace lfs::python {
 
         m.def(
             "fingerprint_path",
-            [](const std::filesystem::path& path, const bool include_full_hash) {
+            [](const LogicalPath& path, const bool include_full_hash) {
                 std::optional<lfs::Result<project::ReferenceFingerprint>> result;
                 {
                     nb::gil_scoped_release release;
@@ -465,7 +509,7 @@ namespace lfs::python {
 
         m.def(
             "check_fingerprint",
-            [](const std::filesystem::path& path, const project::ReferenceFingerprint& expected) {
+            [](const LogicalPath& path, const project::ReferenceFingerprint& expected) {
                 std::optional<lfs::Result<project::FingerprintCheck>> result;
                 {
                     nb::gil_scoped_release release;
@@ -773,7 +817,7 @@ namespace lfs::python {
             .def_prop_ro("commit_uuid", [](const project::ProjectHeadIdentity& head) { return head.commit_uuid.to_string(); })
             .def_ro("generation", &project::ProjectHeadIdentity::generation);
 
-        m.def("inspect_project_head", [](const std::filesystem::path& path) {
+        m.def("inspect_project_head", [](const LogicalPath& path) {
             std::optional<lfs::Result<project::ProjectHeadIdentity>> result;
             {
                 nb::gil_scoped_release release;
@@ -781,7 +825,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), "Read the project and commit identity from the head slots without opening the project.");
 
-        m.def("classify_project", [](const std::filesystem::path& path) {
+        m.def("classify_project", [](const LogicalPath& path) {
             std::optional<project::OpenClassification> result;
             {
                 nb::gil_scoped_release release;
@@ -791,7 +835,7 @@ namespace lfs::python {
             }
             return *result; }, nb::arg("path"), "Classify a .licht path without throwing for damaged heads.");
 
-        m.def("project_storage_stats", [](const std::filesystem::path& path) {
+        m.def("project_storage_stats", [](const LogicalPath& path) {
             std::optional<lfs::Result<project::ProjectStorageStats>> result;
             {
                 nb::gil_scoped_release release;
@@ -799,22 +843,22 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"));
 
-        m.def("run_project_operation", [](const std::filesystem::path& path, const std::string& project_uuid, const std::string& commit_uuid, nb::callable operation) {
+        m.def("run_project_operation", [](const LogicalPath& path, const std::string& project_uuid, const std::string& commit_uuid, nb::callable operation) {
             const auto expected_project = parse_reference_uuid(project_uuid);
             const auto expected_commit = commit_uuid.empty() ? lfs::core::Uuid{} : parse_reference_uuid(commit_uuid);
             unwrap(project::run_project_operation(path, expected_project, expected_commit, [&operation] { operation(); })); }, nb::arg("path"), nb::arg("project_uuid"), nb::arg("commit_uuid"), nb::arg("operation"));
 
-        m.def("backup_project_file", [](const std::filesystem::path& path) {
+        m.def("backup_project_file", [](const LogicalPath& path) {
             nb::gil_scoped_release release;
             return unwrap(project::backup_project_file(path)); }, nb::arg("path"));
 
-        m.def("restore_project_backup", [](const std::filesystem::path& path, const std::filesystem::path& backup, const std::string& project_uuid, const std::string& commit_uuid) {
+        m.def("restore_project_backup", [](const LogicalPath& path, const LogicalPath& backup, const std::string& project_uuid, const std::string& commit_uuid) {
             const auto project = parse_reference_uuid(project_uuid);
             const auto commit = parse_reference_uuid(commit_uuid);
             nb::gil_scoped_release release;
             unwrap(project::restore_project_backup(path, backup, project, commit)); }, nb::arg("path"), nb::arg("backup"), nb::arg("project_uuid"), nb::arg("commit_uuid"));
 
-        m.def("inspect_project_card", [](const std::filesystem::path& path) {
+        m.def("inspect_project_card", [](const LogicalPath& path) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
                 nb::gil_scoped_release release;
@@ -822,11 +866,11 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"));
 
-        m.def("project_content_stamp", [](const std::filesystem::path& path) {
+        m.def("project_content_stamp", [](const LogicalPath& path) {
             nb::gil_scoped_release release;
             return project::project_content_stamp(path); }, nb::arg("path"));
 
-        m.def("inspect_project_details", [](const std::filesystem::path& path, const std::uint64_t checkpoint_byte_budget) {
+        m.def("inspect_project_details", [](const LogicalPath& path, const std::uint64_t checkpoint_byte_budget) {
             std::optional<lfs::Result<project::ProjectInspectorDetails>> result;
             {
                 nb::gil_scoped_release release;
@@ -834,7 +878,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("checkpoint_byte_budget") = 8ull * 1024 * 1024);
 
-        m.def("read_preview", [](const std::filesystem::path& path) {
+        m.def("read_preview", [](const LogicalPath& path) {
             std::optional<lfs::Result<std::vector<std::byte>>> result;
             {
                 nb::gil_scoped_release release;
@@ -843,7 +887,7 @@ namespace lfs::python {
             const auto bytes = unwrap(std::move(*result));
             return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("path"));
 
-        m.def("restore_save", [](const std::filesystem::path& path, const std::uint64_t generation, const std::filesystem::path& destination) {
+        m.def("restore_save", [](const LogicalPath& path, const std::uint64_t generation, const LogicalPath& destination) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
                 nb::gil_scoped_release release;
@@ -851,7 +895,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("generation"), nb::arg("destination"));
 
-        m.def("rebind_checkpoint", [](const std::filesystem::path& path, const std::string& checkpoint_instance_uuid) {
+        m.def("rebind_checkpoint", [](const LogicalPath& path, const std::string& checkpoint_instance_uuid) {
             const auto uuid = parse_reference_uuid(checkpoint_instance_uuid);
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
@@ -860,7 +904,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("checkpoint_instance_uuid"));
 
-        m.def("compact_project_file", [](const std::filesystem::path& path, nb::object progress, nb::object cancel) {
+        m.def("compact_project_file", [](const LogicalPath& path, nb::object progress, nb::object cancel) {
             PyProgressCallback progress_callback{std::move(progress)};
             PyCancelCallback cancel_callback{std::move(cancel)};
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
@@ -877,7 +921,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
-        m.def("clean_project_file", [](const std::filesystem::path& path, const std::filesystem::path& destination, const std::string& expected_commit, nb::object progress, nb::object cancel) {
+        m.def("clean_project_file", [](const LogicalPath& path, const LogicalPath& destination, const std::string& expected_commit, nb::object progress, nb::object cancel) {
             const auto expected = expected_commit.empty() ? lfs::core::Uuid{} : parse_reference_uuid(expected_commit);
             PyProgressCallback progress_callback{std::move(progress)};
             PyCancelCallback cancel_callback{std::move(cancel)};
@@ -886,7 +930,7 @@ namespace lfs::python {
                 progress_callback.present ? project::ProjectOperationProgress(progress_callback) : project::ProjectOperationProgress{},
                 cancel_callback.present ? project::ProjectOperationCancel(cancel_callback) : project::ProjectOperationCancel{})); }, nb::arg("path"), nb::arg("destination") = "", nb::arg("expected_commit") = "", nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
-        m.def("plan_reduce_size", [](const std::filesystem::path& path) {
+        m.def("plan_reduce_size", [](const LogicalPath& path) {
             std::optional<lfs::Result<project::ProjectReducePlan>> result;
             {
                 nb::gil_scoped_release release;
@@ -894,7 +938,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"));
 
-        m.def("undo_contents_removal", [](const std::filesystem::path& path, const std::string& id) {
+        m.def("undo_contents_removal", [](const LogicalPath& path, const std::string& id) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
                 nb::gil_scoped_release release;
@@ -902,7 +946,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("id"));
 
-        m.def("reduce_size", [](const std::filesystem::path& path, const nb::dict& options, nb::object progress, nb::object cancel) {
+        m.def("reduce_size", [](const LogicalPath& path, const nb::dict& options, nb::object progress, nb::object cancel) {
             const auto read_option = [&](const char* name, const bool fallback) {
                 return options.contains(name) ? nb::cast<bool>(options[name]) : fallback;
             };
@@ -930,7 +974,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("options") = nb::dict(), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
-        m.def("embed_dataset_file", [](const std::filesystem::path& path, nb::object progress, nb::object cancel) {
+        m.def("embed_dataset_file", [](const LogicalPath& path, nb::object progress, nb::object cancel) {
             PyProgressCallback progress_callback{std::move(progress)};
             PyCancelCallback cancel_callback{std::move(cancel)};
             std::optional<lfs::Result<project::DatasetEmbedResult>> result;
@@ -947,7 +991,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
-        m.def("set_dataset_reference", [](const std::filesystem::path& path, const std::filesystem::path& dataset_dir, const bool accept_content_change) {
+        m.def("set_dataset_reference", [](const LogicalPath& path, const LogicalPath& dataset_dir, const bool accept_content_change) {
             std::optional<lfs::Result<project::DatasetReferenceResult>> result;
             {
                 nb::gil_scoped_release release;
@@ -955,7 +999,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("dataset_dir"), nb::arg("accept_content_change") = false);
 
-        m.def("export_project_as", [](const std::filesystem::path& path, const std::string& format, const std::filesystem::path& destination, nb::object progress, nb::object cancel) {
+        m.def("export_project_as", [](const LogicalPath& path, const std::string& format, const LogicalPath& destination, nb::object progress, nb::object cancel) {
             project::ProjectExportFormat export_format;
             if (format == "ply" || format == "PLY") export_format = project::ProjectExportFormat::Ply;
             else if (format == "sog" || format == "SOG") export_format = project::ProjectExportFormat::Sog;
@@ -978,7 +1022,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("format"), nb::arg("destination"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
-        m.def("repair_project", [](const std::filesystem::path& path, const std::filesystem::path& destination, const std::string& expected_project) {
+        m.def("repair_project", [](const LogicalPath& path, const LogicalPath& destination, const std::string& expected_project) {
             const auto expected = expected_project.empty() ? lfs::core::Uuid{} : parse_reference_uuid(expected_project);
             std::optional<lfs::Result<project::ProjectRepairResult>> result;
             {
@@ -987,7 +1031,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("destination"), nb::arg("expected_project") = "");
 
-        m.def("verify_project_file", [](const std::filesystem::path& path, nb::object progress, nb::object cancel) {
+        m.def("verify_project_file", [](const LogicalPath& path, nb::object progress, nb::object cancel) {
             PyProgressCallback progress_callback{std::move(progress)};
             PyCancelCallback cancel_callback{std::move(cancel)};
             std::optional<lfs::Result<project::ProjectVerificationResult>> result;
@@ -1004,7 +1048,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
-        m.def("set_project_preview", [](const std::filesystem::path& path, const nb::bytes& png) {
+        m.def("set_project_preview", [](const LogicalPath& path, const nb::bytes& png) {
             constexpr std::array<unsigned char, 8> png_signature{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
             if (png.size() != 0) {
                 if (png.size() < png_signature.size() ||
@@ -1028,7 +1072,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("png_bytes"));
 
-        m.def("encode_preview_from_image_file", [](const std::filesystem::path& image_path) {
+        m.def("encode_preview_from_image_file", [](const LogicalPath& image_path) {
             std::optional<lfs::Result<std::vector<std::byte>>> result;
             {
                 nb::gil_scoped_release release;
@@ -1037,7 +1081,7 @@ namespace lfs::python {
             const auto bytes = unwrap(std::move(*result));
             return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("image_path"));
 
-        m.def("encode_preview_from_first_dataset_image", [](const std::filesystem::path& path) {
+        m.def("encode_preview_from_first_dataset_image", [](const LogicalPath& path) {
             std::optional<lfs::Result<std::vector<std::byte>>> result;
             {
                 nb::gil_scoped_release release;
@@ -1046,7 +1090,7 @@ namespace lfs::python {
             const auto bytes = unwrap(std::move(*result));
             return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("path"));
 
-        m.def("encode_preview_from_first_embedded_image", [](const std::filesystem::path& path) {
+        m.def("encode_preview_from_first_embedded_image", [](const LogicalPath& path) {
             std::optional<lfs::Result<std::vector<std::byte>>> result;
             {
                 nb::gil_scoped_release release;
@@ -1055,7 +1099,7 @@ namespace lfs::python {
             const auto bytes = unwrap(std::move(*result));
             return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("path"));
 
-        m.def("inspect_project_thumbnail_sources", [](const std::filesystem::path& path) {
+        m.def("inspect_project_thumbnail_sources", [](const LogicalPath& path) {
             std::optional<lfs::Result<project::ProjectThumbnailSourceAvailability>> result;
             {
                 nb::gil_scoped_release release;
@@ -1063,7 +1107,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"));
 
-        m.def("preview_from_first_dataset_image", [](const std::filesystem::path& path) {
+        m.def("preview_from_first_dataset_image", [](const LogicalPath& path) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
                 nb::gil_scoped_release release;
@@ -1071,7 +1115,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"));
 
-        m.def("preview_from_first_embedded_image", [](const std::filesystem::path& path) {
+        m.def("preview_from_first_embedded_image", [](const LogicalPath& path) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
                 nb::gil_scoped_release release;
@@ -1079,7 +1123,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"));
 
-        m.def("preview_from_image_file", [](const std::filesystem::path& project_path, const std::filesystem::path& image_path) {
+        m.def("preview_from_image_file", [](const LogicalPath& project_path, const LogicalPath& image_path) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
                 nb::gil_scoped_release release;
@@ -1087,7 +1131,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("project_path"), nb::arg("image_path"));
 
-        m.def("set_project_license", [](const std::filesystem::path& path, const std::string& identifier, const std::string& notice) {
+        m.def("set_project_license", [](const LogicalPath& path, const std::string& identifier, const std::string& notice) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
                 nb::gil_scoped_release release;
@@ -1095,7 +1139,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("identifier"), nb::arg("notice") = "");
 
-        m.def("clear_project_license", [](const std::filesystem::path& path) {
+        m.def("clear_project_license", [](const LogicalPath& path) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
                 nb::gil_scoped_release release;
@@ -1103,7 +1147,7 @@ namespace lfs::python {
             }
             return unwrap(std::move(*result)); }, nb::arg("path"));
 
-        m.def("set_project_title", [](const std::filesystem::path& path, const std::string& title) {
+        m.def("set_project_title", [](const LogicalPath& path, const std::string& title) {
             std::optional<lfs::Result<project::ProjectInspectorCard>> result;
             {
                 nb::gil_scoped_release release;
@@ -1113,7 +1157,7 @@ namespace lfs::python {
 
         m.def(
             "inspect_project",
-            [](const std::filesystem::path& path, const bool resolve_preview_fallback) {
+            [](const LogicalPath& path, const bool resolve_preview_fallback) {
                 project::ReaderOptions options;
                 options.allow_unsupported_inspection = true;
                 std::optional<lfs::Result<project::ProjectReader>> opened;
@@ -1225,7 +1269,7 @@ namespace lfs::python {
 
         m.def(
             "load",
-            [](const std::filesystem::path& path, std::optional<std::string> format,
+            [](const LogicalPath& path, std::optional<std::string> format,
                std::optional<int> resize_factor, std::optional<int> max_width,
                std::optional<std::string> images_folder, nb::object progress,
                std::optional<int> min_track_length) -> PyLoadResult {
@@ -1282,7 +1326,7 @@ namespace lfs::python {
 
         m.def(
             "load_point_cloud",
-            [](const std::filesystem::path& path) -> nb::tuple {
+            [](const LogicalPath& path) -> nb::tuple {
                 std::expected<lfs::core::PointCloud, std::string> result;
                 {
                     nb::gil_scoped_release release;
@@ -1303,7 +1347,7 @@ namespace lfs::python {
 
         m.def(
             "save_ply",
-            [](const PySplatData& data, const std::filesystem::path& path, bool binary,
+            [](const PySplatData& data, const LogicalPath& path, bool binary,
                nb::object progress, nb::object extra_attributes, bool include_provenance) {
                 io::PlySaveOptions options;
                 options.output_path = path;
@@ -1334,7 +1378,7 @@ namespace lfs::python {
 
         m.def(
             "save_point_cloud_ply",
-            [](const PyPointCloud& pc, const std::filesystem::path& path, nb::object extra_attributes,
+            [](const PyPointCloud& pc, const LogicalPath& path, nb::object extra_attributes,
                bool include_provenance) {
                 const auto data = pc.retain_data();
                 if (!data)
@@ -1359,7 +1403,7 @@ namespace lfs::python {
 
         m.def(
             "save_sog",
-            [](const PySplatData& data, const std::filesystem::path& path, int kmeans_iterations, bool use_gpu,
+            [](const PySplatData& data, const LogicalPath& path, int kmeans_iterations, bool use_gpu,
                nb::object progress, bool include_provenance) {
                 io::SogSaveOptions options;
                 options.output_path = path;
@@ -1390,7 +1434,7 @@ namespace lfs::python {
 
         m.def(
             "save_ssog",
-            [](const PySplatData& data, const std::filesystem::path& path, int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent,
+            [](const PySplatData& data, const LogicalPath& path, int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent,
                int chunk_min_k, int kmeans_iterations, bool use_gpu,
                nb::object progress, bool include_provenance) {
                 io::SsogSaveOptions options;
@@ -1428,7 +1472,7 @@ namespace lfs::python {
 
         m.def(
             "save_spz",
-            [](const PySplatData& data, const std::filesystem::path& path, int version, bool include_provenance) {
+            [](const PySplatData& data, const LogicalPath& path, int version, bool include_provenance) {
                 io::SpzSaveOptions options;
                 options.output_path = path;
                 options.version = version;
@@ -1450,7 +1494,7 @@ namespace lfs::python {
 
         m.def(
             "save_usd",
-            [](const PySplatData& data, const std::filesystem::path& path, bool include_provenance) {
+            [](const PySplatData& data, const LogicalPath& path, bool include_provenance) {
                 io::UsdSaveOptions options;
                 options.output_path = path;
                 options.provenance = include_provenance ? core::make_provenance_stamp()
@@ -1470,7 +1514,7 @@ namespace lfs::python {
 
         m.def(
             "save_nurec_usdz",
-            [](const PySplatData& data, const std::filesystem::path& path, bool include_provenance) {
+            [](const PySplatData& data, const LogicalPath& path, bool include_provenance) {
                 io::NurecUsdzSaveOptions options;
                 options.output_path = path;
                 options.provenance = include_provenance ? core::make_provenance_stamp()
@@ -1490,7 +1534,7 @@ namespace lfs::python {
 
         m.def(
             "export_html",
-            [](const PySplatData& data, const std::filesystem::path& path, int kmeans_iterations, nb::object progress,
+            [](const PySplatData& data, const LogicalPath& path, int kmeans_iterations, nb::object progress,
                bool include_provenance) {
                 io::HtmlExportOptions options;
                 options.output_path = path;
@@ -1524,7 +1568,7 @@ namespace lfs::python {
 
         m.def(
             "is_dataset_path",
-            [](const std::filesystem::path& path) {
+            [](const LogicalPath& path) {
                 nb::gil_scoped_release release;
                 return io::Loader::isDatasetPath(path);
             },
@@ -1533,9 +1577,15 @@ namespace lfs::python {
 
         m.def(
             "is_gaussian_splat_ply",
-            [](const std::filesystem::path& path) { return io::is_gaussian_splat_ply(path); },
+            [](const LogicalPath& path) { return io::is_gaussian_splat_ply(path); },
             nb::arg("path"),
             "Check if PLY file is a 3D Gaussian splat (has opacity, scale_0, rot_0 properties)");
+
+        m.def(
+            "is_mesh_file",
+            [](const LogicalPath& path) { return io::is_mesh_file(path); },
+            nb::arg("path"),
+            "Check if the loader reads a file as a triangle mesh");
 
         m.def(
             "get_supported_formats", []() {
@@ -1553,7 +1603,7 @@ namespace lfs::python {
 
         m.def(
             "save_image",
-            [](const std::filesystem::path& path, const PyTensor& image, bool include_provenance) {
+            [](const LogicalPath& path, const PyTensor& image, bool include_provenance) {
                 auto t = image.tensor().contiguous().cpu();
                 const auto comment = core::provenance_to_json(
                     include_provenance ? core::make_provenance_stamp()

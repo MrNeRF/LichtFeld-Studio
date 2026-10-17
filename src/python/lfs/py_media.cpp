@@ -126,7 +126,7 @@ namespace lfs::python {
                 nb::gil_scoped_release release;
                 const auto result = MediaIngest::sourceExif(path);
                 if (!result) throw Exception(result.error());
-                return json_detail::dump(json_detail::sourceExif(*result)); }, nb::arg("path"), "Read original JPEG/PNG/primary HEIF EXIF and typed entries as JSON; binary values are hex, MakerNotes opaque.")
+                return json_detail::dump(json_detail::sourceExif(*result)); }, nb::arg("path"), "Read original JPEG/PNG/primary HEIF EXIF, or TIFF decoded tags and observed source ranges as JSON; binary values are hex, MakerNotes opaque.")
             .def_static("codec_build_info", &MediaIngest::codecBuildInfo)
             .def_static("probe", [](const std::filesystem::path& path, bool headers_only, std::int64_t timeout_ms) {
                 ProbeOptions options;

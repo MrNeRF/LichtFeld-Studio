@@ -9,6 +9,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/number_format.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
@@ -46,6 +47,9 @@
 #include "scene/scene_render_state.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/sequencer_controller.hpp"
+#if LFS_BUILD_TRAINER
+#include "training/training_setup.hpp"
+#endif
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -1718,7 +1722,7 @@ namespace lfs::vis::gui {
         cmd::SequencerExportVideo::when([this](const auto& evt) {
             const auto path = evt.path.empty()
                                   ? SaveMp4FileDialog("camera_path")
-                                  : std::filesystem::path(evt.path);
+                                  : lfs::core::utf8_to_path(evt.path);
             if (path.empty())
                 return;
 
@@ -2050,7 +2054,7 @@ namespace lfs::vis::gui {
         publication.path = path;
         publication.format = format;
         try {
-            if (std::filesystem::exists(path) || std::filesystem::is_symlink(path))
+            if (lfs::core::native_fs::exists(path) || lfs::core::native_fs::is_symlink(path))
                 throw std::runtime_error("The gallery preparation directory already exists.");
             auto snapshots = manager->getScene().snapshotVisibleSplats();
             const auto visible = manager->getScene().getVisibleSplatNodeSlots();
@@ -2170,7 +2174,7 @@ namespace lfs::vis::gui {
                 if (cancelled || !error.empty()) {
                     if (owns_directory) {
                         std::error_code ignored;
-                        std::filesystem::remove_all(path, ignored);
+                        lfs::core::native_fs::remove_all(path, ignored);
                     }
                     jobs_.report(job, std::nullopt, cancelled ? "Scene preparation canceled" : "Scene preparation failed", error);
                 } else {
@@ -2962,6 +2966,12 @@ namespace lfs::vis::gui {
 
                     auto loader = lfs::io::Loader::create();
                     auto result = loader->load(path, load_options);
+#if LFS_BUILD_TRAINER
+                    if (result && std::holds_alternative<lfs::io::LoadedScene>(result->data) &&
+                        !stop_token.stop_requested()) {
+                        lfs::training::preloadInitMesh(local_params);
+                    }
+#endif
 
                     if (stop_token.stop_requested()) {
                         return;

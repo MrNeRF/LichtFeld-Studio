@@ -3,7 +3,7 @@
 """File-scoped gallery review, separate from the asset selection and transfers."""
 from copy import deepcopy
 from functools import partial
-from pathlib import Path
+from _lfs_path_io import Path
 
 from .gallery_logging import failure as log_failure
 import lichtfeld as lf

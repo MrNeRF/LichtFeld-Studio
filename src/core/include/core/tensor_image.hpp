@@ -49,14 +49,14 @@ namespace lfs::core {
         const UndistortParams& params, int actual_src_width, int actual_src_height,
         int resize_factor, int max_width);
 
-    // Maps normalized camera coordinates through the encoded camera model.
-    LFS_CORE_API void distort_normalized_point(
-        const UndistortParams& params, float x, float y, float& distorted_x, float& distorted_y);
-
-    // Inverts a distorted image pixel to normalized camera coordinates.
-    LFS_CORE_API bool undistort_image_point(
-        const UndistortParams& params, float image_x, float image_y,
-        float& normalized_x, float& normalized_y);
+    // The first monotonic branch of the radial lens map. Distorted radii from `maximum` on fold
+    // back and have no ray; `bound` is the undistorted radius there (the incidence angle for
+    // fisheye models). Both are infinite when the map never turns.
+    struct UndistortRadialBranch {
+        float bound;
+        float maximum;
+    };
+    LFS_CORE_API UndistortRadialBranch undistort_radial_branch(const UndistortParams& params);
 
     LFS_CORE_API Tensor inverse_distortion_sample_map(const UndistortParams& params, void* stream);
 

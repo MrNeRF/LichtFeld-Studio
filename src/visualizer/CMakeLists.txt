@@ -292,6 +292,7 @@ if(MSVC)
     set_source_files_properties(
             ${CMAKE_CURRENT_SOURCE_DIR}/visualizer_impl.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/project/project_lifecycle.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/project/session_state.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/gui/gui_manager.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/scene/scene_manager.cpp
             PROPERTIES COMPILE_OPTIONS "/bigobj"
@@ -375,7 +376,7 @@ if(LFS_GRAPHICS_VULKAN_BUILD)
 
     add_executable(lfs_shader_compiler EXCLUDE_FROM_ALL tools/shader_compiler.cpp)
     target_compile_features(lfs_shader_compiler PRIVATE cxx_std_23)
-    target_include_directories(lfs_shader_compiler PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(lfs_shader_compiler PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include)
     target_link_libraries(lfs_shader_compiler PRIVATE glslang::glslang glslang::SPIRV
         glslang::glslang-default-resource-limits)
 endif()

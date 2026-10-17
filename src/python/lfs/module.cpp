@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/native_fs.hpp"
 #include "io/apple_reframe.hpp"
 #include "preferences.hpp"
 #include <algorithm>
@@ -199,7 +200,7 @@ namespace {
     // Python path strings are UTF-8. Avoid implicit std::filesystem::path(string)
     // on Windows, which routes through the active ANSI code page.
     std::filesystem::path python_utf8_path(const std::string& value) {
-        return lfs::core::utf8_to_path(value);
+        return lfs::core::native_fs::display_path(lfs::core::utf8_to_path(value));
     }
 
     lfs::Result<void> post_clear_scene_to_viewer(lfs::vis::Visualizer& viewer) {
@@ -977,7 +978,7 @@ NB_MODULE(lichtfeld, m) {
         auto user_packages = lfs::python::get_user_packages_dir();
         nb::module_ sys = nb::module_::import_("sys");
         nb::list path = nb::cast<nb::list>(sys.attr("path"));
-        const std::string pkg_path = lfs::core::path_to_utf8(user_packages);
+        const std::string pkg_path = lfs::core::path_to_native_utf8(user_packages);
         bool found = false;
         for (size_t i = 0; i < path.size(); ++i) {
             if (nb::cast<std::string>(path[i]) == pkg_path) {
@@ -2039,7 +2040,7 @@ NB_MODULE(lichtfeld, m) {
         "create_splat_from_photo", [](const std::string& path) {
             nb::gil_scoped_release release;
             const auto photo = python_utf8_path(path);
-            if (!std::filesystem::is_regular_file(photo))
+            if (!lfs::core::native_fs::is_regular_file(photo))
                 throw std::invalid_argument("Photo does not exist");
             emit_project_cmd_marshaled("python.create_splat_from_photo", [photo] {
                 lfs::core::events::cmd::CreateSplatFromPhoto{.path = photo}.emit();
@@ -3075,6 +3076,18 @@ NB_MODULE(lichtfeld, m) {
         },
         "Frame the selection or the whole scene in the active view.");
     m.def(
+        "go_home", []() {
+            if (auto* const controller = lfs::vis::InputController::instance())
+                controller->goHome();
+        },
+        "Move the active viewport to its home view");
+    m.def(
+        "set_home", []() {
+            if (auto* const controller = lfs::vis::InputController::instance())
+                controller->setHome();
+        },
+        "Make the active viewport's current view its home view");
+    m.def(
         "reset_home", []() {
             if (auto* const controller = lfs::vis::InputController::instance())
                 controller->resetHome();
@@ -3719,7 +3732,7 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "run", [](const std::string& path) {
             const std::filesystem::path script_path = lfs::core::utf8_to_path(path);
-            if (!std::filesystem::exists(script_path)) {
+            if (!lfs::core::native_fs::exists(script_path)) {
                 throw std::runtime_error("Script not found: " + path);
             }
 

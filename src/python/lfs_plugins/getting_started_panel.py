@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Getting Started panel with tutorial videos and documentation links."""
+from _lfs_path_io import native_path, open
 
 import os
 import threading
@@ -43,9 +44,9 @@ def _extract_video_id(url):
 
 
 def _download_thumbnail(video_id, on_done):
-    os.makedirs(_CACHE_DIR, exist_ok=True)
+    os.makedirs(native_path(_CACHE_DIR), exist_ok=True)
     path = os.path.join(_CACHE_DIR, f"{video_id}.jpg")
-    if os.path.exists(path):
+    if os.path.exists(native_path(path)):
         on_done(video_id, path)
         return
     try:

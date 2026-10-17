@@ -4,6 +4,7 @@
  */
 
 #include "io/project_recovery.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -295,13 +296,13 @@ namespace lfs::io::project {
             const auto backup_prefix = lfs::core::path_to_utf8(temp_stem) +
                                        (shortened ? ".replace-backup-short." : ".replace-backup.");
             for (std::filesystem::directory_iterator
-                     iterator(detail::project_fs::native_path(directory), error),
+                     iterator(detail::project_fs::traversal_path(directory), error),
                  end;
                  !error && iterator != end;
                  iterator.increment(error)) {
                 const auto filename =
                     lfs::core::path_to_utf8(
-                        detail::project_fs::display_path(iterator->path()).filename());
+                        detail::project_fs::entry_path(directory, iterator->path()).filename());
                 const auto suffix =
                     ".tmp" + extension;
                 if (starts_and_ends(
@@ -313,7 +314,7 @@ namespace lfs::io::project {
                     starts_and_ends(filename, stem + ".project-write.", suffix) ||
                     starts_and_ends(filename, stem + ".replace-backup.", suffix)) {
                     result.push_back(
-                        detail::project_fs::display_path(iterator->path()));
+                        detail::project_fs::entry_path(directory, iterator->path()));
                 }
             }
             std::ranges::sort(result);
@@ -343,18 +344,18 @@ namespace lfs::io::project {
                     master_path.extension());
             std::error_code error;
             for (std::filesystem::directory_iterator
-                     iterator(detail::project_fs::native_path(directory), error),
+                     iterator(detail::project_fs::traversal_path(directory), error),
                  end;
                  !error && iterator != end;
                  iterator.increment(error)) {
                 const auto filename =
                     lfs::core::path_to_utf8(
-                        detail::project_fs::display_path(iterator->path()).filename());
+                        detail::project_fs::entry_path(directory, iterator->path()).filename());
                 if (starts_and_ends(
                         filename, prefix, suffix) ||
                     starts_and_ends(filename, lfs::core::path_to_utf8(master_path.stem()) + ".recovery-session.", suffix)) {
                     result.push_back(
-                        detail::project_fs::display_path(iterator->path()));
+                        detail::project_fs::entry_path(directory, iterator->path()));
                 }
             }
             return result;
@@ -553,7 +554,10 @@ namespace lfs::io::project {
                 master_path.stem());
             const auto published = lfs::core::path_to_utf8(
                 master_path.filename());
-            return filename.starts_with(published) ||
+            const auto bounded = lfs::core::path_to_utf8(
+                detail::project_artifact_path(master_path, ".corrupt-00000000000000000000-32").filename());
+            const auto bounded_prefix = bounded.substr(0, bounded.find(".corrupt-"));
+            return filename.starts_with(bounded_prefix + ".corrupt-") || filename.starts_with(published) ||
                    filename.starts_with(stem);
         }
 
@@ -697,8 +701,7 @@ namespace lfs::io::project {
         void try_remove_unheld_artifact(
             const std::filesystem::path& data_path,
             const bool remove_data) {
-            auto lock_path = data_path;
-            lock_path += ".lock";
+            const auto lock_path = detail::project_lock_path(data_path);
             std::error_code exists_error;
             const bool lock_existed =
                 detail::project_fs::exists(
@@ -845,9 +848,7 @@ namespace lfs::io::project {
 
     std::filesystem::path autosave_sidecar_path(
         const std::filesystem::path& master_path) {
-        auto result = master_path;
-        result += ".autosave";
-        return result;
+        return detail::project_artifact_path(master_path, ".autosave");
     }
 
     std::filesystem::path scratch_autosave_path(
@@ -918,26 +919,14 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::filesystem::path>
-    quarantine_project_artifact(
-        const std::filesystem::path& source) {
-        const auto unix_seconds =
-            std::chrono::duration_cast<
-                std::chrono::seconds>(
-                std::chrono::system_clock::now()
-                    .time_since_epoch())
-                .count();
-        auto aside = source;
-        aside += std::format(
-            ".corrupt-{}", unix_seconds);
+    detail::quarantine_project_artifact_with_suffix(
+        const std::filesystem::path& source, const std::string& suffix) {
         constexpr int kMaxDisambiguators = 32;
         for (int attempt = 0;
              attempt <= kMaxDisambiguators;
              ++attempt) {
-            auto candidate = aside;
-            if (attempt > 0) {
-                candidate += std::format(
-                    "-{}", attempt);
-            }
+            const auto candidate = detail::project_artifact_path(
+                source, attempt == 0 ? suffix : suffix + std::format("-{}", attempt));
             std::error_code exists_error;
             if (detail::project_fs::exists(
                     candidate, exists_error) &&
@@ -957,6 +946,15 @@ namespace lfs::io::project {
             "A corrupt project artifact could not be quarantined.",
             "no unused .corrupt-* aside name was available",
             "recovery.quarantine");
+    }
+
+    lfs::Result<std::filesystem::path>
+    quarantine_project_artifact(const std::filesystem::path& source) {
+        const auto unix_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                                      std::chrono::system_clock::now().time_since_epoch())
+                                      .count();
+        return detail::quarantine_project_artifact_with_suffix(
+            source, std::format(".corrupt-{}", unix_seconds));
     }
 
     void sweep_orphan_project_artifacts(
@@ -979,12 +977,12 @@ namespace lfs::io::project {
         std::vector<std::filesystem::path> write_temps;
         std::error_code error;
         for (std::filesystem::directory_iterator
-                 iterator(detail::project_fs::native_path(directory), error),
+                 iterator(detail::project_fs::traversal_path(directory), error),
              end;
              !error && iterator != end;
              iterator.increment(error)) {
             std::error_code type_error;
-            const auto entry = detail::project_fs::display_path(iterator->path());
+            const auto entry = detail::project_fs::entry_path(directory, iterator->path());
             const auto filename =
                 lfs::core::path_to_utf8(
                     entry.filename());
@@ -1019,12 +1017,12 @@ namespace lfs::io::project {
         std::vector<std::filesystem::path> corrupt_asides;
         error.clear();
         for (std::filesystem::directory_iterator
-                 iterator(detail::project_fs::native_path(directory), error),
+                 iterator(detail::project_fs::traversal_path(directory), error),
              end;
              !error && iterator != end;
              iterator.increment(error)) {
             std::error_code type_error;
-            const auto entry = detail::project_fs::display_path(iterator->path());
+            const auto entry = detail::project_fs::entry_path(directory, iterator->path());
             const auto filename =
                 lfs::core::path_to_utf8(
                     entry.filename());
@@ -1064,7 +1062,7 @@ namespace lfs::io::project {
             ".tmp" + lfs::core::path_to_utf8(
                          master_path.extension());
         const auto master_lock_name =
-            master_name + ".lock";
+            lfs::core::path_to_utf8(detail::project_lock_path(master_path).filename());
 
         std::vector<std::filesystem::path> saveas_data;
         std::vector<std::filesystem::path> write_temp_data;
@@ -1074,7 +1072,7 @@ namespace lfs::io::project {
             unreferenced_write_temps;
         std::error_code error;
         for (std::filesystem::directory_iterator
-                 iterator(detail::project_fs::native_path(directory), error),
+                 iterator(detail::project_fs::traversal_path(directory), error),
              end;
              !error && iterator != end;
              iterator.increment(error)) {
@@ -1084,13 +1082,17 @@ namespace lfs::io::project {
                 type_error) {
                 continue;
             }
-            const auto entry = detail::project_fs::display_path(iterator->path());
+            const auto entry = detail::project_fs::entry_path(directory, iterator->path());
             const auto filename =
                 lfs::core::path_to_utf8(
                     entry.filename());
             if (filename == master_lock_name) {
                 continue;
             }
+            // A shortened lock key does not encode a reversible master name.
+            // Only its known master may reclaim it.
+            if (filename.starts_with(".lfs-artifact-") && filename.ends_with(".lock"))
+                continue;
             const auto data =
                 path_without_lock_suffix(entry);
             const auto data_name =
@@ -1163,8 +1165,7 @@ namespace lfs::io::project {
         }
 
         std::error_code lock_exists_error;
-        auto master_lock_path = master_path;
-        master_lock_path += ".lock";
+        const auto master_lock_path = detail::project_lock_path(master_path);
         const bool master_lock_existed =
             reclaim_master_lock &&
             detail::project_fs::exists(
@@ -1238,8 +1239,7 @@ namespace lfs::io::project {
                 return removed;
             }
         }
-        auto lock_path = scratch_path;
-        lock_path += ".lock";
+        const auto lock_path = detail::project_lock_path(scratch_path);
         std::error_code ignored;
         detail::project_fs::remove(lock_path, ignored);
         return {};
@@ -1340,7 +1340,7 @@ namespace lfs::io::project {
         }
         std::vector<std::filesystem::path> candidates;
         for (std::filesystem::directory_iterator
-                 iterator(detail::project_fs::native_path(recovery_directory), error),
+                 iterator(detail::project_fs::traversal_path(recovery_directory), error),
              end;
              !error && iterator != end;
              iterator.increment(error)) {
@@ -1349,7 +1349,7 @@ namespace lfs::io::project {
                 type_error) {
                 continue;
             }
-            const auto entry = detail::project_fs::display_path(iterator->path());
+            const auto entry = detail::project_fs::entry_path(recovery_directory, iterator->path());
             const auto filename =
                 lfs::core::path_to_utf8(
                     entry.filename());
@@ -1396,7 +1396,7 @@ namespace lfs::io::project {
             return result;
         }
         for (std::filesystem::directory_iterator
-                 iterator(detail::project_fs::native_path(recovery_directory), error),
+                 iterator(detail::project_fs::traversal_path(recovery_directory), error),
              end;
              !error && iterator != end;
              iterator.increment(error)) {
@@ -1405,7 +1405,7 @@ namespace lfs::io::project {
                 type_error) {
                 continue;
             }
-            const auto entry = detail::project_fs::display_path(iterator->path());
+            const auto entry = detail::project_fs::entry_path(recovery_directory, iterator->path());
             if (!is_scratch_autosave_path(
                     entry, recovery_directory)) {
                 continue;

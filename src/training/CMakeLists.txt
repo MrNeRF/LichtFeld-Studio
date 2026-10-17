@@ -283,6 +283,7 @@ target_link_libraries(lfs_training
     PRIVATE
         lfs_preprocessing       # MoGe-2 normal auto-generate
         lfs_python_utils
+        lfs_rendering           # Mesh2Splat for mesh initialization
 )
 if(LFS_TENSOR_VULKAN)
     add_subdirectory(vulkan)

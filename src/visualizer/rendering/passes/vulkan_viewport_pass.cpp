@@ -83,13 +83,14 @@ namespace lfs::vis {
         struct GridUniform {
             glm::mat4 view_projection{1.0f};
             glm::vec4 view_position_plane{0.0f};
-            glm::vec4 opacity_padding{0.0f};
-            glm::vec4 near_origin{0.0f};
-            glm::vec4 near_x{0.0f};
-            glm::vec4 near_y{0.0f};
-            glm::vec4 far_origin{0.0f};
-            glm::vec4 far_x{0.0f};
-            glm::vec4 far_y{0.0f};
+            glm::vec4 opacity_ortho{0.0f};
+            glm::vec4 pivot_radius{0.0f};
+            glm::vec4 ray_origin{0.0f};
+            glm::vec4 ray_origin_x{0.0f};
+            glm::vec4 ray_origin_y{0.0f};
+            glm::vec4 ray_dir{0.0f};
+            glm::vec4 ray_dir_x{0.0f};
+            glm::vec4 ray_dir_y{0.0f};
         };
 
         struct GridPush {
@@ -1879,18 +1880,20 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] static GridUniform makeGridUniform(const VulkanViewportGridOverlay& grid) {
-            const auto corners = gridFrustumCorners(grid.view, grid.projection, grid.orthographic);
+            const auto rays = gridRays(grid.view, grid.projection, grid.pivot, grid.orthographic);
             GridUniform uniform{};
             uniform.view_projection = grid.view_projection;
             uniform.view_position_plane = glm::vec4(grid.view_position,
                                                     static_cast<float>(std::clamp(grid.plane, 0, 2)));
-            uniform.opacity_padding = glm::vec4(std::clamp(grid.opacity, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f);
-            uniform.near_origin = glm::vec4(corners.near_origin, 0.0f);
-            uniform.near_x = glm::vec4(corners.near_x, 0.0f);
-            uniform.near_y = glm::vec4(corners.near_y, 0.0f);
-            uniform.far_origin = glm::vec4(corners.far_origin, 0.0f);
-            uniform.far_x = glm::vec4(corners.far_x, 0.0f);
-            uniform.far_y = glm::vec4(corners.far_y, 0.0f);
+            uniform.opacity_ortho = glm::vec4(std::clamp(grid.opacity, 0.0f, 1.0f), grid.orthographic ? 1.0f : 0.0f,
+                                              0.0f, 0.0f);
+            uniform.pivot_radius = glm::vec4(grid.pivot, rays.floor_radius);
+            uniform.ray_origin = glm::vec4(rays.origin, 0.0f);
+            uniform.ray_origin_x = glm::vec4(rays.origin_x, 0.0f);
+            uniform.ray_origin_y = glm::vec4(rays.origin_y, 0.0f);
+            uniform.ray_dir = glm::vec4(rays.dir, 0.0f);
+            uniform.ray_dir_x = glm::vec4(rays.dir_x, 0.0f);
+            uniform.ray_dir_y = glm::vec4(rays.dir_y, 0.0f);
             return uniform;
         }
 
@@ -1912,6 +1915,7 @@ namespace lfs::vis {
                 .projection = params.grid_projection,
                 .view_projection = params.grid_view_projection,
                 .view_position = params.grid_view_position,
+                .pivot = params.grid_pivot,
                 .plane = params.grid_plane,
                 .opacity = params.grid_opacity,
                 .orthographic = params.grid_orthographic,

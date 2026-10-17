@@ -476,6 +476,11 @@ if(MSVC)
     unset(_lfs_language)
 endif()
 
+# native_fs relies on MSVC's lexically_relative fix for \\?\ paths (LWG 3699, VS 2022 17.4).
+if(MSVC AND MSVC_VERSION LESS 1934)
+    message(FATAL_ERROR "LichtFeld Studio needs Visual Studio 2022 17.4 or newer, found MSVC ${MSVC_VERSION}")
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 

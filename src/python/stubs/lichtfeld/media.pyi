@@ -728,7 +728,7 @@ class MediaIngest:
     @staticmethod
     def source_exif_json(path: str | os.PathLike) -> str:
         """
-        Read original JPEG/PNG/primary HEIF EXIF and typed entries as JSON; binary values are hex, MakerNotes opaque.
+        Read original JPEG/PNG/primary HEIF EXIF, or TIFF decoded tags and observed source ranges as JSON; binary values are hex, MakerNotes opaque.
         """
 
     @staticmethod

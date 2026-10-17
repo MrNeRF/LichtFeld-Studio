@@ -2562,7 +2562,7 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Path to a splat file or SSOG directory"}}}},
                     .required = {"path"}}},
             [viewer](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
 
                 auto result = post_and_wait(viewer, [viewer, path]() {
                     return viewer->loadPLY(path);
@@ -4100,7 +4100,7 @@ namespace lfs::app {
                         {"apply_modifiers", json{{"type", "boolean"}, {"default", true}, {"description", "Export the evaluated Node Editor payload; false exports the stored payload"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
                 const bool apply_modifiers = args.value("apply_modifiers", true);
@@ -4147,7 +4147,7 @@ namespace lfs::app {
                         {"apply_modifiers", json{{"type", "boolean"}, {"default", true}, {"description", "Export the evaluated Node Editor payload; false exports the stored payload"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
                 const bool apply_modifiers = args.value("apply_modifiers", true);
@@ -4203,7 +4203,7 @@ namespace lfs::app {
                         {"apply_modifiers", json{{"type", "boolean"}, {"default", true}, {"description", "Export the evaluated Node Editor payload; false exports the stored payload"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
                 const bool apply_modifiers = args.value("apply_modifiers", true);
@@ -4262,7 +4262,7 @@ namespace lfs::app {
                         {"apply_modifiers", json{{"type", "boolean"}, {"default", true}, {"description", "Export the evaluated Node Editor payload; false exports the stored payload"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
                 const bool apply_modifiers = args.value("apply_modifiers", true);
@@ -4311,7 +4311,7 @@ namespace lfs::app {
                         {"apply_modifiers", json{{"type", "boolean"}, {"default", true}, {"description", "Export the evaluated Node Editor payload; false exports the stored payload"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
                 const bool apply_modifiers = args.value("apply_modifiers", true);
@@ -4360,7 +4360,7 @@ namespace lfs::app {
                         {"apply_modifiers", json{{"type", "boolean"}, {"default", true}, {"description", "Export the evaluated Node Editor payload; false exports the stored payload"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
                 const bool apply_modifiers = args.value("apply_modifiers", true);
@@ -4409,7 +4409,7 @@ namespace lfs::app {
                         {"apply_modifiers", json{{"type", "boolean"}, {"default", true}, {"description", "Export the evaluated Node Editor payload; false exports the stored payload"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
                 const bool apply_modifiers = args.value("apply_modifiers", true);
@@ -4458,7 +4458,7 @@ namespace lfs::app {
                         {"apply_modifiers", json{{"type", "boolean"}, {"default", true}, {"description", "Export the evaluated Node Editor payload; false exports the stored payload"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
                 const bool apply_modifiers = args.value("apply_modifiers", true);
@@ -4502,7 +4502,7 @@ namespace lfs::app {
                         {"format", json{{"type", "string"}, {"description", "Output format: auto, binary, or text"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto source_arg = optional_string_arg(args, "source_path");
                 const auto format = parse_colmap_write_format(args.value("format", "auto"));
 

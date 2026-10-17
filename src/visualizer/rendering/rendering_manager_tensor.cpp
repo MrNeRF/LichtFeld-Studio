@@ -374,6 +374,7 @@ namespace lfs::vis {
                                context.scene_manager->getTrainerManager()->isRunning(),
             .depth_window_drag_preview = depthWindowDragPreview(context.view),
             .gaussian_selection_visible = gaussian_selection_visible_,
+            .exact_surface_picking = exact_surface_picking_,
             .cursor_preview = view.viewport_overlay_service_.cursorPreview(),
             .gizmo = gizmo_state_,
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
@@ -394,7 +395,10 @@ namespace lfs::vis {
             view.viewport_interaction_context_.updatePickContext(panels);
         }
 
-        if (!has_model && !has_points) {
+        const bool ply_split_pairs_models =
+            splitViewUsesPLYComparison(frame_settings.split_view_mode) &&
+            plyComparisonNodes(context.scene_manager->getScene()).size() >= 2;
+        if (!has_model && !has_points && !ply_split_pairs_models) {
             // Meshes only: the compositor draws them over the background.
             view.dirty_mask_.exchange(0, std::memory_order_acq_rel);
             clearViewportImageState(view, size);
@@ -561,7 +565,8 @@ namespace lfs::vis {
             const auto publish_split = [&](ViewportSplitView split,
                                            lfs::rendering::FrameMetadata metadata,
                                            SplitViewInfo info,
-                                           std::optional<GTPresentedView> gt_view = std::nullopt) {
+                                           std::optional<GTPresentedView> gt_view = std::nullopt,
+                                           ViewportMeshPassDesc meshes = {}) {
                 if (environmentBackgroundUsesTransparentViewerCompositing(frame_settings)) {
                     const auto environment = buildViewportEnvironment(frame_context, frame_settings, true, environment_map_path);
                     split.left.environment = environment;
@@ -587,7 +592,7 @@ namespace lfs::vis {
                     [capture, size] { return composeSplitViewCpuImage(cpuSplitViewDesc(capture), size); },
                     metadata, size);
                 view.viewport_environment_ = view.split_view_.left.environment;
-                view.viewport_meshes_ = {};
+                view.viewport_meshes_ = std::move(meshes);
                 initialized_ = true;
                 return ViewportFrameResult{
                     .image = view.split_view_.left.image,
@@ -604,37 +609,51 @@ namespace lfs::vis {
 
             if (splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
                 const auto& scene = context.scene_manager->getScene();
-                const auto visible_nodes = scene.getVisibleSplatNodeSlots();
+                const auto visible_nodes = plyComparisonNodes(scene);
                 const auto pair = plyComparisonPairForOffset(visible_nodes.size(), frame_settings.split_view_offset);
                 if (!pair)
-                    return keep_previous("PLY comparison requires at least two visible Gaussian models");
-                const auto& left_slot = visible_nodes[pair->first];
-                const auto& right_slot = visible_nodes[pair->second];
-                if (!left_slot.node || !right_slot.node ||
-                    !hasRenderableGaussians(left_slot.node->model.get()) ||
-                    !hasRenderableGaussians(right_slot.node->model.get())) {
+                    return keep_previous("PLY comparison requires at least two visible models");
+                const auto& left_node = visible_nodes[pair->first];
+                const auto& right_node = visible_nodes[pair->second];
+                const auto renderable = [](const PlyComparisonNode& entry) {
+                    return entry.node && (!entry.splat_slot || hasRenderableGaussians(entry.node->model.get()));
+                };
+                if (!renderable(left_node) || !renderable(right_node))
                     return keep_previous("PLY comparison render slots are unavailable");
-                }
                 const auto layouts = makePlyComparisonPanelLayouts(render_size.x, frame_settings.split_position);
                 const auto output_layouts = makePlyComparisonPanelLayouts(size.x, frame_settings.split_position);
-                SceneRenderState left_state = scene_state;
-                SceneRenderState right_state = scene_state;
-                scopeSceneRenderStateToVisibleSplatNode(
-                    left_state, scene, *left_slot.node, static_cast<int>(left_slot.slot_index),
-                    scene_coords::nodeVisualizerWorldTransform(scene, left_slot.node->id));
-                scopeSceneRenderStateToVisibleSplatNode(
-                    right_state, scene, *right_slot.node, static_cast<int>(right_slot.slot_index),
-                    scene_coords::nodeVisualizerWorldTransform(scene, right_slot.node->id));
-                auto left = render_panel(*left_slot.node->model, std::move(left_state),
-                                         {std::max(layouts[0].panel.width, 1), render_size.y},
-                                         view.split_left_render_target_, std::nullopt,
-                                         SplitViewPanelId::Left,
-                                         {layouts[0].panel.x, 0}, size);
-                auto right = render_panel(*right_slot.node->model, std::move(right_state),
-                                          {std::max(layouts[1].panel.width, 1), render_size.y},
-                                          view.split_right_render_target_, std::nullopt,
-                                          SplitViewPanelId::Right,
-                                          {layouts[1].panel.x, 0}, size);
+                // A mesh side renders no Gaussians: its panel is the background
+                // and the mesh pass draws the mesh into that side only.
+                const glm::vec4 background{
+                    frame_settings.background_color,
+                    environmentBackgroundUsesTransparentViewerCompositing(frame_settings) ? 0.0f : 1.0f};
+                if (!mesh_only_split_background_ ||
+                    glm::any(glm::notEqual(mesh_only_split_background_color_, background))) {
+                    mesh_only_split_background_ = ensureGpuDisplayTensor(std::make_shared<lfs::core::Tensor>(
+                        lfs::core::Tensor::from_vector({background.r, background.g, background.b, background.a},
+                                                       {4, 1, 1}, lfs::core::Device::CPU)));
+                    mesh_only_split_background_color_ = background;
+                }
+                const auto render_side = [&](const PlyComparisonNode& entry, const std::size_t index,
+                                             const SplitViewPanelId panel_id, const RenderTargetId target)
+                    -> std::expected<PanelOutput, std::string> {
+                    if (!entry.splat_slot) {
+                        lfs::rendering::FrameMetadata metadata{};
+                        metadata.viewer_backend = lfs::rendering::ViewerBackend::Metal;
+                        metadata.valid = true;
+                        return PanelOutput{.image = mesh_only_split_background_, .metadata = std::move(metadata)};
+                    }
+                    SceneRenderState state = scene_state;
+                    scopeSceneRenderStateToVisibleSplatNode(
+                        state, scene, *entry.node, static_cast<int>(*entry.splat_slot),
+                        scene_coords::nodeVisualizerWorldTransform(scene, entry.node->id));
+                    return render_panel(*entry.node->model, std::move(state),
+                                        {std::max(layouts[index].panel.width, 1), render_size.y},
+                                        target, std::nullopt, panel_id,
+                                        {layouts[index].panel.x, 0}, size);
+                };
+                auto left = render_side(left_node, 0, SplitViewPanelId::Left, view.split_left_render_target_);
+                auto right = render_side(right_node, 1, SplitViewPanelId::Right, view.split_right_render_target_);
                 if (!left || !right) {
                     return keep_previous(std::format(
                         "PLY comparison panel rendering failed (left: {}; right: {})",
@@ -667,15 +686,30 @@ namespace lfs::vis {
                     split.right.texcoord_scale = layouts[1].texcoord_scale;
                     split.right.texcoord_offset = layouts[1].texcoord_offset;
                 }
+                // Each side draws only its own mesh through the full-viewport camera.
+                auto meshes = buildViewportMeshes(frame_context, frame_settings);
+                if (!meshes.items.empty()) {
+                    const ViewportMeshPanel panel{.view_projection = meshes.view_projection,
+                                                  .camera_position = meshes.camera_position,
+                                                  .camera_backward = meshes.camera_backward,
+                                                  .full_viewport_projection = true};
+                    meshes.panels = {panel, panel};
+                    meshes.panels[0].end_position = std::clamp(frame_settings.split_position, 0.0f, 1.0f);
+                    meshes.panels[1].start_position = meshes.panels[0].end_position;
+                    for (auto& item : meshes.items)
+                        item.panel_mask = (item.mesh == left_node.mesh ? 1u : 0u) |
+                                          (item.mesh == right_node.mesh ? 2u : 0u);
+                }
                 view.consumed_temporal_camera_cut_generation_ = temporal_camera_cut_generation;
                 complete_temporal_frame();
                 return publish_split(
                     std::move(split), makeSplitMetadata(left->metadata, right->metadata, frame_settings.split_position),
                     {.enabled = true,
                      .mode_label = "Split View",
-                     .detail_label = std::format("{} | {}", left_slot.node->name, right_slot.node->name),
-                     .left_name = left_slot.node->name,
-                     .right_name = right_slot.node->name});
+                     .detail_label = std::format("{} | {}", left_node.node->name, right_node.node->name),
+                     .left_name = left_node.node->name,
+                     .right_name = right_node.node->name},
+                    std::nullopt, std::move(meshes));
             }
 
             auto& scene = context.scene_manager->getScene();

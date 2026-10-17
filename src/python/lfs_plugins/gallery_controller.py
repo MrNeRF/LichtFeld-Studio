@@ -7,7 +7,7 @@ import uuid
 import time
 import threading
 import copy
-from pathlib import Path
+from _lfs_path_io import Path
 
 import lichtfeld as lf
 from .gallery_messages import tr, localize_message
