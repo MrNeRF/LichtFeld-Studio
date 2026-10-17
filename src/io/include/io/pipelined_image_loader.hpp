@@ -23,6 +23,7 @@
 #include <queue>
 #include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -281,6 +282,7 @@ namespace lfs::io {
 
     private:
         friend struct PipelinedImageLoaderTestAccess;
+        friend struct PipelinedPreparedCacheTestAccess;
 
         struct PrefetchedImage {
             size_t sequence_id;
@@ -455,10 +457,12 @@ namespace lfs::io {
         lfs::core::Tensor decode_portable_rgb(const std::filesystem::path& path,
                                               const LoadParams& params,
                                               lfs::core::TensorUpload& upload,
-                                              const std::vector<uint8_t>* encoded = nullptr) const;
+                                              const std::vector<uint8_t>* encoded = nullptr);
+        void cache_portable_prepared_image(const std::string& key, const lfs::core::Tensor& image,
+                                           size_t max_output_bytes = 64u << 20);
+        void warn_portable_cache_failure(std::string_view message);
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
-        std::string prepared_cpu_cache_prefix() const;
         bool decodes_16bit(const LoadParams& params) const { return config_.use_16bit_color || params.decode_16bit; }
         bool decodes_float(const std::filesystem::path& path, const LoadParams& params) const;
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
@@ -624,6 +628,7 @@ namespace lfs::io {
         // expensive portable preparation bounded while CPU decoding stays parallel.
         mutable std::mutex portable_large_prepare_mutex_;
         mutable bool portable_large_prepare_logged_ = false;
+        std::atomic<bool> portable_cache_warning_logged_{false};
 
         mutable std::mutex stats_mutex_;
         mutable CacheStats stats_;

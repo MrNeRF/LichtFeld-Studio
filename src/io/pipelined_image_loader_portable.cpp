@@ -3,6 +3,7 @@
 
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -203,47 +204,93 @@ namespace lfs::io {
 
     } // namespace
 
+    void PipelinedImageLoader::warn_portable_cache_failure(const std::string_view message) {
+        if (!portable_cache_warning_logged_.exchange(true))
+            LOG_WARN("[PipelinedImageLoader] Optional prepared JPEG cache unavailable: {}; continuing with source image preparation", message);
+    }
+
+    void PipelinedImageLoader::cache_portable_prepared_image(
+        const std::string& key, const Tensor& image, const size_t max_output_bytes) {
+        // Cache failure must never replace or invalidate the already prepared image.
+        try {
+            // Match the existing derived RGB cache: truncate normalized floats
+            // to bytes and preserve full chroma at the configured JPEG quality.
+            auto pixels = (image.dtype() == DataType::UInt8
+                               ? image
+                               : image.mul(255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8))
+                              .to_pageable_host();
+            const size_t width = pixels.shape()[2], height = pixels.shape()[1];
+            const size_t plane = width * height;
+            std::vector<uint8_t> interleaved(pixels.numel());
+            const auto* src = pixels.ptr<uint8_t>();
+            for (size_t i = 0; i < plane; ++i)
+                for (size_t ch = 0; ch < 3; ++ch)
+                    interleaved[i * 3 + ch] = src[ch * plane + i];
+            lfs::core::image_codecs::JpegEncodeOptions options;
+            options.quality = config_.cache_jpeg_quality;
+            options.full_chroma = true;
+            options.max_output_bytes = max_output_bytes;
+            std::vector<uint8_t> bytes;
+            const auto status = lfs::core::image_codecs::encode_jpeg_memory(
+                interleaved, static_cast<int>(width), static_cast<int>(height), 3,
+                width * 3, bytes, options);
+            if (!status) {
+                warn_portable_cache_failure(status.error().detail());
+                return;
+            }
+            put_in_jpeg_cache(key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
+        } catch (const std::exception& e) {
+            warn_portable_cache_failure(e.what());
+        }
+    }
+
     lfs::core::Tensor PipelinedImageLoader::decode_portable_rgb(
         const std::filesystem::path& path,
         const LoadParams& params,
         lfs::core::TensorUpload& upload,
-        const std::vector<uint8_t>* const encoded) const {
-        // Preserve the exact prepared pixels of expensive portable warps in host
-        // memory using CacheLoader's existing CPU cache and memory policy.
-        // Each consumer still owns a fresh asynchronous device upload.
-        const bool prepared_backend = config_.backend == lfs::core::GpuBackend::Vulkan ||
-                                      config_.backend == lfs::core::GpuBackend::Metal;
-        std::string prepared_key;
-        const size_t prepared_budget = prepared_backend && params.undistort &&
-                                               CacheLoader::getInstance(true).cpu_image_cache_enabled()
-                                           ? std::min({config_.max_cache_bytes / 2,
-                                                       get_total_physical_memory() / 8,
-                                                       size_t{16} * 1024 * 1024 * 1024})
-                                           : 0;
-        if (prepared_backend && params.undistort &&
-            !params.skip_blob_cache && !params.masked_fill && prepared_budget) {
-            std::error_code ec;
-            const auto stamp = std::filesystem::last_write_time(path, ec);
-            if (!ec) {
-                const auto bytes = std::filesystem::file_size(path, ec);
-                if (!ec)
-                    prepared_key = prepared_cpu_cache_prefix() + make_cache_key(path, params) + ":prepared:" +
-                                   std::to_string(params.output_uint8) + ":" +
-                                   std::to_string(static_cast<int64_t>(stamp.time_since_epoch().count())) + ":" + std::to_string(bytes);
-            }
-            const Tensor cached = CacheLoader::getInstance(true).find_cpu_image(prepared_key);
-            if (cached.is_valid())
-                return to_device(upload, cached);
-        }
+        const std::vector<uint8_t>* const encoded) {
         {
             std::lock_guard stats_lock(stats_mutex_);
             ++stats_.cpu_decode_calls;
+        }
+        // Only 8-bit RGB warps use the lossy derived JPEG policy. Evaluation,
+        // high-precision sources and mask filling retain their original path.
+        std::string prepared_key;
+        if (params.undistort && !params.skip_blob_cache && !params.masked_fill &&
+            !decodes_16bit(params) && !params.decode_float) {
+            try {
+                prepared_key = make_cache_key(path, params);
+                const auto cached = prepared_key.empty() ? nullptr : load_cached_jpeg_blob(prepared_key);
+                if (cached) {
+                    auto [data, width, height, channels] = lfs::core::load_image_from_memory(cached->data(), cached->size(), 1, 0);
+                    if (!data)
+                        throw std::runtime_error("invalid prepared JPEG bytes");
+                    auto host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
+                    const auto grid = lfs::core::compute_undistort_grid(*params.undistort, params.resize_factor, params.max_width);
+                    if (channels != 3 || width != grid.width || height != grid.height)
+                        throw std::runtime_error("prepared JPEG dimensions do not match the requested warp");
+                    auto image = to_device(upload, host);
+                    if (!params.output_uint8)
+                        image = image.to(DataType::Float32).mul(UINT8_SCALE);
+                    {
+                        std::lock_guard stats_lock(stats_mutex_);
+                        ++stats_.hot_path_hits;
+                    }
+                    // The upload retains only this small prepared CPU image;
+                    // consumers follow its fence without blocking this worker.
+                    return image;
+                }
+            } catch (const std::exception& e) {
+                if (!prepared_key.empty())
+                    invalidate_cache_entry(prepared_key);
+                warn_portable_cache_failure(e.what());
+            }
         }
         const bool float_decode = decodes_float(path, params);
         if (!params.undistort && !float_decode && !encoded)
             return load_rgb_decoded_ahead(path, params, decodes_16bit(params));
         Tensor host;
-        if (params.undistort || float_decode) {
+        if (float_decode || (params.undistort && decodes_16bit(params))) {
             auto ahead = take_decoded_ahead(path, HostDecodeKind::Float32);
             auto [data, width, height, channels] = ahead
                                                        ? std::tuple{static_cast<float*>(ahead->data.release()), ahead->width, ahead->height, ahead->channels}
@@ -267,11 +314,16 @@ namespace lfs::io {
                        .permute({2, 0, 1})
                        .contiguous();
         } else {
+            // Warps consume full-resolution UInt8 directly; do not resize or
+            // expand these sources to float before the area warp.
+            const int resize_factor = params.undistort ? 1 : params.resize_factor;
+            const int max_width = params.undistort ? 0 : params.max_width;
+            auto ahead = params.undistort ? take_decoded_ahead(path, HostDecodeKind::UInt8) : std::nullopt;
             auto [data, width, height, channels] =
-                encoded != nullptr
-                    ? lfs::core::load_image_from_memory(encoded->data(), encoded->size(), params.resize_factor,
-                                                        params.max_width)
-                    : lfs::core::load_image(path, params.resize_factor, params.max_width);
+                ahead ? std::tuple{static_cast<unsigned char*>(ahead->data.release()), ahead->width, ahead->height, ahead->channels}
+                : encoded != nullptr
+                    ? lfs::core::load_image_from_memory(encoded->data(), encoded->size(), resize_factor, max_width)
+                    : lfs::core::load_image(path, resize_factor, max_width);
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
             // Planar bytes avoid a second device image and a per-step GPU transpose.
@@ -279,11 +331,10 @@ namespace lfs::io {
         }
         std::unique_lock<std::mutex> large_prepare_lock;
         constexpr size_t LARGE_PORTABLE_SOURCE_BYTES = size_t{128} * 1024 * 1024;
-        if (prepared_backend && params.undistort &&
-            host.bytes() > LARGE_PORTABLE_SOURCE_BYTES) {
+        if (params.undistort && host.bytes() > LARGE_PORTABLE_SOURCE_BYTES) {
             large_prepare_lock = std::unique_lock(portable_large_prepare_mutex_);
             if (!portable_large_prepare_logged_) {
-                LOG_INFO("{} image preparation: limiting large full-resolution GPU sources to one at a time (source {:.1f} MiB); CPU decoding and prepared-image caching remain in RAM",
+                LOG_INFO("{} image preparation: limiting large full-resolution GPU sources to one at a time (source {:.1f} MiB); CPU decoding and compressed prepared-image caching remain in RAM",
                          config_.backend == lfs::core::GpuBackend::Vulkan ? "Vulkan" : "Metal",
                          host.bytes() / (1024.0 * 1024.0));
                 portable_large_prepare_logged_ = true;
@@ -306,8 +357,6 @@ namespace lfs::io {
 
         if (params.undistort) {
             const bool restore_uint8 = params.output_uint8;
-            if (image.dtype() == DataType::UInt8)
-                image = image.to(DataType::Float32).div(255.0f);
             image = lfs::core::undistort_image(
                 image.contiguous(), undistort_for(*params.undistort, image, params.resize_factor, params.max_width), nullptr);
             if (restore_uint8)
@@ -316,28 +365,17 @@ namespace lfs::io {
                 image = image.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32).to(DataType::Float32).div(65535.0f);
         }
         image = image.contiguous();
-        if (!prepared_key.empty() && image.bytes() <= prepared_budget &&
-            get_available_physical_memory() > get_total_physical_memory() / 4 + image.bytes()) {
-            try {
-                // No compression, dtype conversion or quantization is applied
-                // here: cached and uncached consumers receive the same bytes.
-                auto pixels = image.to_pageable_host();
-                CacheLoader::getInstance(true).store_cpu_image(prepared_key, std::move(pixels), prepared_budget);
-            } catch (const std::bad_alloc&) {
-                LOG_WARN("Portable prepared image cache allocation failed; continuing with uncached image preparation");
-            }
-        }
-        if (prepared_backend && params.undistort) {
+        if (!prepared_key.empty())
+            cache_portable_prepared_image(prepared_key, image);
+        if (params.undistort) {
             if (large_prepare_lock.owns_lock()) {
-                // Releasing this permit before the warp finishes would only
-                // move large inputs into the retired-allocation queue.
+                // Keep the permit until the large GPU source can be retired.
                 lfs::core::TensorCompletion ready;
                 ready.include(image);
                 ready.wait();
             }
-            // The reusable upload owns its destination until it is settled.
-            // Do not retain a full-resolution source while this worker waits
-            // for the next request, especially after a prepared CPU-cache hit.
+            // Settle the original upload on a miss, so an idle worker does not
+            // retain a full-resolution device source. Hits return above.
             upload.wait();
         }
         return image;

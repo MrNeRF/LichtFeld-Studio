@@ -1022,12 +1022,9 @@ namespace {
                 a[i] = static_cast<float>(static_cast<double>(rgba[i * 4 + 3]) / 255.0);
             }
             expect_close(host(rgb_f), rgb, 0, 0, "rgba split rgb");
-            // Metal uses FP32 reciprocal multiplication: allow one FP32 ULP
-            // in [0, 1] against the correctly rounded double division.
-            const double alpha_tolerance = GetParam() == GpuBackend::Metal ? 6e-8 : 0;
-            expect_close(host(alpha), a, alpha_tolerance, 0, "rgba split alpha");
+            expect_close(host(alpha), a, 0, 0, "rgba split alpha");
             EXPECT_EQ(host_bytes(rgb_u), rgb_bytes);
-            expect_close(host(alpha_u), a, alpha_tolerance, 0, "rgba split alpha (uint8 rgb)");
+            expect_close(host(alpha_u), a, 0, 0, "rgba split alpha (uint8 rgb)");
         }
         {
             const auto values = image_floats(P);

@@ -3,10 +3,12 @@
 
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/shared_image_ops.hpp"
 #include "core/tensor_backend.hpp"
+#include "io/cuda/masked_image_fill.hpp"
 #include "io/pipelined_image_loader.hpp"
 
 #include <gtest/gtest.h>
@@ -33,6 +35,21 @@
 #else
 #include <unistd.h>
 #endif
+
+namespace lfs::io {
+    struct PipelinedPreparedCacheTestAccess {
+        static std::string key(const PipelinedImageLoader& loader, const std::filesystem::path& path, const LoadParams& params) {
+            return loader.make_cache_key(path, params);
+        }
+        static auto blob(PipelinedImageLoader& loader, const std::string& key) { return loader.load_cached_jpeg_blob(key); }
+        static void put(PipelinedImageLoader& loader, const std::string& key, std::vector<uint8_t> bytes) {
+            loader.put_in_jpeg_cache(key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
+        }
+        static void encode(PipelinedImageLoader& loader, const std::string& key, const lfs::core::Tensor& image, size_t limit) {
+            loader.cache_portable_prepared_image(key, image, limit);
+        }
+    };
+} // namespace lfs::io
 
 namespace {
 
@@ -389,158 +406,305 @@ namespace {
         }
     }
 
-    TEST_P(PipelinedLoaderBackends, PreparedWarpCachePreservesPixelsAndInvalidatesParameters) {
-        if (GetParam() != GpuBackend::Vulkan && GetParam() != GpuBackend::Metal)
+    using CacheAccess = lfs::io::PipelinedPreparedCacheTestAccess;
+
+    Tensor decoded_prepared_blob(PipelinedImageLoader& loader, const std::filesystem::path& file,
+                                 const lfs::io::LoadParams& params) {
+        const auto bytes = CacheAccess::blob(loader, CacheAccess::key(loader, file, params));
+        EXPECT_TRUE(bytes);
+        if (!bytes)
+            return {};
+        lfs::core::image_codecs::Image decoded;
+        std::string error;
+        EXPECT_TRUE(lfs::core::image_codecs::decode_memory(bytes->data(), bytes->size(), decoded, error)) << error;
+        EXPECT_EQ(decoded.channels, 3);
+        const size_t plane = size_t(decoded.width) * decoded.height;
+        std::vector<float> values(plane * 3);
+        for (size_t i = 0; i < plane; ++i)
+            for (size_t ch = 0; ch < 3; ++ch)
+                values[ch * plane + i] = float(decoded.data[i * 3 + ch]) * UINT8_SCALE;
+        return host(values, {3, size_t(decoded.height), size_t(decoded.width)});
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheDecodesWarmPixelsAndInvalidatesParameters) {
+        if (GetParam() == GpuBackend::CUDA)
             GTEST_SKIP();
         const GpuBackendScope scope(GetParam());
-        auto& cpu_cache = lfs::io::CacheLoader::getInstance(true);
-        cpu_cache.update_cache_params(true, 0, 1.f, 0.1f, false, 500);
         PipelinedLoaderConfig config;
         config.backend = GetParam();
-        config.max_cache_bytes = 16u << 20;
         PipelinedImageLoader loader(config);
         auto camera = distorted_camera();
         lfs::io::LoadParams params;
         params.undistort = &camera;
-        auto first = loader.load_image_immediate(path("rgb8.png"), params);
-        const auto expected = first.cpu();
-        first.fill_(0.f);
+        auto cold = loader.load_image_immediate(path("rgb8.png"), params);
+        ASSERT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
+        auto expected = decoded_prepared_blob(loader, path("rgb8.png"), params);
+        cold.fill_(0.f);
         expect_close(loader.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
-        EXPECT_EQ(loader.get_stats().cpu_decode_calls, 1u);
-        cpu_cache.clear_cpu_cache();
-        expect_close(loader.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
-        EXPECT_EQ(loader.get_stats().cpu_decode_calls, 2u);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 1u);
+        EXPECT_EQ(loader.get_stats().cpu_decode_calls, 2u); // Decode JPEG on every request.
+        const auto old_key = CacheAccess::key(loader, path("rgb8.png"), params);
+        camera.distortion[0] += 0.02f;
+        EXPECT_NE(CacheAccess::key(loader, path("rgb8.png"), params), old_key);
+        (void)loader.load_image_immediate(path("rgb8.png"), params);
+        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 2u);
+        params.max_width = 7;
+        EXPECT_NE(loader.load_image_immediate(path("rgb8.png"), params).shape(), cold.shape());
         params.output_uint8 = true;
         EXPECT_EQ(loader.load_image_immediate(path("rgb8.png"), params).dtype(), DataType::UInt8);
-        EXPECT_EQ(loader.get_stats().cpu_decode_calls, 3u);
-        params.output_uint8 = false;
-        camera.distortion[0] += 0.15f;
-        const auto changed = loader.load_image_immediate(path("rgb8.png"), params).cpu();
-        EXPECT_EQ(loader.get_stats().cpu_decode_calls, 4u);
-        params.skip_blob_cache = true;
-        expect_close(loader.load_image_immediate(path("rgb8.png"), params), changed, 0.f);
-        EXPECT_EQ(loader.get_stats().cpu_decode_calls, 5u);
+        EXPECT_EQ(loader.load_image_immediate(path("rgb8.png"), params).dtype(), DataType::UInt8);
     }
 
-    TEST_P(PipelinedLoaderBackends, PreparedWarpCacheHonorsBudgetAndFileChanges) {
-        if (GetParam() != GpuBackend::Vulkan && GetParam() != GpuBackend::Metal)
+    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheMatchesFullChromaAndByteConversionPolicy) {
+        if (GetParam() == GpuBackend::CUDA)
             GTEST_SKIP();
         const GpuBackendScope scope(GetParam());
-        lfs::io::CacheLoader::getInstance(true).update_cache_params(true, 0, 1.f, 0.1f, false, 500);
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        config.cache_jpeg_quality = 83;
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        const auto image = loader.load_image_immediate(path("rgb8.png"), params).cpu();
+        const auto values = image.to_vector();
+        const size_t width = image.shape()[2], height = image.shape()[1], plane = width * height;
+        std::vector<uint8_t> rgb(values.size());
+        for (size_t i = 0; i < plane; ++i)
+            for (size_t ch = 0; ch < 3; ++ch)
+                rgb[i * 3 + ch] = static_cast<uint8_t>(std::clamp(values[ch * plane + i] * 255.0f, 0.f, 255.f));
+        lfs::core::image_codecs::JpegEncodeOptions options;
+        options.quality = config.cache_jpeg_quality;
+        options.full_chroma = true;
+        std::vector<uint8_t> expected;
+        ASSERT_TRUE(lfs::core::image_codecs::encode_jpeg_memory(rgb, int(width), int(height), 3, width * 3, expected, options));
+        const auto actual = CacheAccess::blob(loader, CacheAccess::key(loader, path("rgb8.png"), params));
+        ASSERT_TRUE(actual);
+        EXPECT_EQ(*actual, expected);
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheInvalidatesChangedFilesAndHonorsBudget) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
         auto camera = distorted_camera();
         lfs::io::LoadParams params;
         params.undistort = &camera;
         PipelinedLoaderConfig config;
         config.backend = GetParam();
-        config.max_cache_bytes = 2;
-        {
-            PipelinedImageLoader loader(config);
-            const auto first = loader.load_image_immediate(path("rgb8.png"), params).cpu();
-            expect_close(loader.load_image_immediate(path("rgb8.png"), params), first, 0.f);
-            EXPECT_EQ(loader.get_stats().cpu_decode_calls, 2u);
-        }
-        config.max_cache_bytes = 16u << 20;
+        config.max_cache_bytes = 1024;
         PipelinedImageLoader loader(config);
         const auto file = path("cache-replaced.png");
         std::filesystem::copy_file(path("rgb8.png"), file, std::filesystem::copy_options::overwrite_existing);
         (void)loader.load_image_immediate(file, params);
-        const auto original_stamp = std::filesystem::last_write_time(file);
-        auto replacement = samples<uint8_t>(3, 255, 101);
+        const auto key = CacheAccess::key(loader, file, params);
+        const auto stamp = std::filesystem::last_write_time(file);
+        const auto replacement = samples<uint8_t>(3, 255, 101);
         ASSERT_TRUE(save_png(file, replacement.data(), WIDTH, HEIGHT, 3, 8, 1));
-        std::filesystem::last_write_time(file, original_stamp + std::chrono::seconds(2));
-        const auto changed = loader.load_image_immediate(file, params).cpu();
-        EXPECT_EQ(loader.get_stats().cpu_decode_calls, 2u);
-        params.skip_blob_cache = true;
-        expect_close(loader.load_image_immediate(file, params), changed, 0.f);
-
-        params.skip_blob_cache = false;
-        config.max_cache_bytes = changed.bytes() * 2 + 16; // one prepared image fits
-        PipelinedImageLoader bounded(config);
-        const auto original = bounded.load_image_immediate(path("rgb8.png"), params).cpu();
-        (void)bounded.load_image_immediate(file, params);
-        expect_close(bounded.load_image_immediate(path("rgb8.png"), params), original, 0.f);
-        EXPECT_EQ(bounded.get_stats().cpu_decode_calls, 3u);
-        EXPECT_GE(bounded.release_host_cache(std::numeric_limits<size_t>::max()), original.bytes());
-        expect_close(bounded.load_image_immediate(path("rgb8.png"), params), original, 0.f);
-        EXPECT_EQ(bounded.get_stats().cpu_decode_calls, 4u);
+        std::filesystem::last_write_time(file, stamp + std::chrono::seconds(2));
+        EXPECT_NE(CacheAccess::key(loader, file, params), key);
+        (void)loader.load_image_immediate(file, params);
+        expect_close(loader.load_image_immediate(file, params), decoded_prepared_blob(loader, file, params), 0.f);
+        EXPECT_LE(loader.get_stats().jpeg_cache_bytes, config.max_cache_bytes);
+        EXPECT_GT(loader.release_host_cache(std::numeric_limits<size_t>::max()), 0u);
+        EXPECT_EQ(loader.get_stats().jpeg_cache_bytes, 0u);
+        const auto hits = loader.get_stats().hot_path_hits;
+        (void)loader.load_image_immediate(file, params);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, hits + 1); // Existing spill restores the same JPEG bytes.
     }
 
-    TEST_P(PipelinedLoaderBackends, PreparedWarpCacheRespectsDisabledCpuCache) {
-        if (GetParam() != GpuBackend::Vulkan && GetParam() != GpuBackend::Metal)
+    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheSpillsOversizedEntriesAndCleansItsRun) {
+        if (GetParam() == GpuBackend::CUDA)
             GTEST_SKIP();
         const GpuBackendScope scope(GetParam());
-        auto& cache = lfs::io::CacheLoader::getInstance(true);
-        struct Restore {
-            lfs::io::CacheLoader& cache;
-            ~Restore() { cache.update_cache_params(true, 0, 1.f, 0.1f, false, 500); }
-        } restore{cache};
-        cache.update_cache_params(false, 0, 1.f, 0.1f, false, 500);
         auto camera = distorted_camera();
         lfs::io::LoadParams params;
         params.undistort = &camera;
-        PipelinedLoaderConfig config;
-        config.backend = GetParam();
-        PipelinedImageLoader loader(config);
-        const auto first = loader.load_image_immediate(path("rgb8.png"), params).cpu();
-        expect_close(loader.load_image_immediate(path("rgb8.png"), params), first, 0.f);
-        EXPECT_EQ(loader.get_stats().cpu_decode_calls, 2u);
-    }
-
-    TEST_P(PipelinedLoaderBackends, PreparedWarpCacheSeparatesLoaderLifetimes) {
-        if (GetParam() != GpuBackend::Vulkan && GetParam() != GpuBackend::Metal)
-            GTEST_SKIP();
-        const GpuBackendScope scope(GetParam());
-        auto& cache = lfs::io::CacheLoader::getInstance(true);
-        cache.update_cache_params(true, 0, 1.f, 0.1f, false, 500);
-        const auto before = cache.cpu_image_bytes("portable-prepared:");
-        PipelinedLoaderConfig config;
-        config.backend = GetParam();
-        config.max_cache_bytes = 16u << 20;
-        auto camera = distorted_camera();
-        lfs::io::LoadParams params;
-        params.undistort = &camera;
+        std::filesystem::path spill;
         {
-            auto first = std::make_unique<PipelinedImageLoader>(config);
-            PipelinedImageLoader second(config);
-            const auto expected = first->load_image_immediate(path("rgb8.png"), params).cpu();
-            expect_close(second.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
-            EXPECT_EQ(cache.cpu_image_bytes("portable-prepared:"), before + 2 * expected.bytes());
-            first.reset();
-            EXPECT_EQ(cache.cpu_image_bytes("portable-prepared:"), before + expected.bytes());
-            expect_close(second.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
-            EXPECT_EQ(second.get_stats().cpu_decode_calls, 1u);
+            PipelinedLoaderConfig config;
+            config.backend = GetParam();
+            config.max_cache_bytes = 1;
+            PipelinedImageLoader loader(config);
+            spill = loader.run_spill_directory();
+            ASSERT_FALSE(spill.empty());
+            (void)loader.load_image_immediate(path("rgb8.png"), params);
+            const auto expected = decoded_prepared_blob(loader, path("rgb8.png"), params);
+            EXPECT_EQ(loader.get_stats().jpeg_cache_bytes, 0u);
+            EXPECT_EQ(loader.get_stats().spill_cache_entries, 1u);
+            expect_close(loader.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
+            EXPECT_EQ(loader.get_stats().hot_path_hits, 1u);
         }
-        EXPECT_EQ(cache.cpu_image_bytes("portable-prepared:"), before);
+        EXPECT_FALSE(std::filesystem::exists(spill));
     }
 
-    TEST_P(PipelinedLoaderBackends, PreparedWarpCacheConcurrentConsumersOwnIndependentImages) {
-        if (GetParam() != GpuBackend::Vulkan && GetParam() != GpuBackend::Metal)
+    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheBypassesEvaluationPrecisionAndMaskedFill) {
+        if (GetParam() == GpuBackend::CUDA)
             GTEST_SKIP();
         const GpuBackendScope scope(GetParam());
-        lfs::io::CacheLoader::getInstance(true).update_cache_params(true, 0, 1.f, 0.1f, false, 500);
         PipelinedLoaderConfig config;
         config.backend = GetParam();
-        config.max_cache_bytes = 16u << 20;
         PipelinedImageLoader loader(config);
         auto camera = distorted_camera();
         lfs::io::LoadParams params;
         params.undistort = &camera;
+        params.skip_blob_cache = true;
         const auto expected = loader.load_image_immediate(path("rgb8.png"), params).cpu();
+        expect_close(loader.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
+        params.skip_blob_cache = false;
+        params.decode_float = true;
+        (void)loader.load_image_immediate(path("rgb8.png"), params);
+        params.decode_float = false;
+        params.decode_16bit = true;
+        const auto sixteen = loader.load_image_immediate(path("rgb16.png"), params).cpu();
+        expect_close(loader.load_image_immediate(path("rgb16.png"), params), sixteen, 0.f);
+        params.decode_16bit = false;
+        const lfs::io::MaskedImageFill fill{};
+        params.masked_fill = &fill;
+        (void)loader.load_image_immediate(path("rgb8.png"), params);
+        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 0u);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 0u);
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheConcurrentWarmConsumersOwnIndependentImages) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        (void)loader.load_image_immediate(path("rgb8.png"), params);
+        const auto expected = decoded_prepared_blob(loader, path("rgb8.png"), params);
         const auto backend = GetParam();
         std::vector<std::future<Tensor>> consumers;
-        for (int i = 0; i < 8; ++i) {
+        for (int i = 0; i < 8; ++i)
             consumers.push_back(std::async(std::launch::async, [&, backend] {
-                const GpuBackendScope worker_scope(backend);
+                const GpuBackendScope worker(backend);
                 auto image = loader.load_image_immediate(path("rgb8.png"), params);
-                auto result = image.cpu();
+                auto copy = image.cpu();
                 image.fill_(0.f);
-                return result;
+                return copy;
             }));
-        }
         for (auto& consumer : consumers)
             expect_close(consumer.get(), expected, 0.f);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 8u);
+        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
         expect_close(loader.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
-        EXPECT_EQ(loader.get_stats().cpu_decode_calls, 1u);
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheConcurrentMissesPublishOnlyCompleteBlobs) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.skip_blob_cache = true;
+        const auto cold = loader.load_image_immediate(path("rgb8.png"), params).cpu().to_vector();
+        params.skip_blob_cache = false;
+        std::vector<std::future<Tensor>> consumers;
+        const auto backend = GetParam();
+        for (int i = 0; i < 8; ++i)
+            consumers.push_back(std::async(std::launch::async, [&, backend] {
+                const GpuBackendScope worker(backend);
+                return loader.load_image_immediate(path("rgb8.png"), params).cpu();
+            }));
+        std::vector<Tensor> loaded;
+        for (auto& consumer : consumers)
+            loaded.push_back(consumer.get());
+        const auto warm = decoded_prepared_blob(loader, path("rgb8.png"), params).to_vector();
+        for (const auto& image : loaded) {
+            const auto values = image.to_vector();
+            EXPECT_TRUE(values == cold || values == warm);
+        }
+        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
+        EXPECT_EQ(loader.get_stats().cpu_decode_calls, 9u);
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedJpegCachePrefetchSharesImmediateBlobWithoutAnotherWarp) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        (void)loader.load_image_immediate(path("rgb8.png"), params);
+        const auto expected = decoded_prepared_blob(loader, path("rgb8.png"), params);
+        std::vector<ImageRequest> requests;
+        for (size_t i = 0; i < 8; ++i) {
+            auto r = request("rgb8.png");
+            r.sequence_id = i;
+            r.params = params;
+            r.undistort = &camera;
+            requests.push_back(r);
+        }
+        loader.prefetch(requests);
+        for (size_t i = 0; i < requests.size(); ++i) {
+            auto completion = loader.try_get_completion_for(std::chrono::seconds(20));
+            ASSERT_TRUE(completion && completion->outcome);
+            expect_close(completion->outcome->tensor, expected, 0.f);
+        }
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 8u);
+        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheFailurePreservesImageAndRecovers) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.skip_blob_cache = true;
+        auto image = loader.load_image_immediate(path("rgb8.png"), params);
+        const auto expected = image.cpu();
+        params.skip_blob_cache = false;
+        const auto key = CacheAccess::key(loader, path("rgb8.png"), params);
+        std::string warning;
+        const auto handler = Logger::get().add_log_handler([&](LogLevel, const SourceSite&, std::string_view message) {
+            if (message.find("Optional prepared JPEG cache") != std::string_view::npos)
+                warning = message;
+        });
+        CacheAccess::encode(loader, key, image, 1); // Actual encoder ResourceExhausted.
+        Logger::get().remove_log_handler(handler);
+        EXPECT_FALSE(warning.empty());
+        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 0u);
+        expect_close(image, expected, 0.f);
+        (void)loader.load_image_immediate(path("rgb8.png"), params);
+        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
+        expect_close(loader.load_image_immediate(path("rgb8.png"), params), decoded_prepared_blob(loader, path("rgb8.png"), params), 0.f);
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheCorruptBlobFallsBackToOriginal) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.skip_blob_cache = true;
+        const auto expected = loader.load_image_immediate(path("rgb8.png"), params).cpu();
+        params.skip_blob_cache = false;
+        const auto key = CacheAccess::key(loader, path("rgb8.png"), params);
+        CacheAccess::put(loader, key, {0xff, 0xd8, 0xff, 0xd9});
+        expect_close(loader.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 0u);
+        expect_close(loader.load_image_immediate(path("rgb8.png"), params), decoded_prepared_blob(loader, path("rgb8.png"), params), 0.f);
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, PipelinedLoaderBackends,
