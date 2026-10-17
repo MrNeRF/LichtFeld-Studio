@@ -715,6 +715,7 @@ namespace {
                 "eval -- Score a finished model or splat file against its images\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
                 "preprocess -- Generate depth and/or normal maps for an image dataset\n"
+                "batch-train -- Train multiple Gaussian Splatting datasets sequentially\n"
                 "plugin -- Manage plugins (create, check, list)\n"
                 "\n"
                 "Run '<subcommand> --help' for details.\n"
@@ -722,6 +723,8 @@ namespace {
                 "EXAMPLES:\n"
                 "lichtfeld-studio -d ./data -o ./output\n"
                 "lichtfeld-studio --headless -d ./data -o ./output --export ply\n"
+                "lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --strategy mrnf --iter 30000\n"
+                "lichtfeld-studio batch-train --config batch.json\n"
                 "lichtfeld-studio -v session.licht\n"
                 "lichtfeld-studio --headless --resume session.licht\n"
                 "lichtfeld-studio -d ./data -o ./output --save-project-at-iter 7000\n"
@@ -2765,6 +2768,183 @@ dataset options work as in training; see the Evaluation page of the docs.
         }
         return core_args::ParsedArgs{core_args::LichtMode{project, dataset}};
     }
+
+    bool is_known_training_bool_flag(const std::string_view flag) {
+        if (flag == "--export")
+            return false;
+        for (const auto& binding : lfs::core::args::optimization_cli_bindings()) {
+            if (binding.flag == flag) {
+                return binding.parse_type == lfs::core::args::OptimizationCliParseType::Bool;
+            }
+        }
+        return false;
+    }
+
+    std::expected<lfs::core::args::ParsedArgs, std::string> parseBatchTrainArgs(const int argc, const char* const argv[]) {
+        namespace core_args = lfs::core::args;
+        namespace param = lfs::core::param;
+
+        constexpr const char* BATCH_TRAIN_HELP_HEADER =
+            "LichtFeld Studio - Batch Training\n"
+            "Sequentially train Gaussian Splatting models on multiple datasets with isolated CUDA\n"
+            "processes, live progress monitoring, failure resilience, and comprehensive reporting.\n";
+
+        constexpr const char* BATCH_TRAIN_HELP_FOOTER =
+            "\nEXAMPLES:\n"
+            "  # Train all dataset subdirectories found in ./datasets:\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --strategy mrnf --iter 30000\n\n"
+            "  # Train specific datasets:\n"
+            "  lichtfeld-studio batch-train scene1/ scene2/ scene3/ -o ./outputs/\n\n"
+            "  # Train recursively scanning for datasets:\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --recursive\n\n"
+            "  # Train from a JSON batch manifest with per-scene overrides:\n"
+            "  lichtfeld-studio batch-train --config batch_manifest.json\n\n"
+            "  # Preview the resolved job queue without running (dry run):\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --dry-run\n\n"
+            "  # Stop immediately if any dataset fails (default is to continue):\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --stop-on-failure\n";
+
+        ::args::ArgumentParser parser(BATCH_TRAIN_HELP_HEADER, BATCH_TRAIN_HELP_FOOTER);
+        ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
+        ::args::PositionalList<std::string> inputs(parser, "inputs", "Dataset directories, parent directory to scan, or JSON batch config");
+        ::args::ValueFlag<std::string> output_dir(parser, "path", "Base output directory for trained models and exports", {'o', "output", "output-dir"});
+        ::args::ValueFlag<std::string> config(parser, "path", "Batch configuration JSON file", {'c', "config"});
+        ::args::Flag recursive(parser, "recursive", "Scan input directory recursively for datasets", {'r', "recursive"});
+        ::args::Flag stop_on_failure(parser, "stop-on-failure", "Stop batch execution immediately if any dataset fails (default: continue)", {"stop-on-failure", "fail-fast"});
+        ::args::Flag dry_run(parser, "dry-run", "Validate and print the resolved batch queue without running training", {"dry-run"});
+        ::args::ValueFlag<int> timeout(parser, "minutes", "Timeout per training job in minutes (default: 0 = disabled)", {"timeout"});
+        ::args::ValueFlag<std::string> summary_path(parser, "path", "Custom path for the batch JSON summary file", {"summary"});
+        ::args::ValueFlag<std::string> report_path(parser, "path", "Custom path for the batch text report file", {"report"});
+        LogLevelFlag log_level(parser);
+
+        std::vector<std::string> batch_args;
+        std::vector<std::string> shared_training_args;
+        batch_args.push_back(std::string(argv[0]) + " batch-train");
+
+        bool after_double_dash = false;
+        for (int i = 2; i < argc; ++i) {
+            std::string_view arg = argv[i];
+            if (after_double_dash) {
+                shared_training_args.push_back(std::string(arg));
+                continue;
+            }
+            if (arg == "--") {
+                after_double_dash = true;
+                continue;
+            }
+
+            if (arg == "-h" || arg == "--help" || arg == "-r" || arg == "--recursive" ||
+                arg == "--stop-on-failure" || arg == "--fail-fast" || arg == "--dry-run") {
+                batch_args.push_back(std::string(arg));
+                continue;
+            }
+
+            if (arg == "-o" || arg == "--output" || arg == "--output-dir" ||
+                arg == "-c" || arg == "--config" ||
+                arg == "--timeout" || arg == "--summary" || arg == "--report" ||
+                arg == "--log-level") {
+                batch_args.push_back(std::string(arg));
+                if (i + 1 < argc && argv[i + 1][0] != '-') {
+                    batch_args.push_back(argv[++i]);
+                }
+                continue;
+            }
+
+            if (arg.starts_with("-o=") || arg.starts_with("--output=") || arg.starts_with("--output-dir=") ||
+                arg.starts_with("-c=") || arg.starts_with("--config=") ||
+                arg.starts_with("--timeout=") || arg.starts_with("--summary=") || arg.starts_with("--report=") ||
+                arg.starts_with("--log-level=")) {
+                batch_args.push_back(std::string(arg));
+                continue;
+            }
+
+            if (!arg.starts_with('-')) {
+                batch_args.push_back(std::string(arg));
+                continue;
+            }
+
+            // Unrecognized by batch parser: forward to child training runs
+            shared_training_args.push_back(std::string(arg));
+            if (!arg.contains('=')) {
+                if (!is_known_training_bool_flag(arg)) {
+                    if (i + 1 < argc && argv[i + 1][0] != '-') {
+                        shared_training_args.push_back(argv[++i]);
+                    }
+                }
+            }
+        }
+
+        parser.Prog(batch_args[0]);
+        try {
+            parser.ParseArgs(std::vector<std::string>(batch_args.begin() + 1, batch_args.end()));
+        } catch (const ::args::Help&) {
+            std::print("{}", parser.Help());
+            return core_args::HelpMode{};
+        } catch (const ::args::ParseError& e) {
+            return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
+        }
+
+        std::string log_level_error;
+        if (!log_level.apply(log_level_error))
+            return std::unexpected(log_level_error);
+
+        param::BatchTrainingParameters params;
+        if (config) {
+            params.config_file = lfs::core::utf8_to_path(::args::get(config));
+            if (!lfs::core::native_fs::exists(params.config_file)) {
+                return std::unexpected(std::format("Config file not found: {}", lfs::core::path_to_utf8(params.config_file)));
+            }
+            auto loaded = param::read_batch_training_parameters_from_json(params.config_file, params);
+            if (!loaded) {
+                return std::unexpected(std::format("Error reading batch config: {}", loaded.error().user_message()));
+            }
+            params = std::move(*loaded);
+        }
+
+        if (inputs) {
+            for (const auto& in_str : ::args::get(inputs)) {
+                params.input_paths.push_back(lfs::core::utf8_to_path(in_str));
+            }
+        }
+
+        if (output_dir) {
+            params.output_dir = lfs::core::utf8_to_path(::args::get(output_dir));
+        }
+
+        if (recursive) {
+            params.recursive = true;
+        }
+
+        if (stop_on_failure) {
+            params.continue_on_failure = false;
+        }
+
+        if (dry_run) {
+            params.dry_run = true;
+        }
+
+        if (timeout) {
+            params.timeout_minutes = ::args::get(timeout);
+        }
+
+        if (summary_path) {
+            params.summary_file = lfs::core::utf8_to_path(::args::get(summary_path));
+        }
+
+        if (report_path) {
+            params.report_file = lfs::core::utf8_to_path(::args::get(report_path));
+        }
+
+        for (auto&& a : shared_training_args) {
+            params.shared_args.push_back(std::move(a));
+        }
+
+        if (params.input_paths.empty() && params.jobs.empty() && params.config_file.empty()) {
+            return std::unexpected(std::format("Missing input datasets or batch config\n\n{}", parser.Help()));
+        }
+
+        return core_args::BatchTrainingMode{std::move(params)};
+    }
 } // namespace
 
 std::expected<lfs::core::args::ParsedArgs, std::string>
@@ -2782,6 +2962,8 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
 
         if (arg1 == "convert") {
             return parseConvertArgs(argc, argv);
+        } else if (arg1 == "batch-train" || arg1 == "batch" || arg1 == "batch_train") {
+            return parseBatchTrainArgs(argc, argv);
         } else if (arg1 == "eval") {
             std::string error;
             if (auto parsed = parseEvalArgs(argc, argv, error)) {
