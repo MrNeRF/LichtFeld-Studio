@@ -937,6 +937,30 @@ def test_training_rml_no_longer_includes_ppisp_auto_toggle():
     assert "label_ppisp_auto" not in content
 
 
+def test_training_rml_makes_every_panel_section_collapsible(training_panel_module):
+    project_root = Path(__file__).parent.parent.parent
+    training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"
+    content = training_rml.read_text()
+
+    panel_blocks = {"basic_params", "advanced_params"}
+    for name in training_panel_module.SECTIONS:
+        if name in panel_blocks:
+            continue
+        dom_name = name.replace("_", "-")
+        assert f'id="hdr-{dom_name}" data-event-click="toggle_section(\'{name}\')"' in content
+        assert f'id="arrow-{dom_name}"' in content
+        assert f'class="section-content collapsed" id="sec-{dom_name}"' in content
+
+
+def test_training_panel_restores_new_sections_collapsed(training_panel_module):
+    panel = training_panel_module.TrainingPanel.__new__(training_panel_module.TrainingPanel)
+    panel._handle = None
+    panel.apply_chrome({"expanded": ["losses", "retired_section"]})
+
+    assert panel._collapsed == training_panel_module.INITIALLY_COLLAPSED - {"losses"}
+    assert panel.capture_chrome()["expanded"] == ["basic_params", "losses"]
+
+
 def test_training_rml_exposes_mrnf_grow_until_iter():
     project_root = Path(__file__).parent.parent.parent
     training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"

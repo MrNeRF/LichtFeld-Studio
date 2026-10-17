@@ -145,14 +145,29 @@ BASIC_RUNS = (
         "use_exposure_correction",
     ),
     _run(
-        "basic_bilateral_toggle",
-        "use_bilateral_grid",
+        "ppisp_exif",
+        "ppisp_exposure_from_exif",
+        visibility_condition_id="dep_ppisp_params",
+    ),
+    _run("basic_mask_mode", "mask_mode"),
+    _run("mask_invert", "invert_masks", visibility_condition_id="dep_mask_mode"),
+    _run(
+        "mask_threshold",
+        "mask_threshold",
+        visibility_condition_id="dep_mask_threshold",
     ),
     _run(
-        "basic_live_start",
-        "mask_mode",
-        "use_depth_loss",
+        "mask_alpha",
+        "use_alpha_as_mask",
+        visibility_condition_id="dep_mask_mode",
     ),
+    _run(
+        "mask_penalties",
+        "mask_opacity_penalty_weight",
+        "mask_opacity_penalty_power",
+        visibility_condition_id="dep_mask_segment",
+    ),
+    _run("basic_depth_toggle", "use_depth_loss"),
     _run(
         "basic_depth_weight",
         "depth_auto_generate",
@@ -171,35 +186,35 @@ BASIC_RUNS = (
         "normal_loss_space",
         visibility_condition_id="dep_normal_loss",
     ),
-    _run("mask_invert", "invert_masks", visibility_condition_id="dep_mask_mode"),
-    _run(
-        "mask_threshold",
-        "mask_threshold",
-        visibility_condition_id="dep_mask_threshold",
-    ),
-    _run(
-        "mask_alpha",
-        "use_alpha_as_mask",
-        visibility_condition_id="dep_mask_mode",
-    ),
-    _run(
-        "mask_penalties",
-        "mask_opacity_penalty_weight",
-        "mask_opacity_penalty_power",
-        visibility_condition_id="dep_mask_segment",
-    ),
+    _run("basic_undistort", "undistort"),
     _run("basic_sparsity_toggle", "enable_sparsity"),
+    _run(
+        "sparsity",
+        "sparsify_steps",
+        "init_rho",
+        visibility_condition_id="dep_sparsity",
+    ),
     _run("basic_gut", "gut", disabled_condition_id="gut_disabled"),
-    _run("basic_after_gut", "undistort", "mip_filter"),
+    _run("basic_mip_filter", "mip_filter"),
+    _run("bg_mode", "bg_mode"),
+)
+
+APPEARANCE_RUNS = (
+    _run("bilateral_toggle", "use_bilateral_grid"),
     _run(
-        "basic_ppisp_toggle",
-        "ppisp",
+        "bilateral",
+        "bilateral_grid_x",
+        "bilateral_grid_y",
+        "bilateral_grid_w",
+        "bilateral_grid_lr",
+        visibility_condition_id="dep_bilateral",
     ),
     _run(
-        "ppisp_exif",
-        "ppisp_exposure_from_exif",
-        visibility_condition_id="dep_ppisp_params",
+        "exposure_grid_start",
+        "exposure_correction_grid_start_iter",
+        visibility_condition_id="dep_exposure_correction",
     ),
+    _run("ppisp_toggle", "ppisp"),
     _run(
         "ppisp_freeze",
         "ppisp_freeze_from_sidecar",
@@ -216,31 +231,10 @@ BASIC_RUNS = (
         "ppisp_freeze_gaussians",
         visibility_condition_id="dep_ppisp_controller",
     ),
-    _run("bg_mode", "bg_mode"),
+    _run("ppisp_registry", visibility_condition_id="dep_ppisp_params"),
 )
 
-DATASET_RUNS = (
-    _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
-    _run("dataset_eval_train", "eval_all", visibility_condition_id="dep_eval"),
-    _run("dataset_eval_flip", "eval_flip", visibility_condition_id="dep_eval"),
-    _run("dataset_eval_space", "eval_space", visibility_condition_id="dep_undistort"),
-    _run("dataset_eval_bit_depth", "eval_bit_depth", visibility_condition_id="dep_eval"),
-    _run(
-        "dataset_eval_mask_opacity",
-        "eval_mask_opacity",
-        visibility_condition_id="dep_eval_mask_splat",
-    ),
-)
-
-OPTIMIZATION_RUNS = (
-    _run(
-        "learning_rates",
-        "means_lr",
-        "shs_lr",
-        "opacity_lr",
-        "scaling_lr",
-        "rotation_lr",
-    ),
+REFINEMENT_RUNS = (
     _run(
         "refinement_locked",
         "refine_every",
@@ -265,25 +259,25 @@ OPTIMIZATION_RUNS = (
         "prune_opacity",
         visibility_condition_id="dep_igs",
     ),
+    _run("refinement_registry"),
 )
 
-BILATERAL_RUNS = (
+LEARNING_RATE_RUNS = (
     _run(
-        "bilateral",
-        "bilateral_grid_x",
-        "bilateral_grid_y",
-        "bilateral_grid_w",
-        "bilateral_grid_lr",
-        visibility_condition_id="dep_bilateral",
+        "learning_rates",
+        "means_lr",
+        "shs_lr",
+        "opacity_lr",
+        "scaling_lr",
+        "rotation_lr",
     ),
-    _run(
-        "exposure_grid_start",
-        "exposure_correction_grid_start_iter",
-        visibility_condition_id="dep_exposure_correction",
-    ),
+    _run("learning_rates_registry"),
 )
 
-LOSS_RUNS = (_run("loss_numbers", "opacity_reg", "scale_reg", "tv_loss_weight"),)
+LOSS_RUNS = (
+    _run("loss_numbers", "opacity_reg", "scale_reg", "tv_loss_weight"),
+    _run("losses_registry"),
+)
 
 INIT_RUNS = (
     _run("init_main", "init_scaling", "random"),
@@ -296,26 +290,75 @@ INIT_RUNS = (
     _run("init_mesh", "init_mesh_resolution", visibility_condition_id="dep_init_mesh"),
 )
 
-SPARSITY_RUNS = (
+EVALUATION_RUNS = (
+    _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
+    _run("dataset_eval_train", "eval_all", visibility_condition_id="dep_eval"),
+    _run("dataset_eval_flip", "eval_flip", visibility_condition_id="dep_eval"),
+    _run("dataset_eval_space", "eval_space", visibility_condition_id="dep_undistort"),
+    _run("dataset_eval_bit_depth", "eval_bit_depth", visibility_condition_id="dep_eval"),
     _run(
-        "sparsity",
-        "sparsify_steps",
-        "init_rho",
-        visibility_condition_id="dep_sparsity",
+        "dataset_eval_mask_opacity",
+        "eval_mask_opacity",
+        visibility_condition_id="dep_eval_mask_splat",
     ),
 )
+
+# Registry properties without a curated row, placed with the settings they tune.
+# Anything not listed here, including newly registered properties, lands in
+# "More Parameters".
+REGISTRY_PLACEMENT = {
+    "ppisp_registry": (
+        "ppisp_lr",
+        "ppisp_reg_weight",
+        "ppisp_warmup_steps",
+        "ppisp_holdout_appearance",
+    ),
+    "refinement_registry": (
+        "min_opacity",
+        "growth_grad_threshold",
+        "grow_fraction",
+        "opacity_decay",
+        "opacity_decay_rendered_only",
+        "scale_decay",
+        "means_noise_weight",
+        "bounds_percentile",
+        "use_error_map",
+        "densify_error_map",
+        "use_edge_map",
+        "densify_structure_weight",
+        "max_screen_share",
+        "screen_share_penalty",
+        "morton_reorder_interval",
+    ),
+    "learning_rates_registry": (
+        "means_lr_end",
+        "scaling_lr_end",
+        "late_lr_anneal",
+        "cropbox_lr_scale",
+    ),
+    "losses_registry": (
+        "scale_reg_decay_power",
+        "erank_reg",
+        "dc_reg",
+        "sh_rest_reg",
+        "thin_structure_weight",
+        "gradient_loss_weight",
+        "cropbox_loss_weight",
+    ),
+}
 
 SECTIONS = (
     SectionSpec("basic_params", "training.section.basic_params", BASIC_RUNS),
     SectionSpec("advanced_params", "training.section.advanced_params"),
-    SectionSpec("dataset", "training.section.dataset", DATASET_RUNS),
-    SectionSpec("optimization", "training.section.optimization", OPTIMIZATION_RUNS),
-    SectionSpec("learning_rates", "training.opt.learning_rates"),
-    SectionSpec("refinement", "training.section.refinement"),
-    SectionSpec("bilateral", "training.section.bilateral_grid", BILATERAL_RUNS),
+    SectionSpec("dataset", "training.section.dataset"),
+    SectionSpec("appearance", "training.section.appearance_correction", APPEARANCE_RUNS),
+    SectionSpec("bilateral_grid", "training.section.bilateral_grid"),
+    SectionSpec("ppisp_correction", "main_panel.appearance_correction"),
+    SectionSpec("refinement", "training.section.refinement", REFINEMENT_RUNS),
+    SectionSpec("learning_rates", "training.section.learning_rates", LEARNING_RATE_RUNS),
     SectionSpec("losses", "training.section.losses", LOSS_RUNS),
     SectionSpec("init", "training.section.initialization", INIT_RUNS),
-    SectionSpec("sparsity", "training_panel.sparsity", SPARSITY_RUNS),
+    SectionSpec("evaluation", "training.section.evaluation", EVALUATION_RUNS),
     SectionSpec("save_steps", "training_panel.save_eval_steps"),
     SectionSpec(
         "advanced_registry",
@@ -327,24 +370,15 @@ SECTIONS = (
 RUNS = tuple(run for section in SECTIONS for run in section.runs)
 
 SEARCH_SECTION_RUN_IDS = {
-    "basic_params": tuple(run.id for run in BASIC_RUNS),
-    "advanced_registry": (AUTO_ADVANCED_RUN_ID,),
-    "dataset": tuple(run.id for run in DATASET_RUNS),
-    "optimization": tuple(run.id for run in OPTIMIZATION_RUNS),
-    "learning_rates": ("learning_rates",),
-    "refinement": tuple(
-        run.id for run in OPTIMIZATION_RUNS if run.id != "learning_rates"
-    ),
-    "bilateral": tuple(run.id for run in BILATERAL_RUNS),
-    "losses": tuple(run.id for run in LOSS_RUNS),
-    "init": tuple(run.id for run in INIT_RUNS),
-    "sparsity": tuple(run.id for run in SPARSITY_RUNS),
+    section.id: tuple(run.id for run in section.runs)
+    for section in SECTIONS
+    if section.runs
 }
 SEARCH_VISIBILITY_MODEL_KEYS = tuple(
     f"pv_section_{section_id}_visible" for section_id in SEARCH_SECTION_RUN_IDS
 ) + ("pv_section_advanced_params_visible",)
 
-LEARNING_RATES = list(OPTIMIZATION_RUNS[0].prop_ids)
+LEARNING_RATES = list(LEARNING_RATE_RUNS[0].prop_ids)
 
 _ENUM_OPTION_TOOLTIP_KEYS = {
     ("mask_mode", 0): "training.tooltip.opt.mask_mode.none",
@@ -479,10 +513,21 @@ def auto_advanced_prop_ids(group_info):
 def resolve_runs(group_info):
     """Resolve dynamic schema runs against one immutable registry snapshot."""
     advanced_ids = auto_advanced_prop_ids(group_info)
+    placed = {prop_id for prop_ids in REGISTRY_PLACEMENT.values() for prop_id in prop_ids}
+
+    def run_prop_ids(run):
+        if run.id in REGISTRY_PLACEMENT:
+            return tuple(
+                prop_id for prop_id in advanced_ids if prop_id in REGISTRY_PLACEMENT[run.id]
+            )
+        if run.id == AUTO_ADVANCED_RUN_ID:
+            return tuple(prop_id for prop_id in advanced_ids if prop_id not in placed)
+        return run.prop_ids
+
     return tuple(
         SectionRunSpec(
             run.id,
-            advanced_ids if run.id == AUTO_ADVANCED_RUN_ID else run.prop_ids,
+            run_prop_ids(run),
             run.visibility_condition_id,
             run.disabled_condition_id,
         )
@@ -905,6 +950,8 @@ class SectionBinding:
         return records
 
     def is_visible(self):
+        if not self.rows:
+            return False
         return not self._search_query() or bool(self._records())
 
     def publish(self):

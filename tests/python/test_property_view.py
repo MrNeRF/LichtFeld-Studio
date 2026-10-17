@@ -631,6 +631,24 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
     )
 
 
+def test_registry_placement_groups_auto_rows_and_leaves_new_ones_in_more_parameters(lf):
+    group_info = lf.ui.property_group_info("optimization")
+    resolved = {run.id: run.prop_ids for run in property_view.resolve_runs(group_info)}
+    placed = [
+        prop_id
+        for run_id in property_view.REGISTRY_PLACEMENT
+        for prop_id in resolved[run_id]
+    ]
+    assert sorted(placed) == sorted(EXPECTED_ADVANCED_IDS)
+    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == ()
+
+    future_group = {
+        "properties": [*group_info["properties"], {"id": "future_scalar", "type": "float"}]
+    }
+    resolved = {run.id: run.prop_ids for run in property_view.resolve_runs(future_group)}
+    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == ("future_scalar",)
+
+
 def test_strategy_applicability_filters_auto_rows_and_search(lf):
     group_info = lf.ui.property_group_info("optimization")
     properties = {meta["id"]: meta for meta in group_info["properties"]}

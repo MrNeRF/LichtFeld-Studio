@@ -178,11 +178,12 @@ SECTIONS = [
     "basic_params",
     "advanced_params",
     "dataset",
-    "optimization",
-    "bilateral",
+    "appearance",
+    "refinement",
+    "learning_rates",
     "losses",
     "init",
-    "sparsity",
+    "evaluation",
     "save_steps",
     "advanced_registry",
 ]
@@ -191,11 +192,12 @@ INITIALLY_COLLAPSED = {
     "advanced_params",
     "advanced_registry",
     "dataset",
-    "optimization",
-    "bilateral",
+    "appearance",
+    "refinement",
+    "learning_rates",
     "losses",
     "init",
-    "sparsity",
+    "evaluation",
     "save_steps",
 }
 
@@ -284,7 +286,7 @@ class TrainingPanel(Panel):
 
     def capture_chrome(self):
         return {
-            "collapsed": sorted(self._collapsed),
+            "expanded": sorted(set(SECTIONS) - self._collapsed),
             "property_search": self._pv_search_query,
             "steps_scaling_lock": bool(self._auto_scale_steps_locked),
         }
@@ -297,9 +299,9 @@ class TrainingPanel(Panel):
             if self._handle:
                 self._handle.dirty_all()
             return
-        collapsed = payload.get("collapsed")
-        if isinstance(collapsed, (list, tuple)):
-            self._collapsed = {str(name) for name in collapsed}
+        expanded = payload.get("expanded")
+        if isinstance(expanded, (list, tuple)):
+            self._collapsed = set(INITIALLY_COLLAPSED) - {str(name) for name in expanded}
         search = payload.get("property_search")
         if isinstance(search, str):
             self._pv_search_query = search
