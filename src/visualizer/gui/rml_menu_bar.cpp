@@ -2037,7 +2037,7 @@ namespace lfs::vis::gui {
                                           "toolbar.splat_rendering", "Splat Rendering",
                                           active_mode == "splats"));
             render_buttons.push_back(make("menu-render-points", "set_render_mode", "points",
-                                          "dots-diagonal", "toolbar.point_cloud", "Point Cloud",
+                                          "points", "toolbar.point_cloud", "Point Cloud",
                                           active_mode == "points"));
             render_buttons.push_back(make("menu-render-rings", "set_render_mode", "rings", "ring",
                                           "toolbar.gaussian_rings", "Gaussian Rings",
