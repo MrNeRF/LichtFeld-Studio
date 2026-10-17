@@ -281,6 +281,28 @@ def test_export_panel_progress_prefers_native_store(export_panel_module, monkeyp
     assert panel._cached_export_state["format"] == "SPZ"
 
 
+def test_export_panel_discovers_drag_job_and_uses_existing_cancel(export_panel_module):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    state.export_state = {"active": True, "progress": 0.25, "stage": "writing", "format": "SOG"}
+
+    assert panel._exporting is False
+    assert panel.on_update(None) is True
+    assert panel._exporting is True
+    assert panel._progress_value == "0.25"
+    assert "show_form" in panel._handle.dirty_fields
+    assert "show_progress" in panel._handle.dirty_fields
+    assert state.folder_dialog_calls == []
+    assert state.export_calls == []
+
+    panel._on_cancel_export(None, None, None)
+    assert state.cancel_calls == 1
+    state.export_state = {"active": False}
+    assert panel.on_update(None) is True
+    assert state.set_panel_enabled_calls == [("lfs.export", False)]
+
+
 def test_export_panel_closes_when_export_finishes(export_panel_module):
     module, state = export_panel_module
     panel = module.ExportPanel()

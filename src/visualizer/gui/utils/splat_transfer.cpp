@@ -179,8 +179,12 @@ namespace lfs::vis::gui {
                 std::call_once(cleanup, [&] { cleanupSplatTransfers(folder.parent_path()); });
                 const auto target = folder / core::utf8_to_path(options.name + "." + options.format);
                 const auto staged = folder / core::utf8_to_path(options.name + ".partial." + options.format);
+                core::native_fs::create_directories(root);
+                // Reserve the UUID directory exclusively. Even an unexpected
+                // UUID collision must not touch or clean somebody else's data.
+                if (!core::native_fs::create_directory(folder))
+                    throw std::runtime_error("Transfer folder already exists");
                 try {
-                    core::native_fs::create_directories(folder);
                     {
                         std::ofstream marker(lfs::core::native_fs::native_path(folder / ".lichtfeld-transfer"), std::ios::binary);
                         if (!marker)

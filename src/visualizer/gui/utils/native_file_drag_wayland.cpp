@@ -52,6 +52,7 @@ namespace lfs::vis::gui {
         bool attempted = false, done = false, failed = false, active = false, broken = false, provider_failed = false;
         std::string payload;
         FileProvider provider;
+        bool dispatching = false;
 
         static void enter(void* data, wl_pointer*, uint32_t, wl_surface* surface, wl_fixed_t x, wl_fixed_t y) {
             auto& s = *static_cast<Seat*>(data);
@@ -239,6 +240,13 @@ namespace lfs::vis::gui {
                 broken = true;
         }
         void pump() {
+            if (dispatching)
+                return;
+            struct DispatchScope {
+                bool& value;
+                explicit DispatchScope(bool& flag) : value(flag) { value = true; }
+                ~DispatchScope() { value = false; }
+            } scope(dispatching);
             init();
             if (queue && (wl_display_dispatch_queue_pending(display, queue) < 0 || (wl_display_flush(display) < 0 && errno != EAGAIN))) {
                 broken = true;

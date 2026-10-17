@@ -12,7 +12,8 @@
 #include <vector>
 
 namespace lfs::vis::gui {
-    // Worker callbacks only touch atomics. Native widgets belong to the UI thread.
+    // Worker callbacks only touch atomics. The existing export panel belongs to
+    // the UI thread and reads the same export job as normal exports.
     struct FileTransferProgressState {
         std::shared_ptr<std::atomic<bool>> cancelled;
         std::atomic<int> completed{0};
@@ -33,13 +34,14 @@ namespace lfs::vis::gui {
         }
     };
 
-    // Poll only the native progress UI, never SDL/Rml or the application frame.
-    // Draining the worker even if the UI fails keeps cancellation/rollback ordered.
+    // The caller may advance complete frames only from the deferred native
+    // action, never from an Rml update. Drain the worker even if a frame fails.
     template <class Tick>
     auto waitForFileTransfer(std::future<std::vector<std::filesystem::path>>& future,
-                             FileTransferProgressState& state, Tick tick) {
+                             FileTransferProgressState& state, Tick tick,
+                             std::chrono::milliseconds poll_interval = std::chrono::milliseconds(25)) {
         std::exception_ptr ui_error;
-        while (future.wait_for(std::chrono::milliseconds(25)) != std::future_status::ready) {
+        while (future.wait_for(poll_interval) != std::future_status::ready) {
             if (!ui_error) {
                 try {
                     tick(state.completed.load());
@@ -56,16 +58,4 @@ namespace lfs::vis::gui {
         return files;
     }
 
-    class FileTransferProgress {
-        struct Impl;
-        std::unique_ptr<Impl> impl_;
-
-    public:
-        FileTransferProgress(std::shared_ptr<FileTransferProgressState> state,
-                             std::string title, std::string message, std::string cancel_label);
-        ~FileTransferProgress();
-        FileTransferProgress(const FileTransferProgress&) = delete;
-        FileTransferProgress& operator=(const FileTransferProgress&) = delete;
-        [[nodiscard]] bool update(int completed);
-    };
 } // namespace lfs::vis::gui

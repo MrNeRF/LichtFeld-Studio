@@ -232,6 +232,32 @@ int main(int argc, char** argv) {
             std::filesystem::remove_all(root); // Unique test-owned root above.
         }
         manifest["snapshot_deleted_world_covariance_sh1_cancel_lod"] = "passed";
+        {
+            // Staging never overwrites an existing user file. Identical export
+            // names live in distinct, exclusively reserved UUID directories.
+            const auto root = std::filesystem::temp_directory_path() / ("lichtfeld-name-test-" + generate_uuid_v4().to_string());
+            std::filesystem::create_directories(root);
+            const auto existing = root / "splat-same.ply";
+            std::ofstream(existing) << "user content";
+            auto model = fixture(0);
+            const auto token = std::make_shared<std::atomic<bool>>(false);
+            const auto first = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = "same", .staging_root = root}).get();
+            const auto second = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = "same", .staging_root = root}).get();
+            require(first != second && first.filename() == second.filename(), "Readable names or isolated transfer roots changed");
+            std::ifstream input(existing);
+            std::string preserved;
+            std::getline(input, preserved);
+            input.close();
+            require(preserved == "user content", "Staging overwrote a preexisting file");
+            for (const auto& name : {"CON", "AUX. ", "../bad:<|name", "control\nname"}) {
+                const auto path = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = name, .staging_root = root}).get();
+                const auto leaf = path.filename().u8string();
+                require(leaf.starts_with(u8"splat-") && leaf.find_first_of(u8"<>:\"/\\|?*\n\r") == std::u8string::npos, "Unsafe exported leaf name");
+                require(path.parent_path().parent_path() == root, "Node name escaped its transfer root");
+            }
+            std::filesystem::remove_all(root); // Unique test-owned root above.
+        }
+        manifest["filename_isolation_and_existing_files"] = "passed";
         std::ofstream output(argv[1]);
         output << manifest.dump(2);
         if (!output)

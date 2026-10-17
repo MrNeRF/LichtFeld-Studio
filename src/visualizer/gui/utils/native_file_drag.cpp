@@ -134,6 +134,7 @@ namespace lfs::vis::gui {
 
         public:
             bool failed() const { return failed_; }
+            bool prepared() const { return bool(data_); }
             void cancel() noexcept {
                 cancelled_ = true;
                 provider_ = {};
@@ -327,6 +328,15 @@ namespace lfs::vis::gui {
         // Hand it to OLE explicitly so the pointer can enter another app.
         ReleaseCapture();
         const auto hr = DoDragDrop(owned_data.get(), source.get(), DROPEFFECT_COPY, &effect);
+        if (hr == DRAGDROP_S_DROP && (effect & DROPEFFECT_COPY) && !deferred->failed() && !deferred->prepared()) {
+            // An OLE receiver may retain IDataObject and defer all reads. Resolve
+            // before leaving this completed-frame action so a later GetData can
+            // only read the cache, never try to advance a live render callback.
+            FORMATETC format{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+            STGMEDIUM medium{};
+            if (SUCCEEDED(deferred->GetData(&format, &medium)))
+                ReleaseStgMedium(&medium);
+        }
         if (hr != DRAGDROP_S_DROP || !(effect & DROPEFFECT_COPY) || deferred->failed())
             deferred->cancel();
         if (deferred->failed())

@@ -190,7 +190,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/menu_bar.hpp
         gui/utils/native_file_dialog.cpp
         gui/utils/native_file_drag.cpp
-        gui/utils/file_transfer_progress.cpp
         gui/utils/native_file_drag_wayland.cpp
         gui/utils/splat_transfer.cpp
         gui/utils/splat_export_request.cpp

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "gui/utils/native_file_drag.hpp"
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/EventListener.h>
 #include <core/scene.hpp>
@@ -13,6 +14,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -182,6 +184,7 @@ namespace lfs::vis::gui {
         NativeDragContext* external_context_ = nullptr;
         std::function<std::vector<std::filesystem::path>()> external_provider_;
         std::shared_ptr<FileTransferProgressState> external_progress_;
+        std::future<FileDragResult> external_result_;
         SDL_Window* external_window_ = nullptr;
         void beginExternalTransfer(core::NodeId id, bool outside_only = false, std::vector<core::NodeId> ids = {});
         void updateExternalTransfer();

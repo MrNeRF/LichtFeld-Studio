@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "gui/utils/file_transfer_progress.hpp"
+#include "gui/utils/native_drag_scheduler.hpp"
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -70,5 +71,16 @@ int main() {
         saw_failure = true;
     }
     check(saw_failure && drained.load() && !state.user_cancelled.load());
+    NativeDragScheduler scheduler;
+    int actions = 0;
+    auto scheduled = scheduler.enqueue([&] {
+        ++actions;
+        check(NativeDragScheduler::ownsNativeCursor());
+        scheduler.dispatch(); // Modal frames cannot reenter this native action.
+        return FileDragResult{FileDragStatus::Copied, {}};
+    });
+    check(actions == 0 && scheduler.busy());
+    scheduler.dispatch();
+    check(actions == 1 && scheduled.get().status == FileDragStatus::Copied && !scheduler.busy() && !NativeDragScheduler::ownsNativeCursor());
     std::cout << "PASS: aggregate progress, completed fast path, cancellation, worker drain after UI failure\n";
 }

@@ -4,11 +4,12 @@
   "windows_build": "passed",
   "ctest": {
     "windows": {
-      "passed": 3,
+      "passed": 4,
       "tests": [
         "splat_transfer_contract",
         "native_drag_contract",
-        "file_transfer_progress_contract"
+        "file_transfer_progress_contract",
+        "native_modal_frame_contract"
       ]
     },
     "linux_standalone": {
@@ -28,7 +29,7 @@
     }
   },
   "python_tests": {
-    "passed": 89
+    "passed": 90
   },
   "linux": "Native Wayland protocol and X11 guard contracts passed; physical desktop interoperability pending",
   "blender": {
@@ -82,14 +83,18 @@
   "known_unrelated_flake": "Existing shader header fake compiler concurrent append log; test unchanged",
   "resource_checks": {
     "windows_com_cycles": 6000,
-    "wayland": "50 protocol cycles plus context reuse; resource teardown checked with sanitizers"
+    "wayland": "50 protocol cycles plus context reuse; resource teardown checked with sanitizers",
+    "cursor": "UI cursor ownership restored by native-action scope, including exceptions"
   },
   "progress": {
-    "windows": "Shell IProgressDialog; deferred until left mouse button release",
-    "linux": "Modeless GTK dialog; no focus on map",
+    "ui": "Existing lfs.export panel and AsyncTaskManager job; separate native progress dialog removed",
+    "dispatch": "Native operation queued until a frame has completed; modal wait advances guarded complete application frames",
     "delay_ms": 250,
-    "contract": "Aggregate monotonic progress, completed fast path, cancel and worker drain after UI failure",
-    "visual_validation": "Pending; protocol and headless tests do not exercise native dialog appearance",
-    "snapshot_progress": "CPU snapshot remains synchronous, without granular progress"
+    "snapshot_progress": "CPU snapshot remains synchronous under lock, without granular progress",
+    "visual_validation": "Physical drag and visual responsiveness still require desktop validation"
+  },
+  "filenames": {
+    "staging": "Readable sanitized node names in exclusively reserved UUID directories; existing staging files preserved",
+    "destination_collisions": "Controlled by receiving file manager, not overridden by LichtFeld"
   }
 }

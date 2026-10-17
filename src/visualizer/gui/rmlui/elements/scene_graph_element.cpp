@@ -22,6 +22,7 @@
 #include "gui/panel_registry.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/file_transfer_progress.hpp"
+#include "gui/utils/native_drag_scheduler.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/utils/native_file_drag.hpp"
 #include "gui/utils/splat_export_request.hpp"
@@ -682,7 +683,18 @@ namespace lfs::vis::gui {
         external_progress_ = std::make_shared<FileTransferProgressState>(std::make_shared<std::atomic<bool>>(false));
         external_provider_ = [identity = std::move(identity), revision = scene.renderGeneration(), prefs, progress = external_progress_] {
             const auto cancelled = progress->cancelled;
+            bool job_started = false;
             try {
+                auto* gui = services().guiOrNull();
+                auto* window = services().windowOrNull();
+                if (!gui || !window)
+                    throw std::runtime_error("Transfer UI unavailable");
+                const auto format = prefs.format == "spz" ? core::ExportFormat::SPZ : prefs.format == "sog" ? core::ExportFormat::SOG
+                                                                                                            : core::ExportFormat::PLY;
+                job_started = gui->asyncTasks().beginDragExport(format, [progress] { progress->requestCancel(); });
+                if (!job_started)
+                    throw std::runtime_error("Another export is active");
+                const auto worker_start = gui->asyncTasks().dragExportWorkerStart();
                 auto* live = services().sceneOrNull();
                 if (!live || live->getScene().renderGeneration() != revision)
                     throw std::runtime_error("Scene changed before transfer");
@@ -701,20 +713,27 @@ namespace lfs::vis::gui {
                                                                 : prefs.format == "sog"   ? prefs.sog_sh
                                                                                           : prefs.ply_sh;
                     sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string().substr(0, 8) : node->name, .sh_degree = degree, .sog_iterations = prefs.maximum_quality ? 100 : prefs.sog_iterations, .z_up = prefs.format == "ply" && prefs.blender_axes}});
-                    sources.back().options.progress = [progress, index = sources.size() - 1, count = identity.size()](float fraction) {
+                    sources.back().options.progress = [progress, worker_start, index = sources.size() - 1, count = identity.size()](float fraction) {
+                        worker_start();
                         return progress->report(index, count, fraction);
                     };
                 }
-                FileTransferProgress dialog(progress, tr("preferences.drag_title"), tr("export.exporting"), tr("common.cancel"));
                 auto future = prepareSplatTransferBatch(sources, cancelled);
                 lock.reset(); // Owned CPU snapshot, no live model lock during IO.
-                return waitForFileTransfer(future, *progress, [&dialog, warned = false](int value) mutable {
-                    if (!dialog.update(value) && !warned) {
-                        warned = true;
-                        LOG_WARN("[splat-transfer] native progress window unavailable; export continues");
+                auto files = waitForFileTransfer(future, *progress, [gui, window, progress, started = std::chrono::steady_clock::now(), shown = false](int value) mutable {
+                    gui->asyncTasks().reportDragExport(value / 1000.0f);
+                    if (!shown && std::chrono::steady_clock::now() - started >= std::chrono::milliseconds(250)) {
+                        shown = true;
+                        PanelRegistry::instance().set_panel_enabled("lfs.export", true);
                     }
-                });
+                    if (!window->advanceNativeTransferFrame())
+                        progress->requestCancel(); }, std::chrono::milliseconds(1));
+                gui->asyncTasks().finishDragExport(false);
+                return files;
             } catch (const std::exception& error) {
+                if (job_started)
+                    if (auto* gui = services().guiOrNull())
+                        gui->asyncTasks().finishDragExport(progress->user_cancelled.load(), tr("preferences.drag_failed"));
                 if (progress->user_cancelled.load())
                     LOG_INFO("[splat-transfer] deferred export cancelled");
                 else
@@ -729,6 +748,12 @@ namespace lfs::vis::gui {
 
     void SceneGraphElement::updateExternalTransfer() {
 #if defined(_WIN32) || defined(__linux__)
+        if (external_result_.valid() && external_result_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            external_result_.get();
+            external_native_active_ = false;
+            external_progress_.reset();
+            markStateDirty();
+        }
         if (external_native_active_ || !external_armed_ || !external_context_)
             return;
         float x = 0, y = 0;
@@ -753,31 +778,37 @@ namespace lfs::vis::gui {
             outside = *native_outside;
         if (glm::length(glm::vec2(x, y) - external_origin_) < 6.0f || (external_outside_only_ && !outside))
             return;
+        auto* window_manager = services().windowOrNull();
+        if (!window_manager || window_manager->nativeDragScheduler().busy())
+            return;
         external_armed_ = false;
         external_native_active_ = true;
         cancelDrag();
         if (auto* context = GetContext())
             context->ProcessMouseButtonCancel(0, 0);
         SDL_CaptureMouse(false);
-        LOG_INFO("[splat-transfer] native drag started (deferred files)");
-        FileDragResult result;
-        const auto progress = external_progress_;
-        try {
-            result = dragFiles(std::move(external_provider_), external_window_, external_context_);
-        } catch (const std::exception& error) {
-            LOG_ERROR("[splat-transfer] native drag failed: {}", error.what());
-            result = {FileDragStatus::Failed, error.what()};
-        }
-        external_native_active_ = false;
-        if (progress && progress->user_cancelled.load())
-            result = {FileDragStatus::Cancelled, {}};
-        external_progress_.reset();
-        if (auto* context = GetContext())
-            context->ProcessMouseButtonCancel(0, 0);
-        LOG_INFO("[splat-transfer] native drag finished: {} {}", static_cast<int>(result.status), result.error);
-        if (result.status == FileDragStatus::Failed || result.status == FileDragStatus::Unsupported)
-            if (auto* gui = services().guiOrNull())
-                gui->enqueueToast({.title = tr("preferences.drag_title"), .message = tr("preferences.drag_failed")});
+        const auto window_id = SDL_GetWindowID(external_window_);
+        external_result_ = window_manager->nativeDragScheduler().enqueue([provider = std::move(external_provider_), progress = external_progress_, window_id]() mutable {
+            FileDragResult result;
+            try {
+                auto* window = SDL_GetWindowFromID(window_id);
+                auto* manager = services().windowOrNull();
+                if (!window || !manager)
+                    return FileDragResult{FileDragStatus::Cancelled, {}};
+                LOG_INFO("[splat-transfer] native drag started at completed frame");
+                result = dragFiles(std::move(provider), window, &manager->nativeFileDragContext());
+            } catch (const std::exception& error) {
+                LOG_ERROR("[splat-transfer] native drag failed: {}", error.what());
+                result = {FileDragStatus::Failed, error.what()};
+            }
+            if (progress->user_cancelled.load())
+                result = {FileDragStatus::Cancelled, {}};
+            LOG_INFO("[splat-transfer] native drag finished: {} {}", static_cast<int>(result.status), result.error);
+            if (result.status == FileDragStatus::Failed || result.status == FileDragStatus::Unsupported)
+                if (auto* gui = services().guiOrNull())
+                    gui->enqueueToast({.title = tr("preferences.drag_title"), .message = tr("preferences.drag_failed")});
+            return result;
+        });
         markStateDirty();
 #endif
     }

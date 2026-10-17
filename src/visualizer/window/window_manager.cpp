@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/utils/native_drag_scheduler.hpp"
 #include "gui/utils/native_file_drag.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
@@ -551,6 +552,26 @@ namespace lfs::vis {
         return *native_file_drag_;
     }
 
+    gui::NativeDragScheduler& WindowManager::nativeDragScheduler() {
+        if (!native_drag_scheduler_)
+            native_drag_scheduler_ = std::make_unique<gui::NativeDragScheduler>();
+        return *native_drag_scheduler_;
+    }
+
+    void WindowManager::dispatchNativeDrags(std::function<bool()> frame) {
+        native_transfer_frame_ = std::move(frame);
+        if (native_drag_scheduler_)
+            native_drag_scheduler_->dispatch();
+    }
+
+    bool WindowManager::advanceNativeTransferFrame() {
+        if (!native_transfer_frame_)
+            return false;
+        auto frame = native_transfer_frame_;
+        wakeEventLoop();
+        return frame();
+    }
+
     WindowManager::~WindowManager() {
         // Release our Wayland proxies/queue while SDL's borrowed display is
         // still alive. One context also avoids rebinding globals on panel reload.
@@ -976,6 +997,10 @@ namespace lfs::vis {
     }
 
     void WindowManager::waitEvents(std::optional<double> timeout_seconds) {
+        // A native receiver is waiting for our export. Minimized windows and
+        // renderer recovery must not turn the modal frame into an infinite wait.
+        if (native_drag_scheduler_ && native_drag_scheduler_->busy())
+            timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, 0.025) : std::optional<double>{0.025};
         frame_input_.beginFrame();
         SDL_Event event;
         if (vulkan_context_ &&
@@ -1455,6 +1480,8 @@ namespace lfs::vis {
     }
 
     void WindowManager::setResizeCursorForEdge(const ResizeEdge edge) {
+        if (gui::NativeDragScheduler::ownsNativeCursor())
+            return;
         if constexpr (!kUseManualBorderlessResize)
             return;
 

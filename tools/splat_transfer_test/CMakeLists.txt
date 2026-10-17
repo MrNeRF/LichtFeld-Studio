@@ -16,7 +16,7 @@ option(LFS_DRAG_SANITIZERS "Enable address, undefined-behavior and leak checks" 
 add_executable(wayland_contract wayland_contract.cpp "${BACKEND}/native_file_drag.cpp" "${BACKEND}/native_file_drag_wayland.cpp")
 target_compile_definitions(wayland_contract PRIVATE LFS_HAS_WAYLAND_DRAG=1)
 add_executable(x11_guard_contract native_linux_contract.cpp "${BACKEND}/native_file_drag.cpp" "${BACKEND}/native_file_drag_wayland.cpp")
-add_executable(progress_contract progress_contract.cpp "${BACKEND}/file_transfer_progress.cpp")
+add_executable(progress_contract progress_contract.cpp)
 foreach(target IN ITEMS wayland_contract x11_guard_contract progress_contract)
     target_include_directories(${target} PRIVATE "${PROJECT_ROOT}/src/visualizer" "${PROJECT_ROOT}/src/core/include" "${LFS_SDL_INCLUDE_DIR}")
     target_compile_features(${target} PRIVATE cxx_std_23)

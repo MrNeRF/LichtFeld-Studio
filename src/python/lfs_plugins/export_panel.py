@@ -317,9 +317,9 @@ class ExportPanel(Panel):
     def on_mount(self, doc):
         super().on_mount(doc)
         self._doc = doc
-        self._exporting = False
+        self._cached_export_state = self._export_state()
+        self._exporting = bool(self._cached_export_state.get("active", False))
         self._last_progress = -1.0
-        self._cached_export_state = {}
         self._selection_seeded = False
         self._last_node_key = None
         self._last_colmap_source_path = ""
@@ -380,7 +380,9 @@ class ExportPanel(Panel):
             rml_widgets.request_model_update(self._handle)
 
     def on_update(self, doc):
-        if self._exporting:
+        # Drag export can start outside this panel. Opening it during that job
+        # must show progress directly, without exposing the manual export form.
+        if self._exporting or self._export_state().get("active", False):
             dirty = self._update_export_progress()
             dirty |= self._scrub_fields.sync_all()
             return dirty
