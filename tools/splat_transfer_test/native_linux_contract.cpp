@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "gui/utils/native_drag_icon.hpp"
 #include "gui/utils/native_file_drag.hpp"
 #include <SDL3/SDL.h>
 #include <cstdlib>
@@ -30,6 +31,11 @@ extern "C" void SDL_free(void* data) { std::free(data); }
 int main() {
     using namespace lfs::vis::gui;
     const auto check = [](bool ok) { if (!ok) throw std::runtime_error("Native drag guard failed"); };
+    for (const auto& icon_path : {lfs::core::getAssetsDir() / "lichtfeld-icon.png", std::filesystem::path("/missing/lichtfeld-icon.png")}) {
+        auto* icon = loadNativeDragIcon(64, icon_path);
+        check(icon && gdk_pixbuf_get_width(icon) == 64 && gdk_pixbuf_get_height(icon) == 64);
+        g_object_unref(icon);
+    }
     check(dragReadyFiles({}).status == FileDragStatus::Failed);
     const auto path = std::filesystem::temp_directory_path() / "lichtfeld-native-drag-contract.ply";
     std::ofstream(path) << "fixture";

@@ -20,6 +20,7 @@ int main() {
     if (auto result = lfs::vis::gui::nativeDragDataContract(path))
         return result;
     const auto cursors_before = GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS);
+    const auto gdi_before = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
     DWORD before = 0, after = 0;
     PROCESS_MEMORY_COUNTERS_EX first{}, last{};
     if (!GetProcessHandleCount(GetCurrentProcess(), &before))
@@ -34,7 +35,7 @@ int main() {
     if (!GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&last), sizeof(last)))
         return 11;
     std::filesystem::remove(path);
-    if (GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS) > cursors_before + 2)
+    if (GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS) > cursors_before + 2 || GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) > gdi_before + 2)
         return 12;
     if (after > before + 2 || last.PrivateUsage > first.PrivateUsage + 8 * 1024 * 1024)
         return 10;

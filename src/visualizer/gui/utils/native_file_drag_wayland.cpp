@@ -3,6 +3,7 @@
 #include "native_file_drag.hpp"
 #include <SDL3/SDL.h>
 #ifdef LFS_HAS_WAYLAND_DRAG
+#include "native_drag_icon.hpp"
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -11,10 +12,10 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <vector>
 #include <wayland-client.h>
-#include <wayland-cursor.h>
 #endif
 namespace lfs::vis::gui {
     struct NativeDragContext::Impl {
@@ -52,32 +53,78 @@ namespace lfs::vis::gui {
         wl_data_source* source = nullptr;
         wl_compositor* compositor = nullptr;
         wl_shm* shm = nullptr;
-        wl_cursor_theme* cursor_theme = nullptr;
+        wl_buffer* icon_buffers[2] = {};
+        int icon_state = -1;
         wl_surface* drag_icon = nullptr;
         static void shmFormat(void*, wl_shm*, uint32_t) {}
         static constexpr wl_shm_listener shm_listener = {shmFormat};
+        static constexpr int icon_size = 72;
         void updateIcon(bool accepted) {
-            if (!drag_icon || !cursor_theme)
+            const int state = accepted ? 1 : 0;
+            if (!drag_icon || !icon_buffers[state] || icon_state == state)
                 return;
-            auto* cursor = wl_cursor_theme_get_cursor(cursor_theme, accepted ? "dnd-copy" : "dnd-none");
-            if (!cursor)
-                cursor = wl_cursor_theme_get_cursor(cursor_theme, accepted ? "copy" : "not-allowed");
-            if (!cursor || !cursor->image_count)
-                return;
-            auto* image = cursor->images[0];
-            auto* buffer = wl_cursor_image_get_buffer(image);
-            if (!buffer)
-                return;
-            wl_surface_attach(drag_icon, buffer, 0, 0);
-            wl_surface_damage(drag_icon, 0, 0, image->width, image->height);
+            icon_state = state;
+            wl_surface_attach(drag_icon, icon_buffers[state], 0, 0);
+            wl_surface_damage(drag_icon, 0, 0, icon_size, icon_size);
             wl_surface_commit(drag_icon);
+        }
+        void destroyIcon() {
+            if (drag_icon)
+                wl_surface_destroy(drag_icon);
+            drag_icon = nullptr;
+            for (auto& buffer : icon_buffers) {
+                if (buffer)
+                    wl_buffer_destroy(buffer);
+                buffer = nullptr;
+            }
+            icon_state = -1;
         }
         void createIcon() {
             if (!compositor || !shm)
                 return;
-            if (!cursor_theme)
-                cursor_theme = wl_cursor_theme_load(nullptr, 32, shm);
-            if (cursor_theme)
+            auto* image = loadNativeDragIcon(64);
+            if (!image)
+                return;
+            const int fd = memfd_create("lichtfeld-drag-icon", MFD_CLOEXEC);
+            constexpr int bytes = icon_size * icon_size * 4;
+            void* memory = MAP_FAILED;
+            if (fd >= 0 && ftruncate(fd, bytes * 2) == 0)
+                memory = mmap(nullptr, bytes * 2, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            if (memory != MAP_FAILED) {
+                std::memset(memory, 0, bytes * 2);
+                const auto* pixels = gdk_pixbuf_get_pixels(image);
+                const int channels = gdk_pixbuf_get_n_channels(image);
+                const int stride = gdk_pixbuf_get_rowstride(image);
+                for (int state = 0; state < 2; ++state) {
+                    auto* output = static_cast<uint32_t*>(memory) + state * icon_size * icon_size;
+                    for (int y = 0; y < std::min(64, gdk_pixbuf_get_height(image)); ++y)
+                        for (int x = 0; x < std::min(64, gdk_pixbuf_get_width(image)); ++x) {
+                            const auto* pixel = pixels + y * stride + x * channels;
+                            const uint32_t alpha = channels == 4 ? pixel[3] : 255;
+                            output[y * icon_size + x] = alpha << 24 | (pixel[0] * alpha / 255) << 16 | (pixel[1] * alpha / 255) << 8 | pixel[2] * alpha / 255;
+                        }
+                    for (int y = 48; y < 72; ++y)
+                        for (int x = 48; x < 72; ++x) {
+                            const int dx = x - 59, dy = y - 59;
+                            if (dx * dx + dy * dy > 121)
+                                continue;
+                            const bool mark = state ? (std::abs(dx) <= 1 && std::abs(dy) <= 6) || (std::abs(dy) <= 1 && std::abs(dx) <= 6)
+                                                    : std::abs(dx + dy) <= 1 && std::abs(dx) <= 7;
+                            output[y * icon_size + x] = mark ? 0xffffffff : state ? 0xff28843b
+                                                                                  : 0xffb82b32;
+                        }
+                }
+                if (auto* pool = wl_shm_create_pool(shm, fd, bytes * 2)) {
+                    for (int state = 0; state < 2; ++state)
+                        icon_buffers[state] = wl_shm_pool_create_buffer(pool, state * bytes, icon_size, icon_size, icon_size * 4, WL_SHM_FORMAT_ARGB8888);
+                    wl_shm_pool_destroy(pool);
+                }
+                munmap(memory, bytes * 2);
+            }
+            if (fd >= 0)
+                close(fd);
+            g_object_unref(image);
+            if (icon_buffers[0] && icon_buffers[1])
                 drag_icon = wl_compositor_create_surface(compositor);
         }
         bool attempted = false, done = false, failed = false, active = false, broken = false, provider_failed = false;
@@ -393,10 +440,7 @@ namespace lfs::vis::gui {
         }
         static constexpr wl_data_source_listener source_listener = {target, send, cancelled, dropPerformed, finished, action};
         ~Impl() {
-            if (drag_icon)
-                wl_surface_destroy(drag_icon);
-            if (cursor_theme)
-                wl_cursor_theme_destroy(cursor_theme);
+            destroyIcon();
             if (shm)
                 wl_shm_destroy(shm);
             if (compositor)
@@ -469,9 +513,7 @@ namespace lfs::vis::gui {
                 if (s.source)
                     wl_data_source_destroy(s.source);
                 s.source = nullptr;
-                if (s.drag_icon)
-                    wl_surface_destroy(s.drag_icon);
-                s.drag_icon = nullptr;
+                s.destroyIcon();
                 s.active = false;
                 s.payload.clear();
                 s.provider = {};

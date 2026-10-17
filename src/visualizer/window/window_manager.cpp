@@ -725,6 +725,8 @@ namespace lfs::vis {
 
     bool WindowManager::init() {
         configureValidationLayerSearchPath();
+        // Preserve the initiating press when this same gesture activates us.
+        SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 
         if (shouldPreferX11OnGnome()) {
             SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");

@@ -2,15 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "native_file_drag.hpp"
 #include <SDL3/SDL.h>
-#include <array>
 #include <atomic>
 #include <core/native_fs.hpp>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 
 #include <vector>
 #ifdef __linux__
+#include "native_drag_icon.hpp"
 #include "native_drop_pause.hpp"
 #include <gdk/gdkx.h>
 #include <gtk/gtk.h>
@@ -55,40 +56,94 @@ namespace lfs::vis::gui {
         template <class T>
         using ComPtr = std::unique_ptr<T, ComRelease<T>>;
         class CopySource final : public IDropSource {
-            static HCURSOR makeCopyCursor() {
-                std::array<unsigned char, 128> mask, pixels{};
-                mask.fill(0xff);
-                const auto pixel = [&](int x, int y, bool white) {
-                    const auto index = y * 4 + x / 8;
-                    const auto bit = static_cast<unsigned char>(0x80 >> (x % 8));
-                    mask[index] &= static_cast<unsigned char>(~bit);
-                    if (white)
-                        pixels[index] |= bit;
-                };
-                // A native monochrome arrow plus a copy badge. No per-feedback
-                // allocations, and no dependency on undocumented OLE resources.
-                for (int y = 0; y < 19; ++y)
-                    for (int x = 0; x <= y / 2; ++x)
-                        pixel(x, y, x > 0 && x < y / 2 && y < 18);
-                for (int y = 16; y < 25; ++y)
-                    for (int x = 5; x < 9; ++x)
-                        pixel(x, y, x == 6 || x == 7);
-                for (int y = 18; y < 31; ++y)
-                    for (int x = 17; x < 30; ++x)
-                        pixel(x, y, x > 17 && x < 29 && y > 18 && y < 30 && !((x >= 22 && x <= 24 && y >= 21 && y <= 27) || (y >= 23 && y <= 25 && x >= 20 && x <= 26)));
-                return CreateCursor(GetModuleHandle(nullptr), 0, 0, 32, 32, mask.data(), pixels.data());
+            static HCURSOR makeIconCursor(HWND window, bool allowed) {
+                const auto dpi = window ? GetDpiForWindow(window) : 96;
+                const int size = MulDiv(64, dpi ? dpi : 96, 96);
+                auto icon = static_cast<HICON>(LoadImageW(GetModuleHandle(nullptr), L"IDI_ICON1", IMAGE_ICON, size, size, LR_DEFAULTCOLOR));
+                if (!icon) {
+                    SHFILEINFOW info{};
+                    if (SHGetFileInfoW(L"file", FILE_ATTRIBUTE_NORMAL, &info, sizeof(info), SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_LARGEICON))
+                        icon = info.hIcon;
+                }
+                if (!icon)
+                    return nullptr;
+                BITMAPINFO info{};
+                info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                info.bmiHeader.biWidth = size;
+                info.bmiHeader.biHeight = -size;
+                info.bmiHeader.biPlanes = 1;
+                info.bmiHeader.biBitCount = 32;
+                info.bmiHeader.biCompression = BI_RGB;
+                void* pixels = nullptr;
+                const auto bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+                const auto dc = CreateCompatibleDC(nullptr);
+                HCURSOR cursor = nullptr;
+                if (bitmap && dc) {
+                    std::memset(pixels, 0, static_cast<size_t>(size) * size * 4);
+                    const auto previous = SelectObject(dc, bitmap);
+                    const bool drawn = DrawIconEx(dc, 0, 0, icon, size, size, 0, nullptr, DI_NORMAL);
+                    SelectObject(dc, previous);
+                    auto* output = static_cast<uint32_t*>(pixels);
+                    // A readable badge on the existing app icon, never an arrow
+                    // rasterized by hand. Both states retain the full thumbnail.
+                    for (int y = size * 5 / 8; y < size; ++y)
+                        for (int x = size * 5 / 8; x < size; ++x) {
+                            const int dx = (x - size * 53 / 64) * 64 / size;
+                            const int dy = (y - size * 53 / 64) * 64 / size;
+                            if (dx * dx + dy * dy > 100)
+                                continue;
+                            const bool mark = allowed ? (std::abs(dx) <= 1 && std::abs(dy) <= 6) || (std::abs(dy) <= 1 && std::abs(dx) <= 6)
+                                                      : std::abs(dx + dy) <= 1 && std::abs(dx) <= 7;
+                            output[y * size + x] = mark ? 0xffffffff : allowed ? 0xff28843b
+                                                                               : 0xffb82b32;
+                        }
+                    const auto mask = CreateBitmap(size, size, 1, 1, nullptr);
+                    if (mask) {
+                        const auto old_mask = SelectObject(dc, mask);
+                        const bool cleared = PatBlt(dc, 0, 0, size, size, BLACKNESS);
+                        SelectObject(dc, old_mask);
+                        if (drawn && cleared) {
+                            ICONINFO cursor_info{FALSE, 0, 0, mask, bitmap};
+                            cursor = static_cast<HCURSOR>(CreateIconIndirect(&cursor_info));
+                        }
+                    }
+                    if (mask)
+                        DeleteObject(mask);
+                }
+                if (dc)
+                    DeleteDC(dc);
+                if (bitmap)
+                    DeleteObject(bitmap);
+                DestroyIcon(icon);
+                return cursor;
             }
             HCURSOR previous_cursor_ = GetCursor();
-            HCURSOR copy_cursor_ = makeCopyCursor();
+            HCURSOR copy_cursor_;
+            HCURSOR forbidden_cursor_;
 
         public:
+            explicit CopySource(HWND window = nullptr)
+                : copy_cursor_(makeIconCursor(window, true)), forbidden_cursor_(makeIconCursor(window, false)) {}
             ~CopySource() {
-                if (copy_cursor_) {
-                    if (GetCursor() == copy_cursor_)
-                        SetCursor(previous_cursor_);
+                if (GetCursor() == copy_cursor_ || GetCursor() == forbidden_cursor_)
+                    SetCursor(previous_cursor_);
+                if (copy_cursor_)
                     DestroyCursor(copy_cursor_);
-                }
+                if (forbidden_cursor_)
+                    DestroyCursor(forbidden_cursor_);
             }
+#ifdef LFS_NATIVE_DRAG_TESTS
+            bool readablePreview() const {
+                ICONINFO info{};
+                if (!copy_cursor_ || !forbidden_cursor_ || !GetIconInfo(copy_cursor_, &info))
+                    return false;
+                BITMAP bitmap{};
+                const bool readable = GetObject(info.hbmColor, sizeof(bitmap), &bitmap) && bitmap.bmWidth >= 64 && bitmap.bmHeight >= 64;
+                DeleteObject(info.hbmColor);
+                DeleteObject(info.hbmMask);
+                return readable;
+            }
+#endif
             HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override {
                 if (!out)
                     return E_POINTER;
@@ -112,7 +167,7 @@ namespace lfs::vis::gui {
                 return (keys & MK_LBUTTON) ? S_OK : DRAGDROP_S_DROP;
             }
             HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD effect) override {
-                const auto cursor = effect & DROPEFFECT_COPY ? copy_cursor_ : LoadCursor(nullptr, IDC_NO);
+                const auto cursor = effect & DROPEFFECT_COPY ? copy_cursor_ : forbidden_cursor_;
                 if (!cursor)
                     return DRAGDROP_S_USEDEFAULTCURSORS;
                 SetCursor(cursor);
@@ -376,7 +431,8 @@ namespace lfs::vis::gui {
             return {FileDragStatus::Failed, "OLE initialization failed on the calling UI thread"};
         auto* deferred = new DeferredData([resolve = std::move(resolve)]() mutable { return resolve(); });
         ComPtr<IDataObject> owned_data(deferred);
-        ComPtr<IDropSource> source(new CopySource());
+        const auto hwnd = static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+        ComPtr<IDropSource> source(new CopySource(hwnd));
         DWORD effect = DROPEFFECT_NONE;
         // SDL and GHOST can hold automatic capture while the button is down.
         // Hand it to OLE explicitly so the pointer can enter another app.
@@ -507,7 +563,11 @@ namespace lfs::vis::gui {
         auto* drag = gtk_drag_begin_with_coordinates(widget, targets, GDK_ACTION_COPY, 1, nullptr, -1, -1);
         gtk_target_list_unref(targets);
         if (drag) {
-            gtk_drag_set_icon_name(drag, "text-x-generic", 0, 0);
+            if (auto* icon = loadNativeDragIcon(64)) {
+                gtk_drag_set_icon_pixbuf(drag, icon, -12, -12);
+                g_object_unref(icon);
+            } else
+                gtk_drag_set_icon_name(drag, "text-x-generic", 0, 0);
             struct Timeout {
                 State* state;
                 GdkDragContext* drag;
@@ -549,7 +609,10 @@ namespace lfs::vis::gui {
         if (FAILED(ole.result))
             return 1;
         for (int i = 0; i < 1000; ++i) {
-            ComPtr<IDropSource> source(new CopySource());
+            auto* preview = new CopySource();
+            ComPtr<IDropSource> source(preview);
+            if (!preview->readablePreview())
+                return 15;
             int calls = 0;
             auto* delayed = new DeferredData([&] {
                 ++calls;

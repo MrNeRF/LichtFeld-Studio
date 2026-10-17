@@ -64,7 +64,7 @@
     ],
     "unicode_filename": "passed"
   },
-  "physical_drag": "Pending validation of the progress-enabled build",
+  "physical_drag": "User confirmed previous drag build; new branded preview and first activation click remain to be visually validated",
   "clang_format": {
     "version": "18.1.3",
     "configuration": ".clang-format",
@@ -84,7 +84,7 @@
   "resource_checks": {
     "windows_com_cycles": 6000,
     "wayland": "50 protocol cycles plus context reuse; resource teardown checked with sanitizers",
-    "cursor": "Windows copy/forbidden cursor, GUI resource counts checked; GTK native feedback; Wayland themed icon surface with real SHM protocol test"
+    "cursor": "Windows existing LichtFeld icon at 64 logical pixels scaled to source DPI, copy/forbidden badges, USER/GDI resource counts; GTK 64px branded icon; Wayland branded 72px canvas and immutable memfd SHM buffers"
   },
   "progress": {
     "ui": "Existing lfs.export panel and AsyncTaskManager job; separate native progress dialog removed",
@@ -106,5 +106,9 @@
     "labels": "Plain format names in all 10 locales",
     "legacy_sog": "Normalized to PLY; manual SOG export retained"
   },
-  "self_drop": "Windows rejects before GetData; Linux pauses SDL file/text reception and restores prior flags; SDL queued drops discarded"
+  "self_drop": "Windows rejects before GetData; Linux pauses SDL file/text reception and restores prior flags; SDL queued drops discarded",
+  "focus_activation": {
+    "implementation": "SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH enabled before video initialization",
+    "physical_test": "Pending first-click drag validation on Windows and Linux desktops"
+  }
 }
