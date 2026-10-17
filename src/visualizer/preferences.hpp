@@ -5,6 +5,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "gui/utils/splat_drag_preferences.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -18,16 +19,6 @@ namespace lfs::vis {
     // Snapshot defaults seed new projects; restored VIEW state remains authoritative.
     [[nodiscard]] LFS_VIS_API std::string renderingDefaultsFromSettings(const RenderSettings& settings);
     [[nodiscard]] LFS_VIS_API lfs::Status applyRenderingDefaults(RenderSettings& settings, std::string_view serialized);
-
-    struct SplatDragPreferenceState {
-        std::string format = "ply";
-        bool maximum_quality = true;
-        bool blender_axes = true;
-        int ply_sh = -1;
-        int spz_sh = -1;
-        int sog_sh = -1;
-        int sog_iterations = 30;
-    };
 
     struct McpPreferenceState {
         bool enabled = true;

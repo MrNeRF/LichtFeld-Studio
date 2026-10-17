@@ -971,7 +971,7 @@ namespace lfs::vis {
             return;
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        impl_->values["splat_drag"] = {{"format", state.format}, {"maximum_quality", state.maximum_quality}, {"blender_axes", state.blender_axes}, {"ply_sh", std::clamp(state.ply_sh, -1, 3)}, {"spz_sh", std::clamp(state.spz_sh, -1, 3)}, {"sog_sh", std::clamp(state.sog_sh, -1, 3)}, {"sog_iterations", std::clamp(state.sog_iterations, 1, 100)}};
+        impl_->values["splat_drag"] = {{"format", state.format}, {"sh_degree", std::clamp(state.sh_degree, 0, 3)}, {"blender_axes", state.blender_axes}};
         impl_->saveLocked();
     }
     SplatDragPreferenceState UserPreferences::splatDrag() {
@@ -985,12 +985,12 @@ namespace lfs::vis {
         state.format = field<std::string>(*it, "format", "ply");
         if (state.format != "ply" && state.format != "spz")
             state.format = "ply";
-        state.maximum_quality = field<bool>(*it, "maximum_quality", true);
+        std::optional<int> limit;
+        if (it->contains("sh_degree"))
+            limit = field<int>(*it, "sh_degree", 3);
+        state.sh_degree = resolveSplatDragShLimit(limit, field<bool>(*it, "maximum_quality", true),
+                                                  field<int>(*it, state.format == "spz" ? "spz_sh" : "ply_sh", -1));
         state.blender_axes = field<bool>(*it, "blender_axes", true);
-        state.ply_sh = std::clamp(field<int>(*it, "ply_sh", -1), -1, 3);
-        state.spz_sh = std::clamp(field<int>(*it, "spz_sh", -1), -1, 3);
-        state.sog_sh = std::clamp(field<int>(*it, "sog_sh", -1), -1, 3);
-        state.sog_iterations = std::clamp(field<int>(*it, "sog_iterations", 30), 1, 100);
         return state;
     }
     void UserPreferences::setSceneGraphSelectionMarkers(const bool enabled) {

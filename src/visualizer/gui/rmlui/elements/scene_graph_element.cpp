@@ -717,8 +717,7 @@ namespace lfs::vis::gui {
                 auto* window = services().windowOrNull();
                 if (!gui || !window)
                     throw std::runtime_error("Transfer UI unavailable");
-                const auto format = prefs.format == "spz" ? core::ExportFormat::SPZ : prefs.format == "sog" ? core::ExportFormat::SOG
-                                                                                                            : core::ExportFormat::PLY;
+                const auto format = prefs.format == "spz" ? core::ExportFormat::SPZ : core::ExportFormat::PLY;
                 job_started = gui->asyncTasks().beginDragExport(format, [progress] { progress->requestCancel(); });
                 if (!job_started)
                     throw std::runtime_error("Another export is active");
@@ -738,10 +737,7 @@ namespace lfs::vis::gui {
                     const auto* node = scene.getNodeById(id);
                     if (!node || node->uuid != uuid || !node->model)
                         throw SplatTransferError(sources.size(), "Transfer source no longer exists");
-                    const int degree = prefs.maximum_quality ? -1 : prefs.format == "spz" ? prefs.spz_sh
-                                                                : prefs.format == "sog"   ? prefs.sog_sh
-                                                                                          : prefs.ply_sh;
-                    sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string() : node->name, .sh_degree = degree, .sog_iterations = prefs.maximum_quality ? 100 : prefs.sog_iterations, .z_up = prefs.format == "ply" && prefs.blender_axes}});
+                    sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string() : node->name, .sh_degree = prefs.sh_degree, .z_up = prefs.format == "ply" && prefs.blender_axes}});
                     sources.back().options.progress = [progress, worker_start, index = sources.size() - 1, count = identity.size()](float fraction) {
                         worker_start();
                         return progress->report(index, count, fraction);

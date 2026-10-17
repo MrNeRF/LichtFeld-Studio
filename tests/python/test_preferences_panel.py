@@ -40,8 +40,7 @@ def preferences_panel_module(monkeypatch):
 
     state = SimpleNamespace(
         language="it",
-        splat_drag_preferences={"format": "ply", "maximum_quality": True,
-            "blender_axes": True, "ply_sh": -1, "spz_sh": -1, "sog_sh": -1, "sog_iterations": 30},
+        splat_drag_preferences={"format": "ply", "sh_degree": 3, "blender_axes": True},
         sidebar_clear_calls=[],
         set_language_calls=[],
         mcp_preferences={
@@ -1432,12 +1431,12 @@ def test_marketplace_git_checkout_requires_git_without_changing_saved_choice(pre
 def test_splat_drag_preferences_convert_ui_values_and_respect_safe_mode(preferences_panel_module):
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
-    panel._set_splat_drag_preference("spz_sh", "2")
-    assert state.splat_drag_preferences["spz_sh"] == 2
-    assert panel._get_splat_drag_preference("spz_sh") == "2"
+    panel._set_splat_drag_preference("sh_degree", "2")
+    assert state.splat_drag_preferences["sh_degree"] == 2
+    assert panel._get_splat_drag_preference("sh_degree") == "2"
     panel._mcp_safe_mode = True
-    panel._set_splat_drag_preference("spz_sh", "1")
-    assert state.splat_drag_preferences["spz_sh"] == 2
+    panel._set_splat_drag_preference("sh_degree", "1")
+    assert state.splat_drag_preferences["sh_degree"] == 2
 
 
 def test_quick_export_offers_only_ply_and_spz_with_plain_translated_labels():
@@ -1451,3 +1450,34 @@ def test_quick_export_offers_only_ply_and_spz_with_plain_translated_labels():
         preferences = json.loads(path.read_text(encoding="utf-8"))
         assert preferences["preferences.drag_ply"] == "PLY", path.name
         assert preferences["preferences.drag_spz"] == "SPZ", path.name
+
+
+@pytest.mark.parametrize("value", ["-1", "4", "invalid", None])
+def test_drag_sh_limit_rejects_invalid_ui_values(preferences_panel_module, value):
+    module, state = preferences_panel_module
+    module.PreferencesPanel()._set_splat_drag_preference("sh_degree", value)
+    assert state.splat_drag_preferences["sh_degree"] == 3
+
+
+def test_drag_settings_use_one_sh_cap_and_localized_tooltips():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/preferences.rml")
+    cap = next(element for element in document.iter("select")
+               if element.get("data-value") == "splat_drag_sh_degree")
+    assert [option.get("value") for option in cap] == ["0", "1", "2", "3"]
+    text = (root / "src/visualizer/gui/rmlui/resources/preferences.rml").read_text(encoding="utf-8")
+    assert "splat_drag_maximum_quality" not in text
+    assert "splat_drag_ply_sh" not in text and "splat_drag_spz_sh" not in text
+    tooltip_keys = {"preferences.drag_format_hint", "preferences.drag_sh_hint", "preferences.drag_axes_hint"}
+    assert tooltip_keys <= {element.get("data-tooltip") for element in document.iter()}
+    inline = " ".join("".join(element.itertext()) for element in document.iter("span")
+                      if "preferences-description" in element.get("class", ""))
+    assert not any(key in inline for key in tooltip_keys)
+    axes = next(element for element in document.iter()
+                if element.get("data-tooltip") == "preferences.drag_axes_hint")
+    assert axes.get("data-if") == "splat_drag_format == 'ply'"
+    for path in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert all(data.get(key) for key in tooltip_keys), path.name
+        assert not any("SOG" in data[key].upper() for key in tooltip_keys), path.name

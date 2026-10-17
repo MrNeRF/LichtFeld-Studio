@@ -156,30 +156,18 @@ namespace lfs::python {
             const auto s = lfs::vis::UserPreferences::instance().splatDrag();
             nb::dict result;
             result["format"] = s.format;
-            result["maximum_quality"] = s.maximum_quality;
+            result["sh_degree"] = s.sh_degree;
             result["blender_axes"] = s.blender_axes;
-            result["ply_sh"] = s.ply_sh;
-            result["spz_sh"] = s.spz_sh;
-            result["sog_sh"] = s.sog_sh;
-            result["sog_iterations"] = s.sog_iterations;
             return result;
         });
         m.def("set_splat_drag_preferences", [](nb::dict values) {
             auto s = lfs::vis::UserPreferences::instance().splatDrag();
             if (values.contains("format"))
                 s.format = nb::cast<std::string>(values["format"]);
-            if (values.contains("maximum_quality"))
-                s.maximum_quality = nb::cast<bool>(values["maximum_quality"]);
+            if (values.contains("sh_degree"))
+                s.sh_degree = nb::cast<int>(values["sh_degree"]);
             if (values.contains("blender_axes"))
                 s.blender_axes = nb::cast<bool>(values["blender_axes"]);
-            if (values.contains("ply_sh"))
-                s.ply_sh = nb::cast<int>(values["ply_sh"]);
-            if (values.contains("spz_sh"))
-                s.spz_sh = nb::cast<int>(values["spz_sh"]);
-            if (values.contains("sog_sh"))
-                s.sog_sh = nb::cast<int>(values["sog_sh"]);
-            if (values.contains("sog_iterations"))
-                s.sog_iterations = nb::cast<int>(values["sog_iterations"]);
             lfs::vis::UserPreferences::instance().setSplatDrag(s);
         });
         m.def("scene_graph_selection_markers", &lfs::vis::loadSceneGraphSelectionMarkersPreference,

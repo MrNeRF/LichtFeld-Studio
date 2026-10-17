@@ -131,7 +131,8 @@ namespace lfs::vis::gui {
         const float s2 = glm::dot(linear[0], linear[0]);
         if (!std::isfinite(s2) || s2 <= 0 || std::abs(glm::determinant(linear)) < 1e-12f)
             throw std::runtime_error("Invalid or singular object transform");
-        if (model.get_max_sh_degree() > 0) {
+        const int degree = options.sh_degree < 0 ? model.get_max_sh_degree() : std::clamp(options.sh_degree, 0, model.get_max_sh_degree());
+        if (degree > 0) {
             for (int i = 0; i < 3; ++i)
                 for (int j = 0; j < 3; ++j)
                     if (std::abs(glm::dot(linear[i], linear[j]) - (i == j ? s2 : 0)) > 1e-6f * s2)
@@ -142,7 +143,6 @@ namespace lfs::vis::gui {
         const auto cpu = [](const core::Tensor& t) {
             return t.is_valid() ? t.to(core::Device::CPU).contiguous().clone() : core::Tensor{};
         };
-        const int degree = options.sh_degree < 0 ? model.get_max_sh_degree() : std::clamp(options.sh_degree, 0, model.get_max_sh_degree());
         auto sh = cpu(model.shN_canonical_cpu());
         const int coefficients = (degree + 1) * (degree + 1) - 1;
         if (sh.is_valid() && coefficients > 0)

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "formats/ply.hpp"
+#include "formats/spz.hpp"
 #include "gui/utils/file_transfer_progress.hpp"
 #include "gui/utils/splat_transfer.hpp"
 #include <algorithm>
@@ -256,6 +257,37 @@ int main(int argc, char** argv) {
             std::filesystem::remove_all(root); // Unique test-owned root above.
         }
         manifest["snapshot_deleted_world_covariance_sh1_cancel_lod"] = "passed";
+        {
+            const auto root = std::filesystem::temp_directory_path() / ("lichtfeld-sh-cap-" + generate_uuid_v4().to_string());
+            for (int available = 0; available <= 3; ++available) {
+                auto model = fixture(available);
+                for (int cap = 0; cap <= 3; ++cap) {
+                    for (const auto* format : {"ply", "spz"}) {
+                        const auto path = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), std::make_shared<std::atomic<bool>>(false),
+                                                                              {.format = format, .sh_degree = cap, .staging_root = root})
+                                              .get();
+                        const int expected = std::min(available, cap);
+                        if (std::string_view(format) == "ply") {
+                            auto loaded = lfs::io::load_ply(path, options);
+                            require(bool(loaded) && loaded->value.get_max_sh_degree() == expected, "PLY SH cap increased or lost source degree");
+                            require(loaded->value.size() == 2, "SH cap removed points");
+                        } else {
+                            auto loaded = lfs::io::load_spz(path);
+                            require(bool(loaded) && loaded->get_max_sh_degree() == expected, "SPZ SH cap increased or lost source degree");
+                            require(loaded->size() == 2, "SPZ SH cap removed points");
+                        }
+                    }
+                }
+            }
+            const auto path = lfs::vis::gui::prepareSplatTransfer(fixture(3), glm::scale(glm::mat4(1), glm::vec3(1, 2, 3)),
+                                                                  std::make_shared<std::atomic<bool>>(false), {.sh_degree = 0, .staging_root = root})
+                                  .get();
+            auto loaded = lfs::io::load_ply(path, options);
+            require(bool(loaded) && loaded->value.get_max_sh_degree() == 0, "Discarded SH still rejected an SH0 affine export");
+            std::filesystem::remove_all(root); // Unique test-owned root.
+        }
+        manifest["sh_cap_0_to_3_all_source_degrees_ply_spz"] = "passed";
+
         {
             // Staging never overwrites an existing user file. Identical export
             // names live in distinct, exclusively reserved UUID directories.

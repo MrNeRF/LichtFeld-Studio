@@ -29,7 +29,7 @@
     }
   },
   "python_tests": {
-    "passed": 93
+    "passed": 98
   },
   "linux": "Native Wayland protocol and X11 guard contracts passed; physical desktop interoperability pending",
   "blender": {
@@ -105,7 +105,12 @@
       "spz"
     ],
     "labels": "Plain format names in all 10 locales",
-    "legacy_sog": "Normalized to PLY; manual SOG export retained"
+    "legacy_sog": "Normalized to PLY; manual SOG export retained",
+    "settings": "Format PLY/SPZ, one maximum SH degree 0..3 (default 3), Blender axes visible only for PLY",
+    "tooltips": "All drag explanations in localized tooltips in all 10 locales; obsolete quality and SOG UI keys removed",
+    "migration": "Old maximum/-1 maps to cap 3; otherwise preserve the selected format SH cap; new explicit cap wins",
+    "sh_contract": "16 source/cap combinations for both PLY and SPZ, degree=min(source,cap), unchanged point count; reduced SH0 permits nonuniform affine export",
+    "hierarchy": "Group remains a flat set of files, not Blender collections"
   },
   "self_drop": "Windows rejects before GetData; Linux pauses SDL file/text reception and restores prior flags; SDL queued drops discarded",
   "focus_activation": {

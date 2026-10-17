@@ -231,7 +231,7 @@ class PreferencesPanel(Panel):
             lf.ui.scene_graph_selection_markers,
             self._set_scene_graph_selection_markers,
         )
-        for key in ("format", "maximum_quality", "blender_axes", "ply_sh", "spz_sh"):
+        for key in ("format", "sh_degree", "blender_axes"):
             model.bind("splat_drag_" + key,
                        lambda k=key: self._get_splat_drag_preference(k),
                        lambda value, k=key: self._set_splat_drag_preference(k, value))
@@ -896,16 +896,18 @@ class PreferencesPanel(Panel):
 
     def _get_splat_drag_preference(self, key):
         value = lf.ui.get_splat_drag_preferences()[key]
-        return value if key in ("maximum_quality", "blender_axes", "format") else str(value)
+        return value if key in ("blender_axes", "format") else str(value)
 
     def _set_splat_drag_preference(self, key, value):
         if self._mcp_safe_mode:
             return
-        if key not in ("maximum_quality", "blender_axes", "format"):
+        if key not in ("blender_axes", "format"):
             try:
                 value = int(value)
             except (TypeError, ValueError):
                 return
+        if key == "sh_degree" and not 0 <= value <= 3:
+            return
         lf.ui.set_splat_drag_preferences({key: value})
         if self._handle:
             self._handle.dirty("splat_drag_" + key)
@@ -1693,8 +1695,7 @@ class PreferencesPanel(Panel):
             lf.ui.set_native_floating_windows(False)
             if not self._mcp_safe_mode:
                 lf.ui.set_scene_graph_selection_markers(False)
-                lf.ui.set_splat_drag_preferences({"format": "ply", "maximum_quality": True,
-                    "blender_axes": True, "ply_sh": -1, "spz_sh": -1, "sog_sh": -1, "sog_iterations": 30})
+                lf.ui.set_splat_drag_preferences({"format": "ply", "sh_degree": 3, "blender_axes": True})
             return lf.ui.reset_layout()
         elif section == "mcp":
             if not self._mcp_safe_mode:
