@@ -128,6 +128,16 @@ namespace {
             const auto result = codec::encode_png_memory(bytes, w, h, c, b, stride, output, options);
             ASSERT_FALSE(result);
             EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+            const auto detail = result.error().detail();
+            for (const auto& field : {
+                     "width=" + std::to_string(w) + ",",
+                     "height=" + std::to_string(h) + ",",
+                     "channels=" + std::to_string(c) + ",",
+                     "depth=" + std::to_string(b) + ",",
+                     "stride=" + std::to_string(stride) + ",",
+                     "span_bytes=" + std::to_string(bytes.size()) + ",",
+                     "limit=" + std::to_string(options.max_output_bytes) + ")"})
+                EXPECT_NE(detail.find(field), std::string_view::npos) << detail;
             EXPECT_EQ(output, (std::vector<uint8_t>{7, 8, 9}));
         };
         invalid({}, 3, 2, 3, 16, 18);

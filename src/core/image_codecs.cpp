@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -2887,17 +2888,22 @@ namespace lfs::core::image_codecs {
         const auto failure = [](ErrorCode code, std::string message) -> Status {
             return Status::failure(make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()}));
         };
+        const auto invalid = [&](std::string_view reason) -> Status {
+            return failure(ErrorCode::InvalidArgument,
+                           std::format("{} (width={}, height={}, channels={}, depth={}, stride={}, span_bytes={}, limit={})",
+                                       reason, width, height, channels, bit_depth, row_stride, data.size(), options.max_output_bytes));
+        };
         if (width <= 0 || height <= 0 || channels < 1 || channels > 4 || (bit_depth != 8 && bit_depth != 16) ||
             static_cast<std::size_t>(width) > std::numeric_limits<std::size_t>::max() / channels / (bit_depth / 8))
-            return failure(ErrorCode::InvalidArgument, "Unsupported PNG layout");
+            return invalid("Unsupported PNG layout");
         const auto row_bytes = static_cast<std::size_t>(width) * channels * (bit_depth / 8);
         if (row_stride < row_bytes || static_cast<std::size_t>(height - 1) > (std::numeric_limits<std::size_t>::max() - row_bytes) / row_stride ||
             data.size() < row_stride * (height - 1) + row_bytes)
-            return failure(ErrorCode::InvalidArgument, "Unsupported PNG buffer size or stride");
+            return invalid("Unsupported PNG buffer size or stride");
         if (!options.max_output_bytes || options.max_output_bytes > output.max_size())
-            return failure(ErrorCode::InvalidArgument, "Invalid PNG encoded-byte limit");
+            return invalid("Invalid PNG encoded-byte limit");
         if (options.comment && (options.comment->find('\0') != std::string::npos || options.comment->size() > PNG_UINT_31_MAX - 8))
-            return failure(ErrorCode::InvalidArgument, "Invalid PNG Comment text");
+            return invalid("Invalid PNG Comment text");
         try {
             EncodedMemory memory;
             memory.limit = options.max_output_bytes;
