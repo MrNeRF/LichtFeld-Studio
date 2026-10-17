@@ -234,7 +234,14 @@ namespace lfs::io {
             const std::string js_import = "import { main } from './index.js';";
             html = replace_placeholder(html, js_import, js);
 
-            const glm::vec3 bg = glm::clamp(background_color.value_or(glm::vec3(0.0f)), glm::vec3(0.0f), glm::vec3(1.0f));
+            auto sanitize_channel = [](float v) noexcept -> float {
+                return std::isfinite(v) ? v : 0.0f;
+            };
+            glm::vec3 raw_bg = background_color.value_or(glm::vec3(0.0f));
+            raw_bg.r = sanitize_channel(raw_bg.r);
+            raw_bg.g = sanitize_channel(raw_bg.g);
+            raw_bg.b = sanitize_channel(raw_bg.b);
+            const glm::vec3 bg = glm::clamp(raw_bg, glm::vec3(0.0f), glm::vec3(1.0f));
             const std::string settings_fetch = "settings: fetch(settingsUrl).then(response => response.json())";
             std::ostringstream settings_stream;
             settings_stream << std::fixed << std::setprecision(6);

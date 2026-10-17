@@ -39,8 +39,6 @@
 #include "rendering/render_constants.hpp"
 #include "sequencer/keyframe.hpp"
 #include "training/training_manager.hpp"
-#include "visualizer/core/parameter_manager.hpp"
-#include "visualizer/core/services.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
 #include "visualizer/gui/string_keys.hpp"
@@ -1989,27 +1987,7 @@ namespace lfs::app {
                 break;
             }
             case core::ExportFormat::HTML_VIEWER: {
-                std::optional<glm::vec3> bg_color;
-                if (auto* rm = vis::services().renderingOrNull()) {
-                    const auto vp_bg = rm->getSettings().background_color;
-                    if (vp_bg != glm::vec3(0.0f)) {
-                        bg_color = vp_bg;
-                    }
-                }
-                if (!bg_color) {
-                    if (auto* tm = scene_manager.getTrainerManager(); tm && tm->hasTrainer()) {
-                        if (auto* trainer = tm->getTrainer()) {
-                            const auto train_bg = trainer->getParams().optimization.bg_color;
-                            bg_color = glm::vec3(train_bg[0], train_bg[1], train_bg[2]);
-                        }
-                    } else if (auto* pm = vis::services().paramsOrNull(); pm && pm->isLoaded()) {
-                        const auto train_bg = pm->getActiveParams().bg_color;
-                        bg_color = glm::vec3(train_bg[0], train_bg[1], train_bg[2]);
-                    }
-                }
-                if (!bg_color && vis::services().renderingOrNull()) {
-                    bg_color = vis::services().renderingOrNull()->getSettings().background_color;
-                }
+                const auto bg_color = vis::gui::resolve_html_export_background_color();
                 if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{
                         .output_path = path,
                         .provenance = stamp,

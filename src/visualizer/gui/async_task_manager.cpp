@@ -21,6 +21,7 @@
 #include "gui/error_event_bridge.hpp"
 #include "gui/gallery_scene_publication.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/html_viewer_export.hpp"
 #include "gui/import_error.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/string_keys.hpp"
@@ -1823,27 +1824,7 @@ namespace lfs::vis::gui {
         auto provenance = include_provenance ? make_gui_export_stamp(*scene_manager)
                                              : core::make_minimal_provenance_stamp();
 
-        std::optional<glm::vec3> background_color;
-        if (auto* rendering = services().renderingOrNull()) {
-            const auto vp_bg = rendering->getSettings().background_color;
-            if (vp_bg != glm::vec3(0.0f)) {
-                background_color = vp_bg;
-            }
-        }
-        if (!background_color) {
-            if (auto* trainer_mgr = services().trainerOrNull(); trainer_mgr && trainer_mgr->hasTrainer()) {
-                if (auto* trainer = trainer_mgr->getTrainer()) {
-                    const auto train_bg = trainer->getParams().optimization.bg_color;
-                    background_color = glm::vec3(train_bg[0], train_bg[1], train_bg[2]);
-                }
-            } else if (auto* params = services().paramsOrNull(); params && params->isLoaded()) {
-                const auto train_bg = params->getActiveParams().bg_color;
-                background_color = glm::vec3(train_bg[0], train_bg[1], train_bg[2]);
-            }
-        }
-        if (!background_color && services().renderingOrNull()) {
-            background_color = services().renderingOrNull()->getSettings().background_color;
-        }
+        const auto background_color = resolve_html_export_background_color();
 
         startAsyncExport(format,
                          path,

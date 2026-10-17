@@ -1632,8 +1632,17 @@ namespace lfs::training {
                 return lfs::io::save_spz(splat, {.output_path = output, .version = 4, .provenance = provenance});
             case OutputFormat::GLB:
                 return lfs::io::save_spz(splat, {.output_path = output, .provenance = provenance, .glb = true});
-            case OutputFormat::HTML:
-                return lfs::io::export_html(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
+            case OutputFormat::HTML: {
+                std::optional<glm::vec3> bg_color;
+                if (params.optimization.bg_mode == lfs::core::param::BackgroundMode::SolidColor) {
+                    const auto& train_bg = params.optimization.bg_color;
+                    bg_color = glm::vec3(train_bg[0], train_bg[1], train_bg[2]);
+                }
+                return lfs::io::export_html(splat, {.output_path = output,
+                                                   .kmeans_iterations = 10,
+                                                   .provenance = provenance,
+                                                   .background_color = bg_color});
+            }
             case OutputFormat::USD:
             case OutputFormat::USDA:
             case OutputFormat::USDC:
