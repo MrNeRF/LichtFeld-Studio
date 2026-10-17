@@ -55,6 +55,49 @@ namespace lfs::core::image_codecs {
 
         constexpr std::array<std::uint8_t, 8> kPngSignature{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
 
+        // Shared bounded ownership for encoded destinations. C callbacks can
+        // record allocation failure without unwinding through a codec ABI.
+        struct EncodedMemory {
+            enum class Failure { None,
+                                 Limit,
+                                 Allocation };
+            Failure failure = Failure::None;
+            std::vector<std::uint8_t> bytes;
+            std::size_t limit = 0;
+
+            bool write_at(std::size_t position, const std::uint8_t* data, std::size_t count) noexcept {
+                if (position > limit || count > limit - position) {
+                    failure = Failure::Limit;
+                    return false;
+                }
+                if (!count)
+                    return true;
+                try {
+                    const auto required = position + count;
+                    if (required > bytes.capacity()) {
+                        const auto doubled = bytes.capacity() > limit / 2 ? limit : bytes.capacity() * 2;
+                        bytes.reserve(std::max(required, doubled));
+                    }
+                    if (position == bytes.size())
+                        bytes.insert(bytes.end(), data, data + count);
+                    else {
+                        if (required > bytes.size())
+                            bytes.resize(required, 0);
+                        std::memcpy(bytes.data() + position, data, count);
+                    }
+                    return true;
+                } catch (const std::bad_alloc&) {
+                    // LFS-CENSUS-OK(empty-catch): retain the failure at the C
+                    // boundary; the caller returns ResourceExhausted.
+                    failure = Failure::Allocation;
+                    return false;
+                }
+            }
+            bool append(const std::uint8_t* data, std::size_t count) noexcept {
+                return write_at(bytes.size(), data, count);
+            }
+        };
+
         std::string lower_extension(const std::filesystem::path& path) {
             auto extension = lfs::core::path_to_utf8(path.extension());
             std::transform(extension.begin(), extension.end(), extension.begin(),
@@ -138,9 +181,9 @@ namespace lfs::core::image_codecs {
             return data.size() >= 2 && data[0] == 'B' && data[1] == 'M';
         }
 
-        bool is_tiff(const std::vector<std::uint8_t>& data) {
-            return data.size() >= 4 && ((data[0] == 'I' && data[1] == 'I' && data[2] == 42 && data[3] == 0) ||
-                                        (data[0] == 'M' && data[1] == 'M' && data[2] == 0 && data[3] == 42));
+        bool is_tiff(std::span<const std::uint8_t> data) {
+            return data.size() >= 4 && ((data[0] == 'I' && data[1] == 'I' && (data[2] == 42 || data[2] == 43) && data[3] == 0) ||
+                                        (data[0] == 'M' && data[1] == 'M' && data[2] == 0 && (data[3] == 42 || data[3] == 43)));
         }
 
         bool is_hdr(const std::vector<std::uint8_t>& data) {
@@ -578,21 +621,27 @@ namespace lfs::core::image_codecs {
         }
 
         int tiff_error_handler_ext_r(TIFF*, void* user_data, const char* module,
-                                     const char* format, va_list args) {
+                                     const char* format, va_list args) noexcept {
             auto& error = *static_cast<std::string*>(user_data);
-            std::array<char, 512> message{};
-            std::vsnprintf(message.data(), message.size(), format, args);
-            if (!error.empty())
-                error += "; ";
-            if (module && *module) {
-                // libtiff names the file it was given; show the caller's spelling, not the extended one.
-                std::string_view name = module;
-                if (name.starts_with(R"(\\?\UNC\)"))
-                    error += R"(\\)" + std::string(name.substr(8)) + ": ";
-                else
-                    error += std::string(name.starts_with(R"(\\?\)") ? name.substr(4) : name) + ": ";
+            try {
+                std::array<char, 512> message{};
+                std::vsnprintf(message.data(), message.size(), format, args);
+                if (!error.empty())
+                    error += "; ";
+                if (module && *module) {
+                    // libtiff names the file it was given; show the caller's spelling, not the extended one.
+                    std::string_view name = module;
+                    if (name.starts_with(R"(\\?\UNC\)"))
+                        error += R"(\\)" + std::string(name.substr(8)) + ": ";
+                    else
+                        error += std::string(name.starts_with(R"(\\?\)") ? name.substr(4) : name) + ": ";
+                }
+                error += message.data();
+            } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): preserve the C boundary. The
+                // failed codec call returns its fallback diagnostic outside C.
+                error.clear();
             }
-            error += message.data();
             return 1;
         }
 
@@ -603,20 +652,19 @@ namespace lfs::core::image_codecs {
         TIFF* open_tiff(const std::filesystem::path& path, const char* mode, std::string& error) {
             install_tiff_quiet_handlers();
             error.clear();
-            auto* options = TIFFOpenOptionsAlloc();
+            std::unique_ptr<TIFFOpenOptions, decltype(&TIFFOpenOptionsFree)> options(TIFFOpenOptionsAlloc(), TIFFOpenOptionsFree);
             if (!options) {
                 error = "TIFF open failed: could not allocate codec options";
                 return nullptr;
             }
-            TIFFOpenOptionsSetErrorHandlerExtR(options, tiff_error_handler_ext_r, &error);
-            TIFFOpenOptionsSetWarningHandlerExtR(options, tiff_warning_handler_ext_r, nullptr);
+            TIFFOpenOptionsSetErrorHandlerExtR(options.get(), tiff_error_handler_ext_r, &error);
+            TIFFOpenOptionsSetWarningHandlerExtR(options.get(), tiff_warning_handler_ext_r, nullptr);
 #ifdef _WIN32
-            TIFF* tiff = TIFFOpenWExt(native_fs::native_path(path).c_str(), mode, options);
+            TIFF* tiff = TIFFOpenWExt(native_fs::native_path(path).c_str(), mode, options.get());
 #else
             const auto path_utf8 = path_to_utf8(path);
-            TIFF* tiff = TIFFOpenExt(path_utf8.c_str(), mode, options);
+            TIFF* tiff = TIFFOpenExt(path_utf8.c_str(), mode, options.get());
 #endif
-            TIFFOpenOptionsFree(options);
             if (!tiff) {
                 if (error.empty())
                     error = "TIFF open failed: invalid file structure or unsupported codec";
@@ -625,6 +673,107 @@ namespace lfs::core::image_codecs {
             }
             return tiff;
         }
+
+        // Borrowed input or a bounded seekable destination. All callbacks are
+        // nonthrowing; diagnostics and failure flags are consumed outside C.
+        struct TiffMemory {
+            std::span<const std::uint8_t> input;
+            EncodedMemory* output = nullptr;
+            std::size_t position = 0;
+            bool failed = false;
+            bool allocation_failed = false;
+            std::array<char, 512> message{};
+
+            std::span<const std::uint8_t> bytes() const noexcept {
+                return output ? std::span<const std::uint8_t>(output->bytes) : input;
+            }
+            void fail(const char* text) noexcept {
+                failed = true;
+                if (!message[0])
+                    std::strncpy(message.data(), text, message.size() - 1);
+            }
+            static tmsize_t read(thandle_t handle, void* data, tmsize_t size) noexcept {
+                auto& self = *static_cast<TiffMemory*>(handle);
+                if (size < 0) {
+                    self.fail("Invalid TIFF read size");
+                    return -1;
+                }
+                const auto bytes = self.bytes();
+                const auto count = self.position >= bytes.size() ? 0 : std::min<std::size_t>(size, bytes.size() - self.position);
+                if (count)
+                    std::memcpy(data, bytes.data() + self.position, count);
+                self.position += count;
+                return static_cast<tmsize_t>(count);
+            }
+            static tmsize_t write(thandle_t handle, void* data, tmsize_t size) noexcept {
+                auto& self = *static_cast<TiffMemory*>(handle);
+                // libtiff can reach a directory callback with a null payload
+                // after an internal allocation fails. Never copy that payload.
+                if (!data && size > 0)
+                    self.allocation_failed = true;
+                if (self.failed || !self.output || size < 0 || (!data && size != 0)) {
+                    self.fail("Invalid TIFF write");
+                    return -1;
+                }
+                if (!self.output->write_at(self.position, static_cast<const std::uint8_t*>(data), size)) {
+                    self.fail("TIFF encoded destination exhausted");
+                    return -1;
+                }
+                self.position += static_cast<std::size_t>(size);
+                return size;
+            }
+            static toff_t seek(thandle_t handle, toff_t offset, int origin) noexcept {
+                auto& self = *static_cast<TiffMemory*>(handle);
+                const uint64_t limit = self.output ? self.output->limit : self.input.size();
+                uint64_t target = offset;
+                if (origin == SEEK_CUR || origin == SEEK_END) {
+                    const uint64_t base = origin == SEEK_CUR ? self.position : self.bytes().size();
+                    // Unsigned toff_t carries signed relative offsets.
+                    const auto delta = static_cast<int64_t>(offset);
+                    const auto magnitude = delta < 0 ? uint64_t(-(delta + 1)) + 1 : uint64_t(delta);
+                    if ((delta < 0 && magnitude > base) || (delta >= 0 && magnitude > limit - base)) {
+                        if (self.output)
+                            self.output->failure = EncodedMemory::Failure::Limit;
+                        self.fail("TIFF relative seek outside buffer bounds");
+                        return static_cast<toff_t>(-1);
+                    }
+                    target = delta < 0 ? base - magnitude : base + magnitude;
+                } else if (origin != SEEK_SET) {
+                    self.fail("Invalid TIFF seek origin");
+                    return static_cast<toff_t>(-1);
+                }
+                if (target > limit) {
+                    if (self.output)
+                        self.output->failure = EncodedMemory::Failure::Limit;
+                    self.fail("TIFF seek outside buffer bounds");
+                    return static_cast<toff_t>(-1);
+                }
+                self.position = static_cast<std::size_t>(target);
+                return target;
+            }
+            static int diagnostic(TIFF*, void* context, const char*, const char* format, va_list args) noexcept {
+                auto& self = *static_cast<TiffMemory*>(context);
+                self.failed = true;
+                std::array<char, 512> text{};
+                std::vsnprintf(text.data(), text.size(), format ? format : "TIFF codec error", args);
+                if (std::strstr(text.data(), "memory") || std::strstr(text.data(), "alloc") || std::strstr(text.data(), "No space") ||
+                    std::strstr(text.data(), "Insertion in tif_map_"))
+                    self.allocation_failed = true;
+                self.fail(text.data());
+                return 1;
+            }
+            TIFF* open(const char* mode) {
+                std::unique_ptr<TIFFOpenOptions, decltype(&TIFFOpenOptionsFree)> options(TIFFOpenOptionsAlloc(), TIFFOpenOptionsFree);
+                if (!options) {
+                    allocation_failed = true;
+                    fail("Cannot allocate TIFF codec options");
+                    return nullptr;
+                }
+                TIFFOpenOptionsSetErrorHandlerExtR(options.get(), diagnostic, this);
+                TIFFOpenOptionsSetWarningHandlerExtR(options.get(), tiff_warning_handler_ext_r, nullptr);
+                return TIFFClientOpenExt("memory TIFF", mode, this, read, write, seek, [](thandle_t) { return 0; }, [](thandle_t handle) -> toff_t { return static_cast<TiffMemory*>(handle)->bytes().size(); }, [](thandle_t, void**, toff_t*) { return 0; }, [](thandle_t, void*, toff_t) {}, options.get());
+            }
+        };
 
         bool supported_tiff_samples(const std::uint16_t bits, const std::uint16_t sample_format) {
             return (sample_format == SAMPLEFORMAT_UINT && (bits == 8 || bits == 16 || bits == 32)) ||
@@ -661,7 +810,13 @@ namespace lfs::core::image_codecs {
             const auto tile_row_bytes = static_cast<std::size_t>(tile_row);
             const auto pixel_bytes = static_cast<std::size_t>(channels) * sample_size;
             const bool separate = planar == PLANARCONFIG_SEPARATE;
-            if (!separate && tile_width == width && tile_height == height &&
+            if (tile_row_bytes < static_cast<std::size_t>(tile_width) * (separate ? sample_size : pixel_bytes) ||
+                tile_height > static_cast<std::size_t>(tile_bytes) / tile_row_bytes) {
+                error = "TIFF tile is smaller than its declared samples";
+                return false;
+            }
+            if (!separate && reinterpret_cast<std::uintptr_t>(dest) % sample_size == 0 &&
+                tile_width == width && tile_height == height &&
                 static_cast<std::size_t>(tile_bytes) == static_cast<std::size_t>(width) * height * pixel_bytes) {
                 if (TIFFReadTile(tiff, dest, 0, 0, 0, 0) < 0) {
                     error = error.empty() ? "TIFF tile read failed" : "TIFF tile read failed: " + error;
@@ -710,6 +865,11 @@ namespace lfs::core::image_codecs {
                                    std::string& error) {
             std::uint16_t orientation = ORIENTATION_TOPLEFT;
             TIFFGetFieldDefaulted(tiff, TIFFTAG_ORIENTATION, &orientation);
+            if (static_cast<std::size_t>(width) > std::vector<std::uint32_t>{}.max_size() / height ||
+                static_cast<std::size_t>(width) > result.data.max_size() / height / 4) {
+                error = "TIFF RGBA image size exceeds supported storage";
+                return false;
+            }
             std::vector<std::uint32_t> rgba(static_cast<std::size_t>(width) * height);
             if (!TIFFReadRGBAImageOriented(tiff, width, height, rgba.data(), orientation, 0)) {
                 error = error.empty() ? "TIFF RGBA fallback failed" : "TIFF RGBA fallback failed: " + error;
@@ -729,10 +889,7 @@ namespace lfs::core::image_codecs {
             return true;
         }
 
-        bool decode_tiff(const std::filesystem::path& path, Image& result, std::string& error) {
-            TIFF* tiff = open_tiff(path, "r", error);
-            if (!tiff)
-                return false;
+        bool decode_tiff_samples(TIFF* tiff, Image& result, std::string& error) {
             std::uint32_t width = 0;
             std::uint32_t height = 0;
             std::uint16_t channels = 1;
@@ -747,22 +904,25 @@ namespace lfs::core::image_codecs {
             TIFFGetFieldDefaulted(tiff, TIFFTAG_PHOTOMETRIC, &photometric);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLEFORMAT, &sample_format);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_PLANARCONFIG, &planar);
-            if (width == 0 || height == 0 || channels < 1 || channels > 4) {
-                TIFFClose(tiff);
+            if (width == 0 || height == 0 || width > uint32_t(std::numeric_limits<int>::max()) ||
+                height > uint32_t(std::numeric_limits<int>::max()) || channels < 1 || channels > 4) {
                 error = "Unsupported TIFF layout";
                 return false;
             }
             if (TIFFIsTiled(tiff) && !tiff_photometric_is_raw(photometric)) {
                 const bool read = read_tiff_rgba_stored(tiff, result, width, height, error);
-                TIFFClose(tiff);
+
                 return read;
             }
             if (!supported_tiff_samples(bits, sample_format)) {
-                TIFFClose(tiff);
                 error = "Unsupported TIFF sample format";
                 return false;
             }
             const std::size_t sample_size = bits / 8;
+            if (static_cast<std::size_t>(width) > result.data.max_size() / height / channels / sample_size) {
+                error = "TIFF decoded image size exceeds supported storage";
+                return false;
+            }
             result.width = static_cast<int>(width);
             result.height = static_cast<int>(height);
             result.channels = channels;
@@ -772,36 +932,40 @@ namespace lfs::core::image_codecs {
             const auto row_bytes = static_cast<std::size_t>(width) * channels * sample_size;
             if (TIFFIsTiled(tiff)) {
                 if (!read_tiff_tiles(tiff, result.data.data(), width, height, channels, sample_size, planar, error)) {
-                    TIFFClose(tiff);
                     return false;
                 }
             } else {
                 const tmsize_t scanline_size = TIFFScanlineSize(tiff);
+                const auto required_row = planar == PLANARCONFIG_CONTIG ? row_bytes : row_bytes / channels;
+                if (scanline_size <= 0 || static_cast<std::size_t>(scanline_size) < required_row) {
+                    error = "TIFF scanline is smaller than its declared samples";
+                    return false;
+                }
                 std::vector<std::uint8_t> row(static_cast<std::size_t>(std::max<tmsize_t>(scanline_size, 1)));
-                for (std::uint32_t y = 0; y < height; ++y) {
-                    if (planar == PLANARCONFIG_CONTIG) {
+                if (planar == PLANARCONFIG_CONTIG) {
+                    for (std::uint32_t y = 0; y < height; ++y) {
                         if (TIFFReadScanline(tiff, row.data(), y, 0) < 0) {
-                            TIFFClose(tiff);
                             error = error.empty() ? "TIFF scanline read failed" : "TIFF scanline read failed: " + error;
                             return false;
                         }
                         std::memcpy(result.data.data() + static_cast<std::size_t>(y) * row_bytes, row.data(), row_bytes);
-                    } else {
-                        for (std::uint16_t channel = 0; channel < channels; ++channel) {
+                    }
+                } else {
+                    // Compressed scanlines must be consumed sequentially within
+                    // each plane. Alternating planes by row requires unsupported
+                    // random seeks into partially decoded LZW/ZIP strips.
+                    for (std::uint16_t channel = 0; channel < channels; ++channel)
+                        for (std::uint32_t y = 0; y < height; ++y) {
                             if (TIFFReadScanline(tiff, row.data(), y, channel) < 0) {
-                                TIFFClose(tiff);
-                                error = error.empty() ? "TIFF planar scanline read failed"
-                                                      : "TIFF planar scanline read failed: " + error;
+                                error = error.empty() ? "TIFF planar scanline read failed" : "TIFF planar scanline read failed: " + error;
                                 return false;
                             }
-                            for (std::uint32_t x = 0; x < width; ++x) {
+                            for (std::uint32_t x = 0; x < width; ++x)
                                 std::memcpy(result.data.data() + (static_cast<std::size_t>(y) * width * channels +
                                                                   static_cast<std::size_t>(x) * channels + channel) *
                                                                      sample_size,
                                             row.data() + static_cast<std::size_t>(x) * sample_size, sample_size);
-                            }
                         }
-                    }
                 }
             }
             if (photometric == PHOTOMETRIC_MINISWHITE && channels == 1 && sample_format == SAMPLEFORMAT_UINT)
@@ -817,15 +981,17 @@ namespace lfs::core::image_codecs {
                     std::memcpy(result.data.data() + offset, &normalized, 4);
                 }
             }
-            TIFFClose(tiff);
+
             return true;
         }
 
-        bool decode_tiff_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
-                                   Probe& result, std::string& error) {
-            TIFF* tiff = open_tiff(path, "r", error);
-            if (!tiff)
-                return false;
+        bool decode_tiff(const std::filesystem::path& path, Image& result, std::string& error) {
+            std::unique_ptr<TIFF, decltype(&TIFFClose)> tiff(open_tiff(path, "r", error), TIFFClose);
+            return tiff && decode_tiff_samples(tiff.get(), result, error);
+        }
+
+        bool decode_tiff_samples_to_buffer(TIFF* tiff, DecodeTarget& target,
+                                           Probe& result, std::string& error) {
             std::uint32_t width = 0;
             std::uint32_t height = 0;
             std::uint16_t channels = 1;
@@ -840,6 +1006,13 @@ namespace lfs::core::image_codecs {
             TIFFGetFieldDefaulted(tiff, TIFFTAG_PHOTOMETRIC, &photometric);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLEFORMAT, &sample_format);
             TIFFGetFieldDefaulted(tiff, TIFFTAG_PLANARCONFIG, &planar);
+            if (!width || !height || width > uint32_t(std::numeric_limits<int>::max()) ||
+                height > uint32_t(std::numeric_limits<int>::max()) || channels < 1 || channels > 4 ||
+                !supported_tiff_samples(bits, sample_format) ||
+                static_cast<std::size_t>(width) > std::numeric_limits<std::size_t>::max() / height / channels / (bits / 8)) {
+                error = "TIFF layout requires conversion";
+                return false;
+            }
             const auto source_type = sample_format == SAMPLEFORMAT_IEEEFP ? SampleType::Float32
                                      : bits == 16                         ? SampleType::UInt16
                                                                           : SampleType::UInt8;
@@ -854,29 +1027,31 @@ namespace lfs::core::image_codecs {
                                  (bits == 32 && target.sample_type == SampleType::Float32)) &&
                                 (TIFFIsTiled(tiff) ? raw_samples : TIFFScanlineSize(tiff) == static_cast<tmsize_t>(row_bytes));
             if (!direct) {
-                TIFFClose(tiff);
                 error = "TIFF layout requires conversion";
                 return false;
             }
             if (!allocate_target(target, row_bytes * height, error)) {
-                TIFFClose(tiff);
                 return false;
             }
             result = {static_cast<int>(width), static_cast<int>(height), target.channels, target.sample_type};
             if (TIFFIsTiled(tiff)) {
                 if (!read_tiff_tiles(tiff, static_cast<std::uint8_t*>(target.data), width, height, channels, sample_size,
                                      planar, error)) {
-                    TIFFClose(tiff);
                     return false;
                 }
             } else {
+                // libtiff's native sample transforms may require word alignment.
+                // Keep the zero-copy path for normal aligned caller buffers.
+                const bool unaligned = reinterpret_cast<std::uintptr_t>(target.data) % sample_size != 0;
+                std::vector<std::uint32_t> scratch(unaligned ? (row_bytes + 3) / 4 : 0);
                 for (std::uint32_t y = 0; y < height; ++y) {
                     auto* row = static_cast<std::uint8_t*>(target.data) + static_cast<std::size_t>(y) * row_bytes;
-                    if (TIFFReadScanline(tiff, row, y, 0) < 0) {
-                        TIFFClose(tiff);
+                    if (TIFFReadScanline(tiff, unaligned ? static_cast<void*>(scratch.data()) : row, y, 0) < 0) {
                         error = error.empty() ? "TIFF scanline read failed" : "TIFF scanline read failed: " + error;
                         return false;
                     }
+                    if (unaligned)
+                        std::memcpy(row, scratch.data(), row_bytes);
                 }
             }
             if (photometric == PHOTOMETRIC_MINISWHITE && channels == 1 && sample_format == SAMPLEFORMAT_UINT)
@@ -892,8 +1067,40 @@ namespace lfs::core::image_codecs {
                     std::memcpy(samples + offset, &normalized, sizeof(normalized));
                 }
             }
-            TIFFClose(tiff);
+
             return true;
+        }
+
+        bool decode_tiff_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
+                                   Probe& result, std::string& error) {
+            std::unique_ptr<TIFF, decltype(&TIFFClose)> tiff(open_tiff(path, "r", error), TIFFClose);
+            return tiff && decode_tiff_samples_to_buffer(tiff.get(), target, result, error);
+        }
+
+        bool decode_tiff_memory(std::span<const std::uint8_t> input, Image& result, std::string& error) {
+            TiffMemory source{input};
+            std::unique_ptr<TIFF, decltype(&TIFFClose)> tiff(source.open("rm"), TIFFClose);
+            Image staged;
+            const bool decoded = tiff && decode_tiff_samples(tiff.get(), staged, error);
+            tiff.reset();
+            if (!decoded || source.failed) {
+                if (source.message[0])
+                    error = source.message.data();
+                return false;
+            }
+            result = std::move(staged);
+            return true;
+        }
+
+        bool decode_tiff_memory_to_buffer(std::span<const std::uint8_t> input, DecodeTarget& target,
+                                          Probe& result, std::string& error) {
+            TiffMemory source{input};
+            std::unique_ptr<TIFF, decltype(&TIFFClose)> tiff(source.open("rm"), TIFFClose);
+            const bool decoded = tiff && decode_tiff_samples_to_buffer(tiff.get(), target, result, error);
+            tiff.reset();
+            if (source.message[0])
+                error = source.message.data();
+            return decoded && !source.failed;
         }
 
         bool decode_webp(const std::vector<std::uint8_t>& file_data, Image& result, std::string& error) {
@@ -1293,6 +1500,8 @@ namespace lfs::core::image_codecs {
             error = "Empty image buffer";
             return false;
         }
+        if (is_tiff({data, size}))
+            return decode_tiff_memory_to_buffer({data, size}, target, result, error);
         if (is_heif({data, size}))
             return decode_heif_to_buffer(std::span<const uint8_t>{data, size}, target, result, error);
         if (size >= 2 && data[0] == 0xff && data[1] == 0xd8)
@@ -1534,6 +1743,8 @@ namespace lfs::core::image_codecs {
             error = "Empty image buffer";
             return false;
         }
+        if (is_tiff({data, size}))
+            return decode_tiff_memory({data, size}, result, error);
         if (is_heif({data, size}))
             return decode_heif(std::span<const uint8_t>{data, size}, result, error);
         if (size >= 2 && data[0] == 0xff && data[1] == 0xd8)
@@ -1547,39 +1758,6 @@ namespace lfs::core::image_codecs {
     }
 
     namespace {
-        // Shared bounded ownership for encoded destinations. C callbacks can
-        // record allocation failure without unwinding through a codec ABI.
-        struct EncodedMemory {
-            enum class Failure { None,
-                                 Limit,
-                                 Allocation };
-            Failure failure = Failure::None;
-            std::vector<std::uint8_t> bytes;
-            std::size_t limit = 0;
-
-            bool append(const std::uint8_t* data, std::size_t count) noexcept {
-                if (count > limit - bytes.size()) {
-                    failure = Failure::Limit;
-                    return false;
-                }
-                try {
-                    const auto required = bytes.size() + count;
-                    if (required > bytes.capacity()) {
-                        const auto doubled = bytes.capacity() > limit / 2 ? limit : bytes.capacity() * 2;
-                        bytes.reserve(std::max(required, doubled));
-                    }
-                    if (count)
-                        bytes.insert(bytes.end(), data, data + count);
-                    return true;
-                } catch (const std::bad_alloc&) {
-                    // LFS-CENSUS-OK(empty-catch): retain the failure at the C
-                    // boundary; the caller returns ResourceExhausted.
-                    failure = Failure::Allocation;
-                    return false;
-                }
-            }
-        };
-
         struct JpegEncodeState {
             jpeg_compress_struct codec{};
             JpegError error{};
@@ -2971,6 +3149,123 @@ namespace lfs::core::image_codecs {
         }
     } // namespace
 
+    static void close_tiff_writer(TIFF* tiff) noexcept {
+        // The encoder explicitly writes and flushes its directory. Cleanup must
+        // not retry a partially failed directory or allocate during unwinding.
+        TIFFSetMode(tiff, 0); // O_RDONLY, on all supported platforms.
+        TIFFClose(tiff);
+    }
+
+    static bool encode_tiff_samples(TIFF* tiff, const std::uint8_t* data,
+                                    int width, int height, int channels, int bits, std::size_t row_stride,
+                                    const std::optional<std::string>& description, const TiffColorTags* color,
+                                    const AtomicFileOptions* policy, bool* was_cancelled, std::string& error,
+                                    bool* allocation_failed = nullptr) {
+        const auto missing_tag_storage = [&]() {
+            if (allocation_failed)
+                *allocation_failed = true;
+            error = "Cannot allocate TIFF tag storage";
+            return false;
+        };
+        const auto row_bytes = static_cast<std::size_t>(width) * channels * (bits / 8);
+        if (!TIFFSetField(tiff, TIFFTAG_IMAGEWIDTH, width) ||
+            !TIFFSetField(tiff, TIFFTAG_IMAGELENGTH, height) ||
+            !TIFFSetField(tiff, TIFFTAG_SAMPLESPERPIXEL, channels) ||
+            !TIFFSetField(tiff, TIFFTAG_BITSPERSAMPLE, bits)) {
+            error = "TIFF layout tag write failed";
+            return false;
+        }
+        if (bits == 16 && !TIFFSetField(tiff, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT)) {
+            error = "TIFF sample format write failed";
+            return false;
+        }
+        if (description && !TIFFSetField(tiff, TIFFTAG_IMAGEDESCRIPTION, description->c_str())) {
+            error = "TIFF description write failed";
+            return false;
+        }
+        if (description) {
+            char* stored = nullptr;
+            if (!TIFFGetField(tiff, TIFFTAG_IMAGEDESCRIPTION, &stored) || !stored ||
+                std::strcmp(stored, description->c_str()) != 0)
+                return missing_tag_storage();
+        }
+        if (color && color->chromaticities) {
+            const auto& xy = *color->chromaticities;
+            const std::array<float, 6> primaries{xy[0], xy[1], xy[2], xy[3], xy[4], xy[5]};
+            const std::array<float, 2> white{xy[6], xy[7]};
+            if (!TIFFSetField(tiff, TIFFTAG_PRIMARYCHROMATICITIES, primaries.data()) ||
+                !TIFFSetField(tiff, TIFFTAG_WHITEPOINT, white.data())) {
+                error = "TIFF chromaticities write failed";
+                return false;
+            }
+        }
+        if (color && color->chromaticities) {
+            float *primaries = nullptr, *white = nullptr;
+            if (!TIFFGetField(tiff, TIFFTAG_PRIMARYCHROMATICITIES, &primaries) || !primaries ||
+                !TIFFGetField(tiff, TIFFTAG_WHITEPOINT, &white) || !white ||
+                std::memcmp(primaries, color->chromaticities->data(), 6 * sizeof(float)) != 0 ||
+                std::memcmp(white, color->chromaticities->data() + 6, 2 * sizeof(float)) != 0)
+                return missing_tag_storage();
+        }
+        if (color && !color->transfer_function.empty() &&
+            !TIFFSetField(tiff, TIFFTAG_TRANSFERFUNCTION, color->transfer_function.data(),
+                          color->transfer_function.data(), color->transfer_function.data())) {
+            error = "TIFF transfer function write failed";
+            return false;
+        }
+        if (color && !color->transfer_function.empty()) {
+            uint16_t *red = nullptr, *green = nullptr, *blue = nullptr;
+            const auto count = color->transfer_function.size_bytes();
+            if (!TIFFGetField(tiff, TIFFTAG_TRANSFERFUNCTION, &red, &green, &blue) ||
+                !red || !green || !blue ||
+                std::memcmp(red, color->transfer_function.data(), count) != 0 ||
+                std::memcmp(green, color->transfer_function.data(), count) != 0 ||
+                std::memcmp(blue, color->transfer_function.data(), count) != 0)
+                return missing_tag_storage();
+        }
+        // Keep the existing explicit strip geometry and LZW policy.
+        std::uint16_t extra_sample = EXTRASAMPLE_UNASSALPHA;
+        if (!TIFFSetField(tiff, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT) ||
+            !TIFFSetField(tiff, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG) ||
+            !TIFFSetField(tiff, TIFFTAG_PHOTOMETRIC, channels < 3 ? PHOTOMETRIC_MINISBLACK : PHOTOMETRIC_RGB) ||
+            !TIFFSetField(tiff, TIFFTAG_ROWSPERSTRIP, std::min<uint32_t>(height, TIFFDefaultStripSize(tiff, 0))) ||
+            !TIFFSetField(tiff, TIFFTAG_COMPRESSION, COMPRESSION_LZW) ||
+            ((channels == 2 || channels == 4) && !TIFFSetField(tiff, TIFFTAG_EXTRASAMPLES, 1, &extra_sample))) {
+            error = "TIFF encoding tag write failed";
+            return false;
+        }
+        if (channels == 2 || channels == 4) {
+            uint16_t count = 0;
+            uint16_t* extras = nullptr;
+            if (!TIFFGetField(tiff, TIFFTAG_EXTRASAMPLES, &count, &extras) || count != 1 ||
+                !extras || extras[0] != EXTRASAMPLE_UNASSALPHA)
+                return missing_tag_storage();
+        }
+        // libtiff may transform its input buffer. Keep borrowed UINT16 pixels
+        // read-only and aligned, including spans with an unaligned start.
+        std::vector<std::uint16_t> row(bits == 16 ? row_bytes / 2 : 0);
+        bool success = true;
+        for (int y = 0; y < height; ++y) {
+            if (policy && policy->cancelled && policy->cancelled()) {
+                if (was_cancelled)
+                    *was_cancelled = true;
+                error = "TIFF write cancelled";
+                return false;
+            }
+            auto* source = const_cast<std::uint8_t*>(data) + static_cast<std::size_t>(y) * row_stride;
+            if (bits == 16)
+                std::memcpy(row.data(), source, row_bytes);
+            if (TIFFWriteScanline(tiff, bits == 16 ? static_cast<void*>(row.data()) : source, y, 0) < 0) {
+                success = false;
+                break;
+            }
+        }
+        success = success && TIFFWriteDirectory(tiff) != 0 && TIFFFlush(tiff) != 0;
+        if (!success)
+            error = "TIFF scanline write failed";
+        return success;
+    }
+
     static bool write_tiff_stream(const std::filesystem::path& path, const std::uint8_t* data,
                                   const int width, const int height, const int channels, std::string& error, FILE* borrowed,
                                   const int bits = 8, std::size_t row_stride = 0,
@@ -2995,68 +3290,9 @@ namespace lfs::core::image_codecs {
                 error = "Could not initialize TIFF codec for " + path_to_utf8(path);
             return false;
         }
-        const std::unique_ptr<TIFF, decltype(&TIFFClose)> owner(tiff, TIFFClose);
-        TIFFSetField(tiff, TIFFTAG_IMAGEWIDTH, width);
-        TIFFSetField(tiff, TIFFTAG_IMAGELENGTH, height);
-        TIFFSetField(tiff, TIFFTAG_SAMPLESPERPIXEL, channels);
-        TIFFSetField(tiff, TIFFTAG_BITSPERSAMPLE, bits);
-        if (bits == 16 && !TIFFSetField(tiff, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT)) {
-            error = "TIFF sample format write failed";
-            return false;
-        }
-        if (description && !TIFFSetField(tiff, TIFFTAG_IMAGEDESCRIPTION, description->c_str())) {
-            error = "TIFF description write failed";
-            return false;
-        }
-        if (color && color->chromaticities) {
-            const auto& xy = *color->chromaticities;
-            const std::array<float, 6> primaries{xy[0], xy[1], xy[2], xy[3], xy[4], xy[5]};
-            const std::array<float, 2> white{xy[6], xy[7]};
-            if (!TIFFSetField(tiff, TIFFTAG_PRIMARYCHROMATICITIES, primaries.data()) ||
-                !TIFFSetField(tiff, TIFFTAG_WHITEPOINT, white.data())) {
-                error = "TIFF chromaticities write failed";
-                return false;
-            }
-        }
-        if (color && !color->transfer_function.empty() &&
-            !TIFFSetField(tiff, TIFFTAG_TRANSFERFUNCTION, color->transfer_function.data(),
-                          color->transfer_function.data(), color->transfer_function.data())) {
-            error = "TIFF transfer function write failed";
-            return false;
-        }
-        TIFFSetField(tiff, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT);
-        TIFFSetField(tiff, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-        TIFFSetField(tiff, TIFFTAG_PHOTOMETRIC, channels < 3 ? PHOTOMETRIC_MINISBLACK : PHOTOMETRIC_RGB);
-        // libtiff may omit the default RowsPerStrip; make it explicit for readers
-        // that require a nonzero strip height, without changing decoded samples.
-        TIFFSetField(tiff, TIFFTAG_ROWSPERSTRIP, std::min<uint32_t>(height, TIFFDefaultStripSize(tiff, 0)));
-        TIFFSetField(tiff, TIFFTAG_COMPRESSION, COMPRESSION_LZW);
-        std::uint16_t extra_sample = EXTRASAMPLE_UNASSALPHA;
-        if (channels == 2 || channels == 4)
-            TIFFSetField(tiff, TIFFTAG_EXTRASAMPLES, 1, &extra_sample);
-        // libtiff may transform its input buffer. Keep borrowed UINT16 pixels
-        // read-only and aligned, including spans with an unaligned start.
-        std::vector<std::uint16_t> row(bits == 16 ? row_bytes / 2 : 0);
-        bool success = true;
-        for (int y = 0; y < height; ++y) {
-            if (policy && policy->cancelled && policy->cancelled()) {
-                if (was_cancelled)
-                    *was_cancelled = true;
-                error = "TIFF write cancelled";
-                return false;
-            }
-            auto* source = const_cast<std::uint8_t*>(data) + static_cast<std::size_t>(y) * row_stride;
-            if (bits == 16)
-                std::memcpy(row.data(), source, row_bytes);
-            if (TIFFWriteScanline(tiff, bits == 16 ? static_cast<void*>(row.data()) : source, y, 0) < 0) {
-                success = false;
-                break;
-            }
-        }
-        success = success && TIFFWriteDirectory(tiff) != 0 && TIFFFlush(tiff) != 0;
-        if (!success)
-            error = "TIFF scanline write failed";
-        return success;
+        const std::unique_ptr<TIFF, decltype(&close_tiff_writer)> owner(tiff, close_tiff_writer);
+        return encode_tiff_samples(tiff, data, width, height, channels, bits, row_stride,
+                                   description, color, policy, was_cancelled, error);
     }
 
     bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,
@@ -3146,6 +3382,75 @@ namespace lfs::core::image_codecs {
         return true;
     }
 
+    namespace {
+        enum class TiffColorValidation { Valid,
+                                         Unsupported,
+                                         Chromaticities };
+        TiffColorValidation validate_tiff_color(const TiffColorTags& color, int channels, int bits) {
+            if ((!color.transfer_function.empty() && color.transfer_function.size() != (std::size_t{1} << bits)) ||
+                ((color.chromaticities || !color.transfer_function.empty()) && channels < 3))
+                return TiffColorValidation::Unsupported;
+            if (color.chromaticities) {
+                const auto& xy = *color.chromaticities;
+                for (size_t i = 0; i < xy.size(); i += 2)
+                    if (!std::isfinite(xy[i]) || !std::isfinite(xy[i + 1]) ||
+                        xy[i] < 0 || xy[i + 1] <= 0 || xy[i] + xy[i + 1] > 1.000001f)
+                        return TiffColorValidation::Chromaticities;
+            }
+            return TiffColorValidation::Valid;
+        }
+    } // namespace
+
+    Status encode_tiff_memory(std::span<const std::uint8_t> data, int width, int height, int channels,
+                              int bit_depth, std::size_t row_stride, std::vector<std::uint8_t>& output,
+                              const TiffEncodeOptions& options) {
+        const auto failure = [](ErrorCode code, std::string detail) -> Status {
+            return Status::failure(make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()}));
+        };
+        const auto invalid = [&](std::string_view reason) -> Status {
+            return failure(ErrorCode::InvalidArgument,
+                           std::format("{} (width={}, height={}, channels={}, depth={}, stride={}, span_bytes={}, limit={})",
+                                       reason, width, height, channels, bit_depth, row_stride, data.size(), options.max_output_bytes));
+        };
+        if (width <= 0 || height <= 0 || channels < 1 || channels > 4 || (bit_depth != 8 && bit_depth != 16) ||
+            static_cast<std::size_t>(width) > std::numeric_limits<std::size_t>::max() / channels / (bit_depth / 8))
+            return invalid("Unsupported TIFF layout");
+        const auto row_bytes = static_cast<std::size_t>(width) * channels * (bit_depth / 8);
+        if (row_stride < row_bytes || static_cast<std::size_t>(height - 1) > (std::numeric_limits<std::size_t>::max() - row_bytes) / row_stride ||
+            data.size() < row_stride * (height - 1) + row_bytes)
+            return invalid("Unsupported TIFF buffer size or stride");
+        if (!options.max_output_bytes || options.max_output_bytes > std::numeric_limits<uint32_t>::max() || options.max_output_bytes > output.max_size())
+            return invalid("Invalid classic TIFF encoded-byte limit");
+        if (options.description && (options.description->find('\0') != std::string::npos || options.description->size() > 1024 * 1024))
+            return invalid("Unsupported TIFF description");
+        const auto color = validate_tiff_color(options.color, channels, bit_depth);
+        if (color != TiffColorValidation::Valid)
+            return invalid(color == TiffColorValidation::Unsupported ? "Unsupported TIFF color tags" : "Invalid TIFF chromaticities");
+        try {
+            EncodedMemory memory;
+            memory.limit = options.max_output_bytes;
+            TiffMemory destination{{}, &memory};
+            std::string error;
+            std::unique_ptr<TIFF, decltype(&close_tiff_writer)> tiff(destination.open("wm"), close_tiff_writer);
+            const bool encoded = tiff && encode_tiff_samples(tiff.get(), data.data(), width, height, channels, bit_depth, row_stride,
+                                                             options.description, &options.color, nullptr, nullptr, error, &destination.allocation_failed);
+            // The shared writer explicitly finalizes the directory and flushes.
+            // Release all codec state before publishing the owned destination.
+            tiff.reset();
+            if (!encoded || destination.failed) {
+                if (memory.failure != EncodedMemory::Failure::None || destination.allocation_failed)
+                    return failure(ErrorCode::ResourceExhausted, memory.failure == EncodedMemory::Failure::Limit
+                                                                     ? "TIFF encoded-byte limit exhausted"
+                                                                     : "Cannot allocate TIFF encoder or output");
+                return failure(ErrorCode::Unavailable, std::format("TIFF encoding failed: {}{}", error, destination.message.data()));
+            }
+            output = std::move(memory.bytes);
+            return {};
+        } catch (const std::bad_alloc&) {
+            return failure(ErrorCode::ResourceExhausted, "Cannot allocate TIFF encoder or output");
+        }
+    }
+
     Status write_tiff_u16(const std::filesystem::path& path, std::span<const std::uint8_t> data,
                           int width, int height, int channels, std::size_t row_stride,
                           const std::optional<std::string>& description, const AtomicFileOptions& options,
@@ -3162,16 +3467,11 @@ namespace lfs::core::image_codecs {
             return invalid("Unsupported TIFF16 buffer size or stride");
         if (description && (description->find('\0') != std::string::npos || description->size() > 1024 * 1024))
             return invalid("Unsupported TIFF16 description");
-        if ((!color.transfer_function.empty() && color.transfer_function.size() != 65536) ||
-            ((color.chromaticities || !color.transfer_function.empty()) && channels < 3))
+        const auto color_validation = validate_tiff_color(color, channels, 16);
+        if (color_validation == TiffColorValidation::Unsupported)
             return invalid("Unsupported TIFF16 color tags");
-        if (color.chromaticities) {
-            const auto& xy = *color.chromaticities;
-            for (size_t i = 0; i < xy.size(); i += 2)
-                if (!std::isfinite(xy[i]) || !std::isfinite(xy[i + 1]) ||
-                    xy[i] < 0 || xy[i + 1] <= 0 || xy[i] + xy[i + 1] > 1.000001f)
-                    return invalid("Invalid TIFF16 chromaticities");
-        }
+        if (color_validation == TiffColorValidation::Chromaticities)
+            return invalid("Invalid TIFF16 chromaticities");
         const auto extension = lower_extension(path);
         if (extension != ".tif" && extension != ".tiff")
             return invalid("TIFF16 output requires a TIFF extension");
