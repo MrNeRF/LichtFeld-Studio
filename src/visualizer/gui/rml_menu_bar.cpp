@@ -2033,7 +2033,7 @@ namespace lfs::vis::gui {
             else if (settings.show_center_markers)
                 active_mode = "centers";
 
-            render_buttons.push_back(make("menu-render-splats", "set_render_mode", "splats", "blob",
+            render_buttons.push_back(make("menu-render-splats", "set_render_mode", "splats", "splats",
                                           "toolbar.splat_rendering", "Splat Rendering",
                                           active_mode == "splats"));
             render_buttons.push_back(make("menu-render-points", "set_render_mode", "points",
@@ -2048,7 +2048,7 @@ namespace lfs::vis::gui {
 
             const bool ortho = settings.orthographic;
             projection_buttons.push_back(make("menu-projection", "toggle_projection", "",
-                                              ortho ? "box" : "perspective",
+                                              ortho ? "orthographic" : "perspective",
                                               ortho ? "toolbar.orthographic" : "toolbar.perspective",
                                               ortho ? "Orthographic" : "Perspective", ortho));
             projection_buttons.push_back(make("menu-depth-view", "toggle_depth_view", "", "depth-map",
@@ -2057,7 +2057,7 @@ namespace lfs::vis::gui {
             bool view_snap = false;
             if (const auto* ic = lfs::vis::InputController::instance())
                 view_snap = ic->cameraViewSnapEnabled();
-            projection_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "check",
+            projection_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "magnet",
                                               "", "Snap Axis Views", view_snap));
         }
 
