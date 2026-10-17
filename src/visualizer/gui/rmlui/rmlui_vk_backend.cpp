@@ -3,15 +3,9 @@
  * SPDX-License-Identifier: MIT */
 
 #include "gui/rmlui/rmlui_vk_backend.hpp"
-#include "core/error.hpp"
-#include "core/image_io.hpp"
-#include "core/logger.hpp"
-#include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/rml_image_file.hpp"
 #include "gui/rmlui/vulkan/rmlui_shaders_spv.hpp"
-#include "io/project_container.hpp"
-#include "python/python_runtime.hpp"
 #include "window/vulkan_graphics_context.hpp"
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/FileInterface.h>
@@ -24,7 +18,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <filesystem>
 #include <format>
 #include <limits>
 #include <optional>
@@ -32,8 +25,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
-#include <tuple>
+#include <utility>
 
 // AlignUp(314, 256) = 512
 template <typename T>
@@ -80,18 +72,6 @@ static void InsertDebugUtilsLabel(VkDevice device, VkCommandBuffer command_buffe
 #endif
 
 namespace {
-
-    struct PreviewTextureRequest {
-        std::filesystem::path path;
-        int max_size = 0;
-        int width = 0;
-        int height = 0;
-        bool embedded_project_preview = false;
-    };
-
-    bool IsPreviewTextureSource(std::string_view source) {
-        return source.rfind("preview://", 0) == 0;
-    }
 
     bool IsLfsVkTextureSource(std::string_view source) {
         return source.rfind("lfs-vk://", 0) == 0;
@@ -159,79 +139,6 @@ namespace {
         if (request.image_view == VK_NULL_HANDLE || request.sampler == VK_NULL_HANDLE ||
             request.width <= 0 || request.height <= 0)
             return std::nullopt;
-        return request;
-    }
-
-    int HexValue(char c) {
-        if (c >= '0' && c <= '9')
-            return c - '0';
-        if (c >= 'a' && c <= 'f')
-            return 10 + c - 'a';
-        if (c >= 'A' && c <= 'F')
-            return 10 + c - 'A';
-        return -1;
-    }
-
-    std::string PercentDecode(std::string_view value) {
-        std::string decoded;
-        decoded.reserve(value.size());
-        for (size_t i = 0; i < value.size(); ++i) {
-            if (value[i] == '%' && i + 2 < value.size()) {
-                const int hi = HexValue(value[i + 1]);
-                const int lo = HexValue(value[i + 2]);
-                if (hi >= 0 && lo >= 0) {
-                    decoded.push_back(static_cast<char>((hi << 4) | lo));
-                    i += 2;
-                    continue;
-                }
-            }
-            decoded.push_back(value[i] == '+' ? ' ' : value[i]);
-        }
-        return decoded;
-    }
-
-    std::optional<PreviewTextureRequest> ParsePreviewTextureRequest(std::string_view source) {
-        if (!IsPreviewTextureSource(source))
-            return std::nullopt;
-
-        source.remove_prefix(std::string_view("preview://").size());
-        PreviewTextureRequest request;
-        int thumb_size = 0;
-        int preview_size = 0;
-        int dataset_size = 0;
-
-        while (!source.empty()) {
-            const size_t sep = source.find('&');
-            const std::string_view part = sep == std::string_view::npos ? source : source.substr(0, sep);
-            if (const size_t eq = part.find('='); eq != std::string_view::npos) {
-                const std::string_view key = part.substr(0, eq);
-                const std::string_view value = part.substr(eq + 1);
-                if (key == "path") {
-                    request.path = lfs::core::utf8_to_path(PercentDecode(value));
-                } else if (key == "kind") {
-                    request.embedded_project_preview = value == "licht";
-                } else if (key == "thumb") {
-                    thumb_size = ParseIntParam(value);
-                } else if (key == "pmw") {
-                    preview_size = ParseIntParam(value);
-                } else if (key == "mw") {
-                    dataset_size = ParseIntParam(value);
-                } else if (key == "w") {
-                    request.width = ParseIntParam(value);
-                } else if (key == "h") {
-                    request.height = ParseIntParam(value);
-                }
-            }
-
-            if (sep == std::string_view::npos)
-                break;
-            source.remove_prefix(sep + 1);
-        }
-
-        if (request.path.empty())
-            return std::nullopt;
-
-        request.max_size = thumb_size > 0 ? thumb_size : (preview_size > 0 ? preview_size : dataset_size);
         return request;
     }
 
@@ -360,9 +267,7 @@ RenderInterface_VK::memoryStatistics() const {
             static_cast<std::size_t>(stats.allocation_bytes)};
 }
 
-RenderInterface_VK::~RenderInterface_VK() {
-    StopPreviewWorkerPool();
-}
+RenderInterface_VK::~RenderInterface_VK() = default;
 
 std::string RenderInterface_VK::MakeExternalTextureSource(VkImageView image_view, VkSampler sampler,
                                                           int width, int height, std::uint64_t incarnation) {
@@ -1022,7 +927,7 @@ struct TGAHeader {
 #pragma pack()
 
 Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) {
-    if (IsPreviewTextureSource(source))
+    if (lfs::vis::gui::isPreviewTextureSource(source))
         return LoadAsyncPreviewTexture(texture_dimensions, source);
 
     if (auto vk_request = ParseLfsVkTextureRequest(source)) {
@@ -1114,18 +1019,13 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
 }
 
 Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) {
-    const auto request = ParsePreviewTextureRequest(source);
+    const auto request = lfs::vis::gui::parsePreviewTextureRequest(source);
     if (!request)
         return 0;
 
     static constexpr Rml::byte transparent_pixel[4] = {0, 0, 0, 0};
     const Rml::Vector2i placeholder_dimensions{1, 1};
-    // RmlUi builds and caches cover/contain geometry from the dimensions returned
-    // here. Report the decoded aspect ratio up front, while keeping the temporary
-    // GPU allocation at one transparent pixel until the asynchronous upload lands.
-    texture_dimensions = request->width > 0 && request->height > 0
-                             ? Rml::Vector2i{request->width, request->height}
-                             : placeholder_dimensions;
+    texture_dimensions = request->layoutDimensions();
     const Rml::TextureHandle handle = CreateTexture(
         {transparent_pixel, sizeof(transparent_pixel)}, placeholder_dimensions, source);
     auto* texture = reinterpret_cast<texture_data_t*>(handle);
@@ -1133,181 +1033,9 @@ Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& te
         return 0;
     texture->m_is_async_preview = true;
 
-    auto state = std::make_shared<async_preview_state_t>();
-    state->texture = texture;
-    state->source = source;
-    m_async_preview_textures.push_back(state);
-
-    try {
-        EnsurePreviewWorkerPool();
-        EnqueuePreviewWork(preview_work_t{
-            state, request->path, request->max_size, request->embedded_project_preview});
-    } catch (const std::exception& e) {
-        LOG_WARN("Failed to queue async preview texture worker for '{}': {}",
-                 lfs::core::path_to_utf8(request->path), e.what());
-        DropAsyncPreviewTexture(texture);
-    }
+    m_preview_textures.load(handle, source, *request);
 
     return handle;
-}
-
-void RenderInterface_VK::EnsurePreviewWorkerPool() {
-    std::lock_guard lock(m_preview_queue_mutex);
-    if (!m_preview_workers.empty())
-        return;
-    m_preview_workers_stopping = false;
-    constexpr std::size_t kWorkerCount = 3;
-    for (std::size_t i = 0; i < kWorkerCount; ++i) {
-        m_preview_workers.emplace_back([this] {
-            for (;;) {
-                preview_work_t work;
-                {
-                    std::unique_lock queue_lock(m_preview_queue_mutex);
-                    m_preview_queue_cv.wait(queue_lock, [this] {
-                        return m_preview_workers_stopping || !m_preview_queue.empty();
-                    });
-                    if (m_preview_workers_stopping && m_preview_queue.empty())
-                        return;
-                    work = std::move(m_preview_queue.front());
-                    m_preview_queue.pop_front();
-                }
-                if (!work.state || work.state->cancelled.load(std::memory_order_acquire))
-                    continue;
-                auto result = DecodePreviewTexture(
-                    std::move(work.path), work.max_size, work.embedded_project_preview);
-                if (work.state->cancelled.load(std::memory_order_acquire))
-                    continue;
-                {
-                    std::lock_guard result_lock(work.state->mutex);
-                    work.state->result = std::move(result);
-                }
-                work.state->ready.store(true, std::memory_order_release);
-                lfs::python::request_redraw();
-            }
-        });
-    }
-}
-
-void RenderInterface_VK::EnqueuePreviewWork(preview_work_t work) {
-    {
-        std::lock_guard lock(m_preview_queue_mutex);
-        if (m_preview_workers_stopping)
-            throw std::runtime_error("preview worker pool is stopping");
-        m_preview_queue.emplace_back(std::move(work));
-    }
-    m_preview_queue_cv.notify_one();
-}
-
-void RenderInterface_VK::StopPreviewWorkerPool() noexcept {
-    {
-        std::lock_guard lock(m_preview_queue_mutex);
-        m_preview_workers_stopping = true;
-        m_preview_queue.clear();
-    }
-    m_preview_queue_cv.notify_all();
-    for (auto& worker : m_preview_workers) {
-        if (worker.joinable())
-            worker.join();
-    }
-    m_preview_workers.clear();
-}
-
-RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewTexture(
-    std::filesystem::path path,
-    const int max_size,
-    const bool embedded_project_preview) {
-    async_preview_result_t result;
-    unsigned char* data = nullptr;
-    try {
-        int width = 0;
-        int height = 0;
-        int channels = 0;
-        unsigned char* pixels = nullptr;
-        if (embedded_project_preview) {
-            auto reader = lfs::io::project::ProjectReader::open(path);
-            if (!reader) {
-                // A catalog entry can outlive its file until the catalog marks it missing.
-                if (reader.error().code() != lfs::ErrorCode::NotFound)
-                    LOG_WARN("Failed to inspect embedded project preview '{}': {}",
-                             lfs::core::path_to_utf8(path),
-                             lfs::format_for_developer(reader.error()));
-                return result;
-            }
-            auto preview = reader->read_preview();
-            if (!preview) {
-                LOG_WARN("Failed to read embedded project preview '{}': {}",
-                         lfs::core::path_to_utf8(path),
-                         lfs::format_for_developer(preview.error()));
-                return result;
-            }
-            const auto* bytes = reinterpret_cast<const std::uint8_t*>(preview->data());
-            std::tie(pixels, width, height, channels) =
-                lfs::core::load_image_from_memory(bytes, preview->size());
-        } else {
-            std::tie(pixels, width, height, channels) =
-                lfs::core::load_image_thumbnail(path, max_size);
-        }
-        data = pixels;
-        if (pixels && width > 0 && height > 0 && channels > 0) {
-            int output_width = width;
-            int output_height = height;
-            if (embedded_project_preview && max_size > 0 &&
-                std::max(width, height) > max_size) {
-                const double scale = static_cast<double>(max_size) /
-                                     static_cast<double>(std::max(width, height));
-                output_width = std::max(1, static_cast<int>(std::lround(width * scale)));
-                output_height = std::max(1, static_cast<int>(std::lround(height * scale)));
-            }
-            const std::size_t pixel_count =
-                static_cast<std::size_t>(output_width) *
-                static_cast<std::size_t>(output_height);
-            result.pixels.resize(pixel_count * 4u);
-            const auto sample = [&](const double x, const double y, const int channel) {
-                const double sx = std::clamp(x, 0.0, static_cast<double>(width - 1));
-                const double sy = std::clamp(y, 0.0, static_cast<double>(height - 1));
-                const int x0 = static_cast<int>(sx);
-                const int y0 = static_cast<int>(sy);
-                const int x1 = std::min(width - 1, x0 + 1);
-                const int y1 = std::min(height - 1, y0 + 1);
-                const double fx = sx - x0;
-                const double fy = sy - y0;
-                const auto at = [&](const int px, const int py) {
-                    return static_cast<double>(pixels[(static_cast<std::size_t>(py) * width + px) * channels + channel]);
-                };
-                return (at(x0, y0) * (1.0 - fx) + at(x1, y0) * fx) * (1.0 - fy) +
-                       (at(x0, y1) * (1.0 - fx) + at(x1, y1) * fx) * fy;
-            };
-            for (int y = 0; y < output_height; ++y) {
-                for (int x = 0; x < output_width; ++x) {
-                    const double source_x = (x + 0.5) * width / output_width - 0.5;
-                    const double source_y = (y + 0.5) * height / output_height - 0.5;
-                    const unsigned char r = static_cast<unsigned char>(std::lround(sample(source_x, source_y, 0)));
-                    const unsigned char g = static_cast<unsigned char>(std::lround(sample(source_x, source_y, channels > 1 ? 1 : 0)));
-                    const unsigned char b = static_cast<unsigned char>(std::lround(sample(source_x, source_y, channels > 2 ? 2 : 0)));
-                    const unsigned char a = channels > 3 ? static_cast<unsigned char>(std::lround(sample(source_x, source_y, 3))) : 255;
-                    Rml::byte* dst = result.pixels.data() +
-                                     (static_cast<std::size_t>(y) *
-                                          static_cast<std::size_t>(output_width) +
-                                      static_cast<std::size_t>(x)) *
-                                         4u;
-                    dst[0] = static_cast<Rml::byte>(
-                        (static_cast<unsigned int>(r) * a + 127u) / 255u);
-                    dst[1] = static_cast<Rml::byte>(
-                        (static_cast<unsigned int>(g) * a + 127u) / 255u);
-                    dst[2] = static_cast<Rml::byte>(
-                        (static_cast<unsigned int>(b) * a + 127u) / 255u);
-                    dst[3] = static_cast<Rml::byte>(a);
-                }
-            }
-            result.width = output_width;
-            result.height = output_height;
-        }
-    } catch (const std::exception& e) {
-        LOG_WARN("Failed to decode preview texture '{}': {}", lfs::core::path_to_utf8(path), e.what());
-    }
-    if (data)
-        lfs::core::free_image(data);
-    return result;
 }
 
 void RenderInterface_VK::QueueTextureForDeferredDeletion(texture_data_t* texture) {
@@ -1317,73 +1045,24 @@ void RenderInterface_VK::QueueTextureForDeferredDeletion(texture_data_t* texture
     }
 }
 
-void RenderInterface_VK::DropAsyncPreviewTexture(texture_data_t* texture) {
-    if (!texture)
-        return;
-    m_async_preview_textures.erase(std::remove_if(m_async_preview_textures.begin(), m_async_preview_textures.end(),
-                                                  [texture](const std::shared_ptr<async_preview_state_t>& state) {
-                                                      if (state && state->texture == texture) {
-                                                          state->cancelled.store(true, std::memory_order_release);
-                                                          state->texture = nullptr;
-                                                          return true;
-                                                      }
-                                                      return false;
-                                                  }),
-                                   m_async_preview_textures.end());
-}
-
 void RenderInterface_VK::ProcessAsyncPreviewUploads() {
-    if (m_async_preview_textures.empty() || !m_p_device || !m_p_allocator)
+    if (!m_p_device || !m_p_allocator)
         return;
-
-    constexpr int kUploadBudgetPerFrame = 2;
-    int uploads_remaining = kUploadBudgetPerFrame;
-    bool uploaded_any = false;
-    bool needs_followup_redraw = false;
-
-    for (auto it = m_async_preview_textures.begin(); it != m_async_preview_textures.end();) {
-        const std::shared_ptr<async_preview_state_t>& state = *it;
-        if (!state || !state->texture) {
-            it = m_async_preview_textures.erase(it);
-            continue;
-        }
-        if (!state->ready.load(std::memory_order_acquire)) {
-            ++it;
-            continue;
-        }
-        if (uploads_remaining <= 0) {
-            needs_followup_redraw = true;
-            break;
-        }
-
-        async_preview_result_t result;
-        {
-            std::lock_guard lock(state->mutex);
-            result = std::move(state->result);
-        }
-
-        if (!result.pixels.empty() && result.width > 0 && result.height > 0) {
-            Rml::Vector2i dimensions{result.width, result.height};
-            const Rml::TextureHandle replacement_handle = CreateTexture({result.pixels.data(), result.pixels.size()}, dimensions, state->source);
-            auto* replacement = reinterpret_cast<texture_data_t*>(replacement_handle);
-            if (replacement) {
-                replacement->m_is_async_preview = true;
-                QueueTextureForDeferredDeletion(new texture_data_t(*state->texture));
-                *state->texture = *replacement;
-                UnregisterLiveTexture(replacement);
-                delete replacement;
-                --uploads_remaining;
-                uploaded_any = true;
-            }
-        }
-
-        it = m_async_preview_textures.erase(it);
-    }
-
-    if (uploaded_any)
-        m_preview_texture_generation.fetch_add(1, std::memory_order_acq_rel);
-    if (needs_followup_redraw)
-        lfs::python::request_redraw();
+    m_preview_textures.uploadReady([this](Rml::TextureHandle handle, const Rml::String& source,
+                                          lfs::vis::gui::PreviewTexturePixels& result) {
+        auto* texture = reinterpret_cast<texture_data_t*>(handle);
+        Rml::Vector2i dimensions{result.width, result.height};
+        const Rml::TextureHandle replacement_handle = CreateTexture({result.pixels.data(), result.pixels.size()}, dimensions, source);
+        auto* replacement = reinterpret_cast<texture_data_t*>(replacement_handle);
+        if (!replacement)
+            return false;
+        replacement->m_is_async_preview = true;
+        QueueTextureForDeferredDeletion(new texture_data_t(*texture));
+        *texture = *replacement;
+        UnregisterLiveTexture(replacement);
+        delete replacement;
+        return true;
+    });
 }
 
 Rml::TextureHandle RenderInterface_VK::GenerateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) {
@@ -1613,7 +1292,7 @@ void RenderInterface_VK::ReleaseTexture(Rml::TextureHandle texture_handle) {
     texture_data_t* p_texture = reinterpret_cast<texture_data_t*>(texture_handle);
 
     if (p_texture) {
-        DropAsyncPreviewTexture(p_texture);
+        m_preview_textures.cancel(texture_handle);
         QueueTextureForDeferredDeletion(p_texture);
     }
 }
@@ -2048,8 +1727,7 @@ void RenderInterface_VK::ShutdownExternal() {
     if (m_p_device)
         lfs::rendering::vk_device_wait_idle_synced(m_p_device);
 
-    StopPreviewWorkerPool();
-    m_async_preview_textures.clear();
+    m_preview_textures.stop();
     DestroyFrostedGlassBackdrop(false);
     DestroyRenderLayers();
     Destroy_Pipelines();
