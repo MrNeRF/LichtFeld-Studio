@@ -17,7 +17,6 @@ namespace lfs::core::internal::warp_math {
     constexpr int LANCZOS_RADIUS = 3;
     constexpr int OUTPUT_TILE_ROWS = 256;
     constexpr float MIN_SIGNED_WEIGHT_RATIO = 1.0e-4f;
-    constexpr float EVALUATION_MIN_COVERAGE = 0.999f;
 
     // COLMAP sensor/models.h (BSD-3 licensed formulas)
     inline void apply_distortion_pinhole(
@@ -308,75 +307,6 @@ namespace lfs::core::internal::warp_math {
             dst[channel * output_plane + output_index] = result[channel] * inverse_samples;
     }
 
-    inline void
-    distort_image_to_source_kernel(
-        const float* src,
-        float* dst,
-        uint8_t* validity,
-        const int channels,
-        const int ox, const int oy,
-        const UndistortParams params,
-        const UndistortRadialBranch& branch) {
-        if (ox >= params.src_width || oy >= params.src_height)
-            return;
-
-        float result[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        float absolute_inside_sum = 0.0f;
-        float absolute_full_sum = 0.0f;
-        bool converged = true;
-        for (int qy = 0; qy < AREA_QUADRATURE && converged; ++qy) {
-            for (int qx = 0; qx < AREA_QUADRATURE; ++qx) {
-                const float pixel_x = static_cast<float>(ox) +
-                                      (static_cast<float>(qx) + 0.5f) / AREA_QUADRATURE;
-                const float pixel_y = static_cast<float>(oy) +
-                                      (static_cast<float>(qy) + 0.5f) / AREA_QUADRATURE;
-                const float xd = (pixel_x - params.src_cx) / params.src_fx;
-                const float yd = (pixel_y - params.src_cy) / params.src_fy;
-                float ux, uy;
-                if (!undistort_normalized_point(params, branch, xd, yd, ux, uy)) {
-                    converged = false;
-                    break;
-                }
-                const float sx = ux * params.dst_fx + params.dst_cx - PIXEL_CENTER_OFFSET;
-                const float sy = uy * params.dst_fy + params.dst_cy - PIXEL_CENTER_OFFSET;
-                if (!isfinite(sx) || !isfinite(sy)) {
-                    converged = false;
-                    break;
-                }
-                float sample[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-                float absolute_inside = 0.0f;
-                float absolute_full = 0.0f;
-                if (!lanczos3_sample(
-                        src, params.dst_width, params.dst_height, channels,
-                        sx, sy, sample, absolute_inside, absolute_full)) {
-                    converged = false;
-                    break;
-                }
-                absolute_inside_sum += absolute_inside;
-                absolute_full_sum += absolute_full;
-                for (int channel = 0; channel < channels; ++channel)
-                    result[channel] += sample[channel];
-            }
-        }
-
-        const int output_index = oy * params.src_width + ox;
-        const int output_plane = params.src_width * params.src_height;
-        const float coverage = absolute_full_sum > 0.0f
-                                   ? absolute_inside_sum / absolute_full_sum
-                                   : 0.0f;
-        if (!converged || coverage < EVALUATION_MIN_COVERAGE) {
-            validity[output_index] = 0;
-            for (int channel = 0; channel < channels; ++channel)
-                dst[channel * output_plane + output_index] = 0.0f;
-            return;
-        }
-
-        validity[output_index] = 1;
-        constexpr float inverse_samples = 1.0f / (AREA_QUADRATURE * AREA_QUADRATURE);
-        for (int channel = 0; channel < channels; ++channel)
-            dst[channel * output_plane + output_index] = result[channel] * inverse_samples;
-    }
-
     enum class AreaFilterMode : int {
         NONNEGATIVE,
         DEPTH,
@@ -434,81 +364,6 @@ namespace lfs::core::internal::warp_math {
         const int output_index = oy * params.dst_width + ox;
         const int output_plane = params.dst_width * params.dst_height;
         if (valid_samples <= 0.0f) {
-            for (int channel = 0; channel < channels; ++channel)
-                dst[channel * output_plane + output_index] = 0.0f;
-            return;
-        }
-        for (int channel = 0; channel < channels; ++channel)
-            result[channel] /= valid_samples;
-        if (mode == AreaFilterMode::NORMAL) {
-            const float norm = sqrtf(result[0] * result[0] + result[1] * result[1] +
-                                     result[2] * result[2]);
-            if (norm > 1.0e-8f && isfinite(norm)) {
-                result[0] /= norm;
-                result[1] /= norm;
-                result[2] /= norm;
-            } else {
-                result[0] = result[1] = result[2] = 0.0f;
-            }
-        }
-        for (int channel = 0; channel < channels; ++channel)
-            dst[channel * output_plane + output_index] = result[channel];
-    }
-
-    inline void
-    distort_area_to_source_kernel(
-        const float* src,
-        float* dst,
-        const int channels,
-        const AreaFilterMode mode,
-        const int ox, const int oy,
-        const UndistortParams params,
-        const UndistortRadialBranch& branch) {
-        if (ox >= params.src_width || oy >= params.src_height)
-            return;
-
-        float result[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        float valid_samples = 0.0f;
-        const int input_plane = params.dst_width * params.dst_height;
-        bool converged = true;
-        for (int qy = 0; qy < AREA_QUADRATURE && converged; ++qy) {
-            for (int qx = 0; qx < AREA_QUADRATURE; ++qx) {
-                const float pixel_x = static_cast<float>(ox) +
-                                      (static_cast<float>(qx) + 0.5f) / AREA_QUADRATURE;
-                const float pixel_y = static_cast<float>(oy) +
-                                      (static_cast<float>(qy) + 0.5f) / AREA_QUADRATURE;
-                const float xd = (pixel_x - params.src_cx) / params.src_fx;
-                const float yd = (pixel_y - params.src_cy) / params.src_fy;
-                float ux, uy;
-                if (!undistort_normalized_point(params, branch, xd, yd, ux, uy)) {
-                    converged = false;
-                    break;
-                }
-                const float sx = ux * params.dst_fx + params.dst_cx - PIXEL_CENTER_OFFSET;
-                const float sy = uy * params.dst_fy + params.dst_cy - PIXEL_CENTER_OFFSET;
-                if (mode == AreaFilterMode::DEPTH) {
-                    const float sample = bilinear_sample_renormalized(
-                        src, params.dst_width, params.dst_height, params.dst_width,
-                        sx, sy, true);
-                    if (sample > 0.0f && isfinite(sample)) {
-                        result[0] += sample;
-                        valid_samples += 1.0f;
-                    }
-                } else {
-                    for (int channel = 0; channel < channels; ++channel) {
-                        result[channel] += bilinear_sample_renormalized(
-                            src + channel * input_plane,
-                            params.dst_width, params.dst_height, params.dst_width,
-                            sx, sy);
-                    }
-                    valid_samples += 1.0f;
-                }
-            }
-        }
-
-        const int output_index = oy * params.src_width + ox;
-        const int output_plane = params.src_width * params.src_height;
-        if (!converged || valid_samples <= 0.0f) {
             for (int channel = 0; channel < channels; ++channel)
                 dst[channel * output_plane + output_index] = 0.0f;
             return;

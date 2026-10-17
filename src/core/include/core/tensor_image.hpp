@@ -58,16 +58,6 @@ namespace lfs::core {
     };
     LFS_CORE_API UndistortRadialBranch undistort_radial_branch(const UndistortParams& params);
 
-    // Inverts normalized distorted coordinates on the first radial branch, like the CUDA warps.
-    LFS_CORE_API bool undistort_normalized_point(
-        const UndistortParams& params, const UndistortRadialBranch& branch,
-        float distorted_x, float distorted_y, float& normalized_x, float& normalized_y);
-
-    // Inverts a distorted image pixel to normalized camera coordinates.
-    LFS_CORE_API bool undistort_image_point(
-        const UndistortParams& params, float image_x, float image_y,
-        float& normalized_x, float& normalized_y);
-
     LFS_CORE_API Tensor inverse_distortion_sample_map(const UndistortParams& params, void* stream);
 
     LFS_CORE_API Tensor undistort_image(const Tensor& src, const UndistortParams& params,

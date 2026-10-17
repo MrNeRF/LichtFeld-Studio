@@ -3,11 +3,11 @@
 #include "core/tensor_image.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/tensor_execution.hpp"
 #include "internal/image_resample.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/undistort_resample.hpp"
 #include <format>
-#include <limits>
 #include <stdexcept>
 
 namespace lfs::core::internal {
@@ -69,46 +69,34 @@ namespace lfs::core::internal {
             const auto stream = prepare_inputs_for_stream({&source}, source.stream());
             return backend_ops_for(source).image_warp(source, p, mode, inverse, validity, ExecContext{stream});
         }
+        // The lens inverse runs only on the GPU; CPU images round-trip through it.
+        if (mode == 4)
+            return inverse_distortion_sample_map(p, nullptr).cpu();
+        if (inverse) {
+            const auto gpu = source.to(Device::GPU);
+            Tensor gpu_validity;
+            const auto result = mode == 0   ? distort_image_to_source(gpu, p, gpu_validity, nullptr)
+                                : mode == 1 ? distort_mask_to_source_area(gpu, p, nullptr)
+                                : mode == 2 ? distort_depth_to_source_area(gpu, p, nullptr)
+                                            : distort_normal_to_source_area(gpu, p, nullptr);
+            if (validity)
+                *validity = gpu_validity.cpu();
+            return result.cpu();
+        }
         const bool scalar = input.ndim() == 2;
         const int channels = scalar ? 1 : int(input.size(0));
-        const auto branch = undistort_radial_branch(p);
-        if (mode == 4) {
-            auto samples = Tensor::empty({size_t(p.src_height), size_t(p.src_width), 2}, Device::CPU);
-            auto* values = samples.ptr<float>();
-            for (int y = 0; y < p.src_height; ++y) {
-                for (int x = 0; x < p.src_width; ++x) {
-                    float nx, ny;
-                    if (!undistort_normalized_point(p, branch, (x + 0.5f - p.src_cx) / p.src_fx,
-                                                    (y + 0.5f - p.src_cy) / p.src_fy, nx, ny))
-                        nx = ny = std::numeric_limits<float>::quiet_NaN();
-                    const auto i = 2 * (size_t(y) * p.src_width + x);
-                    values[i] = nx;
-                    values[i + 1] = ny;
-                }
-            }
-            return samples;
-        }
-        const int width = inverse ? p.src_width : p.dst_width;
-        const int height = inverse ? p.src_height : p.dst_height;
-        auto output = Tensor::zeros(scalar ? TensorShape{size_t(height), size_t(width)} : TensorShape{size_t(channels), size_t(height), size_t(width)}, Device::CPU);
-        if (validity)
-            *validity = Tensor::zeros({size_t(height), size_t(width)}, Device::CPU, DataType::UInt8);
+        auto output = Tensor::zeros(scalar ? TensorShape{size_t(p.dst_height), size_t(p.dst_width)} : TensorShape{size_t(channels), size_t(p.dst_height), size_t(p.dst_width)}, Device::CPU);
         const int quadrature = warp_math::area_quadrature(p);
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < width; ++x) {
+        for (int y = 0; y < p.dst_height; ++y) {
+            for (int x = 0; x < p.dst_width; ++x) {
                 if (mode == 0) {
-                    if (inverse)
-                        warp_math::distort_image_to_source_kernel(source.ptr<float>(), output.ptr<float>(), validity->ptr<uint8_t>(), channels, x, y, p, branch);
-                    else if (rgb8)
+                    if (rgb8)
                         warp_math::undistort_image_kernel(source.ptr<uint8_t>(), output.ptr<float>(), channels, x, y, quadrature, p);
                     else
                         warp_math::undistort_image_kernel(source.ptr<float>(), output.ptr<float>(), channels, x, y, quadrature, p);
                 } else {
                     const auto filter = static_cast<warp_math::AreaFilterMode>(mode - 1);
-                    if (inverse)
-                        warp_math::distort_area_to_source_kernel(source.ptr<float>(), output.ptr<float>(), channels, filter, x, y, p, branch);
-                    else
-                        warp_math::undistort_area_kernel(source.ptr<float>(), output.ptr<float>(), channels, filter, x, y, quadrature, p);
+                    warp_math::undistort_area_kernel(source.ptr<float>(), output.ptr<float>(), channels, filter, x, y, quadrature, p);
                 }
             }
         }
@@ -161,7 +149,7 @@ namespace lfs::core {
 namespace lfs::core {
     Tensor inverse_distortion_sample_map(const UndistortParams& params, void* stream) {
 #if LFS_HAS_CUDA
-        if (default_gpu_backend() == GpuBackend::CUDA)
+        if (TensorExecutionTarget::current().backend() == GpuBackend::CUDA)
             return cuda::inverse_distortion_sample_map(params, static_cast<cudaStream_t>(stream));
 #endif
         auto source = Tensor::empty({1}, Device::GPU);
