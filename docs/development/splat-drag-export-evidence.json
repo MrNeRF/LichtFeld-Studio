@@ -4,17 +4,19 @@
   "windows_build": "passed",
   "ctest": {
     "windows": {
-      "passed": 2,
+      "passed": 3,
       "tests": [
         "splat_transfer_contract",
-        "native_drag_contract"
+        "native_drag_contract",
+        "file_transfer_progress_contract"
       ]
     },
     "linux_standalone": {
-      "passed": 2,
+      "passed": 3,
       "tests": [
         "wayland_drag_contract",
-        "x11_drag_guard_contract"
+        "x11_drag_guard_contract",
+        "file_transfer_progress_contract"
       ],
       "compiler": "GCC 14",
       "sanitizers": [
@@ -61,7 +63,7 @@
     ],
     "unicode_filename": "passed"
   },
-  "physical_drag": "pending graphical session",
+  "physical_drag": "Pending validation of the progress-enabled build",
   "clang_format": {
     "version": "18.1.3",
     "configuration": ".clang-format",
@@ -81,5 +83,13 @@
   "resource_checks": {
     "windows_com_cycles": 6000,
     "wayland": "50 protocol cycles plus context reuse; resource teardown checked with sanitizers"
+  },
+  "progress": {
+    "windows": "Shell IProgressDialog; deferred until left mouse button release",
+    "linux": "Modeless GTK dialog; no focus on map",
+    "delay_ms": 250,
+    "contract": "Aggregate monotonic progress, completed fast path, cancel and worker drain after UI failure",
+    "visual_validation": "Pending; protocol and headless tests do not exercise native dialog appearance",
+    "snapshot_progress": "CPU snapshot remains synchronous, without granular progress"
   }
 }

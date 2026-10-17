@@ -21,6 +21,7 @@
 #include "gui/gui_manager.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/utils/file_transfer_progress.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/utils/native_file_drag.hpp"
 #include "gui/utils/splat_export_request.hpp"
@@ -678,7 +679,9 @@ namespace lfs::vis::gui {
         const auto prefs = UserPreferences::instance().splatDrag();
         // No scene/model pointer or Element is retained by a receiver's data
         // object. Resolve identities again on the UI thread when data is read.
-        external_provider_ = [identity = std::move(identity), revision = scene.renderGeneration(), prefs] {
+        external_progress_ = std::make_shared<FileTransferProgressState>(std::make_shared<std::atomic<bool>>(false));
+        external_provider_ = [identity = std::move(identity), revision = scene.renderGeneration(), prefs, progress = external_progress_] {
+            const auto cancelled = progress->cancelled;
             try {
                 auto* live = services().sceneOrNull();
                 if (!live || live->getScene().renderGeneration() != revision)
@@ -698,13 +701,24 @@ namespace lfs::vis::gui {
                                                                 : prefs.format == "sog"   ? prefs.sog_sh
                                                                                           : prefs.ply_sh;
                     sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string().substr(0, 8) : node->name, .sh_degree = degree, .sog_iterations = prefs.maximum_quality ? 100 : prefs.sog_iterations, .z_up = prefs.format == "ply" && prefs.blender_axes}});
+                    sources.back().options.progress = [progress, index = sources.size() - 1, count = identity.size()](float fraction) {
+                        return progress->report(index, count, fraction);
+                    };
                 }
-                auto cancelled = std::make_shared<std::atomic<bool>>(false);
+                FileTransferProgress dialog(progress, tr("preferences.drag_title"), tr("export.exporting"), tr("common.cancel"));
                 auto future = prepareSplatTransferBatch(sources, cancelled);
                 lock.reset(); // Owned CPU snapshot, no live model lock during IO.
-                return future.get();
+                return waitForFileTransfer(future, *progress, [&dialog, warned = false](int value) mutable {
+                    if (!dialog.update(value) && !warned) {
+                        warned = true;
+                        LOG_WARN("[splat-transfer] native progress window unavailable; export continues");
+                    }
+                });
             } catch (const std::exception& error) {
-                LOG_ERROR("[splat-transfer] deferred export failed: {}", error.what());
+                if (progress->user_cancelled.load())
+                    LOG_INFO("[splat-transfer] deferred export cancelled");
+                else
+                    LOG_ERROR("[splat-transfer] deferred export failed: {}", error.what());
                 throw;
             }
         };
@@ -729,6 +743,7 @@ namespace lfs::vis::gui {
         if (!(buttons & SDL_BUTTON_LMASK) || keyboard[SDL_SCANCODE_ESCAPE]) {
             external_armed_ = false;
             external_provider_ = {};
+            external_progress_.reset();
             return;
         }
         bool outside = x < external_window_bounds_.x || y < external_window_bounds_.y || x >= external_window_bounds_.z || y >= external_window_bounds_.w;
@@ -746,6 +761,7 @@ namespace lfs::vis::gui {
         SDL_CaptureMouse(false);
         LOG_INFO("[splat-transfer] native drag started (deferred files)");
         FileDragResult result;
+        const auto progress = external_progress_;
         try {
             result = dragFiles(std::move(external_provider_), external_window_, external_context_);
         } catch (const std::exception& error) {
@@ -753,6 +769,9 @@ namespace lfs::vis::gui {
             result = {FileDragStatus::Failed, error.what()};
         }
         external_native_active_ = false;
+        if (progress && progress->user_cancelled.load())
+            result = {FileDragStatus::Cancelled, {}};
+        external_progress_.reset();
         if (auto* context = GetContext())
             context->ProcessMouseButtonCancel(0, 0);
         LOG_INFO("[splat-transfer] native drag finished: {} {}", static_cast<int>(result.status), result.error);
@@ -3694,6 +3713,10 @@ namespace lfs::vis::gui {
             markStateDirty();
         } else if (type == "dragend") {
             external_armed_ = false;
+            if (!external_native_active_) {
+                external_provider_ = {};
+                external_progress_.reset();
+            }
             if (auto_expanded_group_id_ != core::NULL_NODE &&
                 dropped_into_auto_expanded_group_id_ != auto_expanded_group_id_) {
                 collapsed_ids_.insert(auto_expanded_group_id_);

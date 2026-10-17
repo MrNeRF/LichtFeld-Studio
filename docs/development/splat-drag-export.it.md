@@ -14,11 +14,21 @@ Il file viene prodotto **su richiesta dei dati**: enumerare i formati o entrare 
 
 Questo elimina il precedente prerequisito di attendere la preparazione prima di avviare il drag nativo e la richiesta di ripetere il gesto per modelli grandi. Se il destinatario legge i dati, la chiamata attende l’export; un destinatario che imponga propri timeout deve essere verificato sul desktop reale. Non viene inventato un gesto se il pulsante era già stato rilasciato prima dell’avvio del drag nativo.
 
+## Avanzamento durante il trasferimento
+
+Alla richiesta effettiva dei dati viene collegato ai writer esistenti un progresso complessivo della selezione. Il valore è monotono anche quando un encoder riparte da zero per una nuova fase; ogni oggetto occupa una porzione uguale della barra, senza promettere una stima temporale esatta. I callback del worker aggiornano soltanto atomiche, non widget o dati della scena.
+
+Dopo 250 ms può comparire una finestra nativa con testo localizzato e annullamento. Gli export rapidi non fanno lampeggiare finestre. Su Windows si usa `IProgressDialog` della Shell, che aggiorna la propria UI su un thread dedicato; l'apertura attende anche il rilascio del pulsante sinistro per non interferire con il drag. Su Linux si usa un dialogo GTK non modale, senza acquisire il focus all'apertura. Su Wayland il destinatario può richiedere dati prima del rilascio e il progresso può quindi comparire prima: non si inventano seriali o un nuovo gesto per posticiparlo.
+
+La normale coda SDL, il rendering Vulkan e Rml non vengono eseguiti ricorsivamente durante la richiesta dati. Linux itera solo il contesto GTK con lavoro limitato per tick; la connessione GTK della finestra non viene usata come sorgente del drag Wayland. Il lock dei modelli viene rilasciato prima di attendere il worker. Lo snapshot CPU rimane sincrono e non offre ancora un avanzamento granulare durante la copia.
+
+Annulla o chiusura della finestra segnalano il token del writer. La finestra resta posseduta finché il worker ha concluso il rollback; poi viene distrutta. L'annullamento volontario non produce un toast di errore, mentre i veri errori del writer restano fallimenti. Un errore della UI cancella e attende il worker; se il backend nativo non può aprire la finestra, viene registrato un avviso e il trasferimento prosegue. I file parziali e i fratelli del batch non consegnato seguono il rollback già esistente.
+
 ## Preferenze e dati
 
 Interfaccia → Albero della scena: PLY, SPZ v4 oppure SOG; qualità massima o grado SH per formato; iterazioni SOG personalizzate 1-100; conversione assi Blender per PLY. Qualità massima mantiene tutti gli SH memorizzati e tutti gli splat non eliminati, anche con SH ridotti nel viewport. PLY è binario float32. SPZ/SOG restano compressi con perdita; il preset SOG usa 100 iterazioni, senza promettere ottimalità matematica.
 
-PLY per Blender converte RDF in `(x, z, -y)` e trasforma insieme geometria, covarianza e SH. SPZ e SOG mantengono le convenzioni dei writer. Per Blender senza add-on usare PLY; SOG non viene dichiarato formato nativo Blender. SPZ SH0 sul Blender originale può richiedere la correzione upstream separata.
+PLY per Blender converte RDF in `(x, z, -y)` e trasforma insieme geometria, covarianza e SH. SPZ e SOG mantengono le convenzioni dei writer. Blender 5.3 importa nativamente PLY e SPZ, ma non SOG. PLY conserva i valori float32 e resta la scelta di riferimento per i test senza addon. SPZ SH0 sul Blender originale usato in laboratorio può richiedere la correzione upstream separata. Non viene applicata una conversione nascosta da SOG a PLY: il formato scelto nelle preferenze resta quello consegnato.
 
 Le etichette sono tradotte in tutte le dieci lingue del progetto. Errori tecnici dettagliati vanno nel log; la UI mostra un messaggio localizzato. Non viene esposto il testo non tradotto delle eccezioni.
 
@@ -49,12 +59,12 @@ Offre solo URI e azione copia. Gestisce più seat, rimozione del seat, Escape, c
 Windows: configurare `BUILD_SPLAT_TRANSFER_TESTS=ON`, compilare e usare:
 
 ```text
-ctest --test-dir .local/build --output-on-failure -R "^(splat_transfer_contract|native_drag_contract)$"
+ctest --test-dir .local/build --output-on-failure -R "^(splat_transfer_contract|native_drag_contract|file_transfer_progress_contract)$"
 ```
 
 Il contratto export usa i writer reali: SH0-3, snapshot indipendente, maschera eliminati, assi e trasformazioni mondo, covarianza, opacità/DC, rotazione numerica SH1, LOD foglie, riduzione SH, nomi portabili, SPZ/SOG, input invalidi, annullamento durante scrittura, batch, rollback, errore IO, coda satura, future non bloccante e temporanei scaduti. SPZ/SOG sono verifiche di produzione del file, non round-trip numerici completi di tutti i coefficienti compressi.
 
-Il contratto COM esegue 6.000 cicli: enumerazione senza generazione, generazione una sola volta, letture ripetute con storage indipendente, annullamento senza dati ed errore del provider. Dopo riscaldamento misura handle e memoria privata. Questo non certifica ogni percorso di ogni applicazione ricevente.
+Il contratto di avanzamento verifica aggregazione, valori non finiti, assenza di aggiornamenti per future già pronti, annullamento e attesa della chiusura del worker in caso di errore UI. Non apre finestre durante i test headless. Il contratto COM esegue 6.000 cicli: enumerazione senza generazione, generazione una sola volta, letture ripetute con storage indipendente, annullamento senza dati ed errore del provider. Dopo riscaldamento misura handle e memoria privata. Questo non certifica ogni percorso di ogni applicazione ricevente.
 
 Linux, senza CUDA o desktop:
 
@@ -76,14 +86,16 @@ Controlli progetto: `tools/check_locale_completeness.py`, `tools/check_ui_hardco
 
 Non si promette trasformazione SH esatta per scale non uniformi, shear o riflessioni: SH>0 viene rifiutato in questi casi per evitare colori corrotti. SH0 supporta geometria affine non singolare. Trasformazioni non finite, singolari o prospettiche vengono rifiutate. Le LOD caricate parzialmente non vengono spacciate per l’intero modello.
 
-Nessuna sessione grafica dell’utente è stata aperta. Restano da verificare fisicamente: riga → Explorer/Desktop e Blender 5.3 originale su Windows; riga → file manager/Blender in X11 e Wayland GNOME/KDE; selezione multipla, Escape, cambio finestra, oggetti grandi, nomi Unicode e conflitti di nome. I sanitizer e i test di protocollo non sostituiscono questi destinatari reali. Una CI completa Linux Release/Debug non è stata eseguita su questa macchina Windows; sono stati compilati ed eseguiti i backend Linux isolati con GCC 14 e sanitizer.
+Le applicazioni di test sono state avviate per l’utente; l’automazione non ha completato un drag fisico della nuova versione con avanzamento. Restano da verificare fisicamente: riga → Explorer/Desktop e Blender 5.3 originale su Windows; riga → file manager/Blender in X11 e Wayland GNOME/KDE; selezione multipla, Escape, cambio finestra, oggetti grandi, nomi Unicode e conflitti di nome. I sanitizer e i test di protocollo non sostituiscono questi destinatari reali. Una CI completa Linux Release/Debug non è stata eseguita su questa macchina Windows; sono stati compilati ed eseguiti i backend Linux isolati con GCC 14 e sanitizer.
 
 ## Risultati locali del 17 ottobre 2026
 
-Build Windows completata; contratti CTest Windows 2/2 e Linux standalone 2/2 superati. Su Linux GCC 14 compila i backend con warning come errori e ASan/UBSan; il controllo delle perdite è abilitato. Il test COM copre 6.000 cicli; non sostituisce una prova fisica con Explorer. I test Python mirati a export e preferenze sono 89 superati.
+Build Windows completata; contratti CTest Windows 3/3 e Linux standalone 3/3 superati. Su Linux GCC 14 compila i backend con warning come errori e ASan/UBSan; il controllo delle perdite è abilitato. Il test COM copre 6.000 cicli; non sostituisce una prova fisica con Explorer. I test Python mirati a export e preferenze sono 89 superati.
 
 Blender originale 5.3.0 Beta, build `346d005c9994`, importa senza addon i PLY SH0-3 generati dal contratto, inclusi nomi Unicode. Due punti per fixture; errore massimo sulle posizioni circa 1,91e-7. Questo verifica l’importatore nativo, non un gesto fisico tra finestre.
 
 La suite CPU Python estesa su Windows ha prodotto 3.762 pass, 66 segnalazioni di fallimento, 40 skip e 410 deselezioni. I 61 identificatori unici falliti sono stati rieseguiti sui sorgenti della base `d161094a9eac9cd1f22f8c280549d2b5dc3c63e8`: tutti e 61 falliscono anche lì, usando lo stesso ambiente Windows e lo stesso runtime compilato locale. Non è una build nativa indipendente del master e non prova la correttezza di ogni percorso runtime. Questi problemi non sono stati corretti in questo branch, come richiesto dall’utente.
 
 È stata inoltre osservata una race intermittente nel log del compilatore fittizio del test preesistente `test_shader_header_target.py`. Il test resta invariato: un’eventuale correzione appartiene a un branch separato. Nessuna baseline del debito o regola di controllo è stata indebolita.
+
+Riferimenti per i backend di avanzamento: [IProgressDialog](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nn-shlobj_core-iprogressdialog), [Gtk.Dialog](https://docs.gtk.org/gtk3/class.Dialog.html). Compatibilità nativa: [note di rilascio Blender 5.3](https://developer.blender.org/docs/release_notes/5.3/rendering/).

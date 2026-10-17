@@ -32,6 +32,7 @@ namespace lfs::vis::gui {
 
     struct PanelDrawContext;
     class NativeDragContext;
+    struct FileTransferProgressState;
 
     class SceneGraphElement : public Rml::Element {
     public:
@@ -180,6 +181,7 @@ namespace lfs::vis::gui {
 
         NativeDragContext* external_context_ = nullptr;
         std::function<std::vector<std::filesystem::path>()> external_provider_;
+        std::shared_ptr<FileTransferProgressState> external_progress_;
         SDL_Window* external_window_ = nullptr;
         void beginExternalTransfer(core::NodeId id, bool outside_only = false, std::vector<core::NodeId> ids = {});
         void updateExternalTransfer();
