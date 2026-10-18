@@ -24,6 +24,10 @@ import utils;
 #define LFS_RASTER_OVERLAYS 1
 #endif
 
+#ifndef LFS_SPARK_RAD_RASTER
+#define LFS_SPARK_RAD_RASTER 0
+#endif
+
 #ifndef LFS_SKIP_DENSE_TILES
 #define LFS_SKIP_DENSE_TILES 0
 #endif
@@ -318,7 +322,13 @@ void main(
   #if SUBTILE_SIZE > 0
     pix_coord_base += projection_origin;
   #endif
+#if LFS_3DGUT_RASTERIZE
+    // The host picks the *_rad variant for Spark RAD scenes; a compile-time flag keeps the
+    // LOD-parent kernel out of the ordinary 3DGUT loop.
+    const bool spark_rad_opacity_path = LFS_SPARK_RAD_RASTER != 0;
+#else
     const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
+#endif
 #if LFS_3DGUT_RASTERIZE
     float3 ray_origin = float3(0.0);
     float3 ray_direction = float3(0.0, 0.0, 1.0);
@@ -439,9 +449,8 @@ void main(
                             center_pix_coord, xy_vs[splat_id], inv_cov_vs_opacity[splat_id].xyz,
                             g.opacity, cam))
                         continue;
-                    gauss_rgba = spark_rad_opacity_path
-                        ? evaluate_gut_splat_spark_rad(g, ray_origin, ray_direction)
-                        : evaluate_gut_splat_for_profile(g, ray_origin, ray_direction, uniforms.splat_render_profile);
+                    gauss_rgba = evaluate_gut_splat_lod(g, ray_origin, ray_direction, spark_rad_opacity_path,
+                                                        uniforms.splat_render_profile);
                   #if LFS_RASTER_OVERLAYS
                     overlay_splat = load_splat_alphablend(splat_id, xy_vs, inv_cov_vs_opacity, rgb);
                   #endif

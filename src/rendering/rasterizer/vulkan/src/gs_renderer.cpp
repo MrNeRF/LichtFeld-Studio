@@ -1010,6 +1010,9 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
         createComputePipeline(pipeline_rasterize_forward_3dgut[i], spirv_paths.at("rasterize_forward_3dgut"));
         createComputePipeline(pipeline_rasterize_forward_plain[i], spirv_paths.at("rasterize_forward_plain"));
         createComputePipeline(pipeline_rasterize_forward_3dgut_plain[i], spirv_paths.at("rasterize_forward_3dgut_plain"));
+        createComputePipeline(pipeline_rasterize_forward_3dgut_rad[i], spirv_paths.at("rasterize_forward_3dgut_rad"));
+        createComputePipeline(pipeline_rasterize_forward_3dgut_plain_rad[i],
+                              spirv_paths.at("rasterize_forward_3dgut_plain_rad"));
         createComputePipeline(pipeline_rasterize_forward_light[i],
                               spirv_paths.at("rasterize_forward_light"));
         createComputePipeline(pipeline_rasterize_forward_light_plain[i],
@@ -1771,9 +1774,12 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
 
         if (!use_batched_raster) {
             if (use_gut_rasterization) {
-                auto& gut_pipeline = overlays_active
-                                         ? pipeline_rasterize_forward_3dgut
-                                         : pipeline_rasterize_forward_3dgut_plain;
+                const bool spark_rad = (uniforms.lod_enabled & 4u) != 0u;
+                auto& gut_pipeline = spark_rad
+                                         ? (overlays_active ? pipeline_rasterize_forward_3dgut_rad
+                                                            : pipeline_rasterize_forward_3dgut_plain_rad)
+                                         : (overlays_active ? pipeline_rasterize_forward_3dgut
+                                                            : pipeline_rasterize_forward_3dgut_plain);
                 executeComputeIndirect(
                     record,
                     indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),

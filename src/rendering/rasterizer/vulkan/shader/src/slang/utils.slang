@@ -946,14 +946,24 @@ float evaluate_splat_alpha(
 }
 
 [ForceInline]
-float4 evaluate_gut_splat_spark_rad(Splat_3D_GUT_AlphaBlend g, float3 ray_origin, float3 ray_direction) {
+float4 evaluate_gut_splat_lod(Splat_3D_GUT_AlphaBlend g, float3 ray_origin, float3 ray_direction,
+                              bool spark_rad, uint profile) {
     float3 gro = mul(g.iscl_rot, ray_origin - g.xyz_ws);
     float3 grd = safe_normalize(mul(g.iscl_rot, ray_direction));
     float3 distance = cross(grd, gro);
     float sigma_over_2 = 0.5f * dot(distance, distance);
-    float value = sigma_over_2 > power_threshold_for_spark_rad_opacity(g.opacity)
-        ? 0.0f : exp(-sigma_over_2);
-    float alpha = spark_rad_alpha_from_value(g.opacity, value);
+    float value = exp(-sigma_over_2);
+    float alpha;
+    // Spark RAD leaves (opacity <= 1) blend like ordinary splats; only high-density LOD parents
+    // need the Spark kernel, so the ordinary path keeps its cost.
+    if (spark_rad && g.opacity > 1.0f) {
+        alpha = spark_rad_alpha_from_value(
+            g.opacity, sigma_over_2 > power_threshold_for_spark_rad_opacity(g.opacity) ? 0.0f : value);
+    } else {
+        alpha = clipOpacity(g.opacity * value);
+        if (!spark_rad && profile == 1u && alpha < (1.0f / 255.0f))
+            alpha = 0.0f;
+    }
     return float4(clamp(g.rgb, float3(0.0f), float3(MAX_BLEND_COLOR)) * alpha, alpha);
 }
 
