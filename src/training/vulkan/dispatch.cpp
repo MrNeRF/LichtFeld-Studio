@@ -15,6 +15,11 @@ namespace lfs::training::vulkan {
             uint64_t parameters;
         };
         static_assert(sizeof(Push) == 8);
+        struct ShaderModule {
+            VkDevice device;
+            VkShaderModule handle;
+            ~ShaderModule() { vkDestroyShaderModule(device, handle, nullptr); }
+        };
         struct Pipeline {
             std::shared_ptr<VulkanContext> context;
             VkPipelineLayout layout = VK_NULL_HANDLE;
@@ -46,30 +51,34 @@ namespace lfs::training::vulkan {
             VkShaderModule shader = VK_NULL_HANDLE;
             vk_check(context.get(), vkCreateShaderModule(context->device(), &shader_info, nullptr, &shader),
                      "vkCreateShaderModule(training.dispatch)");
+            const ShaderModule shader_lifetime{context->device(), shader};
             auto pipeline = std::make_shared<Pipeline>();
             pipeline->context = context;
             VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push)};
             VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
             layout_info.pushConstantRangeCount = 1;
             layout_info.pPushConstantRanges = &range;
-            vk_check(context.get(), vkCreatePipelineLayout(context->device(), &layout_info, nullptr, &pipeline->layout),
-                     "vkCreatePipelineLayout(training.dispatch)");
+            const VkResult layout_created = vkCreatePipelineLayout(context->device(), &layout_info, nullptr, &pipeline->layout);
+            if (layout_created != VK_SUCCESS)
+                pipeline->layout = VK_NULL_HANDLE; // Failed creation leaves the output undefined.
+            vk_check(context.get(), layout_created, "vkCreatePipelineLayout(training.dispatch)");
             VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
             stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
             stage.module = shader;
             stage.pName = "main";
             VkPipelineShaderStageRequiredSubgroupSizeCreateInfo required_size{
                 VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
-            // The raster backward has a shuffle-based logical warp path. Select
-            // wave32 only for that stage on compatible AMD devices; other stages
-            // and vendors retain their existing subgroup selection.
+            // Raster kernels have a shuffle-based logical warp path. Select
+            // wave32 for compatible AMD raster stages; other stages and vendors
+            // retain their existing subgroup selection.
             const bool gsplat_raster =
                 (name == "gsplat_backward" || name == "gsplat_backward_atomic") && specialization == 0;
             // Fast stage is packed into the low four bits; higher bits describe
             // SH, output and densification variants of the same raster kernel.
             const bool fast_raster =
                 (name == "fast_backward" || name == "fast_backward_atomic") && (specialization & 15u) == 0;
-            if ((gsplat_raster || fast_raster) &&
+            const bool fast_forward_raster = name == "fast_forward" && (specialization & 15u) == 5;
+            if ((gsplat_raster || fast_raster || fast_forward_raster) &&
                 context->caps().subgroup_size == 64 && context->caps().subgroup_size_control &&
                 context->caps().min_subgroup_size <= 32 && context->caps().max_subgroup_size >= 32) {
                 VkPhysicalDeviceSubgroupSizeControlProperties size_properties{
@@ -79,7 +88,7 @@ namespace lfs::training::vulkan {
                 vkGetPhysicalDeviceProperties2(context->physical_device(), &properties);
                 if (properties.properties.vendorID == 0x1002 &&
                     (size_properties.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
-                    size_properties.maxComputeWorkgroupSubgroups >= 4) {
+                    size_properties.maxComputeWorkgroupSubgroups >= (fast_forward_raster ? 8u : 4u)) {
                     required_size.requiredSubgroupSize = 32;
                     stage.pNext = &required_size;
                 }
@@ -105,7 +114,8 @@ namespace lfs::training::vulkan {
             vk_check(context.get(), result, "vkCreateComputePipelines(training.dispatch)");
             if (info.stage.pNext)
                 LOG_DEBUG("Vulkan training kernel {} stage {} uses required subgroup size 32", name, specialization);
-            vkDestroyShaderModule(context->device(), shader, nullptr);
+            if (info.stage.pNext && fast_forward_raster)
+                LOG_INFO("Vulkan Fast raster forward: using subgroup size 32");
             cache.emplace(key, pipeline);
             release_at_shutdown(*context, mutex, cache);
             return pipeline;

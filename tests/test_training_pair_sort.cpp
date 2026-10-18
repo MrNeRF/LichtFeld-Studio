@@ -263,6 +263,55 @@ TEST(TrainingVulkanPairSort, CoversEmptySingletonAndPartitionBoundaries) {
     }
 }
 
+TEST(TrainingVulkanPairSort, IndirectCountPreservesStableOrderAndCapacityTail) {
+    if (!lfs::core::gpu_backend_available(GpuBackend::Vulkan))
+        GTEST_SKIP() << "Vulkan tensor backend unavailable";
+    const lfs::core::GpuBackendScope scope(GpuBackend::Vulkan);
+    for (const bool wide : {false, true}) {
+        for (const uint32_t count : {0u, 1u, 31u, 32u, 33u, 127u, 128u, 129u, 2047u, 2048u, 2049u, 4097u}) {
+            SCOPED_TRACE(::testing::Message() << "wide=" << wide << " count=" << count);
+            const uint32_t capacity = count + 2048;
+            const uint64_t canary = wide ? 0xdede'dede'dede'dedeull : 0xdede'dedeull;
+            std::vector<Pair> input(capacity, {canary, 0xdead'beefu});
+            for (uint32_t i = 0; i < count; ++i)
+                input[i] = {((i * 37u) % 19u) | (wide ? uint64_t(i % 7u) << 40 : 0), i};
+            auto [keys_a, values_a] = upload_pairs(input, wide);
+            Tensor keys_b = keys_a.clone(), values_b = values_a.clone();
+            std::stable_sort(input.begin(), input.begin() + count,
+                             [](const Pair& a, const Pair& b) { return a.key < b.key; });
+            std::vector<uint32_t> words(32);
+            words[0] = count;
+            // Same indirect-dispatch ABI as the Fast forward control pass.
+            words[8] = (count + 2047) / 2048;
+            words[9] = words[10] = 1;
+            words[16] = 256;
+            words[17] = words[18] = 1;
+            words[28] = words[29] = words[30] = 1;
+            const Tensor control = Tensor::from_blob(words.data(), {32}, Device::CPU, DataType::UInt32).to(Device::GPU);
+            const bool in_a = lfs::training::vulkan_pair_sort(
+                {&keys_a, &keys_b, &values_a, &values_b}, capacity, 0, wide ? 64 : 32,
+                wide, nullptr, &control);
+            const Tensor sorted_keys = (in_a ? keys_a : keys_b).to(Device::CPU);
+            const Tensor sorted_values = (in_a ? values_a : values_b).to(Device::CPU);
+            for (uint32_t i = 0; i < count; ++i) {
+                const uint64_t key = wide ? std::bit_cast<uint64_t>(sorted_keys.ptr<int64_t>()[i])
+                                          : sorted_keys.ptr<uint32_t>()[i];
+                ASSERT_EQ(key, input[i].key) << i;
+                ASSERT_EQ(sorted_values.ptr<uint32_t>()[i], input[i].value) << i;
+            }
+            for (const auto& pair : {std::pair{&keys_a, &values_a}, std::pair{&keys_b, &values_b}}) {
+                const Tensor keys = pair.first->to(Device::CPU), values = pair.second->to(Device::CPU);
+                for (uint32_t i = count; i < capacity; ++i) {
+                    const uint64_t key = wide ? std::bit_cast<uint64_t>(keys.ptr<int64_t>()[i])
+                                              : keys.ptr<uint32_t>()[i];
+                    ASSERT_EQ(key, canary) << i;
+                    ASSERT_EQ(values.ptr<uint32_t>()[i], 0xdead'beefu) << i;
+                }
+            }
+        }
+    }
+}
+
 TEST(TrainingVulkanPairSort, MatchesFastQuantizedKeysAndReportsThroughput) {
     if (!lfs::core::gpu_backend_available(GpuBackend::Vulkan))
         GTEST_SKIP() << "Vulkan tensor backend unavailable";

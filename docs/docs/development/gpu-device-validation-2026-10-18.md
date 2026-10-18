@@ -462,3 +462,166 @@ full-resolution-source limit are present. This does not establish that every
 historical experiment was retained, or that a new optimization will be faster;
 forward/backward substage measurements remain the next justified performance
 investigation. No training kernel is changed by this menu correction.
+
+## Stable sort performance follow-up
+
+Two independent controls and two candidates resume the same 1M-Gaussian CUDA
+checkpoint from step 200 to 400, with max width 1920 (actual tensor 1440 x 1920),
+SH0, MCMC, CPU image cache, Fast/3DGS rasterization and evaluation disabled.
+The optional ballot sort uses core subgroup operations on eligible AMD devices;
+existing generic and NVIDIA-match SPIR-V modules are byte-identical to controls.
+The candidate preserves stable integer key/value ordering and capacity tails.
+
+| Configuration | Steady step, run 1 / run 2 (ms) | Whole process, run 1 / run 2 (s) |
+| --- | --- | --- |
+| Generic stable sort | 173.088 / 174.050 | 60.812 / 58.656 |
+| Ballot stable sort | 149.763 / 148.069 | 55.484 / 51.594 |
+
+The mean step decreases 14.2%; mean whole-process time decreases 10.4%.
+These are 200-step collector means, not the historical 2,000-step comparison.
+Loader waits are separately reported (96.6-108.0 ms/step across these runs),
+and asynchronous phase spans must not be summed to reconstruct total time.
+Peak backend allocations are about 1.66-1.67 billion bytes in both paths.
+An isolated 10M-key test decreases sorting GPU time from 75.027 to 14.027 ms;
+that factor is not a whole-training speedup.
+
+Forcing forward wave32 in addition to ballot sort yielded 149.013 / 144.015 ms,
+versus 149.763 / 148.069 ms without it. This small, variable increment is not
+retained. Incorrect early probes (the gsplat-stage control and the candidate
+before its host selector was wired) are excluded. Definitive runs occurred
+after the unrelated local build finished. Profiling hooks were restored out
+of production sources. Evidence: `amd-forward-optimization/whole-step-comparison.json`.
+These timing results alone do not establish final trained-model quality parity.
+
+## Forward/backward research and next experiments
+
+Research checked on 18 October 2026; candidate ideas below are not claims of
+implemented or measured improvements. External implementations are design
+references only. No external kernel is copied.
+
+### Existing mechanisms confirmed in this branch
+
+`fast_forward.slang::project` already counts ellipse/tile overlaps using
+`tileSpan` scanlines. `rasterSubgroup` already uses lane broadcasts, conservative
+8x4 subtile tests and early transmittance termination. `fast_backward.slang`
+already reuses final transmittance/last contributor and reduces gradients in
+logical 32-lane groups before atomics. `dispatch.cpp` already requests wave32
+for eligible AMD raster-backward pipelines. `atomicFloat` already has separate
+native FP32-atomic and CAS fallback modules. Merely enabling any of those again
+is not a new optimization. SH storage already has a subgroup-aligned swizzle.
+
+AMD recommends balancing register pressure, LDS and occupancy, profiling wave
+size choices and avoiding redundant submissions/barriers. LDS layout matters:
+its RDNA banks are 32-bit wide, and structure-of-arrays layouts can help.
+These recommendations motivate experiments, not guaranteed gains on this APU.
+Sources: [RDNA performance guide](https://gpuopen.com/learn/rdna-performance-guide/),
+[occupancy explanation](https://gpuopen.com/learn/occupancy-explained/),
+[wave-size guidance](https://gpuopen.com/presentations/2023/RDNA3_Beyond-the-current-gen-v4.pdf).
+Khronos requires checking supported operations/stages and subgroup-size-control
+properties: [Vulkan subgroups](https://docs.vulkan.org/guide/latest/subgroups.html).
+
+### Prioritized experiments preserving FP32 formulas
+
+| Priority | Experiment and concrete code location | Invariants and evidence required |
+| --- | --- | --- |
+| 1 | Forward-only 128/64-thread variants instead of 256: `fast_forward.slang::rasterSubgroup`, `dispatch.cpp`, indirect raster arguments in `fast_vulkan.cpp`. Divide a 256-pixel tile among independent groups while retaining each logical warp's pixel ranks. | Same per-pixel Gaussian order, threshold comparisons and FP32 expressions. Keep scan/projection workgroup contracts unchanged. Compare image/alpha/depth/normal/transmittance/last-contributor bits on fixed inputs, odd sizes, empty tiles, early termination and partial batches. More groups may cost more than they save. No measured gain yet. |
+| 2 | Coalesced projected-data access: `fast_common.slangh::Projected`, `projectedAt`, producer and workspace accounting. Current record is 18 words (72 bytes); adjacent lanes fetching different Gaussians use that stride. Prototype a full-FP32 field-major or AoSoA scratch layout. | Copy bits without new packing/quantization; preserve original indices and stable order. Include projection writes and backward reads in the timing, not only raster time. Check unused depth/normal fields in compiler output before assuming they consume bandwidth. Size/padding and 64-bit address bounds require tests. |
+| 3 | Backward live-state specialization: `fast_backward.slang` has two pixel states and 16 accumulators per lane, plus 8 KiB reduction scratch and maxLast. Inspect actual compiler resource usage for RGB-only versus depth/normal/densification variants; shorten variable lifetimes or split optional fields only where retained. | Preserve each field's XOR reduction tree, clamp location, native atomic behavior and all enabled auxiliary gradients. Do not replace the tree with unordered WaveActiveSum. Compiler may already eliminate unused fields; inspect generated code first. Do not blanket-pad `reduction[field][lane]`, whose lanes are already contiguous. |
+| 4 | Stage readback and recorder stalls: deferred forward performs a status readback after sort/ranges, before raster. Profile the CPU wait separately; inspect resource dependencies and avoid redundant read-to-read barriers only where proven. | Preserve fault reporting, overflow replay and no partial output publication. GPU validation cannot simply be removed. Recorder already batches commands, so a blanket batching rewrite is unjustified. Cross-device viewer transfers and queue lifetimes must remain covered. |
+| 5 | Projection SH/layout and uniform metadata reads: `fast_projection_backward.slangh`, `fast_common.slangh`. Consider read-only, wave-uniform loads and remaining scattered FP32 accesses. | Only broadcast genuinely uniform data; retain SH basis order and quantized storage decode exactly. SH0 timings cannot justify an SH3 optimization; test all degrees and existing storage modes separately. |
+
+The Radeon 890M uses shared physical RAM. This is not the discrete-card PCIe
+case in external benchmarks. Current `vk_memory.cpp::ensure_staging` already
+prefers coherent, host-visible device-local mapped staging with a fallback.
+Investigate measured loader/transfer waits without changing CPU image-cache
+semantics or assuming the integrated GPU has the same transfer bottleneck as
+a discrete Radeon. Pipelining uploads must preserve image order and prepared
+image contents, concurrency and memory budgets.
+
+### Larger alternatives requiring a separate numerical decision
+
+VkSplat demonstrates two raster-backward organizations (per-Gaussian and a
+shared-memory formulation), adaptive selection and fused projection/optimizer.
+Its [paper](https://arxiv.org/html/2605.00219v1) reports quality consistency,
+not bitwise identity to our rasterizer. The public
+[per-splat kernel](https://github.com/harry7557558/vksplat/blob/main/vksplat/slang/alphablend_shader_bwd_per_splat.slang)
+stages pixel state and accumulates per-splat gradients; the
+[tensor kernel](https://github.com/harry7557558/vksplat/blob/main/vksplat/slang/alphablend_shader_bwd_tensor.slang)
+uses another shared-data organization. Either can change reduction order,
+transmittance replay and atomic scheduling. Do not port these as a supposedly
+exact replacement. First quantify our backward substages and preserve all
+normal/depth/regularization features absent from the reference comparison.
+Likewise, fusion with Adam must preserve gradient normalization, regularizers,
+clamps, moments, skipped updates and every consumer of materialized gradients.
+
+A second public Vulkan trainer documents staged Gaussian loads and a cached
+forward-state backward replay: [Slang Splat rendering documentation](https://github.com/MichaelMoroz/slang-splat/blob/main/doc/Rendering.md).
+Its camera model, tile layout, losses and optional fixed-point gradient path
+differ from ours. Its Vulkan target is useful architectural evidence; this
+review does not establish performance or Radeon validation for that project.
+
+Excluded under the current precision requirement: FP16/fixed-point gradients,
+new depth-key quantization, approximate exp/log, looser alpha/transmittance
+thresholds, dropped pixels or SH bands, and changed densification schedules.
+Existing configured storage formats remain separate from introducing any new
+precision reduction.
+
+### Acceptance sequence
+
+First capture uninstrumented controls from the same checkpoint and profile
+raster-forward, raster-backward and projection-backward with GPU timestamps
+without introducing a host wait between every dispatch. When available, inspect
+VGPR/SGPR counts, scratch spills, LDS allocation/bank conflicts and cache traffic;
+source-level array sizes alone are insufficient to identify an occupancy limit.
+Keep instrumentation outside the shipping path.
+
+Change one factor at a time. For memory/layout/work distribution, require exact
+fixed-input forward outputs and contribution lists. For backward, preserve the
+reduction tree and compare gradients against the CPU/finite-difference tests;
+repeat controls establish existing atomic nondeterminism. Do not relax test
+tolerances to make a candidate pass. Exercise native and emulated atomics,
+SH0-3, depth/normal, image background, densification, invalid inputs, capacity
+overflow/replay and cross-device training/viewing. Then compare repeated
+200-step timings and the agreed 2,000-step quality protocol (same images,
+checkpoint, evaluation backend and visual crops). Keep only gains larger than
+control variability. Recheck NVIDIA Vulkan, CUDA and Mac Metal/Vulkan before
+promoting any candidate; retain existing paths for unsupported devices.
+
+## Final raster-forward validation and retained changes
+
+The initial sort study above is preserved. Its first wave32 sample was inconclusive; a subsequent replicated study justified retaining the narrower subgroup for compatible AMD Fast raster forward pipelines. No floating-point shader source, CUDA kernel or native Metal kernel was changed. Forward needs eight supported subgroups per workgroup (256 / 32); the existing backward requirement remains four. Unsupported devices retain their existing policy, and a rejected optional pipeline retries the default subgroup with a CLI warning.
+
+Four 200-step controls averaged 148.221 ms per training step; three wave32 runs averaged 137.335 ms, a 7.34% reduction. Mean complete process time was 55.664 versus 53.339 seconds (4.18%). These runs resume the same step-200 checkpoint and collect all 200 steps; they are not 180-step warmup-filtered samples. Separate experiments must not be compounded into a single speedup claim.
+
+### Paired 2,000 additional steps
+
+Both runs resume the same immutable step-200 checkpoint and finish at step 2,200: MCMC, Fast/3DGS, SH0, one-million Gaussian cap, CPU image cache, maximum image dimension 1920 (actual 1440 x 1920). The control already includes the ballot sort; the candidate additionally enables the retained forward subgroup policy. Step time excludes loader wait; process time includes startup and saving.
+
+| Measurement | Control | Candidate |
+|---|---:|---:|
+| Mean step | 125.320 ms | 114.591 ms |
+| Mean loader wait | 10.399 ms | 9.936 ms |
+| Complete process | 276.328 s | 253.641 s |
+| Peak backend allocation | 1,660,760,320 bytes | 1,668,604,160 bytes |
+| PSNR | 17.290001 | 17.299679 |
+| SSIM | 0.408864 | 0.409086 |
+| LPIPS | 0.634722 | 0.634551 |
+
+Step time decreases 8.56%; complete process time decreases 8.21%. No additional scratch buffer was introduced. The measured peak differs by about 7.5 MiB; this is not a measurement of identical physical residency. The 2,000-step loader average benefits from cache warmup and should not be confused with early 200-step averages.
+
+The same final CUDA evaluator compared 11 views of each model. All 82 images were used for training: these evaluated views are **not disjoint held-out data**, even though the evaluator labels its split `test`. This measures relative fidelity, not generalization. Mean metric changes are tiny; the worst per-view PSNR delta is -0.054865 dB. Mean absolute rendered-channel difference is 1.411/255. Both short SH0 runs remain visibly soft and under-converged. Render contact sheets and face crops were inspected for face detail, silhouette, foreground base and foliage: no added visible degradation was observed. These observations do not establish bit-identical trained models or an absolute guarantee for every scene.
+
+Nine fixed-input forward scenes, including odd partial tiles, produce byte-identical image, alpha, depth, normal, transmittance, contribution and range outputs. Gradient finite-difference checks pass without relaxed tolerances. Earlier 200-step sort-only quality differences are smaller than repeated-control variation. Smaller workgroups, alternate projected-record layouts, explicit backward shuffle rewrites and cached culling thresholds were investigated but are not included: they did not establish a useful additional gain.
+
+### Final failure and platform checks
+
+Seven artifact-only fault probes pass: shader creation failure, layout creation failure, initial and partial compute-pipeline failures, DeviceLost propagation, forward subgroup rejection, and insufficient forward subgroup capacity. Failed shader/layout outputs deliberately contained invalid handles; none was destroyed. Optional failures log fallback; DeviceLost is propagated. No injection hooks or profiling waits remain in application sources.
+
+- Windows portable tests on each physical Vulkan adapter: 54 passed, 32 skipped, three disabled, zero failed. The final nine-scene forward test also passes on both adapters. Policy, cross-device interop and preference/UI checks pass. Final three-step CUDA, NVIDIA Vulkan and AMD Vulkan training smokes complete successfully.
+- Mac final general suites (passed/skipped/disabled): Metal graphics + Metal tensor 1236/177/5; Metal + Vulkan 1237/176/5; Vulkan + Metal 1235/176/5; Vulkan + Vulkan 1236/175/5; Metal-only 750/418/4. All have zero failures. Corresponding UI suites also have zero failures. Final Mac Vulkan training smoke completes. Successful backend math and device selection are preserved; shared pipeline error cleanup is hardened.
+- Combined Linux CUDA/Vulkan application builds. Its complete 90-object ELF dependency audit finds no eager CUDA-driver dependency and no unresolved library. With driver loading blocked, help/startup and three training steps with refinement complete on llvmpipe. Policy: 13 passed. Stable pair sort including indirect counts and untouched tails: three passed. Two physical-device interop cases skip. WSL provides no physical Vulkan adapter, so this does not establish native Linux hardware performance.
+- The unchanged strict Linux floating-point CPU oracle still has three known fused/unfused precision failures (14 passed, 20 skipped, three failed). An artifact-only unfused diagnostic passes 17 with 20 skipped; shipping tolerances and oracle were not changed. This limitation is not reported as a green strict suite.
+
+Backend neutrality, I/O discipline, CUDA log format, error-debt baseline and whitespace checks pass. A pre-existing CUDA context-release shutdown warning also occurs in earlier controls; successful training/evaluation exits and checkpoints are verified.
+
+Evidence is under `.local/gpu-backend-preferences/raster-layout-experiments`: `wave32-replicated-summary.json`, `quality2000-*-summary.json`, `quality2000-metrics-comparison.json`, `quality2000-render-differences.json`, `quality2000-contact-sheet.png`, `quality2000-face-crops.png`, `final-exact-forward.json`, `failure-cases/summary.json`, `final-test-summary.json`, `final-training-smokes.json`, and `linux-final-elf-audit.json`. Its README identifies historical probes that must not be rerun against the final binary. Earlier sort evidence remains under `amd-forward-optimization`.

@@ -4,6 +4,7 @@
 #include "lfs/training/ops/pair_sort_vulkan.hpp"
 
 #include "core/gpu_elapsed.hpp"
+#include "core/logger.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor/backend/vulkan/vk_memory.hpp"
 #include "core/tensor/backend/vulkan/vk_ops_common.hpp"
@@ -18,6 +19,7 @@
 #include <mutex>
 #include <ranges>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace lfs::training {
@@ -61,6 +63,12 @@ namespace lfs::training {
         static_assert(offsetof(PairSortPush, pass_index) == 72);
         static_assert(offsetof(PairSortPush, control) == 80);
 
+        struct ShaderModule {
+            VkDevice device;
+            VkShaderModule handle;
+            ~ShaderModule() { vkDestroyShaderModule(device, handle, nullptr); }
+        };
+
         struct Pipelines {
             std::shared_ptr<VulkanContext> context;
             VkPipelineLayout layout = VK_NULL_HANDLE;
@@ -96,16 +104,44 @@ namespace lfs::training {
             });
         }
 
-        std::shared_ptr<Pipelines> pipelines_for(const std::shared_ptr<VulkanContext>& context,
-                                                 const bool subgroup_match) {
+        bool supports_ballot_match(VulkanContext& context) {
+            const auto& caps = context.caps();
+            if (!caps.subgroup_size_control || caps.min_subgroup_size > 32 || caps.max_subgroup_size < 32 ||
+                caps.max_workgroup_invocations < 128 || caps.shared_memory_size < 16 * 1024)
+                return false;
             static std::mutex mutex;
-            static std::map<std::pair<uint64_t, bool>, std::shared_ptr<Pipelines>> cached;
-            const auto key = std::pair{context->context_id(), subgroup_match};
+            static std::map<uint64_t, bool> cached;
             std::lock_guard lock(mutex);
+            if (const auto found = cached.find(context.context_id()); found != cached.end())
+                return found->second;
+            VkPhysicalDeviceSubgroupSizeControlProperties sizes{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+            VkPhysicalDeviceSubgroupProperties subgroup{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
+            subgroup.pNext = &sizes;
+            VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            properties.pNext = &subgroup;
+            vkGetPhysicalDeviceProperties2(context.physical_device(), &properties);
+            constexpr auto required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+            const bool supported = properties.properties.vendorID == 0x1002 &&
+                                   (subgroup.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+                                   (subgroup.supportedOperations & required) == required &&
+                                   (sizes.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+                                   sizes.maxComputeWorkgroupSubgroups >= 4;
+            cached.emplace(context.context_id(), supported);
+            vulkan::release_at_shutdown(context, mutex, cached);
+            return supported;
+        }
+
+        std::shared_ptr<Pipelines> pipelines_for(const std::shared_ptr<VulkanContext>& context,
+                                                 const bool subgroup_match, const bool ballot_match = false) {
+            static std::mutex mutex;
+            static std::map<std::tuple<uint64_t, bool, bool>, std::shared_ptr<Pipelines>> cached;
+            const auto key = std::tuple{context->context_id(), subgroup_match, ballot_match};
+            std::unique_lock lock(mutex);
             if (const auto found = cached.find(key); found != cached.end())
                 return found->second;
             const auto modules = lfs::training::vulkan::embedded_training_shaders();
-            const std::string_view module_name = subgroup_match ? "pair_sort_match" : "pair_sort";
+            const std::string_view module_name = ballot_match ? "pair_sort_ballot" : subgroup_match ? "pair_sort_match"
+                                                                                                    : "pair_sort";
             const auto module = std::ranges::find(modules, module_name, &lfs::training::vulkan::EmbeddedShader::name);
             LFS_ASSERT_MSG(module != modules.end(), "Vulkan pair sort shader module is missing");
 
@@ -115,8 +151,20 @@ namespace lfs::training {
             shader_info.codeSize = module->words.size_bytes();
             shader_info.pCode = module->words.data();
             VkShaderModule shader = VK_NULL_HANDLE;
-            vk_check(context.get(), vkCreateShaderModule(context->device(), &shader_info, nullptr, &shader),
-                     "vkCreateShaderModule(training.pair_sort)");
+            const auto fallback = [&](const VkResult reason) {
+                pipelines.reset();
+                LOG_WARN("Vulkan pair sort: ballot wave32 pipeline unavailable (VkResult {}); falling back to generic stable sort", static_cast<int>(reason));
+                lock.unlock();
+                auto generic = pipelines_for(context, false, false);
+                lock.lock();
+                return cached.emplace(key, generic).first->second;
+            };
+            const VkResult shader_created = vkCreateShaderModule(context->device(), &shader_info, nullptr, &shader);
+            if (shader_created != VK_SUCCESS && shader_created != VK_ERROR_DEVICE_LOST && ballot_match)
+                return fallback(shader_created);
+            vk_check(context.get(), shader_created, "vkCreateShaderModule(training.pair_sort)");
+            // Only a successful creation yields a valid handle to destroy.
+            const ShaderModule shader_lifetime{context->device(), shader};
 
             VkPushConstantRange push_range{};
             push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -125,8 +173,14 @@ namespace lfs::training {
             VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
             layout_info.pushConstantRangeCount = 1;
             layout_info.pPushConstantRanges = &push_range;
-            vk_check(context.get(), vkCreatePipelineLayout(context->device(), &layout_info, nullptr, &pipelines->layout),
-                     "vkCreatePipelineLayout(training.pair_sort)");
+            const VkResult layout_created = vkCreatePipelineLayout(context->device(), &layout_info, nullptr, &pipelines->layout);
+            if (layout_created != VK_SUCCESS) {
+                // Failed object creation leaves the output handle undefined.
+                pipelines->layout = VK_NULL_HANDLE;
+                if (layout_created != VK_ERROR_DEVICE_LOST && ballot_match)
+                    return fallback(layout_created);
+            }
+            vk_check(context.get(), layout_created, "vkCreatePipelineLayout(training.pair_sort)");
 
             const VkSpecializationMapEntry stage_entry{
                 kStageSpecializationId, 0, sizeof(uint32_t)};
@@ -142,14 +196,22 @@ namespace lfs::training {
                 shader_stage.module = shader;
                 shader_stage.pName = "main";
                 shader_stage.pSpecializationInfo = &specialization;
+                VkPipelineShaderStageRequiredSubgroupSizeCreateInfo required_size{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
+                if (ballot_match) {
+                    required_size.requiredSubgroupSize = 32;
+                    shader_stage.pNext = &required_size;
+                }
                 VkComputePipelineCreateInfo pipeline_info{
                     VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
                 pipeline_info.stage = shader_stage;
                 pipeline_info.layout = pipelines->layout;
-                vk_check(context.get(), vkCreateComputePipelines(context->device(), context->pipeline_cache(), 1, &pipeline_info, nullptr, &pipelines->stages[stage]),
-                         "vkCreateComputePipelines(training.pair_sort)");
+                const VkResult created = vkCreateComputePipelines(context->device(), context->pipeline_cache(), 1, &pipeline_info, nullptr, &pipelines->stages[stage]);
+                if (created != VK_SUCCESS && created != VK_ERROR_DEVICE_LOST && ballot_match)
+                    return fallback(created);
+                vk_check(context.get(), created, "vkCreateComputePipelines(training.pair_sort)");
             }
-            vkDestroyShaderModule(context->device(), shader, nullptr);
+            if (ballot_match)
+                LOG_INFO("Vulkan pair sort: using core subgroup ballots with wave32");
             cached.emplace(key, pipelines);
             vulkan::release_at_shutdown(*context, mutex, cached);
             return pipelines;
@@ -231,7 +293,8 @@ namespace lfs::training {
             }
         } release{*context, counts, offsets};
 
-        const auto pipelines = pipelines_for(context, subgroup_match);
+        const bool ballot_match = !subgroup_match && supports_ballot_match(*context);
+        const auto pipelines = pipelines_for(context, subgroup_match, ballot_match);
         if (indirect)
             LFS_ASSERT_MSG(indirect->is_contiguous() && indirect->dtype() == core::DataType::UInt32 && indirect->numel() >= 32,
                            "Vulkan pair sort indirect control has the wrong type or size");
