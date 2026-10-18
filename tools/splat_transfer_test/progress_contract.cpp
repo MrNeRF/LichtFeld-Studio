@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "gui/utils/file_transfer_progress.hpp"
 #include "gui/utils/native_drag_scheduler.hpp"
-#include "gui/utils/splat_drag_preferences.hpp"
 #include "gui/utils/splat_drag_selection.hpp"
 #include <iostream>
 #include <limits>
@@ -16,14 +15,6 @@ int main() {
         if (!value)
             throw std::runtime_error("File transfer progress contract failed");
     };
-    using lfs::vis::resolveSplatDragShLimit;
-    check(resolveSplatDragShLimit(std::nullopt, true, 0) == 3);
-    check(resolveSplatDragShLimit(std::nullopt, false, -1) == 3);
-    check(resolveSplatDragShLimit(std::nullopt, false, 2) == 2);
-    check(resolveSplatDragShLimit(0, true, 3) == 0);
-    check(resolveSplatDragShLimit(2, false, 0) == 2);
-    check(resolveSplatDragShLimit(-5, true, 3) == 0);
-    check(resolveSplatDragShLimit(9, false, 0) == 3);
     struct Node {
         SplatDragKind kind;
         bool loaded = true;

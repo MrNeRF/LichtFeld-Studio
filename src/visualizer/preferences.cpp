@@ -985,11 +985,7 @@ namespace lfs::vis {
         state.format = field<std::string>(*it, "format", "ply");
         if (state.format != "ply" && state.format != "spz")
             state.format = "ply";
-        std::optional<int> limit;
-        if (it->contains("sh_degree"))
-            limit = field<int>(*it, "sh_degree", 3);
-        state.sh_degree = resolveSplatDragShLimit(limit, field<bool>(*it, "maximum_quality", true),
-                                                  field<int>(*it, state.format == "spz" ? "spz_sh" : "ply_sh", -1));
+        state.sh_degree = std::clamp(field<int>(*it, "sh_degree", 3), 0, 3);
         state.blender_axes = field<bool>(*it, "blender_axes", true);
         return state;
     }

@@ -13,7 +13,6 @@
 #include <glm/gtc/quaternion.hpp>
 #include <iostream>
 #include <limits>
-#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <thread>
 using namespace lfs::core;
@@ -39,9 +38,22 @@ static SplatData fixture(int degree) {
     model.refresh_deleted_count();
     return model;
 }
+// The contract stages in its own folder, never in the user's transfer cache.
+static const auto kStagingRoot = std::filesystem::temp_directory_path() / ("lichtfeld-transfer-contract-" + generate_uuid_v4().to_string());
+// One-source batch: snapshot now, file from the worker.
+static std::future<std::filesystem::path> transfer(const SplatData& model, glm::mat4 world,
+                                                   std::shared_ptr<std::atomic<bool>> cancelled,
+                                                   lfs::vis::gui::SplatTransferOptions options = {}) {
+    if (options.staging_root.empty())
+        options.staging_root = kStagingRoot;
+    const lfs::vis::gui::SplatTransferSource source[] = {{&model, world, std::move(options)}};
+    auto batch = lfs::vis::gui::prepareSplatTransferBatch(source, std::move(cancelled));
+    return std::async(std::launch::deferred, [batch = std::move(batch)]() mutable { return batch.get().front(); });
+}
 int main(int argc, char** argv) {
     try {
-        require(argc == 2 || (argc == 3 && std::string_view(argv[2]) == "--require-cuda"), "Pass output manifest path and optional --require-cuda");
+        const bool require_cuda = argc == 2 && std::string_view(argv[1]) == "--require-cuda";
+        require(argc == 1 || require_cuda, "Optional argument: --require-cuda");
         // CPU input tensors do not make this an accelerator-free contract:
         // snapshot hydration and resident SH storage use the core CUDA path.
         int device_count = 0;
@@ -52,21 +64,20 @@ int main(int argc, char** argv) {
                                  cuda_status == cudaErrorInitializationError ||
                                  cuda_status == cudaErrorStubLibrary;
         if (unavailable) {
-            std::cerr << (argc == 3 ? "FAIL" : "SKIP")
+            std::cerr << (require_cuda ? "FAIL" : "SKIP")
                       << ": splat transfer contract requires a working CUDA device: "
                       << cudaGetErrorString(cuda_status) << ", device_count=" << device_count << '\n';
-            return argc == 3 ? 1 : 77;
+            return require_cuda ? 1 : 77;
         }
         require(cuda_status == cudaSuccess, "Unexpected CUDA error while probing export test availability");
         lfs::io::LoadOptions options;
         options.splat_tensor_allocator = [](TensorShape shape, size_t, DataType type, std::string_view) { return Tensor::empty(std::move(shape), Device::CPU, type); };
-        nlohmann::json manifest = {{"exports", nlohmann::json::array()}};
         for (int degree = 0; degree <= 3; ++degree) {
             auto model = fixture(degree);
             const auto original_rest = model.shN_canonical_cpu();
             model.set_active_sh_degree(0); // Export all stored SH even if the viewport displays only DC.
             auto world = glm::translate(glm::mat4(1), glm::vec3(1, 2, 3)) * glm::scale(glm::mat4(1), glm::vec3(2));
-            auto future = lfs::vis::gui::prepareSplatTransfer(model, world, std::make_shared<std::atomic<bool>>(false), {.name = degree == 2 ? "scena-è-東京" : "splat"});
+            auto future = transfer(model, world, std::make_shared<std::atomic<bool>>(false), {.name = degree == 2 ? "scena-è-東京" : "splat"});
             model.means().fill_(999);
             const auto path = future.get();
             require(std::filesystem::is_regular_file(path), "No committed PLY");
@@ -110,12 +121,10 @@ int main(int argc, char** argv) {
                     checkNear(a[6 + c], b[6 + c]);
                 }
             }
-            const auto utf8_path = path.generic_u8string();
-            manifest["exports"].push_back({{"degree", degree}, {"path", std::string(utf8_path.begin(), utf8_path.end())}, {"points", 2}});
             auto cancelled = std::make_shared<std::atomic<bool>>(true);
             bool rejected = false;
             try {
-                lfs::vis::gui::prepareSplatTransfer(fixture(degree), glm::mat4(1), cancelled).get();
+                transfer(fixture(degree), glm::mat4(1), cancelled).get();
             } catch (const std::exception&) { rejected = true; }
             require(rejected, "Cancellation ignored");
         }
@@ -125,7 +134,7 @@ int main(int argc, char** argv) {
             lod.lod_tree->child_count = {2, 0, 0};
             lod.lod_tree->child_start = {1, 0, 0};
             lod.lod_tree->lod_level = {1, 0, 0};
-            const auto path = lfs::vis::gui::prepareSplatTransfer(lod, glm::mat4(1), std::make_shared<std::atomic<bool>>(false)).get();
+            const auto path = transfer(lod, glm::mat4(1), std::make_shared<std::atomic<bool>>(false)).get();
             auto loaded = lfs::io::load_ply(path, options);
             require(bool(loaded), "LOD leaf PLY failed");
             require(loaded->value.size() == 1, "LOD interior nodes or deleted leaves were exported");
@@ -137,24 +146,26 @@ int main(int argc, char** argv) {
         {
             auto model = fixture(3);
             auto cancel = std::make_shared<std::atomic<bool>>(false);
-            const auto path = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), cancel,
-                                                                  {.format = "ply", .name = "../../CON:hello", .sh_degree = 1, .z_up = false})
+            bool rejected_format = false;
+            const auto path = transfer(model, glm::mat4(1), cancel,
+                                       {.format = "ply", .name = "../../CON:hello", .sh_degree = 1, .z_up = false})
                                   .get();
-            require(path.parent_path().parent_path().filename() == "lichtfeld-transfers", "Name escaped transfer folder");
+            require(path.parent_path().parent_path() == kStagingRoot, "Name escaped transfer folder");
             auto loaded = lfs::io::load_ply(path, options);
             require(bool(loaded), "Custom PLY failed");
             require(loaded->value.get_active_sh_degree() == 1, "Custom SH degree ignored");
             auto pos = loaded->value.means().to(Device::CPU).contiguous();
             checkNear(pos.ptr<float>()[1], 1.2f);
-            const auto compressed = lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), cancel,
-                                                                        {.format = "spz", .name = "test", .z_up = false})
+            const auto compressed = transfer(fixture(0), glm::mat4(1), cancel,
+                                             {.format = "spz", .name = "test", .z_up = false})
                                         .get();
             require(std::filesystem::file_size(compressed) > 32, "No SPZ exported");
             require(compressed.extension() == ".spz", "Wrong SPZ extension");
-            const auto sog = lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), cancel,
-                                                                 {.format = "sog", .name = "test", .sog_iterations = 2, .z_up = false})
-                                 .get();
-            require(std::filesystem::file_size(sog) > 32, "No SOG exported");
+            rejected_format = false;
+            try {
+                transfer(fixture(0), glm::mat4(1), cancel, {.format = "sog", .name = "test"}).get();
+            } catch (const std::exception&) { rejected_format = true; }
+            require(rejected_format, "Drag export accepted SOG");
         }
 
         {
@@ -165,14 +176,15 @@ int main(int argc, char** argv) {
                 } catch (const std::exception&) { failed = true; }
                 require(failed, "Invalid transfer accepted");
             };
-            rejected([] { lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), nullptr); });
-            rejected([] { auto m = glm::mat4(1); m[0][0] = std::numeric_limits<float>::quiet_NaN(); lfs::vis::gui::prepareSplatTransfer(fixture(0), m, std::make_shared<std::atomic<bool>>(false)); });
-            rejected([] { lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(0), std::make_shared<std::atomic<bool>>(false)); });
-            rejected([] { lfs::vis::gui::prepareSplatTransfer(fixture(1), glm::scale(glm::mat4(1), glm::vec3(1, 2, 3)), std::make_shared<std::atomic<bool>>(false)); });
-            rejected([] { lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false), {.format = "bad"}); });
+            rejected([] { transfer(fixture(0), glm::mat4(1), nullptr); });
+            rejected([] { auto m = glm::mat4(1); m[0][0] = std::numeric_limits<float>::quiet_NaN(); transfer(fixture(0), m, std::make_shared<std::atomic<bool>>(false)); });
+            rejected([] { transfer(fixture(0), glm::mat4(0), std::make_shared<std::atomic<bool>>(false)); });
+            rejected([] { transfer(fixture(1), glm::scale(glm::mat4(1), glm::vec3(1, 2, 3)), std::make_shared<std::atomic<bool>>(false)); });
+            rejected([] { transfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false), {.format = "bad"}); });
             rejected([] { lfs::vis::gui::prepareSplatTransferBatch({}, std::make_shared<std::atomic<bool>>(false)); });
             auto model = fixture(0);
-            const lfs::vis::gui::SplatTransferSource sources[] = {{&model, glm::mat4(1), {.name = "first"}}, {&model, glm::mat4(1), {.name = "second"}}};
+            const lfs::vis::gui::SplatTransferSource sources[] = {{&model, glm::mat4(1), {.name = "first", .staging_root = kStagingRoot}},
+                                                                  {&model, glm::mat4(1), {.name = "second", .staging_root = kStagingRoot}}};
             const auto paths = lfs::vis::gui::prepareSplatTransferBatch(sources, std::make_shared<std::atomic<bool>>(false)).get();
             require(paths.size() == 2 && paths[0] != paths[1], "Batch files collided");
             for (const auto& path : paths)
@@ -193,8 +205,8 @@ int main(int argc, char** argv) {
             require(indexed_snapshot_error, "Single-item failure lost its node index");
             auto cancel = std::make_shared<std::atomic<bool>>(false);
             bool reached = false;
-            rejected([&] { lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), cancel,
-                                                               {.format = "spz", .progress = [&](float fraction) { if (fraction >= .4f) { reached = true; cancel->store(true); return false; } return true; }})
+            rejected([&] { transfer(fixture(0), glm::mat4(1), cancel,
+                                    {.format = "spz", .progress = [&](float fraction) { if (fraction >= .4f) { reached = true; cancel->store(true); return false; } return true; }})
                                .get(); });
             require(reached && cancel->load(), "Cancellation during export was not exercised");
         }
@@ -205,13 +217,13 @@ int main(int argc, char** argv) {
             auto gate = release.get_future().share();
             std::atomic<bool> signalled{false};
             std::atomic<bool> released{false};
-            auto active = lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false),
-                                                              {.progress = [&](float) { if (!signalled.exchange(true)) entered.set_value(); gate.wait(); return true; }});
+            auto active = transfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false),
+                                   {.progress = [&](float) { if (!signalled.exchange(true)) entered.set_value(); gate.wait(); return true; }});
             require(entered.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready, "Worker did not run");
-            auto queued = lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false));
+            auto queued = transfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false));
             bool busy = false;
             try {
-                lfs::vis::gui::prepareSplatTransfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false));
+                transfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false));
             } catch (const std::exception&) { busy = true; }
             std::jthread watchdog([&] { if (gate.wait_for(std::chrono::seconds(1)) != std::future_status::ready && !released.exchange(true)) release.set_value(); });
             const auto before = std::chrono::steady_clock::now();
@@ -235,7 +247,8 @@ int main(int argc, char** argv) {
             std::ofstream(fresh / ".lichtfeld-transfer") << "owned";
             std::ofstream(old / "file.ply") << "data";
             std::ofstream(unmarked / "user-file") << "preserve";
-            std::filesystem::last_write_time(old / ".lichtfeld-transfer", std::filesystem::file_time_type::clock::now() - std::chrono::hours(24 * 8));
+            // Delivered transfers expire after an hour; receivers read them on drop.
+            std::filesystem::last_write_time(old / ".lichtfeld-transfer", std::filesystem::file_time_type::clock::now() - std::chrono::hours(2));
             lfs::vis::gui::cleanupSplatTransfers(root);
             require(!std::filesystem::exists(old), "Expired transfer retained");
             require(std::filesystem::exists(fresh), "Fresh transfer removed");
@@ -268,20 +281,19 @@ int main(int argc, char** argv) {
             std::ofstream(blocker) << "preserve";
             rejected = false;
             try {
-                lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), std::make_shared<std::atomic<bool>>(false), {.staging_root = blocker}).get();
+                transfer(model, glm::mat4(1), std::make_shared<std::atomic<bool>>(false), {.staging_root = blocker}).get();
             } catch (const std::exception&) { rejected = true; }
             require(rejected && std::filesystem::is_regular_file(blocker), "IO failure damaged an existing file");
             std::filesystem::remove_all(root); // Unique test-owned root above.
         }
-        manifest["snapshot_deleted_world_covariance_sh1_cancel_lod"] = "passed";
         {
             const auto root = std::filesystem::temp_directory_path() / ("lichtfeld-sh-cap-" + generate_uuid_v4().to_string());
             for (int available = 0; available <= 3; ++available) {
                 auto model = fixture(available);
                 for (int cap = 0; cap <= 3; ++cap) {
                     for (const auto* format : {"ply", "spz"}) {
-                        const auto path = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), std::make_shared<std::atomic<bool>>(false),
-                                                                              {.format = format, .sh_degree = cap, .staging_root = root})
+                        const auto path = transfer(model, glm::mat4(1), std::make_shared<std::atomic<bool>>(false),
+                                                   {.format = format, .sh_degree = cap, .staging_root = root})
                                               .get();
                         const int expected = std::min(available, cap);
                         if (std::string_view(format) == "ply") {
@@ -296,14 +308,13 @@ int main(int argc, char** argv) {
                     }
                 }
             }
-            const auto path = lfs::vis::gui::prepareSplatTransfer(fixture(3), glm::scale(glm::mat4(1), glm::vec3(1, 2, 3)),
-                                                                  std::make_shared<std::atomic<bool>>(false), {.sh_degree = 0, .staging_root = root})
+            const auto path = transfer(fixture(3), glm::scale(glm::mat4(1), glm::vec3(1, 2, 3)),
+                                       std::make_shared<std::atomic<bool>>(false), {.sh_degree = 0, .staging_root = root})
                                   .get();
             auto loaded = lfs::io::load_ply(path, options);
             require(bool(loaded) && loaded->value.get_max_sh_degree() == 0, "Discarded SH still rejected an SH0 affine export");
             std::filesystem::remove_all(root); // Unique test-owned root.
         }
-        manifest["sh_cap_0_to_3_all_source_degrees_ply_spz"] = "passed";
 
         {
             // Staging never overwrites an existing user file. Identical export
@@ -314,11 +325,11 @@ int main(int argc, char** argv) {
             std::ofstream(existing) << "user content";
             auto model = fixture(0);
             const auto token = std::make_shared<std::atomic<bool>>(false);
-            const auto first = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = "same", .staging_root = root}).get();
-            const auto second = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = "same", .staging_root = root}).get();
+            const auto first = transfer(model, glm::mat4(1), token, {.name = "same", .staging_root = root}).get();
+            const auto second = transfer(model, glm::mat4(1), token, {.name = "same", .staging_root = root}).get();
             require(first != second && first.filename() == second.filename(), "Readable names or isolated transfer roots changed");
-            const auto long_first = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = std::string(200, 'x'), .staging_root = root}).get();
-            const auto long_second = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = std::string(200, 'x'), .staging_root = root}).get();
+            const auto long_first = transfer(model, glm::mat4(1), token, {.name = std::string(200, 'x'), .staging_root = root}).get();
+            const auto long_second = transfer(model, glm::mat4(1), token, {.name = std::string(200, 'x'), .staging_root = root}).get();
             require(long_first.filename() != long_second.filename(), "Long batch names collided after fallback");
             require(long_first.stem().string() == "splat-" + long_first.parent_path().filename().string(), "Long filename lost its full unique staging identity");
             std::ifstream input(existing);
@@ -327,14 +338,13 @@ int main(int argc, char** argv) {
             input.close();
             require(preserved == "user content", "Staging overwrote a preexisting file");
             for (const auto& name : {"CON", "AUX. ", "../bad:<|name", "control\nname"}) {
-                const auto path = lfs::vis::gui::prepareSplatTransfer(model, glm::mat4(1), token, {.name = name, .staging_root = root}).get();
+                const auto path = transfer(model, glm::mat4(1), token, {.name = name, .staging_root = root}).get();
                 const auto leaf = path.filename().u8string();
                 require(leaf.starts_with(u8"splat-") && leaf.find_first_of(u8"<>:\"/\\|?*\n\r") == std::u8string::npos, "Unsafe exported leaf name");
                 require(path.parent_path().parent_path() == root, "Node name escaped its transfer root");
             }
             std::filesystem::remove_all(root); // Unique test-owned root above.
         }
-        manifest["filename_isolation_and_existing_files"] = "passed";
         {
             using namespace lfs::vis::gui;
             const auto root = std::filesystem::temp_directory_path() / ("lichtfeld-batch-progress-" + generate_uuid_v4().to_string());
@@ -381,12 +391,8 @@ int main(int argc, char** argv) {
             require(rejected && progress.user_cancelled.load() && std::filesystem::is_empty(root), "Mid-batch cancellation left exported siblings");
             std::filesystem::remove_all(root); // Unique test-owned root.
         }
-        manifest["batch_aggregate_progress_and_cancel_rollback"] = "passed";
 
-        std::ofstream output(argv[1]);
-        output << manifest.dump(2);
-        if (!output)
-            throw std::runtime_error("Cannot write test manifest");
+        std::filesystem::remove_all(kStagingRoot); // Unique test-owned root.
         std::cout << "PASS snapshot, deleted mask, world axes, covariance, opacity, SH0-3 and cancellation\n";
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';

@@ -88,5 +88,3 @@ generatedSchema.usda
 # only creates merge-conflict churn).
 src/rendering/rasterizer/vulkan/shader/generated/*.spv
 src/rendering/rasterizer/vulkan/shader/radix_sort/*.spv
-
-.local/

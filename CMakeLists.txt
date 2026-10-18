@@ -1600,7 +1600,7 @@ if(BUILD_SPLAT_TRANSFER_TESTS)
     target_link_libraries(lfs_splat_transfer_test PRIVATE lfs_core lfs_io CUDA::cudart)
     target_compile_features(lfs_splat_transfer_test PRIVATE cxx_std_23)
     enable_testing()
-    add_test(NAME splat_transfer_contract COMMAND lfs_splat_transfer_test "${CMAKE_BINARY_DIR}/splat-transfer-results.json")
+    add_test(NAME splat_transfer_contract COMMAND lfs_splat_transfer_test)
     # Snapshot hydration and SH storage require CUDA. Hosted CPU runners still
     # run all native/progress contracts and report this integration test skipped.
     set_tests_properties(splat_transfer_contract PROPERTIES SKIP_RETURN_CODE 77 LABELS "gpu")

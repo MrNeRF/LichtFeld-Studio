@@ -9,6 +9,7 @@
 #include <core/native_fs.hpp>
 #include <core/path_utils.hpp>
 #include <core/splat_data_transform.hpp>
+#include <core/user_paths.hpp>
 #include <core/uuid.hpp>
 #include <deque>
 #include <fstream>
@@ -64,6 +65,18 @@ namespace lfs::vis::gui {
         TransferWorker& transferWorker() {
             static TransferWorker worker;
             return worker;
+        }
+    } // namespace
+
+    namespace {
+        // The app's cache folder, not the system temp: /tmp is RAM-backed on many Linux systems and a
+        // batch can be gigabytes.
+        std::filesystem::path transferRoot(const SplatTransferOptions& options) {
+            if (!options.staging_root.empty())
+                return core::native_fs::absolute(options.staging_root);
+            if (const auto paths = core::UserPaths::resolve())
+                return paths->cacheDir() / "transfers";
+            return core::native_fs::temp_directory_path() / "lichtfeld-transfers";
         }
     } // namespace
 
@@ -156,7 +169,7 @@ namespace lfs::vis::gui {
             cpu(model.deleted()), {}, {});
         if (!snapshot)
             throw std::runtime_error(lfs::format_for_developer(snapshot.error()));
-        if (options.format != "ply" && options.format != "spz" && options.format != "sog")
+        if (options.format != "ply" && options.format != "spz")
             throw std::runtime_error("Unsupported splat drag format");
         const auto id = core::generate_uuid_v4().to_string();
         // A portable file name: never interpret node labels as directories.
@@ -173,10 +186,8 @@ namespace lfs::vis::gui {
         options.name = "splat-" + options.name;
         return std::packaged_task<std::filesystem::path()>(
             [model = std::move(*snapshot), world, cancelled, id, options] {
-                const auto root = options.staging_root.empty() ? core::native_fs::temp_directory_path() / "lichtfeld-transfers" : core::native_fs::absolute(options.staging_root);
+                const auto root = transferRoot(options);
                 const auto folder = root / id;
-                static std::once_flag cleanup;
-                std::call_once(cleanup, [&] { cleanupSplatTransfers(folder.parent_path()); });
                 const auto target = folder / core::utf8_to_path(options.name + "." + options.format);
                 const auto staged = folder / core::utf8_to_path(options.name + ".partial." + options.format);
                 core::native_fs::create_directories(root);
@@ -206,13 +217,8 @@ namespace lfs::vis::gui {
                     io::Result<void> result;
                     if (options.format == "ply")
                         result = io::save_ply(*model, {.output_path = staged, .binary = true, .progress_callback = progress});
-                    else if (options.format == "spz")
-                        result = io::save_spz(*model, {.output_path = staged, .version = 4, .progress_callback = progress});
                     else
-                        result = io::save_sog(*model, {.output_path = staged,
-                                                       .kmeans_iterations = std::clamp(options.sog_iterations, 1, 100),
-                                                       .use_gpu = false,
-                                                       .progress_callback = progress});
+                        result = io::save_spz(*model, {.output_path = staged, .version = 4, .progress_callback = progress});
                     if (!result)
                         throw std::runtime_error(result.error().format());
                     if (cancelled->load())
@@ -227,16 +233,6 @@ namespace lfs::vis::gui {
                     throw;
                 }
             });
-    }
-    std::future<std::filesystem::path> prepareSplatTransfer(
-        const core::SplatData& model, glm::mat4 world,
-        std::shared_ptr<std::atomic<bool>> cancelled, SplatTransferOptions options) {
-        auto task = captureTransfer(model, world, std::move(cancelled), std::move(options));
-        return transferWorker().submit([task = std::move(task)]() mutable {
-            auto future = task.get_future();
-            task();
-            return future.get();
-        });
     }
     std::future<std::vector<std::filesystem::path>> prepareSplatTransferBatch(
         std::span<const SplatTransferSource> sources, std::shared_ptr<std::atomic<bool>> cancelled) {
@@ -268,7 +264,9 @@ namespace lfs::vis::gui {
                 throw SplatTransferError(index, "Unknown snapshot failure");
             }
         }
-        return transferWorker().submit([tasks = std::move(tasks), cancelled]() mutable {
+        return transferWorker().submit([tasks = std::move(tasks), cancelled, root = transferRoot(sources.front().options)]() mutable {
+            // Receivers read on drop; an hour is ample for delayed readers and bounds what piles up on disk.
+            cleanupSplatTransfers(root);
             std::vector<std::filesystem::path> paths;
             try {
                 paths.reserve(tasks->size()); // Allocate bookkeeping before any file commits.
