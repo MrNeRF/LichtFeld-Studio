@@ -164,7 +164,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_guide_segment_clipping.cpp
         test_viewport_depth_layout.cpp
         test_panel_layout_render_demand.cpp
-        test_right_panel_tab_picker.cpp
+        test_right_panel_tabs.cpp
         test_preferences_migration.cpp
         test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
@@ -878,7 +878,7 @@ set(TEST_FILES
     test_menu_bar_title.cpp
     test_guide_segment_clipping.cpp
     test_status_bar_mining.cpp
-    test_right_panel_tab_picker.cpp
+    test_right_panel_tabs.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
     test_tensor_stream.cpp

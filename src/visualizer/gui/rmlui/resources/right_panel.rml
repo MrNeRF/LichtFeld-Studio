@@ -13,7 +13,8 @@
                  data-attr-id="tab.dom_id"
                  data-class-active="tab.id == active_tab"
                  data-class-closeable="tab.closeable"
-                 data-event-click="tab_click(tab.id)">
+                 data-event-click="tab_click(tab.id)"
+                 data-event-keydown="tab_keydown(tab.id)">
                 <span class="tab-label">{{ tab.label }}</span>
                 <button class="tab-close"
                         data-if="tab.closeable"

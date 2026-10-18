@@ -81,6 +81,17 @@ namespace lfs::vis::gui {
                                            on_tab_changed(std::string(id));
                                    }
                                });
+        ctor.BindEventCallback("tab_keydown",
+                               [this](Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& args) {
+                                   const auto key = static_cast<Rml::Input::KeyIdentifier>(event.GetParameter("key_identifier", 0));
+                                   if ((key == Rml::Input::KI_RETURN || key == Rml::Input::KI_SPACE) &&
+                                       event.GetTargetElement()->IsClassSet("tab") && !args.empty()) {
+                                       event.StopPropagation();
+                                       const auto id = args[0].Get<Rml::String>();
+                                       if (!id.empty() && on_tab_changed)
+                                           on_tab_changed(id);
+                                   }
+                               });
         ctor.BindEventCallback("tab_close",
                                [this](Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& args) {
                                    event.StopPropagation();

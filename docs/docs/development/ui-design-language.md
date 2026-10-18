@@ -133,6 +133,32 @@ design when it does.
 | Context menu | A command list attached to an item or viewport location | Global context-menu resource or `begin_context_menu()` | Asset actions and viewport commands |
 | Viewport overlay | Contextual, low-chrome information or manipulation directly over the 3D view | `VIEWPORT_OVERLAY`; do not use it as a substitute for a settings window | Selection/gizmo overlays |
 
+### Right sidebar category tabs
+
+Rendering, Training, and plugins registered in `MAIN_PANEL_TAB` share the vertical
+category strip at the far right of the lower sidebar. Scene remains above it.
+The active panel fills the space to the left of the strip, including its former
+horizontal tab row. The bottom dock retains its horizontal tabs.
+
+Labels read downwards and use the translated panel label. Tab height follows the
+measured text length; plugin authors do not need to supply dimensions or special
+markup. Optional close buttons still disable closeable plugin panels.
+
+- Click a tab to select its panel.
+- Scroll the wheel over the strip, or drag it with the middle mouse button, to
+  reach overflowing tabs.
+- Ctrl+wheel over the lower sidebar selects the previous or next category and
+  stops at the ends.
+- Ctrl+Tab cycles categories; Ctrl+Shift+Tab cycles backwards and wraps.
+- Up/Down navigate tab focus; Enter/Space activate a focused tab.
+- A category selected through another UI action is scrolled into view.
+
+The right sidebar owns `right_panel.{rml,rcss,theme.rcss}`. Do not apply the
+horizontal `panel_tabs.rcss` geometry to it. Content bounds, preload bounds, and
+pointer routing must reserve `PanelLayoutManager::RIGHT_TAB_BAR_W` at the current
+UI scale. Tests in `test_right_panel_tabs.cpp` exercise real RmlUi geometry and
+input at 1x, 1.5x, and 2x scales.
+
 ### Docked panels
 
 A docked panel is part of the application's continuous workspace. It should not
