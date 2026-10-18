@@ -771,6 +771,7 @@ namespace lfs::vis {
                 {"rasterize_outline_plain", lfs::core::path_to_utf8((root / "generated/rasterize_outline_plain.spv"))},
                 {"rasterize_outline_gut_plain", lfs::core::path_to_utf8((root / "generated/rasterize_outline_gut_plain.spv"))},
                 {"selection_outline_resolve", lfs::core::path_to_utf8((root / "generated/selection_outline_resolve.spv"))},
+                {"selection_outline_mask", lfs::core::path_to_utf8((root / "generated/selection_outline_mask.spv"))},
                 {"rasterize_forward", lfs::core::path_to_utf8((root / "generated/rasterize_forward.spv"))},
                 {"rasterize_forward_3dgut", lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut.spv"))},
                 {"rasterize_forward_plain", lfs::core::path_to_utf8((root / "generated/rasterize_forward_plain.spv"))},
@@ -9171,7 +9172,7 @@ namespace lfs::vis {
         // input. 3DGUT and live training use the legacy per-render-tile chain.
         const bool higs_candidate =
             !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload &&
-            !depth_capture_mode_ && !request.overlay.markers.show_object_outline;
+            !depth_capture_mode_;
         // Depth view and camera-frustum occlusion consume per-pixel median depth.
         // mip_filter bit 1
         // switches the macro compose to an exact per-pixel replay of the single
@@ -9618,7 +9619,8 @@ namespace lfs::vis {
                         overlay_bindings->overlay_params,
                         overlay_bindings->raster_overlays_active,
                         /*predicate_waves=*/!export_wave_batch,
-                        request.exact_depth_sample_mask);
+                        request.exact_depth_sample_mask,
+                        request.overlay.markers.show_object_outline ? &overlay_bindings->transform_indices : nullptr);
                 } else {
                     renderer_.executeLegacyDepthWaves(
                         uniforms,

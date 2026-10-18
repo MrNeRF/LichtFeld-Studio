@@ -52,19 +52,20 @@ def _select(endpoint, code):
     _rpc(endpoint, "resources/read", {"uri": "lichtfeld://selection/current"})
 
 
-def _write_splat(path, x, scales, dense=False):
+def _write_splat(path, x, scales, dense=False, z=0., copies=1):
     names = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
              "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
     points = [(0., 0.)]
     if dense:
         points = [(i / 10., j / 10.) for i in range(-15, 16) for j in range(-15, 16)
                   if i * i + j * j <= 225]
+    points *= copies
     header = f"ply\nformat binary_little_endian 1.0\nelement vertex {len(points)}\n"
     header += "".join(f"property float {name}\n" for name in names) + "end_header\n"
     # No red component: the red UI contour can be measured without screenshots.
     dc = [(component - 0.5) / 0.28209479177387814 for component in (0., 0.3, 0.6)]
     local_scales = (0.08, 0.08, 0.05) if dense else scales
-    data = b"".join(struct.pack("<14f", x + px * scales[0], py * scales[1], 0,
+    data = b"".join(struct.pack("<14f", x + px * scales[0], py * scales[1], z,
                                *dc, math.log(0.95 / 0.05),
                                *(math.log(scale) for scale in local_scales), 1, 0, 0, 0)
                     for px, py in points)
@@ -81,11 +82,18 @@ pixels = frame.image.cpu().tolist()
 factor = 255 if isinstance(pixels[0][0][0], float) else 1
 width, height = len(pixels[0]), len(pixels)
 mask = [y * width + x for y, row in enumerate(pixels)
-        for x, pixel in enumerate(row) if pixel[0] * factor > 85]
-open({str(path)!r}, 'w').write(json.dumps({{'width': width, 'height': height, 'mask': mask}}))
+        for x, pixel in enumerate(row) if pixel[0] * factor > 5]
+max_red = max(pixel[0] * factor for row in pixels for pixel in row)
+open({str(path)!r}, 'w').write(json.dumps({{'width': width, 'height': height, 'mask': mask, 'max_red': max_red}}))
 del frame, pixels, mask
 """)
     value = json.loads(path.read_text())
+    size_path = path.parent / "viewport-size.json"
+    size = [value["width"], value["height"]]
+    if size_path.exists():
+        assert json.loads(size_path.read_text()) == size, "Viewport resized during the pixel comparison"
+    else:
+        size_path.write_text(json.dumps(size))
     return (value["width"], value["height"]), set(value["mask"])
 
 
@@ -147,14 +155,12 @@ del frame, rows
         _select(endpoint, "lf.select_nodes(['a', 'b'])")
         shape_both, both = _mask(endpoint, tmp_path / "both.json")
         assert shape == shape_b == shape_both
-        # Single-object contours independently identify the shared visible seam.
-        # This includes occlusion; hidden portions do not enter either mask.
-        exterior = mask_a ^ mask_b
-        interior = mask_a & mask_b
-        assert len(exterior) > 100 and len(interior) > 30
-        assert exterior <= both, "The exterior contour acquired gaps"
-        assert both <= mask_a | mask_b, "A contour appeared outside visible object boundaries"
-        assert interior <= both, "A visible object boundary acquired gaps"
+        # A singly selected object keeps its full silhouette behind unselected
+        # objects. Selecting both suppresses hidden contours between them.
+        assert len(mask_a) > 100 and len(mask_b) > 100 and len(both) > 100
+        assert mask_a != mask_b, "Tree selection did not change the contoured object"
+        # Overlapping selected objects can introduce depth-ID boundaries inside
+        # both individual silhouettes, so set union/subtraction is not an oracle.
         _editor(endpoint, "s.desaturate_unselected = True")
         assert _mask(endpoint, tmp_path / "full-overlays.json")[1] == both
         _editor(endpoint, "s.desaturate_unselected = False")
@@ -163,7 +169,73 @@ del frame, rows
         assert _mask(endpoint, tmp_path / "group.json")[1] == both
         _select(endpoint, "lf.deselect_all()")
         assert not _mask(endpoint, tmp_path / "none.json")[1]
+        # Change only tree selection between frames, without editor requests,
+        # camera changes or settings writes that could force reprojection.
+        cycle_path = tmp_path / "selection-cycle.json"
+        _editor(endpoint, f"""
+import os
+outline_cycle_tick = 0
+outline_cycle_masks = []
+def outline_selection_cycle(dt):
+    global outline_cycle_tick
+    phase, tick = divmod(outline_cycle_tick, 6)
+    if tick == 0:
+        if phase < 2:
+            lf.select_node(('a', 'b')[phase])
+        else:
+            lf.deselect_all()
+    if tick == 5:
+        frame = lf.capture_viewport()
+        assert frame is not None
+        pixels = frame.image.cpu().tolist()
+        factor = 255 if isinstance(pixels[0][0][0], float) else 1
+        width = len(pixels[0])
+        outline_cycle_masks.append([y * width + x for y, row in enumerate(pixels)
+                                    for x, pixel in enumerate(row) if pixel[0] * factor > 5])
+        if phase == 2:
+            with open({str(cycle_path) + '.tmp'!r}, 'w') as output:
+                output.write(json.dumps(outline_cycle_masks))
+            os.replace({str(cycle_path) + '.tmp'!r}, {str(cycle_path)!r})
+            lf.stop_animation()
+    outline_cycle_tick += 1
+lf.on_frame(outline_selection_cycle, duration_s=20.)
+""")
+        deadline = time.monotonic() + 25
+        while not cycle_path.exists():
+            assert time.monotonic() < deadline, "Selection-only frame cycle did not complete"
+            time.sleep(0.05)
+        cycled = [set(mask) for mask in json.loads(cycle_path.read_text())]
+        assert cycled == [mask_a, mask_b, set()], "A previous object's outline survived selection changes"
+        _editor(endpoint, "s.selection_outline = False")
+        _select(endpoint, "lf.select_node('a')")
+        assert not _mask(endpoint, tmp_path / "disabled.json")[1]
+        _editor(endpoint, "s.selection_outline = True")
+        if roll == 0:
+            _editor(endpoint, "lf.set_node_visibility('b', False)")
+            _select(endpoint, "lf.select_node('a')")
+            _, visible = _mask(endpoint, tmp_path / "visible.json")
+            front = tmp_path / "front.ply"
+            # Four opaque layers terminate color compositing before object a.
+            _write_splat(front, 0., (2., 2., 0.1), z=-1., copies=4)
+            _editor(endpoint, f"lf.load_file({str(front)!r})")
+            deadline = time.monotonic() + 30
+            while True:
+                nodes = _rpc(endpoint, "resources/read", {"uri": "lichtfeld://scene/nodes"})
+                if any(node["name"] == "front" for node in json.loads(nodes["contents"][0]["text"])["nodes"]):
+                    break
+                assert time.monotonic() < deadline, nodes
+                time.sleep(0.05)
+            _select(endpoint, "lf.select_node('a')")
+            _, hidden = _mask(endpoint, tmp_path / "hidden.json")
+            assert hidden == visible, "An unselected occluder cut the selected silhouette"
+            visible_red = json.loads((tmp_path / "visible.json").read_text())["max_red"]
+            hidden_red = json.loads((tmp_path / "hidden.json").read_text())["max_red"]
+            assert 0.3 < hidden_red / visible_red < 0.4, "Occluded contour alpha differs from Blender's 0.35"
+            _select(endpoint, "lf.select_nodes(['a', 'front'])")
+            _, together = _mask(endpoint, tmp_path / "occluding-selected.json")
+            _select(endpoint, "lf.select_node('front')")
+            assert _mask(endpoint, tmp_path / "front-only.json")[1] == together
         (tmp_path / "evidence.json").write_text(json.dumps({
-            "backend": backend, "roll": roll, "dense": dense, "exterior_pixels": len(exterior),
-            "interior_pixels": len(interior),
+            "backend": backend, "roll": roll, "dense": dense,
+            "single_a_pixels": len(mask_a), "single_b_pixels": len(mask_b), "both_pixels": len(both),
         }, indent=2))

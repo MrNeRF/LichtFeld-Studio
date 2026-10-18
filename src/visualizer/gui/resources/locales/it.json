@@ -1,6 +1,6 @@
 {
   "main_panel.selection_outline": "Contorno selezione",
-  "tooltip.selection_outline": "Mostra i contorni visibili degli oggetti splat selezionati usando il colore dei marcatori centrali. Non disponibile durante il training e nelle viste nuvola di punti o profondità.",
+  "tooltip.selection_outline": "Mostra il contorno degli oggetti splat selezionati nel colore dei marcatori centrali. Le parti coperte sono attenuate. Non disponibile durante il training e nelle viste nuvola di punti o profondità.",
   "preferences.drag_sh_hint": "Limita il dettaglio dei colori dipendenti dalla vista. Il grado esportato è il minore tra il limite e quello disponibile.",
   "preferences.drag_format_hint": "Formato dei file creati trascinando gli splat fuori da LichtFeld.",
   "preferences.drag_sh_limit": "SH massimo",

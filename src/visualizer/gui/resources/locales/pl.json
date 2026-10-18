@@ -1,6 +1,6 @@
 {
   "main_panel.selection_outline": "Kontur zaznaczenia",
-  "tooltip.selection_outline": "Wyświetla widoczne kontury zaznaczonych obiektów splat w kolorze znacznika środka. Niedostępny podczas treningu oraz w widokach chmury punktów i głębi.",
+  "tooltip.selection_outline": "Wyświetla kontury zaznaczonych obiektów splat w kolorze znacznika środka. Zasłonięte części są przyciemnione. Niedostępny podczas treningu oraz w widokach chmury punktów i głębi.",
   "preferences.drag_sh_hint": "Ogranicza szczegóły koloru zależne od kierunku patrzenia. Eksport używa mniejszej wartości z tego limitu i dostępnego stopnia SH.",
   "preferences.drag_format_hint": "Format plików tworzonych przy przeciąganiu splatów poza LichtFeld.",
   "preferences.drag_sh_limit": "Maksymalny stopień SH",

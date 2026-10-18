@@ -16,10 +16,12 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uniform OutlineSize size)
     if (p.x >= size.width || p.y >= size.height)
         return;
     uint index = p.y * size.width + p.x;
-    uint center = outline_ids[index];
-    // IDs 0/1 both represent non-selected coverage. Object IDs retain only
-    // visible boundaries, including boundaries between selected objects.
+    uint center_sample = outline_ids[index];
+    uint center = center_sample & 0x7fffffffu;
+    // The mask contains selected objects only. The high bit records scene
+    // occlusion without cutting holes in their silhouettes.
     center = center > 1u ? center : 0u;
+    float edge_alpha = (center_sample & 0x80000000u) != 0u ? 0.35f : 1.0f;
     float distance_to_edge = 3.0f;
     // Only the 3x3 neighborhood can contribute to this two-sided 2px line.
     // Samples at distance >= 2 have zero coverage.
@@ -32,16 +34,23 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uniform OutlineSize size)
             int2 q = int2(p) + int2(x, y);
             if (q.x < 0 || q.y < 0 || q.x >= int(size.width) || q.y >= int(size.height))
                 continue; // Clipping at the viewport edge is not an object contour.
-            uint neighbor = outline_ids[uint(q.y) * size.width + uint(q.x)];
+            uint neighbor_sample = outline_ids[uint(q.y) * size.width + uint(q.x)];
+            uint neighbor = neighbor_sample & 0x7fffffffu;
             neighbor = neighbor > 1u ? neighbor : 0u;
-            if (neighbor != center && (neighbor != 0u || center != 0u))
-                distance_to_edge = min(distance_to_edge, length(float2(x, y)));
+            if (neighbor != center && (neighbor != 0u || center != 0u)) {
+                float distance = length(float2(x, y));
+                if (distance < distance_to_edge) {
+                    distance_to_edge = distance;
+                    if (center == 0u)
+                        edge_alpha = (neighbor_sample & 0x80000000u) != 0u ? 0.35f : 1.0f;
+                }
+            }
         }
     }
-    float coverage = 1.0f - smoothstep(1.0f, 2.0f, distance_to_edge);
+    float coverage = (1.0f - smoothstep(1.0f, 2.0f, distance_to_edge)) * edge_alpha * (254.0f / 255.0f);
     if (coverage > 0.0f) {
         // The raster buffer contains premultiplied RGB and transmittance.
-        // Blend an opaque UI line without touching the scene/depth buffers.
+        // Match Blender's normal-view occluded alpha, without changing depth.
         float4 pixel = pixel_state[index];
         pixel_state[index] = float4(lerp(pixel.rgb, selection_colors[0].rgb, coverage),
                                     pixel.a * (1.0f - coverage));

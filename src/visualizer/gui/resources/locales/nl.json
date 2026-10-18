@@ -1,6 +1,6 @@
 {
   "main_panel.selection_outline": "Selectiecontour",
-  "tooltip.selection_outline": "Toont de zichtbare contouren van geselecteerde splat-objecten in de kleur van de centrummarkering. Niet beschikbaar tijdens training en in puntenwolk- of diepteweergaven.",
+  "tooltip.selection_outline": "Toont de contouren van geselecteerde splat-objecten in de kleur van de centrummarkering. Bedekte delen worden gedimd. Niet beschikbaar tijdens training en in puntenwolk- of diepteweergaven.",
   "preferences.drag_sh_hint": "Beperkt kleurdetails die afhangen van de kijkrichting. De export gebruikt de laagste waarde van deze limiet en de beschikbare SH-graad.",
   "preferences.drag_format_hint": "Bestandsformaat bij het slepen van splats uit LichtFeld.",
   "preferences.drag_sh_limit": "Maximale SH-graad",

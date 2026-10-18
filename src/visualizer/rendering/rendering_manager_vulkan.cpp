@@ -4690,6 +4690,10 @@ namespace lfs::vis {
 
                     const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
                     const bool can_rerender_selection_overlay =
+                        // Object contour membership is classified during projection.
+                        // Reusing its flags after a tree selection change retains
+                        // the previous object's contour, including on deselection.
+                        !frame_settings.selection_outline &&
                         (frame_dirty & DirtyFlag::SELECTION) != 0 &&
                         (frame_dirty == DirtyFlag::SELECTION ||
                          (is_training && (non_overlay_dirty & ~DirtyFlag::SPLATS) == 0)) &&

@@ -1,6 +1,6 @@
 {
   "main_panel.selection_outline": "선택 윤곽선",
-  "tooltip.selection_outline": "선택한 스플랫 오브젝트의 보이는 윤곽선을 중심 마커 색상으로 표시합니다. 학습 중이거나 포인트 클라우드 또는 깊이 보기에서는 사용할 수 없습니다.",
+  "tooltip.selection_outline": "선택한 스플랫 오브젝트의 윤곽선을 중심 마커 색상으로 표시합니다. 가려진 부분은 흐리게 표시됩니다. 학습 중이거나 포인트 클라우드 또는 깊이 보기에서는 사용할 수 없습니다.",
   "preferences.drag_sh_hint": "시점에 따라 달라지는 색상 세부 정보를 제한합니다. 이 한도와 사용 가능한 SH 차수 중 더 낮은 값을 사용합니다.",
   "preferences.drag_format_hint": "스플랫을 LichtFeld 밖으로 드래그할 때 생성되는 파일 형식입니다.",
   "preferences.drag_sh_limit": "최대 SH 차수",

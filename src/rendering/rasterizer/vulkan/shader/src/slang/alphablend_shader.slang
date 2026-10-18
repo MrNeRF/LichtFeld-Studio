@@ -180,11 +180,13 @@ layout(binding=14) StructuredBuffer<float4> overlay_params;
 layout(binding=21) RWStructuredBuffer<uint> outline_ids;
 layout(binding=22) StructuredBuffer<uint> outline_lod_indices;
 layout(binding=23) StructuredBuffer<uint> outline_logical_indices;
+layout(binding=24) RWStructuredBuffer<float2> outline_scene_depths;
 #else
 layout(binding=15) RWStructuredBuffer<uint> outline_ids;
 layout(binding=16) ByteAddressBuffer transform_indices;
 layout(binding=17) StructuredBuffer<uint> outline_lod_indices;
 layout(binding=18) StructuredBuffer<uint> outline_logical_indices;
+layout(binding=19) RWStructuredBuffer<float2> outline_scene_depths;
 #endif
 #endif
 
@@ -316,8 +318,13 @@ void main(
         }
     }
 #if LFS_SELECTION_OUTLINE
-    uint outline_id = uniforms.depth_wave > 0u && is_inside ? outline_ids[pix_id] : 0u;
+    uint outline_id = uniforms.depth_wave > 0u && is_inside ? outline_ids[pix_id] & 0x7fffffffu : 0u;
     const bool outline_has_indices = overlay_enabled(overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS].y);
+    bool outline_active = is_inside;
+    float2 previous_outline_depths = uniforms.depth_wave > 0u && is_inside && outline_id != 0u
+                                        ? outline_scene_depths[pix_id] : float2(FAR_DEPTH);
+    float outline_scene_depth = previous_outline_depths.x;
+    float outline_selected_depth = previous_outline_depths.y;
 #endif
     bool thread_active = is_inside && curr_pixel_state.a >= 0.0001f;
 
@@ -341,6 +348,9 @@ void main(
     ray_origin = ray.origin;
     ray_direction = ray.direction;
     thread_active = thread_active && ray.valid;
+  #if LFS_SELECTION_OUTLINE
+    outline_active = outline_active && ray.valid;
+  #endif
 #endif
 
     const int shared_memory_rounds = ((tile_idx_end - tile_idx_start + TILE_SIZE - 1) / TILE_SIZE);
@@ -359,7 +369,11 @@ void main(
         // equivalent to CUDA `if (__syncthreads_count(thread_active) == 0) break;`
         const uint subgroup_idx = thread_rank / SUBGROUP_SIZE;
         const uint32_t subgroup_has_active_thread =
-            uint32_t(WaveActiveAnyTrue(thread_active));
+            uint32_t(WaveActiveAnyTrue(thread_active
+              #if LFS_SELECTION_OUTLINE
+                || outline_active
+              #endif
+            ));
         if (WaveIsFirstLane())
             active_subgroups[subgroup_idx] = subgroup_has_active_thread;
         GroupMemoryBarrierWithGroupSync();
@@ -418,9 +432,14 @@ void main(
         GroupMemoryBarrierWithGroupSync();
         #endif
 
-        if (thread_active) {
+        if (thread_active
+          #if LFS_SELECTION_OUTLINE
+            || outline_active
+          #endif
+        ) {
             for (int j = 0; j < min(TILE_SIZE, splats_left_to_process); j++) {
-                local_n_contrib++;
+                if (thread_active)
+                    local_n_contrib++;
 
                 // subtile culling
             #if SUBTILE_SIZE > 0
@@ -465,9 +484,11 @@ void main(
                 if (gauss_rgba.a < ALPHA_THRESHOLD)
                     continue;
 #if LFS_SELECTION_OUTLINE
-                // Resolve the first significant footprint in raster order before UI color/alpha changes.
-                // Preserve it across depth waves, including unselected foreground occluders.
-                if (outline_id == 0u && gauss_rgba.a >= 0.1f) {
+                // Blender's outline prepass contains selected objects only. An
+                // unselected foreground footprint dims the selected silhouette;
+                // it must neither clip it nor terminate the outline search.
+                if (outline_active && gauss_rgba.a >= 0.1f) {
+                    outline_scene_depth = min(outline_scene_depth, splat_depth);
                     uint logical_id = splat_id;
                     if ((uniforms.lod_enabled & 1u) != 0u)
                         logical_id = (uniforms.lod_enabled & 8u) != 0u
@@ -479,7 +500,21 @@ void main(
                     #else
                     uint outline_flags = read_byte(gaussian_overlay_flags, splat_id);
                     #endif
-                    outline_id = (outline_flags & OVERLAY_FLAG_OUTLINE_SELECTED) != 0u ? node + 2u : 1u;
+                    if ((outline_flags & OVERLAY_FLAG_OUTLINE_SELECTED) != 0u) {
+                        uint node_id = node + 2u;
+                        if (splat_depth < outline_selected_depth ||
+                            (splat_depth == outline_selected_depth && node_id < outline_id)) {
+                            outline_id = node_id;
+                            outline_selected_depth = splat_depth;
+                        }
+                    } else if (outline_id == 0u) {
+                        outline_id = 1u;
+                    }
+                }
+                if (!thread_active) {
+                    if (!outline_active)
+                        break;
+                    continue;
                 }
 #endif
 
@@ -557,6 +592,10 @@ void main(
                     }
                     curr_pixel_state = float4(marker_color, 0.0f);
                     thread_active = false;
+                  #if LFS_SELECTION_OUTLINE
+                    if (outline_active)
+                        continue;
+                  #endif
                     break;
                 }
 
@@ -576,6 +615,10 @@ void main(
                     // This Splat never registred so we subtract it before we break.
                     local_n_contrib--;
                     thread_active = false;
+                  #if LFS_SELECTION_OUTLINE
+                    if (outline_active)
+                        continue;
+                  #endif
                     break;
                 }
                 curr_pixel_state = new_pixel_state;
@@ -587,7 +630,11 @@ void main(
 
     if (is_inside) {
 #if LFS_SELECTION_OUTLINE
+        float epsilon = 1.0e-4f * max(1.0f, abs(outline_scene_depth));
+        if (outline_id > 1u && outline_selected_depth > outline_scene_depth + epsilon)
+            outline_id |= 0x80000000u;
         outline_ids[pix_id] = outline_id;
+        outline_scene_depths[pix_id] = float2(outline_scene_depth, outline_selected_depth);
 #endif
         n_contributors[pix_id] = local_n_contrib;
         final_pixel_state[pix_id] = curr_pixel_state;
