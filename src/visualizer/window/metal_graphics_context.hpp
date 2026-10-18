@@ -35,6 +35,8 @@ namespace lfs::vis {
         [[nodiscard]] bool presentBootstrapFrame(float r, float g, float b, float a) override;
         [[nodiscard]] bool hasActiveFrame() const noexcept override;
         [[nodiscard]] lfs::Result<WindowCapture> captureFinalFrameRgba() override;
+        [[nodiscard]] lfs::Result<WindowCapture> captureSceneRgba() override;
+        void snapshotSceneCapture(const GraphicsFrame& frame) override;
         [[nodiscard]] bool waitForNextFrameSlot() override;
         [[nodiscard]] bool waitForSubmittedFrames() override;
         [[nodiscard]] bool waitIdle() override;
@@ -49,6 +51,8 @@ namespace lfs::vis {
 
     private:
         [[nodiscard]] std::future<lfs::Result<WindowCapture>> captureFinalFrameRgbaAsync();
+        [[nodiscard]] static std::future<lfs::Result<WindowCapture>> captureRgbaAsync(
+            lfs::core::Tensor tensor, int width, int height);
         [[nodiscard]] std::uint64_t completedSubmitSerial() const;
         [[nodiscard]] bool waitForCompletedSubmitSerial(std::uint64_t serial);
         struct Impl;

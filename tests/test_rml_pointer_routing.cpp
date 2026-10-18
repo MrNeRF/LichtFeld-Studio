@@ -3,7 +3,6 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"

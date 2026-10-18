@@ -15,7 +15,6 @@
 #include "core/event_bridge/control_boundary.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/property_registry.hpp"

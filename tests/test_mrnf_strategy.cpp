@@ -1159,6 +1159,27 @@ TEST_F(MRNFStrategyTest, StopRefineBoundaryRequestsExclusiveMutation) {
     EXPECT_FALSE(strategy.is_refining(151));
 }
 
+TEST_F(MRNFStrategyTest, ShortenedScheduleKeepsTenStepsBetweenRefines) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+
+    auto params = vanilla_mrnf_params();
+    params.start_refine = 0;
+    params.refine_every = 3;
+    params.stop_refine = 100;
+    params.max_cap = 32;
+    params.steps_scaler = 0.02f;
+    strategy.initialize(params);
+
+    EXPECT_FALSE(strategy.is_refining(3));
+    EXPECT_TRUE(strategy.is_refining(10));
+
+    // An unscaled schedule keeps the interval it was given.
+    params.steps_scaler = 1.0f;
+    strategy.set_optimization_params(params);
+    EXPECT_TRUE(strategy.is_refining(3));
+}
+
 TEST_F(MRNFStrategyTest, GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);

@@ -20,7 +20,7 @@ def test_unregister_after_panel_poll_exception_keeps_editor_alive(tmp_path):
 
     endpoint = f"http://127.0.0.1:{os.environ.get('LFS_MCP_PORT', '45704')}/mcp"
     port = endpoint.split(":")[-1].split("/")[0]
-    env = dict(os.environ, HOME=str(tmp_path / "home"))
+    env = dict(os.environ, HOME=str(tmp_path / "home"), LFS_HOME=str(tmp_path / "home" / ".lichtfeld"))
     (tmp_path / "home").mkdir()
 
     with (tmp_path / "app.log").open("w") as log:

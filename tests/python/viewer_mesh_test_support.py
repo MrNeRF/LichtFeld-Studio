@@ -33,6 +33,17 @@ def background_splats(path):
 MESH_CODE = '"""Small generated geometry for viewer QA; execute in the app\'s Python editor."""\nimport lichtfeld as lf\nimport math\nfrom array import array\n\ncorners = [[-1, 0, -1], [1, 0, -1], [0, 0, 1], [0, 2, 0]]\nfaces = [(0, 3, 1), (1, 3, 2), (2, 3, 0), (0, 1, 2)]\npalette = [(1, .1, .1, 1), (.1, 1, .1, 1), (.1, .1, 1, 1), (.7, .7, .7, 1)]\nverts, norms, cols = [], [], []\nfor face, color in zip(faces, palette):\n    tri = [corners[i] for i in face]\n    a = [tri[1][i]-tri[0][i] for i in range(3)]\n    b = [tri[2][i]-tri[0][i] for i in range(3)]\n    normal = [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]\n    length = math.sqrt(sum(x*x for x in normal));normal = [x/length for x in normal]\n    verts.extend(tri); norms.extend([normal] * 3); cols.extend([color] * 3)\nfloor = [[-3, -.05, -3], [-3, -.05, 3], [3, -.05, 3], [-3, -.05, -3], [3, -.05, 3], [3, -.05, -3]]\nverts.extend(floor); norms.extend([[0, 1, 0]] * 6); cols.extend([[.55, .55, .55, 1]] * 6)\nif globals().get(\'QA_FLOOR_FIRST\', False):\n    verts = verts[-6:] + verts[:-6]\n    norms = norms[-6:] + norms[:-6]\n    cols = cols[-6:] + cols[:-6]\ndef tensor(values, dtype):\n    flat = array(dtype, [v for row in values for v in row])\n    shaped = memoryview(flat).cast(\'B\').cast(dtype, (len(values), len(values[0])))\n    return lf.Tensor.from_numpy(shaped)\nnode = lf.get_scene().add_mesh(globals().get(\'QA_MESH_NAME\', \'QA_mesh\'), tensor(verts, \'f\'),\n    tensor([list(range(i,i+3)) for i in range(0,len(verts),3)], \'i\'),\n    tensor(cols, \'f\'), tensor(norms, \'f\'))\nlf.set_node_visualizer_world_transform(globals().get(\'QA_MESH_NAME\', \'QA_mesh\'),\n    [1.,0.,0.,0., 0.,1.,0.,0., 0.,0.,1.,0., 0.,0.,0.,1.], record_history=False)\nprint(\'Generated mesh node\', node, \'vertices\', len(verts))\n'
 
 
+def require_independent_dual_split(endpoint):
+    """Enter split_view_mode 3, or skip where screen views replace the dual split."""
+    import pytest
+
+    result = _call(endpoint, "tools/call", {
+        "name": "render_settings_set", "arguments": {"split_view_mode": 3},
+    })
+    if result.get("isError"):
+        pytest.skip("No independent dual split view; screen views (lf.ui.screen.split) replace it")
+
+
 def setup_mesh(endpoint):
     # Mesh vertices are pinned into visualizer space below. A loaded splat keeps
     # an identity dataset transform, and the visualizer flips that to diag(1,-1,-1),
@@ -56,7 +67,8 @@ def viewport_image(endpoint, directory, name, require_green=True):
     from PIL import Image
 
     path = directory / "bounds.json"
-    _editor(endpoint, f"import json; open({str(path)!r}, 'w').write(json.dumps(lf.selection.get_viewport_bounds()))")
+    # The import completion overlay lingers for 3 s and covers the viewport.
+    _editor(endpoint, f"import json; lf.ui.dismiss_import(); open({str(path)!r}, 'w').write(json.dumps(lf.selection.get_viewport_bounds()))")
     x, y, width, height = map(round, json.loads(path.read_text()))
     for index in range(8):
         time.sleep(.3)

@@ -1383,6 +1383,7 @@ namespace lfs::training {
         report_file << "3D Gaussian Splatting Evaluation Report\n";
         report_file << "==============================================\n";
         report_file << "Output Directory: " << lfs::core::path_to_utf8(output_dir_) << "\n";
+        report_file << "JPEG Decoder: " << lfs::io::PipelinedImageLoader::jpeg_decoder() << "\n";
 
         // Get current time
         const auto now = std::chrono::system_clock::now();

@@ -24,6 +24,7 @@
 #include <future>
 #include <limits>
 #include <thread>
+#include <utility>
 
 namespace lfs::vis {
     namespace {
@@ -72,6 +73,7 @@ namespace lfs::vis {
         dispatch_semaphore_t frame_slots = dispatch_semaphore_create(kFramesInFlight);
         std::shared_ptr<SharedState> shared = std::make_shared<SharedState>();
         lfs::core::Tensor final_image;
+        lfs::core::Tensor scene_capture; // The scene composite before overlays, when requested.
         std::array<float, 4> clear_color{0, 0, 0, 1};
         int width = 1;
         int height = 1;
@@ -443,10 +445,12 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
     bool MetalGraphicsContext::hasActiveFrame() const noexcept { return impl_->active; }
 
     std::future<lfs::Result<WindowCapture>> MetalGraphicsContext::captureFinalFrameRgbaAsync() {
-        const auto tensor = impl_->final_image;
-        const int width = impl_->width;
-        const int height = impl_->height;
-        return std::async(std::launch::async, [tensor, width, height]() -> lfs::Result<WindowCapture> {
+        return captureRgbaAsync(impl_->final_image, impl_->width, impl_->height);
+    }
+
+    std::future<lfs::Result<WindowCapture>> MetalGraphicsContext::captureRgbaAsync(
+        lfs::core::Tensor tensor, const int width, const int height) {
+        return std::async(std::launch::async, [tensor = std::move(tensor), width, height]() -> lfs::Result<WindowCapture> {
             try {
                 if (!tensor.is_valid() || width <= 0 || height <= 0)
                     return metalGraphicsError(lfs::ErrorCode::NotFound,
@@ -469,6 +473,19 @@ kernel void clear_rgba8(device uchar4* destination [[buffer(0)]],
 
     lfs::Result<WindowCapture> MetalGraphicsContext::captureFinalFrameRgba() {
         return captureFinalFrameRgbaAsync().get();
+    }
+
+    void MetalGraphicsContext::snapshotSceneCapture(const GraphicsFrame& frame) {
+        if (const auto* image = finalImageTensor(frame))
+            impl_->scene_capture = image->clone();
+    }
+
+    lfs::Result<WindowCapture> MetalGraphicsContext::captureSceneRgba() {
+        auto scene = std::exchange(impl_->scene_capture, lfs::core::Tensor{});
+        if (!scene.is_valid())
+            return metalGraphicsError(lfs::ErrorCode::NotFound,
+                                      "No scene composite was kept for this frame");
+        return captureRgbaAsync(std::move(scene), impl_->width, impl_->height).get();
     }
 
     bool MetalGraphicsContext::waitForNextFrameSlot() {

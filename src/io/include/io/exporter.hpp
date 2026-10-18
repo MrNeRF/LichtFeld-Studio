@@ -10,6 +10,7 @@
 #include "core/splat_data.hpp"
 #include "io/error.hpp"
 #include "io/export_progress.hpp"
+#include <glm/vec3.hpp>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -124,6 +125,7 @@ namespace lfs::io {
         int kmeans_iterations = 10;
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+        std::optional<glm::vec3> background_color{};
     };
 
     /**

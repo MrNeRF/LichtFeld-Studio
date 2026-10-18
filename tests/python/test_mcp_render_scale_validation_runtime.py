@@ -23,7 +23,7 @@ def test_render_settings_rejects_negative_scale_without_changing_state(tmp_path)
     endpoint = f"http://127.0.0.1:{port}/mcp"
     home = tmp_path / "home"
     home.mkdir()
-    env = dict(os.environ, HOME=str(home))
+    env = dict(os.environ, HOME=str(home), LFS_HOME=str(home / ".lichtfeld"))
     env.pop("PYTHONPATH", None)
     env.setdefault("DISPLAY", ":92")
 

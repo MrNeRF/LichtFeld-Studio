@@ -235,19 +235,6 @@ namespace lfs::vis {
             };
         }
 
-        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeViewportCaptureImageHwc(
-            lfs::core::Tensor image) {
-            if (!image.is_valid() || image.ndim() != 3) {
-                return std::make_shared<lfs::core::Tensor>(std::move(image));
-            }
-
-            const auto layout = lfs::rendering::detectImageLayout(image);
-            if (layout == lfs::rendering::ImageLayout::CHW) {
-                image = image.permute({1, 2, 0});
-            }
-            return std::make_shared<lfs::core::Tensor>(image.cpu().contiguous());
-        }
-
         // Per-frame mesh-pass payload (without depth blit). The Vulkan splat path
         // publishes this every frame so the viewport pass sees the current camera;
         // otherwise the mesh stays anchored to whichever frame last set it.

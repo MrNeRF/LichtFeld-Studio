@@ -22,7 +22,7 @@ def test_set_node_transform_from_cuda_tensor_keeps_editor_alive(tmp_path):
     endpoint = f"http://127.0.0.1:{port}/mcp"
     home = tmp_path / "home"
     home.mkdir()
-    env = dict(os.environ, HOME=str(home))
+    env = dict(os.environ, HOME=str(home), LFS_HOME=str(home / ".lichtfeld"))
 
     with (tmp_path / "app.log").open("w") as log:
         app = subprocess.Popen(
@@ -159,7 +159,7 @@ def test_cuda_tensors_are_rejected_by_cpu_ndarray_inputs(tmp_path, api, code):
     endpoint = f"http://127.0.0.1:{port}/mcp"
     home = tmp_path / "home"
     home.mkdir()
-    env = dict(os.environ, HOME=str(home))
+    env = dict(os.environ, HOME=str(home), LFS_HOME=str(home / ".lichtfeld"))
 
     with (tmp_path / "app.log").open("w") as log:
         app = subprocess.Popen(

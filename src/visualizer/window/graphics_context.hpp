@@ -90,6 +90,8 @@ namespace lfs::vis {
             return captureFinalFrameRgba();
         }
         virtual void cancelSceneCaptureRequest() noexcept {}
+        // Keep the frame's scene composite, before overlays, for captureSceneRgba().
+        virtual void snapshotSceneCapture(const GraphicsFrame&) {}
 
         [[nodiscard]] virtual bool waitForNextFrameSlot() = 0;
         [[nodiscard]] virtual bool waitForSubmittedFrames() = 0;

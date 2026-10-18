@@ -11,6 +11,7 @@
 #include "core/camera.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/training_manager.hpp"
 #include "display_tensors.hpp"
 #include "rendering/image_layout.hpp"
@@ -479,6 +480,66 @@ namespace lfs::vis {
                 view.metal_scene_upscaler_->resetAll();
         }
 
+        // Points draw the dataset cloud, or the splat centers in point-cloud mode.
+        // The main view and the GT comparison panel render them the same way.
+        const auto render_point_scene =
+            [&](const lfs::rendering::PointCloudRenderRequest& pc_request, const RenderTargetId target)
+            -> std::expected<SceneRenderer::OutputTensors, std::string> {
+            if ((frame_context.frame_dirty & DirtyFlag::SPLATS) != 0) {
+                invalidatePointCloudData();
+            }
+            if ((frame_context.frame_dirty & DirtyFlag::SELECTION) != 0)
+                ++point_cloud_preview_selection_revision_;
+            const bool splats_as_points = frame_settings.point_cloud_mode && has_model;
+            lfs::core::Tensor splat_positions;
+            const lfs::core::Tensor* positions = nullptr;
+            const lfs::core::Tensor* colors = nullptr;
+            if (splats_as_points) {
+                constexpr float SH_C0 = 0.28209479177387814f;
+                const auto& sh0 = model->sh0_raw();
+                const void* sh0_key = sh0.is_valid() ? sh0.data_ptr() : nullptr;
+                const std::size_t sh0_count = sh0.is_valid() ? static_cast<std::size_t>(sh0.size(0)) : 0;
+                if (sh0_key != point_cloud_colors_cache_key_ || sh0_count != point_cloud_colors_cache_size_ ||
+                    !point_cloud_colors_cache_.is_valid()) {
+                    point_cloud_colors_cache_ = (sh0.slice(1, 0, 1).squeeze(1) * SH_C0 + 0.5f).clamp(0.0f, 1.0f);
+                    point_cloud_colors_cache_key_ = sh0_key;
+                    point_cloud_colors_cache_size_ = sh0_count;
+                }
+                splat_positions = model->get_means();
+                positions = &splat_positions;
+                colors = &point_cloud_colors_cache_;
+            } else {
+                positions = &scene_state.point_cloud->means;
+                colors = &scene_state.point_cloud->colors;
+            }
+            auto request = buildPointSceneRequest(pc_request, frame_settings);
+            request.positions = positions;
+            request.colors = colors;
+            request.positions_revision = point_cloud_data_revision_;
+            request.colors_revision = point_cloud_data_revision_;
+            if (splats_as_points && model->has_deleted_mask() && model->deleted_mask_matches_size()) {
+                request.deleted_mask = &model->deleted();
+                request.deleted_mask_revision = model->deleted_mask_version();
+            }
+            request.selection_revision = point_cloud_preview_selection_revision_;
+            request.preview_selection_revision = point_cloud_preview_selection_revision_;
+            request.synchronize_output = context.preparing_import;
+            if (!point_scene_renderer_)
+                point_scene_renderer_ = createPointSceneRenderer(*context.graphics_context);
+            auto rendered = point_scene_renderer_->render(request, target);
+            if (!rendered)
+                return std::unexpected(rendered.error());
+            auto outputs = point_scene_renderer_->readOutputTensors(target);
+            if (!outputs)
+                return std::unexpected(lfs::format_for_developer(outputs.error()));
+            return std::move(*outputs);
+        };
+        const auto point_cloud_transforms = [&]() {
+            return frame_settings.point_cloud_mode && has_model
+                       ? scene_state.model_transforms
+                       : std::vector<glm::mat4>{scene_state.point_cloud_transform};
+        };
+
         if (splitViewEnabled(frame_settings.split_view_mode)) {
             if (view.tensor_temporal_pipeline_)
                 view.tensor_temporal_pipeline_->reset(TemporalViewId::Main);
@@ -724,8 +785,8 @@ namespace lfs::vis {
                     }
                 }
             }
-            if (!camera || !has_model)
-                return keep_previous("GT comparison requires a dataset camera and visible Gaussian model");
+            if (!camera)
+                return keep_previous("GT comparison requires a dataset camera");
 
             const GTComparisonMode gt_mode = frame_settings.gt_comparison_mode;
             const glm::ivec2 gt_size = gtComparisonPreviewSize(*camera, size);
@@ -776,21 +837,58 @@ namespace lfs::vis {
                 actual_frame.pixel_region);
             if (!render_camera)
                 return keep_previous("GT comparison could not build the dataset render camera");
-            auto rendered = render_panel(*model, scene_state, reference_size,
-                                         view.split_right_render_target_, render_camera);
-            if (!rendered)
-                return keep_previous(std::format("GT comparison rendered panel failed: {}", rendered.error()));
+            // Scene reconstruction lowers only the rendered panel's resolution, as on
+            // Vulkan; the compositor resamples it and the reference keeps its sampling.
+            const float base_scale = effectiveSceneRenderScale(frame_settings.render_scale, 1.0f, false);
+            const float panel_scale = actual_frame.pixel_region ? 1.0f : scale / std::max(base_scale, 1.0e-6f);
+            const glm::ivec2 panel_size{
+                std::max(static_cast<int>(std::lround(static_cast<float>(reference_size.x) * panel_scale)), 1),
+                std::max(static_cast<int>(std::lround(static_cast<float>(reference_size.y) * panel_scale)), 1)};
+            const auto panel_camera =
+                panel_size == reference_size
+                    ? render_camera
+                    : detail::buildGTRenderCamera(
+                          *camera, panel_size, detail::currentSceneTransform(context.scene_manager, camera->uid()),
+                          actual_frame.pixel_region);
+            if (!panel_camera)
+                return keep_previous("GT comparison could not build the reduced dataset render camera");
+            // Before a dataset trains there is no Gaussian model: compare the
+            // reference against the dataset points, as the Vulkan viewer does.
+            // Without points either, the reference faces the background.
+            const bool splat_panel = has_model && !frame_settings.point_cloud_mode;
+            PanelOutput panel{
+                .image = makeGTComparePlaceholderTensor(reference_size, frame_settings.background_color),
+                .metadata = {.viewer_backend = lfs::rendering::ViewerBackend::Metal, .valid = true}};
+            if (splat_panel) {
+                auto rendered_panel = render_panel(*model, scene_state, panel_size,
+                                                   view.split_right_render_target_, panel_camera);
+                if (!rendered_panel)
+                    return keep_previous(std::format("GT comparison rendered panel failed: {}", rendered_panel.error()));
+                panel = std::move(*rendered_panel);
+            } else if (has_model || has_points) {
+                FrameContext panel_context = frame_context;
+                panel_context.render_size = panel_size;
+                auto pc_request = buildPointCloudRenderRequest(panel_context, panel_size, point_cloud_transforms());
+                bool equirectangular = false;
+                applyGTComparisonRenderCamera(pc_request.frame_view, equirectangular, *panel_camera);
+                auto outputs = render_point_scene(pc_request, view.split_right_render_target_);
+                if (!outputs)
+                    return keep_previous(std::format("GT comparison point panel failed: {}", outputs.error()));
+                panel.image = std::move(outputs->color);
+                panel.depth = std::move(outputs->depth);
+            }
+            auto* const rendered = &panel;
 
             std::shared_ptr<lfs::core::Tensor> compare = rendered->image;
-            if (gt_mode == GTComparisonMode::Depth) {
+            if (splat_panel && gt_mode == GTComparisonMode::Depth) {
                 compare = makeDepthDisplayTensor(*rendered->depth,
                                                  frame_settings.depth_visualization_mode,
                                                  frame_settings.background_color);
-            } else if (gt_mode == GTComparisonMode::Normal) {
-                if (!render_camera->intrinsics)
+            } else if (splat_panel && gt_mode == GTComparisonMode::Normal) {
+                if (!panel_camera->intrinsics)
                     return keep_previous("Normal GT comparison requires pinhole camera intrinsics");
-                compare = makeNormalDisplayFromDepthTensor(*rendered->depth, *render_camera->intrinsics);
-            } else {
+                compare = makeNormalDisplayFromDepthTensor(*rendered->depth, *panel_camera->intrinsics);
+            } else if (splat_panel) {
                 lfs::core::PpispRegion region;
                 if (actual_frame.pixel_region) {
                     const auto& pixels = *actual_frame.pixel_region;
@@ -868,57 +966,11 @@ namespace lfs::vis {
             image = std::move(outputs->color);
             depth = std::move(outputs->depth);
         } else {
-            if ((frame_context.frame_dirty & DirtyFlag::SPLATS) != 0) {
-                invalidatePointCloudData();
-            }
-            if ((frame_context.frame_dirty & DirtyFlag::SELECTION) != 0)
-                ++point_cloud_preview_selection_revision_;
-            const bool splats_as_points = frame_settings.point_cloud_mode && has_model;
-            const std::vector<glm::mat4> cloud_transforms{scene_state.point_cloud_transform};
-            const auto pc_request = buildPointCloudRenderRequest(
-                frame_context, render_size,
-                splats_as_points ? scene_state.model_transforms : cloud_transforms);
-            lfs::core::Tensor splat_positions;
-            const lfs::core::Tensor* positions = nullptr;
-            const lfs::core::Tensor* colors = nullptr;
-            if (splats_as_points) {
-                constexpr float SH_C0 = 0.28209479177387814f;
-                const auto& sh0 = model->sh0_raw();
-                const void* sh0_key = sh0.is_valid() ? sh0.data_ptr() : nullptr;
-                const std::size_t sh0_count = sh0.is_valid() ? static_cast<std::size_t>(sh0.size(0)) : 0;
-                if (sh0_key != point_cloud_colors_cache_key_ || sh0_count != point_cloud_colors_cache_size_ ||
-                    !point_cloud_colors_cache_.is_valid()) {
-                    point_cloud_colors_cache_ = (sh0.slice(1, 0, 1).squeeze(1) * SH_C0 + 0.5f).clamp(0.0f, 1.0f);
-                    point_cloud_colors_cache_key_ = sh0_key;
-                    point_cloud_colors_cache_size_ = sh0_count;
-                }
-                splat_positions = model->get_means();
-                positions = &splat_positions;
-                colors = &point_cloud_colors_cache_;
-            } else {
-                positions = &scene_state.point_cloud->means;
-                colors = &scene_state.point_cloud->colors;
-            }
-            auto request = buildPointSceneRequest(pc_request, frame_settings);
-            request.positions = positions;
-            request.colors = colors;
-            request.positions_revision = point_cloud_data_revision_;
-            request.colors_revision = point_cloud_data_revision_;
-            if (splats_as_points && model->has_deleted_mask() && model->deleted_mask_matches_size()) {
-                request.deleted_mask = &model->deleted();
-                request.deleted_mask_revision = model->deleted_mask_version();
-            }
-            request.selection_revision = point_cloud_preview_selection_revision_;
-            request.preview_selection_revision = point_cloud_preview_selection_revision_;
-            request.synchronize_output = context.preparing_import;
-            if (!point_scene_renderer_)
-                point_scene_renderer_ = createPointSceneRenderer(*context.graphics_context);
-            auto rendered = point_scene_renderer_->render(request, view.main_render_target_);
-            if (!rendered)
-                return keep_previous(rendered.error());
-            auto outputs = point_scene_renderer_->readOutputTensors(view.main_render_target_);
+            auto outputs = render_point_scene(
+                buildPointCloudRenderRequest(frame_context, render_size, point_cloud_transforms()),
+                view.main_render_target_);
             if (!outputs)
-                return keep_previous(lfs::format_for_developer(outputs.error()));
+                return keep_previous(outputs.error());
             image = std::move(outputs->color);
             depth = std::move(outputs->depth);
         }
@@ -966,6 +1018,53 @@ namespace lfs::vis {
             .orthographic = context.settings.orthographic,
         };
         view.viewport_artifact_service_.updateFromImageOutput(image, metadata, size, true);
+        if (environmentBackgroundUsesTransparentViewerCompositing(frame_settings)) {
+            // The raster leaves the environment transparent for the compositor;
+            // captures composite it like the viewport does.
+            const auto frame_view = frame_context.makeFrameView();
+            const lfs::rendering::VideoCompositeFrameRequest request{
+                .viewport = {.rotation = frame_view.rotation,
+                             .translation = frame_view.translation,
+                             .size = frame_view.size,
+                             .focal_length_mm = frame_view.focal_length_mm,
+                             .orthographic = frame_view.orthographic,
+                             .ortho_scale = frame_view.ortho_scale},
+                .frame_view = frame_view,
+                .background_color = frame_settings.background_color,
+                .environment = {.enabled = true,
+                                .map_path = lfs::core::utf8_to_path(frame_settings.environment_map_path),
+                                .exposure = frame_settings.environment_exposure,
+                                .rotation_degrees = frame_settings.environment_rotation_degrees,
+                                .equirectangular = frame_settings.equirectangular},
+            };
+            view.viewport_artifact_service_.setLazyCaptureForCurrentOutput(
+                [this, request, metadata, image, published_size]() -> std::shared_ptr<lfs::core::Tensor> {
+                    auto* const engine = getRenderingEngine();
+                    if (!engine) {
+                        LOG_ERROR("Failed to composite Metal viewport capture: rendering engine unavailable");
+                        return {};
+                    }
+                    auto frame = engine->materializeGpuFrame(image, metadata, published_size);
+                    if (!frame || !frame->valid()) {
+                        LOG_ERROR("Failed to materialize Metal viewport capture for environment composite: {}",
+                                  frame ? "invalid frame" : frame.error());
+                        return {};
+                    }
+                    auto composited = engine->renderVideoCompositeFrame(*frame, request);
+                    if (!composited) {
+                        LOG_ERROR("Failed to composite environment into Metal viewport capture: {}", composited.error());
+                        // Match the viewport's black background when the environment cannot load.
+                        auto fallback = request;
+                        fallback.environment.enabled = false;
+                        fallback.background_color = glm::vec3(0.0f);
+                        composited = engine->renderVideoCompositeFrame(*frame, fallback);
+                        if (!composited)
+                            return {};
+                    }
+                    return makeViewportCaptureImageHwc(std::move(*composited));
+                },
+                metadata, size);
+        }
         if (frame_context.training_active && training_refresh_dirty != 0) {
             const double elapsed_ms = std::chrono::duration<double, std::milli>(
                                           std::chrono::steady_clock::now() - render_started)

@@ -45,6 +45,19 @@ namespace lfs::training {
         constexpr float MRNF_LOG_MIN_SCALE_THRESHOLD = -23.0258509f;     // log(1e-10)
         constexpr float MRNF_SH_C0 = 0.28209479177387814f;
 
+        // A split scales parent and child opacity by 0.6 and resets their Adam state.
+        // Compressed schedules (--iter 600 refines every 3 steps) split them again
+        // before they recover, and at max_cap the refills prune the model empty.
+        constexpr size_t MRNF_MIN_SCALED_REFINE_EVERY = 10;
+
+        [[nodiscard]] lfs::core::param::OptimizationParameters resolve_mrnf_params(
+            lfs::core::param::OptimizationParameters params) {
+            params.resolve_mrnf_capacity_defaults();
+            if (params.steps_scaler > 0.0f && params.steps_scaler < 1.0f)
+                params.refine_every = std::max(params.refine_every, MRNF_MIN_SCALED_REFINE_EVERY);
+            return params;
+        }
+
         [[nodiscard]] lfs::core::Tensor compact_bool_indices(
             const lfs::core::Tensor& mask, size_t count) {
             using namespace lfs::core;
@@ -514,10 +527,11 @@ namespace lfs::training {
         _densify_child_allocated_peak_bytes = 0;
         if (optimParams.gut && optimParams.opacity_decay_rendered_only)
             LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
-        auto resolved_params = optimParams;
-        resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
-            std::move(resolved_params));
+            resolve_mrnf_params(optimParams));
+        if (_params->refine_every != optimParams.refine_every)
+            LOG_INFO("MRNF: refining every {} steps instead of {} on the shortened schedule",
+                     _params->refine_every, optimParams.refine_every);
 
         if (_params->max_cap > 0) {
             const size_t capacity = static_cast<size_t>(_params->max_cap);
@@ -2508,9 +2522,7 @@ namespace lfs::training {
     void MRNF::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
         const bool renderer_changed = _params && _params->gut != params.gut;
         const bool support_changed = !_params || _params->opacity_decay_rendered_only != params.opacity_decay_rendered_only;
-        auto resolved_params = params;
-        resolved_params.resolve_mrnf_capacity_defaults();
-        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(std::move(resolved_params));
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(resolve_mrnf_params(params));
         if ((support_changed || renderer_changed) && params.gut && params.opacity_decay_rendered_only)
             LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
         if (_splat_data && (support_changed || renderer_changed)) {

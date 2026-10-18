@@ -17,6 +17,7 @@ from test_api_camera_project_runtime import _editor
 from test_render_capture_environment import _splat_fixture
 from test_render_capture_camera import _capture
 from test_render_on_demand_idle import _call, _tool
+from viewer_mesh_test_support import require_independent_dual_split
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
@@ -54,10 +55,11 @@ settings.mesh_backface_culling = False
         assert {node["type"] for node in nodes} == {"splat", "mesh"}, nodes
         _tool(endpoint, "ui_tool_invoke", {"tool_id": "builtin.translate"})
         _tool(endpoint, "scene_select_node", {"name": "foreground"})
+        if split:
+            require_independent_dual_split(endpoint)
         _tool(endpoint, "render_settings_set", {
             "show_grid": True, "show_coord_axes": True, "show_pivot": True,
-            "render_scale": 1., "split_view_mode": 3 if split else 0,
-            "raster_backend": backend,
+            "render_scale": 1., "raster_backend": backend,
         })
         _editor(endpoint, '''
 for panel in ['left', 'right']:

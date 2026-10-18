@@ -22,7 +22,7 @@ def test_ui_tool_list_null_include_poll_is_invalid_argument(tmp_path):
     endpoint = f"http://127.0.0.1:{port}/mcp"
     home = tmp_path / "home"
     home.mkdir()
-    env = dict(os.environ, HOME=str(home))
+    env = dict(os.environ, HOME=str(home), LFS_HOME=str(home / ".lichtfeld"))
     env.pop("PYTHONPATH", None)
     env.setdefault("DISPLAY", ":92")
 

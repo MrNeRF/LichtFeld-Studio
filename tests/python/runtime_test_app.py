@@ -44,7 +44,9 @@ def isolated_app(directory):
     env = os.environ.copy()
     for key in ("PYTHONHOME", "PYTHONPATH"):
         env.pop(key, None)
-    env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / "config"),
+    # LFS_HOME outranks HOME: without it, apps share the caller's profile and
+    # inherit each other's preferences and crash-recovery prompts.
+    env.update(HOME=str(home), LFS_HOME=str(home / ".lichtfeld"), XDG_CONFIG_HOME=str(home / "config"),
                XDG_CACHE_HOME=str(home / "cache"), XDG_DATA_HOME=str(home / "data"),
                LFS_ASSET_MANAGER_DIR=str(home / "catalog"),
                LFS_ASSET_MANAGER_ASSETS_DIR=str(home / "assets"),

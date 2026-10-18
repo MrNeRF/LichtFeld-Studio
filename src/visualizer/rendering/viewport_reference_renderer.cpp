@@ -429,8 +429,34 @@ namespace lfs::vis {
             if (!restarted)
                 LOG_ERROR("Unable to restart dynamic rendering after viewport pre-render work: {}", context->lastError());
         }
-        if (ready)
+        if (!ready)
+            return;
+        if (!desc.capture_scene) {
             record(frame, desc);
+            return;
+        }
+        struct SceneCapture {
+            VulkanContext* context;
+            const VulkanContext::Frame* frame;
+        } capture{context, native};
+        context->requestSceneCapture();
+        impl_->params.scene_capture_context = &capture;
+        impl_->params.record_scene_capture = [](void* state, VkCommandBuffer command_buffer) {
+            const auto* scene = static_cast<const SceneCapture*>(state);
+            return scene->context->recordSceneCapture(command_buffer, *scene->frame);
+        };
+        const auto release_capture = [&] {
+            context->cancelSceneCaptureRequest();
+            impl_->params.scene_capture_context = nullptr;
+            impl_->params.record_scene_capture = nullptr;
+        };
+        try {
+            record(frame, desc);
+        } catch (...) {
+            release_capture();
+            throw;
+        }
+        release_capture();
     }
 
     void prepareViewportReference(GraphicsContext& graphics, ViewRenderState& view, bool export_locked, bool resize_deferring) {

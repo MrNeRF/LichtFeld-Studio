@@ -24,7 +24,6 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/parameters.hpp"
@@ -1074,7 +1073,6 @@ namespace lfs::python {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            core::event::bus().clear_all();
             lfs::vis::services().clear();
             lfs::vis::op::undoHistory().clear();
             set_application_scene(nullptr);
@@ -1085,7 +1083,6 @@ namespace lfs::python {
             set_application_scene(nullptr);
             lfs::vis::op::undoHistory().clear();
             lfs::vis::services().clear();
-            core::event::bus().clear_all();
             lfs::event::EventBridge::instance().clear_all();
         }
 

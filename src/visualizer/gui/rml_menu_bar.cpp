@@ -2017,7 +2017,7 @@ namespace lfs::vis::gui {
             bool view_snap = false;
             if (const auto* ic = lfs::vis::InputController::instance())
                 view_snap = ic->cameraViewSnapEnabled();
-            snap_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "check",
+            snap_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "magnet",
                                         "", "Snap Axis Views", view_snap));
         }
 

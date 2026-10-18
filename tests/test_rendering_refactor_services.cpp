@@ -6,7 +6,6 @@
 #include "core/error.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
@@ -389,14 +388,12 @@ namespace lfs::vis {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             services().clear();
         }
 
         void TearDown() override {
             services().clear();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
     };
 
@@ -592,7 +589,6 @@ namespace lfs::vis {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             services().clear();
             op::undoHistory().clear();
             UnifiedToolRegistry::instance().clearActiveTool();
@@ -605,7 +601,6 @@ namespace lfs::vis {
             op::undoHistory().clear();
             services().clear();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
     };
 
@@ -5594,7 +5589,6 @@ namespace lfs::vis {
     protected:
         void SetUp() override {
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             lfs::vis::services().clear();
             lfs::vis::op::undoHistory().clear();
 
@@ -5644,7 +5638,6 @@ namespace lfs::vis {
         void TearDown() override {
             lfs::vis::op::operators().cancelModalOperator();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             lfs::vis::services().clear();
             viewer_.reset();
             lfs::vis::op::undoHistory().clear();

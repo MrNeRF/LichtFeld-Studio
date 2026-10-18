@@ -93,10 +93,10 @@ namespace lfs::vis::gui {
                          .label = icon_only_view ? "" : LOC("view3d.view"),
                          .icon = icon_only_view ? "camera-orbit" : "",
                          .tooltip = LOC("view3d.view")});
-        const auto display_icon = mode == "points"    ? "dots-diagonal"
+        const auto display_icon = mode == "points"    ? "points"
                                   : mode == "rings"   ? "ring"
                                   : mode == "centers" ? "circle-dot"
-                                                      : "blob";
+                                                      : "splats";
         if (compact_display) {
             items.push_back({.kind = HeaderItem::Kind::Menu,
                              .id = "display",
@@ -108,12 +108,12 @@ namespace lfs::vis::gui {
         } else {
             items.push_back({.kind = HeaderItem::Kind::Toggle,
                              .id = "display:splats",
-                             .icon = "blob",
+                             .icon = "splats",
                              .tooltip = LOC("view3d.splats"),
                              .active = mode == "splats"});
             items.push_back({.kind = HeaderItem::Kind::Toggle,
                              .id = "display:points",
-                             .icon = "dots-diagonal",
+                             .icon = "points",
                              .tooltip = LOC("view3d.point_cloud"),
                              .active = mode == "points"});
             items.push_back({.kind = HeaderItem::Kind::Toggle,
@@ -192,8 +192,8 @@ namespace lfs::vis::gui {
                                  .is_active = active,
                                  .icon = icon_path});
             };
-            mode_item("view3d.splats", "display:splats", "blob", displayMode(s) == "splats");
-            mode_item("view3d.point_cloud", "display:points", "dots-diagonal", displayMode(s) == "points");
+            mode_item("view3d.splats", "display:splats", "splats", displayMode(s) == "splats");
+            mode_item("view3d.point_cloud", "display:points", "points", displayMode(s) == "points");
             mode_item("view3d.rings", "display:rings", "ring", displayMode(s) == "rings");
             mode_item("view3d.centers", "display:centers", "circle-dot", displayMode(s) == "centers");
             if (area.header.w / std::max(area.header.h / 28.0f, 1.0f) < 420.0f) {

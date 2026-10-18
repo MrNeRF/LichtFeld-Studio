@@ -282,53 +282,6 @@ def test_toolbar_fit_uses_measured_width_and_can_restore_captions(training_panel
     assert "is-compact" in classes
 
 
-def test_sparsity_is_a_collapsible_advanced_group():
-    """Keep the sparsity activation outside the collapsed parameter section so it remains usable."""
-    from xml.etree import ElementTree as ET
-    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
-    advanced = root.find(".//*[@id='sec-advanced-params']")
-    header = advanced.find(".//*[@id='hdr-sparsity']")
-    assert header.get("data-event-click") == "toggle_section('sparsity')"
-    assert header.find(".//*[@id='arrow-sparsity']") is not None
-    content = advanced.find(".//*[@id='sec-sparsity']")
-    assert "collapsed" in content.get("class")
-    assert content.find(".//*[@data-for='row : pv_basic_sparsity_toggle_rows']") is None
-    activation = advanced.find(".//*[@data-for='row : pv_basic_sparsity_toggle_rows']")
-    assert activation is not None
-    nodes = list(advanced.iter())
-    assert nodes.index(activation) < nodes.index(header)
-    assert content.find(".//*[@data-if='dep_sparsity']") is not None
-    assert content.find(".//*[@data-for='row : pv_sparsity_rows']") is not None
-    assert content.find(".//*[@id='sec-save-steps']") is None
-
-
-
-def test_advanced_has_single_real_activation_for_each_optional_feature():
-    """Feature checkboxes must have one live value-change binding and remain outside their details."""
-    from xml.etree import ElementTree as ET
-    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
-    advanced = root.find(".//*[@id='sec-advanced-params']")
-    assert root.find(".//*[@id='advanced-feature-activations']") is None
-    for run in ("basic_depth_toggle", "basic_normal_toggle", "basic_bilateral_toggle",
-                "basic_ppisp_toggle", "basic_sparsity_toggle", "dataset_eval", "feature_random"):
-        rows = root.findall(f".//*[@data-for='row : pv_{run}_rows']")
-        assert len(rows) == 1
-        assert advanced.find(f".//*[@data-for='row : pv_{run}_rows']") is rows[0]
-        checkbox = rows[0].find("input")
-        assert checkbox.get("data-checked") == "row.checked"
-        assert checkbox.get("data-event-click") == "pv_value_change(row.id, !row.checked)"
-    positions = list(advanced.iter())
-    for run, section in {
-        "basic_depth_toggle": "depth", "basic_normal_toggle": "normal",
-        "basic_ppisp_toggle": "ppisp", "basic_bilateral_toggle": "bilateral",
-        "dataset_eval": "evaluation", "feature_random": "random-init",
-        "basic_sparsity_toggle": "sparsity",
-    }.items():
-        activation = advanced.find(f".//*[@data-for='row : pv_{run}_rows']")
-        details = advanced.find(f".//*[@id='sec-{section}']")
-        assert positions.index(activation) < positions.index(details)
-
-
 def test_bundled_locales_define_training_panel_strategy_and_color_keys():
     project_root = Path(__file__).parent.parent.parent
     locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
@@ -841,8 +794,8 @@ def test_rejected_enable_does_not_change_other_features(training_panel_module, m
     ("3DGS", "basic_params", "backend"),
     ("strategy", "basic_params", "strategy"),
     ("SH_degree", "basic_params", "sh_degree"),
-    ("bg_image", "background", "background_fields"),
-    ("ppisp", "ppisp", "appearance"),
+    ("bg_image", "basic_params", "background_fields"),
+    ("ppisp", "appearance", "appearance"),
     ("resize_factor", "dataset", "dataset_fields"),
     ("save_steps", "save_steps", "save_steps"),
 ])
@@ -856,60 +809,6 @@ def test_search_keeps_bespoke_controls_reachable(training_panel_module, query, s
     panel._pv_search_query = "no-such-setting"
     assert not panel._bespoke_matches(field)
     assert not panel._bespoke_section_visible(section)
-
-
-def test_dataset_default_open_preserves_saved_chrome(training_panel_module):
-    panel = training_panel_module.TrainingPanel()
-    assert "dataset" not in panel._collapsed
-    assert "advanced_params" in panel._collapsed
-    panel.apply_chrome({"collapsed": ["dataset", "advanced_params"], "steps_scaling_lock": False})
-    assert "dataset" in panel._collapsed
-    saved = panel.capture_chrome()
-    restored = training_panel_module.TrainingPanel()
-    restored.apply_chrome(saved)
-    assert restored.capture_chrome() == saved
-    panel.apply_chrome({})
-    assert "dataset" not in panel._collapsed
-    assert "advanced_params" in panel._collapsed
-
-
-def test_dataset_is_a_main_section_before_advanced(training_panel_module):
-    """Dataset controls must remain available when the advanced section is collapsed."""
-    from xml.etree import ElementTree as ET
-
-    root = Path(__file__).resolve().parents[2]
-    document = ET.parse(root / "src/visualizer/gui/rmlui/resources/training.rml")
-    parents = {child: parent for parent in document.iter() for child in parent}
-    dataset = document.find(".//*[@data-if='pv_section_dataset_visible']")
-    advanced = document.find(".//*[@id='hdr-advanced-params']")
-    assert parents[dataset] is parents[advanced]
-    siblings = list(parents[advanced])
-    assert siblings.index(dataset) + 1 == siblings.index(advanced)
-    assert dataset.get("class") == "training-panel-block"
-    assert dataset.find(".//*[@id='hdr-dataset']").get("data-event-click") == "toggle_section('dataset')"
-    assert dataset.find(".//*[@id='sec-dataset']") is not None
-    assert "collapsed" not in dataset.find(".//*[@id='sec-dataset']").get("class").split()
-    assert dataset.find(".//*[@id='arrow-dataset']").text == "\u25bc"
-    assert dataset.find(".//*[@data-class-disabled-overlay='dataset_disabled']") is not None
-    assert dataset.find(".//select[@data-value='resize_factor_str']") is not None
-    assert dataset.find(".//input[@data-value='max_width_str']") is not None
-    for name in ("use_cpu_cache", "use_16bit_color"):
-        assert dataset.find(f".//input[@data-checked='{name}']") is not None
-    assert "dataset" not in training_panel_module.property_view.ADVANCED_SECTIONS
-
-
-
-@pytest.mark.parametrize("query", ["resize_factor", "max_width", "dataset path"])
-def test_dataset_search_does_not_open_advanced(training_panel_module, query):
-    module = training_panel_module
-    panel = module.TrainingPanel()
-    panel._pv_search_query = query
-    panel._collapsed = {"advanced_params", "dataset"}
-    assert panel._bespoke_section_visible("dataset")
-    assert not panel._bespoke_section_visible("advanced_params")
-    assert module.property_view.section_is_visible((), "dataset", panel._bespoke_section_visible)
-    assert not module.property_view.section_is_visible((), "advanced_params", panel._bespoke_section_visible)
-    assert panel._collapsed == {"advanced_params", "dataset"}
 
 
 def test_redesigned_rml_preserves_locks_and_groups_all_controls():
@@ -927,15 +826,12 @@ def test_redesigned_rml_preserves_locks_and_groups_all_controls():
     assert any(node.attrib.get("data-class-disabled-overlay") == "step_scaling_params_locked"
                for node in document.iter("div"))
     for section, runs in {
-        "camera": ("basic_undistort", "basic_mip_filter"),
-        "appearance": ("basic_exposure_correction",),
-        "masking": ("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties"),
-        "depth": ("basic_depth_weight",),
-        "normal": ("basic_normal_weights",),
-        "background": ("bg_mode",),
-        "ppisp": ("appearance_tuning",),
-        "bilateral": ("bilateral",),
-        "random-init": ("init_random",),
+        "appearance": ("bilateral_toggle", "bilateral", "exposure_grid_start", "ppisp_toggle", "ppisp_registry"),
+        "refinement": ("refinement_locked", "refinement_registry"),
+        "learning-rates": ("learning_rates", "learning_rates_registry"),
+        "losses": ("loss_numbers", "losses_registry"),
+        "init": ("init_main", "init_random", "init_mesh"),
+        "evaluation": ("dataset_eval",),
     }.items():
         mounted = {node.attrib.get("data-for") for node in by_id[f"sec-{section}"].iter()}
         assert all(f"row : pv_{run}_rows" in mounted for run in runs)
@@ -1860,6 +1756,30 @@ def test_training_rml_no_longer_includes_ppisp_auto_toggle():
 
     assert "ppisp_auto_step" not in content
     assert "label_ppisp_auto" not in content
+
+
+def test_training_rml_makes_every_panel_section_collapsible(training_panel_module):
+    project_root = Path(__file__).parent.parent.parent
+    training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"
+    content = training_rml.read_text()
+
+    panel_blocks = {"basic_params", "advanced_params"}
+    for name in training_panel_module.SECTIONS:
+        if name in panel_blocks:
+            continue
+        dom_name = name.replace("_", "-")
+        assert f'id="hdr-{dom_name}" data-event-click="toggle_section(\'{name}\')"' in content
+        assert f'id="arrow-{dom_name}"' in content
+        assert f'class="section-content collapsed" id="sec-{dom_name}"' in content
+
+
+def test_training_panel_restores_new_sections_collapsed(training_panel_module):
+    panel = training_panel_module.TrainingPanel.__new__(training_panel_module.TrainingPanel)
+    panel._handle = None
+    panel.apply_chrome({"expanded": ["losses", "retired_section"]})
+
+    assert panel._collapsed == training_panel_module.INITIALLY_COLLAPSED - {"losses"}
+    assert panel.capture_chrome()["expanded"] == ["basic_params", "losses"]
 
 
 def test_training_rml_exposes_mrnf_grow_until_iter():
@@ -2897,42 +2817,6 @@ def test_show_save_pc_dialog_message_depends_on_project_binding(
         "training.save_pc.btn_start_without",
         "training.conflict.btn_cancel",
     ]
-
-
-def test_enabled_features_have_independent_parameter_sections():
-    """Collapsing one feature must not hide another feature or expose incompatible PPISP controls."""
-    from xml.etree import ElementTree as ET
-
-    root = Path(__file__).resolve().parents[2]
-    document = ET.parse(root / "src/visualizer/gui/rmlui/resources/training.rml")
-    advanced = document.find(".//*[@id='sec-advanced-params']")
-    sections = {name: advanced.find(f".//*[@id='sec-{name}']") for name in (
-        "depth", "normal", "ppisp", "bilateral", "exposure", "evaluation", "random-init", "sparsity")}
-    for name, section in sections.items():
-        assert section is not None, name
-        for other in sections:
-            if name != other:
-                assert section.find(f".//*[@id='sec-{other}']") is None
-    assert sections["depth"].find(".//*[@data-for='row : pv_basic_normal_weights_rows']") is None
-    assert sections["normal"].find(".//*[@data-for='row : pv_basic_depth_weight_rows']") is None
-    assert sections["evaluation"].find(".//*[@data-value='test_every_str']") is not None
-    eval_all = sections["evaluation"].find(".//*[@data-for='row : pv_dataset_eval_train_rows']")
-    assert eval_all is not None
-    holdout = sections["evaluation"].find(".//*[@data-tooltip='training.tooltip.test_every']")
-    assert "dep_eval_holdout" in holdout.get("data-if")
-    assert sections["random-init"].find(".//*[@data-for='row : pv_init_random_rows']") is not None
-    basic_params = document.find(
-        ".//div[@class='training-panel-block'][@data-if='pv_section_basic_params_visible']"
-    )
-    assert basic_params is not None
-    assert basic_params.find(".//*[@data-value='sh_degree_str']") is not None
-    assert advanced.find(".//*[@data-value='sh_degree_str']") is None
-    for name in ("ppisp", "bilateral"):
-        parent = next(node for node in advanced.iter() if sections[name] in list(node))
-        assert "!dep_exposure_correction" in parent.get("data-if")
-    for run in ("ppisp_exif", "appearance_tuning", "bilateral", "exposure_grid_start"):
-        assert sections["exposure"].find(f".//*[@data-for='row : pv_{run}_rows']") is not None
-
 
 
 def test_error_details_do_not_participate_in_toolbar_layout():

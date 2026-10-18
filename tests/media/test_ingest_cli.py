@@ -213,6 +213,14 @@ class IngestCLI(unittest.TestCase):
             ffmpeg=[item["fragment"] for item in fragments if archives.search(item["fragment"])]
             if ffmpeg:
                 providers.add(target["name"])
+                if target["name"]=="lichtfeld_native_third_party_tests":
+                    # This Windows-only test host exercises the native FFmpeg
+                    # file boundary directly, outside the production provider.
+                    self.assertEqual(sys.platform,"win32")
+                    self.assertEqual(target["type"],"EXECUTABLE")
+                    self.assertIn("tests/test_native_third_party_paths.cpp",
+                                  {source["path"] for source in target.get("sources",[])})
+                    allowed_providers.add(target["name"])
                 if target["name"]=="media_apple_hevc_fallback_runner":
                     # The Apple codec-open fault seam compiles the session into
                     # this test host; production still has one media provider.

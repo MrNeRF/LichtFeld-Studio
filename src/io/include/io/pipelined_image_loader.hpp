@@ -258,6 +258,9 @@ namespace lfs::io {
         // than on CPU worker threads.
         [[nodiscard]] static bool decodes_on_gpu(lfs::core::GpuBackend backend);
 
+        // The JPEG decoder this process uses, for run records.
+        [[nodiscard]] static std::string_view jpeg_decoder();
+
         lfs::core::Tensor load_image_immediate(
             const std::filesystem::path& path, const LoadParams& params);
         // Decodes `path` on a CPU thread for the next load_image_immediate with these parameters, so that call only

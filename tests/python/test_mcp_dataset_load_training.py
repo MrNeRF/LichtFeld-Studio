@@ -76,7 +76,7 @@ def endpoint(tmp_path):
     home = tmp_path / "home"
     for directory in (home, home / ".config", home / ".cache", home / ".local/share", home / "tmp"):
         directory.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
+    env = dict(os.environ, HOME=str(home), LFS_HOME=str(home / ".lichtfeld"), XDG_CONFIG_HOME=str(home / ".config"),
                XDG_CACHE_HOME=str(home / ".cache"), XDG_DATA_HOME=str(home / ".local/share"),
                TMPDIR=str(home / "tmp"), NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
     for name in ("PYTHONHOME", "PYTHONPATH"):
