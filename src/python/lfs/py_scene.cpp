@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <glm/gtc/type_ptr.hpp>
+#include <limits>
 #include <nanobind/ndarray.h>
 #include <stdexcept>
 #include <type_traits>
@@ -790,6 +791,18 @@ namespace lfs::python {
             throw nb::value_error("width and height must be positive");
 
         auto T_flat = T_tensor.ndim() == 2 ? T_tensor.reshape({3}) : T_tensor;
+
+        // A camera without a uid is skipped by uid-keyed features such as the frustum overlay: give it the next free one.
+        if (uid < 0) {
+            uid = 0;
+            for (const auto& existing : *scene_->getAllCamerasCached()) {
+                if (!existing)
+                    continue;
+                if (existing->uid() == std::numeric_limits<int>::max())
+                    throw nb::value_error("Cannot auto-assign a camera uid above INT_MAX");
+                uid = std::max(uid, existing->uid() + 1);
+            }
+        }
 
         auto camera = std::make_shared<lfs::core::Camera>(
             R_tensor.clone(),

@@ -1547,6 +1547,9 @@ namespace lfs::io {
                                                    const PrefetchedImage& item,
                                                    const SidecarCacheFormat kind,
                                                    void* cuda_stream) {
+        // Cache hits go to the hot queue, which only the GPU decode thread drains.
+        if (!is_nvcodec_available())
+            return;
         if (kind != SidecarCacheFormat::DepthFloat && !jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
             return;
         }
@@ -2456,8 +2459,10 @@ namespace lfs::io {
             std::optional<PrefetchedImage> cold_rgb;
             try {
                 const bool needs_requested_processing = load_params_need_processing(request.params);
+                // Only the GPU decode thread drains the hot queue; without it every image decodes on the CPU.
+                const bool gpu_decode = is_nvcodec_available();
 
-                if (auto cached = load_cached_jpeg_blob(result.cache_key)) {
+                if (auto cached = gpu_decode ? load_cached_jpeg_blob(result.cache_key) : nullptr) {
                     result.jpeg_data = std::move(cached);
                     result.is_cache_hit = true;
                     result.needs_processing = false;
@@ -2474,7 +2479,7 @@ namespace lfs::io {
                         stats_.total_bytes_read += result.raw_bytes.size();
                     }
 
-                    if (result.is_original_jpeg && !needs_requested_processing) {
+                    if (result.is_original_jpeg && !needs_requested_processing && gpu_decode) {
                         // An unchanged JPEG is already a usable encoded cache
                         // entry. Avoid a decode/re-encode and its quality loss.
                         auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));

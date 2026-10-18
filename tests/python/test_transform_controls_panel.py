@@ -877,6 +877,7 @@ def test_transform_controls_keeps_other_numeric_bindings_live_while_focused(tran
         "transform_show_rotate",
         "transform_show_scale",
         "transform_show_actions",
+        "transform_is_crop",
     ]
     panel._dirty_all()
     assert panel._handle.dirty_calls == previous_bindings
@@ -1108,3 +1109,95 @@ def test_numeric_reset_is_one_undo_step(history_panel):
     state.visualizer_world_transforms["target"] = before.copy()
     panel._reset_single_transform()
     assert history == [({"target": before}, {"target": _translation_matrix(0, 0, 0)})]
+
+
+@pytest.mark.parametrize("shape", ["box", "ellipsoid"])
+@pytest.mark.parametrize("operation,group", [("translate", "pos"), ("rotate", "rot"), ("scale", "scale")])
+def test_crop_numeric_controls_edit_only_volume_with_one_undo_entry(
+    transform_controls_module, history_panel, shape, operation, group
+):
+    module, _ = transform_controls_module
+    panel, state, history = history_panel
+    if operation == "scale":
+        module.lf.decompose_transform = lambda matrix: {
+            **_decompose_transform(matrix),
+            "scale": [math.sqrt(sum(matrix[axis * 4 + row] ** 2 for row in range(3)))
+                      for axis in range(3)],
+        }
+    state.active_tool = "builtin.cropbox"
+    state.selected_names = ["volume"]
+    original = _translation_matrix(.1, .2, .3)
+    state.local_transforms = {"volume": original.copy(), "bicycle": original.copy()}
+    state.visualizer_world_transforms = {name: matrix.copy() for name, matrix in state.local_transforms.items()}
+    volume = SimpleNamespace(locked=False, cropbox=lambda: object() if shape == "box" else None,
+                             ellipsoid=lambda: object() if shape == "ellipsoid" else None)
+    module.lf.get_scene = lambda: SimpleNamespace(get_node=lambda name: volume if name == "volume" else None)
+    module.lf.ui.get_crop_tool_shape = lambda: shape
+    module.lf.ui.get_crop_tool_operation = lambda: operation
+    module.lf.ui.get_transform_space = lambda: 1
+    model = _DataModelStub()
+    panel.bind_model(model)
+    doc = _DocumentStub()
+    panel.update(doc)
+
+    assert "hidden" not in doc.wrap.classes
+    assert model.bound_funcs["transform_is_crop"]()
+    assert model.bound_funcs["transform_show_" + operation]()
+    assert not model.bound_funcs["transform_show_actions"]()
+    panel._set_value(group, 0, "2")
+    panel._set_value(group, 0, "2.5")
+    panel._commit_active_edit()
+
+    assert state.local_transforms["bicycle"] == original
+    assert state.local_transforms["volume"] != original
+    if operation == "scale":
+        # Crop gizmos also scale the existing basis columns, with no translation.
+        expected = original.copy()
+        for row in range(3):
+            expected[row] *= 2.5
+        assert state.local_transforms["volume"] == pytest.approx(expected)
+    assert len(history) == 1
+    assert history[0][0] == {"volume": original}
+    # Selecting another operation refreshes the same numeric overlay.
+    module.lf.ui.get_crop_tool_operation = lambda: "rotate" if operation != "rotate" else "translate"
+    assert panel.update(doc)
+
+
+@pytest.mark.parametrize("selected", [["bicycle"], [], ["bicycle", "other"]])
+def test_crop_numeric_controls_never_edit_parent_selection(transform_controls_module, selected):
+    module, state = transform_controls_module
+    state.active_tool = "builtin.cropbox"
+    state.selected_names = selected
+    parent = SimpleNamespace(cropbox=lambda: None, ellipsoid=lambda: None)
+    module.lf.get_scene = lambda: SimpleNamespace(get_node=lambda name: parent)
+    module.lf.ui.get_crop_tool_operation = lambda: "translate"
+    module.lf.ui.get_crop_tool_shape = lambda: "box"
+    panel = module.TransformControlsController()
+    doc = _DocumentStub()
+    panel.update(doc)
+    panel._set_value("pos", 0, "99")
+    assert "hidden" in doc.wrap.classes
+    assert not panel._editable
+    assert not state.set_local_calls
+    assert not state.set_visualizer_world_calls
+
+
+def test_crop_numeric_controls_respect_volume_lock(transform_controls_module):
+    module, state = transform_controls_module
+    state.active_tool = "builtin.cropbox"
+    state.selected_names = ["volume"]
+    state.local_transforms["volume"] = _translation_matrix(1, 2, 3)
+    state.visualizer_world_transforms["volume"] = _translation_matrix(1, 2, 3)
+    volume = SimpleNamespace(locked=True, cropbox=lambda: object())
+    module.lf.get_scene = lambda: SimpleNamespace(get_node=lambda name: volume)
+    module.lf.ui.get_crop_tool_shape = lambda: "box"
+    module.lf.ui.get_crop_tool_operation = lambda: "translate"
+    panel = module.TransformControlsController()
+    doc = _DocumentStub()
+    panel.update(doc)
+    assert "hidden" not in doc.wrap.classes
+    assert not panel._editable
+    panel._set_value("pos", 0, "99")
+    panel._apply_step("pos_x", 1)
+    assert not state.set_visualizer_world_calls
+    assert not state.set_local_calls

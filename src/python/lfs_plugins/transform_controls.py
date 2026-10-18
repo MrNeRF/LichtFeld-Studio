@@ -170,6 +170,8 @@ class TransformControlsController:
         self._visible = False
         self._editable = False
         self._active_tool = ""
+        self._crop_active = False
+        self._crop_locked = False
         self._selected = []
         self._transform_space = _SPACE_WORLD
         self._pivot_mode = _PIVOT_ORIGIN
@@ -202,7 +204,8 @@ class TransformControlsController:
         model.bind_func("transform_show_translate", lambda: self._active_tool == "builtin.translate")
         model.bind_func("transform_show_rotate", lambda: self._active_tool == "builtin.rotate")
         model.bind_func("transform_show_scale", lambda: self._active_tool == "builtin.scale")
-        model.bind_func("transform_show_actions", lambda: self._active_tool in _NUMERIC_TRANSFORM_TOOL_IDS)
+        model.bind_func("transform_is_crop", lambda: self._crop_active)
+        model.bind_func("transform_show_actions", lambda: not self._crop_active and self._active_tool in _NUMERIC_TRANSFORM_TOOL_IDS)
         for axis in ("x", "y", "z"):
             idx = _AXIS_INDEX[axis]
             model.bind(
@@ -288,13 +291,17 @@ class TransformControlsController:
 
     def update(self, doc):
         dirty = False
-        prev_tool = self._active_tool
+        prev_tool = (self._active_tool, self._crop_active)
         prev_space = self._transform_space
         prev_selected = tuple(self._selected)
 
         active_tool = _native_store_value("active_tool", _MISSING)
         if active_tool is _MISSING:
             active_tool = lf.ui.get_active_tool() or ""
+        self._crop_active = active_tool == "builtin.cropbox"
+        if self._crop_active:
+            operation = lf.ui.get_crop_tool_operation()
+            active_tool = f"builtin.{operation}"
         self._active_tool = active_tool or ""
         active_transform_tool = self._active_tool in _NUMERIC_TRANSFORM_TOOL_IDS
         wrap = doc.get_element_by_id("transform-block")
@@ -308,14 +315,26 @@ class TransformControlsController:
             return False
 
         self._selected = lf.get_selected_node_names() or []
-        self._editable = bool(lf.can_transform_selection())
+        self._crop_locked = False
+        if self._crop_active:
+            # Only the volume selected by the crop tool may receive numeric edits.
+            # A parent selection during tool activation must never move the model.
+            scene = lf.get_scene()
+            node = scene.get_node(self._selected[0]) if scene and len(self._selected) == 1 else None
+            shape = lf.ui.get_crop_tool_shape()
+            volume = (node.cropbox() if shape == "box" else node.ellipsoid()) if node else None
+            if volume is None:
+                self._selected = []
+            else:
+                self._crop_locked = bool(node.locked)
+        self._editable = bool(self._can_edit_selection())
         if not self._editable:
             self._step_repeat_prop = None
             self._commit_active_edit()
         self._transform_space = self._current_transform_space()
         self._pivot_mode = self._current_pivot_mode()
 
-        if self._active_tool != prev_tool or self._transform_space != prev_space:
+        if (self._active_tool, self._crop_active) != prev_tool or self._transform_space != prev_space:
             self._commit_active_edit()
 
         visible = active_transform_tool and len(self._selected) > 0
@@ -356,6 +375,8 @@ class TransformControlsController:
         self._doc = None
         self._visible = False
         self._active_tool = ""
+        self._crop_active = False
+        self._crop_locked = False
         self._selected = []
         self._focused_input_property = None
         self._escape_revert.clear()
@@ -365,6 +386,11 @@ class TransformControlsController:
         self._focus_active = False
         self._last_state_key = None
         self._force_dirty = False
+
+    def _can_edit_selection(self):
+        return lf.can_transform_selection() and (
+            not self._crop_active or (bool(self._selected) and not self._crop_locked)
+        )
 
     def _current_transform_space(self) -> int:
         value = _native_store_value("transform_space", _MISSING)
@@ -464,6 +490,7 @@ class TransformControlsController:
         return (
             RuntimeState.language_generation.value,
             self._active_tool,
+            self._crop_active,
             self._editable,
             tuple(self._selected),
             self._transform_space,
@@ -514,6 +541,7 @@ class TransformControlsController:
         self._handle.dirty("transform_show_rotate")
         self._handle.dirty("transform_show_scale")
         self._handle.dirty("transform_show_actions")
+        self._handle.dirty("transform_is_crop")
 
     def _numeric_display_value(self, value_property, formatted_value):
         if value_property == self._focused_input_property and self._focused_input_text is not None:
@@ -547,7 +575,7 @@ class TransformControlsController:
                     self._state.multi_visualizer_world_transforms_before.append(world_transform)
 
     def _set_value(self, group, idx, value_str):
-        if not lf.can_transform_selection():
+        if not self._can_edit_selection():
             return
         value_property = {
             "pos": f"transform_pos_{('x', 'y', 'z')[idx]}_str",
@@ -586,7 +614,7 @@ class TransformControlsController:
         self._force_dirty = True
 
     def _set_uniform_scale(self, value_str):
-        if not lf.can_transform_selection():
+        if not self._can_edit_selection():
             return
         if self._focused_input_property == "transform_scale_u_str":
             self._focused_input_text = str(value_str)
@@ -792,7 +820,7 @@ class TransformControlsController:
         return False
 
     def _apply_step(self, prop, direction):
-        if not lf.can_transform_selection():
+        if not self._can_edit_selection():
             return
         cfg = _STEP_CONFIG.get(prop)
         if not cfg:
@@ -835,7 +863,7 @@ class TransformControlsController:
         self._force_dirty = True
 
     def _on_action(self, handle, event, args):
-        if not lf.can_transform_selection():
+        if not self._can_edit_selection():
             return
         del handle, event
         if not args:
