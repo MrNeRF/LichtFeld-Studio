@@ -89,7 +89,7 @@ namespace {
         Rml::Element* button(int index) { return doc->GetElementById("tab-plugin-" + std::to_string(index)); }
         PanelInputState inputOverRail() {
             PanelInputState input;
-            input.mouse_x = 400.0f - 14.0f * GetParam();
+            input.mouse_x = 8.0f + 14.0f * GetParam();
             input.mouse_y = 50.0f;
             return input;
         }
@@ -101,7 +101,7 @@ namespace {
         }
     };
 
-    TEST_P(RightPanelTabsTest, TabsStackOnTheRightAndLabelsDetermineHeight) {
+    TEST_P(RightPanelTabsTest, TabsStackOnTheLeftAndLabelsDetermineHeight) {
         auto data = tabs(3);
         data[0].label = "Rendering";
         data[1].label = "Training";
@@ -112,7 +112,7 @@ namespace {
             auto* tab = button(i);
             const auto position = tab->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto size = tab->GetBox().GetSize(Rml::BoxArea::Border);
-            EXPECT_NEAR(position.x + size.x, 400, 0.5f);
+            EXPECT_NEAR(position.x, 8, 0.5f);
             EXPECT_NEAR(size.x, 28 * GetParam(), 0.5f);
             EXPECT_GE(position.y, last_bottom);
             last_bottom = position.y + size.y;
@@ -120,6 +120,8 @@ namespace {
         }
         EXPECT_GT(button(2)->GetBox().GetSize().y, button(0)->GetBox().GetSize().y);
         EXPECT_NE(button(0)->GetProperty("nav-down"), nullptr);
+        EXPECT_FLOAT_EQ(button(0)->GetBox().GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right), 0);
+        EXPECT_GT(button(1)->GetBox().GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right), 0);
     }
 
     TEST_P(RightPanelTabsTest, WheelScrollsOverflowWithoutChangingTheActiveTab) {

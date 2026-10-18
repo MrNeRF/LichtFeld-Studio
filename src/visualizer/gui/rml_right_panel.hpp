@@ -98,7 +98,6 @@ namespace lfs::vis::gui {
         Rml::Element* tab_bar_el_ = nullptr;
         RmlTooltipController tooltip_;
         Rml::Element* tab_strip_viewport_el_ = nullptr;
-        Rml::Element* tab_separator_el_ = nullptr;
 
         Rml::DataModelHandle tab_model_;
         std::vector<TabSnapshot> tabs_;

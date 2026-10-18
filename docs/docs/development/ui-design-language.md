@@ -136,8 +136,9 @@ design when it does.
 ### Right sidebar category tabs
 
 Rendering, Training, and plugins registered in `MAIN_PANEL_TAB` share the vertical
-category strip at the far right of the lower sidebar. Scene remains above it.
-The active panel fills the space to the left of the strip, including its former
+category strip at the left of the lower sidebar. Scene remains above it.
+The active tab has no border on its content-facing edge, so it joins the panel.
+The active panel fills the space to the right of the strip, including its former
 horizontal tab row. The bottom dock retains its horizontal tabs.
 
 Labels read downwards and use the translated panel label. Tab height follows the

@@ -34,10 +34,10 @@ body {
     cursor: resize-vertical;
 }
 
-/* Right-aligned category tabs read downwards, as in Blender's sidebar. */
+/* Categories sit beside the content, with an open edge on the active tab. */
 #tab-bar {
     position: absolute;
-    right: 0;
+    left: 8px;
     width: 28dp;
 }
 
@@ -54,13 +54,6 @@ body {
     overflow: hidden;
 }
 
-#tab-separator {
-    position: absolute;
-    right: 27dp;
-    width: 1dp;
-    pointer-events: none;
-}
-
 .tab {
     position: relative;
     display: block;
@@ -71,11 +64,15 @@ body {
     margin: 0;
     padding: 0;
     border-width: 1dp;
-    border-radius: 0 5dp 5dp 0;
+    border-radius: 5dp 0 0 5dp;
     white-space: nowrap;
     cursor: pointer;
     tab-index: auto;
     nav: auto;
+}
+
+.tab.active {
+    border-right-width: 0;
 }
 
 .tab-label {

@@ -512,14 +512,18 @@ TEST_F(PanelLayoutRenderDemandTest, VerticalTabsReserveWidthInLiveAndCachedConte
                                      PanelLayoutManager::RIGHT_TAB_BAR_W * dpi;
         const float expected_y = 8.0f + layout.scenePanelHeight(s.work_size.y - 16.0f, dpi) +
                                  PanelLayoutManager::SPLITTER_H * dpi;
+        const float expected_x = s.work_size.x - layout.getRightPanelWidth() + 8 +
+                                 PanelLayoutManager::RIGHT_TAB_BAR_W * dpi;
+        EXPECT_FLOAT_EQ(active->last_draw_x, expected_x);
         EXPECT_FLOAT_EQ(active->last_draw_width, expected_width);
         EXPECT_FLOAT_EQ(active->last_draw_y, expected_y);
         EXPECT_FLOAT_EQ(scene->last_draw_width, layout.getRightPanelWidth() - 16.0f);
         layout.renderRightPanelCached(ui, draw_ctx, true, false, windows, focus, input, s);
+        EXPECT_FLOAT_EQ(active->last_cached_x, expected_x);
         EXPECT_FLOAT_EQ(active->last_cached_width, expected_width);
         EXPECT_FLOAT_EQ(scene->last_cached_width, layout.getRightPanelWidth() - 16.0f);
         // Scrolling the category rail must not scroll the panel beneath it.
-        input.mouse_x = s.work_size.x - 14 * dpi;
+        input.mouse_x = s.work_size.x - layout.getRightPanelWidth() + 8 + 14 * dpi;
         input.mouse_y = expected_y + 30;
         input.mouse_wheel = -1;
         layout.renderRightPanel(ui, draw_ctx, true, false, windows, focus, input, s);

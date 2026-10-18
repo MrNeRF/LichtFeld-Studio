@@ -55,7 +55,6 @@ namespace lfs::vis::gui {
         splitter_el_ = document_->GetElementById("splitter");
         tab_bar_el_ = document_->GetElementById("tab-bar");
         tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
-        tab_separator_el_ = document_->GetElementById("tab-separator");
 
         updateTheme();
     }
@@ -120,7 +119,6 @@ namespace lfs::vis::gui {
         tab_bar_el_ = nullptr;
         tooltip_.setHover({}, nullptr);
         tab_strip_viewport_el_ = nullptr;
-        tab_separator_el_ = nullptr;
         tab_scroll_top_ = 0.0f;
         reveal_active_tab_ = true;
         tab_scroll_dragging_ = false;
@@ -147,7 +145,6 @@ namespace lfs::vis::gui {
         tab_bar_el_ = nullptr;
         tooltip_.setHover({}, nullptr);
         tab_strip_viewport_el_ = nullptr;
-        tab_separator_el_ = nullptr;
         base_rcss_.clear();
         has_theme_signature_ = false;
         wants_input_ = false;
@@ -184,7 +181,6 @@ namespace lfs::vis::gui {
         splitter_el_ = document_->GetElementById("splitter");
         tab_bar_el_ = document_->GetElementById("tab-bar");
         tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
-        tab_separator_el_ = document_->GetElementById("tab-separator");
 
         tab_model_.DirtyVariable("tabs");
         tab_model_.DirtyVariable("active_tab");
@@ -446,7 +442,8 @@ namespace lfs::vis::gui {
 
         const float mx = input.mouse_x - layout.pos.x;
         const float my = input.mouse_y - layout.pos.y;
-        const float dp_ratio = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
+        const float dp_ratio = rml_manager_ ? rml_manager_->getDpRatio()
+                                            : rml_context_->GetDensityIndependentPixelRatio();
         const auto resize_zone = resizeHitZone(layout.pos.x, dp_ratio);
         const auto splitter_zone = resizeHitZone(
             layout.pos.y + layout.scene_h + layout.splitter_h * 0.5f, dp_ratio);
@@ -486,8 +483,7 @@ namespace lfs::vis::gui {
             splitter_zone.contains(input.mouse_y);
         const bool over_interactive = hover && hover->GetTagName() != "body" &&
                                       hover->GetId() != "rp-body" &&
-                                      hover->GetId() != "left-border" &&
-                                      hover->GetId() != "tab-separator";
+                                      hover->GetId() != "left-border";
 
         if (over_interactive != last_over_interactive_) {
             input_dirty_ = true;
@@ -499,8 +495,7 @@ namespace lfs::vis::gui {
         tooltip_.setHover(resolveRmlTooltip(hover), hover);
 
         const bool over_tabs = tab_bar_el_ &&
-                               mx >= layout.size.x - PanelLayoutManager::RIGHT_TAB_BAR_W * dp_ratio &&
-                               mx < layout.size.x && my >= layout.scene_h + layout.splitter_h && my < layout.size.y;
+                               mx >= 8.0f && mx < 8.0f + PanelLayoutManager::RIGHT_TAB_BAR_W * dp_ratio && my >= layout.scene_h + layout.splitter_h && my < layout.size.y;
         const bool over_properties = pointer_in_context && my >= layout.scene_h + layout.splitter_h;
         bool cycled = false;
         if (over_properties && input.key_ctrl && input.mouse_wheel != 0.0f) {
@@ -685,11 +680,6 @@ namespace lfs::vis::gui {
                 tab_bar_el_->SetProperty("top", std::format("{:.0f}px", tab_top));
                 tab_bar_el_->SetProperty("height", std::format("{:.0f}px", std::max(0.0f, layout.size.y - tab_top - 8.0f)));
                 tab_bar_el_->SetProperty("width", std::format("{:.0f}px", tab_bar_w));
-            }
-            if (tab_separator_el_) {
-                const float sep_top = layout.scene_h + layout.splitter_h;
-                tab_separator_el_->SetProperty("top", std::format("{:.0f}px", sep_top));
-                tab_separator_el_->SetProperty("height", std::format("{:.0f}px", std::max(0.0f, layout.size.y - sep_top - 8.0f)));
             }
 
             rml_context_->SetDimensions(Rml::Vector2i(w, h));

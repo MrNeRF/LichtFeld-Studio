@@ -6381,7 +6381,7 @@ namespace lfs::vis::gui {
             right_panel_pointer_over_active_tab =
                 !pointer_over_right_panel_edge &&
                 pointInRect(panel_input.mouse_x, panel_input.mouse_y,
-                            glm::vec2{content_x, tab_content_y},
+                            glm::vec2{content_x + tab_bar_w, tab_content_y},
                             glm::vec2{std::max(0.0f, content_w - tab_bar_w), tab_content_h});
 
             if ((float_blocks_rp || viewport_pointer_captured) &&
