@@ -7,6 +7,8 @@ tools/ci_format_push.sh text eol=lf
 # Preserve upstream patch context lines (a single space) byte-for-byte.
 .github/overlays/libheif/*.patch whitespace=-blank-at-eol,-blank-at-eof
 .github/overlays/libheif/*.diff whitespace=-blank-at-eol,-blank-at-eof
+.github/overlays/tiff/*.patch whitespace=-blank-at-eol,-blank-at-eof
+.github/overlays/tiff/*.diff whitespace=-blank-at-eol,-blank-at-eof
 
 # Encoded images and numeric reference buffers must survive checkout byte-exact.
 tests/data/heif/*.heic binary
