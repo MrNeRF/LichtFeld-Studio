@@ -17,20 +17,21 @@
 
 namespace lfs::core::image_codecs {
     namespace {
-        // OpenEXR delivers diagnostics on the thread that caused the error.
-        // Scope the destination to this context so nested readers remain independent.
-        thread_local exr_const_context_t diagnostic_context = nullptr;
+        // Error callbacks can run with the context lock held. Never reenter
+        // OpenEXR to query userdata from them. Worker and nested call scopes
+        // preserve the destination on the thread that caused the diagnostic.
         thread_local std::string* diagnostic_error = nullptr;
+        thread_local bool diagnostic_allocation_failed = false;
         struct DiagnosticScope {
-            exr_const_context_t previous_context = diagnostic_context;
-            std::string* previous_error = diagnostic_error;
-            DiagnosticScope(exr_const_context_t context, std::string& error) {
-                diagnostic_context = context;
+            std::string* previous = diagnostic_error;
+            bool previous_allocation_failed = diagnostic_allocation_failed;
+            explicit DiagnosticScope(std::string& error) {
                 diagnostic_error = &error;
+                diagnostic_allocation_failed = false;
             }
             ~DiagnosticScope() {
-                diagnostic_context = previous_context;
-                diagnostic_error = previous_error;
+                diagnostic_error = previous;
+                diagnostic_allocation_failed = previous_allocation_failed;
             }
         };
 
@@ -95,6 +96,13 @@ namespace lfs::core::image_codecs {
         };
 
         bool check(exr_result_t status, std::string& error) {
+            // A header parser may continue with default attributes after OOM.
+            // Never publish those defaults as a successful probe or decode.
+            if (diagnostic_allocation_failed) {
+                if (error.empty())
+                    error = "EXR: allocation failed while reading";
+                return false;
+            }
             if (status == EXR_ERR_SUCCESS) {
                 error.clear();
                 return true;
@@ -116,17 +124,34 @@ namespace lfs::core::image_codecs {
             std::array<int, 4> channels{-1, -1, -1, -1};
         };
 
-        bool open(const std::filesystem::path& path, Context& context, Header& header,
+        struct ReadState {
+            std::span<const std::uint8_t> bytes{};
+            bool memory = false;
+        };
+
+        bool open(const std::string& name, ReadState& source, Context& context, Header& header,
                   std::string& error) {
             exr_context_initializer_t init = EXR_DEFAULT_CONTEXT_INITIALIZER;
             // Keep the library's useful details without printing or throwing through C.
-            init.user_data = &error;
-            init.error_handler_fn = [](exr_const_context_t ctxt, exr_result_t, const char* message) noexcept {
-                void* user = nullptr;
-                if (ctxt == diagnostic_context)
-                    user = diagnostic_error;
-                else
-                    exr_get_user_data(ctxt, &user);
+            init.user_data = &source;
+            if (source.memory) {
+                init.read_fn = [](exr_const_context_t, void* user, void* data, uint64_t size, uint64_t offset, exr_stream_error_func_ptr_t) noexcept -> int64_t {
+                    const auto bytes = static_cast<const ReadState*>(user)->bytes;
+                    if (offset > bytes.size() || size > uint64_t(std::numeric_limits<int64_t>::max()) || (!data && size))
+                        return -1;
+                    const auto count = std::min<uint64_t>(size, bytes.size() - static_cast<size_t>(offset));
+                    if (count)
+                        std::memcpy(data, bytes.data() + static_cast<size_t>(offset), static_cast<size_t>(count));
+                    return static_cast<int64_t>(count);
+                };
+                init.size_fn = [](exr_const_context_t, void* user) noexcept -> int64_t {
+                    return static_cast<int64_t>(static_cast<const ReadState*>(user)->bytes.size());
+                };
+            }
+            init.error_handler_fn = [](exr_const_context_t, exr_result_t status, const char* message) noexcept {
+                if (status == EXR_ERR_OUT_OF_MEMORY)
+                    diagnostic_allocation_failed = true;
+                auto* user = diagnostic_error;
                 if (message && user) {
                     try {
                         *static_cast<std::string*>(user) = message;
@@ -137,7 +162,6 @@ namespace lfs::core::image_codecs {
                     }
                 }
             };
-            const auto name = path_to_utf8(native_fs::native_path(path));
             if (!check(exr_start_read(&context.value, name.c_str(), &init), error) ||
                 !check(exr_get_storage(context.value, 0, &header.storage), error) ||
                 !check(exr_get_data_window(context.value, 0, &header.window), error))
@@ -191,27 +215,19 @@ namespace lfs::core::image_codecs {
 
     bool probe_exr(const std::filesystem::path& path, Probe& result, std::string& error) {
         error.clear();
+        DiagnosticScope diagnostics(error);
+        ReadState source{};
         Context context;
         Header header;
-        if (!open(path, context, header, error))
+        if (!open(path_to_utf8(native_fs::native_path(path)), source, context, header, error))
             return false;
         // Header only: do not read the chunk table or decompress pixels for camera import.
         result = {header.width, header.height, header.source_channels, SampleType::Float32};
         return true;
     }
 
-    bool decode_exr(const std::filesystem::path& path, Image& result, std::string& error, unsigned max_workers) {
-        error.clear();
-        Context context;
-        Header header;
-        if (!open(path, context, header, error))
-            return false;
-        std::error_code file_error;
-        const auto file_size = native_fs::file_size(path, file_error);
-        if (file_error) {
-            error = "EXR: unable to read file size: " + file_error.message();
-            return false;
-        }
+    static bool decode_open_exr(Context& context, const Header& header, uint64_t file_size,
+                                Image& result, std::string& error, unsigned max_workers) {
         int32_t chunk_count = 0;
         uint64_t table_offset = 0;
         if (!check(exr_get_chunk_count(context.value, 0, &chunk_count), error) ||
@@ -309,7 +325,7 @@ namespace lfs::core::image_codecs {
         std::atomic<bool> failed{false};
         auto run = [&](unsigned index) noexcept {
             auto& worker = workers[index];
-            DiagnosticScope diagnostics(context.value, worker.error);
+            DiagnosticScope diagnostics(worker.error);
             try {
                 Pipeline pipeline{EXR_DECODE_PIPELINE_INITIALIZER, context.value};
                 bool initialized = false;
@@ -378,5 +394,56 @@ namespace lfs::core::image_codecs {
         }
         result = std::move(image);
         return true;
+    }
+
+    bool decode_exr(const std::filesystem::path& path, Image& result, std::string& error, unsigned max_workers) {
+        error.clear();
+        DiagnosticScope diagnostics(error);
+        ReadState source{};
+        Context context;
+        Header header;
+        if (!open(path_to_utf8(native_fs::native_path(path)), source, context, header, error))
+            return false;
+        std::error_code file_error;
+        const auto file_size = native_fs::file_size(path, file_error);
+        if (file_error) {
+            error = "EXR: unable to read file size: " + file_error.message();
+            return false;
+        }
+        return decode_open_exr(context, header, file_size, result, error, max_workers);
+    }
+
+    bool decode_exr_memory(std::span<const std::uint8_t> input, Image& result, std::string& error, unsigned max_workers) {
+        return decode_exr_memory(input, result, error, max_workers, std::numeric_limits<size_t>::max());
+    }
+
+    bool decode_exr_memory(std::span<const std::uint8_t> input, Image& result, std::string& error,
+                           unsigned max_workers, std::size_t max_decoded_bytes) {
+        error.clear();
+        if (input.empty() || input.size() > uint64_t(std::numeric_limits<int64_t>::max())) {
+            error = "EXR: invalid input buffer size";
+            return false;
+        }
+        try {
+            DiagnosticScope diagnostics(error);
+            ReadState source{input, true};
+            Context context;
+            Header header;
+            if (!open("EXR buffer", source, context, header, error))
+                return false;
+            const size_t required = size_t(header.width) * header.height * 4 * sizeof(float);
+            if (required > max_decoded_bytes) {
+                error = "EXR: decoded image exceeds byte limit (bytes=" + std::to_string(required) +
+                        ", limit=" + std::to_string(max_decoded_bytes) + ")";
+                return false;
+            }
+            return decode_open_exr(context, header, input.size(), result, error, max_workers);
+        } catch (const std::bad_alloc&) {
+            error = "EXR: decode allocation failed";
+            return false;
+        } catch (const std::length_error&) {
+            error = "EXR: decoded image exceeds buffer capacity";
+            return false;
+        }
     }
 } // namespace lfs::core::image_codecs

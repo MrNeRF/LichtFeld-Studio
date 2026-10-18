@@ -671,9 +671,8 @@ namespace lfs::io {
                 (!params.skip_blob_cache && load_cached_jpeg_blob(make_cache_key(path, params))))
                 return std::nullopt;
         }
-        if (config_.backend != lfs::core::GpuBackend::CUDA && params.undistort &&
-            !params.skip_blob_cache && !params.masked_fill && !decodes_16bit(params) &&
-            !params.decode_float && load_cached_jpeg_blob(make_cache_key(path, params)))
+        if (config_.backend != lfs::core::GpuBackend::CUDA && uses_portable_prepared_cache(params) &&
+            load_cached_jpeg_blob(make_cache_key(path, params)))
             return std::nullopt;
         if (decodes_float(path, params) || (params.undistort && decodes_16bit(params)) ||
             (config_.backend == lfs::core::GpuBackend::CUDA && params.undistort))
@@ -753,18 +752,23 @@ namespace lfs::io {
         return data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF;
     }
 
-    std::vector<uint8_t> PipelinedImageLoader::read_file(const std::filesystem::path& path) const {
+    std::vector<uint8_t> PipelinedImageLoader::read_file(const std::filesystem::path& path,
+                                                         const std::optional<size_t> expected_size) const {
         std::ifstream file;
         if (!lfs::core::open_file_for_read(path, std::ios::binary | std::ios::ate, file))
             throw std::runtime_error("Failed to open: " + lfs::core::path_to_utf8(path));
 
         const auto size = file.tellg();
+        if (size < 0 || (expected_size && static_cast<uintmax_t>(size) != *expected_size))
+            throw std::runtime_error("Unexpected file size: " + lfs::core::path_to_utf8(path));
         file.seekg(0, std::ios::beg);
 
         std::vector<uint8_t> buffer(size);
         if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
             throw std::runtime_error("Failed to read: " + lfs::core::path_to_utf8(path));
         }
+        if (expected_size && file.peek() != std::char_traits<char>::eof())
+            throw std::runtime_error("Run spill grew while reading: " + lfs::core::path_to_utf8(path));
         return buffer;
     }
 
@@ -803,6 +807,7 @@ namespace lfs::io {
     std::shared_ptr<std::vector<uint8_t>> PipelinedImageLoader::get_from_jpeg_cache(const std::string& cache_key) {
         relieve_host_memory_pressure();
         std::filesystem::path spill_path;
+        size_t spill_size = 0;
         {
             std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
             if (const auto it = jpeg_cache_.find(cache_key); it != jpeg_cache_.end()) {
@@ -812,13 +817,14 @@ namespace lfs::io {
             if (const auto it = spill_cache_.find(cache_key); it != spill_cache_.end()) {
                 it->second.last_access = std::chrono::steady_clock::now();
                 spill_path = it->second.path;
+                spill_size = it->second.size_bytes;
             }
         }
 
         if (spill_path.empty())
             return nullptr;
         try {
-            return std::make_shared<std::vector<uint8_t>>(read_file(spill_path));
+            return std::make_shared<std::vector<uint8_t>>(read_file(spill_path, spill_size));
         } catch (const std::exception& e) {
             LOG_WARN("[PipelinedImageLoader] Run spill read failed for {}: {}",
                      lfs::core::path_to_utf8(spill_path), e.what());
@@ -836,7 +842,9 @@ namespace lfs::io {
     void PipelinedImageLoader::put_in_jpeg_cache(const std::string& cache_key, std::shared_ptr<std::vector<uint8_t>> data) {
         if (!data)
             return;
-        const size_t size = data->size();
+        // RAM holds the vector's allocation, not just its encoded payload.
+        // Disk spill still writes and accounts only the actual payload bytes.
+        const size_t size = data->capacity();
         {
             std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
             if (const auto it = jpeg_cache_.find(cache_key); it != jpeg_cache_.end()) {

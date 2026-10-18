@@ -79,6 +79,9 @@ namespace lfs::core::image_codecs {
     // TIFF metadata only. Pixel decode APIs retain the original file encoding.
     LFS_IMAGE_CODECS_API bool read_tiff_metadata(const std::filesystem::path&, TiffMetadata&, std::string& error);
     LFS_IMAGE_CODECS_API bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
+    // EXR memory reads use the file decoder's Float32 RGBA sample policy.
+    // EXR targets require Float32 RGB/RGBA (zero channels selects RGBA) and
+    // stage decoding before allocating/writing caller storage.
     LFS_IMAGE_CODECS_API bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
     LFS_IMAGE_CODECS_API bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);
 

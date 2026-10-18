@@ -4,6 +4,7 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_codecs.hpp"
+#include "core/image_exr.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -14,8 +15,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -204,15 +207,98 @@ namespace lfs::io {
 
     } // namespace
 
+    bool PipelinedImageLoader::uses_portable_prepared_cache(const LoadParams& params) const {
+        if (!params.undistort || params.skip_blob_cache || params.masked_fill)
+            return false;
+        if (!(decodes_16bit(params) || params.decode_float))
+            return true;
+        if (params.output_uint8)
+            return false;
+        if (params.undistort->dst_width <= 0 || params.undistort->dst_height <= 0)
+            return false;
+        const auto grid = lfs::core::compute_undistort_grid(*params.undistort, params.resize_factor, params.max_width);
+        const size_t sample_bytes = params.decode_float ? sizeof(float) : sizeof(uint16_t);
+        // Bound the extra interleaved RGB staging image as well as encoded extent.
+        // Large outputs keep the original path rather than repeatedly building
+        // an optional cache that may exhaust its byte limit.
+        return grid.width > 0 && grid.height > 0 &&
+               uint64_t(grid.width) * uint64_t(grid.height) <= PORTABLE_CACHE_MAX_BYTES / (3 * sample_bytes);
+    }
+
     void PipelinedImageLoader::warn_portable_cache_failure(const std::string_view message) {
         if (!portable_cache_warning_logged_.exchange(true))
-            LOG_WARN("[PipelinedImageLoader] Optional prepared JPEG cache unavailable: {}; continuing with source image preparation", message);
+            LOG_WARN("[PipelinedImageLoader] Optional prepared image cache unavailable: {}; continuing with source image preparation", message);
     }
 
     void PipelinedImageLoader::cache_portable_prepared_image(
-        const std::string& key, const Tensor& image, const size_t max_output_bytes) {
+        const std::string& key, const Tensor& image, const size_t max_output_bytes, const bool lossless) {
         // Cache failure must never replace or invalidate the already prepared image.
         try {
+            if (!running_.load(std::memory_order_acquire))
+                return;
+            if (lossless && image.dtype() == DataType::Int32) {
+                if (image.ndim() != 3 || image.shape()[0] != 3)
+                    throw std::runtime_error("prepared PNG cache expects UInt16 RGB");
+                const auto pixels = image.to_pageable_host();
+                const size_t width = pixels.shape()[2], height = pixels.shape()[1], plane = width * height;
+                std::vector<uint16_t> interleaved(pixels.numel());
+                const auto* src = pixels.ptr<int32_t>();
+                for (size_t i = 0; i < plane; ++i)
+                    for (size_t ch = 0; ch < 3; ++ch) {
+                        const auto value = src[ch * plane + i];
+                        if (value < 0 || value > 65535)
+                            throw std::runtime_error("prepared PNG cache sample is outside the UInt16 grid");
+                        interleaved[i * 3 + ch] = static_cast<uint16_t>(value);
+                    }
+                lfs::core::image_codecs::PngEncodeOptions options;
+                options.compression_level = 3;
+                options.max_output_bytes = max_output_bytes;
+                std::vector<uint8_t> bytes;
+                const auto status = lfs::core::image_codecs::encode_png_memory(
+                    {reinterpret_cast<const uint8_t*>(interleaved.data()), interleaved.size() * sizeof(uint16_t)},
+                    static_cast<int>(width), static_cast<int>(height), 3, 16, width * 3 * sizeof(uint16_t), bytes, options);
+                if (!status) {
+                    LOG_DEBUG("[PipelinedImageLoader] Optional prepared image cache PNG encoding failed for {}: {}", key, status.error().detail());
+                    warn_portable_cache_failure(status.error().detail());
+                    return;
+                }
+                if (!running_.load(std::memory_order_acquire))
+                    return;
+                bytes.shrink_to_fit();
+                put_in_jpeg_cache(key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
+                return;
+            }
+            if (lossless) {
+                if (image.dtype() != DataType::Float32 || image.ndim() != 3 || image.shape()[0] != 3)
+                    throw std::runtime_error("prepared EXR cache expects Float32 RGB");
+                // Explicit decode_float requests retain their native values.
+                // Training currently uses the UInt16 grid branch above.
+                const auto pixels = image.to_pageable_host();
+                const size_t width = pixels.shape()[2], height = pixels.shape()[1];
+                const size_t plane = width * height;
+                std::vector<float> interleaved(pixels.numel());
+                const auto* src = pixels.ptr<float>();
+                for (size_t i = 0; i < plane; ++i)
+                    for (size_t ch = 0; ch < 3; ++ch)
+                        interleaved[i * 3 + ch] = src[ch * plane + i];
+                lfs::core::image_codecs::ExrEncodeOptions options;
+                options.precision = lfs::core::image_codecs::ExrSampleType::Float;
+                options.cancelled = [this] { return !running_.load(std::memory_order_acquire); };
+                std::vector<uint8_t> bytes;
+                const auto status = lfs::core::image_codecs::encode_exr_memory(
+                    {static_cast<int>(width), static_cast<int>(height), 3, width * 3 * sizeof(float), {reinterpret_cast<const uint8_t*>(interleaved.data()), interleaved.size() * sizeof(float)}},
+                    bytes, options, max_output_bytes);
+                if (!status) {
+                    if (status.error().code() == lfs::ErrorCode::Cancelled)
+                        return;
+                    LOG_DEBUG("[PipelinedImageLoader] Optional prepared image cache EXR encoding failed for {}: {}", key, status.error().detail());
+                    warn_portable_cache_failure(status.error().detail());
+                    return;
+                }
+                bytes.shrink_to_fit();
+                put_in_jpeg_cache(key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
+                return;
+            }
             // Match the existing derived RGB cache: truncate normalized floats
             // to bytes and preserve full chroma at the configured JPEG quality.
             auto pixels = (image.dtype() == DataType::UInt8
@@ -235,13 +321,14 @@ namespace lfs::io {
                 interleaved, static_cast<int>(width), static_cast<int>(height), 3,
                 width * 3, bytes, options);
             if (!status) {
-                LOG_DEBUG("[PipelinedImageLoader] Optional prepared JPEG cache encoding failed for {}: {}", key, status.error().detail());
+                LOG_DEBUG("[PipelinedImageLoader] Optional prepared image cache JPEG encoding failed for {}: {}", key, status.error().detail());
                 warn_portable_cache_failure(status.error().detail());
                 return;
             }
+            bytes.shrink_to_fit();
             put_in_jpeg_cache(key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
         } catch (const std::exception& e) {
-            LOG_DEBUG("[PipelinedImageLoader] Optional prepared JPEG cache store failed for {}: {}", key, e.what());
+            LOG_DEBUG("[PipelinedImageLoader] Optional prepared image cache store failed for {}: {}", key, e.what());
             warn_portable_cache_failure(e.what());
         }
     }
@@ -255,24 +342,80 @@ namespace lfs::io {
             std::lock_guard stats_lock(stats_mutex_);
             ++stats_.cpu_decode_calls;
         }
-        // Only 8-bit RGB warps use the lossy derived JPEG policy. Evaluation,
-        // high-precision sources and mask filling retain their original path.
+        // Preserve the existing lossy JPEG policy for 8-bit RGB. High-precision
+        // Quantized results use PNG16, explicit floats EXR; evaluation and mask filling bypass.
         std::string prepared_key;
-        if (params.undistort && !params.skip_blob_cache && !params.masked_fill &&
-            !decodes_16bit(params) && !params.decode_float) {
+        const bool lossless_cache = decodes_16bit(params) || params.decode_float;
+        if (uses_portable_prepared_cache(params)) {
             try {
                 prepared_key = make_cache_key(path, params);
                 const auto cached = prepared_key.empty() ? nullptr : load_cached_jpeg_blob(prepared_key);
                 if (cached) {
-                    auto [data, width, height, channels] = lfs::core::load_image_from_memory(cached->data(), cached->size(), 1, 0);
-                    if (!data)
-                        throw std::runtime_error("invalid prepared JPEG bytes");
-                    auto host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
                     const auto grid = lfs::core::compute_undistort_grid(*params.undistort, params.resize_factor, params.max_width);
-                    if (channels != 3 || width != grid.width || height != grid.height)
-                        throw std::runtime_error("prepared JPEG dimensions do not match the requested warp");
+                    Tensor host;
+                    if (lossless_cache && !params.decode_float) {
+                        constexpr std::array<uint8_t, 8> png_signature{137, 80, 78, 71, 13, 10, 26, 10};
+                        if (cached->size() < png_signature.size() || !std::equal(png_signature.begin(), png_signature.end(), cached->begin()))
+                            throw std::runtime_error("invalid prepared PNG bytes");
+                        struct BoundedPixels {
+                            size_t expected;
+                            std::vector<uint16_t> values;
+                        } pixels{size_t(grid.width) * grid.height * 3 * sizeof(uint16_t), {}};
+                        lfs::core::image_codecs::DecodeTarget target;
+                        target.channels = 3;
+                        target.sample_type = lfs::core::image_codecs::SampleType::UInt16;
+                        target.user = &pixels;
+                        target.allocate = [](size_t bytes, void* user) -> void* {
+                            auto& buffer = *static_cast<BoundedPixels*>(user);
+                            if (bytes != buffer.expected)
+                                return nullptr;
+                            buffer.values.resize(bytes / sizeof(uint16_t));
+                            return buffer.values.data();
+                        };
+                        lfs::core::image_codecs::Probe decoded;
+                        std::string error;
+                        if (!lfs::core::image_codecs::decode_memory_to_buffer(cached->data(), cached->size(), target, decoded, error))
+                            throw std::runtime_error("invalid prepared PNG bytes: " + error);
+                        if (decoded.width != grid.width || decoded.height != grid.height)
+                            throw std::runtime_error("prepared PNG dimensions do not match the requested warp");
+                        host = Tensor::empty_pageable_host({3, size_t(grid.height), size_t(grid.width)}, DataType::Int32);
+                        const size_t plane = size_t(grid.width) * grid.height;
+                        auto* dst = host.ptr<int32_t>();
+                        for (size_t i = 0; i < plane; ++i)
+                            for (size_t ch = 0; ch < 3; ++ch)
+                                dst[ch * plane + i] = pixels.values[i * 3 + ch];
+                    } else if (lossless_cache) {
+                        lfs::core::image_codecs::Image decoded;
+                        std::string error;
+                        const size_t decoded_limit = size_t(grid.width) * grid.height * 4 * sizeof(float);
+                        if (!lfs::core::image_codecs::decode_exr_memory(*cached, decoded, error, 1, decoded_limit))
+                            throw std::runtime_error("invalid prepared EXR bytes: " + error);
+                        if (decoded.width != grid.width || decoded.height != grid.height || decoded.channels != 4 ||
+                            decoded.sample_type != lfs::core::image_codecs::SampleType::Float32)
+                            throw std::runtime_error("prepared EXR layout does not match the requested warp");
+                        host = Tensor::empty_pageable_host({3, size_t(grid.height), size_t(grid.width)}, DataType::Float32);
+                        auto* dst = host.ptr<float>();
+                        const size_t plane = size_t(grid.width) * grid.height;
+                        for (size_t i = 0; i < plane; ++i)
+                            for (size_t ch = 0; ch < 3; ++ch) {
+                                std::memcpy(dst + ch * plane + i, decoded.data.data() + (i * 4 + ch) * sizeof(float), sizeof(float));
+                                // Our encoder only accepts finite samples. A
+                                // nonfinite cached value cannot be its output.
+                                if (!std::isfinite(dst[ch * plane + i]))
+                                    throw std::runtime_error("prepared EXR contains a nonfinite sample");
+                            }
+                    } else {
+                        auto [data, width, height, channels] = lfs::core::load_image_from_memory(cached->data(), cached->size(), 1, 0);
+                        if (!data)
+                            throw std::runtime_error("invalid prepared JPEG bytes");
+                        host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
+                        if (channels != 3 || width != grid.width || height != grid.height)
+                            throw std::runtime_error("prepared JPEG dimensions do not match the requested warp");
+                    }
                     auto image = to_device(upload, host);
-                    if (!params.output_uint8)
+                    if (lossless_cache && !params.decode_float)
+                        image = image.to(DataType::Float32).div(65535.0f);
+                    else if (!lossless_cache && !params.output_uint8)
                         image = image.to(DataType::Float32).mul(UINT8_SCALE);
                     {
                         std::lock_guard stats_lock(stats_mutex_);
@@ -283,7 +426,7 @@ namespace lfs::io {
                     return image;
                 }
             } catch (const std::exception& e) {
-                LOG_DEBUG("[PipelinedImageLoader] Optional prepared JPEG cache read failed for {}: {}", lfs::core::path_to_utf8(path), e.what());
+                LOG_DEBUG("[PipelinedImageLoader] Optional prepared image cache read failed for {}: {}", lfs::core::path_to_utf8(path), e.what());
                 if (!prepared_key.empty())
                     invalidate_cache_entry(prepared_key);
                 warn_portable_cache_failure(e.what());
@@ -358,18 +501,28 @@ namespace lfs::io {
             image = image.to(DataType::Float32).mul(UINT8_SCALE);
         }
 
+        Tensor cache_grid;
         if (params.undistort) {
             const bool restore_uint8 = params.output_uint8;
             image = lfs::core::undistort_image(
                 image.contiguous(), undistort_for(*params.undistort, image, params.resize_factor, params.max_width), nullptr);
             if (restore_uint8)
                 image = float_to_uint8(image);
-            else if (!params.decode_float)
-                image = image.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32).to(DataType::Float32).div(65535.0f);
+            else if (!params.decode_float) {
+                const auto quantized = image.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32);
+                if (!prepared_key.empty() && lossless_cache)
+                    cache_grid = quantized;
+                image = quantized.to(DataType::Float32).div(65535.0f);
+            }
         }
         image = image.contiguous();
-        if (!prepared_key.empty())
-            cache_portable_prepared_image(prepared_key, image);
+        if (!prepared_key.empty()) {
+            // PNG can expand incompressible UInt16 rows. Keep the staging bound,
+            // but allow 25% encoded headroom for filter bytes, deflate and chunks.
+            const size_t encoded_limit = cache_grid.is_valid() ? PORTABLE_PNG_CACHE_MAX_BYTES
+                                                               : PORTABLE_CACHE_MAX_BYTES;
+            cache_portable_prepared_image(prepared_key, cache_grid.is_valid() ? cache_grid : image, encoded_limit, lossless_cache);
+        }
         if (params.undistort) {
             if (large_prepare_lock.owns_lock()) {
                 // Keep the permit until the large GPU source can be retired.

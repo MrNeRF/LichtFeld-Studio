@@ -4,6 +4,7 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_codecs.hpp"
+#include "core/image_exr.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -21,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -43,11 +45,16 @@ namespace lfs::io {
             return loader.make_cache_key(path, params);
         }
         static auto blob(PipelinedImageLoader& loader, const std::string& key) { return loader.load_cached_jpeg_blob(key); }
+        static auto backend(const PipelinedImageLoader& loader) { return loader.config_.backend; }
+        static auto png_encoded_limit() { return PipelinedImageLoader::PORTABLE_PNG_CACHE_MAX_BYTES; }
+        static bool eligible(const PipelinedImageLoader& loader, const LoadParams& params) {
+            return loader.uses_portable_prepared_cache(params);
+        }
         static void put(PipelinedImageLoader& loader, const std::string& key, std::vector<uint8_t> bytes) {
             loader.put_in_jpeg_cache(key, std::make_shared<std::vector<uint8_t>>(std::move(bytes)));
         }
-        static void encode(PipelinedImageLoader& loader, const std::string& key, const lfs::core::Tensor& image, size_t limit) {
-            loader.cache_portable_prepared_image(key, image, limit);
+        static void encode(PipelinedImageLoader& loader, const std::string& key, const lfs::core::Tensor& image, size_t limit, bool lossless = false) {
+            loader.cache_portable_prepared_image(key, image, limit, lossless);
         }
     };
 } // namespace lfs::io
@@ -163,10 +170,27 @@ namespace {
             normal_ = samples<uint8_t>(3, 255, 13);
             ASSERT_TRUE(save_png(path("rgb8.png"), rgb8_.data(), WIDTH, HEIGHT, 3, 8, 1));
             ASSERT_TRUE(save_png(path("rgb16.png"), rgb16_.data(), WIDTH, HEIGHT, 3, 16, 1));
+            ASSERT_TRUE(image_codecs::write_tiff_u16(
+                path("rgb16.tiff"),
+                {reinterpret_cast<const uint8_t*>(rgb16_.data()), rgb16_.size() * sizeof(uint16_t)},
+                WIDTH, HEIGHT, 3, WIDTH * 3 * sizeof(uint16_t), std::nullopt,
+                {.overwrite = true, .durable = false}));
             ASSERT_TRUE(save_png(path("rgba.png"), rgba_.data(), WIDTH, HEIGHT, 4, 8, 1));
             ASSERT_TRUE(save_png(path("mask.png"), mask_.data(), WIDTH, HEIGHT, 1, 8, 1));
             ASSERT_TRUE(save_png(path("depth16.png"), depth_.data(), WIDTH, HEIGHT, 1, 16, 1));
             ASSERT_TRUE(save_png(path("normal.png"), normal_.data(), WIDTH, HEIGHT, 3, 8, 1));
+            std::vector<float> floating(rgb16_.size());
+            for (size_t i = 0; i < floating.size(); ++i)
+                floating[i] = float(rgb16_[i]) / 16384.f - 0.5f;
+            image_codecs::ExrEncodeOptions options;
+            options.precision = image_codecs::ExrSampleType::Float;
+            std::vector<uint8_t> exr;
+            ASSERT_TRUE(image_codecs::encode_exr_memory(
+                {WIDTH, HEIGHT, 3, WIDTH * 3 * sizeof(float), {reinterpret_cast<const uint8_t*>(floating.data()), floating.size() * sizeof(float)}},
+                exr, options));
+            std::ofstream output(path("rgbfloat.exr"), std::ios::binary);
+            output.write(reinterpret_cast<const char*>(exr.data()), exr.size());
+            ASSERT_TRUE(output);
         }
 
         static void TearDownTestSuite() {
@@ -427,6 +451,351 @@ namespace {
 
     using CacheAccess = lfs::io::PipelinedPreparedCacheTestAccess;
 
+    TEST_P(PipelinedLoaderBackends, CompressedCacheBudgetCountsReservedCapacityAndSpillsOnlyPayload) {
+        const GpuBackendScope scope(GetParam());
+        std::vector<uint8_t> small{1, 2, 3};
+        small.reserve(64);
+        const auto budget = small.capacity();
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        config.max_cache_bytes = budget;
+        PipelinedImageLoader loader(config);
+        std::vector<uint8_t> large{1, 2, 3};
+        large.reserve(budget * 8);
+        CacheAccess::put(loader, "capacity-test", std::move(large));
+        EXPECT_EQ(loader.get_stats().jpeg_cache_bytes, 0u);
+        EXPECT_EQ(loader.get_stats().spill_cache_bytes, 3u);
+        ASSERT_TRUE(CacheAccess::blob(loader, "capacity-test"));
+        EXPECT_EQ(*CacheAccess::blob(loader, "capacity-test"), (std::vector<uint8_t>{1, 2, 3}));
+        CacheAccess::put(loader, "capacity-test", std::move(small));
+        EXPECT_EQ(loader.get_stats().jpeg_cache_bytes, budget);
+        EXPECT_EQ(loader.get_stats().spill_cache_bytes, 0u);
+        EXPECT_EQ(loader.release_host_cache(1), budget);
+        EXPECT_EQ(loader.get_stats().jpeg_cache_bytes, 0u);
+        EXPECT_EQ(loader.get_stats().spill_cache_bytes, 3u);
+        for (uintmax_t changed_size : {uintmax_t(1), uintmax_t(1024 * 1024)}) {
+            std::vector<uint8_t> bytes{1, 2, 3};
+            bytes.reserve(budget * 8);
+            CacheAccess::put(loader, "capacity-test", std::move(bytes));
+            const auto directory = loader.run_spill_directory();
+            const auto entry = std::filesystem::directory_iterator(directory);
+            ASSERT_NE(entry, std::filesystem::directory_iterator{});
+            std::filesystem::resize_file(entry->path(), changed_size);
+            EXPECT_FALSE(CacheAccess::blob(loader, "capacity-test"));
+            EXPECT_EQ(loader.get_stats().spill_cache_bytes, 0u);
+        }
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedLosslessCacheBoundsAdditionalStagingBeforeEncoding) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        camera.src_width = camera.dst_width = 3840;
+        camera.src_height = camera.dst_height = 2160;
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.decode_16bit = true;
+        EXPECT_TRUE(CacheAccess::eligible(loader, params)); // PNG16 staging fits at full 4K.
+        params.decode_float = true;
+        EXPECT_FALSE(CacheAccess::eligible(loader, params)); // EXR retains Float32 staging.
+        params.decode_float = false;
+        camera.dst_width = 7680;
+        camera.dst_height = 4320;
+        EXPECT_FALSE(CacheAccess::eligible(loader, params));
+        camera.dst_width = 3840;
+        camera.dst_height = 2160;
+        params.resize_factor = 2;
+        EXPECT_TRUE(CacheAccess::eligible(loader, params));
+        params.resize_factor = 1;
+        params.max_width = 1920;
+        EXPECT_TRUE(CacheAccess::eligible(loader, params));
+        params.max_width = 0;
+        params.decode_16bit = false;
+        EXPECT_TRUE(CacheAccess::eligible(loader, params)); // Existing JPEG policy is unchanged.
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedLosslessCachesPreserveColdValuesAndOwnWarmImages) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP() << "Portable cache; CUDA retains its existing cache policy";
+        const GpuBackendScope scope(GetParam());
+        for (int mode : {0, 1, 2, 3}) {
+            SCOPED_TRACE(mode);
+            PipelinedLoaderConfig config;
+            config.backend = GetParam();
+            config.use_16bit_color = mode == 1;
+            PipelinedImageLoader loader(config);
+            auto camera = distorted_camera();
+            lfs::io::LoadParams params;
+            params.undistort = &camera;
+            params.decode_16bit = mode == 0;
+            params.decode_float = mode >= 2;
+            const auto file = path(mode == 2 ? "rgbfloat.exr" : mode == 1 ? "rgb16.tiff"
+                                                                          : "rgb16.png");
+            params.skip_blob_cache = true;
+            const auto reference = loader.load_image_immediate(file, params).cpu();
+            EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 0u);
+            params.skip_blob_cache = false;
+            auto cold = loader.load_image_immediate(file, params);
+            expect_close(cold, reference, 0.f);
+            const auto blob = CacheAccess::blob(loader, CacheAccess::key(loader, file, params));
+            ASSERT_TRUE(blob);
+            ASSERT_GE(blob->size(), 4u);
+            EXPECT_EQ((*blob)[0], mode >= 2 ? 0x76 : 0x89);
+            EXPECT_EQ((*blob)[1], mode >= 2 ? 0x2f : 0x50);
+            EXPECT_EQ(blob->capacity(), blob->size());
+            EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
+            cold.fill_(0.f);
+            auto warm = loader.load_image_immediate(file, params);
+            expect_close(warm, reference, 0.f);
+            EXPECT_EQ(loader.get_stats().hot_path_hits, 1u);
+            warm.fill_(1.f);
+            expect_close(loader.load_image_immediate(file, params), reference, 0.f);
+            params.output_uint8 = true;
+            EXPECT_EQ(loader.load_image_immediate(file, params).dtype(), DataType::UInt8);
+            EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u); // Precision-to-byte conversion is not cached here.
+        }
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedPngCacheRestoresEveryUInt16ValueWithGpuDivision) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        camera.src_width = camera.dst_width = 256;
+        camera.src_height = camera.dst_height = 256;
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.decode_16bit = true;
+        std::vector<int32_t> samples(3 * 65536);
+        for (size_t i = 0; i < samples.size(); ++i)
+            samples[i] = static_cast<uint16_t>(i);
+        const auto integers = Tensor::from_blob(samples.data(), {3, 256, 256}, Device::CPU, DataType::Int32).clone().to(GetParam());
+        const auto expected = integers.to(DataType::Int32).to(DataType::Float32).div(65535.0f).cpu();
+        const auto file = path("rgb16.png");
+        CacheAccess::encode(loader, CacheAccess::key(loader, file, params), integers, 64u << 20, true);
+        expect_close(loader.load_image_immediate(file, params), expected, 0.f);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 1u);
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedPngCacheSpillsRejectsDamageAndPreservesHealthyBlobOnFailure) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        config.max_cache_bytes = 1;
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.decode_16bit = true;
+        const auto file = path("rgb16.png");
+        const auto cold = loader.load_image_immediate(file, params).cpu();
+        const auto key = CacheAccess::key(loader, file, params);
+        const auto healthy = CacheAccess::blob(loader, key);
+        ASSERT_TRUE(healthy);
+        EXPECT_EQ(loader.get_stats().jpeg_cache_bytes, 0u);
+        EXPECT_EQ(loader.get_stats().spill_cache_entries, 1u);
+        expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+        const auto integers = cold.mul(65535.0f).add(0.5f).to(DataType::Int32);
+        CacheAccess::encode(loader, key, integers, 1, true);
+        EXPECT_EQ(*CacheAccess::blob(loader, key), *healthy);
+        for (const auto invalid : {-1.f, 65536.f}) {
+            const auto outside_grid = host(std::vector<float>(WIDTH * HEIGHT * 3, invalid), {3, HEIGHT, WIDTH}).to(DataType::Int32);
+            CacheAccess::encode(loader, key, outside_grid, 64u << 20, true);
+            EXPECT_EQ(*CacheAccess::blob(loader, key), *healthy);
+        }
+        auto truncated = *healthy;
+        truncated.resize(truncated.size() / 2);
+        std::vector<uint16_t> wider_samples(WIDTH * 2 * HEIGHT * 3, 12345);
+        image_codecs::PngEncodeOptions options;
+        options.compression_level = 1;
+        std::vector<uint8_t> wider;
+        ASSERT_TRUE(image_codecs::encode_png_memory(
+            {reinterpret_cast<const uint8_t*>(wider_samples.data()), wider_samples.size() * sizeof(uint16_t)},
+            WIDTH * 2, HEIGHT, 3, 16, WIDTH * 2 * 3 * sizeof(uint16_t), wider, options));
+        for (const auto& damaged : {std::vector<uint8_t>{0xff}, truncated, wider}) {
+            const auto hits = loader.get_stats().hot_path_hits;
+            CacheAccess::put(loader, key, damaged);
+            expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+            EXPECT_EQ(loader.get_stats().hot_path_hits, hits);
+            expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+            EXPECT_EQ(loader.get_stats().hot_path_hits, hits + 1);
+        }
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedPngCacheAllowsExpansionNearStagingBound) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        // RGB UInt16 staging is just below 64 MiB. The warp may change its
+        // compressibility, so test unwarped integer samples separately too.
+        constexpr int width = 4096, height = 2730;
+        const auto file = path("cache-incompressible.png");
+        {
+            std::vector<uint16_t> samples(size_t(width) * height * 3);
+            uint32_t random = 0x12345678;
+            for (auto& sample : samples) {
+                random ^= random << 13;
+                random ^= random >> 17;
+                random ^= random << 5;
+                sample = static_cast<uint16_t>(random);
+            }
+            ASSERT_TRUE(save_png(file, samples.data(), width, height, 3, 16, 0));
+        }
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        config.max_cache_bytes = 1; // Exercise actual-size disk spill too.
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        camera.src_width = camera.dst_width = width;
+        camera.src_height = camera.dst_height = height;
+        camera.src_fx = camera.dst_fx = float(width);
+        camera.src_fy = camera.dst_fy = float(height);
+        camera.src_cx = camera.dst_cx = width * 0.5f;
+        camera.src_cy = camera.dst_cy = height * 0.5f;
+        for (auto& coefficient : camera.distortion)
+            coefficient = 0.f;
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.decode_16bit = true;
+        ASSERT_TRUE(CacheAccess::eligible(loader, params));
+        {
+            const auto cold = loader.load_image_immediate(file, params).cpu();
+            ASSERT_EQ(loader.get_stats().spill_cache_entries, 1u);
+            EXPECT_LE(loader.get_stats().spill_cache_bytes, CacheAccess::png_encoded_limit());
+            const auto warm = loader.load_image_immediate(file, params).cpu();
+            ASSERT_EQ(warm.shape(), cold.shape());
+            EXPECT_EQ(std::memcmp(warm.ptr<float>(), cold.ptr<float>(), cold.bytes()), 0);
+        }
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 1u);
+        auto integers = Tensor::empty_pageable_host({3, size_t(height), size_t(width)}, DataType::Int32);
+        uint32_t random = 0x12345678;
+        for (size_t i = 0; i < integers.numel(); ++i) {
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            integers.ptr<int32_t>()[i] = static_cast<uint16_t>(random);
+        }
+        const auto expected = integers.to(GetParam()).to(DataType::Float32).div(65535.0f).cpu();
+        CacheAccess::encode(loader, CacheAccess::key(loader, file, params), integers, CacheAccess::png_encoded_limit(), true);
+        ASSERT_GT(loader.get_stats().spill_cache_bytes, 64u << 20);
+        EXPECT_LE(loader.get_stats().spill_cache_bytes, CacheAccess::png_encoded_limit());
+        const auto restored = loader.load_image_immediate(file, params).cpu();
+        ASSERT_EQ(restored.shape(), expected.shape());
+        EXPECT_EQ(std::memcmp(restored.ptr<float>(), expected.ptr<float>(), expected.bytes()), 0);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 2u);
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedExrCacheSpillsCorruptionFallsBackAndRecovers) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        config.max_cache_bytes = 1;
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.decode_16bit = true;
+        params.decode_float = true; // Exercise the EXR path explicitly, outside training.
+        const auto file = path("rgb16.png");
+        const auto cold = loader.load_image_immediate(file, params).cpu();
+        EXPECT_EQ(loader.get_stats().jpeg_cache_bytes, 0u);
+        EXPECT_EQ(loader.get_stats().spill_cache_entries, 1u);
+        expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+        const auto key = CacheAccess::key(loader, file, params);
+        CacheAccess::put(loader, key, {0x76, 0x2f, 0x31, 0x01, 0xff});
+        const auto hits = loader.get_stats().hot_path_hits;
+        expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, hits);
+        expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, hits + 1);
+        std::vector<float> pixels(WIDTH * HEIGHT * 3, 0.5f);
+        image_codecs::ExrEncodeOptions options;
+        options.precision = image_codecs::ExrSampleType::Float;
+        options.compression = image_codecs::ExrCompression::None;
+        std::vector<uint8_t> damaged;
+        ASSERT_TRUE(image_codecs::encode_exr_memory(
+            {WIDTH, HEIGHT, 3, WIDTH * 3 * sizeof(float), {reinterpret_cast<const uint8_t*>(pixels.data()), pixels.size() * sizeof(float)}},
+            damaged, options));
+        // The last uncompressed RGB sample is replaced by a quiet NaN.
+        ASSERT_GE(damaged.size(), 4u);
+        const std::array<uint8_t, 4> nan{0, 0, 0xc0, 0x7f};
+        std::copy(nan.begin(), nan.end(), damaged.end() - 4);
+        CacheAccess::put(loader, key, std::move(damaged));
+        expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, hits + 1);
+        std::vector<float> wider_pixels(WIDTH * 2 * HEIGHT * 3, 0.5f);
+        std::vector<uint8_t> wider;
+        ASSERT_TRUE(image_codecs::encode_exr_memory(
+            {WIDTH * 2, HEIGHT, 3, WIDTH * 2 * 3 * sizeof(float), {reinterpret_cast<const uint8_t*>(wider_pixels.data()), wider_pixels.size() * sizeof(float)}},
+            wider, options));
+        CacheAccess::put(loader, key, std::move(wider));
+        expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, hits + 1);
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedExrCacheFailurePreservesSourceAndSuccessfulBlob) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.decode_float = true;
+        const auto file = path("rgbfloat.exr");
+        const auto image = loader.load_image_immediate(file, params);
+        const auto expected = image.cpu();
+        const auto key = CacheAccess::key(loader, file, params);
+        const auto before = CacheAccess::blob(loader, key);
+        ASSERT_TRUE(before);
+        CacheAccess::encode(loader, key, image, 1, true);
+        expect_close(image, expected, 0.f);
+        ASSERT_TRUE(CacheAccess::blob(loader, key));
+        EXPECT_EQ(*CacheAccess::blob(loader, key), *before);
+        expect_close(loader.load_image_immediate(file, params), expected, 0.f);
+        camera.distortion[0] += 0.02f;
+        EXPECT_NE(CacheAccess::key(loader, file, params), key);
+        (void)loader.load_image_immediate(file, params);
+        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 2u);
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedCacheShutdownDoesNotStartAnotherEncodeOrWarn) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        const auto image = host(std::vector<float>(WIDTH * HEIGHT * 3, 0.25f), {3, HEIGHT, WIDTH});
+        const auto before = image.to_vector();
+        loader.shutdown();
+        std::atomic<unsigned> warnings{0};
+        const DebugLogHandler logs([&](LogLevel level, const SourceSite&, std::string_view message) {
+            if (level == LogLevel::Warn && message.find("Optional prepared image cache") != std::string_view::npos)
+                ++warnings;
+        });
+        CacheAccess::encode(loader, "stopped-exr", image, 1, true);
+        CacheAccess::encode(loader, "stopped-jpeg", image, 1);
+        CacheAccess::encode(loader, "stopped-png", image.to(DataType::Int32), 1, true);
+        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 0u);
+        EXPECT_EQ(loader.get_stats().spill_cache_entries, 0u);
+        EXPECT_EQ(image.to_vector(), before);
+        EXPECT_EQ(warnings.load(), 0u);
+    }
+
     Tensor decoded_prepared_blob(PipelinedImageLoader& loader, const std::filesystem::path& file,
                                  const lfs::io::LoadParams& params) {
         const auto bytes = CacheAccess::blob(loader, CacheAccess::key(loader, file, params));
@@ -436,12 +805,27 @@ namespace {
         lfs::core::image_codecs::Image decoded;
         std::string error;
         EXPECT_TRUE(lfs::core::image_codecs::decode_memory(bytes->data(), bytes->size(), decoded, error)) << error;
-        EXPECT_EQ(decoded.channels, 3);
+        if (decoded.sample_type == image_codecs::SampleType::UInt16) {
+            auto planar = Tensor::empty_pageable_host({3, size_t(decoded.height), size_t(decoded.width)}, DataType::Int32);
+            const size_t plane = size_t(decoded.width) * decoded.height;
+            for (size_t i = 0; i < plane; ++i)
+                for (size_t ch = 0; ch < 3; ++ch) {
+                    uint16_t value;
+                    std::memcpy(&value, decoded.data.data() + (i * 3 + ch) * sizeof(uint16_t), sizeof(value));
+                    planar.ptr<int32_t>()[ch * plane + i] = value;
+                }
+            return planar.to(CacheAccess::backend(loader)).to(DataType::Float32).div(65535.0f).cpu();
+        }
+        const bool floating = decoded.sample_type == lfs::core::image_codecs::SampleType::Float32;
+        EXPECT_EQ(decoded.channels, floating ? 4 : 3);
         const size_t plane = size_t(decoded.width) * decoded.height;
         std::vector<float> values(plane * 3);
         for (size_t i = 0; i < plane; ++i)
             for (size_t ch = 0; ch < 3; ++ch)
-                values[ch * plane + i] = float(decoded.data[i * 3 + ch]) * UINT8_SCALE;
+                if (floating)
+                    std::memcpy(&values[ch * plane + i], decoded.data.data() + (i * 4 + ch) * sizeof(float), sizeof(float));
+                else
+                    values[ch * plane + i] = float(decoded.data[i * 3 + ch]) * UINT8_SCALE;
         return host(values, {3, size_t(decoded.height), size_t(decoded.width)});
     }
 
@@ -500,6 +884,7 @@ namespace {
         const auto actual = CacheAccess::blob(loader, CacheAccess::key(loader, path("rgb8.png"), params));
         ASSERT_TRUE(actual);
         EXPECT_EQ(*actual, expected);
+        EXPECT_EQ(actual->capacity(), actual->size());
     }
 
     TEST_P(PipelinedLoaderBackends, PreparedJpegCacheUsesSharedRunScopedKeyAndHonorsBudget) {
@@ -563,7 +948,7 @@ namespace {
         EXPECT_FALSE(std::filesystem::exists(spill));
     }
 
-    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheBypassesEvaluationPrecisionAndMaskedFill) {
+    TEST_P(PipelinedLoaderBackends, PreparedCachesBypassEvaluationAndMaskedFill) {
         if (GetParam() == GpuBackend::CUDA)
             GTEST_SKIP();
         const GpuBackendScope scope(GetParam());
@@ -577,13 +962,6 @@ namespace {
         const auto expected = loader.load_image_immediate(path("rgb8.png"), params).cpu();
         expect_close(loader.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
         params.skip_blob_cache = false;
-        params.decode_float = true;
-        (void)loader.load_image_immediate(path("rgb8.png"), params);
-        params.decode_float = false;
-        params.decode_16bit = true;
-        const auto sixteen = loader.load_image_immediate(path("rgb16.png"), params).cpu();
-        expect_close(loader.load_image_immediate(path("rgb16.png"), params), sixteen, 0.f);
-        params.decode_16bit = false;
         const lfs::io::MaskedImageFill fill{};
         params.masked_fill = &fill;
         (void)loader.load_image_immediate(path("rgb8.png"), params);
@@ -591,95 +969,110 @@ namespace {
         EXPECT_EQ(loader.get_stats().hot_path_hits, 0u);
     }
 
-    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheConcurrentWarmConsumersOwnIndependentImages) {
+    TEST_P(PipelinedLoaderBackends, PreparedCachesConcurrentWarmConsumersOwnIndependentImages) {
         if (GetParam() == GpuBackend::CUDA)
             GTEST_SKIP();
         const GpuBackendScope scope(GetParam());
-        PipelinedLoaderConfig config;
-        config.backend = GetParam();
-        PipelinedImageLoader loader(config);
-        auto camera = distorted_camera();
-        lfs::io::LoadParams params;
-        params.undistort = &camera;
-        (void)loader.load_image_immediate(path("rgb8.png"), params);
-        const auto expected = decoded_prepared_blob(loader, path("rgb8.png"), params);
-        const auto backend = GetParam();
-        std::vector<std::future<Tensor>> consumers;
-        for (int i = 0; i < 8; ++i)
-            consumers.push_back(std::async(std::launch::async, [&, backend] {
-                const GpuBackendScope worker(backend);
-                auto image = loader.load_image_immediate(path("rgb8.png"), params);
-                auto copy = image.cpu();
-                image.fill_(0.f);
-                return copy;
-            }));
-        for (auto& consumer : consumers)
-            expect_close(consumer.get(), expected, 0.f);
-        EXPECT_EQ(loader.get_stats().hot_path_hits, 8u);
-        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
-        expect_close(loader.load_image_immediate(path("rgb8.png"), params), expected, 0.f);
+        for (bool high_precision : {false, true}) {
+            SCOPED_TRACE(high_precision);
+            const char* source_name = high_precision ? "rgb16.png" : "rgb8.png";
+            PipelinedLoaderConfig config;
+            config.backend = GetParam();
+            PipelinedImageLoader loader(config);
+            auto camera = distorted_camera();
+            lfs::io::LoadParams params;
+            params.undistort = &camera;
+            params.decode_16bit = high_precision;
+            (void)loader.load_image_immediate(path(source_name), params);
+            const auto expected = decoded_prepared_blob(loader, path(source_name), params);
+            const auto backend = GetParam();
+            std::vector<std::future<Tensor>> consumers;
+            for (int i = 0; i < 8; ++i)
+                consumers.push_back(std::async(std::launch::async, [&, backend] {
+                    const GpuBackendScope worker(backend);
+                    auto image = loader.load_image_immediate(path(source_name), params);
+                    auto copy = image.cpu();
+                    image.fill_(0.f);
+                    return copy;
+                }));
+            for (auto& consumer : consumers)
+                expect_close(consumer.get(), expected, 0.f);
+            EXPECT_EQ(loader.get_stats().hot_path_hits, 8u);
+            EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
+            expect_close(loader.load_image_immediate(path(source_name), params), expected, 0.f);
+        }
     }
 
-    TEST_P(PipelinedLoaderBackends, PreparedJpegCacheConcurrentMissesPublishOnlyCompleteBlobs) {
+    TEST_P(PipelinedLoaderBackends, PreparedCachesConcurrentMissesPublishOnlyCompleteBlobs) {
         if (GetParam() == GpuBackend::CUDA)
             GTEST_SKIP();
         const GpuBackendScope scope(GetParam());
-        PipelinedLoaderConfig config;
-        config.backend = GetParam();
-        PipelinedImageLoader loader(config);
-        auto camera = distorted_camera();
-        lfs::io::LoadParams params;
-        params.undistort = &camera;
-        params.skip_blob_cache = true;
-        const auto cold = loader.load_image_immediate(path("rgb8.png"), params).cpu().to_vector();
-        params.skip_blob_cache = false;
-        std::vector<std::future<Tensor>> consumers;
-        const auto backend = GetParam();
-        for (int i = 0; i < 8; ++i)
-            consumers.push_back(std::async(std::launch::async, [&, backend] {
-                const GpuBackendScope worker(backend);
-                return loader.load_image_immediate(path("rgb8.png"), params).cpu();
-            }));
-        std::vector<Tensor> loaded;
-        for (auto& consumer : consumers)
-            loaded.push_back(consumer.get());
-        const auto warm = decoded_prepared_blob(loader, path("rgb8.png"), params).to_vector();
-        for (const auto& image : loaded) {
-            const auto values = image.to_vector();
-            EXPECT_TRUE(values == cold || values == warm);
+        for (bool high_precision : {false, true}) {
+            SCOPED_TRACE(high_precision);
+            const char* source_name = high_precision ? "rgb16.png" : "rgb8.png";
+            PipelinedLoaderConfig config;
+            config.backend = GetParam();
+            PipelinedImageLoader loader(config);
+            auto camera = distorted_camera();
+            lfs::io::LoadParams params;
+            params.undistort = &camera;
+            params.decode_16bit = high_precision;
+            params.skip_blob_cache = true;
+            const auto cold = loader.load_image_immediate(path(source_name), params).cpu().to_vector();
+            params.skip_blob_cache = false;
+            std::vector<std::future<Tensor>> consumers;
+            const auto backend = GetParam();
+            for (int i = 0; i < 8; ++i)
+                consumers.push_back(std::async(std::launch::async, [&, backend] {
+                    const GpuBackendScope worker(backend);
+                    return loader.load_image_immediate(path(source_name), params).cpu();
+                }));
+            std::vector<Tensor> loaded;
+            for (auto& consumer : consumers)
+                loaded.push_back(consumer.get());
+            const auto warm = decoded_prepared_blob(loader, path(source_name), params).to_vector();
+            for (const auto& image : loaded) {
+                const auto values = image.to_vector();
+                EXPECT_TRUE(values == cold || values == warm);
+            }
+            EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
+            EXPECT_EQ(loader.get_stats().cpu_decode_calls, 9u);
         }
-        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
-        EXPECT_EQ(loader.get_stats().cpu_decode_calls, 9u);
     }
 
-    TEST_P(PipelinedLoaderBackends, PreparedJpegCachePrefetchSharesImmediateBlobWithoutAnotherWarp) {
+    TEST_P(PipelinedLoaderBackends, PreparedCachesPrefetchSharesImmediateBlobWithoutAnotherWarp) {
         if (GetParam() == GpuBackend::CUDA)
             GTEST_SKIP();
         const GpuBackendScope scope(GetParam());
-        PipelinedLoaderConfig config;
-        config.backend = GetParam();
-        PipelinedImageLoader loader(config);
-        auto camera = distorted_camera();
-        lfs::io::LoadParams params;
-        params.undistort = &camera;
-        (void)loader.load_image_immediate(path("rgb8.png"), params);
-        const auto expected = decoded_prepared_blob(loader, path("rgb8.png"), params);
-        std::vector<ImageRequest> requests;
-        for (size_t i = 0; i < 8; ++i) {
-            auto r = request("rgb8.png");
-            r.sequence_id = i;
-            r.params = params;
-            r.undistort = &camera;
-            requests.push_back(r);
+        for (bool high_precision : {false, true}) {
+            SCOPED_TRACE(high_precision);
+            const char* source_name = high_precision ? "rgb16.png" : "rgb8.png";
+            PipelinedLoaderConfig config;
+            config.backend = GetParam();
+            PipelinedImageLoader loader(config);
+            auto camera = distorted_camera();
+            lfs::io::LoadParams params;
+            params.undistort = &camera;
+            params.decode_16bit = high_precision;
+            (void)loader.load_image_immediate(path(source_name), params);
+            const auto expected = decoded_prepared_blob(loader, path(source_name), params);
+            std::vector<ImageRequest> requests;
+            for (size_t i = 0; i < 8; ++i) {
+                auto r = request(source_name);
+                r.sequence_id = i;
+                r.params = params;
+                r.undistort = &camera;
+                requests.push_back(r);
+            }
+            loader.prefetch(requests);
+            for (size_t i = 0; i < requests.size(); ++i) {
+                auto completion = loader.try_get_completion_for(std::chrono::seconds(20));
+                ASSERT_TRUE(completion && completion->outcome);
+                expect_close(completion->outcome->tensor, expected, 0.f);
+            }
+            EXPECT_EQ(loader.get_stats().hot_path_hits, 8u);
+            EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
         }
-        loader.prefetch(requests);
-        for (size_t i = 0; i < requests.size(); ++i) {
-            auto completion = loader.try_get_completion_for(std::chrono::seconds(20));
-            ASSERT_TRUE(completion && completion->outcome);
-            expect_close(completion->outcome->tensor, expected, 0.f);
-        }
-        EXPECT_EQ(loader.get_stats().hot_path_hits, 8u);
-        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
     }
 
     TEST_P(PipelinedLoaderBackends, PreparedJpegCacheFailurePreservesImageAndRecovers) {
@@ -700,7 +1093,7 @@ namespace {
         std::atomic<size_t> warnings{0}, debug_failures{0};
         {
             const DebugLogHandler handler([&](LogLevel level, const SourceSite&, std::string_view message) {
-                if (message.find("Optional prepared JPEG cache") == std::string_view::npos)
+                if (message.find("Optional prepared image cache") == std::string_view::npos)
                     return;
                 if (level == LogLevel::Warn)
                     ++warnings;
@@ -736,7 +1129,7 @@ namespace {
         std::atomic<size_t> warnings{0}, debug_failures{0};
         {
             const DebugLogHandler handler([&](LogLevel level, const SourceSite&, std::string_view message) {
-                if (message.find("Optional prepared JPEG cache") == std::string_view::npos)
+                if (message.find("Optional prepared image cache") == std::string_view::npos)
                     return;
                 if (level == LogLevel::Warn)
                     ++warnings;

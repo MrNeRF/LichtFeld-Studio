@@ -195,7 +195,7 @@ namespace lfs::core::image_codecs {
                                          std::memcmp(data.data(), "#?RGBE", 6) == 0);
         }
 
-        bool is_exr(const std::vector<std::uint8_t>& data) {
+        bool is_exr(std::span<const std::uint8_t> data) {
             return data.size() >= 4 && data[0] == 0x76 && data[1] == 0x2f && data[2] == 0x31 && data[3] == 0x01;
         }
 
@@ -222,6 +222,31 @@ namespace lfs::core::image_codecs {
             if (!target.data)
                 error = "Could not allocate image buffer";
             return target.data;
+        }
+
+        bool decode_exr_memory_to_buffer(std::span<const std::uint8_t> input, DecodeTarget& target,
+                                         Probe& result, std::string& error) {
+            error.clear();
+            const auto channels = target.channels == 0 ? 4 : target.channels;
+            if (target.sample_type != SampleType::Float32 || (channels != 3 && channels != 4)) {
+                error = "EXR: target requires Float32 RGB/RGBA samples";
+                return false;
+            }
+            Image image;
+            if (!decode_exr_memory(input, image, error))
+                return false;
+            const auto pixels = size_t(image.width) * image.height;
+            void* output = allocate_target(target, pixels * channels * sizeof(float), error);
+            if (!output)
+                return false;
+            if (channels == 4)
+                std::memcpy(output, image.data.data(), image.data.size());
+            else
+                for (size_t i = 0; i < pixels; ++i)
+                    std::memcpy(static_cast<uint8_t*>(output) + i * 3 * sizeof(float),
+                                image.data.data() + i * 4 * sizeof(float), 3 * sizeof(float));
+            result = {image.width, image.height, channels, SampleType::Float32};
+            return true;
         }
 
         struct PngReadOwner {
@@ -1520,6 +1545,8 @@ namespace lfs::core::image_codecs {
             error = "Empty image buffer";
             return false;
         }
+        if (is_exr({data, size}))
+            return decode_exr_memory_to_buffer({data, size}, target, result, error);
         if (is_tiff({data, size}))
             return decode_tiff_memory_to_buffer({data, size}, target, result, error);
         if (is_heif({data, size}))
@@ -1763,6 +1790,8 @@ namespace lfs::core::image_codecs {
             error = "Empty image buffer";
             return false;
         }
+        if (is_exr({data, size}))
+            return decode_exr_memory({data, size}, result, error);
         if (is_tiff({data, size}))
             return decode_tiff_memory({data, size}, result, error);
         if (is_heif({data, size}))
@@ -1892,6 +1921,44 @@ namespace lfs::core::image_codecs {
         } catch (const std::bad_alloc&) {
             return failure(ErrorCode::ResourceExhausted, "Cannot allocate JPEG encoder state");
         }
+    }
+
+    Result<void> encode_exr_memory(const ExrEncodeView& view, std::vector<std::uint8_t>& output,
+                                   const ExrEncodeOptions& options, std::size_t max_output_bytes) {
+        const auto failure = [](ErrorCode code, std::string detail) -> Result<void> {
+            return Result<void>::failure(make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()}));
+        };
+        if (!max_output_bytes || max_output_bytes > output.max_size() ||
+            max_output_bytes > uint64_t(std::numeric_limits<int64_t>::max()))
+            return failure(ErrorCode::InvalidArgument, std::format("Invalid EXR encoded-byte limit (limit={})", max_output_bytes));
+        EncodedMemory memory;
+        memory.limit = max_output_bytes;
+        const ExrWriteStream stream{"EXR buffer", &memory,
+                                    [](void* user, const void* data, uint64_t size, uint64_t offset) noexcept -> int64_t {
+                                        auto& destination = *static_cast<EncodedMemory*>(user);
+                                        if (destination.failure != EncodedMemory::Failure::None ||
+                                            size > uint64_t(std::numeric_limits<int64_t>::max()) ||
+                                            offset > destination.limit || size > destination.limit - offset) {
+                                            if (destination.failure == EncodedMemory::Failure::None)
+                                                destination.failure = EncodedMemory::Failure::Limit;
+                                            return -1;
+                                        }
+                                        if (!data && size)
+                                            return -1;
+                                        return destination.write_at(static_cast<size_t>(offset), static_cast<const uint8_t*>(data), static_cast<size_t>(size))
+                                                   ? static_cast<int64_t>(size)
+                                                   : -1;
+                                    }};
+        const auto status = encode_exr(view, stream, options);
+        if (!status || memory.failure != EncodedMemory::Failure::None) {
+            if (memory.failure != EncodedMemory::Failure::None)
+                return failure(ErrorCode::ResourceExhausted, memory.failure == EncodedMemory::Failure::Limit
+                                                                 ? "EXR encoded-byte limit exhausted"
+                                                                 : "Cannot allocate EXR output buffer");
+            return status;
+        }
+        output = std::move(memory.bytes);
+        return {};
     }
 
     bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,

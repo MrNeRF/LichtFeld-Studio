@@ -195,6 +195,9 @@ namespace lfs::io {
         };
 
         struct CacheStats {
+            // Legacy names for the shared compressed-blob tier, including
+            // JPEG, JPEG 2000 and EXR. RAM bytes count vector capacity;
+            // spill bytes count the encoded payload stored on disk.
             size_t jpeg_cache_entries = 0;
             size_t jpeg_cache_bytes = 0;
             size_t spill_cache_entries = 0;
@@ -461,15 +464,19 @@ namespace lfs::io {
                                               const LoadParams& params,
                                               lfs::core::TensorUpload& upload,
                                               const std::vector<uint8_t>* encoded = nullptr);
+        static constexpr size_t PORTABLE_CACHE_MAX_BYTES = 64u << 20;
+        static constexpr size_t PORTABLE_PNG_CACHE_MAX_BYTES = PORTABLE_CACHE_MAX_BYTES + PORTABLE_CACHE_MAX_BYTES / 4;
         void cache_portable_prepared_image(const std::string& key, const lfs::core::Tensor& image,
-                                           size_t max_output_bytes = 64u << 20);
+                                           size_t max_output_bytes = PORTABLE_CACHE_MAX_BYTES, bool lossless = false);
         void warn_portable_cache_failure(std::string_view message);
+        bool uses_portable_prepared_cache(const LoadParams& params) const;
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
         bool decodes_16bit(const LoadParams& params) const { return config_.use_16bit_color || params.decode_16bit; }
         bool decodes_float(const std::filesystem::path& path, const LoadParams& params) const;
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
-        std::vector<uint8_t> read_file(const std::filesystem::path& path) const;
+        std::vector<uint8_t> read_file(const std::filesystem::path& path,
+                                       std::optional<size_t> expected_size = std::nullopt) const;
         std::shared_ptr<std::vector<uint8_t>> load_cached_jpeg_blob(const std::string& cache_key);
         lfs::core::Tensor decode_file_on_cpu(const std::filesystem::path& path,
                                              const LoadParams& params) const;
