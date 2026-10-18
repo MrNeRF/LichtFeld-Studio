@@ -18,6 +18,72 @@ from runtime_test_app import isolated_app
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
 
+@pytest.mark.parametrize("backend", [2, 3])
+def test_selection_outline_accumulated_coverage(tmp_path, backend):
+    endpoint = os.environ.get("LFS_OUTLINE_TEST_ENDPOINT")
+    if not os.environ.get("LFS_EXECUTABLE"):
+        pytest.skip("Set LFS_EXECUTABLE to a build with selection outlines")
+    if os.name == "nt" and not endpoint:
+        pytest.skip("Windows GPU test requires an owned LFS_OUTLINE_TEST_ENDPOINT")
+    faint, below, stack, solid, halo = (tmp_path / (name + ".ply") for name in ("faint", "below", "stack", "solid", "halo"))
+    _write_splat(faint, 0., (.5, .2, .1), opacity=.2)
+    _write_splat(below, 0., (.5, .2, .1), opacity=.08, copies=8)
+    _write_splat(stack, 0., (.5, .2, .1), opacity=.08, copies=16)
+    _write_splat(solid, 0., (.2, .2, .1))
+    _write_splat(halo, 1.5, (.3, .3, .1), opacity=.2)
+    with nullcontext(endpoint) if endpoint else isolated_app(tmp_path) as endpoint:
+        _rpc(endpoint, "initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
+                                      "clientInfo": {"name": "outline-coverage-test", "version": "1"}})
+        _rpc(endpoint, "tools/list", {})
+        for resource in ("runtime/catalog", "runtime/state", "ui/state", "scene/state", "selection/current"):
+            _rpc(endpoint, "resources/read", {"uri": "lichtfeld://" + resource})
+        _editor(endpoint, f"""
+lf.clear_scene()
+s = lf.get_render_settings()
+s.raster_backend = {backend}
+s.selection_outline = True
+s.desaturate_unselected = False
+s.selection_color_center_marker = (1., 0., 0.)
+s.show_grid = False
+s.show_camera_frustums = False
+s.background_color = (0., 0., 0.)
+s.scene_upscaler = 'native'
+s.render_scale = 1.
+s.lod_enabled = False
+lf.set_camera((0., 0., 6.), (0., 0., 0.))
+""")
+
+        def load(path):
+            _editor(endpoint, f"lf.load_file({str(path)!r})")
+            deadline = time.monotonic() + 30
+            while True:
+                nodes = json.loads(_rpc(endpoint, "resources/read", {"uri": "lichtfeld://scene/nodes"})["contents"][0]["text"])
+                if any(node["name"] == path.stem for node in nodes["nodes"]):
+                    return
+                assert time.monotonic() < deadline, nodes
+                time.sleep(.05)
+
+        load(faint)
+        _select(endpoint, "lf.select_node('faint')")
+        assert not _mask(endpoint, tmp_path / "faint-mask.json")[1], "A single 20% floater produced an outline"
+        load(below)
+        _select(endpoint, "lf.select_node('below')")
+        assert not _mask(endpoint, tmp_path / "below-mask.json")[1], "Coverage below 50% produced an outline"
+        load(stack)
+        _select(endpoint, "lf.select_node('stack')")
+        assert _mask(endpoint, tmp_path / "stack-mask.json")[1], "Sub-10% splats did not accumulate into a visible silhouette"
+        _select(endpoint, "lf.select_node('faint')")
+        assert not _mask(endpoint, tmp_path / "faint-over-stack.json")[1], "Unselected opacity contributed to selected coverage"
+        _editor(endpoint, "lf.set_node_visibility('faint', False)\nlf.set_node_visibility('below', False)\nlf.set_node_visibility('stack', False)")
+        load(solid)
+        _select(endpoint, "lf.select_node('solid')")
+        baseline = _mask(endpoint, tmp_path / "solid-mask.json")[1]
+        assert baseline
+        load(halo)
+        _select(endpoint, "lf.select_nodes(['solid', 'halo'])")
+        assert _mask(endpoint, tmp_path / "solid-halo-mask.json")[1] == baseline, "A detached faint halo added a contour"
+
+
 def _rpc(endpoint, method, params):
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     token_file = os.environ.get("LFS_OUTLINE_TEST_TOKEN_FILE")
@@ -52,7 +118,7 @@ def _select(endpoint, code):
     _rpc(endpoint, "resources/read", {"uri": "lichtfeld://selection/current"})
 
 
-def _write_splat(path, x, scales, dense=False, z=0., copies=1):
+def _write_splat(path, x, scales, dense=False, z=0., copies=1, opacity=0.95):
     names = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
              "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
     points = [(0., 0.)]
@@ -66,7 +132,7 @@ def _write_splat(path, x, scales, dense=False, z=0., copies=1):
     dc = [(component - 0.5) / 0.28209479177387814 for component in (0., 0.3, 0.6)]
     local_scales = (0.08, 0.08, 0.05) if dense else scales
     data = b"".join(struct.pack("<14f", x + px * scales[0], py * scales[1], z,
-                               *dc, math.log(0.95 / 0.05),
+                               *dc, math.log(opacity / (1. - opacity)),
                                *(math.log(scale) for scale in local_scales), 1, 0, 0, 0)
                     for px, py in points)
     path.write_bytes(header.encode() + data)
@@ -211,11 +277,23 @@ lf.on_frame(outline_selection_cycle, duration_s=20.)
         assert not _mask(endpoint, tmp_path / "disabled.json")[1]
         _editor(endpoint, "s.selection_outline = True")
         if roll == 0:
-            _editor(endpoint, "lf.set_node_visibility('b', False)")
-            _select(endpoint, "lf.select_node('a')")
+            _editor(endpoint, "lf.set_node_visibility('a', False)\nlf.set_node_visibility('b', False)")
+            occluded = tmp_path / "occluded.ply"
+            # Keep the selected silhouette well inside the opaque foreground.
+            # Otherwise its faint tails can legitimately increase coverage at
+            # the foreground's own semi-transparent outer boundary.
+            _write_splat(occluded, 0., (.08, .08, .05))
+            _editor(endpoint, f"lf.load_file({str(occluded)!r})")
+            deadline = time.monotonic() + 30
+            while True:
+                nodes = _rpc(endpoint, "resources/read", {"uri": "lichtfeld://scene/nodes"})
+                if any(node["name"] == "occluded" for node in json.loads(nodes["contents"][0]["text"])["nodes"]):
+                    break
+                assert time.monotonic() < deadline, nodes
+                time.sleep(0.05)
+            _select(endpoint, "lf.select_node('occluded')")
             _, visible = _mask(endpoint, tmp_path / "visible.json")
             front = tmp_path / "front.ply"
-            # Four opaque layers terminate color compositing before object a.
             _write_splat(front, 0., (2., 2., 0.1), z=-1., copies=4)
             _editor(endpoint, f"lf.load_file({str(front)!r})")
             deadline = time.monotonic() + 30
@@ -225,13 +303,13 @@ lf.on_frame(outline_selection_cycle, duration_s=20.)
                     break
                 assert time.monotonic() < deadline, nodes
                 time.sleep(0.05)
-            _select(endpoint, "lf.select_node('a')")
+            _select(endpoint, "lf.select_node('occluded')")
             _, hidden = _mask(endpoint, tmp_path / "hidden.json")
             assert hidden == visible, "An unselected occluder cut the selected silhouette"
             visible_red = json.loads((tmp_path / "visible.json").read_text())["max_red"]
             hidden_red = json.loads((tmp_path / "hidden.json").read_text())["max_red"]
             assert 0.3 < hidden_red / visible_red < 0.4, "Occluded contour alpha differs from Blender's 0.35"
-            _select(endpoint, "lf.select_nodes(['a', 'front'])")
+            _select(endpoint, "lf.select_nodes(['occluded', 'front'])")
             _, together = _mask(endpoint, tmp_path / "occluding-selected.json")
             _select(endpoint, "lf.select_node('front')")
             assert _mask(endpoint, tmp_path / "front-only.json")[1] == together

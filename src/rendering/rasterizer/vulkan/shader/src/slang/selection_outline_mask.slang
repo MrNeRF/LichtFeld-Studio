@@ -13,7 +13,7 @@ layout(binding=6) ByteAddressBuffer flags;
 layout(binding=7) ByteAddressBuffer transform_indices;
 layout(binding=8) StructuredBuffer<float4> overlay_params;
 layout(binding=9) RWStructuredBuffer<uint> outline_ids;
-layout(binding=10) RWStructuredBuffer<float2> scene_depths;
+layout(binding=10) RWStructuredBuffer<float4> scene_depths;
 
 groupshared float2 batch_positions[256];
 groupshared float4 batch_conics[256];
@@ -28,10 +28,13 @@ void main(uint3 pixel : SV_DispatchThreadID, uint3 lane : SV_GroupThreadID,
     uint rank = lane.y * 16u + lane.x;
     bool inside = pixel.x < uniforms.image_width && pixel.y < uniforms.image_height;
     uint index = pixel.y * uniforms.image_width + pixel.x;
-    uint id = inside ? outline_ids[index] & 0x7fffffffu : 0u;
-    float2 previous_depths = inside && id != 0u ? scene_depths[index] : float2(1.0e10f);
+    uint id = inside ? outline_ids[index] & 0x3fffffffu : 0u;
+    float4 previous_depths = inside && uniforms.depth_wave > 0u
+                                 ? scene_depths[index] : float4(1.0e10f, 1.0e10f, 0.0f, 0.0f);
     float scene_depth = previous_depths.x;
     float selected_depth = previous_depths.y;
+    float scene_coverage = previous_depths.z;
+    float selected_coverage = previous_depths.w;
     uint macro = (group.y / HIGS_MACRO_T16_H) * higs_macro_grid_width(uniforms.grid_width)
                  + group.x / HIGS_MACRO_T16_W;
     uint begin = uint(macro_ranges[macro]);
@@ -55,7 +58,8 @@ void main(uint3 pixel : SV_DispatchThreadID, uint3 lane : SV_GroupThreadID,
                 bool nearer_selected = batch_selected[j] != 0u &&
                     (batch_depths[j] < selected_depth ||
                      (batch_depths[j] == selected_depth && node_id < id));
-                if (batch_depths[j] >= scene_depth && !nearer_selected)
+                if (scene_coverage >= 0.5f &&
+                    (batch_selected[j] == 0u || (selected_coverage >= 0.5f && !nearer_selected)))
                     continue;
                 Splat_2D_AlphaBlend splat;
                 splat.xy_vs = batch_positions[j];
@@ -64,9 +68,15 @@ void main(uint3 pixel : SV_DispatchThreadID, uint3 lane : SV_GroupThreadID,
                 float alpha = (uniforms.lod_enabled & 4u) != 0u
                                   ? evaluate_splat_spark_rad(splat, coordinate).a
                                   : evaluate_splat_for_profile(splat, coordinate, uniforms.splat_render_profile).a;
-                if (alpha < 0.1f)
+                if (alpha < ALPHA_THRESHOLD)
                     continue;
-                scene_depth = min(scene_depth, batch_depths[j]);
+                if (scene_coverage < 0.5f) {
+                    scene_coverage += (1.0f - scene_coverage) * alpha;
+                    if (scene_coverage >= 0.5f)
+                        scene_depth = batch_depths[j];
+                }
+                if (batch_selected[j] != 0u)
+                    selected_coverage += (1.0f - selected_coverage) * alpha;
                 if (nearer_selected) {
                     id = node_id;
                     selected_depth = batch_depths[j];
@@ -81,7 +91,9 @@ void main(uint3 pixel : SV_DispatchThreadID, uint3 lane : SV_GroupThreadID,
         float epsilon = 1.0e-4f * max(1.0f, abs(scene_depth));
         if (id > 1u && selected_depth > scene_depth + epsilon)
             id |= 0x80000000u;
+        if (selected_coverage < 0.5f)
+            id |= 0x40000000u;
         outline_ids[index] = id;
-        scene_depths[index] = float2(scene_depth, selected_depth);
+        scene_depths[index] = float4(scene_depth, selected_depth, scene_coverage, selected_coverage);
     }
 }

@@ -17,10 +17,10 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uniform OutlineSize size)
         return;
     uint index = p.y * size.width + p.x;
     uint center_sample = outline_ids[index];
-    uint center = center_sample & 0x7fffffffu;
-    // The mask contains selected objects only. The high bit records scene
-    // occlusion without cutting holes in their silhouettes.
-    center = center > 1u ? center : 0u;
+    uint center = center_sample & 0x3fffffffu;
+    // Bit 30 hides candidates below 50% accumulated selected coverage.
+    // Bit 31 records scene occlusion without cutting silhouette holes.
+    center = center > 1u && (center_sample & 0x40000000u) == 0u ? center : 0u;
     float edge_alpha = (center_sample & 0x80000000u) != 0u ? 0.35f : 1.0f;
     float distance_to_edge = 3.0f;
     // Only the 3x3 neighborhood can contribute to this two-sided 2px line.
@@ -35,8 +35,8 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uniform OutlineSize size)
             if (q.x < 0 || q.y < 0 || q.x >= int(size.width) || q.y >= int(size.height))
                 continue; // Clipping at the viewport edge is not an object contour.
             uint neighbor_sample = outline_ids[uint(q.y) * size.width + uint(q.x)];
-            uint neighbor = neighbor_sample & 0x7fffffffu;
-            neighbor = neighbor > 1u ? neighbor : 0u;
+            uint neighbor = neighbor_sample & 0x3fffffffu;
+            neighbor = neighbor > 1u && (neighbor_sample & 0x40000000u) == 0u ? neighbor : 0u;
             if (neighbor != center && (neighbor != 0u || center != 0u)) {
                 float distance = length(float2(x, y));
                 if (distance < distance_to_edge) {

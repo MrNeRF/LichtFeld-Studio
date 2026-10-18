@@ -1528,7 +1528,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                                            ? &clearDeviceBuffer(buffers.pixel_outline_ids, alloc_pixels)
                                            : nullptr;
     const _VulkanBuffer* outline_scene_depth = selection_outline
-                                                   ? &resizeDeviceBuffer(buffers.pixel_outline_scene_depth, 2u * alloc_pixels)
+                                                   ? &resizeDeviceBuffer(buffers.pixel_outline_scene_depth, 4u * alloc_pixels)
                                                    : nullptr;
 
     constexpr size_t kRadix = 256u;
@@ -3019,7 +3019,7 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     const size_t alloc_tiles = scratch_bucket.alloc_tiles;
     if (outline_transform_indices) {
         clearDeviceBuffer(buffers.pixel_outline_ids, alloc_pixels);
-        resizeDeviceBuffer(buffers.pixel_outline_scene_depth, 2u * alloc_pixels);
+        resizeDeviceBuffer(buffers.pixel_outline_scene_depth, 4u * alloc_pixels);
     }
     const size_t alloc_grid_w =
         _CEIL_DIV(static_cast<size_t>(scratch_bucket.alloc_w), size_t{TILE_WIDTH});

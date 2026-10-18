@@ -180,13 +180,13 @@ layout(binding=14) StructuredBuffer<float4> overlay_params;
 layout(binding=21) RWStructuredBuffer<uint> outline_ids;
 layout(binding=22) StructuredBuffer<uint> outline_lod_indices;
 layout(binding=23) StructuredBuffer<uint> outline_logical_indices;
-layout(binding=24) RWStructuredBuffer<float2> outline_scene_depths;
+layout(binding=24) RWStructuredBuffer<float4> outline_scene_depths;
 #else
 layout(binding=15) RWStructuredBuffer<uint> outline_ids;
 layout(binding=16) ByteAddressBuffer transform_indices;
 layout(binding=17) StructuredBuffer<uint> outline_lod_indices;
 layout(binding=18) StructuredBuffer<uint> outline_logical_indices;
-layout(binding=19) RWStructuredBuffer<float2> outline_scene_depths;
+layout(binding=19) RWStructuredBuffer<float4> outline_scene_depths;
 #endif
 #endif
 
@@ -318,13 +318,15 @@ void main(
         }
     }
 #if LFS_SELECTION_OUTLINE
-    uint outline_id = uniforms.depth_wave > 0u && is_inside ? outline_ids[pix_id] & 0x7fffffffu : 0u;
+    uint outline_id = uniforms.depth_wave > 0u && is_inside ? outline_ids[pix_id] & 0x3fffffffu : 0u;
     const bool outline_has_indices = overlay_enabled(overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS].y);
     bool outline_active = is_inside;
-    float2 previous_outline_depths = uniforms.depth_wave > 0u && is_inside && outline_id != 0u
-                                        ? outline_scene_depths[pix_id] : float2(FAR_DEPTH);
+    float4 previous_outline_depths = uniforms.depth_wave > 0u && is_inside
+                                        ? outline_scene_depths[pix_id] : float4(FAR_DEPTH, FAR_DEPTH, 0.0f, 0.0f);
     float outline_scene_depth = previous_outline_depths.x;
     float outline_selected_depth = previous_outline_depths.y;
+    float outline_scene_coverage = previous_outline_depths.z;
+    float outline_selected_coverage = previous_outline_depths.w;
 #endif
     bool thread_active = is_inside && curr_pixel_state.a >= 0.0001f;
 
@@ -487,8 +489,14 @@ void main(
                 // Blender's outline prepass contains selected objects only. An
                 // unselected foreground footprint dims the selected silhouette;
                 // it must neither clip it nor terminate the outline search.
-                if (outline_active && gauss_rgba.a >= 0.1f) {
-                    outline_scene_depth = min(outline_scene_depth, splat_depth);
+                if (outline_active) {
+                    // Match alpha compositing, including individually faint splats.
+                    // Persist both accumulators across depth waves.
+                    if (outline_scene_coverage < 0.5f) {
+                        outline_scene_coverage += (1.0f - outline_scene_coverage) * gauss_rgba.a;
+                        if (outline_scene_coverage >= 0.5f)
+                            outline_scene_depth = splat_depth;
+                    }
                     uint logical_id = splat_id;
                     if ((uniforms.lod_enabled & 1u) != 0u)
                         logical_id = (uniforms.lod_enabled & 8u) != 0u
@@ -501,6 +509,7 @@ void main(
                     uint outline_flags = read_byte(gaussian_overlay_flags, splat_id);
                     #endif
                     if ((outline_flags & OVERLAY_FLAG_OUTLINE_SELECTED) != 0u) {
+                        outline_selected_coverage += (1.0f - outline_selected_coverage) * gauss_rgba.a;
                         uint node_id = node + 2u;
                         if (splat_depth < outline_selected_depth ||
                             (splat_depth == outline_selected_depth && node_id < outline_id)) {
@@ -633,8 +642,12 @@ void main(
         float epsilon = 1.0e-4f * max(1.0f, abs(outline_scene_depth));
         if (outline_id > 1u && outline_selected_depth > outline_scene_depth + epsilon)
             outline_id |= 0x80000000u;
+        // Bit 30 retains a candidate ID for later waves without exposing
+        // a silhouette before selected coverage reaches 50%.
+        if (outline_selected_coverage < 0.5f)
+            outline_id |= 0x40000000u;
         outline_ids[pix_id] = outline_id;
-        outline_scene_depths[pix_id] = float2(outline_scene_depth, outline_selected_depth);
+        outline_scene_depths[pix_id] = float4(outline_scene_depth, outline_selected_depth, outline_scene_coverage, outline_selected_coverage);
 #endif
         n_contributors[pix_id] = local_n_contrib;
         final_pixel_state[pix_id] = curr_pixel_state;
