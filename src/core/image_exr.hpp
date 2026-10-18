@@ -19,6 +19,10 @@ namespace lfs::core::image_codecs {
     // Produces owning Float32 RGBA, including the existing single-channel policy.
     LFS_IMAGE_CODECS_API bool decode_exr_memory(std::span<const std::uint8_t> input, Image& result,
                                                 std::string& error, unsigned max_workers = 0);
+    // Consumer budget for the owning Float32 RGBA output. Checked after the
+    // header, before chunk-table work or pixel allocation; not total codec RAM.
+    LFS_IMAGE_CODECS_API bool decode_exr_memory(std::span<const std::uint8_t> input, Image& result,
+                                                std::string& error, unsigned max_workers, std::size_t max_decoded_bytes);
     enum class ExrSampleType { Half,
                                Float };
     enum class ExrCompression { None,

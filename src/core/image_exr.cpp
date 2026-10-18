@@ -414,6 +414,11 @@ namespace lfs::core::image_codecs {
     }
 
     bool decode_exr_memory(std::span<const std::uint8_t> input, Image& result, std::string& error, unsigned max_workers) {
+        return decode_exr_memory(input, result, error, max_workers, std::numeric_limits<size_t>::max());
+    }
+
+    bool decode_exr_memory(std::span<const std::uint8_t> input, Image& result, std::string& error,
+                           unsigned max_workers, std::size_t max_decoded_bytes) {
         error.clear();
         if (input.empty() || input.size() > uint64_t(std::numeric_limits<int64_t>::max())) {
             error = "EXR: invalid input buffer size";
@@ -426,6 +431,12 @@ namespace lfs::core::image_codecs {
             Header header;
             if (!open("EXR buffer", source, context, header, error))
                 return false;
+            const size_t required = size_t(header.width) * header.height * 4 * sizeof(float);
+            if (required > max_decoded_bytes) {
+                error = "EXR: decoded image exceeds byte limit (bytes=" + std::to_string(required) +
+                        ", limit=" + std::to_string(max_decoded_bytes) + ")";
+                return false;
+            }
             return decode_open_exr(context, header, input.size(), result, error, max_workers);
         } catch (const std::bad_alloc&) {
             error = "EXR: decode allocation failed";
