@@ -943,8 +943,8 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
     snapshot = controller.snapshot()
 
     assert snapshot["show_crop_toolbar"] is True
-    assert snapshot["show_crop_edit_controls"] is True
-    assert snapshot["show_crop_enable_separator"] is True
+    assert snapshot["show_crop_edit_controls"] is False
+    assert snapshot["show_crop_enable_separator"] is False
     assert snapshot["crop_enable_buttons"] == [
         {
             "button_id": "crop-enabled",
@@ -1479,9 +1479,9 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert rml.count('data-for="button : crop_group_buttons"') == 2
     assert rml.count('data-for="button : crop_enable_buttons"') == 2
     assert rml.count('data-for="button : crop_settings_buttons"') == 2
-    assert rml.count('data-for="button : crop_object_buttons"') == 2
-    assert rml.count('data-for="button : crop_transform_buttons"') == 2
-    assert rml.count('data-for="button : crop_action_buttons"') == 2
+    assert rml.count('data-for="button : crop_object_buttons"') == 3
+    assert rml.count('data-for="button : crop_transform_buttons"') == 3
+    assert rml.count('data-for="button : crop_action_buttons"') == 3
     assert rml.count('data-for="button : align_action_buttons"') == 2
     assert rml.count('data-for="button : selection_volume_gizmo_buttons"') == 1
     assert 'class="toolbar-flyout-divider hidden"' not in rml
