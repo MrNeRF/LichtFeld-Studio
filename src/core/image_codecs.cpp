@@ -38,6 +38,7 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -75,8 +76,11 @@ namespace lfs::core::image_codecs {
                 try {
                     const auto required = position + count;
                     if (required > bytes.capacity()) {
-                        const auto doubled = bytes.capacity() > limit / 2 ? limit : bytes.capacity() * 2;
-                        bytes.reserve(std::max(required, doubled));
+                        // Keep amortized geometric growth without doubling a
+                        // large output's allocation up to the full byte limit.
+                        const auto extra = bytes.capacity() / 2;
+                        const auto grown = bytes.capacity() + std::min(extra, limit - bytes.capacity());
+                        bytes.reserve(std::max(required, grown));
                     }
                     if (position == bytes.size())
                         bytes.insert(bytes.end(), data, data + count);
@@ -760,8 +764,17 @@ namespace lfs::core::image_codecs {
                 // Only client I/O callbacks mark the input as failed.
                 std::array<char, 512> text{};
                 std::vsnprintf(text.data(), text.size(), format ? format : "TIFF codec error", args);
-                if (std::strstr(text.data(), "memory") || std::strstr(text.data(), "alloc") || std::strstr(text.data(), "No space") ||
-                    std::strstr(text.data(), "Insertion in tif_map_"))
+                // Inspect the provider's format, not interpolated tag names or
+                // file data. libtiff has no structured allocation error code.
+                const std::string_view message = format ? format : "";
+                if (message.starts_with("Failed to allocate ") || message.starts_with("Cannot allocate ") ||
+                    message.starts_with("No space ") || message.starts_with("Out of memory") ||
+                    message == "Not enough memory" || message.starts_with("%s: Out of memory") ||
+                    message.starts_with("%s: Failed to allocate ") || message.starts_with("Memory allocation of ") ||
+                    message.starts_with("Cumulated memory allocation of ") ||
+                    message == "malloc(sizeof(TIFFOffsetAndDirNumber)) failed" ||
+                    message == "Insertion in tif_map_dir_offset_to_number failed" ||
+                    message == "Insertion in tif_map_dir_number_to_offset failed")
                     self.allocation_failed = true;
                 if (!self.failed)
                     self.describe(text.data());

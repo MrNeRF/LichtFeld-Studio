@@ -634,6 +634,7 @@ namespace {
                 const auto source = samples(w, h, 1, bits);
                 std::vector<uint8_t> encoded;
                 ASSERT_TRUE(codec::encode_tiff_memory(source, w, h, 1, bits, size_t(w) * (bits / 8), encoded));
+                EXPECT_LE(encoded.capacity() - encoded.size(), encoded.size() / 2);
                 check_pixels(encoded, source, w, h, 1, bits);
                 const std::vector<uint8_t> previous{9, 8, 7};
                 std::vector<uint8_t> failed = previous;
