@@ -1118,6 +1118,12 @@ def test_crop_numeric_controls_edit_only_volume_with_one_undo_entry(
 ):
     module, _ = transform_controls_module
     panel, state, history = history_panel
+    if operation == "scale":
+        module.lf.decompose_transform = lambda matrix: {
+            **_decompose_transform(matrix),
+            "scale": [math.sqrt(sum(matrix[axis * 4 + row] ** 2 for row in range(3)))
+                      for axis in range(3)],
+        }
     state.active_tool = "builtin.cropbox"
     state.selected_names = ["volume"]
     original = _translation_matrix(.1, .2, .3)
@@ -1144,6 +1150,12 @@ def test_crop_numeric_controls_edit_only_volume_with_one_undo_entry(
 
     assert state.local_transforms["bicycle"] == original
     assert state.local_transforms["volume"] != original
+    if operation == "scale":
+        # Crop gizmos also scale the existing basis columns, with no translation.
+        expected = original.copy()
+        for row in range(3):
+            expected[row] *= 2.5
+        assert state.local_transforms["volume"] == pytest.approx(expected)
     assert len(history) == 1
     assert history[0][0] == {"volume": original}
     # Selecting another operation refreshes the same numeric overlay.

@@ -1668,7 +1668,7 @@ namespace lfs::vis {
 
 #undef TRANSFORM_DRAG_CANCEL_TEST
 
-    TEST_F(WindowInputDispatchTest, CropScaleHandleKeepsLocalMinimumUnderNestedParents) {
+    TEST_F(WindowInputDispatchTest, CropScaleHandleChangesTransformAndPreservesExtentsUnderNestedParents) {
         auto& sm = *viewer_->getSceneManager();
         auto& scene = sm.getScene();
         auto& gizmo = gui_->gizmo();
@@ -1707,59 +1707,119 @@ namespace lfs::vis {
             gizmo.setOperation(gui::GizmoOperation::Scale);
             gizmo.setTransformSpace(TransformSpace::World);
             gizmo.updateToolState(ui, false);
-            for (int drag = 0; drag < 3; ++drag) {
-                frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
-                bool found = false;
-                for (int y = 105; y <= 195 && !found; ++y) {
-                    frame.mouse_x = 290.0f;
-                    frame.mouse_y = static_cast<float>(y);
-                    gizmo.renderCropBoxGizmo(ui, layout);
-                    found = gui::isScaleGizmoHovered();
-                }
-                ASSERT_TRUE(found);
-                const glm::vec2 start(frame.mouse_x, frame.mouse_y);
-                const auto drag_to = [&](const glm::vec2 end, const bool reverse = false) {
-                    frame.mouse_x = start.x;
-                    frame.mouse_y = start.y;
-                    frame.mouse_down[0] = frame.mouse_clicked[0] = true;
-                    gizmo.renderCropBoxGizmo(ui, layout);
-                    EXPECT_TRUE(gui::isScaleGizmoActive());
-                    frame.mouse_clicked[0] = false;
-                    if (reverse) {
-                        frame.mouse_x = start.x - 200.0f;
-                        gizmo.renderCropBoxGizmo(ui, layout);
-                    }
-                    frame.mouse_x = end.x;
-                    frame.mouse_y = end.y;
-                    gizmo.renderCropBoxGizmo(ui, layout);
-                    frame.mouse_down[0] = false;
-                    frame.mouse_released[0] = true;
-                    gizmo.renderCropBoxGizmo(ui, layout);
-                    frame.mouse_released[0] = false;
-                };
-                if (drag == 0 && !nested) {
-                    op::undoHistory().clear();
-                    drag_to(start + glm::vec2(24.0f, 0.0f), true);
-                    const auto grown = *scene.getNodeById(volume)->cropbox;
-                    EXPECT_EQ(grown.min, glm::vec3(-0.05f * 1.25f, data.min.y, data.min.z));
-                    EXPECT_EQ(grown.max, glm::vec3(0.05f * 1.25f, data.max.y, data.max.z));
-                    ASSERT_TRUE(op::undoHistory().undo().success);
-                    EXPECT_EQ(scene.getNodeById(volume)->cropbox->min, data.min);
-                    ASSERT_TRUE(op::undoHistory().redo().success);
-                    EXPECT_EQ(scene.getNodeById(volume)->cropbox->min, grown.min);
-                    ASSERT_TRUE(op::undoHistory().undo().success);
-                }
-                drag_to(start - glm::normalize(start - glm::vec2(200.0f, 150.0f)) * 200.0f);
-                const auto* node = scene.getNodeById(volume);
-                ASSERT_NE(node, nullptr);
-                const glm::vec3 half = (node->cropbox->max - node->cropbox->min) * 0.5f;
-                EXPECT_NEAR(half.x, 0.0005f, 1e-8f);
-                EXPECT_NEAR(half.y, nested ? 0.0005f : data.max.y, 1e-8f);
-                EXPECT_EQ(half.z, 0.05f);
+            frame.mouse_down[0] = frame.mouse_clicked[0] = frame.mouse_released[0] = false;
+            bool found = false;
+            for (int y = 105; y <= 195 && !found; ++y) {
+                frame.mouse_x = 290.0f;
+                frame.mouse_y = static_cast<float>(y);
+                gizmo.renderCropBoxGizmo(ui, layout);
+                found = gui::isScaleGizmoHovered();
             }
+            ASSERT_TRUE(found);
+            const glm::vec2 start(frame.mouse_x, frame.mouse_y);
+            const auto drag_to = [&](const glm::vec2 end, const bool reverse = false) {
+                frame.mouse_x = start.x;
+                frame.mouse_y = start.y;
+                frame.mouse_down[0] = frame.mouse_clicked[0] = true;
+                gizmo.renderCropBoxGizmo(ui, layout);
+                EXPECT_TRUE(gui::isScaleGizmoActive());
+                frame.mouse_clicked[0] = false;
+                if (reverse) {
+                    frame.mouse_x = start.x - 200.0f;
+                    gizmo.renderCropBoxGizmo(ui, layout);
+                }
+                frame.mouse_x = end.x;
+                frame.mouse_y = end.y;
+                gizmo.renderCropBoxGizmo(ui, layout);
+                frame.mouse_down[0] = false;
+                frame.mouse_released[0] = true;
+                gizmo.renderCropBoxGizmo(ui, layout);
+                frame.mouse_released[0] = false;
+            };
+            if (!nested) {
+                op::undoHistory().clear();
+                drag_to(start + glm::vec2(24.0f, 0.0f), true);
+                const auto grown = *scene.getNodeById(volume)->cropbox;
+                EXPECT_EQ(grown.min, data.min);
+                EXPECT_EQ(grown.max, data.max);
+                // The numeric scale field multiplies these same basis columns.
+                const auto scaled_transform = sm.getNodeTransform(scene.getNodeById(volume)->name);
+                EXPECT_NEAR(glm::length(glm::vec3(scaled_transform[0])), 1.25f, 1e-5f);
+                EXPECT_NEAR(glm::length(glm::vec3(scaled_transform[1])), 1.0f, 1e-5f);
+                ASSERT_TRUE(op::undoHistory().undo().success);
+                EXPECT_EQ(scene.getNodeById(volume)->cropbox->min, data.min);
+                EXPECT_NEAR(glm::length(glm::vec3(sm.getNodeTransform(scene.getNodeById(volume)->name)[0])), 1.0f, 1e-5f);
+                ASSERT_TRUE(op::undoHistory().redo().success);
+                EXPECT_EQ(scene.getNodeById(volume)->cropbox->min, grown.min);
+                EXPECT_EQ(sm.getNodeTransform(scene.getNodeById(volume)->name), scaled_transform);
+                ASSERT_TRUE(op::undoHistory().undo().success);
+            }
+            drag_to(start - glm::normalize(start - glm::vec2(200.0f, 150.0f)) * 200.0f);
+            const auto* node = scene.getNodeById(volume);
+            ASSERT_NE(node, nullptr);
+            EXPECT_EQ(node->cropbox->min, data.min);
+            EXPECT_EQ(node->cropbox->max, data.max);
+            const auto transform = sm.getNodeTransform(node->name);
+            const glm::vec3 scale(glm::length(glm::vec3(transform[0])), glm::length(glm::vec3(transform[1])), glm::length(glm::vec3(transform[2])));
+            EXPECT_GT(scale.x, 0.0f);
+            EXPECT_LT(scale.x, 1.0f);
+            EXPECT_NEAR(scale.z, 1.0f, 1e-5f);
             gizmo.deactivateAllTools();
             op::undoHistory().clear();
         }
+    }
+
+    TEST_F(WindowInputDispatchTest, EllipsoidScaleHandleMatchesNumericTransformScale) {
+        auto& sm = *viewer_->getSceneManager();
+        auto& scene = sm.getScene();
+        auto& gizmo = gui_->gizmo();
+        auto& camera = viewer_->getViewport().camera;
+        camera.t = {0.0f, 0.0f, 12.0f};
+        camera.pivot = {0.0f, 0.0f, 0.0f};
+        camera.R = rendering::makeVisualizerLookAtRotation(camera.t, camera.pivot);
+        const auto model = scene.addSplat("Scale model", lfs::test::licht::make_splat(3));
+        const auto volume = scene.addEllipsoid("Scale ellipsoid", model);
+        core::EllipsoidData data;
+        data.radii = glm::vec3(0.05f);
+        scene.setEllipsoidData(volume, data);
+        sm.changeContentType(SceneManager::ContentType::SplatFiles);
+        sm.selectNode(volume);
+        viewer_->getEditorContext().update(&sm, viewer_->getTrainerManager());
+        UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+        gizmo.setCropToolShape("ellipsoid");
+        gizmo.setOperation(gui::GizmoOperation::Scale);
+        gui::UIContext ui{.viewer = viewer_.get(), .editor = &viewer_->getEditorContext()};
+        const gui::ViewportLayout layout{.pos = {0.0f, 0.0f}, .size = {400.0f, 300.0f}};
+        gizmo.updateToolState(ui, false);
+        const auto original = sm.getNodeTransform(scene.getNodeById(volume)->name);
+        auto& frame = frameInput();
+        bool found = false;
+        for (int y = 105; y <= 195 && !found; ++y) {
+            frame.mouse_x = 290.0f;
+            frame.mouse_y = static_cast<float>(y);
+            gizmo.renderEllipsoidGizmo(ui, layout);
+            found = gui::isScaleGizmoHovered();
+        }
+        ASSERT_TRUE(found);
+        frame.mouse_down[0] = frame.mouse_clicked[0] = true;
+        gizmo.renderEllipsoidGizmo(ui, layout);
+        ASSERT_TRUE(gui::isScaleGizmoActive());
+        frame.mouse_clicked[0] = false;
+        frame.mouse_x += 24.0f;
+        gizmo.renderEllipsoidGizmo(ui, layout);
+        frame.mouse_down[0] = false;
+        frame.mouse_released[0] = true;
+        gizmo.renderEllipsoidGizmo(ui, layout);
+        frame.mouse_released[0] = false;
+        const auto* node = scene.getNodeById(volume);
+        EXPECT_EQ(node->ellipsoid->radii, data.radii);
+        const auto expected = glm::scale(original, glm::vec3(1.25f, 1.0f, 1.0f));
+        const auto actual = sm.getNodeTransform(node->name);
+        for (int column = 0; column < 4; ++column)
+            for (int row = 0; row < 4; ++row)
+                EXPECT_NEAR(actual[column][row], expected[column][row], 1e-5f);
+        gizmo.deactivateAllTools();
+        op::undoHistory().clear();
     }
 
     TEST_F(WindowInputDispatchTest, CropToolGizmoDrawsInEveryIndependentSplitPanel) {

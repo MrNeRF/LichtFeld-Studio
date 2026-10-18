@@ -133,7 +133,8 @@ namespace lfs::vis::gui {
         void applyBoundsScale(
             GizmoTransformContext& ctx,
             core::Scene& scene,
-            const glm::vec3& new_size);
+            const glm::vec3& new_size,
+            const glm::vec3& new_pivot_world);
 
     } // namespace gizmo_ops
 
