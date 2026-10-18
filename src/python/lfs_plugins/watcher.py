@@ -68,11 +68,27 @@ class PluginWatcher:
     def _check_for_changes(self):
         """Check all loaded plugins for file changes."""
         for name, plugin in self.manager.get_active_plugins_snapshot():
-            if not plugin.info.hot_reload:
-                continue
             if self._has_changes(plugin):
-                with self._lock:
-                    self._pending_reloads.add(name)
+                if plugin.info.hot_reload:
+                    with self._lock:
+                        self._pending_reloads.add(name)
+                else:
+                    if not plugin.needs_restart:
+                        plugin.needs_restart = True
+                        _log.warning("Plugin '%s' modified on disk but hot reload is disabled. Restart required.", name)
+                        self._notify_restart_required(name)
+
+    def _notify_restart_required(self, plugin_name: str):
+        """Log and request UI refresh to notify that a restart is required."""
+        try:
+            import lichtfeld as lf
+            if hasattr(lf, "LOG") and hasattr(lf.LOG, "warning"):
+                lf.LOG.warning(f"Plugin '{plugin_name}' changed: restart required")
+            elif hasattr(lf, "log") and hasattr(lf.log, "warning"):
+                lf.log.warning(f"Plugin '{plugin_name}' changed: restart required")
+            self._request_redraw()
+        except Exception:
+            pass
 
     def _has_changes(self, plugin) -> bool:
         """Check if any plugin files were modified."""
