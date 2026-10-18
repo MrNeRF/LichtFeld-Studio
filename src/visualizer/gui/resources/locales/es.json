@@ -406,7 +406,6 @@
     "section.refinement": "Refinamiento",
     "section.appearance_correction": "Corrección de apariencia",
     "section.learning_rates": "Tasas de aprendizaje",
-    "section.evaluation": "Evaluación",
     "section.bilateral_grid": "Ajustes de Cuadrícula Bilateral",
     "section.losses": "Parámetros de Pérdida",
     "section.initialization": "Inicialización",
