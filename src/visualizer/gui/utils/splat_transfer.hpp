@@ -26,7 +26,7 @@ namespace lfs::vis::gui {
         std::string format = "ply";
         std::string name = "splat";
         int sh_degree = -1;
-        SplatDragAxes axes = SplatDragAxes::blender();
+        SplatDragAxes axes;
         std::optional<int> training_step;
         std::function<bool(float)> progress;
         // Staging root; empty is the transfers folder in the LichtFeld cache directory.

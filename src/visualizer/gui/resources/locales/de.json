@@ -3263,7 +3263,7 @@
   "preferences.drag_axis_positive_y": "+Y",
   "preferences.drag_axis_negative_z": "-Z",
   "preferences.drag_axis_positive_z": "+Z",
-  "preferences.drag_axes_hint": "Hochachse für PLY-Exporte. Beim Ablegen in Ordnern oder auf dem Desktop gilt die gewählte Achse. -Y behält die LichtFeld-Koordinaten bei. Blender verwendet +Z und wird unter Windows automatisch erkannt; dabei gilt +Z. X bleibt unverändert.",
+  "preferences.drag_axes_hint": "Hochachse für PLY-Exporte. Beim Ablegen in Ordnern oder auf dem Desktop gilt die gewählte Achse. -Y behält die LichtFeld-Koordinaten bei. Blender verwendet +Z und wird unter Windows und Linux X11 automatisch erkannt; dabei gilt +Z. X bleibt unverändert.",
   "preferences.drag_default": "Drag-Format",
   "preferences.drag_ply": "PLY",
   "preferences.drag_spz": "SPZ",

@@ -8,12 +8,14 @@
 #include <cstdlib>
 #include <limits>
 #include <memory>
+#include <new>
 #include <stdexcept>
 
 #include <vector>
 #ifdef __linux__
 #include "native_drag_icon.hpp"
 #include "native_drop_pause.hpp"
+#include <X11/Xutil.h>
 #include <gdk/gdkx.h>
 #include <gtk/gtk.h>
 #endif
@@ -72,16 +74,20 @@ namespace lfs::vis::gui {
             DWORD pid = 0;
             if (!window || !GetWindowThreadProcessId(window, &pid) || !pid)
                 return FileDragTarget::Unknown;
+            constexpr DWORD capacity = 32768;
+            std::unique_ptr<wchar_t[]> path(new (std::nothrow) wchar_t[capacity]);
+            if (!path)
+                return FileDragTarget::Unknown;
             const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
             if (!process)
                 return FileDragTarget::Unknown;
-            std::array<wchar_t, 32768> path{};
-            DWORD length = static_cast<DWORD>(path.size());
-            const bool found = QueryFullProcessImageNameW(process, 0, path.data(), &length);
+            DWORD length = capacity;
+            const bool found = QueryFullProcessImageNameW(process, 0, path.get(), &length);
             CloseHandle(process);
-            if (!found || length == 0 || length >= path.size())
+            if (!found || length == 0 || length >= capacity)
                 return FileDragTarget::Unknown;
-            return targetFromExecutable(path.data());
+            path[length] = L'\0';
+            return targetFromExecutable(path.get());
         }
         struct DragTargetState {
             FileDragTarget target = FileDragTarget::Unknown;
@@ -401,6 +407,76 @@ namespace lfs::vis::gui {
     } // namespace
 #endif
 
+#ifdef __linux__
+    namespace {
+        FileDragTarget targetFromX11Window(GdkWindow* window) noexcept {
+            if (!window || gdk_window_is_destroyed(window))
+                return FileDragTarget::Unknown;
+            auto* display = gdk_window_get_display(window);
+            if (!GDK_IS_X11_DISPLAY(display))
+                return FileDragTarget::Unknown;
+            auto* x11 = gdk_x11_display_get_xdisplay(display);
+            Window current = gdk_x11_window_get_xid(window);
+            FileDragTarget target = FileDragTarget::Unknown;
+            gdk_x11_display_error_trap_push(display);
+            for (int level = 0; current && level < 16; ++level) {
+                XClassHint hint{};
+                const bool found = XGetClassHint(x11, current, &hint) && hint.res_class &&
+                                   g_ascii_strcasecmp(hint.res_class, "Blender") == 0;
+                if (hint.res_name)
+                    XFree(hint.res_name);
+                if (hint.res_class)
+                    XFree(hint.res_class);
+                if (found) {
+                    target = FileDragTarget::Blender;
+                    break;
+                }
+                Window root = 0, parent = 0, *children = nullptr;
+                unsigned int count = 0;
+                const bool queried = XQueryTree(x11, current, &root, &parent, &children, &count);
+                if (children)
+                    XFree(children);
+                if (!queried || current == root || parent == current)
+                    break;
+                current = parent;
+            }
+            return gdk_x11_display_error_trap_pop(display) ? FileDragTarget::Unknown : target;
+        }
+
+        class X11FileData {
+            FileProvider provider_;
+            std::array<std::vector<std::string>, 2> uris_;
+            std::array<std::vector<gchar*>, 2> pointers_;
+
+        public:
+            explicit X11FileData(FileProvider provider) : provider_(std::move(provider)) {}
+            X11FileData(const X11FileData&) = delete;
+            X11FileData& operator=(const X11FileData&) = delete;
+            std::vector<gchar*>& get(FileDragTarget target) {
+                const size_t key = target == FileDragTarget::Blender ? 1u : 0u;
+                auto& pointers = pointers_[key];
+                if (pointers.empty()) {
+                    std::vector<std::string> uris;
+                    for (const auto& path : provider_(target)) {
+                        std::unique_ptr<gchar, decltype(&g_free)> uri(g_filename_to_uri(path.c_str(), nullptr, nullptr), g_free);
+                        if (!uri)
+                            throw std::runtime_error("Cannot encode file URI");
+                        uris.emplace_back(uri.get());
+                    }
+                    if (uris.empty())
+                        throw std::runtime_error("No files prepared");
+                    uris_[key] = std::move(uris);
+                    pointers.reserve(uris_[key].size() + 1);
+                    for (auto& uri : uris_[key])
+                        pointers.push_back(uri.data());
+                    pointers.push_back(nullptr);
+                }
+                return pointers;
+            }
+        };
+    } // namespace
+#endif
+
     std::optional<bool> pointerOutsideApplication(SDL_Window* source) {
 #ifdef _WIN32
         (void)source;
@@ -582,12 +658,9 @@ namespace lfs::vis::gui {
             bool done = false;
             bool failed = false;
             bool provider_failed = false;
-            std::vector<std::string> uris;
-            std::vector<gchar*> pointers;
-            FileProvider provider;
-            std::string error;
-        } state;
-        state.provider = [resolve = std::move(resolve)](FileDragTarget destination) mutable { return resolve(destination); };
+            bool preparing = false;
+            X11FileData files;
+        } state{false, false, false, false, X11FileData([resolve = std::move(resolve)](FileDragTarget destination) mutable { return resolve(destination); })};
         auto* widget = gtk_invisible_new_for_screen(gdk_display_get_default_screen(display));
         if (!widget)
             return {FileDragStatus::Failed, "Cannot create GTK drag source"};
@@ -597,31 +670,22 @@ namespace lfs::vis::gui {
         } widget_scope{widget};
         gtk_widget_realize(widget);
         gtk_widget_show(widget);
-        g_signal_connect(widget, "drag-data-get", G_CALLBACK((+[](GtkWidget*, GdkDragContext*, GtkSelectionData* selection, guint, guint, gpointer data) {
+        g_signal_connect(widget, "drag-data-get", G_CALLBACK((+[](GtkWidget*, GdkDragContext* drag_context, GtkSelectionData* selection, guint, guint, gpointer data) {
                              auto& s = *static_cast<State*>(data);
-                             if (s.failed || s.provider_failed)
+                             if (s.failed || s.provider_failed || s.preparing)
                                  return;
+                             struct PreparationScope {
+                                 bool& active;
+                                 explicit PreparationScope(bool& value) : active(value) { active = true; }
+                                 ~PreparationScope() { active = false; }
+                             } preparation(s.preparing);
                              try {
-                                 if (s.pointers.empty()) {
-                                     auto provider = std::move(s.provider);
-                                     if (!provider)
-                                         return;
-                                     for (const auto& path : provider(FileDragTarget::Unknown)) {
-                                         std::unique_ptr<gchar, decltype(&g_free)> uri(g_filename_to_uri(path.c_str(), nullptr, nullptr), g_free);
-                                         if (!uri)
-                                             throw std::runtime_error("Cannot encode file URI");
-                                         s.uris.emplace_back(uri.get());
-                                     }
-                                     for (auto& uri : s.uris)
-                                         s.pointers.push_back(uri.data());
-                                     s.pointers.push_back(nullptr);
-                                 }
-                                 gtk_selection_data_set_uris(selection, s.pointers.data());
+                                 const auto target = targetFromX11Window(gdk_drag_context_get_dest_window(drag_context));
+                                 gtk_selection_data_set_uris(selection, s.files.get(target).data());
                              } catch (...) {
                                  // LFS-CENSUS-OK(empty-catch): GTK receives an empty failed selection; never unwind across C.
                                  s.failed = true;
                                  s.provider_failed = true;
-                                 s.pointers.clear();
                              }
                          })),
                          &state);
@@ -678,6 +742,72 @@ namespace lfs::vis::gui {
         return {FileDragStatus::Unsupported, "Native drag source is not implemented for this platform"};
 #endif
     }
+
+#if defined(__linux__) && defined(LFS_NATIVE_DRAG_TESTS)
+    int nativeX11DragContract() {
+        if (!gtk_init_check(nullptr, nullptr))
+            return 77;
+        auto* display = gdk_display_get_default();
+        if (!GDK_IS_X11_DISPLAY(display))
+            return 77;
+        auto* x11 = gdk_x11_display_get_xdisplay(display);
+        const auto window = XCreateSimpleWindow(x11, DefaultRootWindow(x11), 0, 0, 8, 8, 0, 0, 0);
+        const auto child = XCreateSimpleWindow(x11, window, 0, 0, 4, 4, 0, 0, 0);
+        XSync(x11, False);
+        auto* parent_wrapper = gdk_x11_window_foreign_new_for_display(display, window);
+        auto* child_wrapper = gdk_x11_window_foreign_new_for_display(display, child);
+        const auto classify = [&](const char* name) {
+            XClassHint hint{const_cast<char*>("blender"), const_cast<char*>(name)};
+            XSetClassHint(x11, window, &hint);
+            XSync(x11, False);
+            return targetFromX11Window(parent_wrapper);
+        };
+        bool valid = targetFromX11Window(nullptr) == FileDragTarget::Unknown;
+        for (int i = 0; i < 100; ++i) {
+            valid = valid && classify("Blender") == FileDragTarget::Blender;
+            valid = valid && targetFromX11Window(child_wrapper) == FileDragTarget::Blender;
+            valid = valid && classify("bLeNdEr") == FileDragTarget::Blender;
+            valid = valid && classify("MyBlender") == FileDragTarget::Unknown;
+            valid = valid && classify("Blender-helper") == FileDragTarget::Unknown;
+            valid = valid && classify("Nautilus") == FileDragTarget::Unknown;
+        }
+        XDeleteProperty(x11, window, XInternAtom(x11, "WM_CLASS", False));
+        XSync(x11, False);
+        valid = valid && targetFromX11Window(parent_wrapper) == FileDragTarget::Unknown;
+        XDestroyWindow(x11, child);
+        XSync(x11, False);
+        valid = valid && targetFromX11Window(child_wrapper) == FileDragTarget::Unknown;
+        g_object_unref(child_wrapper);
+        g_object_unref(parent_wrapper);
+        XDestroyWindow(x11, window);
+        XSync(x11, False);
+        if (!valid)
+            return 1;
+        std::array<int, 2> calls{};
+        const auto original = std::filesystem::path("/tmp/drag original #.ply");
+        const auto blender = std::filesystem::path("/tmp/drag blender +.ply");
+        X11FileData files([&](FileDragTarget target) {
+            ++calls[target == FileDragTarget::Blender ? 1 : 0];
+            return std::vector<std::filesystem::path>{target == FileDragTarget::Blender ? blender : original};
+        });
+        auto* original_uri = files.get(FileDragTarget::Unknown).front();
+        const std::string stable_uri = original_uri;
+        auto* blender_uri = files.get(FileDragTarget::Blender).front();
+        std::unique_ptr<gchar, decltype(&g_free)> decoded(g_filename_from_uri(blender_uri, nullptr, nullptr), g_free);
+        if (!decoded || std::filesystem::path(decoded.get()) != blender ||
+            files.get(FileDragTarget::Unknown).front() != original_uri ||
+            stable_uri != original_uri || calls != std::array<int, 2>{1, 1})
+            return 2;
+        bool rejected = false;
+        try {
+            X11FileData empty([](FileDragTarget) { return std::vector<std::filesystem::path>{}; });
+            empty.get(FileDragTarget::Unknown);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        return rejected ? 0 : 3;
+    }
+#endif
 
 #if defined(_WIN32) && defined(LFS_NATIVE_DRAG_TESTS)
     int nativeDragDataContract(const std::filesystem::path& path) {

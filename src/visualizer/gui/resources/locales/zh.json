@@ -3263,7 +3263,7 @@
   "preferences.drag_axis_positive_y": "+Y",
   "preferences.drag_axis_negative_z": "-Z",
   "preferences.drag_axis_positive_z": "+Z",
-  "preferences.drag_axes_hint": "导出 PLY 的向上轴。拖放到文件夹和桌面时使用所选轴。-Y 保持 LichtFeld 坐标。Windows 会自动识别 Blender，并在该次拖放中使用 +Z 覆盖所选轴。X 保持不变。",
+  "preferences.drag_axes_hint": "导出 PLY 的向上轴。拖放到文件夹和桌面时使用所选轴。-Y 保持 LichtFeld 坐标。Windows 和 Linux X11 会自动识别 Blender，并在该次拖放中使用 +Z 覆盖所选轴。X 保持不变。",
   "preferences.drag_default": "拖动格式",
   "preferences.drag_ply": "PLY",
   "preferences.drag_spz": "SPZ",

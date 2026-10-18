@@ -3263,7 +3263,7 @@
   "preferences.drag_axis_positive_y": "+Y",
   "preferences.drag_axis_negative_z": "-Z",
   "preferences.drag_axis_positive_z": "+Z",
-  "preferences.drag_axes_hint": "Oś pionowa eksportowanych plików PLY. Upuszczanie w folderach i na pulpicie używa wybranej osi. -Y zachowuje współrzędne LichtFeld. Blender używa +Z i jest wykrywany automatycznie w systemie Windows; wtedy obowiązuje +Z. X pozostaje bez zmian.",
+  "preferences.drag_axes_hint": "Oś pionowa eksportowanych plików PLY. Upuszczanie w folderach i na pulpicie używa wybranej osi. -Y zachowuje współrzędne LichtFeld. Blender używa +Z i jest wykrywany automatycznie w systemach Windows i Linux X11; wtedy obowiązuje +Z. X pozostaje bez zmian.",
   "preferences.drag_default": "Format przeciągania",
   "preferences.drag_ply": "PLY",
   "preferences.drag_spz": "SPZ",

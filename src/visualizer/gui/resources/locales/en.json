@@ -7,7 +7,7 @@
   "preferences.drag_axis_positive_y": "+Y",
   "preferences.drag_axis_negative_z": "-Z",
   "preferences.drag_axis_positive_z": "+Z",
-  "preferences.drag_axes_hint": "PLY export up axis. Folder and desktop drops use the selected axis. -Y keeps LichtFeld coordinates. Blender uses +Z and is detected automatically on Windows; that drop overrides the selected axis. X is unchanged.",
+  "preferences.drag_axes_hint": "PLY export up axis. Folder and desktop drops use the selected axis. -Y keeps LichtFeld coordinates. Blender uses +Z and is detected automatically on Windows and Linux X11; that drop overrides the selected axis. X is unchanged.",
   "preferences.drag_default": "Drag format",
   "preferences.drag_ply": "PLY",
   "preferences.drag_spz": "SPZ",

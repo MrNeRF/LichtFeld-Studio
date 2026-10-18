@@ -3263,7 +3263,7 @@
   "preferences.drag_axis_positive_y": "+Y",
   "preferences.drag_axis_negative_z": "-Z",
   "preferences.drag_axis_positive_z": "+Z",
-  "preferences.drag_axes_hint": "エクスポートする PLY の上方向の軸。フォルダーやデスクトップへのドロップでは選択した軸を使います。-Y は LichtFeld の座標を保持します。Windows では Blender を自動検出し、そのドロップには選択にかかわらず +Z を使います。X は変わりません。",
+  "preferences.drag_axes_hint": "エクスポートする PLY の上方向の軸。フォルダーやデスクトップへのドロップでは選択した軸を使います。-Y は LichtFeld の座標を保持します。Windows と Linux X11 では Blender を自動検出し、そのドロップには選択にかかわらず +Z を使います。X は変わりません。",
   "preferences.drag_default": "ドラッグ形式",
   "preferences.drag_ply": "PLY",
   "preferences.drag_spz": "SPZ",

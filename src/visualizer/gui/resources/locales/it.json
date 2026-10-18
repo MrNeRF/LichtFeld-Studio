@@ -7,7 +7,7 @@
   "preferences.drag_axis_positive_y": "+Y",
   "preferences.drag_axis_negative_z": "-Z",
   "preferences.drag_axis_positive_z": "+Z",
-  "preferences.drag_axes_hint": "Asse verticale dei PLY esportati. Il rilascio su cartelle e desktop usa l’asse scelto. -Y mantiene le coordinate di LichtFeld. Blender usa +Z e viene rilevato automaticamente su Windows: per quel rilascio prevale +Z. X resta invariato.",
+  "preferences.drag_axes_hint": "Asse verticale dei PLY esportati. Il rilascio su cartelle e desktop usa l’asse scelto. -Y mantiene le coordinate di LichtFeld. Blender usa +Z e viene rilevato automaticamente su Windows e Linux X11: per quel rilascio prevale +Z. X resta invariato.",
   "preferences.drag_default": "Formato drag",
   "preferences.drag_ply": "PLY",
   "preferences.drag_spz": "SPZ",

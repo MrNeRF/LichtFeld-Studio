@@ -3263,7 +3263,7 @@
   "preferences.drag_axis_positive_y": "+Y",
   "preferences.drag_axis_negative_z": "-Z",
   "preferences.drag_axis_positive_z": "+Z",
-  "preferences.drag_axes_hint": "Omhoog-as voor PLY-export. Bij neerzetten in mappen en op het bureaublad geldt de gekozen as. -Y behoudt de LichtFeld-coördinaten. Blender gebruikt +Z en wordt automatisch herkend onder Windows; daarbij geldt +Z. X blijft ongewijzigd.",
+  "preferences.drag_axes_hint": "Omhoog-as voor PLY-export. Bij neerzetten in mappen en op het bureaublad geldt de gekozen as. -Y behoudt de LichtFeld-coördinaten. Blender gebruikt +Z en wordt automatisch herkend onder Windows en Linux X11; daarbij geldt +Z. X blijft ongewijzigd.",
   "preferences.drag_default": "Sleepformaat",
   "preferences.drag_ply": "PLY",
   "preferences.drag_spz": "SPZ",

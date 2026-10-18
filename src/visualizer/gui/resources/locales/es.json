@@ -3263,7 +3263,7 @@
   "preferences.drag_axis_positive_y": "+Y",
   "preferences.drag_axis_negative_z": "-Z",
   "preferences.drag_axis_positive_z": "+Z",
-  "preferences.drag_axes_hint": "Eje vertical de los PLY exportados. Al soltar en carpetas o en el escritorio se usa el eje elegido. -Y mantiene las coordenadas de LichtFeld. Blender usa +Z y se detecta automáticamente en Windows; en ese caso prevalece +Z. X no cambia.",
+  "preferences.drag_axes_hint": "Eje vertical de los PLY exportados. Al soltar en carpetas o en el escritorio se usa el eje elegido. -Y mantiene las coordenadas de LichtFeld. Blender usa +Z y se detecta automáticamente en Windows y Linux X11; en ese caso prevalece +Z. X no cambia.",
   "preferences.drag_default": "Formato de arrastre",
   "preferences.drag_ply": "PLY",
   "preferences.drag_spz": "SPZ",

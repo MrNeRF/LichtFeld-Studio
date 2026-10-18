@@ -910,13 +910,11 @@ class PreferencesPanel(Panel):
                 return
         if key == "sh_degree" and not 0 <= value <= 3:
             return
-        changes = {key: value}
         if key == "up_axis" and value not in (-2, 2, -3, 3):
             return
-        lf.ui.set_splat_drag_preferences(changes)
+        lf.ui.set_splat_drag_preferences({key: value})
         if self._handle:
-            for changed in changes:
-                self._handle.dirty("splat_drag_" + changed)
+            self._handle.dirty("splat_drag_" + key)
 
     def _set_scene_graph_selection_markers(self, enabled):
         if self._mcp_safe_mode:

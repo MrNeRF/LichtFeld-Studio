@@ -86,6 +86,12 @@ int main(int argc, char** argv) {
                                        {.name = "Model"})
                                   .get();
             require(path.filename() == "splat-Model.ply", "Non-training name changed");
+            auto loaded = lfs::io::load_ply(path, options);
+            require(bool(loaded), "Default-axis PLY failed");
+            const auto means = loaded->value.means().to(Device::CPU).contiguous();
+            checkNear(means.ptr<float>()[0], .3f);
+            checkNear(means.ptr<float>()[1], 1.2f);
+            checkNear(means.ptr<float>()[2], -.7f);
             const auto long_name = transfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false),
                                             {.name = std::string(200, 'x'), .training_step = 43453})
                                        .get();
@@ -126,7 +132,7 @@ int main(int argc, char** argv) {
             const auto original_rest = model.shN_canonical_cpu();
             model.set_active_sh_degree(0); // Export all stored SH even if the viewport displays only DC.
             auto world = glm::translate(glm::mat4(1), glm::vec3(1, 2, 3)) * glm::scale(glm::mat4(1), glm::vec3(2));
-            auto future = transfer(model, world, std::make_shared<std::atomic<bool>>(false), {.name = degree == 2 ? "scena-è-東京" : "splat"});
+            auto future = transfer(model, world, std::make_shared<std::atomic<bool>>(false), {.name = degree == 2 ? "scena-è-東京" : "splat", .axes = lfs::vis::SplatDragAxes::blender()});
             model.means().fill_(999);
             const auto path = future.get();
             require(std::filesystem::is_regular_file(path), "No committed PLY");
@@ -183,7 +189,7 @@ int main(int argc, char** argv) {
             lod.lod_tree->child_count = {2, 0, 0};
             lod.lod_tree->child_start = {1, 0, 0};
             lod.lod_tree->lod_level = {1, 0, 0};
-            const auto path = transfer(lod, glm::mat4(1), std::make_shared<std::atomic<bool>>(false)).get();
+            const auto path = transfer(lod, glm::mat4(1), std::make_shared<std::atomic<bool>>(false), {.axes = lfs::vis::SplatDragAxes::blender()}).get();
             auto loaded = lfs::io::load_ply(path, options);
             require(bool(loaded), "LOD leaf PLY failed");
             require(loaded->value.size() == 1, "LOD interior nodes or deleted leaves were exported");
