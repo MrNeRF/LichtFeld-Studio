@@ -112,8 +112,8 @@ namespace {
             auto* tab = button(i);
             const auto position = tab->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto size = tab->GetBox().GetSize(Rml::BoxArea::Border);
-            EXPECT_NEAR(position.x, 8, 0.5f);
-            EXPECT_NEAR(size.x, 28 * GetParam(), 0.5f);
+            EXPECT_NEAR(position.x, 8 + (i == 0 ? 0 : 3) * GetParam(), 0.5f);
+            EXPECT_NEAR(size.x, (i == 0 ? 28 : 25) * GetParam(), 0.5f);
             EXPECT_GE(position.y, last_bottom);
             last_bottom = position.y + size.y;
             EXPECT_NEAR(size.y, tab->GetChild(0)->GetBox().GetSize().x + 20 * GetParam(), 1.0f);
@@ -122,6 +122,26 @@ namespace {
         EXPECT_NE(button(0)->GetProperty("nav-down"), nullptr);
         EXPECT_FLOAT_EQ(button(0)->GetBox().GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right), 0);
         EXPECT_GT(button(1)->GetBox().GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right), 0);
+    }
+
+    TEST_P(RightPanelTabsTest, RailEdgeOpensOnlyBesideTheSelectedTab) {
+        auto data = tabs(3);
+        RmlRightPanelTestAccess::sync(panel, data, data[1].id);
+        auto* selected = button(1);
+        auto* strip = doc->GetElementById("tab-strip-viewport");
+        auto* before = doc->GetElementById("tab-edge-before");
+        auto* after = doc->GetElementById("tab-edge-after");
+        const float top = selected->GetAbsoluteOffset(Rml::BoxArea::Border).y -
+                          strip->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+        EXPECT_NEAR(before->GetBox().GetSize().y, top, 1.0f);
+        EXPECT_NEAR(after->GetAbsoluteOffset(Rml::BoxArea::Border).y,
+                    selected->GetAbsoluteOffset(Rml::BoxArea::Border).y +
+                        selected->GetBox().GetSize(Rml::BoxArea::Border).y,
+                    1.0f);
+        RmlRightPanelTestAccess::scroll(panel, 1000);
+        RmlRightPanelTestAccess::settle(panel);
+        EXPECT_GE(before->GetBox().GetSize().y, 0);
+        EXPECT_GE(after->GetBox().GetSize().y, 0);
     }
 
     TEST_P(RightPanelTabsTest, WheelScrollsOverflowWithoutChangingTheActiveTab) {

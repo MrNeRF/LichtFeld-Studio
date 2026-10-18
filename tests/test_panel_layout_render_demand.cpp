@@ -197,6 +197,8 @@ namespace {
             const lfs::vis::gui::PanelDirectRenderRequest& request,
             const lfs::vis::gui::PanelDrawContext&) override {
             using lfs::vis::gui::PanelDirectRenderMode;
+            last_clip_y_min = request.clip_y_min;
+            last_clip_y_max = request.clip_y_max;
             switch (request.mode) {
             case PanelDirectRenderMode::Measure:
                 break;
@@ -219,6 +221,8 @@ namespace {
             return {.handled = true, .height = height_};
         }
 
+        float last_clip_y_min = -1.0f;
+        float last_clip_y_max = -1.0f;
         int preload_count = 0;
         int draw_count = 0;
         int cached_draw_count = 0;
@@ -502,37 +506,44 @@ TEST_F(PanelLayoutRenderDemandTest, VerticalTabsReserveWidthInLiveAndCachedConte
     const float previous_dpi = lfs::python::get_shared_dpi_scale();
     for (float dpi : {1.0f, 1.5f, 2.0f}) {
         lfs::python::set_shared_dpi_scale(dpi);
-        PanelLayoutManager layout;
-        layout.setActiveTab("test.active.vertical");
-        PanelInputState input;
-        auto s = screen();
-        s.work_size = {2400, 1600};
-        layout.renderRightPanel(ui, draw_ctx, true, false, windows, focus, input, s);
-        const float expected_width = layout.getRightPanelWidth() - 16.0f -
+        for (float height : {320.0f, 720.0f, 1600.0f}) {
+            PanelLayoutManager layout;
+            layout.setActiveTab("test.active.vertical");
+            PanelInputState input;
+            auto s = screen();
+            s.work_size = {2400, height};
+            layout.renderRightPanel(ui, draw_ctx, true, false, windows, focus, input, s);
+            const float expected_width = layout.getRightPanelWidth() - 16.0f -
+                                         PanelLayoutManager::RIGHT_TAB_BAR_W * dpi;
+            const float expected_y = 8.0f + layout.scenePanelHeight(s.work_size.y - 16.0f, dpi) +
+                                     (PanelLayoutManager::SPLITTER_H + PanelLayoutManager::RIGHT_PANEL_SECTION_GAP) * dpi;
+            const float expected_x = s.work_size.x - layout.getRightPanelWidth() + 8 +
                                      PanelLayoutManager::RIGHT_TAB_BAR_W * dpi;
-        const float expected_y = 8.0f + layout.scenePanelHeight(s.work_size.y - 16.0f, dpi) +
-                                 PanelLayoutManager::SPLITTER_H * dpi;
-        const float expected_x = s.work_size.x - layout.getRightPanelWidth() + 8 +
-                                 PanelLayoutManager::RIGHT_TAB_BAR_W * dpi;
-        EXPECT_FLOAT_EQ(active->last_draw_x, expected_x);
-        EXPECT_FLOAT_EQ(active->last_draw_width, expected_width);
-        EXPECT_FLOAT_EQ(active->last_draw_y, expected_y);
-        EXPECT_FLOAT_EQ(scene->last_draw_width, layout.getRightPanelWidth() - 16.0f);
-        layout.renderRightPanelCached(ui, draw_ctx, true, false, windows, focus, input, s);
-        EXPECT_FLOAT_EQ(active->last_cached_x, expected_x);
-        EXPECT_FLOAT_EQ(active->last_cached_width, expected_width);
-        EXPECT_FLOAT_EQ(scene->last_cached_width, layout.getRightPanelWidth() - 16.0f);
-        // Scrolling the category rail must not scroll the panel beneath it.
-        input.mouse_x = s.work_size.x - layout.getRightPanelWidth() + 8 + 14 * dpi;
-        input.mouse_y = expected_y + 30;
-        input.mouse_wheel = -1;
-        layout.renderRightPanel(ui, draw_ctx, true, false, windows, focus, input, s);
-        EXPECT_EQ(layout.captureProjectState().tab_scroll_offset, 0);
-        // Ctrl+wheel in the content belongs to category switching as well.
-        input.mouse_x = active->last_draw_x + 10;
-        input.key_ctrl = true;
-        layout.renderRightPanel(ui, draw_ctx, true, false, windows, focus, input, s);
-        EXPECT_EQ(layout.captureProjectState().tab_scroll_offset, 0);
+            EXPECT_FLOAT_EQ(active->last_draw_x, expected_x);
+            EXPECT_FLOAT_EQ(active->last_draw_width, expected_width);
+            EXPECT_FLOAT_EQ(active->last_draw_y, expected_y);
+            EXPECT_FLOAT_EQ(scene->last_draw_width, layout.getRightPanelWidth() - 16.0f);
+            EXPECT_FLOAT_EQ(scene->last_clip_y_min, 8.0f);
+            EXPECT_FLOAT_EQ(scene->last_clip_y_max, 8.0f + layout.scenePanelHeight(s.work_size.y - 16.0f, dpi));
+            EXPECT_LT(scene->last_clip_y_max, active->last_draw_y);
+            layout.renderRightPanelCached(ui, draw_ctx, true, false, windows, focus, input, s);
+            EXPECT_FLOAT_EQ(active->last_cached_x, expected_x);
+            EXPECT_FLOAT_EQ(active->last_cached_width, expected_width);
+            EXPECT_FLOAT_EQ(scene->last_cached_width, layout.getRightPanelWidth() - 16.0f);
+            EXPECT_FLOAT_EQ(scene->last_clip_y_min, 8.0f);
+            EXPECT_FLOAT_EQ(scene->last_clip_y_max, 8.0f + layout.scenePanelHeight(s.work_size.y - 16.0f, dpi));
+            // Scrolling the category rail must not scroll the panel beneath it.
+            input.mouse_x = s.work_size.x - layout.getRightPanelWidth() + 8 + 14 * dpi;
+            input.mouse_y = expected_y + 30;
+            input.mouse_wheel = -1;
+            layout.renderRightPanel(ui, draw_ctx, true, false, windows, focus, input, s);
+            EXPECT_EQ(layout.captureProjectState().tab_scroll_offset, 0);
+            // Ctrl+wheel in the content belongs to category switching as well.
+            input.mouse_x = active->last_draw_x + 10;
+            input.key_ctrl = true;
+            layout.renderRightPanel(ui, draw_ctx, true, false, windows, focus, input, s);
+            EXPECT_EQ(layout.captureProjectState().tab_scroll_offset, 0);
+        }
     }
     lfs::python::set_shared_dpi_scale(previous_dpi);
 }

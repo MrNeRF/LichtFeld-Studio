@@ -34,6 +34,17 @@ body {
     cursor: resize-vertical;
 }
 
+#splitter-grip {
+    position: absolute;
+    top: 2dp;
+    left: 50%;
+    margin-left: -12dp;
+    width: 24dp;
+    height: 2dp;
+    border-radius: 1dp;
+    pointer-events: none;
+}
+
 /* Categories sit beside the content, with an open edge on the active tab. */
 #tab-bar {
     position: absolute;
@@ -59,12 +70,12 @@ body {
     display: block;
     flex: 0 0 auto;
     box-sizing: border-box;
-    width: 28dp;
+    width: 25dp;
     min-height: 28dp;
-    margin: 0;
+    margin: 0 0 0 3dp;
     padding: 0;
     border-width: 1dp;
-    border-radius: 5dp 0 0 5dp;
+    border-radius: 6dp 0 0 6dp;
     white-space: nowrap;
     cursor: pointer;
     tab-index: auto;
@@ -72,13 +83,16 @@ body {
 }
 
 .tab.active {
+    width: 28dp;
+    margin-left: 0;
     border-right-width: 0;
+    font-weight: 600;
 }
 
 .tab-label {
     position: absolute;
     display: block;
-    left: 27dp;
+    left: 24dp;
     top: 9dp;
     height: 26dp;
     line-height: 26dp;
@@ -105,4 +119,13 @@ body {
     cursor: pointer;
     tab-index: auto;
     nav: auto;
+}
+
+.tab.active .tab-label { left: 27dp; }
+.tab-edge {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 1dp;
+    pointer-events: none;
 }

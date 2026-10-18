@@ -6371,7 +6371,8 @@ namespace lfs::vis::gui {
             const float content_x = rp_layout.pos.x + RIGHT_PANEL_PAD;
             const float content_top = screen.work_pos.y + RIGHT_PANEL_PAD;
             const float content_w = rpw - 2.0f * RIGHT_PANEL_PAD;
-            const float tab_content_y = content_top + scene_h + splitter_h;
+            const float tab_content_y = content_top + scene_h + splitter_h +
+                                        PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * current_ui_scale_;
             const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
             right_panel_pointer_over_scene_header =
                 !pointer_over_right_panel_edge &&
@@ -8628,7 +8629,7 @@ namespace lfs::vis::gui {
         const float avail_h = panel_h - 2.0f * kPanelPad;
         const float scene_h = panel_layout_.scenePanelHeight(avail_h, dpi);
         const float content_top = kPanelPad;
-        const float tab_content_y = content_top + scene_h + splitter_h;
+        const float tab_content_y = content_top + scene_h + splitter_h + PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * dpi;
         const float tab_content_h =
             std::max(0.0f, content_top + avail_h - tab_content_y);
         const float clip_y_min = tab_content_y;

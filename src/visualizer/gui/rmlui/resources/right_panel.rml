@@ -5,8 +5,10 @@
 <body id="rp-body" data-model="right_panel_tabs">
     <div id="resize-handle"></div>
     <div id="left-border"></div>
-    <div id="splitter"></div>
+    <div id="splitter"><div id="splitter-grip"></div></div>
     <div id="tab-bar">
+        <div id="tab-edge-before" class="tab-edge"></div>
+        <div id="tab-edge-after" class="tab-edge"></div>
         <div id="tab-strip-viewport">
             <div data-for="tab : tabs"
                  class="tab"

@@ -5,7 +5,7 @@
 }
 
 #splitter {
-    background-color: @{right_panel.splitter_bg};
+    background-color: transparent;
 }
 
 #splitter:hover {
@@ -17,7 +17,7 @@
 }
 
 .tab {
-    background-color: transparent;
+    background-color: @{alpha(surface_bright,0.36)};
     color: @{text_dim};
     border-color: @{right_panel.tab_border};
 }
@@ -62,3 +62,8 @@
 #resize-handle.dragging {
     background-color: @{right_panel.resize_active};
 }
+
+.tab-edge { background-color: @{right_panel.tab_active_border}; }
+#splitter-grip { background-color: @{border}; }
+#splitter:hover #splitter-grip,
+#splitter.dragging #splitter-grip { background-color: @{text}; }

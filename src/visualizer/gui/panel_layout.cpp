@@ -242,6 +242,8 @@ namespace lfs::vis::gui {
                                       .mode = PanelRenderMode::DirectPreload,
                                       .width = content_w,
                                       .height = scene_h,
+                                      .clip_y_min = content_top,
+                                      .clip_y_max = content_top + scene_h,
                                       .input = &masked_panel_input,
                                   },
                                   draw_ctx);
@@ -255,6 +257,8 @@ namespace lfs::vis::gui {
                                       .y = content_top,
                                       .width = content_w,
                                       .height = scene_h,
+                                      .clip_y_min = content_top,
+                                      .clip_y_max = content_top + scene_h,
                                       .input = &masked_panel_input,
                                   },
                                   draw_ctx);
@@ -268,6 +272,8 @@ namespace lfs::vis::gui {
                                   .y = content_top,
                                   .width = content_w,
                                   .height = scene_h,
+                                  .clip_y_min = content_top,
+                                  .clip_y_max = content_top + scene_h,
                                   .input = &masked_panel_input,
                               },
                               draw_ctx);
@@ -280,7 +286,7 @@ namespace lfs::vis::gui {
         }
         syncActiveTab(main_tabs, focus_panel_name);
 
-        const float tab_content_y = content_top + scene_h + splitter_h;
+        const float tab_content_y = content_top + scene_h + splitter_h + RIGHT_PANEL_SECTION_GAP * dpi;
         const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
 
         if (active_tab_id_.empty()) {
@@ -487,6 +493,8 @@ namespace lfs::vis::gui {
                                   .y = content_top,
                                   .width = content_w,
                                   .height = scene_h,
+                                  .clip_y_min = content_top,
+                                  .clip_y_max = content_top + scene_h,
                                   .input = &input,
                               },
                               draw_ctx);
@@ -499,7 +507,7 @@ namespace lfs::vis::gui {
         }
         syncActiveTab(main_tabs, focus_panel_name);
 
-        const float tab_content_y = content_top + scene_h + splitter_h;
+        const float tab_content_y = content_top + scene_h + splitter_h + RIGHT_PANEL_SECTION_GAP * dpi;
         const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
 
         if (active_tab_id_.empty()) {

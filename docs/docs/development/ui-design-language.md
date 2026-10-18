@@ -137,7 +137,10 @@ design when it does.
 
 Rendering, Training, and plugins registered in `MAIN_PANEL_TAB` share the vertical
 category strip at the left of the lower sidebar. Scene remains above it.
-The active tab has no border on its content-facing edge, so it joins the panel.
+Inactive tabs are recessed. The active tab fills the rail width and opens the
+rail edge beside its content. The rail edge continues above and below it.
+Scene rendering and input are clipped to the scene rectangle; the resize grip
+and a small gap separate it from the category content.
 The active panel fills the space to the right of the strip, including its former
 horizontal tab row. The bottom dock retains its horizontal tabs.
 

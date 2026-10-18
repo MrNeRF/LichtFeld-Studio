@@ -307,6 +307,27 @@ namespace lfs::vis::gui {
         const bool changed = tab_strip_viewport_el_->GetScrollTop() != next_scroll;
         tab_scroll_top_ = next_scroll;
         tab_strip_viewport_el_->SetScrollTop(next_scroll);
+        const float rail_height = tab_bar_el_ ? tab_bar_el_->GetClientHeight() : viewport_height;
+        float open_top = rail_height;
+        float open_bottom = rail_height;
+        for (const auto& tab : tabs_) {
+            if (tab.id != active_tab_)
+                continue;
+            if (auto* button = document_->GetElementById(tab.dom_id)) {
+                const float top = button->GetAbsoluteOffset(Rml::BoxArea::Border).y -
+                                  tab_strip_viewport_el_->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+                open_top = std::clamp(top, 0.0f, rail_height);
+                open_bottom = std::clamp(top + button->GetBox().GetSize(Rml::BoxArea::Border).y,
+                                         0.0f, rail_height);
+            }
+            break;
+        }
+        if (auto* edge = document_->GetElementById("tab-edge-before"))
+            edge->SetProperty("height", std::format("{:.0f}px", open_top));
+        if (auto* edge = document_->GetElementById("tab-edge-after")) {
+            edge->SetProperty("top", std::format("{:.0f}px", open_bottom));
+            edge->SetProperty("height", std::format("{:.0f}px", rail_height - open_bottom));
+        }
         return changed;
     }
 
@@ -495,8 +516,10 @@ namespace lfs::vis::gui {
         tooltip_.setHover(resolveRmlTooltip(hover), hover);
 
         const bool over_tabs = tab_bar_el_ &&
-                               mx >= 8.0f && mx < 8.0f + PanelLayoutManager::RIGHT_TAB_BAR_W * dp_ratio && my >= layout.scene_h + layout.splitter_h && my < layout.size.y;
-        const bool over_properties = pointer_in_context && my >= layout.scene_h + layout.splitter_h;
+                               mx >= 8.0f && mx < 8.0f + PanelLayoutManager::RIGHT_TAB_BAR_W * dp_ratio && my >= layout.scene_h + layout.splitter_h + PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * dp_ratio &&
+                               my < layout.size.y;
+        const bool over_properties = pointer_in_context &&
+                                     my >= layout.scene_h + layout.splitter_h + PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * dp_ratio;
         bool cycled = false;
         if (over_properties && input.key_ctrl && input.mouse_wheel != 0.0f) {
             cycleTab(input.mouse_wheel < 0.0f ? 1 : -1, false);
@@ -676,7 +699,8 @@ namespace lfs::vis::gui {
                 splitter_el_->SetProperty("height", std::format("{:.0f}px", layout.splitter_h));
             }
             if (tab_bar_el_) {
-                const float tab_top = layout.scene_h + layout.splitter_h;
+                const float tab_top = layout.scene_h + layout.splitter_h +
+                                      PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * dp_ratio;
                 tab_bar_el_->SetProperty("top", std::format("{:.0f}px", tab_top));
                 tab_bar_el_->SetProperty("height", std::format("{:.0f}px", std::max(0.0f, layout.size.y - tab_top - 8.0f)));
                 tab_bar_el_->SetProperty("width", std::format("{:.0f}px", tab_bar_w));
@@ -691,6 +715,7 @@ namespace lfs::vis::gui {
                 if (!syncTabScrollState())
                     break;
             }
+            updateTabModel();
             syncTabNavigation();
 
             // Data-model and overflow updates can move the tab strip after input was
