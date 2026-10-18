@@ -34,27 +34,78 @@ body {
     cursor: resize-vertical;
 }
 
-#tab-bar.with-scroll #tab-strip-viewport { right: 60dp; }
-#tab-bar.with-scroll #tab-scroll-right { right: 30dp; }
-#tab-picker {
+/* Right-aligned category tabs read downwards, as in Blender's sidebar. */
+#tab-bar {
     position: absolute;
     right: 0;
-    top: 0;
     width: 28dp;
-    min-width: 28dp;
-    height: 28dp;
-    z-index: 3;
 }
-#tab-picker selectvalue { visibility: hidden; }
-#tab-picker selectarrow { margin-right: 4dp; }
-#tab-picker selectbox { right: 0; min-width: 200dp; max-height: 400dp; overflow-y: auto; }
 
-/* The shared panel_tabs stylesheet owns the common geometry. These right-panel
-   overrides preserve the immediate selection feedback required by its cached
-   context and leave the new bottom dock's transition behavior untouched. */
+#tab-strip-viewport {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3dp;
+    overflow: hidden;
+}
+
+#tab-separator {
+    position: absolute;
+    right: 27dp;
+    width: 1dp;
+    pointer-events: none;
+}
+
 .tab {
+    position: relative;
+    display: block;
+    flex: 0 0 auto;
     box-sizing: border-box;
+    width: 28dp;
+    min-height: 28dp;
+    margin: 0;
+    padding: 0;
     border-width: 1dp;
-    border-bottom-width: 2dp;
-    transition: none;
+    border-radius: 0 5dp 5dp 0;
+    white-space: nowrap;
+    cursor: pointer;
+    tab-index: auto;
+    nav: auto;
+}
+
+.tab-label {
+    position: absolute;
+    display: block;
+    left: 27dp;
+    top: 9dp;
+    height: 26dp;
+    line-height: 26dp;
+    white-space: nowrap;
+    transform-origin: 0 0;
+    transform: rotate(90deg);
+    pointer-events: none;
+}
+
+.tab-close {
+    position: absolute;
+    bottom: 3dp;
+    left: 5dp;
+    width: 16dp;
+    height: 16dp;
+    margin: 0;
+    padding: 0;
+    border-width: 0;
+    border-radius: 3dp;
+    background-color: transparent;
+    line-height: 16dp;
+    text-align: center;
+    font-size: 13dp;
+    cursor: pointer;
+    tab-index: auto;
+    nav: auto;
 }

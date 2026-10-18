@@ -19,13 +19,7 @@
 .tab {
     background-color: transparent;
     color: @{text_dim};
-    @{right_panel.tab_shape};
     border-color: @{right_panel.tab_border};
-    border-bottom-color: @{right_panel.tab_bottom_border};
-}
-
-.tab-label {
-    @{right_panel.tab_label_shape};
 }
 
 .tab:hover {
@@ -36,14 +30,14 @@
     @{right_panel.tab_hover_decor};
     color: @{text};
     border-color: @{right_panel.tab_active_border};
-    border-bottom-color: @{right_panel.tab_active_bottom_border};
+    border-left-color: @{right_panel.tab_active_bottom_border};
 }
 
 .tab.active {
     @{right_panel.tab_active_decor};
     color: @{text};
     border-color: @{right_panel.tab_active_border};
-    border-bottom-color: @{right_panel.tab_active_bottom_border};
+    border-left-color: @{right_panel.tab_active_bottom_border};
 }
 
 .tab-close {
@@ -56,22 +50,6 @@
     color: @{text};
 }
 
-.tab-nav {
-    background-color: @{right_panel.tab_nav_bg};
-    color: @{text_dim};
-}
-
-.tab-nav:hover {
-    background-color: @{right_panel.tab_nav_hover};
-    color: @{text};
-}
-
-.tab-nav.disabled,
-.tab-nav.disabled:hover {
-    background-color: transparent;
-    color: @{right_panel.tab_nav_disabled};
-    opacity: 0.55;
-}
 #left-border {
     @{chrome.right_panel_edge_shape};
 }

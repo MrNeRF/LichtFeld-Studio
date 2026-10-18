@@ -6337,7 +6337,7 @@ namespace lfs::vis::gui {
             const float rpw = panel_layout_.getRightPanelWidth();
             const float ph = screen.work_size.y;
             const float splitter_h = PanelLayoutManager::SPLITTER_H * current_ui_scale_;
-            const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
+            const float tab_bar_w = PanelLayoutManager::RIGHT_TAB_BAR_W * current_ui_scale_;
             const float avail_h = ph - 16.0f;
             const float scene_h = panel_layout_.scenePanelHeight(avail_h, current_ui_scale_);
 
@@ -6371,7 +6371,7 @@ namespace lfs::vis::gui {
             const float content_x = rp_layout.pos.x + RIGHT_PANEL_PAD;
             const float content_top = screen.work_pos.y + RIGHT_PANEL_PAD;
             const float content_w = rpw - 2.0f * RIGHT_PANEL_PAD;
-            const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
+            const float tab_content_y = content_top + scene_h + splitter_h;
             const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
             right_panel_pointer_over_scene_header =
                 !pointer_over_right_panel_edge &&
@@ -6382,7 +6382,7 @@ namespace lfs::vis::gui {
                 !pointer_over_right_panel_edge &&
                 pointInRect(panel_input.mouse_x, panel_input.mouse_y,
                             glm::vec2{content_x, tab_content_y},
-                            glm::vec2{content_w, tab_content_h});
+                            glm::vec2{std::max(0.0f, content_w - tab_bar_w), tab_content_h});
 
             if ((float_blocks_rp || viewport_pointer_captured) &&
                 !rml_right_panel_.isResizeInteractionActive()) {
@@ -8618,17 +8618,17 @@ namespace lfs::vis::gui {
 
         constexpr float kPanelPad = 8.0f;
         constexpr float kPreloadMaxHeight = 100000.0f;
-        const float content_w = panel_layout_.getRightPanelWidth() - 2.0f * kPanelPad;
+        const float content_w = panel_layout_.getRightPanelWidth() - 2.0f * kPanelPad -
+                                PanelLayoutManager::RIGHT_TAB_BAR_W * lfs::python::get_shared_dpi_scale();
         if (content_w <= 0.0f) {
             return;
         }
 
         const float splitter_h = PanelLayoutManager::SPLITTER_H * dpi;
-        const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * dpi;
         const float avail_h = panel_h - 2.0f * kPanelPad;
         const float scene_h = panel_layout_.scenePanelHeight(avail_h, dpi);
         const float content_top = kPanelPad;
-        const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
+        const float tab_content_y = content_top + scene_h + splitter_h;
         const float tab_content_h =
             std::max(0.0f, content_top + avail_h - tab_content_y);
         const float clip_y_min = tab_content_y;
