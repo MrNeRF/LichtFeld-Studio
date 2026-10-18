@@ -2284,6 +2284,10 @@ namespace lfs::vis {
                         comparison_identity ^=
                             reinterpret_cast<size_t>(right_node->model.get());
                     }
+                    if (left_node && left_node->point_cloud)
+                        comparison_identity ^= reinterpret_cast<size_t>(left_node->point_cloud.get());
+                    if (right_node && right_node->point_cloud)
+                        comparison_identity ^= reinterpret_cast<size_t>(right_node->point_cloud.get());
                 }
                 return;
             }
@@ -2321,6 +2325,14 @@ namespace lfs::vis {
             }
             has_point_cloud =
                 scene_state.point_cloud != nullptr && scene_state.point_cloud->size() > 0;
+            if (!has_point_cloud && splitViewUsesPLYComparison(frame_settings.split_view_mode) && scene_manager) {
+                for (const auto& entry : plyComparisonNodes(scene_manager->getScene())) {
+                    if (entry.node && entry.node->point_cloud && entry.node->point_cloud->size() > 0) {
+                        has_point_cloud = true;
+                        break;
+                    }
+                }
+            }
             has_meshes = std::any_of(scene_state.meshes.begin(),
                                      scene_state.meshes.end(),
                                      [](const auto& mesh) { return mesh.mesh != nullptr; });
@@ -3827,7 +3839,7 @@ namespace lfs::vis {
                 }
             }
         } else if (splitViewUsesPLYComparison(frame_settings.split_view_mode) && scene_manager &&
-                   (has_visible_gaussian_model || has_meshes)) {
+                   (has_visible_gaussian_model || has_point_cloud || has_meshes)) {
             const auto& scene = scene_manager->getScene();
             const auto visible_nodes = plyComparisonNodes(scene);
             const auto pair = plyComparisonPairForOffset(visible_nodes.size(), frame_settings.split_view_offset);
@@ -3896,26 +3908,43 @@ namespace lfs::vis {
 
                     ply_comparison_meshes = {left_node.splat_slot ? nullptr : left_node.node->mesh.get(),
                                              right_node.splat_slot ? nullptr : right_node.node->mesh.get()};
-                    auto left = left_node.splat_slot
-                                    ? render_panel_image(
-                                          context.viewport,
-                                          {std::max(left_layout.panel.width, 1), render_size.y},
-                                          SplitViewPanelId::Left,
-                                          left_visibility,
-                                          left_model,
-                                          left_transform_override,
-                                          VksplatViewportRenderer::OutputSlot::SplitLeft)
-                                    : mesh_background_panel();
-                    auto right = right_node.splat_slot
-                                     ? render_panel_image(
-                                           context.viewport,
-                                           {std::max(right_layout.panel.width, 1), render_size.y},
-                                           SplitViewPanelId::Right,
-                                           right_visibility,
-                                           right_model,
-                                           right_transform_override,
-                                           VksplatViewportRenderer::OutputSlot::SplitRight)
-                                     : mesh_background_panel();
+                    const auto render_comparison_node = [&](const PlyComparisonNode& entry,
+                                                            const auto& layout,
+                                                            const SplitViewPanelId panel,
+                                                            const auto& visibility,
+                                                            const core::SplatData* node_model,
+                                                            const std::vector<glm::mat4>* transforms,
+                                                            const auto output_slot)
+                        -> std::expected<RenderedPanel, std::string> {
+                        const glm::ivec2 size{std::max(layout.panel.width, 1), render_size.y};
+                        if (entry.node->point_cloud) {
+                            const std::vector<glm::mat4> cloud_transforms{
+                                scene_coords::nodeVisualizerWorldTransform(scene, entry.node->id)};
+                            auto request = buildPointCloudNodeRenderRequest(
+                                frame_ctx, scene, *entry.node, size, cloud_transforms);
+                            request.frame_view.subregion_origin = {layout.panel.x, 0};
+                            request.frame_view.subregion_full_size = render_size;
+                            auto engine = ensure_auxiliary_rendering_engine();
+                            if (!engine)
+                                return std::unexpected(engine.error());
+                            auto result = (*engine)->renderPointCloudImage(*entry.node->point_cloud, request);
+                            if (!result || !result->image)
+                                return std::unexpected(result ? "Point-cloud comparison returned no image" : result.error());
+                            return RenderedPanel{.image = std::move(result->image),
+                                                 .metadata = std::move(result->metadata),
+                                                 .flip_y = result->metadata.flip_y};
+                        }
+                        if (entry.splat_slot)
+                            return render_panel_image(context.viewport, size, panel, visibility,
+                                                      node_model, transforms, output_slot);
+                        return mesh_background_panel();
+                    };
+                    auto left = render_comparison_node(left_node, left_layout, SplitViewPanelId::Left,
+                                                       left_visibility, left_model, left_transform_override,
+                                                       VksplatViewportRenderer::OutputSlot::SplitLeft);
+                    auto right = render_comparison_node(right_node, right_layout, SplitViewPanelId::Right,
+                                                        right_visibility, right_model, right_transform_override,
+                                                        VksplatViewportRenderer::OutputSlot::SplitRight);
                     if (left && right) {
                         pending_split_view.enabled = true;
                         pending_split_view.split_position = frame_settings.split_position;

@@ -652,10 +652,41 @@ namespace lfs::vis {
         return items;
     }
 
+    lfs::rendering::PointCloudRenderRequest buildPointCloudNodeRenderRequest(
+        const FrameContext& ctx, const core::Scene& scene, const core::SceneNode& node,
+        const glm::ivec2 render_size, const std::vector<glm::mat4>& transforms) {
+        FrameContext scoped = ctx;
+        scoped.scene_state.transform_indices.reset();
+        scoped.scene_state.node_visibility_mask.clear();
+        scoped.scene_state.selection_mask = scene.selectionMaskSliceForNode(node.id);
+        scoped.scene_state.selected_cropbox_index = -1;
+        std::erase_if(scoped.scene_state.cropboxes, [&](const auto& box) {
+            return box.parent_splat_id != node.id;
+        });
+        std::erase_if(scoped.scene_state.ellipsoids, [&](const auto& ellipsoid) {
+            return ellipsoid.parent_splat_id != node.id;
+        });
+        // Selection on the other comparison side must not suppress this node's
+        // enabled crop filter, nor apply its brush-preview mask to this cloud.
+        scoped.cursor_preview = {};
+        scoped.scene_manager = nullptr;
+        scoped.gizmo.cropbox_active = ctx.gizmo.cropbox_active && ctx.scene_manager &&
+                                      ctx.scene_manager->getSelectedNodeCropBoxId() == scene.getCropBoxForSplat(node.id);
+        scoped.gizmo.ellipsoid_active = ctx.gizmo.ellipsoid_active && ctx.scene_manager &&
+                                        ctx.scene_manager->getSelectedNodeEllipsoidId() == scene.getEllipsoidForSplat(node.id);
+        return buildPointCloudRenderRequest(scoped, render_size, transforms);
+    }
+
     std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene) {
         std::vector<PlyComparisonNode> nodes;
         for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
             nodes.push_back({.node = slot.node, .splat_slot = slot.slot_index});
+        }
+        for (const auto* node : scene.getNodes()) {
+            if (node && node->type == core::NodeType::POINTCLOUD && node->point_cloud &&
+                node->point_cloud->size() > 0 && scene.isNodeEffectivelyVisible(node->id)) {
+                nodes.push_back({.node = node, .splat_slot = std::nullopt});
+            }
         }
         for (const auto& mesh : scene.getVisibleMeshes()) {
             if (const auto* const node = scene.getNodeById(mesh.node_id)) {

@@ -967,6 +967,7 @@ namespace lfs::vis {
                 .max_width = 0,
                 .images_folder = "images",
                 .validate_only = false,
+                .preserve_point_cloud = !preserve_raw,
                 .progress = std::move(progress),
                 .cancel_requested = std::move(cancel_requested),
                 .splat_tensor_allocator = splat_allocator,
@@ -990,6 +991,36 @@ namespace lfs::vis {
                       lfs::core::path_to_utf8(path));
             return std::unexpected(error.what());
         }
+    }
+
+    std::string SceneManager::attachLoadedPointCloudNode(
+        const std::filesystem::path& path, const std::string& name,
+        std::shared_ptr<core::PointCloud> cloud, const core::NodeId parent,
+        const bool visible, core::Uuid* imported_uuid, uint32_t* selection_generation) {
+        const auto id = scene_.addPointCloud(name, std::move(cloud), parent);
+        if (id == core::NULL_NODE)
+            throw std::runtime_error("Failed to add point cloud node '" + name + "'");
+        scene_.setNodeVisibility(id, visible);
+        const auto* node = scene_.getNodeById(id);
+        if (imported_uuid)
+            *imported_uuid = node->uuid;
+        {
+            std::lock_guard lock(state_mutex_);
+            splat_paths_[node->uuid] = path;
+        }
+        state::PLYAdded{
+            .name = node->name,
+            .uuid = node->uuid,
+            .node_gaussians = static_cast<size_t>(node->point_cloud->size()),
+            .total_gaussians = scene_.getTotalGaussianCount(),
+            .is_visible = visible,
+            .parent_name = parent == core::NULL_NODE ? "" : scene_.getNodeById(parent)->name,
+            .is_group = false,
+            .node_type = static_cast<int>(core::NodeType::POINTCLOUD)}
+            .emit();
+        if (visible)
+            selectNode(id, selection_generation);
+        return node->name;
     }
 
     std::string SceneManager::attachLoadedSplatFile(const std::filesystem::path& path,
@@ -1041,7 +1072,19 @@ namespace lfs::vis {
             }
 
             auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result.data);
-            if (mesh_data && *mesh_data) {
+            auto* point_cloud = std::get_if<lfs::io::LoadedScene>(&load_result.data);
+            if (point_cloud && point_cloud->cameras.empty() && point_cloud->point_cloud) {
+                {
+                    std::lock_guard lock(state_mutex_);
+                    content_type_ = ContentType::SplatFiles;
+                    splat_paths_.clear();
+                }
+                attached_name = attachLoadedPointCloudNode(
+                    path, name, std::move(point_cloud->point_cloud), core::NULL_NODE,
+                    true, imported_uuid, import_selection_generation);
+                state::SceneLoaded{.scene = nullptr, .path = path, .type = file_type, .num_gaussians = 0}.emit();
+                python::set_application_scene(&scene_);
+            } else if (mesh_data && *mesh_data) {
                 LOG_INFO("Adding mesh '{}' ({} vertices, {} faces)", name,
                          (*mesh_data)->vertex_count(), (*mesh_data)->face_count());
                 const core::NodeId node_id = scene_.addMesh(name, *mesh_data, core::NULL_NODE, imported_uuid);
@@ -1288,6 +1331,15 @@ namespace lfs::vis {
                 name = std::format("{}_{}", base_name, counter++);
             }
 
+            auto* point_cloud = std::get_if<lfs::io::LoadedScene>(&load_result.data);
+            if (point_cloud && point_cloud->cameras.empty() && point_cloud->point_cloud) {
+                const auto added_name = attachLoadedPointCloudNode(
+                    path, name, std::move(point_cloud->point_cloud), parent,
+                    is_visible, imported_uuid, import_selection_generation);
+                if (!defer_import_license && load_result.license_bytes && import_license_callback_)
+                    import_license_callback_(load_result.license_bytes);
+                return added_name;
+            }
             auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result.data);
             if (mesh_data && *mesh_data) {
                 const core::NodeId node_id = scene_.addMesh(name, *mesh_data, core::NULL_NODE, imported_uuid);

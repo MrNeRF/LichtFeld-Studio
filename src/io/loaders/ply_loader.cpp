@@ -89,6 +89,20 @@ namespace lfs::io {
         const bool is_gaussian = is_gaussian_splat_ply(path);
         LOG_INFO("Loading PLY: {} ({})", lfs::core::path_to_utf8(path), is_gaussian ? "gaussian" : "point cloud");
 
+        if (!is_gaussian && options.preserve_point_cloud) {
+            auto cloud = load_ply_point_cloud(path, options);
+            if (!cloud)
+                return make_error(ErrorCode::CORRUPTED_DATA, cloud.error(), path);
+            if (options.progress)
+                options.progress(100.0f, "Point cloud loading complete");
+            return LoadResult{
+                .data = LoadedScene{.point_cloud = std::make_shared<core::PointCloud>(cloud->to(Device::CUDA))},
+                .scene_center = Tensor::zeros({3}, Device::CPU),
+                .loader_used = name(),
+                .load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::high_resolution_clock::now() - start_time)};
+        }
+
         auto point_cloud_to_splat = [&]() -> std::expected<SplatData, std::string> {
             const auto pc_result = load_ply_point_cloud(path, options);
             if (!pc_result)

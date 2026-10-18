@@ -330,6 +330,12 @@ namespace lfs::vis {
         void drainGpuForTensorRelease();
 
     private:
+        std::string attachLoadedPointCloudNode(const std::filesystem::path& path,
+                                               const std::string& name,
+                                               std::shared_ptr<core::PointCloud> cloud,
+                                               core::NodeId parent, bool visible,
+                                               core::Uuid* imported_uuid,
+                                               uint32_t* selection_generation);
         enum class HistoryMode : uint8_t {
             Record,
             RecordFull,

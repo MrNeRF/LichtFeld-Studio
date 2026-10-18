@@ -72,6 +72,9 @@ namespace lfs::io {
         bool load_depths = false;
         bool load_normals = false;
         bool mesh_geometry_only = false;
+        // Viewer imports keep XYZ/RGB PLY data as a point cloud. Training and
+        // conversion callers retain the legacy Gaussian initialization path.
+        bool preserve_point_cloud = false;
         // When true, a normal map that fails the size contract is ignored (one
         // warning naming the file) so auto-generate can overwrite it. When false,
         // the load fails with NORMAL_SIZE_MISMATCH as before.
