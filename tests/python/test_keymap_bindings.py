@@ -148,6 +148,7 @@ def _install_lf_stub(monkeypatch):
         started=[],
         cancelled=0,
         section_request="",
+        splat_drag_preferences={"format": "ply", "sh_degree": 3, "blender_axes": True},
         mcp_preferences={
             "enabled": True,
             "expose_network": False,
@@ -314,6 +315,8 @@ def _install_lf_stub(monkeypatch):
         remember_camera_view_snap=lambda: False,
         scene_graph_selection_markers=lambda: False,
         set_scene_graph_selection_markers=lambda _enabled: None,
+        get_splat_drag_preferences=lambda: dict(state.splat_drag_preferences),
+        set_splat_drag_preferences=lambda values: state.splat_drag_preferences.update(values),
         get_progress_bar_style=lambda: "classic",
         set_progress_bar_style=lambda _style: None,
         get_viewport_chrome_style=lambda: "translucent",
