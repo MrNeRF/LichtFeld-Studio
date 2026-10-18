@@ -8620,7 +8620,7 @@ namespace lfs::vis::gui {
         constexpr float kPanelPad = 8.0f;
         constexpr float kPreloadMaxHeight = 100000.0f;
         const float content_w = panel_layout_.getRightPanelWidth() - 2.0f * kPanelPad -
-                                PanelLayoutManager::RIGHT_TAB_BAR_W * lfs::python::get_shared_dpi_scale();
+                                PanelLayoutManager::RIGHT_TAB_BAR_W * dpi;
         if (content_w <= 0.0f) {
             return;
         }

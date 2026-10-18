@@ -25,6 +25,15 @@
 
 namespace lfs::vis::gui {
 
+    namespace {
+        bool setPixelProperty(Rml::Element* element, Rml::PropertyId id, float value) {
+            const auto* current = element->GetLocalProperty(id);
+            if (current && current->unit == Rml::Unit::PX && std::abs(current->Get<float>() - value) < 0.001f)
+                return false;
+            return element->SetProperty(id, Rml::Property(value, Rml::Unit::PX));
+        }
+    } // namespace
+
     void RmlRightPanel::init(RmlUIManager* mgr) {
         assert(mgr);
         rml_manager_ = mgr;
@@ -51,7 +60,6 @@ namespace lfs::vis::gui {
         }
 
         resize_handle_el_ = document_->GetElementById("resize-handle");
-        left_border_el_ = document_->GetElementById("left-border");
         splitter_el_ = document_->GetElementById("splitter");
         tab_bar_el_ = document_->GetElementById("tab-bar");
         tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
@@ -106,6 +114,9 @@ namespace lfs::vis::gui {
     void RmlRightPanel::shutdown() {
         tab_model_ = {};
         tabs_.clear();
+        tab_text_metrics_.clear();
+        tab_layout_dirty_ = true;
+        tab_navigation_dirty_ = true;
         active_tab_.clear();
         if (rml_manager_)
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
@@ -114,7 +125,6 @@ namespace lfs::vis::gui {
         rml_context_ = nullptr;
         document_ = nullptr;
         resize_handle_el_ = nullptr;
-        left_border_el_ = nullptr;
         splitter_el_ = nullptr;
         tab_bar_el_ = nullptr;
         tooltip_.setHover({}, nullptr);
@@ -140,12 +150,14 @@ namespace lfs::vis::gui {
 
         document_ = nullptr;
         resize_handle_el_ = nullptr;
-        left_border_el_ = nullptr;
         splitter_el_ = nullptr;
         tab_bar_el_ = nullptr;
         tooltip_.setHover({}, nullptr);
         tab_strip_viewport_el_ = nullptr;
         base_rcss_.clear();
+        tab_text_metrics_.assign(tabs_.size(), {});
+        tab_layout_dirty_ = true;
+        tab_navigation_dirty_ = true;
         has_theme_signature_ = false;
         wants_input_ = false;
         wants_keyboard_ = false;
@@ -177,7 +189,6 @@ namespace lfs::vis::gui {
         }
 
         resize_handle_el_ = document_->GetElementById("resize-handle");
-        left_border_el_ = document_->GetElementById("left-border");
         splitter_el_ = document_->GetElementById("splitter");
         tab_bar_el_ = document_->GetElementById("tab-bar");
         tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
@@ -213,6 +224,9 @@ namespace lfs::vis::gui {
 
         if (tabs_ != tabs) {
             tabs_ = tabs;
+            tab_text_metrics_.assign(tabs_.size(), {});
+            tab_layout_dirty_ = true;
+            tab_navigation_dirty_ = true;
             reveal_active_tab_ = true;
             tab_model_.DirtyVariable("tabs");
             dirty = true;
@@ -220,6 +234,7 @@ namespace lfs::vis::gui {
 
         if (active_tab_ != active_tab) {
             active_tab_ = active_tab;
+            tab_layout_dirty_ = true;
             reveal_active_tab_ = true;
             tab_model_.DirtyVariable("active_tab");
             dirty = true;
@@ -228,14 +243,37 @@ namespace lfs::vis::gui {
         return dirty;
     }
 
-    void RmlRightPanel::updateTabModel() {
+    void RmlRightPanel::updateTabs() {
         rml_context_->Update();
+        if (tab_navigation_dirty_) {
+            syncTabNavigation();
+            tab_navigation_dirty_ = false;
+        }
+        if (!tab_layout_dirty_)
+            return;
+
+        // Font, size, or scroll changes can move later tabs after the first
+        // pass. Hover and tooltip redraws need only the context update above.
+        for (int pass = 0; pass < 3; ++pass) {
+            const bool layout_changed = layoutTabs();
+            if (layout_changed)
+                rml_context_->Update();
+            const bool scroll_changed = syncTabScrollState();
+            if (scroll_changed)
+                rml_context_->Update();
+            if (!layout_changed && !scroll_changed)
+                break;
+        }
+        tab_layout_dirty_ = false;
     }
 
     bool RmlRightPanel::layoutTabs() {
         bool changed = false;
         const float dp = rml_context_->GetDensityIndependentPixelRatio();
-        for (const auto& tab : tabs_) {
+        constexpr float text_clearance_dp = 2.0f;
+        const float line_height = std::ceil(20.0f * dp);
+        for (std::size_t i = 0; i < tabs_.size(); ++i) {
+            const auto& tab = tabs_[i];
             auto* button = document_->GetElementById(tab.dom_id);
             if (!button)
                 continue;
@@ -244,27 +282,29 @@ namespace lfs::vis::gui {
                 continue;
             // Rotation changes drawing and hit testing, but not layout. Reserve
             // the measured text length on the vertical axis, including plugin labels.
-            const float text_width = std::ceil(Rml::ElementUtilities::GetStringWidth(label, tab.label) + 2.0f * dp);
-            const float height = std::ceil(std::max(28.0f * dp, text_width + (tab.closeable ? 48.0f : 28.0f) * dp));
-            if (std::abs(button->GetBox().GetSize(Rml::BoxArea::Border).y - height) > 0.5f) {
-                button->SetProperty("height", std::format("{:.0f}px", height));
-                changed = true;
+            auto& metrics = tab_text_metrics_[i];
+            const auto font = label->GetFontFaceHandle();
+            if (metrics.font != font || metrics.dp != dp) {
+                metrics = {font, dp, std::ceil(Rml::ElementUtilities::GetStringWidth(label, tab.label) + text_clearance_dp * dp)};
             }
+            const float text_width = metrics.width;
+            const float height = std::ceil(std::max(28.0f * dp, text_width + (tab.closeable ? 48.0f : 28.0f) * dp));
+            changed |= setPixelProperty(button, Rml::PropertyId::Height, height);
             // A rotated line box must fit across the tab. Snap its origin and
             // dimensions in physical pixels so fractional scales do not clip or
             // blur glyph edges. Keep clearance for the font's ink overhang.
-            const float line_height = std::ceil(20.0f * dp);
             const auto origin = button->GetAbsoluteOffset(Rml::BoxArea::Padding);
             const float content_width = button->GetBox().GetSize(Rml::BoxArea::Padding).x;
-            const float left = std::round(origin.x + (content_width + line_height) * 0.5f) - origin.x;
-            // Align the rotated first glyph with Rendering's first heading,
-            // including its content/header insets and line leading.
-            const float top = std::round(origin.y + 15.0f * dp) - origin.y;
-            label->SetProperty("width", std::format("{:.0f}px", text_width));
-            label->SetProperty("height", std::format("{:.0f}px", line_height));
-            label->SetProperty("line-height", std::format("{:.0f}px", line_height));
-            label->SetProperty("left", std::format("{:.3f}px", left));
-            label->SetProperty("top", std::format("{:.3f}px", top));
+            const float left = std::round(origin.x + (content_width - line_height) * 0.5f) - origin.x;
+            // Bottom-to-top text rotates upward from this lower origin. Keep
+            // its upper extent aligned with Rendering's first heading, excluding
+            // the trailing clearance included in the measured width.
+            const float top = std::round(origin.y + (15.0f - text_clearance_dp) * dp + text_width) - origin.y;
+            changed |= setPixelProperty(label, Rml::PropertyId::Width, text_width);
+            changed |= setPixelProperty(label, Rml::PropertyId::Height, line_height);
+            changed |= setPixelProperty(label, Rml::PropertyId::LineHeight, line_height);
+            changed |= setPixelProperty(label, Rml::PropertyId::Left, left);
+            changed |= setPixelProperty(label, Rml::PropertyId::Top, top);
         }
         return changed;
     }
@@ -298,49 +338,41 @@ namespace lfs::vis::gui {
         const float viewport_height = tab_strip_viewport_el_->GetClientHeight();
         const float max_scroll = std::max(0.0f, tab_strip_viewport_el_->GetScrollHeight() - viewport_height);
         float next_scroll = std::clamp(tab_scroll_top_, 0.0f, max_scroll);
+        const auto active = std::find_if(tabs_.begin(), tabs_.end(),
+                                         [this](const auto& tab) { return tab.id == active_tab_; });
+        auto* button = active != tabs_.end() ? document_->GetElementById(active->dom_id) : nullptr;
+        const float active_top = button
+                                     ? button->GetAbsoluteOffset(Rml::BoxArea::Border).y -
+                                           tab_strip_viewport_el_->GetAbsoluteOffset(Rml::BoxArea::Border).y +
+                                           tab_strip_viewport_el_->GetScrollTop()
+                                     : 0.0f;
+        const float active_height = button ? button->GetBox().GetSize(Rml::BoxArea::Border).y : 0.0f;
         if (reveal_active_tab_) {
-            for (const auto& tab : tabs_) {
-                if (tab.id != active_tab_)
-                    continue;
-                auto* button = document_->GetElementById(tab.dom_id);
-                if (!button)
-                    break;
-                const float top = button->GetAbsoluteOffset(Rml::BoxArea::Border).y -
-                                  tab_strip_viewport_el_->GetAbsoluteOffset(Rml::BoxArea::Border).y +
-                                  tab_strip_viewport_el_->GetScrollTop();
-                const float bottom = top + button->GetBox().GetSize(Rml::BoxArea::Border).y;
-                if (top < next_scroll || bottom - top > viewport_height)
-                    next_scroll = top;
-                else if (bottom > next_scroll + viewport_height)
-                    next_scroll = bottom - viewport_height;
-                break;
+            if (button) {
+                if (active_top < next_scroll || active_height > viewport_height)
+                    next_scroll = active_top;
+                else if (active_top + active_height > next_scroll + viewport_height)
+                    next_scroll = active_top + active_height - viewport_height;
             }
             next_scroll = std::clamp(next_scroll, 0.0f, max_scroll);
             reveal_active_tab_ = false;
         }
-        const bool changed = tab_strip_viewport_el_->GetScrollTop() != next_scroll;
+        bool changed = tab_strip_viewport_el_->GetScrollTop() != next_scroll;
         tab_scroll_top_ = next_scroll;
-        tab_strip_viewport_el_->SetScrollTop(next_scroll);
+        if (changed)
+            tab_strip_viewport_el_->SetScrollTop(next_scroll);
         const float rail_height = tab_bar_el_ ? tab_bar_el_->GetClientHeight() : viewport_height;
         float open_top = rail_height;
         float open_bottom = rail_height;
-        for (const auto& tab : tabs_) {
-            if (tab.id != active_tab_)
-                continue;
-            if (auto* button = document_->GetElementById(tab.dom_id)) {
-                const float top = button->GetAbsoluteOffset(Rml::BoxArea::Border).y -
-                                  tab_strip_viewport_el_->GetAbsoluteOffset(Rml::BoxArea::Border).y;
-                open_top = std::clamp(top, 0.0f, rail_height);
-                open_bottom = std::clamp(top + button->GetBox().GetSize(Rml::BoxArea::Border).y,
-                                         0.0f, rail_height);
-            }
-            break;
+        if (button) {
+            open_top = std::clamp(active_top - next_scroll, 0.0f, rail_height);
+            open_bottom = std::clamp(active_top + active_height - next_scroll, 0.0f, rail_height);
         }
         if (auto* edge = document_->GetElementById("tab-edge-before"))
-            edge->SetProperty("height", std::format("{:.0f}px", open_top));
+            changed |= setPixelProperty(edge, Rml::PropertyId::Height, open_top);
         if (auto* edge = document_->GetElementById("tab-edge-after")) {
-            edge->SetProperty("top", std::format("{:.0f}px", open_bottom));
-            edge->SetProperty("height", std::format("{:.0f}px", rail_height - open_bottom));
+            changed |= setPixelProperty(edge, Rml::PropertyId::Top, open_bottom);
+            changed |= setPixelProperty(edge, Rml::PropertyId::Height, rail_height - open_bottom);
         }
         return changed;
     }
@@ -359,10 +391,10 @@ namespace lfs::vis::gui {
             if (!button)
                 continue;
 
-            const std::string left_id = "#" + tabs_[(i + count - 1) % count].dom_id;
-            const std::string right_id = "#" + tabs_[(i + 1) % count].dom_id;
-            button->SetProperty("nav-up", left_id);
-            button->SetProperty("nav-down", right_id);
+            const std::string previous_id = "#" + tabs_[(i + count - 1) % count].dom_id;
+            const std::string next_id = "#" + tabs_[(i + 1) % count].dom_id;
+            button->SetProperty("nav-up", previous_id);
+            button->SetProperty("nav-down", next_id);
         }
     }
 
@@ -373,6 +405,7 @@ namespace lfs::vis::gui {
         if (next == tab_scroll_top_)
             return;
         tab_scroll_top_ = next;
+        tab_layout_dirty_ = true;
         render_needed_ = true;
         input_dirty_ = true;
     }
@@ -638,7 +671,6 @@ namespace lfs::vis::gui {
                 }
                 if (input.mouse_released[0]) {
                     rml_context_->ProcessMouseButtonUp(0, mods);
-                    // The click may have opened the tab picker, whose list hides the help.
                     tooltip_.setHover(resolveRmlTooltip(hover), hover);
                 }
             }
@@ -700,39 +732,26 @@ namespace lfs::vis::gui {
             if (dims_changed || layout_changed)
                 reveal_active_tab_ = true;
 
-            if (resize_handle_el_) {
-                resize_handle_el_->SetProperty("top", "0px");
-                resize_handle_el_->SetProperty("height", std::format("{:.0f}px", layout.size.y));
+            const bool geometry_changed = dims_changed || layout_changed || theme_changed;
+            if (theme_changed)
+                tab_text_metrics_.assign(tabs_.size(), {});
+            tab_layout_dirty_ |= geometry_changed;
+            if (geometry_changed) {
+                if (splitter_el_) {
+                    setPixelProperty(splitter_el_, Rml::PropertyId::Top, std::round(layout.scene_h));
+                    setPixelProperty(splitter_el_, Rml::PropertyId::Height, std::round(layout.splitter_h));
+                }
+                if (tab_bar_el_) {
+                    const float tab_top = layout.scene_h + layout.splitter_h +
+                                          PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * dp_ratio;
+                    setPixelProperty(tab_bar_el_, Rml::PropertyId::Top, std::round(tab_top));
+                    setPixelProperty(tab_bar_el_, Rml::PropertyId::Height, std::round(std::max(0.0f, layout.size.y - tab_top - 8.0f)));
+                    setPixelProperty(tab_bar_el_, Rml::PropertyId::Width, std::round(tab_bar_w));
+                }
             }
-            if (left_border_el_) {
-                left_border_el_->SetProperty("top", "0px");
-                left_border_el_->SetProperty("height", std::format("{:.0f}px", layout.size.y));
-            }
-            if (splitter_el_) {
-                splitter_el_->SetProperty("top", std::format("{:.0f}px", layout.scene_h));
-                splitter_el_->SetProperty("height", std::format("{:.0f}px", layout.splitter_h));
-            }
-            if (tab_bar_el_) {
-                const float tab_top = layout.scene_h + layout.splitter_h +
-                                      PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * dp_ratio;
-                tab_bar_el_->SetProperty("top", std::format("{:.0f}px", tab_top));
-                tab_bar_el_->SetProperty("height", std::format("{:.0f}px", std::max(0.0f, layout.size.y - tab_top - 8.0f)));
-                tab_bar_el_->SetProperty("width", std::format("{:.0f}px", tab_bar_w));
-            }
-
-            rml_context_->SetDimensions(Rml::Vector2i(w, h));
-            for (int pass = 0; pass < 3; ++pass) {
-                updateTabModel();
-                const bool tab_layout_changed = layoutTabs();
-                if (tab_layout_changed)
-                    updateTabModel();
-                syncTabNavigation();
-                const bool scroll_changed = syncTabScrollState();
-                if (!scroll_changed && !tab_layout_changed)
-                    break;
-            }
-            updateTabModel();
-            syncTabNavigation();
+            if (dims_changed)
+                rml_context_->SetDimensions(Rml::Vector2i(w, h));
+            updateTabs();
 
             // Data-model and overflow updates can move the tab strip after input was
             // processed for this frame. Re-resolve hover against the settled layout so

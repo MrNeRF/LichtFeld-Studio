@@ -30,7 +30,7 @@
     @{right_panel.tab_hover_decor};
     color: @{text};
     border-color: @{right_panel.tab_active_border};
-    border-left-color: @{right_panel.tab_active_bottom_border};
+    border-left-color: @{right_panel.tab_focus_border};
 }
 
 .tab.active {

@@ -225,9 +225,7 @@ def test_optional_gradients_style_the_primary_application_chrome():
     consumers = {
         "chrome.menu_decor": ("shell.theme.rcss", "menubar.theme.rcss"),
         "chrome.status_decor": ("shell.theme.rcss", "statusbar.theme.rcss"),
-        "chrome.right_panel_decor": ("right_panel.theme.rcss",),
         "chrome.right_panel_edge_shape": ("right_panel.theme.rcss",),
-        "chrome.right_panel_separator_decor": ("right_panel.theme.rcss",),
         "chrome.toolbar_decor": ("viewport_overlay.theme.rcss",),
         "controls.selected_decor": ("viewport_overlay.theme.rcss",),
         "controls.selected_icon": ("viewport_overlay.theme.rcss",),

@@ -78,7 +78,7 @@ namespace lfs::vis::gui {
     private:
         friend class RmlRightPanelTestAccess;
         void bindTabModel();
-        void updateTabModel();
+        void updateTabs();
         friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         bool updateTheme();
         bool syncTabData(const std::vector<TabSnapshot>& tabs, const std::string& active_tab);
@@ -93,7 +93,6 @@ namespace lfs::vis::gui {
         Rml::ElementDocument* document_ = nullptr;
 
         Rml::Element* resize_handle_el_ = nullptr;
-        Rml::Element* left_border_el_ = nullptr;
         Rml::Element* splitter_el_ = nullptr;
         Rml::Element* tab_bar_el_ = nullptr;
         RmlTooltipController tooltip_;
@@ -101,6 +100,14 @@ namespace lfs::vis::gui {
 
         Rml::DataModelHandle tab_model_;
         std::vector<TabSnapshot> tabs_;
+        struct TabTextMetrics {
+            Rml::FontFaceHandle font{};
+            float dp = 0.0f;
+            float width = 0.0f;
+        };
+        std::vector<TabTextMetrics> tab_text_metrics_;
+        bool tab_layout_dirty_ = true;
+        bool tab_navigation_dirty_ = true;
         Rml::String active_tab_;
         float tab_scroll_top_ = 0.0f;
         bool reveal_active_tab_ = true;

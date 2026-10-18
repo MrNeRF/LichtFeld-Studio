@@ -24,18 +24,7 @@ namespace lfs::vis::gui {
             panel.syncTabData(tabs, active);
             settle(panel);
         }
-        static void settle(RmlRightPanel& panel) {
-            for (int pass = 0; pass < 3; ++pass) {
-                panel.updateTabModel();
-                const bool layout_changed = panel.layoutTabs();
-                panel.updateTabModel();
-                panel.syncTabNavigation();
-                const bool scroll_changed = panel.syncTabScrollState();
-                if (!layout_changed && !scroll_changed)
-                    break;
-            }
-            panel.updateTabModel();
-        }
+        static void settle(RmlRightPanel& panel) { panel.updateTabs(); }
         static void scroll(RmlRightPanel& panel, float delta) { panel.scrollTabs(delta); }
     };
 } // namespace lfs::vis::gui
@@ -47,6 +36,7 @@ namespace {
         struct TextDraw {
             Rml::Rectanglef bounds;
             Rml::Rectanglei clip;
+            float direction_y;
         };
         std::vector<TextDraw> text_draws;
 
@@ -70,7 +60,8 @@ namespace {
                 const Rml::Vector2f point(pos.x / pos.w, pos.y / pos.w);
                 bounds = bounds.Valid() ? bounds.Join(point) : Rml::Rectanglef::FromPosition(point);
             }
-            text_draws.push_back({bounds, clipping ? clip : Rml::Rectanglei::FromSize({400, 600})});
+            const auto direction = transform * Rml::Vector4f(1, 0, 0, 0);
+            text_draws.push_back({bounds, clipping ? clip : Rml::Rectanglei::FromSize({400, 600}), direction.y});
         }
         void ReleaseGeometry(Rml::CompiledGeometryHandle handle) override { geometry.erase(handle); }
         Rml::TextureHandle LoadTexture(Rml::Vector2i&, const Rml::String&) override { return 0; }
@@ -160,6 +151,26 @@ namespace {
         EXPECT_GT(button(1)->GetBox().GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right), 0);
     }
 
+    TEST_P(RightPanelTabsTest, RelabelingAndClosingControlsResizePreviouslySettledTabs) {
+        auto data = tabs(2);
+        RmlRightPanelTestAccess::sync(panel, data, data[0].id);
+        const float initial_height = button(1)->GetBox().GetSize(Rml::BoxArea::Border).y;
+        for (int i = 0; i < 3; ++i)
+            RmlRightPanelTestAccess::settle(panel);
+
+        data[1].label = "A plugin with a much longer translated label";
+        data[1].closeable = true;
+        RmlRightPanelTestAccess::sync(panel, data, data[0].id);
+        EXPECT_GT(button(1)->GetBox().GetSize(Rml::BoxArea::Border).y, initial_height);
+        EXPECT_NEAR(button(1)->GetBox().GetSize(Rml::BoxArea::Border).y,
+                    button(1)->GetChild(0)->GetBox().GetSize().x + 48 * GetParam(), 1.0f);
+
+        data[1].label = "Plugin 1";
+        data[1].closeable = false;
+        RmlRightPanelTestAccess::sync(panel, data, data[0].id);
+        EXPECT_NEAR(button(1)->GetBox().GetSize(Rml::BoxArea::Border).y, initial_height, 0.5f);
+    }
+
     TEST_P(RightPanelTabsTest, RotatedTextFitsTheRenderClipAtFractionalScales) {
         auto data = tabs(2);
         data[0].label = "Rendering";
@@ -184,6 +195,7 @@ namespace {
                 auto* tab = button(i);
                 auto* label = tab->GetChild(0);
                 const auto& draw = renderer.text_draws[i];
+                EXPECT_NEAR(draw.direction_y, -1.0f, 0.001f);
                 const auto pos = tab->GetAbsoluteOffset(Rml::BoxArea::Border);
                 const auto size = tab->GetBox().GetSize(Rml::BoxArea::Border);
                 EXPECT_GE(draw.bounds.Left(), pos.x + GetParam());

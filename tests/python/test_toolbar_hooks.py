@@ -1941,22 +1941,23 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     tab_rule = right_panel_rcss[tab_start:tab_end]
     assert "box-sizing: border-box;" in tab_rule
     assert "border-width: 1dp;" in tab_rule
-    assert "border-bottom-width: 2dp;" in tab_rule
-    assert "transition: none;" in tab_rule
+    assert "width: 25dp;" in tab_rule
+    assert "margin: 0 0 0 3dp;" in tab_rule
     assert "0.15s" not in tab_rule
 
-    assert right_panel_rml.index('href="panel_tabs.rcss"') < right_panel_rml.index(
-        'href="right_panel.rcss"'
-    )
-    assert right_panel_cpp.index('loadBaseRCSS("rmlui/panel_tabs.rcss")') < (
-        right_panel_cpp.index('loadBaseRCSS("rmlui/right_panel.rcss")')
-    )
+    assert 'href="panel_tabs.rcss"' not in right_panel_rml
+    assert 'loadBaseRCSS("rmlui/panel_tabs.rcss")' not in right_panel_cpp
+    active_geometry_start = right_panel_rcss.index(".tab.active {")
+    active_geometry_end = right_panel_rcss.index("\n}", active_geometry_start)
+    active_geometry = right_panel_rcss[active_geometry_start:active_geometry_end]
+    assert "width: 28dp;" in active_geometry
+    assert "margin-left: 0;" in active_geometry
+    assert "border-right-width: 0;" in active_geometry
 
     for token in (
         "right_panel.tab_border",
-        "right_panel.tab_bottom_border",
         "right_panel.tab_active_border",
-        "right_panel.tab_active_bottom_border",
+        "right_panel.tab_focus_border",
     ):
         assert f"@{{{token}}}" in right_panel_theme
         assert f'"{token}"' in resolver
@@ -1977,10 +1978,10 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     active_start = right_panel_theme.index(".tab.active {")
     active_end = right_panel_theme.index("\n}", active_start)
     active_rule = right_panel_theme[active_start:active_end]
-    assert "border-bottom-color: @{right_panel.tab_active_bottom_border};" in active_rule
+    assert "background-color: transparent;" in active_rule
+    assert "border-color: @{right_panel.tab_active_border};" in active_rule
 
     assert "@{panel.body_decor};" in shell_theme
-    assert "@{chrome.right_panel_decor};" in right_panel_theme
     assert "@{panel.host_body_decor};" in panel_host_theme
     assert '{"panel.host_body_decor"' in resolver
 

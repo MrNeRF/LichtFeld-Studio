@@ -97,7 +97,7 @@ body {
     line-height: 20dp;
     white-space: nowrap;
     transform-origin: 0 0;
-    transform: rotate(90deg);
+    transform: rotate(-90deg);
     pointer-events: none;
 }
 
