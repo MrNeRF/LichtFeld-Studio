@@ -309,6 +309,11 @@ namespace lfs::training {
             p.operation = 3;
             launch(p, mark_reads, mark_writes, groups(p.index_count));
             p.operation = 2;
+            // Zero encoding does not consume value bounds. Give loadOldBounds
+            // a valid address anyway: llvmpipe can execute its optional float2
+            // load despite the null guard. The float4 moment-bounds allocation
+            // covers that read and is already included in the tracked accesses.
+            p.value_bounds = p.bounds;
             const std::array reads{ref(packed), ref(bounds), ref(flags)};
             const std::array writes{ref(packed), ref(bounds)};
             launch(p, reads, writes, blocks);

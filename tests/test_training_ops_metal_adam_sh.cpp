@@ -522,17 +522,15 @@ namespace {
     TEST_P(PortableAdamShMorton, AdamStepShQ16WithSkippedRowsMatchesCpu) { run_step_sh(*adam, true, 0.f); }
 
     // joint_encode_zero_{rows,shN}_cu on random codes and bounds.
-    void run_encode_zero(const ops::AdamOps& adam, ops::JointLayout layout, int bits) {
-        constexpr size_t n = 700;
+    void run_encode_zero(const ops::AdamOps& adam, ops::JointLayout layout, int bits,
+                         size_t n, uint32_t width, const std::vector<int64_t>& indices) {
         const bool swizzled = layout == ops::JointLayout::SwizzledSH;
-        const uint32_t width = swizzled ? 3 : 4;
         const size_t cells = swizzled ? lfs::core::sh_swizzled_padded_n(n) * width * 4 : n * width;
         std::mt19937 rng(bits * 7 + width);
         std::vector<uint8_t> packed(cells * joint::bytes_per_cell(bits));
         for (auto& byte : packed)
             byte = static_cast<uint8_t>(rng() % 101);
         std::vector<float> bounds = pattern(joint::n_bounds_for_prims(n) * 4, 0.5f, 64);
-        const std::vector<int64_t> indices{0, 5, 5, 255, 256, 300, 511, 512, 699, 3, -1, 700};
         Tensor packed_gpu = upload(packed, {packed.size()}, DataType::UInt8);
         Tensor bounds_gpu = upload(bounds, {bounds.size() / 4, 4}, DataType::Float32);
         adam.encode_zero(packed_gpu, bounds_gpu, upload(indices, {indices.size()}, DataType::Int64),
@@ -569,6 +567,25 @@ namespace {
         }
         expect_equal(host<uint8_t>(packed_gpu), expected.bytes, "encode_zero packed");
         expect_equal(host<float>(bounds_gpu), bounds, "encode_zero bounds");
+    }
+
+    void run_encode_zero(const ops::AdamOps& adam, ops::JointLayout layout, int bits) {
+        run_encode_zero(adam, layout, bits, 700, layout == ops::JointLayout::SwizzledSH ? 3 : 4,
+                        {0, 5, 5, 255, 256, 300, 511, 512, 699, 3, -1, 700});
+    }
+
+    TEST_P(PortableAdamShMorton, EncodeZeroAppendedRowsAcrossPartialBlocksMatchesCpu) {
+        // Reproduce the first MCMC growth from the llvmpipe crash, including
+        // a live partial block and the final partial block (block 80).
+        constexpr size_t old_n = 19555, new_n = 20532;
+        std::vector<int64_t> indices(new_n - old_n);
+        std::iota(indices.begin(), indices.end(), int64_t{old_n});
+        for (const auto layout : {ops::JointLayout::Rows, ops::JointLayout::SwizzledSH}) {
+            for (const int bits : {8, 16}) {
+                SCOPED_TRACE(::testing::Message() << "layout=" << static_cast<int>(layout) << " bits=" << bits);
+                run_encode_zero(*adam, layout, bits, new_n, 3, indices);
+            }
+        }
     }
 
     TEST_P(PortableAdamShMorton, EncodeZeroRows16MatchesCpu) { run_encode_zero(*adam, ops::JointLayout::Rows, 16); }

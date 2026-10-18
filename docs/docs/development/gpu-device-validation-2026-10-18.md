@@ -275,10 +275,11 @@ causal diagnostic evidence, not a production regression/quality certification.
 GDB itself can return zero after stopping on SIGSEGV, so the negative-control
 result is classified from the inferior's signal, not the shell's GDB exit code.
 
-The Vulkan Adam adapter and shader are unchanged against merged dev; the stored
+At the time of causal diagnosis, the Vulkan Adam adapter and shader are unchanged
+against merged dev; the stored
 control/candidate SPIR-V audit also lists Adam among the unchanged binaries.
-No change to this Adam kernel or adapter originates in the new branch. The
-reproduction exposes the pre-existing optional-read code path on llvmpipe.
+The reproduction exposes the pre-existing optional-read code path on llvmpipe;
+the targeted follow-up adapter correction is described below.
 Interactions with the broader
 runtime still require a matched dev reproduction before claiming a full
 baseline-level exclusion of regressions.
@@ -286,15 +287,45 @@ baseline-level exclusion of regressions.
 A narrowly scoped candidate is to provide an already valid bounds address for
 the unused value-bounds field in Vulkan `encode_zero` only, with a comment
 explaining why the address must be safe even though the value is unused. That
-would leave CUDA, native Metal and other Adam operations untouched. No such
-production change is applied in this investigation: it needs compiled execution
-and numerical/Metal+Vulkan regression checks when builds resume. No software-GPU
+leaves CUDA, native Metal and other Adam operations untouched. It was initially
+kept as a diagnostic candidate; the subsequent source correction is recorded
+below. Compiled execution and numerical/Metal+Vulkan regression checks remain
+necessary when builds resume. No software-GPU
 blacklist, changed hardware selection or global driver override is introduced.
 
 Evidence: `linux-refine-debug-detail.log`, `linux-gather-addresses.log`,
 `adam-existing.spvasm`, `linux-adam-safe-address-diagnostic.log`,
 `linux-adam-readonly-control.log`, and their `.gdb` / `.sh` harnesses under
 `.local/gpu-backend-preferences`.
+
+### Targeted source correction, not yet rebuilt
+
+The follow-up applies `p.value_bounds = p.bounds` only after the zero-encoding
+mark stage, immediately before operation 2 is queued in `adam_vulkan.cpp`.
+Operation 3 keeps its original parameters. The valid address points to an already
+tracked allocation; there is no extra buffer, allocation, host copy or change to
+optimizer arithmetic. CUDA, native Metal and all shader sources are untouched
+by this follow-up. Mac Vulkan uses the corrected Vulkan adapter and therefore
+must be included in the compiled regression checks.
+
+The existing portable Adam CPU-oracle helper now also accepts the exact growth
+geometry (19,555 to 20,532 primitives). A new parameterized regression compares
+all packed output bytes and bounds against that CPU oracle for row and swizzled
+layouts, both 8-bit and 16-bit codecs. It covers the live partial source block,
+new complete blocks, final partial block 80, and preservation of untouched rows
+and padding. Existing 700-row fixtures retain their original inputs.
+
+No compilation is run, in accordance with the user's current instruction. The
+new C++ regression is **added but not executed**, and the source correction is
+**not yet tested in a rebuilt binary**. The GDB causal result above is supporting
+evidence, not a substitute for that validation. Backend-neutrality, I/O discipline,
+CUDA log-format and error-debt source gates pass; debt baselines are unchanged.
+
+When build work resumes, run the new test and all existing `EncodeZero*` CPU
+comparisons on llvmpipe, both physical Windows adapters, and Mac Metal/Vulkan;
+then repeat the previously failing refinement smoke on the rebuilt Linux app.
+Do not count the old binaries' successful measurements as validation of this
+new source revision.
 
 ## Evidence locations
 
