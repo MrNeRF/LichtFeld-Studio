@@ -1564,6 +1564,18 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     using lfs::rendering::vulkan::DeclaredAccess;
     // Mega-hoist removed: each tagged/indirect dispatch plans its own hazards.
 
+    // Use precisely the index stream used by projection, including GPU LOD selection.
+    const bool gpu_lod = (uniforms.lod_enabled & 32u) != 0u;
+    const bool lod_active = (uniforms.lod_enabled & 1u) != 0u;
+    const auto& lod_indices = lod_active
+                                  ? (gpu_lod ? buffers.lod_gpu_indices.deviceBuffer : buffers.lod_indices.deviceBuffer)
+                                  : buffers.depths.deviceBuffer;
+    const auto& lod_logical_indices = lod_active && (uniforms.lod_enabled & 8u) != 0u
+                                          ? (gpu_lod ? buffers.lod_gpu_logical_indices.deviceBuffer : buffers.lod_logical_indices.deviceBuffer)
+                                          : lod_indices;
+    const auto& lod_weights = lod_active && (uniforms.lod_enabled & 16u) != 0u
+                                  ? (gpu_lod ? buffers.lod_gpu_weights.deviceBuffer : buffers.lod_weights.deviceBuffer)
+                                  : buffers.depths.deviceBuffer;
     const auto& wave_buffer = buffers.depth_wave_dispatch.deviceBuffer;
     const auto& predicate_buffer = buffers.wave_predicates.deviceBuffer;
     for (size_t wave = 0; wave < armed; ++wave) {
@@ -1587,6 +1599,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
         // Inter-wave CSRW mega-barrier removed; per-dispatch plans cover reuse.
 
         VulkanGSRendererUniforms wave_uniforms = uniforms;
+        wave_uniforms.lod_page_splats = buffers.quant_pool ? buffers.pool_page_splats : 0u;
         wave_uniforms.depth_wave = static_cast<uint32_t>(wave);
         const auto record = bufferView(
             wave_buffer,
@@ -1789,6 +1802,9 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                         {overlay_params, BufferUse::ComputeRead},
                         {transform_indices, BufferUse::ComputeRead},
                         {model_transforms, BufferUse::ComputeRead},
+                        {lod_indices, BufferUse::ComputeRead},
+                        {lod_logical_indices, BufferUse::ComputeRead},
+                        {lod_weights, BufferUse::ComputeRead},
                     });
             } else {
                 auto& raster_pipeline = overlays_active
