@@ -23,6 +23,8 @@ Consumer queues know whether their own context supports external interop. A head
 
 CUDA selection is activated on worker threads as well as the main thread. Device information, decoder selection, streams, allocation and DLPack metadata follow the selected adapter. Linux Vulkan-enabled builds use dynamic CUDA driver lookup so an absent CUDA driver does not by itself prevent the application from loading.
 
+CPU-decoded image/mask helpers resolve the current execution target, including a loader's explicit backend scope. CUDA stream/codec decisions follow that target, and masked-fill guards inspect the actual staging tensor. A CUDA loader in a process whose default is Vulkan therefore keeps CUDA image operations consistent with its allocations. Unscoped callers retain the process-default behavior; image formulas and precision are unchanged.
+
 ## Validation protocol
 
 Functional checks cover CUDA and Vulkan training, both Windows adapters, independent viewer devices, saved aliases, missing devices, fallback logs, pending edits and restoration of the active settings. Pure policy tests cover unavailable, reordered and duplicate adapters without relying on the test machine's particular inventory.

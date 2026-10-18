@@ -312,13 +312,13 @@ namespace lfs::io {
         assert(data && channels == 3);
 #if LFS_HAS_CUDA
         std::optional<lfs::core::CUDAStreamGuard> execution_scope;
-        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA)
+        if (lfs::core::TensorExecutionTarget::current().backend() == lfs::core::GpuBackend::CUDA)
             execution_scope.emplace(image_execution_stream(params.cuda_stream));
 #endif
         auto staging = upload_hwc(data, width, height, channels);
         if (params.masked_fill) {
 #if LFS_HAS_CUDA
-            if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::CUDA)
+            if (lfs::core::gpu_backend_of(staging) != lfs::core::GpuBackend::CUDA)
                 throw std::runtime_error(masked_image_fill_error());
             fill_masked_image(staging, *params.masked_fill, staging.stream());
 #else
@@ -333,13 +333,13 @@ namespace lfs::io {
         assert(data && channels == 3);
 #if LFS_HAS_CUDA
         std::optional<lfs::core::CUDAStreamGuard> execution_scope;
-        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA)
+        if (lfs::core::TensorExecutionTarget::current().backend() == lfs::core::GpuBackend::CUDA)
             execution_scope.emplace(image_execution_stream(params.cuda_stream));
 #endif
         auto staging = upload_hwc(data, width, height, channels);
         if (params.masked_fill) {
 #if LFS_HAS_CUDA
-            if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::CUDA)
+            if (lfs::core::gpu_backend_of(staging) != lfs::core::GpuBackend::CUDA)
                 throw std::runtime_error(masked_image_fill_error());
             fill_masked_image(staging, *params.masked_fill, staging.stream());
 #else
@@ -369,7 +369,8 @@ namespace lfs::io {
 
     lfs::core::Tensor load_mask_image_cpu_decoded(const std::filesystem::path& path, const LoadParams& params) {
         using namespace lfs::core;
-        const auto backend = default_gpu_backend();
+        // Match GPU allocations made inside a loader's explicit backend scope.
+        const auto backend = TensorExecutionTarget::current().backend();
         const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
         std::optional<CUDAStreamGuard> execution_scope;
         if (backend == GpuBackend::CUDA)
@@ -494,7 +495,7 @@ namespace lfs::io {
         using namespace lfs::core;
 #if LFS_HAS_CUDA
         std::optional<CUDAStreamGuard> execution_scope;
-        if (default_gpu_backend() == GpuBackend::CUDA)
+        if (TensorExecutionTarget::current().backend() == GpuBackend::CUDA)
             execution_scope.emplace(image_execution_stream(cuda_stream));
 #endif
         const auto finish = [&](const auto* data, const int width, const int height, const int channels) {
@@ -504,7 +505,7 @@ namespace lfs::io {
             auto staging = upload_hwc(data, width, height, channels);
             if (masked_fill) {
 #if LFS_HAS_CUDA
-                if (default_gpu_backend() != GpuBackend::CUDA)
+                if (gpu_backend_of(staging) != GpuBackend::CUDA)
                     throw std::runtime_error(masked_image_fill_error());
                 fill_masked_image(staging, *masked_fill, static_cast<cudaStream_t>(cuda_stream));
 #else
@@ -647,7 +648,7 @@ namespace lfs::io {
         // Hardware decode and its layout kernels write CUDA storage. Viewer
         // image loading on another tensor backend uses the existing CPU cache.
 #if LFS_HAS_CUDA
-        if (default_gpu_backend() == GpuBackend::CUDA) {
+        if (TensorExecutionTarget::current().backend() == GpuBackend::CUDA) {
             determine_nv_image_codec();
             if (nv_image_codec_available_ == NvImageCodecMode::Available && is_jpeg_format(path)) {
                 return load_jpeg_with_hardware_decode(path, params);

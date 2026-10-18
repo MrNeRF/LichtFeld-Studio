@@ -1,7 +1,8 @@
 # GPU device selection: validation on 18 October 2026
 
 Local branch `feat/gpu-backend-preferences`, based on `dev` commit
-`4ef50cbbc7f649cfed1d76d1d1770a3bff62d27f`. No push or pull request is part of this work.
+`4ef50cbbc7f649cfed1d76d1d1770a3bff62d27f`. Validation was initially local;
+publication for review was subsequently authorized.
 The implementation and reproduction checklist are in [GPU device preferences](gpu-device-preferences.md).
 
 The branch subsequently merges `upstream/dev` commit
@@ -628,6 +629,65 @@ Evidence is under `.local/gpu-backend-preferences/raster-layout-experiments`: `w
 
 ## Progress since the initial implementation
 
+This history includes image preparation and cache corrections already merged in
+#3601, supported by the shared JPEG codec from #3637. Those are prerequisites in
+`dev`, not new image-cache changes introduced by this branch. Subsequent upstream
+cache/codec improvements are likewise inherited through the `dev` merges.
+
 The first preserved real-dataset AMD run on 15 October (`gpu-validation-dev/outputs/perf-real-amd/perf_bench.json`, application source tag `43a9af65a-dirty`) records 1,036.650822 ms per steady training step plus 371.361742 ms of steady image-loader wait: approximately **1,408.013 ms per iteration** for those two components. This was a 55-step run with five warmup steps and 50 measured steady steps, all 82 dataset images, SH0, 19,555 live Gaussians and a two-million capacity limit. The earlier incorrect handling of prepared images and large allocations was still present. The saved loader configuration, log and benchmark JSON remain available locally.
 
 The final 2,000-step candidate records **114.590912 ms per training step plus 9.935835 ms of loader wait**, approximately **124.527 ms per iteration** for the corresponding components, with the one-million capacity limit and resized images described above. These endpoints document progress from the beginning of implementation, including memory, image preparation/cache and kernel execution improvements. They are different workloads and collection windows, so their ratio is not an isolated optimization benchmark. Startup, checkpoint saving and evaluation are not included in either sum. The controlled paired comparison remains the separate 125.320-to-114.591 ms result above.
+
+## Publication integration against the latest dev
+
+Upstream advanced to `c002ec1b47ebd61cbdaa410f7ca798cdd98518db`. Merge
+`a1cb9d345` incorporates #3670, #3672, #3673 and #3678 without conflicts.
+Their image-codec and prepared-image cache algorithms are inherited from `dev`;
+this branch does not reimplement them. The combined Windows application, UI,
+policy, interop and portable test runner rebuild successfully after this merge.
+
+The expanded integration run exposed an image-helper dispatch inconsistency:
+a CUDA loader inside a Vulkan-default process allocated CUDA tensors within its
+scope, but CPU-decoded mask operations and masked-fill guards still consulted
+the process default. The shared helpers now use the scoped execution target and
+the actual staging tensor. The CUDA image execution queue and cached-decode
+choice follow the same target. Unscoped execution keeps the existing default;
+no image formula, kernel, precision or cache encoding algorithm changes.
+
+The existing `MasksMatchHostReference/CUDA` case reproduced the failure with
+`--tensor-backend=vulkan`; it passes after the correction, including binary
+and undistorted masks. The before-correction JSON/log are retained. A preliminary
+artifact runner also stalled in a death-test subprocess; switching to the
+repository's unchanged `test_main.cpp` initialization resolves that harness
+issue. No test-runner workaround is added to production or repository tests.
+
+Final additional results:
+
+| Check | Passed | Skipped | Disabled | Failed |
+|---|---:|---:|---:|---:|
+| Windows policy | 13 | 0 | 0 | 0 |
+| Windows CUDA/Vulkan source interop, default adapter | 2 | 0 | 0 | 0 |
+| Windows Radeon-source interop | 1 | 0 | 0 | 0 |
+| Windows UI | 352 | 5 | 2 | 0 |
+| Windows Radeon image-loader/cache subset after dispatch correction | 32 | 42 | 0 | 0 |
+| Windows NVIDIA full portable operators + loader/cache after correction | 87 | 74 | 3 | 0 |
+| Mac Metal-default image-loader/cache subset after correction | 15 | 32 | 0 | 0 |
+| Mac Vulkan-default image-loader/cache subset after correction | 15 | 32 | 0 | 0 |
+
+The Radeon full expanded run before the image-helper correction passed the
+operator cases but exposed the single CUDA-mask failure; the complete affected
+loader/cache subset was rerun afterward. The NVIDIA run afterward includes both
+operators and cache cases. These are functional checks, not new timing samples.
+The targeted Mac reruns validate the shared scope correction on the existing
+combined Metal-graphics build; they do not replace the earlier full Mac matrix
+or claim a rebuild of the latest upstream codec changes on Mac.
+
+Policy, cross-device interop, UI and three-step CUDA/NVIDIA-Vulkan/Radeon-Vulkan
+training all pass after the upstream merge. The three training configurations
+are checked again after the final image-helper change. Backend-neutrality,
+I/O-discipline, CUDA-format and error-debt gates remain clean, with no baseline
+changes. Final Linux and full Mac matrix results above predate this publication
+merge; no new native Linux GPU coverage or performance measurement is claimed.
+Evidence: `.local/gpu-backend-preferences/review-upstream` and
+`review-final-mask`, including `final-summary.json`, `portable-summary.json`,
+the archived failing mask reproduction and the final training `summary.json`.
