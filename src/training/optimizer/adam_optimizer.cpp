@@ -193,6 +193,23 @@ namespace lfs::training {
         crop_damping_mask_ = std::move(mask);
     }
 
+    void AdamOptimizer::set_crop_roi_rows(lfs::core::Tensor rows, const float growth_inside) {
+        LFS_ASSERT_MSG(
+            std::isfinite(growth_inside) && growth_inside >= 0.0f && growth_inside <= 1.0f,
+            "AdamOptimizer crop growth share must be finite and within [0, 1]");
+        if (rows.is_valid()) {
+            LFS_ASSERT_MSG(
+                rows.dtype() == lfs::core::DataType::Bool && rows.ndim() == 1,
+                "AdamOptimizer crop ROI rows must be a 1D bool tensor");
+            if (rows.device() != lfs::core::Device::CUDA)
+                rows = rows.cuda();
+            if (!rows.is_contiguous())
+                rows = rows.contiguous();
+        }
+        crop_roi_rows_ = std::move(rows);
+        cropbox_growth_inside_ = growth_inside;
+    }
+
     void AdamOptimizer::set_crop_score_mask(lfs::core::Tensor mask) {
         if (mask.is_valid()) {
             LFS_ASSERT_MSG(

@@ -40,6 +40,7 @@ class MRNFStrategyTest_SetOptimizationParamsRecomputesDecayFromCurrentState_Test
 class MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_Test;
 class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
+class CropDampingStrategyTest_RoiGrowthShareSplitsPicksAndSpillsLeftovers_Test;
 class MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
 class MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
 class MRNFStrategyTest_ApplyDecaySkipsFrozenRows_Test;
@@ -122,6 +123,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_Test;
         friend class ::MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
         friend class ::CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
+        friend class ::CropDampingStrategyTest_RoiGrowthShareSplitsPicksAndSpillsLeftovers_Test;
         friend class ::MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
         friend class ::MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
         friend class ::MRNFStrategyTest_ApplyDecaySkipsFrozenRows_Test;
@@ -160,6 +162,12 @@ namespace lfs::training {
         void publish_mean_step_far_mask();
         void ensure_mean_step_far_mask();
         [[nodiscard]] size_t densification_row_count() const;
+        // Gumbel top-k picks split between the crop box ROI and the rest by the growth share.
+        [[nodiscard]] lfs::core::Tensor sample_with_roi_share(
+            const lfs::core::Tensor& weights,
+            int k,
+            uint64_t seed,
+            size_t known_nnz);
         [[nodiscard]] lfs::core::Tensor sample_gumbel_topk(
             const lfs::core::Tensor& weights,
             int k,

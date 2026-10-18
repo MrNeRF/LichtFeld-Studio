@@ -250,15 +250,24 @@ namespace lfs::training::kernels {
             const float3 crop_max,
             const bool inverse,
             const bool* __restrict__ deleted,
-            bool* __restrict__ rejected) {
+            bool* __restrict__ rejected,
+            bool* __restrict__ in_roi) {
             for (size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x; i < n;
                  i += static_cast<size_t>(blockDim.x) * gridDim.x) {
                 if (deleted && deleted[i]) {
                     rejected[i] = false;
+                    if (in_roi)
+                        in_roi[i] = false;
                     continue;
                 }
                 const float3 centre = transform_point(
                     model_to_cropbox, make_float3(means[3 * i], means[3 * i + 1], means[3 * i + 2]));
+                if (in_roi) {
+                    const bool inside = centre.x >= crop_min.x && centre.x <= crop_max.x &&
+                                        centre.y >= crop_min.y && centre.y <= crop_max.y &&
+                                        centre.z >= crop_min.z && centre.z <= crop_max.z;
+                    in_roi[i] = inverse ? !inside : inside;
+                }
                 // Inverse boxes keep splats that some camera sees outside the box.
                 const float margin = splat_margin(scaling_raw, i, margin_scale);
                 bool relevant = false;
@@ -385,6 +394,7 @@ namespace lfs::training::kernels {
         const bool inverse,
         const bool* deleted,
         bool* rejected,
+        bool* in_roi,
         cudaStream_t stream) {
         if (n == 0)
             return;
@@ -398,7 +408,7 @@ namespace lfs::training::kernels {
             cameras_in_box, num_cameras,
             make_float3(crop_min.x, crop_min.y, crop_min.z),
             make_float3(crop_max.x, crop_max.y, crop_max.z),
-            inverse, deleted, rejected);
+            inverse, deleted, rejected, in_roi);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.roi_relevance_reject_mask");
     }
 

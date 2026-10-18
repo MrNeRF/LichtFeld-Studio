@@ -29,6 +29,7 @@ _OVERLAY_DOC_KEY_ATTR = "data-viewport-toolbar-doc-key"
 _toolbar_controller = None
 _MISSING = object()
 _CROP_ROI_DEFAULT = 0.1
+_CROP_ROI_GROWTH_DEFAULT = 0.0
 _SEQUENCER_PANEL_ID = "native.sequencer"
 _HISTOGRAM_PANEL_ID = "lfs.histogram"
 
@@ -162,25 +163,27 @@ def _toggle_bottom_dock_panel(panel_id, visible, set_visible):
 
 
 def _crop_roi_param_state():
-    """Return (available, LR scale, loss weight) from the live parameter owner."""
+    """Return (available, LR scale, loss weight, growth inside) from the live parameter owner."""
     try:
         import lichtfeld as lf
 
         getter = getattr(lf, "optimization_params", None)
         params = getter() if callable(getter) else None
+        unavailable = (False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT, _CROP_ROI_GROWTH_DEFAULT)
         if params is None:
-            return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
+            return unavailable
         has_params = getattr(params, "has_params", None)
         if callable(has_params) and not has_params():
-            return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
+            return unavailable
 
         lr_scale = float(params.cropbox_lr_scale)
         loss_weight = float(params.cropbox_loss_weight)
-        if not math.isfinite(lr_scale) or not math.isfinite(loss_weight):
-            return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
-        return True, lr_scale, loss_weight
+        growth_inside = float(params.cropbox_growth_inside)
+        if not all(math.isfinite(value) for value in (lr_scale, loss_weight, growth_inside)):
+            return unavailable
+        return True, lr_scale, loss_weight, growth_inside
     except (AttributeError, TypeError, ValueError, RuntimeError):
-        return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
+        return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT, _CROP_ROI_GROWTH_DEFAULT
 
 
 def _button_record(button_id, action, value, icon_src, *,
@@ -1463,6 +1466,7 @@ class _ViewportToolbarController:
         self._crop_roi_params_available = False
         self._cropbox_lr_scale = _CROP_ROI_DEFAULT
         self._cropbox_loss_weight = _CROP_ROI_DEFAULT
+        self._cropbox_growth_inside = _CROP_ROI_GROWTH_DEFAULT
         self._show_selection_volume_gizmos = False
         self._show_transform_space_controls = False
         self._show_transform_pivot_controls = False
@@ -1494,6 +1498,18 @@ class _ViewportToolbarController:
                 "toolbar.outside_roi_loss_weight", "Outside ROI loss weight"
             ),
         )
+        model.bind_func(
+            "label_cropbox_growth_inside",
+            lambda: _ui_label("toolbar.roi_growth_inside", "ROI growth inside"),
+        )
+        model.bind_func(
+            "cropbox_growth_inside_percent",
+            lambda: (
+                f"{round(self._cropbox_growth_inside * 100.0):.0f}%"
+                if self._cropbox_growth_inside > 0.0
+                else _ui_label("toolbar.roi_growth_auto", "Auto")
+            ),
+        )
         model.bind(
             "cropbox_lr_scale",
             lambda: f"{self._cropbox_lr_scale:.3f}",
@@ -1503,6 +1519,11 @@ class _ViewportToolbarController:
             "cropbox_loss_weight",
             lambda: f"{self._cropbox_loss_weight:.3f}",
             lambda value: self._set_crop_roi_param("cropbox_loss_weight", value),
+        )
+        model.bind(
+            "cropbox_growth_inside",
+            lambda: f"{self._cropbox_growth_inside:.2f}",
+            lambda value: self._set_crop_roi_param("cropbox_growth_inside", value),
         )
         model.bind_event("toolbar_action", self._on_toolbar_action)
         self._gt_compare_controls.bind_model(model)
@@ -1683,10 +1704,14 @@ class _ViewportToolbarController:
             # even while hidden. Do not replace live values with UI defaults when
             # training initialization clears selection or detaches the owner.
             return dirty
-        _node_name, _enabled, _available, lr_scale, loss_weight = cropbox_toolbar_signature
+        _node_name, _enabled, _available, lr_scale, loss_weight, growth_inside = cropbox_toolbar_signature
 
         dirty |= self._sync_value("cropbox_lr_scale", float(lr_scale))
         dirty |= self._sync_value("cropbox_loss_weight", float(loss_weight))
+        if self._sync_value("cropbox_growth_inside", float(growth_inside)):
+            dirty = True
+            if self._handle:
+                self._handle.dirty("cropbox_growth_inside_percent")
         return dirty
 
     def _sync_flag(self, name, value):
@@ -1735,6 +1760,8 @@ class _ViewportToolbarController:
             return
 
         self._sync_value(name, parsed)
+        if name == "cropbox_growth_inside" and self._handle:
+            self._handle.dirty("cropbox_growth_inside_percent")
         self._last_toolbar_signature = None
         if self._handle:
             request_update = getattr(self._handle, "request_update", None)

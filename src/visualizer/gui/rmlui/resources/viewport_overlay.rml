@@ -276,6 +276,21 @@
                         <span class="slider-value">{{cropbox_loss_weight}}</span>
                     </div>
                 </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.cropbox_growth_inside">
+                    <span class="setting-row__label-col">{{label_cropbox_growth_inside}}</span>
+                    <div class="setting-row__control-col setting-row__control-col--slider">
+                        <input id="primary-cropbox-growth-inside"
+                               type="range"
+                               class="setting-slider"
+                               min="0"
+                               max="1"
+                               step="0.05"
+                               data-value="cropbox_growth_inside"
+                               data-attrif-disabled="!crop_roi_params_available" />
+                        <span class="slider-value">{{cropbox_growth_inside_percent}}</span>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -534,6 +549,21 @@
                                data-value="cropbox_loss_weight"
                                data-attrif-disabled="!crop_roi_params_available" />
                         <span class="slider-value">{{cropbox_loss_weight}}</span>
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.cropbox_growth_inside">
+                    <span class="setting-row__label-col">{{label_cropbox_growth_inside}}</span>
+                    <div class="setting-row__control-col setting-row__control-col--slider">
+                        <input id="secondary-cropbox-growth-inside"
+                               type="range"
+                               class="setting-slider"
+                               min="0"
+                               max="1"
+                               step="0.05"
+                               data-value="cropbox_growth_inside"
+                               data-attrif-disabled="!crop_roi_params_available" />
+                        <span class="slider-value">{{cropbox_growth_inside_percent}}</span>
                     </div>
                 </div>
             </div>

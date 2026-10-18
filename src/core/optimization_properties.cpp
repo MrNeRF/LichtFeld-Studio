@@ -146,6 +146,15 @@ namespace lfs::core::param {
             .precision(3)
             .ui_step(0.01)
             .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::cropbox_growth_inside,
+                        "cropbox_growth_inside", "ROI growth inside", d.cropbox_growth_inside, 0.0f, 1.0f,
+                        "Share of new splats placed inside the active crop box")
+            .locale("training.advanced.cropbox_growth_inside")
+            .tooltip("training.tooltip.cropbox_growth_inside")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
 
             // Loss parameters
             .all_strategies()
