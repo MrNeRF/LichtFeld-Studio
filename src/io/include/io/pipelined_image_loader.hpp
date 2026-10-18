@@ -465,6 +465,7 @@ namespace lfs::io {
                                               lfs::core::TensorUpload& upload,
                                               const std::vector<uint8_t>* encoded = nullptr);
         static constexpr size_t PORTABLE_CACHE_MAX_BYTES = 64u << 20;
+        static constexpr size_t PORTABLE_PNG_CACHE_MAX_BYTES = PORTABLE_CACHE_MAX_BYTES + PORTABLE_CACHE_MAX_BYTES / 4;
         void cache_portable_prepared_image(const std::string& key, const lfs::core::Tensor& image,
                                            size_t max_output_bytes = PORTABLE_CACHE_MAX_BYTES, bool lossless = false);
         void warn_portable_cache_failure(std::string_view message);
