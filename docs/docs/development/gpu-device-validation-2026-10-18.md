@@ -237,6 +237,65 @@ Evidence: `linux-explicit-vulkan-stack.log`, `linux-explicit-no-refine.log`,
 `linux-explicit-with-refine.log`, and the paired `linux-*-refine-config.json` files
 in the local validation artifact directory.
 
+### Causal isolation of the llvmpipe crash
+
+A subsequent investigation uses only the same pre-merge executable and GDB.
+There is no application/shader compilation, binary patch on disk, or driver
+installation/change. The earlier main-thread wait in `append_gather` was not the
+failing operation: Adam's previously queued joint-moment zero encoding is involved.
+
+The detailed trace shows the first parameter gather completing, followed by
+extension of its optimizer state, then the next gather waiting when the worker
+faults. The failing generated CPU instruction is
+`vbroadcastss (%rsi,%r8,8), %ymm0`, with `rsi=0` and `r8=80`: it attempts to read
+address `0x280`. This matches an optional float2 bounds read for block 80.
+
+`encode_zero` initializes `Params` to zero and sets `operation=2`; it supplies
+valid packed moment and moment-bounds buffers, but no value-bounds buffer.
+`loadOldBounds` in `adam.slang` also loads optional value bounds, although its
+value is not consumed by operation 2. Disassembly of the existing `adam.spv`
+shows a nonzero test and `OpBranchConditional` guarding that optional load.
+Thus the SPIR-V contains the null guard; the observed software execution still
+performs a null-based read. This strongly implicates lowering/execution of this
+conditional optional read in the installed llvmpipe/LLVM path. It is not proof
+that every Mesa version or native GPU driver has the same behavior.
+
+Controlled debugger experiment, limited to `operation=2` with null value bounds:
+
+| Process | Debugger intervention | Result |
+|---|---|---|
+| Negative control | Identical breakpoints; reads fields but changes nothing | SIGSEGV after first observed zero-encode launch |
+| Diagnostic address substitution | Sets only `Params.value_bounds=Params.bounds` before parameter upload | Normal exit, three completed steps, 15 substituted zero-encode launches; 19,555 to 22,635 Gaussians |
+
+The diagnostic pointer references a buffer already present in the operation's
+read/write tracking. A float2 read at block b fits inside that buffer's float4
+bounds allocation. The optional value read is unused by this operation; no
+optimizer formula, precision, sample count or Gaussian cap is changed. This is
+causal diagnostic evidence, not a production regression/quality certification.
+GDB itself can return zero after stopping on SIGSEGV, so the negative-control
+result is classified from the inferior's signal, not the shell's GDB exit code.
+
+The Vulkan Adam adapter and shader are unchanged against merged dev; the stored
+control/candidate SPIR-V audit also lists Adam among the unchanged binaries.
+No change to this Adam kernel or adapter originates in the new branch. The
+reproduction exposes the pre-existing optional-read code path on llvmpipe.
+Interactions with the broader
+runtime still require a matched dev reproduction before claiming a full
+baseline-level exclusion of regressions.
+
+A narrowly scoped candidate is to provide an already valid bounds address for
+the unused value-bounds field in Vulkan `encode_zero` only, with a comment
+explaining why the address must be safe even though the value is unused. That
+would leave CUDA, native Metal and other Adam operations untouched. No such
+production change is applied in this investigation: it needs compiled execution
+and numerical/Metal+Vulkan regression checks when builds resume. No software-GPU
+blacklist, changed hardware selection or global driver override is introduced.
+
+Evidence: `linux-refine-debug-detail.log`, `linux-gather-addresses.log`,
+`adam-existing.spvasm`, `linux-adam-safe-address-diagnostic.log`,
+`linux-adam-readonly-control.log`, and their `.gdb` / `.sh` harnesses under
+`.local/gpu-backend-preferences`.
+
 ## Evidence locations
 
 Detailed logs, profiles, CSV traces, JSON metrics and contact sheets are under
