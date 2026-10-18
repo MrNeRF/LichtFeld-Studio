@@ -399,6 +399,7 @@ namespace {
     }
 
     Tensor upload(const std::vector<float>& values, lfs::core::TensorShape shape) {
+        LFS_ASSERT_MSG(values.size() == shape.elements(), "Test upload shape exceeds its CPU vector");
         return Tensor::from_blob(const_cast<float*>(values.data()), std::move(shape), Device::CPU, DataType::Float32)
             .to(Device::GPU);
     }
@@ -650,11 +651,11 @@ namespace {
         // The background image covers the rendered tile.
         const int w = c.tile_w > 0 ? c.tile_w : s.width;
         const int h = c.tile_h > 0 ? c.tile_h : s.height;
-        if (fc.bg_image)
-            s.bg_image = random_image(w, h, 5u);
         Gpu g = upload_scene(s, fc.storage);
-        if (fc.bg_image)
+        if (fc.bg_image) {
+            s.bg_image = random_image(w, h, 5u);
             g.bg_image = plane(s.bg_image, 3, h, w);
+        }
         Frame frame;
         forward(frame, s, g, c);
         ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
@@ -686,6 +687,7 @@ namespace {
             {"sh3_half", 40, 3, 48, 40, ops::ShStorage::IeeeFloat16, false, {}},
             {"sh2_q16_of_layout_3", 32, 3, 40, 36, ops::ShStorage::Q16, true, {.active_bases = 9}},
             {"tile", 40, 2, 64, 48, ops::ShStorage::Float32, true, {.tile_x = 16, .tile_y = 8, .tile_w = 40, .tile_h = 32}},
+            {"odd_partial", 33, 3, 65, 37, ops::ShStorage::Float32, true, {.normals = true}},
             {"many_blocks", 4000, 3, 320, 240, ops::ShStorage::Float32, false, {.normals = true}},
         };
         for (const auto& fc : cases)
