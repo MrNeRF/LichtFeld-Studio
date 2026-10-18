@@ -205,7 +205,7 @@ jobs:
 
       - name: Run splat drag contracts
         shell: cmd
-        run: ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^(splat_transfer_contract|native_drag_contract|file_transfer_progress_contract|native_modal_frame_contract)$"
+        run: ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^(splat_drag_axes_contract|splat_transfer_contract|native_drag_contract|file_transfer_progress_contract|native_modal_frame_contract)$"
 
       - name: Provision a network share for path tests
         shell: pwsh

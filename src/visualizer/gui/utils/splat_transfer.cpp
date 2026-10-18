@@ -126,6 +126,8 @@ namespace lfs::vis::gui {
             throw std::runtime_error("Missing cancellation state");
         if (cancelled->load())
             throw std::runtime_error("Splat preparation cancelled");
+        if (!options.axes.valid())
+            throw std::runtime_error("Invalid splat transfer axes");
         if (model.lod_tree && model.lod_tree->has_tree()) {
             auto leaves = core::extract_lod_leaves(model);
             if (!leaves)
@@ -207,12 +209,8 @@ namespace lfs::vis::gui {
                     }
                     if (cancelled->load())
                         throw std::runtime_error("Splat preparation cancelled");
-                    // Raw scene data uses RDF axes. Blender uses +Z up: (x, y, z) -> (x, z, -y).
-                    // Transform covariance and SH together with positions.
-                    glm::mat4 axes(1.0f);
-                    axes[1] = {0, 0, -1, 0};
-                    axes[2] = {0, 1, 0, 0};
-                    core::transform(*model, (options.z_up ? axes : glm::mat4(1.0f)) * world);
+                    // Transform positions, covariance and SH through one basis change.
+                    core::transform(*model, options.axes.matrix() * world);
                     const auto progress = [cancelled, &options](float value, const std::string&) { return !cancelled->load() && (!options.progress || options.progress(value)); };
                     io::Result<void> result;
                     if (options.format == "ply")

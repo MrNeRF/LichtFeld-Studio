@@ -12,7 +12,12 @@
 struct SDL_Window;
 
 namespace lfs::vis::gui {
-    using FileProvider = std::function<std::vector<std::filesystem::path>()>;
+    enum class FileDragTarget { Unknown,
+                                Blender };
+    using FileProvider = std::function<std::vector<std::filesystem::path>(FileDragTarget)>;
+    // A receiver can request CF_HDROP during DragEnter. Nested application
+    // frames must leave native input queued for OLE until GetData returns.
+    [[nodiscard]] bool preserveNativeDragInput();
     struct FileDragResult;
     struct NativeDragPointer {
         float x = 0, y = 0;
@@ -45,7 +50,7 @@ namespace lfs::vis::gui {
         std::string error;
     };
 
-    // UI-thread native drag. The provider resolves once on a data request,
+    // UI-thread native drag. The provider resolves once per target variant on a data request,
     // which a receiver may issue before or after release. It must return only
     // committed regular files and must not capture UI/model pointers: OLE can
     // retain the data object. Exceptions become a failed native transfer.

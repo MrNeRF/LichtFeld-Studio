@@ -1580,6 +1580,12 @@ install(CODE "
 
 option(BUILD_SPLAT_TRANSFER_TESTS "Build splat drag export contract tests" ${BUILD_FORMAT_TESTS})
 if(BUILD_SPLAT_TRANSFER_TESTS)
+    add_executable(lfs_splat_drag_axes_contract tools/splat_transfer_test/axes_contract.cpp)
+    target_include_directories(lfs_splat_drag_axes_contract PRIVATE src/visualizer)
+    target_link_libraries(lfs_splat_drag_axes_contract PRIVATE glm::glm)
+    target_compile_features(lfs_splat_drag_axes_contract PRIVATE cxx_std_23)
+    enable_testing()
+    add_test(NAME splat_drag_axes_contract COMMAND lfs_splat_drag_axes_contract)
     add_executable(lfs_native_modal_frame_contract tools/splat_transfer_test/modal_frame_contract.cpp src/visualizer/core/main_loop.cpp)
     target_include_directories(lfs_native_modal_frame_contract PRIVATE src/visualizer)
     target_compile_definitions(lfs_native_modal_frame_contract PRIVATE LFS_VIS_EXPORTS)

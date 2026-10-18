@@ -986,7 +986,7 @@ namespace lfs::vis {
         // Drain previously queued events before pumping new native events.
         drainQueuedEvents();
         pumping_events_ = true;
-        while (SDL_PollEvent(&event))
+        while (!gui::preserveNativeDragInput() && SDL_PollEvent(&event))
             dispatchPolledEvent(event);
         pumping_events_ = false;
         dispatched_events_.clear();
@@ -999,6 +999,14 @@ namespace lfs::vis {
     }
 
     void WindowManager::waitEvents(std::optional<double> timeout_seconds) {
+        if (gui::preserveNativeDragInput()) {
+            // SDL's native pump removes WM_LBUTTONUP from OLE's message queue.
+            // Keep rendering during a hover-time export, but let DoDragDrop
+            // consume the release itself when the receiver's GetData returns.
+            pollEvents();
+            SDL_Delay(1);
+            return;
+        }
         // A native receiver is waiting for our export. Minimized windows and
         // renderer recovery must not turn the modal frame into an infinite wait.
         if (native_drag_scheduler_ && native_drag_scheduler_->busy())

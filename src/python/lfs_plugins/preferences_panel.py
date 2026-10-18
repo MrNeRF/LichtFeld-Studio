@@ -231,7 +231,7 @@ class PreferencesPanel(Panel):
             lf.ui.scene_graph_selection_markers,
             self._set_scene_graph_selection_markers,
         )
-        for key in ("format", "sh_degree", "blender_axes"):
+        for key in ("format", "sh_degree", "up_axis"):
             model.bind("splat_drag_" + key,
                        lambda k=key: self._get_splat_drag_preference(k),
                        lambda value, k=key: self._set_splat_drag_preference(k, value))
@@ -408,7 +408,7 @@ class PreferencesPanel(Panel):
             lf.ui.get_viewport_toolbar_position(),
             float(lf.ui.get_ui_scale_preference()),
             bool(lf.ui.get_native_floating_windows()),
-            tuple(splat_drag_preferences[key] for key in ("format", "sh_degree", "blender_axes")),
+            tuple(splat_drag_preferences[key] for key in ("format", "sh_degree", "up_axis")),
             self._scene_upscaler(),
             self._scene_upscaler_preset(),
             lf.ui.get_current_language(),
@@ -898,21 +898,25 @@ class PreferencesPanel(Panel):
 
     def _get_splat_drag_preference(self, key):
         value = lf.ui.get_splat_drag_preferences()[key]
-        return value if key in ("blender_axes", "format") else str(value)
+        return value if key == "format" else str(value)
 
     def _set_splat_drag_preference(self, key, value):
         if self._mcp_safe_mode:
             return
-        if key not in ("blender_axes", "format"):
+        if key != "format":
             try:
                 value = int(value)
             except (TypeError, ValueError):
                 return
         if key == "sh_degree" and not 0 <= value <= 3:
             return
-        lf.ui.set_splat_drag_preferences({key: value})
+        changes = {key: value}
+        if key == "up_axis" and value not in (-2, 2, -3, 3):
+            return
+        lf.ui.set_splat_drag_preferences(changes)
         if self._handle:
-            self._handle.dirty("splat_drag_" + key)
+            for changed in changes:
+                self._handle.dirty("splat_drag_" + changed)
 
     def _set_scene_graph_selection_markers(self, enabled):
         if self._mcp_safe_mode:
@@ -1697,7 +1701,7 @@ class PreferencesPanel(Panel):
             lf.ui.set_native_floating_windows(False)
             if not self._mcp_safe_mode:
                 lf.ui.set_scene_graph_selection_markers(False)
-                lf.ui.set_splat_drag_preferences({"format": "ply", "sh_degree": 3, "blender_axes": True})
+                lf.ui.set_splat_drag_preferences({"format": "ply", "sh_degree": 3, "up_axis": -2})
             self._refresh_selection()
             return lf.ui.reset_layout()
         elif section == "mcp":
@@ -1736,7 +1740,7 @@ class PreferencesPanel(Panel):
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")
             self._handle.dirty("scene_graph_selection_markers")
-            for key in ("format", "sh_degree", "blender_axes"):
+            for key in ("format", "sh_degree", "up_axis"):
                 self._handle.dirty("splat_drag_" + key)
             self._dirty_mcp()
             self._dirty_project_location()

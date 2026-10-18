@@ -72,6 +72,36 @@ int main(int argc, char** argv) {
         require(cuda_status == cudaSuccess, "Unexpected CUDA error while probing export test availability");
         lfs::io::LoadOptions options;
         options.splat_tensor_allocator = [](TensorShape shape, size_t, DataType type, std::string_view) { return Tensor::empty(std::move(shape), Device::CPU, type); };
+        for (const int up : {-2, 2, -3, 3}) {
+            for (int degree = 0; degree <= 3; ++degree) {
+                auto model = fixture(degree);
+                const auto initial_sh = model.shN_canonical_cpu();
+                auto path = transfer(model, glm::mat4(1), std::make_shared<std::atomic<bool>>(false), {.axes = {up}}).get();
+                auto loaded = lfs::io::load_ply(path, options);
+                require(bool(loaded), "Axis conversion PLY failed");
+                const auto matrix = lfs::vis::SplatDragAxes{up}.matrix();
+                const auto expected = matrix * glm::vec4(.3f, 1.2f, -.7f, 1);
+                const auto positions = loaded->value.means().to(Device::CPU).contiguous();
+                for (int component = 0; component < 3; ++component)
+                    checkNear(positions.ptr<float>()[component], expected[component]);
+                const int inverse_up = up == 3 ? -3 : up == -3 ? 3
+                                                               : up;
+                path = transfer(loaded->value, glm::mat4(1), std::make_shared<std::atomic<bool>>(false), {.axes = {inverse_up}}).get();
+                auto restored = lfs::io::load_ply(path, options);
+                require(bool(restored), "Inverse axis conversion PLY failed");
+                const auto restored_positions = restored->value.means().to(Device::CPU).contiguous();
+                const auto source_positions = model.means().to(Device::CPU).contiguous();
+                const auto sh = restored->value.shN_canonical_cpu();
+                const size_t coefficients = (degree + 1) * (degree + 1) - 1;
+                for (size_t item = 0; item < 2; ++item) {
+                    const size_t source = item == 0 ? 0 : 2;
+                    for (size_t component = 0; component < 3; ++component)
+                        checkNear(restored_positions.ptr<float>()[item * 3 + component], source_positions.ptr<float>()[source * 3 + component]);
+                    for (size_t coefficient = 0; coefficient < coefficients * 3; ++coefficient)
+                        checkNear(sh.ptr<float>()[item * coefficients * 3 + coefficient], initial_sh.ptr<float>()[source * coefficients * 3 + coefficient]);
+                }
+            }
+        }
         for (int degree = 0; degree <= 3; ++degree) {
             auto model = fixture(degree);
             const auto original_rest = model.shN_canonical_cpu();
@@ -148,7 +178,7 @@ int main(int argc, char** argv) {
             auto cancel = std::make_shared<std::atomic<bool>>(false);
             bool rejected_format = false;
             const auto path = transfer(model, glm::mat4(1), cancel,
-                                       {.format = "ply", .name = "../../CON:hello", .sh_degree = 1, .z_up = false})
+                                       {.format = "ply", .name = "../../CON:hello", .sh_degree = 1, .axes = {}})
                                   .get();
             require(path.parent_path().parent_path() == kStagingRoot, "Name escaped transfer folder");
             auto loaded = lfs::io::load_ply(path, options);
@@ -157,7 +187,7 @@ int main(int argc, char** argv) {
             auto pos = loaded->value.means().to(Device::CPU).contiguous();
             checkNear(pos.ptr<float>()[1], 1.2f);
             const auto compressed = transfer(fixture(0), glm::mat4(1), cancel,
-                                             {.format = "spz", .name = "test", .z_up = false})
+                                             {.format = "spz", .name = "test", .axes = {}})
                                         .get();
             require(std::filesystem::file_size(compressed) > 32, "No SPZ exported");
             require(compressed.extension() == ".spz", "Wrong SPZ extension");

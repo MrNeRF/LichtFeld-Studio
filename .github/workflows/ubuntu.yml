@@ -179,7 +179,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
           ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            ctest --test-dir build --output-on-failure --no-tests=error -R '^(splat_transfer_contract|wayland_drag_contract|file_transfer_progress_contract|native_modal_frame_contract)$'
+            ctest --test-dir build --output-on-failure --no-tests=error -R '^(splat_drag_axes_contract|splat_transfer_contract|wayland_drag_contract|file_transfer_progress_contract|native_modal_frame_contract)$'
 
       - name: Build and run CPU-only format tests
         run: |

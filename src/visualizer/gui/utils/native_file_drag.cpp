@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "native_file_drag.hpp"
 #include <SDL3/SDL.h>
+#include <array>
 #include <atomic>
 #include <core/native_fs.hpp>
 #include <cstdlib>
@@ -22,6 +23,7 @@
 #define NOMINMAX
 #endif
 #include <cstring>
+#include <cwchar>
 #include <ole2.h>
 #include <shellapi.h>
 #include <shlobj.h>
@@ -29,6 +31,10 @@
 #endif
 
 namespace lfs::vis::gui {
+    namespace {
+        thread_local bool preserve_drag_input = false;
+    }
+    bool preserveNativeDragInput() { return preserve_drag_input; }
     bool mayShowTransferProgress(const NativeDragContext* context) {
 #ifdef _WIN32
         (void)context;
@@ -55,7 +61,33 @@ namespace lfs::vis::gui {
         };
         template <class T>
         using ComPtr = std::unique_ptr<T, ComRelease<T>>;
-        class CopySource final : public IDropSource {
+        FileDragTarget targetFromExecutable(const wchar_t* path) noexcept {
+            if (!path)
+                return FileDragTarget::Unknown;
+            const auto* slash = wcsrchr(path, L'\\');
+            const auto* name = slash ? slash + 1 : path;
+            return _wcsicmp(name, L"blender.exe") == 0 ? FileDragTarget::Blender : FileDragTarget::Unknown;
+        }
+        FileDragTarget targetFromWindow(HWND window) noexcept {
+            DWORD pid = 0;
+            if (!window || !GetWindowThreadProcessId(window, &pid) || !pid)
+                return FileDragTarget::Unknown;
+            const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (!process)
+                return FileDragTarget::Unknown;
+            std::array<wchar_t, 32768> path{};
+            DWORD length = static_cast<DWORD>(path.size());
+            const bool found = QueryFullProcessImageNameW(process, 0, path.data(), &length);
+            CloseHandle(process);
+            if (!found || length == 0 || length >= path.size())
+                return FileDragTarget::Unknown;
+            return targetFromExecutable(path.data());
+        }
+        struct DragTargetState {
+            FileDragTarget target = FileDragTarget::Unknown;
+            bool frozen = false;
+        };
+        class CopySource final : public IDropSource, public IDropSourceNotify {
             static HCURSOR makeIconCursor(HWND window, bool allowed) {
                 const auto dpi = window ? GetDpiForWindow(window) : 96;
                 const int size = MulDiv(64, dpi ? dpi : 96, 96);
@@ -120,10 +152,11 @@ namespace lfs::vis::gui {
             HCURSOR previous_cursor_ = GetCursor();
             HCURSOR copy_cursor_;
             HCURSOR forbidden_cursor_;
+            std::shared_ptr<DragTargetState> target_;
 
         public:
-            explicit CopySource(HWND window = nullptr)
-                : copy_cursor_(makeIconCursor(window, true)), forbidden_cursor_(makeIconCursor(window, false)) {}
+            explicit CopySource(HWND window = nullptr, std::shared_ptr<DragTargetState> target = {})
+                : copy_cursor_(makeIconCursor(window, true)), forbidden_cursor_(makeIconCursor(window, false)), target_(std::move(target)) {}
             ~CopySource() {
                 if (GetCursor() == copy_cursor_ || GetCursor() == forbidden_cursor_)
                     SetCursor(previous_cursor_);
@@ -148,9 +181,12 @@ namespace lfs::vis::gui {
                 if (!out)
                     return E_POINTER;
                 *out = nullptr;
-                if (id != IID_IUnknown && id != IID_IDropSource)
+                if (id == IID_IUnknown || id == IID_IDropSource)
+                    *out = static_cast<IDropSource*>(this);
+                else if (id == IID_IDropSourceNotify)
+                    *out = static_cast<IDropSourceNotify*>(this);
+                else
                     return E_NOINTERFACE;
-                *out = static_cast<IDropSource*>(this);
                 AddRef();
                 return S_OK;
             }
@@ -164,7 +200,19 @@ namespace lfs::vis::gui {
             HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape, DWORD keys) override {
                 if (escape || (keys & MK_RBUTTON))
                     return DRAGDROP_S_CANCEL;
+                if (!(keys & MK_LBUTTON) && target_)
+                    target_->frozen = true;
                 return (keys & MK_LBUTTON) ? S_OK : DRAGDROP_S_DROP;
+            }
+            HRESULT STDMETHODCALLTYPE DragEnterTarget(HWND window) override {
+                if (target_ && !target_->frozen)
+                    target_->target = targetFromWindow(window);
+                return S_OK;
+            }
+            HRESULT STDMETHODCALLTYPE DragLeaveTarget() override {
+                if (target_ && !target_->frozen)
+                    target_->target = FileDragTarget::Unknown;
+                return S_OK;
             }
             HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD effect) override {
                 const auto cursor = effect & DROPEFFECT_COPY ? copy_cursor_ : forbidden_cursor_;
@@ -237,19 +285,26 @@ namespace lfs::vis::gui {
         class DeferredData final : public IDataObject {
             std::atomic<ULONG> refs_{1};
             FileProvider provider_;
-            ComPtr<IDataObject> data_;
+            std::array<ComPtr<IDataObject>, 2> data_;
+            std::shared_ptr<DragTargetState> target_;
             bool failed_ = false;
             bool cancelled_ = false;
+            bool preparing_ = false;
+
+            size_t variant() const { return target_ && target_->target == FileDragTarget::Blender ? 1u : 0u; }
 
         public:
             bool failed() const { return failed_; }
-            bool prepared() const { return bool(data_); }
+            bool prepared() const { return bool(data_[variant()]); }
+            void seal() noexcept { provider_ = {}; }
             void cancel() noexcept {
                 cancelled_ = true;
                 provider_ = {};
-                data_.reset();
+                for (auto& data : data_)
+                    data.reset();
             }
-            explicit DeferredData(FileProvider provider) : provider_(std::move(provider)) {}
+            explicit DeferredData(FileProvider provider, std::shared_ptr<DragTargetState> target = {})
+                : provider_(std::move(provider)), target_(std::move(target)) {}
             HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override {
                 if (!out)
                     return E_POINTER;
@@ -280,21 +335,35 @@ namespace lfs::vis::gui {
                     return E_ABORT;
                 if (FAILED(QueryGetData(f)))
                     return DV_E_FORMATETC;
+                if (preparing_)
+                    return E_PENDING;
+                if (failed_)
+                    return E_FAIL;
+                const auto key = variant();
                 try {
-                    if (!data_) {
-                        auto provider = std::move(provider_); // Once only, including failure/reentrancy.
-                        if (!provider)
+                    if (!data_[key]) {
+                        if (!provider_)
                             return E_FAIL;
-                        const auto files = provider();
+                        struct PreparationScope {
+                            bool& active;
+                            explicit PreparationScope(bool& value) : active(value) { active = true; }
+                            ~PreparationScope() { active = false; }
+                        } preparation(preparing_);
+                        struct InputScope {
+                            bool previous = preserve_drag_input;
+                            explicit InputScope(bool preserve) { preserve_drag_input = previous || preserve; }
+                            ~InputScope() { preserve_drag_input = previous; }
+                        } input_scope(target_ && !target_->frozen);
+                        const auto files = provider_(key ? FileDragTarget::Blender : FileDragTarget::Unknown);
                         IDataObject* result = nullptr;
                         const auto hr = createData(files, &result);
                         if (FAILED(hr)) {
                             failed_ = true;
                             return hr;
                         }
-                        data_.reset(result);
+                        data_[key].reset(result);
                     }
-                    const auto hr = data_->GetData(f, out);
+                    const auto hr = data_[key]->GetData(f, out);
                     if (FAILED(hr))
                         failed_ = true;
                     return hr;
@@ -389,14 +458,15 @@ namespace lfs::vis::gui {
             if (!core::native_fs::is_regular_file(file, ec) || ec)
                 return {FileDragStatus::Failed, "Missing committed file"};
         }
-        return dragFiles([owned = std::move(owned)] { return owned; }, window, context);
+        return dragFiles([owned = std::move(owned)](FileDragTarget) { return owned; }, window, context);
     }
     FileDragResult dragFiles(FileProvider provider, SDL_Window* window, NativeDragContext* context) {
         if (!provider)
             return {FileDragStatus::Failed, "Missing file provider"};
-        auto resolve = [provider = std::move(provider), cached = std::optional<std::vector<std::filesystem::path>>{}]() mutable -> const std::vector<std::filesystem::path>& {
-            if (!cached) {
-                auto files = provider();
+        auto resolve = [provider = std::move(provider), cached = std::array<std::optional<std::vector<std::filesystem::path>>, 2>{}](FileDragTarget target) mutable -> const std::vector<std::filesystem::path>& {
+            auto& entry = cached[target == FileDragTarget::Blender ? 1u : 0u];
+            if (!entry) {
+                auto files = provider(target);
                 if (files.empty())
                     throw std::runtime_error("No files prepared");
                 for (auto& file : files) {
@@ -405,10 +475,9 @@ namespace lfs::vis::gui {
                     if (ec || !core::native_fs::is_regular_file(file, ec) || ec)
                         throw std::runtime_error("Missing committed file");
                 }
-                cached = std::move(files);
-                provider = {};
+                entry = std::move(files);
             }
-            return *cached;
+            return *entry;
         };
 #ifdef _WIN32
         (void)window;
@@ -429,10 +498,11 @@ namespace lfs::vis::gui {
         OleScope ole;
         if (FAILED(ole.result))
             return {FileDragStatus::Failed, "OLE initialization failed on the calling UI thread"};
-        auto* deferred = new DeferredData([resolve = std::move(resolve)]() mutable { return resolve(); });
+        auto target = std::make_shared<DragTargetState>();
+        auto* deferred = new DeferredData([resolve = std::move(resolve)](FileDragTarget destination) mutable { return resolve(destination); }, target);
         ComPtr<IDataObject> owned_data(deferred);
         const auto hwnd = static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
-        ComPtr<IDropSource> source(new CopySource(hwnd));
+        ComPtr<IDropSource> source(new CopySource(hwnd, target));
         DWORD effect = DROPEFFECT_NONE;
         // SDL and GHOST can hold automatic capture while the button is down.
         // Hand it to OLE explicitly so the pointer can enter another app.
@@ -449,6 +519,8 @@ namespace lfs::vis::gui {
         }
         if (hr != DRAGDROP_S_DROP || !(effect & DROPEFFECT_COPY) || deferred->failed())
             deferred->cancel();
+        else
+            deferred->seal();
         if (deferred->failed())
             return {FileDragStatus::Failed, "Deferred file preparation failed"};
         if (hr == DRAGDROP_S_DROP && (effect & DROPEFFECT_COPY))
@@ -464,7 +536,7 @@ namespace lfs::vis::gui {
         const auto* driver = SDL_GetCurrentVideoDriver();
         NativeDropPause pause;
         if (driver && std::string_view(driver) == "wayland" && context)
-            return context->drag([resolve = std::move(resolve)]() mutable { return resolve(); }, window);
+            return context->drag([resolve = std::move(resolve)](FileDragTarget destination) mutable { return resolve(destination); }, window);
         if (!window || !driver || std::string_view(driver) != "x11")
             return {FileDragStatus::Unsupported, "Splat drag currently requires Linux X11 / XWayland (SDL_VIDEODRIVER=x11)"};
         float mouse_x, mouse_y;
@@ -515,7 +587,7 @@ namespace lfs::vis::gui {
             FileProvider provider;
             std::string error;
         } state;
-        state.provider = [resolve = std::move(resolve)]() mutable { return resolve(); };
+        state.provider = [resolve = std::move(resolve)](FileDragTarget destination) mutable { return resolve(destination); };
         auto* widget = gtk_invisible_new_for_screen(gdk_display_get_default_screen(display));
         if (!widget)
             return {FileDragStatus::Failed, "Cannot create GTK drag source"};
@@ -534,7 +606,7 @@ namespace lfs::vis::gui {
                                      auto provider = std::move(s.provider);
                                      if (!provider)
                                          return;
-                                     for (const auto& path : provider()) {
+                                     for (const auto& path : provider(FileDragTarget::Unknown)) {
                                          std::unique_ptr<gchar, decltype(&g_free)> uri(g_filename_to_uri(path.c_str(), nullptr, nullptr), g_free);
                                          if (!uri)
                                              throw std::runtime_error("Cannot encode file URI");
@@ -612,13 +684,88 @@ namespace lfs::vis::gui {
         OleScope ole;
         if (FAILED(ole.result))
             return 1;
+        // Explorer can read before Drop. The provider renders nested frames,
+        // which must not pump away the native release OLE is waiting for.
+        for (const bool frozen : {false, true}) {
+            for (const bool fail : {false, true}) {
+                auto target = std::make_shared<DragTargetState>();
+                target->frozen = frozen;
+                bool saw_expected_input_policy = false;
+                ComPtr<IDataObject> data(new DeferredData([&](FileDragTarget) {
+                    saw_expected_input_policy = preserveNativeDragInput() == !frozen;
+                    if (fail)
+                        throw std::runtime_error("Synthetic hover-time export failure");
+                    return std::vector<std::filesystem::path>{path};
+                },
+                                                          target));
+                FORMATETC format{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+                STGMEDIUM storage{};
+                const auto result = data->GetData(&format, &storage);
+                if (SUCCEEDED(result))
+                    ReleaseStgMedium(&storage);
+                if (!saw_expected_input_policy || preserveNativeDragInput() || (FAILED(result) != fail))
+                    return 27;
+            }
+        }
+        if (targetFromExecutable(L"C:\\Apps\\BLENDER.EXE") != FileDragTarget::Blender ||
+            targetFromExecutable(L"C:\\blender.exe\\other.exe") != FileDragTarget::Unknown ||
+            targetFromExecutable(L"C:\\Apps\\my-blender.exe") != FileDragTarget::Unknown ||
+            targetFromExecutable(L"C:\\Apps\\blender.exe.old") != FileDragTarget::Unknown ||
+            targetFromWindow(nullptr) != FileDragTarget::Unknown ||
+            targetFromWindow(GetDesktopWindow()) != FileDragTarget::Unknown)
+            return 20;
+        {
+            auto target = std::make_shared<DragTargetState>();
+            auto* source_impl = new CopySource(nullptr, target);
+            ComPtr<IDropSource> source(source_impl);
+            IDropSourceNotify* raw_notify = nullptr;
+            if (FAILED(source->QueryInterface(IID_IDropSourceNotify, reinterpret_cast<void**>(&raw_notify))))
+                return 21;
+            ComPtr<IDropSourceNotify> notify(raw_notify);
+            std::array<int, 2> calls{};
+            auto variant_path = std::filesystem::path(path.native() + L".blender");
+            auto* delayed = new DeferredData([&](FileDragTarget destination) {
+                ++calls[destination == FileDragTarget::Blender ? 1 : 0];
+                return std::vector<std::filesystem::path>{destination == FileDragTarget::Blender ? variant_path : path};
+            },
+                                             target);
+            ComPtr<IDataObject> data(delayed);
+            FORMATETC format{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+            const auto read = [&](const std::filesystem::path& expected) {
+                STGMEDIUM storage{};
+                if (FAILED(data->GetData(&format, &storage)))
+                    return false;
+                const auto length = DragQueryFileW(static_cast<HDROP>(storage.hGlobal), 0, nullptr, 0);
+                std::vector<wchar_t> name(length + 1);
+                const bool decoded = DragQueryFileW(static_cast<HDROP>(storage.hGlobal), 0, name.data(), static_cast<UINT>(name.size())) == length;
+                const bool equal = decoded && std::filesystem::path(name.data()) == expected;
+                ReleaseStgMedium(&storage);
+                return equal;
+            };
+            if (!read(path))
+                return 22;
+            target->target = FileDragTarget::Blender;
+            if (!read(variant_path))
+                return 23;
+            notify->DragLeaveTarget();
+            if (!read(path) || calls != std::array<int, 2>{1, 1})
+                return 24;
+            target->target = FileDragTarget::Blender;
+            if (source->QueryContinueDrag(FALSE, 0) != DRAGDROP_S_DROP)
+                return 25;
+            notify->DragLeaveTarget();
+            notify->DragEnterTarget(GetDesktopWindow());
+            delayed->seal();
+            if (target->target != FileDragTarget::Blender || !read(variant_path) || calls != std::array<int, 2>{1, 1})
+                return 26;
+        }
         for (int i = 0; i < 1000; ++i) {
             auto* preview = new CopySource();
             ComPtr<IDropSource> source(preview);
             if (!preview->readablePreview())
                 return 15;
             int calls = 0;
-            auto* delayed = new DeferredData([&] {
+            auto* delayed = new DeferredData([&](FileDragTarget) {
                 ++calls;
                 if (i % 4 == 3)
                     throw std::runtime_error("Synthetic provider failure");

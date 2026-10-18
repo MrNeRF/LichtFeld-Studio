@@ -182,7 +182,7 @@ namespace lfs::vis::gui {
         };
 
         NativeDragContext* external_context_ = nullptr;
-        std::function<std::vector<std::filesystem::path>()> external_provider_;
+        FileProvider external_provider_;
         std::shared_ptr<FileTransferProgressState> external_progress_;
         std::future<FileDragResult> external_result_;
         SDL_Window* external_window_ = nullptr;
