@@ -94,7 +94,11 @@ class BugReportOperator(Operator):
 
 @register_menu
 class HelpMenu:
-    """Help menu for the menu bar."""
+    """Help entries for the menu bar.
+
+    The C++ menu bar does not render this one as a label: it binds the entries to
+    the brand logo, which expands into the same dropdown.
+    """
 
     label = "menu.help"
     location = "MENU_BAR"

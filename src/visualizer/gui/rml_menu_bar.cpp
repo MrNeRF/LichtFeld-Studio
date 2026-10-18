@@ -839,7 +839,7 @@ namespace lfs::vis::gui {
         clearTitlebarDragRegion();
         tooltip_.setHover({}, nullptr);
 
-        if (open_menu_index_ >= 0)
+        if (isOpen())
             closeDropdown();
     }
 
@@ -847,7 +847,7 @@ namespace lfs::vis::gui {
         if (!rml_context_)
             return;
 
-        if (open_menu_index_ >= 0)
+        if (isOpen())
             closeDropdown();
 
         if (document_) {
@@ -935,11 +935,41 @@ namespace lfs::vis::gui {
     void RmlMenuBar::updateLabels(const std::vector<std::string>& labels,
                                   const std::vector<std::string>& idnames) {
         assert(labels.size() == idnames.size());
-        if (labels == current_labels_ && idnames == current_idnames_)
+
+        // The Help menu is not rendered as a label: the brand logo opens it instead.
+        std::vector<std::string> visible_labels;
+        std::vector<std::string> visible_idnames;
+        visible_labels.reserve(labels.size());
+        visible_idnames.reserve(idnames.size());
+        std::string logo_idname;
+        for (size_t i = 0; i < labels.size(); ++i) {
+            if (idnames[i] == LOGO_MENU_IDNAME) {
+                logo_idname = idnames[i];
+                continue;
+            }
+            visible_labels.push_back(labels[i]);
+            visible_idnames.push_back(idnames[i]);
+        }
+
+        if (visible_labels == current_labels_ && visible_idnames == current_idnames_ &&
+            logo_idname == logo_menu_idname_)
             return;
-        current_labels_ = labels;
-        current_idnames_ = idnames;
+        current_labels_ = std::move(visible_labels);
+        current_idnames_ = std::move(visible_idnames);
         render_needed_ = true;
+
+        if (logo_menu_idname_ != logo_idname) {
+            logo_menu_idname_ = std::move(logo_idname);
+            if (open_menu_index_ == LOGO_MENU_INDEX)
+                closeDropdown();
+            if (brand_logo_) {
+                brand_logo_->SetClass("hidden", logo_menu_idname_.empty());
+                brand_logo_->SetAttribute(
+                    "title", logo_menu_idname_.empty()
+                                 ? Rml::String{}
+                                 : lfs::event::LocalizationManager::getInstance().get("menu.help"));
+            }
+        }
 
         if (open_menu_index_ >= static_cast<int>(current_idnames_.size())) {
             closeDropdown();
@@ -993,13 +1023,15 @@ namespace lfs::vis::gui {
     }
 
     void RmlMenuBar::syncActiveLabelState() {
-        const int display_active = open_menu_index_ >= 0 ? open_menu_index_ : keyboard_focus_menu_index_;
+        const int display_active = open_menu_index_ != CLOSED_MENU_INDEX ? open_menu_index_ : keyboard_focus_menu_index_;
         if (display_active == active_index_)
             return;
 
         active_index_ = display_active;
         for (size_t i = 0; i < menu_labels_.size(); ++i)
             menu_labels_[i].active = static_cast<int>(i) == active_index_;
+        if (brand_logo_)
+            brand_logo_->SetClass("active", active_index_ == LOGO_MENU_INDEX);
         menu_model_.DirtyVariable("menu_labels");
         render_needed_ = true;
     }
@@ -1088,7 +1120,7 @@ namespace lfs::vis::gui {
 
         const float mx = input.mouse_x - input.screen_x;
         const float my = input.mouse_y - input.screen_y;
-        const bool is_open = open_menu_index_ >= 0;
+        const bool is_open = isOpen();
         const int ctx_w = input.screen_w;
         const int ctx_h = (is_open || tooltip_.hasActiveState())
                               ? input.screen_h
@@ -1144,8 +1176,11 @@ namespace lfs::vis::gui {
         Rml::Element* hovered_toolbar_btn =
             (!is_open && hovered_label < 0) ? toolbarButtonAtPoint(mx, my) : nullptr;
         last_toolbar_hovered_ = hovered_toolbar_btn != nullptr;
+        const bool hovered_logo = !is_open && hovered_label < 0 && !hovered_toolbar_btn && logoAtPoint(mx, my);
         if (hovered_toolbar_btn)
             tooltip_.setHover(resolveRmlTooltip(hovered_toolbar_btn), hovered_toolbar_btn);
+        else if (hovered_logo)
+            tooltip_.setHover(resolveRmlTooltip(brand_logo_), brand_logo_);
         else if (!is_open && hovered_label < 0 && projectTitleAtPoint(mx, my))
             tooltip_.setHover(project_tooltip_, project_title_el_);
         else
@@ -1155,6 +1190,7 @@ namespace lfs::vis::gui {
         const bool in_free_titlebar =
             !is_open &&
             hovered_label < 0 &&
+            !hovered_logo &&
             !hovered_toolbar_btn &&
             my >= 0.0f &&
             my < bar_height_ * dp_ratio;
@@ -1272,6 +1308,12 @@ namespace lfs::vis::gui {
                 wants_input_ = true;
                 if (input.mouse_clicked[0]) {
                     openDropdown(hovered_label, false);
+                    return;
+                }
+            } else if (hovered_logo) {
+                wants_input_ = true;
+                if (input.mouse_clicked[0]) {
+                    openLogoDropdown();
                     return;
                 }
             }
@@ -1416,8 +1458,11 @@ namespace lfs::vis::gui {
         case SDL_SCANCODE_RIGHT:
             if (keyboard_depth_ == 0) {
                 if (!activateKeyboardHighlight(true)) {
-                    const int next = (open_menu_index_ + 1) % static_cast<int>(current_labels_.size());
-                    openDropdown(next, true);
+                    const int next = cycleMenuIndex(1);
+                    if (next == LOGO_MENU_INDEX)
+                        openLogoDropdown(true);
+                    else if (next >= 0)
+                        openDropdown(next, true);
                 }
             } else {
                 activateKeyboardHighlight(true);
@@ -1425,9 +1470,11 @@ namespace lfs::vis::gui {
             break;
         case SDL_SCANCODE_LEFT:
             if (keyboard_depth_ == 0) {
-                const int previous = (open_menu_index_ + static_cast<int>(current_labels_.size()) - 1) %
-                                     static_cast<int>(current_labels_.size());
-                openDropdown(previous, true);
+                const int previous = cycleMenuIndex(-1);
+                if (previous == LOGO_MENU_INDEX)
+                    openLogoDropdown(true);
+                else if (previous >= 0)
+                    openDropdown(previous, true);
             } else {
                 close_one_level();
             }
@@ -1622,8 +1669,8 @@ namespace lfs::vis::gui {
     }
 
     void RmlMenuBar::syncAccessKeyVisibility() {
-        const bool show = access_alt_held_ || (keyboard_focus_menu_index_ >= 0 && open_menu_index_ < 0) ||
-                          (open_menu_index_ >= 0 && keyboard_opened_menu_);
+        const bool show = access_alt_held_ || (keyboard_focus_menu_index_ >= 0 && !isOpen()) ||
+                          (isOpen() && keyboard_opened_menu_);
         if (show == access_keys_visible_)
             return;
         access_keys_visible_ = show;
@@ -1733,8 +1780,17 @@ namespace lfs::vis::gui {
 
     void RmlMenuBar::openDropdown(int index, const bool from_keyboard) {
         assert(index >= 0 && index < static_cast<int>(current_idnames_.size()));
+        openMenu(index, current_idnames_[index], from_keyboard);
+    }
 
-        if (open_menu_index_ < 0)
+    void RmlMenuBar::openLogoDropdown(const bool from_keyboard) {
+        if (logo_menu_idname_.empty())
+            return;
+        openMenu(LOGO_MENU_INDEX, logo_menu_idname_, from_keyboard);
+    }
+
+    void RmlMenuBar::openMenu(const int index, const std::string& idname, const bool from_keyboard) {
+        if (open_menu_index_ == CLOSED_MENU_INDEX)
             rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); });
         open_menu_index_ = index;
         open_submenu_index_ = -1;
@@ -1744,14 +1800,14 @@ namespace lfs::vis::gui {
         keyboard_depth_ = 0;
         keyboard_focus_menu_index_ = -1;
         keyboard_opened_menu_ = from_keyboard;
-        open_menu_idname_ = current_idnames_[index];
+        open_menu_idname_ = idname;
         clearTitlebarDragRegion();
 
         MenuDropdownContent content;
-        content.menu_idname = current_idnames_[index];
+        content.menu_idname = idname;
 
         python::collect_menu_content(
-            current_idnames_[index],
+            idname,
             [](const python::MenuItemInfo* info, void* ctx) {
                 auto* c = static_cast<MenuDropdownContent*>(ctx);
                 MenuItemDesc item;
@@ -1776,7 +1832,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlMenuBar::closeDropdown() {
-        open_menu_index_ = -1;
+        open_menu_index_ = CLOSED_MENU_INDEX;
         keyboard_opened_menu_ = false;
         rml_manager_->deactivateInput(rml_context_, true);
         open_submenu_index_ = -1;
@@ -2215,6 +2271,34 @@ namespace lfs::vis::gui {
         return find_button(menu_window_controls_);
     }
 
+    bool RmlMenuBar::logoAtPoint(const float x, const float y) const {
+        if (!brand_logo_ || logo_menu_idname_.empty() ||
+            brand_logo_->GetDisplay() == Rml::Style::Display::None ||
+            brand_logo_->IsClassSet("hidden"))
+            return false;
+        const auto offset = brand_logo_->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = brand_logo_->GetBox().GetSize(Rml::BoxArea::Border);
+        return x >= offset.x && x < offset.x + size.x &&
+               y >= offset.y && y < offset.y + size.y;
+    }
+
+    int RmlMenuBar::cycleMenuIndex(const int direction) const {
+        // Keyboard cycling walks the logo first, then the text labels.
+        const bool has_logo = !logo_menu_idname_.empty();
+        const int total = static_cast<int>(current_labels_.size()) + (has_logo ? 1 : 0);
+        if (total <= 0)
+            return open_menu_index_;
+        const int slot = open_menu_index_ == LOGO_MENU_INDEX
+                             ? 0
+                             : (has_logo && open_menu_index_ >= 0 ? open_menu_index_ + 1 : open_menu_index_);
+        if (slot < 0)
+            return open_menu_index_;
+        const int next = (slot + direction + total) % total;
+        if (has_logo && next == 0)
+            return LOGO_MENU_INDEX;
+        return has_logo ? next - 1 : next;
+    }
+
     bool RmlMenuBar::projectTitleAtPoint(const float x, const float y) const {
         if (!project_title_el_ || !project_title_has_room_ ||
             project_title_.empty() || project_tooltip_.empty()) {
@@ -2391,7 +2475,7 @@ namespace lfs::vis::gui {
         auto* wm = lfs::vis::services().windowOrNull();
         if (!wm)
             return;
-        if (open_menu_index_ >= 0 || bar_height_px <= 0) {
+        if (isOpen() || bar_height_px <= 0) {
             wm->clearTitlebarDragRegion();
             return;
         }
@@ -2419,7 +2503,8 @@ namespace lfs::vis::gui {
         };
 
         std::vector<lfs::vis::WindowManager::HitTestRect> excluded_rects;
-        excluded_rects.reserve(3);
+        excluded_rects.reserve(4);
+        append_element(excluded_rects, brand_logo_);
         append_element(excluded_rects, menu_items_);
         append_element(excluded_rects, menu_toolbar_);
         append_element(excluded_rects, menu_window_controls_);
@@ -2430,15 +2515,16 @@ namespace lfs::vis::gui {
         if (!dropdown_container_ || !dropdown_popup_ || !dropdown_overlay_ || !menu_items_)
             return;
 
-        const int count = menu_items_->GetNumChildren();
-        if (open_menu_index_ < 0 || open_menu_index_ >= count)
+        // The logo dropdown cascades from the logo box; label dropdowns from their label.
+        Rml::Element* anchor = nullptr;
+        if (open_menu_index_ == LOGO_MENU_INDEX)
+            anchor = brand_logo_;
+        else if (open_menu_index_ >= 0 && open_menu_index_ < menu_items_->GetNumChildren())
+            anchor = menu_items_->GetChild(open_menu_index_);
+        if (!anchor)
             return;
-
-        auto* label_el = menu_items_->GetChild(open_menu_index_);
-        if (!label_el)
-            return;
-        const auto label_offset = label_el->GetAbsoluteOffset(Rml::BoxArea::Border);
-        const auto label_size = label_el->GetBox().GetSize(Rml::BoxArea::Border);
+        const auto label_offset = anchor->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto label_size = anchor->GetBox().GetSize(Rml::BoxArea::Border);
 
         menu_model_.DirtyVariable("dropdown_items");
         dropdown_container_->SetProperty("left", "0px");
@@ -2455,7 +2541,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlMenuBar::sizeOpenDropdowns() {
-        if (!rml_context_ || !dropdown_popup_ || open_menu_index_ < 0)
+        if (!rml_context_ || !dropdown_popup_ || open_menu_index_ == CLOSED_MENU_INDEX)
             return;
 
         struct PopupLimits {
@@ -2628,7 +2714,7 @@ namespace lfs::vis::gui {
         int ctx_w = screen_w;
         // A closed menu bar only occupies the bar strip, but a dropdown or a
         // tooltip needs the full height so it is not clipped below the bar.
-        int ctx_h = (open_menu_index_ >= 0 || tooltip_.hasActiveState()) ? screen_h : bar_h;
+        int ctx_h = (isOpen() || tooltip_.hasActiveState()) ? screen_h : bar_h;
 
         bool tooltip_changed = false;
         if (tooltip_.hasActiveState()) {
@@ -2650,7 +2736,7 @@ namespace lfs::vis::gui {
                 last_document_h_ = ctx_h;
             }
             rml_context_->Update();
-            if (open_menu_index_ >= 0)
+            if (isOpen())
                 sizeOpenDropdowns();
         }
         updateTitlebarDragRegion(bar_h);

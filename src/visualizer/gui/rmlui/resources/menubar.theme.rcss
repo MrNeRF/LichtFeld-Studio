@@ -87,6 +87,14 @@ body {
     background-color: @{menu.active};
 }
 
+#brand-logo:hover {
+    background-color: @{menu.hover};
+}
+
+#brand-logo.active {
+    background-color: @{menu.active};
+}
+
 #bottom-border {
     background-color: @{menu.bottom_border};
 }

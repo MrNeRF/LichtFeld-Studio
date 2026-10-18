@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Rml {
@@ -176,7 +177,7 @@ namespace lfs::vis::gui {
         void setUiHidden(bool hidden);
         void suspend();
         bool wantsInput() const { return wants_input_; }
-        bool isOpen() const { return open_menu_index_ >= 0; }
+        bool isOpen() const { return open_menu_index_ != CLOSED_MENU_INDEX; }
         float barHeight() const;
 
         // Keeps the render-on-demand loop ticking while a tooltip is counting
@@ -187,11 +188,22 @@ namespace lfs::vis::gui {
 
     private:
         friend class RmlMenuBarTestAccess;
+
+        // The Help menu has no top-level label; its entries live in the dropdown
+        // that the brand logo opens. LOGO_MENU_INDEX occupies open_menu_index_ for it.
+        static constexpr int CLOSED_MENU_INDEX = -1;
+        static constexpr int LOGO_MENU_INDEX = -2;
+        static constexpr std::string_view LOGO_MENU_IDNAME = "lfs_plugins.help_menu.HelpMenu";
+
         void bindModel();
         bool updateTheme();
         void rebuildLabels();
         void syncActiveLabelState();
         void openDropdown(int index, bool from_keyboard = false);
+        void openLogoDropdown(bool from_keyboard = false);
+        void openMenu(int index, const std::string& idname, bool from_keyboard);
+        bool logoAtPoint(float x, float y) const;
+        int cycleMenuIndex(int direction) const;
         void syncAccessKeyVisibility();
         enum class AccessKeyResult { Ignore,
                                      Handled,
@@ -308,6 +320,7 @@ namespace lfs::vis::gui {
         std::vector<DispatchKeyReceipt> dispatch_key_receipts_;
         std::size_t window_focus_lost_handler_id_ = 0;
         std::string open_menu_idname_;
+        std::string logo_menu_idname_;
         bool wants_input_ = false;
         bool render_needed_ = true;
         bool mouse_pos_valid_ = false;

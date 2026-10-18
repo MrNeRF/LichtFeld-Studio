@@ -86,9 +86,19 @@ body {
     flex: none;
     width: 20dp;
     height: 20dp;
-    margin-left: 10dp;
-    margin-right: 8dp;
+    padding: 5dp;
+    margin-left: 5dp;
+    margin-right: 4dp;
+    border-radius: 6dp;
     decorator: none;
+    cursor: pointer;
+    /* The bar caches its paint between input events, so the pressed state has
+       to reach its final color on the frame that changes it. */
+    transition: none;
+}
+
+#brand-logo.hidden {
+    display: none;
 }
 
 #menu-window-controls {
@@ -518,7 +528,13 @@ body.toolbar-squeeze #menu-portal-connection {
 }
 
 /* Keep menus and native window controls reachable in narrow windows. */
-body.compact #brand-logo,
+body.compact #brand-logo {
+    width: 16dp;
+    height: 16dp;
+    padding: 2dp;
+    margin-left: 2dp;
+    margin-right: 1dp;
+}
 body.compact .menu-window-utility-btn,
 body.compact .menu-window-separator,
 body.compact #menu-portal-connection span {
