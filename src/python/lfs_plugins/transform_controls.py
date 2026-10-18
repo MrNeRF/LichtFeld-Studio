@@ -171,6 +171,7 @@ class TransformControlsController:
         self._editable = False
         self._active_tool = ""
         self._crop_active = False
+        self._crop_locked = False
         self._selected = []
         self._transform_space = _SPACE_WORLD
         self._pivot_mode = _PIVOT_ORIGIN
@@ -314,6 +315,7 @@ class TransformControlsController:
             return False
 
         self._selected = lf.get_selected_node_names() or []
+        self._crop_locked = False
         if self._crop_active:
             # Only the volume selected by the crop tool may receive numeric edits.
             # A parent selection during tool activation must never move the model.
@@ -323,6 +325,8 @@ class TransformControlsController:
             volume = (node.cropbox() if shape == "box" else node.ellipsoid()) if node else None
             if volume is None:
                 self._selected = []
+            else:
+                self._crop_locked = bool(node.locked)
         self._editable = bool(self._can_edit_selection())
         if not self._editable:
             self._step_repeat_prop = None
@@ -372,6 +376,7 @@ class TransformControlsController:
         self._visible = False
         self._active_tool = ""
         self._crop_active = False
+        self._crop_locked = False
         self._selected = []
         self._focused_input_property = None
         self._escape_revert.clear()
@@ -383,7 +388,9 @@ class TransformControlsController:
         self._force_dirty = False
 
     def _can_edit_selection(self):
-        return lf.can_transform_selection() and (not self._crop_active or bool(self._selected))
+        return lf.can_transform_selection() and (
+            not self._crop_active or (bool(self._selected) and not self._crop_locked)
+        )
 
     def _current_transform_space(self) -> int:
         value = _native_store_value("transform_space", _MISSING)

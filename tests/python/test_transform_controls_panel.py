@@ -1123,7 +1123,7 @@ def test_crop_numeric_controls_edit_only_volume_with_one_undo_entry(
     original = _translation_matrix(.1, .2, .3)
     state.local_transforms = {"volume": original.copy(), "bicycle": original.copy()}
     state.visualizer_world_transforms = {name: matrix.copy() for name, matrix in state.local_transforms.items()}
-    volume = SimpleNamespace(cropbox=lambda: object() if shape == "box" else None,
+    volume = SimpleNamespace(locked=False, cropbox=lambda: object() if shape == "box" else None,
                              ellipsoid=lambda: object() if shape == "ellipsoid" else None)
     module.lf.get_scene = lambda: SimpleNamespace(get_node=lambda name: volume if name == "volume" else None)
     module.lf.ui.get_crop_tool_shape = lambda: shape
@@ -1168,3 +1168,24 @@ def test_crop_numeric_controls_never_edit_parent_selection(transform_controls_mo
     assert not panel._editable
     assert not state.set_local_calls
     assert not state.set_visualizer_world_calls
+
+
+def test_crop_numeric_controls_respect_volume_lock(transform_controls_module):
+    module, state = transform_controls_module
+    state.active_tool = "builtin.cropbox"
+    state.selected_names = ["volume"]
+    state.local_transforms["volume"] = _translation_matrix(1, 2, 3)
+    state.visualizer_world_transforms["volume"] = _translation_matrix(1, 2, 3)
+    volume = SimpleNamespace(locked=True, cropbox=lambda: object())
+    module.lf.get_scene = lambda: SimpleNamespace(get_node=lambda name: volume)
+    module.lf.ui.get_crop_tool_shape = lambda: "box"
+    module.lf.ui.get_crop_tool_operation = lambda: "translate"
+    panel = module.TransformControlsController()
+    doc = _DocumentStub()
+    panel.update(doc)
+    assert "hidden" not in doc.wrap.classes
+    assert not panel._editable
+    panel._set_value("pos", 0, "99")
+    panel._apply_step("pos_x", 1)
+    assert not state.set_visualizer_world_calls
+    assert not state.set_local_calls
