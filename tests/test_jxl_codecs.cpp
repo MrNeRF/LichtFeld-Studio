@@ -531,6 +531,71 @@ namespace {
         ASSERT_TRUE(codec::decode_jxl(encoded, recovered, error)) << error;
         EXPECT_EQ(recovered.data, (std::vector<uint8_t>(samples.begin(), samples.end())));
     }
+    TEST_F(JxlCodec, OfficialStaticProfilesPatchesAndCoalescedLayersDecode) {
+        for (const auto name : {"grayscale.jxl", "patches-lossless.jxl", "sunset-logo.jxl"}) {
+            SCOPED_TRACE(name);
+            const auto path = std::filesystem::path(LFS_JXL_FIXTURES) / "conformance" / name;
+            std::ifstream input(path, std::ios::binary);
+            const std::vector<uint8_t> encoded((std::istreambuf_iterator<char>(input)), {});
+            codec::Image file, memory;
+            std::string error;
+            ASSERT_TRUE(codec::decode_jxl(path, file, error)) << error;
+            ASSERT_TRUE(codec::decode_jxl(encoded, memory, error)) << error;
+            EXPECT_EQ(file.width, memory.width);
+            EXPECT_EQ(file.height, memory.height);
+            EXPECT_EQ(file.data, memory.data);
+            ASSERT_TRUE(codec::decode_jxl(path, file, error, true)) << error;
+            ASSERT_TRUE(codec::decode_jxl(encoded, memory, error, true)) << error;
+            EXPECT_EQ(file.data, memory.data);
+        }
+    }
+
+    TEST_F(JxlCodec, FloatTargetAvoidsIntermediateIntegerClippingAndQuantization) {
+        for (const auto name : {"grayscale.jxl", "sunset-logo.jxl"}) {
+            SCOPED_TRACE(name);
+            const auto path = std::filesystem::path(LFS_JXL_FIXTURES) / "conformance" / name;
+            std::vector<float> file, memory;
+            const auto allocate = [](size_t bytes, void* user) -> void* {
+                auto& storage = *static_cast<std::vector<float>*>(user);
+                storage.resize(bytes / sizeof(float));
+                return storage.data();
+            };
+            codec::DecodeTarget file_target{0, codec::SampleType::Float32, nullptr, allocate, &file};
+            codec::DecodeTarget memory_target{0, codec::SampleType::Float32, nullptr, allocate, &memory};
+            codec::Probe info, memory_info;
+            std::string error;
+            ASSERT_TRUE(codec::decode_jxl_to_buffer(path, file_target, info, error)) << error;
+            std::ifstream input(path, std::ios::binary);
+            const std::vector<uint8_t> encoded((std::istreambuf_iterator<char>(input)), {});
+            ASSERT_TRUE(codec::decode_jxl_to_buffer(encoded, memory_target, memory_info, error)) << error;
+            EXPECT_EQ(file, memory);
+            codec::JxlDecodeLimits limits;
+            limits.output_bytes = file.size() * sizeof(float) - 1;
+            unsigned allocations = 0;
+            codec::DecodeTarget limited{0, codec::SampleType::Float32, nullptr,
+                                        [](size_t, void* user) -> void* { ++*static_cast<unsigned*>(user); return nullptr; }, &allocations};
+            const auto previous = memory_info;
+            EXPECT_FALSE(codec::decode_jxl_to_buffer(encoded, limited, memory_info, error, false, limits));
+            EXPECT_NE(error.find("output byte limit"), std::string::npos);
+            EXPECT_EQ(allocations, 0u);
+            EXPECT_EQ(limited.data, nullptr);
+            EXPECT_EQ(memory_info.width, previous.width);
+            EXPECT_EQ(memory_info.sample_type, previous.sample_type);
+            EXPECT_GT(*std::max_element(file.begin(), file.end()), 1.f);
+            if (std::string_view(name) == "grayscale.jxl") {
+                ASSERT_EQ(info.width, 200);
+                ASSERT_EQ(info.height, 200);
+                ASSERT_EQ(info.channels, 1);
+                // Independently published corpus Float32 reference values.
+                EXPECT_NEAR(file[50 * 200 + 50], .08087914437055588f, .004f);
+                EXPECT_NEAR(file[100 * 200 + 100], .3699168562889099f, .004f);
+                EXPECT_NEAR(file[199 * 200 + 199], 1.001685380935669f, .004f);
+            } else {
+                EXPECT_LT(*std::min_element(file.begin(), file.end()), -1.f);
+            }
+        }
+    }
+
     TEST_F(JxlCodec, LargeImagesPreserveSamplesAndRecoverFromLimits) {
         for (const auto dimensions : {std::pair{3840, 2160}, std::pair{7680, 4320}}) {
             const auto [width, height] = dimensions;

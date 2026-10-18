@@ -18,12 +18,14 @@ namespace lfs::core::image_codecs {
 
     LFS_IMAGE_CODECS_API bool is_jxl(std::span<const uint8_t>);
     LFS_IMAGE_CODECS_API bool probe_jxl(const std::filesystem::path&, Probe&, std::string&, const JxlDecodeLimits& = {});
-    // Values retain the original color encoding unless display=true requests
-    // supported SDR conversion to sRGB. Orientation is applied once and alpha
-    // is returned unassociated. Animation/additional image frames are rejected.
+    // Raw output uses libjxl's decoded-data color encoding; for XYB this can
+    // differ from the original ICC. display=true requests SDR sRGB instead.
+    // Orientation is applied once, static layers are coalesced and alpha is
+    // returned unassociated. Animation/additional displayed frames are rejected.
     LFS_IMAGE_CODECS_API bool decode_jxl(const std::filesystem::path&, Image&, std::string&, bool display = false, const JxlDecodeLimits& = {});
     LFS_IMAGE_CODECS_API bool decode_jxl(std::span<const uint8_t>, Image&, std::string&, bool display = false, const JxlDecodeLimits& = {});
     // Decode/validate completely before allocating or writing caller storage.
+    // Float32 targets decode directly to float without an integer intermediate.
     LFS_IMAGE_CODECS_API bool decode_jxl_to_buffer(const std::filesystem::path&, DecodeTarget&, Probe&, std::string&, bool display = false, const JxlDecodeLimits& = {});
     LFS_IMAGE_CODECS_API bool decode_jxl_to_buffer(std::span<const uint8_t>, DecodeTarget&, Probe&, std::string&, bool display = false, const JxlDecodeLimits& = {});
 } // namespace lfs::core::image_codecs

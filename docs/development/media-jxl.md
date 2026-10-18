@@ -17,12 +17,19 @@ selected by libjxl/Highway. No GPU JPEG XL decoding is promised.
   above-one values. Nonfinite results and unsupported precision are rejected.
 - Orientation is applied by libjxl once; probe dimensions describe the oriented
   pixels. Alpha is returned straight, including associated-alpha input.
-- Raw decoding preserves the original color encoding. Display image paths
+- Raw decoding uses libjxl's decoded-data color encoding. For XYB input the
+  original ICC can differ from the decoded-data ICC; requesting the original
+  profile again is not a harmless no-op. Display image paths
   request SDR sRGB conversion through libjxl's CMS. PQ/HLG and declared HDR
   display conversion require an explicit future tone-mapping policy; raw reads
   remain available. This does not change existing training precision policy.
-- Animation, additional image frames and auxiliary channels require an
+- Static internal layers are coalesced by libjxl into one displayed image.
+  Animation, additional displayed frames and auxiliary channels require an
   explicit future import policy and are rejected instead of silently dropped.
+- Float32 targets decode directly into owning Float32 staging, including for
+  integer-depth codestreams. This preserves out-of-range reconstructed samples
+  and avoids prior integer clipping/quantization. Native integer image output
+  still uses its declared bounded integer storage.
 
 ## Limits and ownership
 
@@ -50,6 +57,20 @@ integer/float precision, orientation, profiles, alpha, resource limits,
 corruption, ownership and concurrent calls. Build using the project's vcpkg
 dependencies, then configure `tests/image_codecs` as for the other codecs.
 The full project additionally exercises discovery and pipelined loading.
+
+An additional audit uses the official `libjxl/conformance` corpus at revision
+`b1d0f990b03e57bf6d137c365cd5dc8b470b9191`. All 33 non-animated cases without
+auxiliary channels decode through file and memory Float32 targets within the
+published per-case reference tolerances, after accounting for decoded-data ICC
+and straight versus associated alpha. An independent direct-libjxl decoder
+also passes these references. The five animation and two auxiliary-channel
+cases are deliberately rejected. Display acceptance was checked for all 33;
+this is not a full metadata/JPEG-reconstruction conformance certification.
+
+Three small official bitstreams and their license/provenance are retained as
+offline regressions for ICC profiles, patches, coalesced static layers and
+Float32 reconstruction beyond the integer range. Float32 output limits are
+checked before caller allocation. The focused JXL suite has 21 tests.
 
 The official Microsoft vcpkg Git registry is pinned at
 `b3ae22aef2b857af6e80d756c13f15db12be4e8a` for `libjxl` alone (0.12.0).

@@ -163,14 +163,12 @@ namespace lfs::core::image_codecs {
                 srgb.rendering_intent = JXL_RENDERING_INTENT_RELATIVE;
                 if (JxlDecoderSetOutputColorProfile(decoder, &srgb, nullptr, 0) != JXL_DEC_SUCCESS)
                     return fail(error, "cannot convert display color profile");
-            } else if (JxlDecoderSetOutputColorProfile(decoder, structured ? &original : nullptr,
-                                                       structured ? nullptr : profile.data(), structured ? 0 : profile.size()) != JXL_DEC_SUCCESS)
-                return fail(error, "cannot preserve original color profile");
+            }
             return true;
         }
 
         bool run(Input& input, Image& image, Probe& info, std::string& error,
-                 bool probe_only, bool display, const JxlDecodeLimits& limits) {
+                 bool probe_only, bool display, const JxlDecodeLimits& limits, bool float_output = false) {
             if ((input.memory ? input.borrowed.size() : input.remaining) > limits.encoded_bytes)
                 return fail(error, "encoded input byte limit exhausted");
             DecoderMemory memory{limits.decoder_bytes};
@@ -181,10 +179,11 @@ namespace lfs::core::image_codecs {
             const int events = JXL_DEC_BASIC_INFO | (probe_only ? 0 : JXL_DEC_COLOR_ENCODING | JXL_DEC_FRAME | JXL_DEC_FULL_IMAGE | JXL_DEC_BOX);
             const auto* cms = JxlGetDefaultCms();
             if (!cms || JxlDecoderSubscribeEvents(decoder.get(), events) != JXL_DEC_SUCCESS ||
+                JxlDecoderSetCoalescing(decoder.get(), JXL_TRUE) != JXL_DEC_SUCCESS ||
                 JxlDecoderSetKeepOrientation(decoder.get(), JXL_FALSE) != JXL_DEC_SUCCESS ||
                 JxlDecoderSetUnpremultiplyAlpha(decoder.get(), JXL_TRUE) != JXL_DEC_SUCCESS ||
                 JxlDecoderSetRenderSpotcolors(decoder.get(), JXL_FALSE) != JXL_DEC_SUCCESS ||
-                JxlDecoderSetCms(decoder.get(), *cms) != JXL_DEC_SUCCESS)
+                (display && JxlDecoderSetCms(decoder.get(), *cms) != JXL_DEC_SUCCESS))
                 return fail(error, "cannot configure decoder");
             JxlBasicInfo basic{};
             Image candidate;
@@ -202,6 +201,11 @@ namespace lfs::core::image_codecs {
                 case JXL_DEC_BASIC_INFO:
                     if (JxlDecoderGetBasicInfo(decoder.get(), &basic) != JXL_DEC_SUCCESS || !header_layout(basic, info, limits, error))
                         return error.empty() ? fail(error, "invalid basic information") : false;
+                    if (float_output) {
+                        info.sample_type = SampleType::Float32;
+                        if (size_t(info.width) * info.height > limits.output_bytes / (size_t(info.channels) * sizeof(float)))
+                            return fail(error, "decoded output byte limit exhausted");
+                    }
                     if (basic.num_extra_channels != (basic.alpha_bits ? 1u : 0u))
                         return fail(error, "auxiliary channels require an explicit import policy");
                     header = true;
@@ -258,7 +262,8 @@ namespace lfs::core::image_codecs {
                     image = std::move(candidate);
                     return true;
                 default:
-                    return fail(error, "malformed or incomplete codestream");
+                    error = "JXL: malformed or incomplete codestream (status=" + std::to_string(status) + ")";
+                    return false;
                 }
             }
         }
@@ -333,7 +338,9 @@ namespace lfs::core::image_codecs {
         bool target_decode(Source source, DecodeTarget& target, Probe& result, std::string& error, bool display, const JxlDecodeLimits& limits) {
             return guarded(error, [&] {
                 Image image;
-                return decode_jxl(source, image, error, display, limits) && copy_target(image, target, result, limits, error);
+                Input input(source);
+                Probe info;
+                return run(input, image, info, error, false, display, limits, target.sample_type == SampleType::Float32) && copy_target(image, target, result, limits, error);
             });
         }
     } // namespace
