@@ -175,6 +175,35 @@ namespace {
         EXPECT_EQ(image.width, input.width);
     }
 
+    TEST(ExrMemory, ConsumerDecodedByteLimitPreservesPreviousOutputAndRecovers) {
+        Pixels input;
+        std::vector<uint8_t> encoded;
+        ASSERT_TRUE(codec::encode_exr_memory(input.view(), encoded));
+        const size_t required = size_t(input.width) * input.height * 4 * sizeof(float);
+        for (size_t limit : {size_t(0), required - 1}) {
+            codec::Image output{7, 8, 3, codec::SampleType::UInt8, {1, 2, 3}};
+            std::string error;
+            EXPECT_FALSE(codec::decode_exr_memory(encoded, output, error, 1, limit));
+            EXPECT_TRUE(error.starts_with("EXR: decoded image exceeds byte limit"));
+            EXPECT_NE(error.find("bytes=" + std::to_string(required)), std::string::npos);
+            EXPECT_NE(error.find("limit=" + std::to_string(limit)), std::string::npos);
+            EXPECT_EQ(output.width, 7);
+            EXPECT_EQ(output.data, (std::vector<uint8_t>{1, 2, 3}));
+            ASSERT_TRUE(codec::decode_exr_memory(encoded, output, error, 1, required)) << error;
+            EXPECT_TRUE(error.empty());
+            EXPECT_EQ(output.data.size(), required);
+        }
+        codec::Image original_api, bounded;
+        std::string error;
+        ASSERT_TRUE(codec::decode_exr_memory(encoded, original_api, error));
+        ASSERT_TRUE(codec::decode_exr_memory(encoded, bounded, error, 4, required));
+        EXPECT_EQ(bounded.data, original_api.data);
+        encoded.pop_back(); // Header is intact; the last pixel payload is not.
+        EXPECT_FALSE(codec::decode_exr_memory(encoded, bounded, error, 1, 0));
+        EXPECT_TRUE(error.starts_with("EXR: decoded image exceeds byte limit"));
+        EXPECT_EQ(bounded.data, original_api.data);
+    }
+
     TEST(ExrMemory, InvalidInputOptionsAndSamplesKeepPreviousOutput) {
         Pixels input;
         const std::vector<uint8_t> sentinel{1, 2, 3};
