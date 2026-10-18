@@ -681,6 +681,37 @@ TEST(GutThinPrismFisheye, ProjectsLikeColmapAndInvertsItself) {
     }
 }
 
+// Catches a fisheye inverse whose Newton start assumes the lens reaches its widest angle at half the image width.
+// This calibrated 3840x2880 lens keeps widening to 79 deg at r = 2349 px; the inverse lost every pixel past
+// r = 1920 px, and GUT rendered and trained that rim black.
+TEST(GutOpenCvFisheye, InvertsTheWholeCalibratedRim) {
+    const gut_camera_model_test::OpenCvFisheyeCamera camera{.focal = {1454.0f, 1454.0f},
+                                                            .principal = {1920.0f, 1440.0f},
+                                                            .resolution = {3840, 2880},
+                                                            .radial = {0.159f, 0.134f, -0.087f, -0.0013f}};
+    const float diagonal_x = 0.8f, diagonal_y = 0.6f;
+    std::vector<float> points;
+    for (const float radius : {300.0f, 1200.0f, 1900.0f, 1920.0f, 2100.0f, 2300.0f, 2340.0f})
+        points.insert(points.end(), {camera.principal[0] + diagonal_x * radius, camera.principal[1] + diagonal_y * radius});
+    const auto rays = gut_camera_model_test::unproject(camera, points);
+    std::vector<float> forward;
+    for (size_t i = 0; i < points.size() / 2; ++i) {
+        ASSERT_EQ(rays[4 * i + 3], 1.0f) << "radius index " << i;
+        forward.insert(forward.end(), {rays[4 * i], rays[4 * i + 1], rays[4 * i + 2]});
+    }
+    const auto back = gut_camera_model_test::project(camera, forward);
+    for (size_t i = 0; i < points.size() / 2; ++i) {
+        EXPECT_EQ(back[3 * i + 2], 1.0f) << i;
+        EXPECT_NEAR(back[3 * i], points[2 * i], 0.05f) << i;
+        EXPECT_NEAR(back[3 * i + 1], points[2 * i + 1], 0.05f) << i;
+    }
+
+    // Past the radius of the widest angle the polynomial folds back: no ray.
+    const auto beyond = gut_camera_model_test::unproject(
+        camera, {camera.principal[0] + diagonal_x * 2395.0f, camera.principal[1] + diagonal_y * 2395.0f});
+    EXPECT_EQ(beyond[3], 0.0f);
+}
+
 TEST(UndistortInverse, ThinPrismFisheyeRoundTrip) {
     expect_inverse_round_trip(CameraModelType::THIN_PRISM_FISHEYE);
 }
