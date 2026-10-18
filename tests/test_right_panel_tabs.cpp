@@ -134,6 +134,7 @@ namespace {
         data[1].label = "Training";
         data[2].label = "A plugin with a much longer translated label";
         RmlRightPanelTestAccess::sync(panel, data, data[0].id);
+        EXPECT_NEAR(button(0)->GetAbsoluteTop(), 6.0f * GetParam(), 0.5f);
         float last_bottom = 0;
         for (int i = 0; i < 3; ++i) {
             auto* tab = button(i);
@@ -200,7 +201,7 @@ namespace {
                 const auto size = tab->GetBox().GetSize(Rml::BoxArea::Border);
                 EXPECT_GE(draw.bounds.Left(), pos.x + GetParam());
                 EXPECT_LE(draw.bounds.Right(), pos.x + size.x - GetParam());
-                EXPECT_GE(draw.bounds.Top(), pos.y + 15.0f * GetParam());
+                EXPECT_GE(draw.bounds.Top(), pos.y + 9.0f * GetParam());
                 EXPECT_LE(draw.bounds.Bottom(), pos.y + size.y - 8.0f * GetParam());
                 EXPECT_NEAR(label->GetAbsoluteLeft(), std::round(label->GetAbsoluteLeft()), 0.01f);
                 EXPECT_NEAR(label->GetAbsoluteTop(), std::round(label->GetAbsoluteTop()), 0.01f);
@@ -218,11 +219,11 @@ namespace {
         auto data = tabs(3);
         RmlRightPanelTestAccess::sync(panel, data, data[1].id);
         auto* selected = button(1);
-        auto* strip = doc->GetElementById("tab-strip-viewport");
+        auto* rail = doc->GetElementById("tab-bar");
         auto* before = doc->GetElementById("tab-edge-before");
         auto* after = doc->GetElementById("tab-edge-after");
         const float top = selected->GetAbsoluteOffset(Rml::BoxArea::Border).y -
-                          strip->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+                          rail->GetAbsoluteOffset(Rml::BoxArea::Border).y;
         EXPECT_NEAR(before->GetBox().GetSize().y, top, 1.0f);
         EXPECT_NEAR(after->GetAbsoluteOffset(Rml::BoxArea::Border).y,
                     selected->GetAbsoluteOffset(Rml::BoxArea::Border).y +

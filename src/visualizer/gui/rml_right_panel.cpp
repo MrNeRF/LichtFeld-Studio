@@ -298,8 +298,9 @@ namespace lfs::vis::gui {
             const float left = std::round(origin.x + (content_width - line_height) * 0.5f) - origin.x;
             // Bottom-to-top text rotates upward from this lower origin. Keep
             // its upper extent aligned with Rendering's first heading, excluding
-            // the trailing clearance included in the measured width.
-            const float top = std::round(origin.y + (15.0f - text_clearance_dp) * dp + text_width) - origin.y;
+            // the trailing clearance included in the measured width. The strip's
+            // 6dp top inset plus this 9dp inset preserve the heading alignment.
+            const float top = std::round(origin.y + (9.0f - text_clearance_dp) * dp + text_width) - origin.y;
             changed |= setPixelProperty(label, Rml::PropertyId::Width, text_width);
             changed |= setPixelProperty(label, Rml::PropertyId::Height, line_height);
             changed |= setPixelProperty(label, Rml::PropertyId::LineHeight, line_height);
@@ -365,8 +366,12 @@ namespace lfs::vis::gui {
         float open_top = rail_height;
         float open_bottom = rail_height;
         if (button) {
-            open_top = std::clamp(active_top - next_scroll, 0.0f, rail_height);
-            open_bottom = std::clamp(active_top + active_height - next_scroll, 0.0f, rail_height);
+            const float viewport_top = tab_bar_el_
+                                           ? tab_strip_viewport_el_->GetAbsoluteOffset(Rml::BoxArea::Border).y -
+                                                 tab_bar_el_->GetAbsoluteOffset(Rml::BoxArea::Border).y
+                                           : 0.0f;
+            open_top = std::clamp(viewport_top + active_top - next_scroll, 0.0f, rail_height);
+            open_bottom = std::clamp(viewport_top + active_top + active_height - next_scroll, 0.0f, rail_height);
         }
         if (auto* edge = document_->GetElementById("tab-edge-before"))
             changed |= setPixelProperty(edge, Rml::PropertyId::Height, open_top);

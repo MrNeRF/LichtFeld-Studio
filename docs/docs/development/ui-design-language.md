@@ -137,6 +137,7 @@ design when it does.
 
 Rendering, Training, and plugins registered in `MAIN_PANEL_TAB` share the vertical
 category strip at the left of the lower sidebar. Scene remains above it.
+The strip shares the content's 6 dp top inset.
 Inactive tabs are recessed. The active tab fills the rail width and opens the
 rail edge beside its content. The rail edge continues above and below it.
 Scene rendering and input are clipped to the scene rectangle; the resize grip

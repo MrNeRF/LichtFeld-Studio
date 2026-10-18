@@ -56,7 +56,7 @@ body {
     position: absolute;
     left: 0;
     right: 0;
-    top: 0;
+    top: 6dp;
     bottom: 0;
     display: flex;
     flex-direction: column;
@@ -92,7 +92,7 @@ body {
 .tab-label {
     position: absolute;
     display: block;
-    top: 15dp;
+    top: 9dp;
     height: 20dp;
     line-height: 20dp;
     white-space: nowrap;
