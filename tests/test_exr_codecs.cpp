@@ -350,6 +350,7 @@ namespace {
             ASSERT_LE(offset + 8 + packed, bytes.size());
             std::fill_n(bytes.begin() + static_cast<std::ptrdiff_t>(offset + 8), packed, std::bit_cast<char>(uint8_t{0xff}));
             write_bytes(damaged.path, bytes);
+            const auto good_bytes = read_bytes(good.path);
             std::vector<std::future<void>> jobs;
             for (int i = 0; i < 8; ++i) {
                 jobs.push_back(std::async(std::launch::async, [&, i] {
@@ -358,7 +359,10 @@ namespace {
                     image.data = {42};
                     std::string error = "stale diagnostic";
                     const bool corrupt = (i % 2) == 0;
-                    const bool success = codec::decode_exr(corrupt ? damaged.path : good.path, image, error, 4);
+                    const auto& input = corrupt ? bytes : good_bytes;
+                    const bool success = (i & 2)
+                                             ? codec::decode_exr_memory({reinterpret_cast<const uint8_t*>(input.data()), input.size()}, image, error, 4)
+                                             : codec::decode_exr(corrupt ? damaged.path : good.path, image, error, 4);
                     EXPECT_EQ(success, !corrupt);
                     if (corrupt) {
                         EXPECT_EQ(image.width, 7);

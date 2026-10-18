@@ -154,12 +154,17 @@ namespace {
         }
         auto output = sentinel;
         codec::ExrEncodeOptions options;
-        unsigned calls = 0;
-        options.cancelled = [&] { return ++calls >= 3; };
-        const auto cancelled = codec::encode_exr_memory(input.view(), output, options);
-        ASSERT_FALSE(cancelled);
-        EXPECT_EQ(cancelled.error().code(), lfs::ErrorCode::Cancelled);
-        EXPECT_EQ(output, sentinel);
+        // Before the context and before each of this fixture's three ZIP chunks.
+        for (unsigned checkpoint = 1; checkpoint <= 4; ++checkpoint) {
+            unsigned calls = 0;
+            options.cancelled = [&] { return ++calls >= checkpoint; };
+            const auto cancelled = codec::encode_exr_memory(input.view(), output, options);
+            ASSERT_FALSE(cancelled);
+            EXPECT_EQ(cancelled.error().code(), lfs::ErrorCode::Cancelled);
+            EXPECT_EQ(output, sentinel);
+            EXPECT_EQ(calls, checkpoint);
+            options.cancelled = {};
+        }
         auto view = input.view();
         ASSERT_TRUE(codec::encode_exr_memory(view, input.bytes));
         EXPECT_EQ(input.bytes, encoded);
