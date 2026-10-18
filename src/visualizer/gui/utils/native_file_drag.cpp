@@ -475,6 +475,10 @@ namespace lfs::vis::gui {
         auto* x11 = static_cast<Display*>(SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr));
         if (!x11)
             return {FileDragStatus::Failed, "SDL X11 display unavailable"};
+        // The press that started this gesture left an implicit pointer grab on SDL's connection. GTK
+        // grabs the pointer on its own connection to run the drag, which fails while SDL holds it.
+        XUngrabPointer(x11, CurrentTime);
+        XFlush(x11);
         auto* display = gdk_display_get_default();
         bool close_display = false;
         if (!GDK_IS_X11_DISPLAY(display) || std::string_view(DisplayString(gdk_x11_display_get_xdisplay(display))) != DisplayString(x11)) {
