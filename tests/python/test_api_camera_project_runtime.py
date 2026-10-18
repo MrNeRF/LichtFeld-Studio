@@ -146,3 +146,19 @@ for rotation, translation, fx, fy, width, height, field in cases:
     assert len(scene.get_nodes()) == count
 print("rejected all invalid cameras without inserting nodes")
 ''')
+
+
+def test_api_camera_without_uid_gets_the_next_free_one(camera_runtime):
+    output = _editor(camera_runtime, '''
+import lichtfeld as lf
+scene = lf.get_scene()
+parent = scene.add_group("Auto uid cameras")
+r = lf.Tensor.eye(3, device="cpu")
+t = lf.Tensor.zeros([3], device="cpu")
+scene.add_camera("given uid", parent, r, t, 50., 50., 100, 100, uid=7)
+scene.add_camera("auto uid a", parent, r, t, 50., 50., 100, 100)
+scene.add_camera("auto uid b", parent, r, t, 50., 50., 100, 100)
+uids = {n.name: n.camera_uid for n in scene.get_nodes() if n.has_camera}
+print(uids["given uid"], uids["auto uid a"], uids["auto uid b"])
+''')
+    assert output.split()[-3:] == ["7", "8", "9"], output
