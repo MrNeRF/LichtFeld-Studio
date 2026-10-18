@@ -174,6 +174,14 @@ namespace {
         codec::Image parallel;
         ASSERT_TRUE(codec::decode_exr(fixture.path, parallel, error, 4)) << error;
         EXPECT_EQ(parallel.data, image.data);
+        std::ifstream stream(lfs::core::native_fs::native_path(fixture.path), std::ios::binary);
+        const std::vector<uint8_t> encoded{std::istreambuf_iterator<char>(stream), {}};
+        codec::Image memory;
+        ASSERT_TRUE(codec::decode_memory(encoded.data(), encoded.size(), memory, error)) << error;
+        EXPECT_EQ(memory.data, image.data);
+        ASSERT_TRUE(codec::decode_exr_memory(encoded, memory, error, 4)) << error;
+        EXPECT_EQ(memory.data, image.data);
+
         EXPECT_EQ(image.width, fixture.width);
         EXPECT_EQ(image.height, fixture.height);
         EXPECT_EQ(image.channels, 4);
@@ -267,6 +275,11 @@ namespace {
         codec::Image parallel;
         ASSERT_TRUE(codec::decode_exr(f.path, parallel, error, 4)) << error;
         EXPECT_EQ(parallel.data, image.data);
+        std::ifstream stream(lfs::core::native_fs::native_path(f.path), std::ios::binary);
+        const std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(stream), {}};
+        codec::Image memory;
+        ASSERT_TRUE(codec::decode_exr_memory(bytes, memory, error)) << error;
+        EXPECT_EQ(memory.data, image.data);
         const auto* pixels = reinterpret_cast<const float*>(image.data.data());
         for (size_t i = 0; i < values.size(); ++i) {
             const float expected = static_cast<float>(values[i]);
@@ -337,6 +350,7 @@ namespace {
             ASSERT_LE(offset + 8 + packed, bytes.size());
             std::fill_n(bytes.begin() + static_cast<std::ptrdiff_t>(offset + 8), packed, std::bit_cast<char>(uint8_t{0xff}));
             write_bytes(damaged.path, bytes);
+            const auto good_bytes = read_bytes(good.path);
             std::vector<std::future<void>> jobs;
             for (int i = 0; i < 8; ++i) {
                 jobs.push_back(std::async(std::launch::async, [&, i] {
@@ -345,7 +359,10 @@ namespace {
                     image.data = {42};
                     std::string error = "stale diagnostic";
                     const bool corrupt = (i % 2) == 0;
-                    const bool success = codec::decode_exr(corrupt ? damaged.path : good.path, image, error, 4);
+                    const auto& input = corrupt ? bytes : good_bytes;
+                    const bool success = (i & 2)
+                                             ? codec::decode_exr_memory({reinterpret_cast<const uint8_t*>(input.data()), input.size()}, image, error, 4)
+                                             : codec::decode_exr(corrupt ? damaged.path : good.path, image, error, 4);
                     EXPECT_EQ(success, !corrupt);
                     if (corrupt) {
                         EXPECT_EQ(image.width, 7);
@@ -462,6 +479,13 @@ namespace {
             EXPECT_FALSE(codec::probe(f.path, info, error));
             EXPECT_FALSE(error.empty());
             EXPECT_FALSE(codec::decode(f.path, image, error));
+            const auto file_error = error;
+            std::ifstream stream(lfs::core::native_fs::native_path(f.path), std::ios::binary);
+            const std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(stream), {}};
+            image = {7, 8, 3, codec::SampleType::UInt8, {1, 2, 3}};
+            EXPECT_FALSE(codec::decode_exr_memory(bytes, image, error));
+            EXPECT_EQ(error, file_error);
+            EXPECT_EQ(image.data, (std::vector<uint8_t>{1, 2, 3}));
         }
     }
     TEST(ExrCodecRegression, UnicodeLongPathMatchesReferenceWithoutWindowsOptIn) {

@@ -17,15 +17,22 @@ namespace lfs::core::image_codecs {
             const ExrWriteStream& stream;
             std::string diagnostic;
         };
+        // Diagnostics may run while OpenEXR holds its context lock. Calling
+        // exr_get_user_data from there would try to acquire that lock again.
+        // The encoder is synchronous; preserve nesting and per-thread isolation.
+        thread_local StreamState* diagnostic_state = nullptr;
+        struct DiagnosticScope {
+            StreamState* previous = diagnostic_state;
+            explicit DiagnosticScope(StreamState& state) { diagnostic_state = &state; }
+            ~DiagnosticScope() { diagnostic_state = previous; }
+        };
         int64_t writeBytes(exr_const_context_t, void* userdata, const void* bytes, uint64_t size, uint64_t offset, exr_stream_error_func_ptr_t) noexcept {
             const auto& state = *static_cast<StreamState*>(userdata);
             return state.stream.write(state.stream.user, bytes, size, offset);
         }
-        void diagnostic(exr_const_context_t context, exr_result_t, const char* message) noexcept {
-            void* user = nullptr;
-            exr_get_user_data(context, &user);
-            if (user && message) {
-                auto& state = *static_cast<StreamState*>(user);
+        void diagnostic(exr_const_context_t, exr_result_t, const char* message) noexcept {
+            if (diagnostic_state && message) {
+                auto& state = *diagnostic_state;
                 try {
                     state.diagnostic = message;
                 } catch (...) {
@@ -52,7 +59,7 @@ namespace lfs::core::image_codecs {
         };
         void check(exr_result_t status, const StreamState& state) {
             if (status != EXR_ERR_SUCCESS)
-                throw Exception(encodeError(ErrorCode::Unavailable,
+                throw Exception(encodeError(status == EXR_ERR_OUT_OF_MEMORY ? ErrorCode::ResourceExhausted : ErrorCode::Unavailable,
                                             std::format("EXR encoding failed (status={}, name={}, detail={})",
                                                         int(status), state.stream.name, state.diagnostic.empty() ? exr_get_error_code_as_string(status) : state.diagnostic),
                                             int(status)));
@@ -97,6 +104,7 @@ namespace lfs::core::image_codecs {
             }
             cancel(options);
             StreamState state{stream, {}};
+            DiagnosticScope diagnostics(state);
             Context context;
             exr_context_initializer_t init = EXR_DEFAULT_CONTEXT_INITIALIZER;
             init.user_data = &state;

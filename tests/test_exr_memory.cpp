@@ -1,0 +1,404 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/image_codecs.hpp"
+#include "core/image_exr.hpp"
+#include <Imath/half.h>
+#include <OpenEXR/ImfChannelList.h>
+#include <OpenEXR/ImfChromaticitiesAttribute.h>
+#include <OpenEXR/ImfFrameBuffer.h>
+#include <OpenEXR/ImfHeader.h>
+#include <OpenEXR/ImfIO.h>
+#include <OpenEXR/ImfInputFile.h>
+#include <OpenEXR/ImfStringAttribute.h>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <future>
+#include <gtest/gtest.h>
+#include <limits>
+#include <stdexcept>
+
+namespace {
+    namespace codec = lfs::core::image_codecs;
+    namespace exr = OPENEXR_IMF_NAMESPACE;
+    class Input : public exr::IStream {
+        std::span<const uint8_t> bytes_;
+        uint64_t position_ = 0;
+
+    public:
+        explicit Input(std::span<const uint8_t> bytes) : exr::IStream("reference"), bytes_(bytes) {}
+        bool read(char* data, int size) override {
+            if (size < 0 || position_ > bytes_.size() || uint64_t(size) > bytes_.size() - position_)
+                throw std::runtime_error("reference read outside input");
+            std::memcpy(data, bytes_.data() + position_, size);
+            position_ += size;
+            return position_ < bytes_.size();
+        }
+        uint64_t tellg() override { return position_; }
+        void seekg(uint64_t offset) override { position_ = offset; }
+    };
+
+    struct Pixels {
+        int width = 19, height = 35, channels = 4;
+        size_t stride;
+        std::vector<uint8_t> bytes;
+        Pixels(int c = 4, size_t padding = 0, size_t offset = 0)
+            : channels(c), stride(size_t(width) * c * sizeof(float) + padding), bytes(offset + stride * (height - 1) + size_t(width) * c * sizeof(float), 0xcc), offset_(offset) {
+            for (int y = 0; y < height; ++y)
+                for (int x = 0; x < width; ++x)
+                    for (int c = 0; c < channels; ++c) {
+                        const float value = c == 3 ? float(x % 5) / 4.f : float((x + y * 7 + c) % 61) / 8.f - 2.f;
+                        std::memcpy(bytes.data() + offset_ + y * stride + (x * channels + c) * sizeof(float), &value, sizeof(float));
+                    }
+        }
+        codec::ExrEncodeView view() const { return {width, height, channels, stride, std::span(bytes).subspan(offset_)}; }
+        size_t offset_;
+    };
+
+    std::vector<float> reference(std::span<const uint8_t> bytes, int width, int height) {
+        Input stream(bytes);
+        exr::InputFile file(stream);
+        std::vector<float> pixels(size_t(width) * height * 4);
+        exr::FrameBuffer frame;
+        const std::array<const char*, 4> names{"R", "G", "B", "A"};
+        for (int c = 0; c < 4; ++c)
+            frame.insert(names[c], exr::Slice(exr::FLOAT, reinterpret_cast<char*>(pixels.data() + c),
+                                              4 * sizeof(float), width * 4 * sizeof(float), 1, 1, c == 3 ? 1.0 : 0.0));
+        file.setFrameBuffer(frame);
+        file.readPixels(0, height - 1);
+        return pixels;
+    }
+
+    TEST(ExrMemory, SharedEncoderMatchesIndependentReaderAndStreamBytes) {
+        for (int channels : {3, 4})
+            for (auto precision : {codec::ExrSampleType::Half, codec::ExrSampleType::Float})
+                for (auto compression : {codec::ExrCompression::None, codec::ExrCompression::Zip})
+                    for (size_t offset : {size_t(0), size_t(1)}) {
+                        Pixels input(channels, offset ? 3 : 0, offset);
+                        const auto original = input.bytes;
+                        codec::ExrEncodeOptions options;
+                        options.precision = precision;
+                        options.compression = compression;
+                        const std::array<std::pair<std::string, std::string>, 1> text{{{"comments", "memory test"}}};
+                        options.text = text;
+                        options.chromaticities = {.64f, .33f, .3f, .6f, .15f, .06f, .3127f, .329f};
+                        std::vector<uint8_t> encoded;
+                        ASSERT_TRUE(codec::encode_exr_memory(input.view(), encoded, options));
+                        EXPECT_EQ(input.bytes, original);
+                        const auto actual = reference(encoded, input.width, input.height);
+                        for (int y = 0; y < input.height; ++y)
+                            for (int x = 0; x < input.width; ++x)
+                                for (int c = 0; c < 4; ++c) {
+                                    float expected = 1.f;
+                                    if (c < channels)
+                                        std::memcpy(&expected, input.view().pixels.data() + y * input.stride + (x * channels + c) * sizeof(float), sizeof(float));
+                                    if (precision == codec::ExrSampleType::Half)
+                                        expected = float(Imath::half(expected));
+                                    ASSERT_EQ(actual[(y * input.width + x) * 4 + c], expected);
+                                }
+                        Input stream(encoded);
+                        exr::InputFile header(stream);
+                        EXPECT_EQ(header.header().typedAttribute<exr::StringAttribute>("comments").value(), "memory test");
+                        const auto& chroma = header.header().typedAttribute<exr::ChromaticitiesAttribute>("chromaticities").value();
+                        EXPECT_EQ(chroma.red.x, options.chromaticities[0]);
+                        EXPECT_EQ(chroma.red.y, options.chromaticities[1]);
+                        EXPECT_EQ(chroma.green.x, options.chromaticities[2]);
+                        EXPECT_EQ(chroma.green.y, options.chromaticities[3]);
+                        EXPECT_EQ(chroma.blue.x, options.chromaticities[4]);
+                        EXPECT_EQ(chroma.blue.y, options.chromaticities[5]);
+                        EXPECT_EQ(chroma.white.x, options.chromaticities[6]);
+                        EXPECT_EQ(chroma.white.y, options.chromaticities[7]);
+                        EXPECT_EQ(header.header().channels().findChannel("R")->type,
+                                  precision == codec::ExrSampleType::Half ? exr::HALF : exr::FLOAT);
+                        EXPECT_EQ(header.header().compression(), compression == codec::ExrCompression::Zip ? exr::ZIP_COMPRESSION : exr::NO_COMPRESSION);
+
+                        std::vector<uint8_t> file_stream;
+                        const codec::ExrWriteStream destination{"reference stream", &file_stream,
+                                                                [](void* context, const void* data, uint64_t size, uint64_t offset) noexcept -> int64_t {
+                                                                    try {
+                                                                        auto& bytes = *static_cast<std::vector<uint8_t>*>(context);
+                                                                        bytes.resize(std::max<size_t>(bytes.size(), offset + size));
+                                                                        std::memcpy(bytes.data() + offset, data, size);
+                                                                        return int64_t(size);
+                                                                    } catch (...) {
+                                                                        return -1;
+                                                                    }
+                                                                }};
+                        ASSERT_TRUE(codec::encode_exr(input.view(), destination, options));
+                        EXPECT_EQ(encoded, file_stream);
+                        codec::Image decoded;
+                        std::string error = "stale";
+                        ASSERT_TRUE(codec::decode_memory(encoded.data(), encoded.size(), decoded, error)) << error;
+                        EXPECT_TRUE(error.empty());
+                        ASSERT_EQ(decoded.data.size(), actual.size() * sizeof(float));
+                        EXPECT_EQ(std::memcmp(decoded.data.data(), actual.data(), decoded.data.size()), 0);
+                    }
+    }
+
+    TEST(ExrMemory, ExtentLimitCancellationAndAliasingPreserveOutput) {
+        Pixels input;
+        std::vector<uint8_t> encoded;
+        ASSERT_TRUE(codec::encode_exr_memory(input.view(), encoded));
+        const auto size = encoded.size();
+        const std::vector<uint8_t> sentinel{3, 2, 1};
+        for (size_t limit : {size_t(1), size_t(256), size - 1}) {
+            auto output = sentinel;
+            const auto status = codec::encode_exr_memory(input.view(), output, {}, limit);
+            ASSERT_FALSE(status);
+            EXPECT_EQ(status.error().code(), lfs::ErrorCode::ResourceExhausted);
+            EXPECT_EQ(output, sentinel);
+            ASSERT_TRUE(codec::encode_exr_memory(input.view(), output, {}, size));
+            EXPECT_EQ(output, encoded);
+        }
+        auto output = sentinel;
+        codec::ExrEncodeOptions options;
+        // Before the context and before each of this fixture's three ZIP chunks.
+        for (unsigned checkpoint = 1; checkpoint <= 4; ++checkpoint) {
+            unsigned calls = 0;
+            options.cancelled = [&] { return ++calls >= checkpoint; };
+            const auto cancelled = codec::encode_exr_memory(input.view(), output, options);
+            ASSERT_FALSE(cancelled);
+            EXPECT_EQ(cancelled.error().code(), lfs::ErrorCode::Cancelled);
+            EXPECT_EQ(output, sentinel);
+            EXPECT_EQ(calls, checkpoint);
+            options.cancelled = {};
+        }
+        auto view = input.view();
+        ASSERT_TRUE(codec::encode_exr_memory(view, input.bytes));
+        EXPECT_EQ(input.bytes, encoded);
+        codec::Image image;
+        image.data = encoded;
+        std::string error;
+        ASSERT_TRUE(codec::decode_memory(image.data.data(), image.data.size(), image, error));
+        EXPECT_EQ(image.width, input.width);
+    }
+
+    TEST(ExrMemory, InvalidInputOptionsAndSamplesKeepPreviousOutput) {
+        Pixels input;
+        const std::vector<uint8_t> sentinel{1, 2, 3};
+        auto check = [&](codec::ExrEncodeView view, codec::ExrEncodeOptions options = {}, size_t limit = 1024 * 1024) {
+            auto output = sentinel;
+            const auto status = codec::encode_exr_memory(view, output, options, limit);
+            EXPECT_FALSE(status);
+            if (!status)
+                EXPECT_EQ(status.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(output, sentinel);
+        };
+        auto view = input.view();
+        view.width = 0;
+        check(view);
+        view = input.view();
+        view.row_stride--;
+        check(view);
+        view = input.view();
+        view.pixels = view.pixels.first(view.pixels.size() - 1);
+        check(view);
+        check(input.view(), {}, 0);
+        check(input.view(), {}, std::numeric_limits<size_t>::max());
+        codec::ExrEncodeOptions options;
+        options.precision = static_cast<codec::ExrSampleType>(7);
+        check(input.view(), options);
+        options = {};
+        options.compression = static_cast<codec::ExrCompression>(7);
+        check(input.view(), options);
+        for (float value : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), 65505.f}) {
+            std::memcpy(input.bytes.data(), &value, sizeof(float));
+            check(input.view());
+        }
+    }
+
+    TEST(ExrMemory, MalformedReadsAndDirectTargetsFailWithoutPartialResults) {
+        Pixels input;
+        std::vector<uint8_t> encoded;
+        ASSERT_TRUE(codec::encode_exr_memory(input.view(), encoded));
+        for (size_t size : {size_t(4), size_t(8), size_t(32), encoded.size() / 2, encoded.size() - 1}) {
+            codec::Image result{7, 8, 3, codec::SampleType::UInt8, {1, 2, 3}};
+            std::string error;
+            EXPECT_FALSE(codec::decode_memory(encoded.data(), size, result, error));
+            EXPECT_EQ(result.data, (std::vector<uint8_t>{1, 2, 3}));
+            EXPECT_EQ(result.width, 7);
+            EXPECT_FALSE(error.empty());
+        }
+        for (int channels : {3, 4}) {
+            std::vector<uint8_t> bytes(size_t(input.width) * input.height * channels * sizeof(float) + 2, 0x5a);
+            codec::DecodeTarget target{channels, codec::SampleType::Float32, bytes.data() + 1};
+            codec::Probe info;
+            std::string error;
+            ASSERT_TRUE(codec::decode_memory_to_buffer(encoded.data(), encoded.size(), target, info, error)) << error;
+            EXPECT_EQ(info.channels, channels);
+            EXPECT_EQ(bytes.front(), 0x5a);
+            EXPECT_EQ(bytes.back(), 0x5a);
+            const auto expected = reference(encoded, input.width, input.height);
+            for (size_t i = 0; i < expected.size() / 4; ++i)
+                EXPECT_EQ(std::memcmp(bytes.data() + 1 + i * channels * sizeof(float), expected.data() + i * 4, channels * sizeof(float)), 0);
+            const auto original = bytes;
+            EXPECT_FALSE(codec::decode_memory_to_buffer(encoded.data(), encoded.size() - 1, target, info, error));
+            EXPECT_EQ(bytes, original);
+            target.sample_type = codec::SampleType::UInt8;
+            EXPECT_FALSE(codec::decode_memory_to_buffer(encoded.data(), encoded.size(), target, info, error));
+            EXPECT_EQ(bytes, original);
+        }
+        unsigned allocations = 0;
+        codec::DecodeTarget target{4, codec::SampleType::Float32, nullptr,
+                                   [](size_t, void* context) -> void* { ++*static_cast<unsigned*>(context); return nullptr; }, &allocations};
+        codec::Probe info{3, 4, 1, codec::SampleType::UInt8};
+        std::string error;
+        EXPECT_FALSE(codec::decode_memory_to_buffer(encoded.data(), encoded.size(), target, info, error));
+        EXPECT_EQ(allocations, 1u);
+        EXPECT_EQ(info.width, 3);
+        struct Allocation {
+            std::vector<uint8_t> bytes;
+            unsigned calls = 0;
+        } storage;
+        target.channels = 0;
+        target.user = &storage;
+        target.allocate = [](size_t size, void* user) -> void* {
+            auto& state = *static_cast<Allocation*>(user);
+            ++state.calls;
+            state.bytes.resize(size + 2, 0x5a);
+            return state.bytes.data() + 1;
+        };
+        EXPECT_FALSE(codec::decode_memory_to_buffer(encoded.data(), encoded.size() - 1, target, info, error));
+        EXPECT_EQ(storage.calls, 0u);
+        ASSERT_TRUE(codec::decode_memory_to_buffer(encoded.data(), encoded.size(), target, info, error));
+        EXPECT_EQ(storage.calls, 1u);
+        EXPECT_EQ(target.data, storage.bytes.data() + 1);
+        EXPECT_EQ(info.channels, 4);
+        EXPECT_EQ(storage.bytes.front(), 0x5a);
+        EXPECT_EQ(storage.bytes.back(), 0x5a);
+        const auto expected = reference(encoded, input.width, input.height);
+        EXPECT_EQ(std::memcmp(storage.bytes.data() + 1, expected.data(), expected.size() * sizeof(float)), 0);
+        codec::DecodeTarget automatic{4, codec::SampleType::Float32};
+        ASSERT_TRUE(codec::decode_memory_to_buffer(encoded.data(), encoded.size(), automatic, info, error));
+        EXPECT_NE(automatic.data, nullptr);
+        EXPECT_EQ(std::memcmp(automatic.data, expected.data(), expected.size() * sizeof(float)), 0);
+        std::free(automatic.data);
+    }
+
+    TEST(ExrMemory, PremultiplicationFloatRangeAndMetadataFollowExistingPolicy) {
+        Pixels input;
+        auto original = input.bytes;
+        codec::ExrEncodeOptions options;
+        options.precision = codec::ExrSampleType::Float;
+        options.premultiply_alpha = true;
+        float large = 1e20f;
+        std::memcpy(input.bytes.data(), &large, sizeof(float));
+        original = input.bytes;
+        std::vector<uint8_t> output;
+        ASSERT_TRUE(codec::encode_exr_memory(input.view(), output, options));
+        EXPECT_EQ(input.bytes, original);
+        const auto decoded = reference(output, input.width, input.height);
+        for (int y = 0; y < input.height; ++y)
+            for (int x = 0; x < input.width; ++x) {
+                std::array<float, 4> values;
+                std::memcpy(values.data(), input.bytes.data() + y * input.stride + x * 4 * sizeof(float), sizeof(values));
+                for (int c = 0; c < 4; ++c)
+                    EXPECT_EQ(decoded[(y * input.width + x) * 4 + c], c < 3 ? values[c] * values[3] : values[c]);
+            }
+        const auto preserved = output;
+        const std::array<std::pair<std::string, std::string>, 2> duplicate{{{"comments", "a"}, {"comments", "b"}}};
+        options.text = duplicate;
+        EXPECT_FALSE(codec::encode_exr_memory(input.view(), output, options));
+        EXPECT_EQ(output, preserved);
+        const std::array<std::pair<std::string, std::string>, 1> reserved{{{"channels", "invalid"}}};
+        options.text = reserved;
+        EXPECT_FALSE(codec::encode_exr_memory(input.view(), output, options));
+        EXPECT_EQ(output, preserved);
+        options.text = {};
+        options.chromaticities[0] = std::numeric_limits<float>::quiet_NaN();
+        EXPECT_FALSE(codec::encode_exr_memory(input.view(), output, options));
+        EXPECT_EQ(output, preserved);
+    }
+
+    TEST(ExrMemory, FloatPreservesHdrSubnormalsAndSignedZeroWithoutQuantization) {
+        const std::array<float, 9> values{std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(),
+                                          std::numeric_limits<float>::min(), std::numeric_limits<float>::denorm_min(), -0.f,
+                                          std::nextafter(1.f, 2.f), 1e-20f, 1e20f, -1e20f};
+        const codec::ExrEncodeView view{3, 1, 3, sizeof(values), {reinterpret_cast<const uint8_t*>(values.data()), sizeof(values)}};
+        for (auto compression : {codec::ExrCompression::None, codec::ExrCompression::Zip}) {
+            codec::ExrEncodeOptions options;
+            options.precision = codec::ExrSampleType::Float;
+            options.compression = compression;
+            std::vector<uint8_t> encoded;
+            ASSERT_TRUE(codec::encode_exr_memory(view, encoded, options));
+            const auto expected = reference(encoded, 3, 1);
+            codec::Image decoded;
+            std::string error;
+            ASSERT_TRUE(codec::decode_exr_memory(encoded, decoded, error));
+            EXPECT_EQ(std::memcmp(expected.data(), decoded.data.data(), decoded.data.size()), 0);
+            for (size_t pixel = 0; pixel < 3; ++pixel)
+                EXPECT_EQ(std::memcmp(values.data() + pixel * 3, expected.data() + pixel * 4, 3 * sizeof(float)), 0);
+        }
+    }
+
+    TEST(ExrMemory, LargeImagesPreserveSamplesAndRecoverFromLimits) {
+        for (const auto dimensions : {std::pair{3840, 2160}, std::pair{7680, 4320}}) {
+            const auto [width, height] = dimensions;
+            const std::vector<float> pixels(size_t(width) * height * 3, .5f);
+            const codec::ExrEncodeView view{width, height, 3, size_t(width) * 3 * sizeof(float), {reinterpret_cast<const uint8_t*>(pixels.data()), pixels.size() * sizeof(float)}};
+            std::vector<uint8_t> output{1, 2, 3};
+            const auto failure = codec::encode_exr_memory(view, output, {}, 64);
+            ASSERT_FALSE(failure);
+            EXPECT_EQ(failure.error().code(), lfs::ErrorCode::ResourceExhausted);
+            EXPECT_EQ(output, (std::vector<uint8_t>{1, 2, 3}));
+            ASSERT_TRUE(codec::encode_exr_memory(view, output));
+            codec::Image decoded;
+            std::string error;
+            ASSERT_TRUE(codec::decode_exr_memory(output, decoded, error)) << error;
+            ASSERT_EQ(decoded.data.size(), size_t(width) * height * 4 * sizeof(float));
+            const auto* actual = reinterpret_cast<const float*>(decoded.data.data());
+            for (size_t i = 0; i < size_t(width) * height; ++i) {
+                if (actual[i * 4] != .5f || actual[i * 4 + 1] != .5f || actual[i * 4 + 2] != .5f || actual[i * 4 + 3] != 1.f) {
+                    FAIL() << "Unexpected EXR sample at pixel " << i;
+                }
+            }
+        }
+    }
+
+    TEST(ExrMemory, NestedCancellationCallbacksKeepDiagnosticsIndependent) {
+        Pixels input;
+        std::vector<uint8_t> expected;
+        ASSERT_TRUE(codec::encode_exr_memory(input.view(), expected));
+        bool nested = false;
+        codec::ExrEncodeOptions options;
+        options.cancelled = [&] {
+            if (!nested) {
+                nested = true;
+                std::vector<uint8_t> rejected{7};
+                EXPECT_FALSE(codec::encode_exr_memory(input.view(), rejected, {}, 1));
+                EXPECT_EQ(rejected, (std::vector<uint8_t>{7}));
+                codec::Image image;
+                std::string error = "stale";
+                EXPECT_TRUE(codec::decode_exr_memory(expected, image, error));
+                EXPECT_TRUE(error.empty());
+            }
+            return false;
+        };
+        std::vector<uint8_t> output;
+        ASSERT_TRUE(codec::encode_exr_memory(input.view(), output, options));
+        EXPECT_TRUE(nested);
+        EXPECT_EQ(output, expected);
+    }
+
+    TEST(ExrMemory, ConcurrentEncodesAndParallelReadsRemainIndependent) {
+        Pixels input;
+        std::vector<uint8_t> encoded;
+        ASSERT_TRUE(codec::encode_exr_memory(input.view(), encoded));
+        std::vector<std::future<void>> tasks;
+        for (int i = 0; i < 8; ++i)
+            tasks.emplace_back(std::async(std::launch::async, [&] {
+                std::vector<uint8_t> bytes;
+                ASSERT_TRUE(codec::encode_exr_memory(input.view(), bytes));
+                EXPECT_EQ(bytes, encoded);
+                codec::Image a, b;
+                std::string error;
+                ASSERT_TRUE(codec::decode_exr_memory(bytes, a, error, 1)) << error;
+                ASSERT_TRUE(codec::decode_exr_memory(bytes, b, error, 4)) << error;
+                EXPECT_EQ(a.data, b.data);
+            }));
+        for (auto& task : tasks)
+            task.get();
+    }
+} // namespace

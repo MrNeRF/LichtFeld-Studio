@@ -15,6 +15,10 @@ namespace lfs::core::image_codecs {
     // Zero selects automatic scheduling; one keeps decoding sequential. The
     // internal override permits reproducible codec tests and measurements.
     LFS_IMAGE_CODECS_API bool decode_exr(const std::filesystem::path& path, Image& result, std::string& error, unsigned max_workers = 0);
+    // Borrowed, immutable EXR input; shares file decoding and worker limits.
+    // Produces owning Float32 RGBA, including the existing single-channel policy.
+    LFS_IMAGE_CODECS_API bool decode_exr_memory(std::span<const std::uint8_t> input, Image& result,
+                                                std::string& error, unsigned max_workers = 0);
     enum class ExrSampleType { Half,
                                Float };
     enum class ExrCompression { None,
@@ -39,5 +43,11 @@ namespace lfs::core::image_codecs {
         std::span<const std::pair<std::string, std::string>> text;
         std::function<bool()> cancelled;
     };
+    // Same RGB/RGBA Float32 input and HALF/FLOAT output policies as encode_exr.
+    // Owns output only after finalization; failure and cancellation preserve it.
+    // Bounds encoded extent, including offset-table rewrites, not working RAM.
+    [[nodiscard]] LFS_IMAGE_CODECS_API Result<void> encode_exr_memory(
+        const ExrEncodeView&, std::vector<std::uint8_t>& output, const ExrEncodeOptions& = {},
+        std::size_t max_output_bytes = 256 * 1024 * 1024);
     [[nodiscard]] LFS_IMAGE_CODECS_API Result<void> encode_exr(const ExrEncodeView&, const ExrWriteStream&, const ExrEncodeOptions&);
 } // namespace lfs::core::image_codecs
