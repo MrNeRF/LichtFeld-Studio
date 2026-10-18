@@ -251,7 +251,7 @@ namespace lfs::io {
                         interleaved[i * 3 + ch] = static_cast<uint16_t>(value);
                     }
                 lfs::core::image_codecs::PngEncodeOptions options;
-                options.compression_level = 1;
+                options.compression_level = 3;
                 options.max_output_bytes = max_output_bytes;
                 std::vector<uint8_t> bytes;
                 const auto status = lfs::core::image_codecs::encode_png_memory(
@@ -516,8 +516,13 @@ namespace lfs::io {
             }
         }
         image = image.contiguous();
-        if (!prepared_key.empty())
-            cache_portable_prepared_image(prepared_key, cache_grid.is_valid() ? cache_grid : image, PORTABLE_CACHE_MAX_BYTES, lossless_cache);
+        if (!prepared_key.empty()) {
+            // PNG can expand incompressible UInt16 rows. Keep the staging bound,
+            // but allow 25% encoded headroom for filter bytes, deflate and chunks.
+            const size_t encoded_limit = cache_grid.is_valid() ? PORTABLE_PNG_CACHE_MAX_BYTES
+                                                               : PORTABLE_CACHE_MAX_BYTES;
+            cache_portable_prepared_image(prepared_key, cache_grid.is_valid() ? cache_grid : image, encoded_limit, lossless_cache);
+        }
         if (params.undistort) {
             if (large_prepare_lock.owns_lock()) {
                 // Keep the permit until the large GPU source can be retired.

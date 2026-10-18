@@ -46,6 +46,7 @@ namespace lfs::io {
         }
         static auto blob(PipelinedImageLoader& loader, const std::string& key) { return loader.load_cached_jpeg_blob(key); }
         static auto backend(const PipelinedImageLoader& loader) { return loader.config_.backend; }
+        static auto png_encoded_limit() { return PipelinedImageLoader::PORTABLE_PNG_CACHE_MAX_BYTES; }
         static bool eligible(const PipelinedImageLoader& loader, const LoadParams& params) {
             return loader.uses_portable_prepared_cache(params);
         }
@@ -628,6 +629,69 @@ namespace {
             expect_close(loader.load_image_immediate(file, params), cold, 0.f);
             EXPECT_EQ(loader.get_stats().hot_path_hits, hits + 1);
         }
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedPngCacheAllowsExpansionNearStagingBound) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        // RGB UInt16 staging is just below 64 MiB. The warp may change its
+        // compressibility, so test unwarped integer samples separately too.
+        constexpr int width = 4096, height = 2730;
+        const auto file = path("cache-incompressible.png");
+        {
+            std::vector<uint16_t> samples(size_t(width) * height * 3);
+            uint32_t random = 0x12345678;
+            for (auto& sample : samples) {
+                random ^= random << 13;
+                random ^= random >> 17;
+                random ^= random << 5;
+                sample = static_cast<uint16_t>(random);
+            }
+            ASSERT_TRUE(save_png(file, samples.data(), width, height, 3, 16, 0));
+        }
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        config.max_cache_bytes = 1; // Exercise actual-size disk spill too.
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        camera.src_width = camera.dst_width = width;
+        camera.src_height = camera.dst_height = height;
+        camera.src_fx = camera.dst_fx = float(width);
+        camera.src_fy = camera.dst_fy = float(height);
+        camera.src_cx = camera.dst_cx = width * 0.5f;
+        camera.src_cy = camera.dst_cy = height * 0.5f;
+        for (auto& coefficient : camera.distortion)
+            coefficient = 0.f;
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.decode_16bit = true;
+        ASSERT_TRUE(CacheAccess::eligible(loader, params));
+        {
+            const auto cold = loader.load_image_immediate(file, params).cpu();
+            ASSERT_EQ(loader.get_stats().spill_cache_entries, 1u);
+            EXPECT_LE(loader.get_stats().spill_cache_bytes, CacheAccess::png_encoded_limit());
+            const auto warm = loader.load_image_immediate(file, params).cpu();
+            ASSERT_EQ(warm.shape(), cold.shape());
+            EXPECT_EQ(std::memcmp(warm.ptr<float>(), cold.ptr<float>(), cold.bytes()), 0);
+        }
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 1u);
+        auto integers = Tensor::empty_pageable_host({3, size_t(height), size_t(width)}, DataType::Int32);
+        uint32_t random = 0x12345678;
+        for (size_t i = 0; i < integers.numel(); ++i) {
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            integers.ptr<int32_t>()[i] = static_cast<uint16_t>(random);
+        }
+        const auto expected = integers.to(GetParam()).to(DataType::Float32).div(65535.0f).cpu();
+        CacheAccess::encode(loader, CacheAccess::key(loader, file, params), integers, CacheAccess::png_encoded_limit(), true);
+        ASSERT_GT(loader.get_stats().spill_cache_bytes, 64u << 20);
+        EXPECT_LE(loader.get_stats().spill_cache_bytes, CacheAccess::png_encoded_limit());
+        const auto restored = loader.load_image_immediate(file, params).cpu();
+        ASSERT_EQ(restored.shape(), expected.shape());
+        EXPECT_EQ(std::memcmp(restored.ptr<float>(), expected.ptr<float>(), expected.bytes()), 0);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 2u);
     }
 
     TEST_P(PipelinedLoaderBackends, PreparedExrCacheSpillsCorruptionFallsBackAndRecovers) {
