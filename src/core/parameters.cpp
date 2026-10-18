@@ -971,6 +971,7 @@ namespace lfs::core {
                 std::pair{"min_opacity", min_opacity},
                 std::pair{"cropbox_lr_scale", cropbox_lr_scale},
                 std::pair{"cropbox_loss_weight", cropbox_loss_weight},
+                std::pair{"cropbox_growth_inside", cropbox_growth_inside},
                 std::pair{"mask_threshold", mask_threshold},
                 std::pair{"prune_opacity", prune_opacity},
                 std::pair{"grow_fraction", grow_fraction},

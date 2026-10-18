@@ -315,7 +315,7 @@ TEST(RoiSplatMaskTest, RelevanceMaskKeepsSplatsAnyCameraSeesThroughTheBox) {
         const auto centres = lfs::core::Tensor::from_vector(cameras, {cameras.size() / 3, size_t{3}}, lfs::core::Device::CUDA);
         lfs::training::kernels::launch_roi_relevance_reject_mask(
             means.ptr<float>(), nullptr, 5, glm::mat4(1.0f), centres.ptr<float>(), static_cast<int>(cameras.size() / 3),
-            kBoxMin, kBoxMax, false, nullptr, rejected.ptr<bool>(), nullptr);
+            kBoxMin, kBoxMax, false, nullptr, rejected.ptr<bool>(), nullptr, nullptr);
         const auto values = rejected.to(lfs::core::DataType::Float32).cpu().to_vector();
         return std::vector<bool>(values.begin(), values.end());
     };

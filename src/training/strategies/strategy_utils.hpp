@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "lfs/training/screen_share.cuh"
@@ -64,6 +66,29 @@ namespace lfs::training {
     lfs::core::Tensor apply_crop_damping_to_scores(
         const AdamOptimizer& optimizer,
         const lfs::core::Tensor& scores);
+
+    // Weighted picks split by the crop box growth share: roi_count picks come from ROI rows and
+    // rest_count from the others. A side with too few positive weights hands its leftover to
+    // the other side unless its share is exactly 0 or 1.
+    struct RoiGrowthSplit {
+        lfs::core::Tensor roi_weights;
+        lfs::core::Tensor rest_weights;
+        int64_t roi_count = 0;
+        int64_t rest_count = 0;
+        int64_t roi_nnz = 0;
+        int64_t rest_nnz = 0;
+    };
+    // nullopt when no crop box ROI is active.
+    [[nodiscard]] std::optional<RoiGrowthSplit> split_growth_by_roi(
+        const AdamOptimizer& optimizer,
+        const lfs::core::Tensor& weights,
+        int64_t k);
+
+    // Sampling weights rescaled so ROI rows hold the growth share of the total weight, for
+    // samplers that draw with replacement. Unchanged when no crop box ROI is active.
+    [[nodiscard]] lfs::core::Tensor roi_share_sampling_weights(
+        const AdamOptimizer& optimizer,
+        const lfs::core::Tensor& weights);
 
     size_t frozen_row_count(const lfs::core::SplatData& splat_data, size_t n);
 

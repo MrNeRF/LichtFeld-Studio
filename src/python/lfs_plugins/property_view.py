@@ -317,6 +317,7 @@ REGISTRY_PLACEMENT = {
         "min_opacity",
         "growth_grad_threshold",
         "grow_fraction",
+        "cropbox_growth_inside",
         "opacity_decay",
         "opacity_decay_rendered_only",
         "scale_decay",
