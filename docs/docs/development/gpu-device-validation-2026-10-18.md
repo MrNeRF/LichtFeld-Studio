@@ -4,6 +4,12 @@ Local branch `feat/gpu-backend-preferences`, based on `dev` commit
 `4ef50cbbc7f649cfed1d76d1d1770a3bff62d27f`. No push or pull request is part of this work.
 The implementation and reproduction checklist are in [GPU device preferences](gpu-device-preferences.md).
 
+The branch subsequently merges `upstream/dev` commit
+`d23669db9de3d7cfc0b3517fb439428d65fb743d` through merge commit
+`acb933295f2d02c03953230d095a0df7f165ed97`, without conflicts.
+No compilation is run after this merge at the user's request. The measurements
+and binaries below refer to the pre-merge source; they do not validate the merged revision.
+
 ## Scope and hardware
 
 Windows validation uses a GeForce RTX 5060 Ti and integrated Radeon 890M with a
@@ -197,6 +203,39 @@ because this WSL setup exposes no Vulkan adapter compatible with the rendering
 requirements; they are not counted as passed. The corresponding physical-device
 checks pass on Windows. Native Radeon Linux execution and two physical CUDA
 cards remain outside the available hardware coverage.
+
+### Follow-up isolation without rebuilding
+
+The available WSL environment does not expose a Vulkan hardware adapter for the
+Radeon or NVIDIA GPU. Its llvmpipe software driver is not a substitute for native
+Linux GPU validation. The software-driver crash therefore must not be presented
+as evidence that Radeon/NVIDIA Vulkan training fails on Linux hardware, or used
+alone to classify the branch as a hardware-backend regression.
+
+Further process-isolated runs reuse the existing pre-merge executable only:
+
+- Explicit Vulkan selection without `LD_PRELOAD` still reproduces the crash.
+  The artificial CUDA-driver interception is not necessary to trigger it.
+- A three-step configuration with normal refinement intervals (`start_refine=500`,
+  `refine_every=100`, no automatic step scaling) completes and saves successfully.
+- The same configuration, changing only `start_refine=0` and `refine_every=1`,
+  crashes with SIGSEGV. This narrows reproduction to work triggered by refinement;
+  it does not identify the exact failing dispatch within asynchronous execution.
+- `tensor_masking_ops.cpp`, `vk_ops_index.cpp`, `index.slang`, `vk_recorder.cpp`,
+  `vk_memory.cpp`, `mcmc.cpp` and `adam_optimizer.cpp` have no branch diff against
+  the newly merged dev. That is evidence about patch scope, not proof that the
+  failure is a driver bug or that dev itself passes this reproduction.
+
+The main-thread backtrace waits in `append_gather` via Adam/MCMC; a queued earlier
+operation could also be responsible. Absence of a validation message does not
+rule out shader address errors. No speculative kernel change or software-device
+blacklist is added. A minimal isolated operation reproducer and a matched dev
+control are the next useful diagnostics when further build work is authorized.
+Native Linux hardware testing remains separate and outstanding.
+
+Evidence: `linux-explicit-vulkan-stack.log`, `linux-explicit-no-refine.log`,
+`linux-explicit-with-refine.log`, and the paired `linux-*-refine-config.json` files
+in the local validation artifact directory.
 
 ## Evidence locations
 
