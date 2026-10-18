@@ -45,6 +45,7 @@ namespace lfs::io {
             return loader.make_cache_key(path, params);
         }
         static auto blob(PipelinedImageLoader& loader, const std::string& key) { return loader.load_cached_jpeg_blob(key); }
+        static auto backend(const PipelinedImageLoader& loader) { return loader.config_.backend; }
         static bool eligible(const PipelinedImageLoader& loader, const LoadParams& params) {
             return loader.uses_portable_prepared_cache(params);
         }
@@ -497,7 +498,15 @@ namespace {
         lfs::io::LoadParams params;
         params.undistort = &camera;
         params.decode_16bit = true;
+        EXPECT_TRUE(CacheAccess::eligible(loader, params)); // PNG16 staging fits at full 4K.
+        params.decode_float = true;
+        EXPECT_FALSE(CacheAccess::eligible(loader, params)); // EXR retains Float32 staging.
+        params.decode_float = false;
+        camera.dst_width = 7680;
+        camera.dst_height = 4320;
         EXPECT_FALSE(CacheAccess::eligible(loader, params));
+        camera.dst_width = 3840;
+        camera.dst_height = 2160;
         params.resize_factor = 2;
         EXPECT_TRUE(CacheAccess::eligible(loader, params));
         params.resize_factor = 1;
@@ -508,7 +517,7 @@ namespace {
         EXPECT_TRUE(CacheAccess::eligible(loader, params)); // Existing JPEG policy is unchanged.
     }
 
-    TEST_P(PipelinedLoaderBackends, PreparedExrCachePreservesColdFloatValuesAndOwnsWarmImages) {
+    TEST_P(PipelinedLoaderBackends, PreparedLosslessCachesPreserveColdValuesAndOwnWarmImages) {
         if (GetParam() == GpuBackend::CUDA)
             GTEST_SKIP() << "Portable cache; CUDA retains its existing cache policy";
         const GpuBackendScope scope(GetParam());
@@ -534,8 +543,9 @@ namespace {
             const auto blob = CacheAccess::blob(loader, CacheAccess::key(loader, file, params));
             ASSERT_TRUE(blob);
             ASSERT_GE(blob->size(), 4u);
-            EXPECT_EQ((*blob)[0], 0x76);
-            EXPECT_EQ((*blob)[1], 0x2f);
+            EXPECT_EQ((*blob)[0], mode >= 2 ? 0x76 : 0x89);
+            EXPECT_EQ((*blob)[1], mode >= 2 ? 0x2f : 0x50);
+            EXPECT_EQ(blob->capacity(), blob->size());
             EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u);
             cold.fill_(0.f);
             auto warm = loader.load_image_immediate(file, params);
@@ -546,6 +556,77 @@ namespace {
             params.output_uint8 = true;
             EXPECT_EQ(loader.load_image_immediate(file, params).dtype(), DataType::UInt8);
             EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 1u); // Precision-to-byte conversion is not cached here.
+        }
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedPngCacheRestoresEveryUInt16ValueWithGpuDivision) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        camera.src_width = camera.dst_width = 256;
+        camera.src_height = camera.dst_height = 256;
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.decode_16bit = true;
+        std::vector<int32_t> samples(3 * 65536);
+        for (size_t i = 0; i < samples.size(); ++i)
+            samples[i] = static_cast<uint16_t>(i);
+        const auto integers = Tensor::from_blob(samples.data(), {3, 256, 256}, Device::CPU, DataType::Int32).clone().to(GetParam());
+        const auto expected = integers.to(DataType::Int32).to(DataType::Float32).div(65535.0f).cpu();
+        const auto file = path("rgb16.png");
+        CacheAccess::encode(loader, CacheAccess::key(loader, file, params), integers, 64u << 20, true);
+        expect_close(loader.load_image_immediate(file, params), expected, 0.f);
+        EXPECT_EQ(loader.get_stats().hot_path_hits, 1u);
+    }
+
+    TEST_P(PipelinedLoaderBackends, PreparedPngCacheSpillsRejectsDamageAndPreservesHealthyBlobOnFailure) {
+        if (GetParam() == GpuBackend::CUDA)
+            GTEST_SKIP();
+        const GpuBackendScope scope(GetParam());
+        PipelinedLoaderConfig config;
+        config.backend = GetParam();
+        config.max_cache_bytes = 1;
+        PipelinedImageLoader loader(config);
+        auto camera = distorted_camera();
+        lfs::io::LoadParams params;
+        params.undistort = &camera;
+        params.decode_16bit = true;
+        const auto file = path("rgb16.png");
+        const auto cold = loader.load_image_immediate(file, params).cpu();
+        const auto key = CacheAccess::key(loader, file, params);
+        const auto healthy = CacheAccess::blob(loader, key);
+        ASSERT_TRUE(healthy);
+        EXPECT_EQ(loader.get_stats().jpeg_cache_bytes, 0u);
+        EXPECT_EQ(loader.get_stats().spill_cache_entries, 1u);
+        expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+        const auto integers = cold.mul(65535.0f).add(0.5f).to(DataType::Int32);
+        CacheAccess::encode(loader, key, integers, 1, true);
+        EXPECT_EQ(*CacheAccess::blob(loader, key), *healthy);
+        for (const auto invalid : {-1.f, 65536.f}) {
+            const auto outside_grid = host(std::vector<float>(WIDTH * HEIGHT * 3, invalid), {3, HEIGHT, WIDTH}).to(DataType::Int32);
+            CacheAccess::encode(loader, key, outside_grid, 64u << 20, true);
+            EXPECT_EQ(*CacheAccess::blob(loader, key), *healthy);
+        }
+        auto truncated = *healthy;
+        truncated.resize(truncated.size() / 2);
+        std::vector<uint16_t> wider_samples(WIDTH * 2 * HEIGHT * 3, 12345);
+        image_codecs::PngEncodeOptions options;
+        options.compression_level = 1;
+        std::vector<uint8_t> wider;
+        ASSERT_TRUE(image_codecs::encode_png_memory(
+            {reinterpret_cast<const uint8_t*>(wider_samples.data()), wider_samples.size() * sizeof(uint16_t)},
+            WIDTH * 2, HEIGHT, 3, 16, WIDTH * 2 * 3 * sizeof(uint16_t), wider, options));
+        for (const auto& damaged : {std::vector<uint8_t>{0xff}, truncated, wider}) {
+            const auto hits = loader.get_stats().hot_path_hits;
+            CacheAccess::put(loader, key, damaged);
+            expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+            EXPECT_EQ(loader.get_stats().hot_path_hits, hits);
+            expect_close(loader.load_image_immediate(file, params), cold, 0.f);
+            EXPECT_EQ(loader.get_stats().hot_path_hits, hits + 1);
         }
     }
 
@@ -561,6 +642,7 @@ namespace {
         lfs::io::LoadParams params;
         params.undistort = &camera;
         params.decode_16bit = true;
+        params.decode_float = true; // Exercise the EXR path explicitly, outside training.
         const auto file = path("rgb16.png");
         const auto cold = loader.load_image_immediate(file, params).cpu();
         EXPECT_EQ(loader.get_stats().jpeg_cache_bytes, 0u);
@@ -643,6 +725,7 @@ namespace {
         });
         CacheAccess::encode(loader, "stopped-exr", image, 1, true);
         CacheAccess::encode(loader, "stopped-jpeg", image, 1);
+        CacheAccess::encode(loader, "stopped-png", image.to(DataType::Int32), 1, true);
         EXPECT_EQ(loader.get_stats().jpeg_cache_entries, 0u);
         EXPECT_EQ(loader.get_stats().spill_cache_entries, 0u);
         EXPECT_EQ(image.to_vector(), before);
@@ -658,6 +741,17 @@ namespace {
         lfs::core::image_codecs::Image decoded;
         std::string error;
         EXPECT_TRUE(lfs::core::image_codecs::decode_memory(bytes->data(), bytes->size(), decoded, error)) << error;
+        if (decoded.sample_type == image_codecs::SampleType::UInt16) {
+            auto planar = Tensor::empty_pageable_host({3, size_t(decoded.height), size_t(decoded.width)}, DataType::Int32);
+            const size_t plane = size_t(decoded.width) * decoded.height;
+            for (size_t i = 0; i < plane; ++i)
+                for (size_t ch = 0; ch < 3; ++ch) {
+                    uint16_t value;
+                    std::memcpy(&value, decoded.data.data() + (i * 3 + ch) * sizeof(uint16_t), sizeof(value));
+                    planar.ptr<int32_t>()[ch * plane + i] = value;
+                }
+            return planar.to(CacheAccess::backend(loader)).to(DataType::Float32).div(65535.0f).cpu();
+        }
         const bool floating = decoded.sample_type == lfs::core::image_codecs::SampleType::Float32;
         EXPECT_EQ(decoded.channels, floating ? 4 : 3);
         const size_t plane = size_t(decoded.width) * decoded.height;
@@ -726,6 +820,7 @@ namespace {
         const auto actual = CacheAccess::blob(loader, CacheAccess::key(loader, path("rgb8.png"), params));
         ASSERT_TRUE(actual);
         EXPECT_EQ(*actual, expected);
+        EXPECT_EQ(actual->capacity(), actual->size());
     }
 
     TEST_P(PipelinedLoaderBackends, PreparedJpegCacheUsesSharedRunScopedKeyAndHonorsBudget) {
