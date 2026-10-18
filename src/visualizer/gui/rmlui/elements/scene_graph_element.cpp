@@ -709,8 +709,13 @@ namespace lfs::vis::gui {
         // No scene/model pointer or Element is retained by a receiver's data
         // object. Resolve identities again on the UI thread when data is read.
         external_progress_ = std::make_shared<FileTransferProgressState>(std::make_shared<std::atomic<bool>>(false));
-        external_provider_ = [identity = std::move(identity), labels = std::move(labels), revision = scene.renderGeneration(), prefs, progress = external_progress_] {
+        external_provider_ = [identity = std::move(identity), labels = std::move(labels), revision = scene.renderGeneration(), prefs, progress = external_progress_](FileDragTarget target) {
             const auto cancelled = progress->cancelled;
+            if (cancelled->load())
+                throw std::runtime_error("Transfer already cancelled");
+            progress->completed.store(0);
+            progress->current_item.store(0);
+            progress->error_message.clear();
             bool job_started = false;
             try {
                 auto* gui = services().guiOrNull();
@@ -726,7 +731,8 @@ namespace lfs::vis::gui {
                 auto* live = services().sceneOrNull();
                 if (!live || live->getScene().renderGeneration() != revision)
                     throw std::runtime_error("Scene changed before transfer");
-                if (const auto* trainer = services().trainerOrNull(); trainer && trainer->isRunning())
+                const auto* trainer = services().trainerOrNull();
+                if (trainer && trainer->isRunning())
                     throw std::runtime_error("Training resumed before transfer");
                 auto& scene = live->getScene();
                 std::optional<std::shared_lock<std::shared_mutex>> lock;
@@ -737,7 +743,15 @@ namespace lfs::vis::gui {
                     const auto* node = scene.getNodeById(id);
                     if (!node || node->uuid != uuid || !node->model)
                         throw SplatTransferError(sources.size(), "Transfer source no longer exists");
-                    sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string() : node->name, .sh_degree = prefs.sh_degree, .z_up = prefs.format == "ply" && prefs.blender_axes}});
+                    const auto axes = prefs.format != "ply"               ? SplatDragAxes{}
+                                      : target == FileDragTarget::Blender ? SplatDragAxes::blender()
+                                                                          : prefs.axes;
+                    sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string() : node->name, .sh_degree = prefs.sh_degree, .axes = axes}});
+                    // Read the iteration beside the paused model snapshot, not
+                    // when the drag is armed or after the export has finished.
+                    if (trainer && trainer->getState() == TrainingState::Paused &&
+                        node->name == scene.getTrainingModelNodeName())
+                        sources.back().options.training_step = trainer->getCurrentIteration();
                     sources.back().options.progress = [progress, worker_start, index = sources.size() - 1, count = identity.size()](float fraction) {
                         worker_start();
                         return progress->report(index, count, fraction);

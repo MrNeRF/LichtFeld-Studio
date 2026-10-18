@@ -197,7 +197,8 @@ int main() {
                 const auto pointer = context.pointer(reinterpret_cast<SDL_Window*>(1));
                 check(pointer && pointer->held && pointer->outside, "pointer serial/focus not observed on own queue");
                 int calls = 0;
-                const auto result = dragFiles([&] {
+                const auto result = dragFiles([&](FileDragTarget target) {
+                    check(target == FileDragTarget::Unknown, "Wayland must not guess the receiving application");
                     check(!drop_files && !drop_text, "self-drop reception remained enabled during source transfer");
                     ++calls;
                     if (mode == 3)
@@ -218,7 +219,7 @@ int main() {
                 }
                 if (mode == 1) {
                     mode = 0;
-                    const auto retry = dragFiles([&] { return std::vector<std::filesystem::path>{path}; }, reinterpret_cast<SDL_Window*>(1), &context);
+                    const auto retry = dragFiles([&](FileDragTarget) { return std::vector<std::filesystem::path>{path}; }, reinterpret_cast<SDL_Window*>(1), &context);
                     check(retry.status == FileDragStatus::Copied, "context cannot be reused after cancellation");
                 }
             }

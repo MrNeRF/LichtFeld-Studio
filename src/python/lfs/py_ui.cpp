@@ -3736,6 +3736,61 @@ namespace lfs::python {
             []() { return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0; },
             "Check if Shift is currently held");
 
+        m.def(
+            "is_mouse_button_down",
+            [](const int button) {
+                constexpr std::array<int, 3> sdl_buttons{SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, SDL_BUTTON_MIDDLE};
+                if (button < 0 || button >= static_cast<int>(sdl_buttons.size()))
+                    throw nb::value_error("button must be 0 (left), 1 (right) or 2 (middle)");
+                return (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_MASK(sdl_buttons[button])) != 0;
+            },
+            nb::arg("button") = 0, "Check if a mouse button is held: 0 left, 1 right, 2 middle");
+
+        m.def(
+            "begin_value_drag",
+            []() {
+                auto* const controller = vis::InputController::instance();
+                return controller && controller->beginValueDrag();
+            },
+            "Hide and lock the pointer for a value drag from a UI event handler. Motion keeps "
+            "accumulating past the window edge; returns False when the pointer cannot be locked.");
+
+        m.def(
+            "take_value_drag_delta",
+            []() {
+                auto* const controller = vis::InputController::instance();
+                return controller ? controller->takeValueDragDelta() : 0.0f;
+            },
+            "Horizontal pointer motion in window points since the previous call during a value drag.");
+
+        m.def(
+            "value_drag_state",
+            []() -> std::string {
+                const auto* const controller = vis::InputController::instance();
+                if (controller && controller->isValueDragActive())
+                    return "active";
+                return controller && controller->isValueDragCancelled() ? "cancelled" : "idle";
+            },
+            "'active' while the value drag holds the pointer, 'cancelled' after Escape, the right "
+            "button or focus loss ended it, otherwise 'idle'.");
+
+        m.def(
+            "request_viewport_overlay_sync",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager())
+                    gui->requestViewportOverlaySync();
+            },
+            "Run the viewport overlay's document sync on the next frame. It does not wake the "
+            "frame loop; pair it with request_redraw when no input will arrive.");
+
+        m.def(
+            "end_value_drag",
+            []() {
+                if (auto* const controller = vis::InputController::instance())
+                    controller->endValueDrag();
+            },
+            "Release the value drag pointer lock and return the pointer to where the drag started.");
+
         // Localization
         m.def(
             "tr",

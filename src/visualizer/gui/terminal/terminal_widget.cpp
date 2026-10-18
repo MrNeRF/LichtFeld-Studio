@@ -733,8 +733,14 @@ namespace lfs::vis::terminal {
         const int copy_cols = std::min(cols, static_cast<int>(line.cells.size()));
         std::memcpy(cells, line.cells.data(), copy_cols * sizeof(VTermScreenCell));
 
+        // libvterm walks popped cells by their width, so padding must be one column wide: a zeroed
+        // cell has width 0 and spins the resize forever when a line pushed while the view was
+        // narrower comes back into a wider one.
+        VTermScreenCell blank{};
+        blank.width = 1;
+        vterm_state_get_default_colors(vterm_obtain_state(self->vt_), &blank.fg, &blank.bg);
         for (int i = copy_cols; i < cols; ++i) {
-            std::memset(&cells[i], 0, sizeof(VTermScreenCell));
+            cells[i] = blank;
         }
 
         self->scrollback_.pop_front();

@@ -1008,12 +1008,17 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
                               spirv_paths.at("compute_tile_ranges_and_batch_counts"));
         createComputePipeline(pipeline_rasterize_outline[i], spirv_paths.at("rasterize_outline"));
         createComputePipeline(pipeline_rasterize_outline_gut[i], spirv_paths.at("rasterize_outline_gut"));
+        createComputePipeline(pipeline_rasterize_outline_gut_rad[i], spirv_paths.at("rasterize_outline_gut_rad"));
+        createComputePipeline(pipeline_rasterize_outline_gut_plain_rad[i], spirv_paths.at("rasterize_outline_gut_plain_rad"));
         createComputePipeline(pipeline_rasterize_outline_plain[i], spirv_paths.at("rasterize_outline_plain"));
         createComputePipeline(pipeline_rasterize_outline_gut_plain[i], spirv_paths.at("rasterize_outline_gut_plain"));
         createComputePipeline(pipeline_rasterize_forward[i], spirv_paths.at("rasterize_forward"));
         createComputePipeline(pipeline_rasterize_forward_3dgut[i], spirv_paths.at("rasterize_forward_3dgut"));
         createComputePipeline(pipeline_rasterize_forward_plain[i], spirv_paths.at("rasterize_forward_plain"));
         createComputePipeline(pipeline_rasterize_forward_3dgut_plain[i], spirv_paths.at("rasterize_forward_3dgut_plain"));
+        createComputePipeline(pipeline_rasterize_forward_3dgut_rad[i], spirv_paths.at("rasterize_forward_3dgut_rad"));
+        createComputePipeline(pipeline_rasterize_forward_3dgut_plain_rad[i],
+                              spirv_paths.at("rasterize_forward_3dgut_plain_rad"));
         createComputePipeline(pipeline_rasterize_forward_light[i],
                               spirv_paths.at("rasterize_forward_light"));
         createComputePipeline(pipeline_rasterize_forward_light_plain[i],
@@ -1577,6 +1582,18 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     using lfs::rendering::vulkan::DeclaredAccess;
     // Mega-hoist removed: each tagged/indirect dispatch plans its own hazards.
 
+    // Use precisely the index stream used by projection, including GPU LOD selection.
+    const bool gpu_lod = (uniforms.lod_enabled & 32u) != 0u;
+    const bool lod_active = (uniforms.lod_enabled & 1u) != 0u;
+    const auto& lod_indices = lod_active
+                                  ? (gpu_lod ? buffers.lod_gpu_indices.deviceBuffer : buffers.lod_indices.deviceBuffer)
+                                  : buffers.depths.deviceBuffer;
+    const auto& lod_logical_indices = lod_active && (uniforms.lod_enabled & 8u) != 0u
+                                          ? (gpu_lod ? buffers.lod_gpu_logical_indices.deviceBuffer : buffers.lod_logical_indices.deviceBuffer)
+                                          : lod_indices;
+    const auto& lod_weights = lod_active && (uniforms.lod_enabled & 16u) != 0u
+                                  ? (gpu_lod ? buffers.lod_gpu_weights.deviceBuffer : buffers.lod_weights.deviceBuffer)
+                                  : buffers.depths.deviceBuffer;
     const auto& wave_buffer = buffers.depth_wave_dispatch.deviceBuffer;
     const auto& predicate_buffer = buffers.wave_predicates.deviceBuffer;
     for (size_t wave = 0; wave < armed; ++wave) {
@@ -1600,6 +1617,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
         // Inter-wave CSRW mega-barrier removed; per-dispatch plans cover reuse.
 
         VulkanGSRendererUniforms wave_uniforms = uniforms;
+        wave_uniforms.lod_page_splats = buffers.quant_pool ? buffers.pool_page_splats : 0u;
         wave_uniforms.depth_wave = static_cast<uint32_t>(wave);
         const auto record = bufferView(
             wave_buffer,
@@ -1802,6 +1820,9 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
             if (use_gut_rasterization) {
                 raster_bindings.push_back({transform_indices, BufferUse::ComputeRead});
                 raster_bindings.push_back({model_transforms, BufferUse::ComputeRead});
+                raster_bindings.push_back({lod_indices, BufferUse::ComputeRead});
+                raster_bindings.push_back({lod_logical_indices, BufferUse::ComputeRead});
+                raster_bindings.push_back({lod_weights, BufferUse::ComputeRead});
             }
             if (selection_outline) {
                 raster_bindings.push_back({*outline_ids, BufferUse::ComputeReadWrite});
@@ -1814,9 +1835,10 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 raster_bindings.push_back({(uniforms.lod_enabled & 8u) != 0u ? logical_ids : pixel_depth, BufferUse::ComputeRead});
                 raster_bindings.push_back({*outline_scene_depth, BufferUse::ComputeReadWrite});
             }
+            const bool spark_rad = (uniforms.lod_enabled & 4u) != 0u;
             auto& raster_pipeline = use_gut_rasterization
-                                        ? (selection_outline ? (overlays_active ? pipeline_rasterize_outline_gut : pipeline_rasterize_outline_gut_plain)
-                                                             : (overlays_active ? pipeline_rasterize_forward_3dgut : pipeline_rasterize_forward_3dgut_plain))
+                                        ? (selection_outline ? (spark_rad ? (overlays_active ? pipeline_rasterize_outline_gut_rad : pipeline_rasterize_outline_gut_plain_rad) : (overlays_active ? pipeline_rasterize_outline_gut : pipeline_rasterize_outline_gut_plain))
+                                                             : (spark_rad ? (overlays_active ? pipeline_rasterize_forward_3dgut_rad : pipeline_rasterize_forward_3dgut_plain_rad) : (overlays_active ? pipeline_rasterize_forward_3dgut : pipeline_rasterize_forward_3dgut_plain)))
                                         : (selection_outline ? (overlays_active ? pipeline_rasterize_outline : pipeline_rasterize_outline_plain)
                                                              : (overlays_active ? pipeline_rasterize_forward : pipeline_rasterize_forward_plain));
             executeComputeIndirect(record,
