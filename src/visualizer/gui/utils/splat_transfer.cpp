@@ -184,6 +184,8 @@ namespace lfs::vis::gui {
             options.name = "splat";
         if (options.name.size() > 120)
             options.name = id;
+        if (options.training_step && *options.training_step >= 0)
+            options.name += "_step_" + std::to_string(*options.training_step);
         // Prefix also avoids Windows reserved device names such as CON and AUX.
         options.name = "splat-" + options.name;
         return std::packaged_task<std::filesystem::path()>(

@@ -11,6 +11,7 @@
 #include <future>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -26,6 +27,7 @@ namespace lfs::vis::gui {
         std::string name = "splat";
         int sh_degree = -1;
         SplatDragAxes axes = SplatDragAxes::blender();
+        std::optional<int> training_step;
         std::function<bool(float)> progress;
         // Staging root; empty is the transfers folder in the LichtFeld cache directory.
         std::filesystem::path staging_root;

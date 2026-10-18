@@ -72,6 +72,25 @@ int main(int argc, char** argv) {
         require(cuda_status == cudaSuccess, "Unexpected CUDA error while probing export test availability");
         lfs::io::LoadOptions options;
         options.splat_tensor_allocator = [](TensorShape shape, size_t, DataType type, std::string_view) { return Tensor::empty(std::move(shape), Device::CPU, type); };
+        for (const std::string format : {"ply", "spz"}) {
+            for (const int step : {0, 43453}) {
+                const auto path = transfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false),
+                                           {.format = format, .name = "Model", .training_step = step})
+                                      .get();
+                require(path.filename() == "splat-Model_step_" + std::to_string(step) + "." + format,
+                        "Training step missing from exported file name");
+            }
+        }
+        {
+            const auto path = transfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false),
+                                       {.name = "Model"})
+                                  .get();
+            require(path.filename() == "splat-Model.ply", "Non-training name changed");
+            const auto long_name = transfer(fixture(0), glm::mat4(1), std::make_shared<std::atomic<bool>>(false),
+                                            {.name = std::string(200, 'x'), .training_step = 43453})
+                                       .get();
+            require(long_name.filename().string().ends_with("_step_43453.ply"), "Long-name fallback lost training step");
+        }
         for (const int up : {-2, 2, -3, 3}) {
             for (int degree = 0; degree <= 3; ++degree) {
                 auto model = fixture(degree);
