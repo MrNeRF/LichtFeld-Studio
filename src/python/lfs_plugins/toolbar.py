@@ -410,6 +410,7 @@ class _GizmoToolbarController:
         mirror_group_buttons = self._build_mirror_records(mirror_tool_def, active_tool_id, context)
         crop_group_buttons = self._build_crop_group_records(crop_tool_def, active_tool_id, context)
         crop_tool_active = active_tool_id == self._CROP_TOOL_ID
+        crop_numeric_visible = crop_tool_active and self._crop_numeric_controls_visible(selected_nodes)
         selection_volume_active = self._selection_volume_active(active_tool_id)
         crop_object_buttons = self._build_crop_object_records(active_tool_id) if crop_tool_active else []
         crop_transform_buttons = self._build_crop_transform_records(active_tool_id) if crop_tool_active else []
@@ -430,9 +431,9 @@ class _GizmoToolbarController:
             ),
             "show_mirror_toolbar": active_tool_id == self._MIRROR_TOOL_ID and bool(submode_buttons),
             "show_align_toolbar": align_tool_active and bool(align_action_buttons),
-            "show_crop_toolbar": bool(crop_enable_buttons) or (crop_tool_active and not selected_nodes and bool(crop_object_buttons)),
-            "show_crop_edit_controls": crop_tool_active and not selected_nodes and bool(crop_object_buttons),
-            "show_crop_enable_separator": bool(crop_enable_buttons) and crop_tool_active and not selected_nodes,
+            "show_crop_toolbar": bool(crop_enable_buttons) or (crop_tool_active and not crop_numeric_visible and bool(crop_object_buttons)),
+            "show_crop_edit_controls": crop_tool_active and not crop_numeric_visible and bool(crop_object_buttons),
+            "show_crop_enable_separator": bool(crop_enable_buttons) and crop_tool_active and not crop_numeric_visible,
             "show_selection_volume_gizmos": selection_volume_active and bool(selection_volume_gizmo_buttons),
             "show_transform_space_controls": active_tool_id in self._TRANSFORM_TOOL_IDS and bool(submode_buttons),
             "show_transform_pivot_controls": active_tool_id in self._TRANSFORM_TOOL_IDS and bool(pivot_buttons),
@@ -587,6 +588,17 @@ class _GizmoToolbarController:
                 enabled=tool_def.can_activate(context),
             )
         ]
+
+    def _crop_numeric_controls_visible(self, selected_nodes):
+        import lichtfeld as lf
+
+        if len(selected_nodes) != 1:
+            return False
+        get_scene = getattr(lf, "get_scene", None)
+        scene = get_scene() if callable(get_scene) else None
+        node = scene.get_node(selected_nodes[0]) if scene else None
+        expected_type = "CROPBOX" if self._active_crop_shape() == "box" else "ELLIPSOID"
+        return node is not None and self._node_type_name(node) == expected_type
 
     def _build_crop_object_records(self, active_tool_id):
         active = active_tool_id == self._CROP_TOOL_ID

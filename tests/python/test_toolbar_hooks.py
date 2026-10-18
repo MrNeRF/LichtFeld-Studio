@@ -945,6 +945,12 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
     assert snapshot["show_crop_toolbar"] is True
     assert snapshot["show_crop_edit_controls"] is False
     assert snapshot["show_crop_enable_separator"] is False
+    # Parent selection still needs the ordinary crop toolbar; numeric inputs
+    # only take its place when a matching crop volume itself is selected.
+    crop_node.type = SimpleNamespace(name="POINTCLOUD")
+    parent_snapshot = controller.snapshot()
+    assert parent_snapshot["show_crop_edit_controls"] is True
+    crop_node.type = SimpleNamespace(name="CROPBOX")
     assert snapshot["crop_enable_buttons"] == [
         {
             "button_id": "crop-enabled",
