@@ -1584,7 +1584,9 @@ if(BUILD_SELECTION_OUTLINE_TESTS)
     add_executable(lfs_selection_outline_contract tools/selection_outline_test/main.cpp)
     target_include_directories(lfs_selection_outline_contract PRIVATE
         src src/visualizer src/rendering/include src/io/include)
-    target_link_libraries(lfs_selection_outline_contract PRIVATE lfs_visualizer lfs_core)
+    # The visualizer references the driver API. Link its toolkit stub explicitly
+    # so Debug/hidden-symbol builds also link on GPU-less Linux CI runners.
+    target_link_libraries(lfs_selection_outline_contract PRIVATE lfs_visualizer lfs_core CUDA::cuda_driver)
     target_compile_features(lfs_selection_outline_contract PRIVATE cxx_std_23)
     enable_testing()
     add_test(NAME selection_outline_contract COMMAND lfs_selection_outline_contract)
