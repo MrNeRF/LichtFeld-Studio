@@ -258,6 +258,9 @@ namespace lfs::core {
             // inside, in front of or behind the box. Strategy noise, decay and resets are unscaled.
             float cropbox_lr_scale = 0.1f;
             float cropbox_loss_weight = 0.1f;
+            // With an active crop box: share of new splats placed inside it (0..1). 0 = auto: growth
+            // follows the ROI-weighted error with no fixed split.
+            float cropbox_growth_inside = 0.0f;
             float lambda_dssim = 0.2f;
             float min_opacity = 0.005f;
             size_t refine_every = 100;

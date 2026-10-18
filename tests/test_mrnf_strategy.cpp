@@ -499,6 +499,74 @@ TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale)
     EXPECT_EQ(unit_scale_candidates, unmasked_candidates);
 }
 
+namespace {
+    Tensor roi_rows(const std::vector<int>& inside, const size_t n) {
+        auto rows = Tensor::zeros_bool({n}, Device::CPU);
+        for (const int i : inside)
+            rows.ptr<unsigned char>()[i] = 1;
+        return rows.cuda();
+    }
+} // namespace
+
+// Catches growth that ignores the crop box share, or a strict 0 % / 100 % share that still grows on
+// the excluded side when its own side runs out of candidates.
+TEST(CropDampingStrategyTest, RoiGrowthShareSplitsPicksAndSpillsLeftovers) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+    auto& optimizer = strategy.get_optimizer();
+    const auto weights = Tensor::ones({10}, Device::CUDA);
+
+    EXPECT_FALSE(split_growth_by_roi(optimizer, weights, 10).has_value()) << "no crop box, no split";
+
+    const auto split = [&](const float share, const int64_t k) {
+        optimizer.set_crop_roi_rows(roi_rows({0, 1, 2, 3}, 10), share);
+        const auto result = split_growth_by_roi(optimizer, weights, k);
+        EXPECT_TRUE(result.has_value());
+        return std::pair{result->roi_count, result->rest_count};
+    };
+    EXPECT_EQ(split(0.5f, 4), (std::pair<int64_t, int64_t>{2, 2}));
+    // Only four ROI rows: the other four ROI picks spill outside.
+    EXPECT_EQ(split(0.8f, 10), (std::pair<int64_t, int64_t>{4, 6}));
+    // Strict shares never spill.
+    EXPECT_EQ(split(1.0f, 10), (std::pair<int64_t, int64_t>{4, 0}));
+    EXPECT_EQ(split(0.0f, 10), (std::pair<int64_t, int64_t>{0, 6}));
+
+    optimizer.set_crop_roi_rows(roi_rows({0, 1, 2, 3}, 10), 1.0f);
+    const auto picks = strategy.sample_with_roi_share(weights, 4, 7, 10).cpu().to_vector_int64();
+    ASSERT_EQ(picks.size(), 4u);
+    for (const auto index : picks)
+        EXPECT_LT(index, 4) << "a 100 % share picked a row outside the box";
+}
+
+// Catches MCMC sampling weights that do not give the ROI its share of the probability mass.
+TEST(CropDampingStrategyTest, RoiShareSamplingWeightsHoldTheShareOfTheMass) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+    auto& optimizer = strategy.get_optimizer();
+    const auto weights = Tensor::ones({10}, Device::CUDA);
+
+    const auto masses = [&](const std::vector<int>& inside, const float share) {
+        optimizer.set_crop_roi_rows(roi_rows(inside, 10), share);
+        const auto values = roi_share_sampling_weights(optimizer, weights).cpu().to_vector();
+        float roi = 0.0f, rest = 0.0f;
+        for (size_t i = 0; i < values.size(); ++i)
+            (std::find(inside.begin(), inside.end(), static_cast<int>(i)) != inside.end() ? roi : rest) += values[i];
+        return std::pair{roi, rest};
+    };
+    const auto [roi, rest] = masses({0, 1, 2, 3}, 0.8f);
+    EXPECT_NEAR(roi, 0.8f, 1e-5f);
+    EXPECT_NEAR(rest, 0.2f, 1e-5f);
+    EXPECT_EQ(masses({0, 1, 2, 3}, 1.0f).second, 0.0f);
+    EXPECT_EQ(masses({}, 1.0f), (std::pair{0.0f, 0.0f})) << "a strict share with an empty ROI draws nothing";
+    EXPECT_GT(masses({}, 0.8f).second, 0.0f) << "an empty ROI hands a partial share to the rest";
+}
+
 TEST(MRNFStrategyTest, DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate) {
     auto splat_data = create_mrnf_test_splat_data(1);
     MRNF strategy(splat_data);

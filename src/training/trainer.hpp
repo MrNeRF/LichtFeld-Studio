@@ -671,7 +671,8 @@ namespace lfs::training {
             AdamOptimizer& optimizer,
             const lfs::core::Camera& camera);
         // Refine, sampling and keep scores of splats that no training camera sees inside, in
-        // front of or behind the crop box are scaled by cropbox_lr_scale.
+        // front of or behind the crop box are scaled by cropbox_lr_scale, and new splats are
+        // split between the ROI and the rest by cropbox_growth_inside.
         void install_cropbox_score_damping(
             lfs::core::SplatData& model,
             AdamOptimizer& optimizer);
@@ -945,6 +946,7 @@ namespace lfs::training {
         std::atomic<bool> cropbox_published_mode_{false};
         core::Tensor cropbox_view_reject_;
         core::Tensor cropbox_score_reject_;
+        core::Tensor cropbox_roi_rows_;
         core::Tensor cropbox_camera_centres_;
         core::Tensor roi_camera_rays_;
         core::Tensor depth_loss_scalar_;

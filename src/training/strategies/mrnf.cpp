@@ -1198,6 +1198,26 @@ namespace lfs::training {
         return indices;
     }
 
+    lfs::core::Tensor MRNF::sample_with_roi_share(
+        const lfs::core::Tensor& weights,
+        const int k,
+        const uint64_t seed,
+        const size_t known_nnz) {
+        const auto split = split_growth_by_roi(*_optimizer, weights, k);
+        if (!split)
+            return sample_gumbel_topk(weights, k, seed, known_nnz);
+        std::vector<lfs::core::Tensor> parts;
+        if (split->roi_count > 0)
+            parts.push_back(sample_gumbel_topk(split->roi_weights, static_cast<int>(split->roi_count), seed,
+                                               static_cast<size_t>(split->roi_nnz)));
+        if (split->rest_count > 0)
+            parts.push_back(sample_gumbel_topk(split->rest_weights, static_cast<int>(split->rest_count),
+                                               seed ^ 0x9e3779b97f4a7c15ull, static_cast<size_t>(split->rest_nnz)));
+        if (parts.empty())
+            return {};
+        return parts.size() == 1 ? parts[0] : lfs::core::Tensor::cat(parts, 0);
+    }
+
     void MRNF::grow_and_split(int iter, int pruned_count) {
         LOG_TIMER("MRNF::grow_and_split");
         LFS_VRAM_SCOPE("MRNF::grow_and_split");
@@ -1273,9 +1293,8 @@ namespace lfs::training {
             if (actual_replace > 0) {
                 // grow-only index/mask scratch (no per-refine driver alloc).
                 _densify_n_scratch.ensure_n(n, Device::CUDA);
-                replace_inds = sample_gumbel_topk(
-                    replace_weights, actual_replace, seed,
-                    static_cast<size_t>(selectable_replace));
+                replace_inds = sample_with_roi_share(replace_weights, actual_replace, seed,
+                                                     static_cast<size_t>(selectable_replace));
                 actual_replace = replace_inds.is_valid() ? static_cast<int>(replace_inds.numel()) : 0;
                 if (actual_replace > 0) {
                     replace_mask = _densify_n_scratch.bool_a_view(n);
@@ -1317,9 +1336,8 @@ namespace lfs::training {
             const int selectable_growth = static_cast<int>(host_counts[2]);
             if (selectable_growth > 0) {
                 const int growth_budget = std::min(n_grow, selectable_growth);
-                growth_inds = sample_gumbel_topk(
-                    growth_weights, growth_budget, seed + 1,
-                    static_cast<size_t>(selectable_growth));
+                growth_inds = sample_with_roi_share(growth_weights, growth_budget, seed + 1,
+                                                    static_cast<size_t>(selectable_growth));
             }
         }
 

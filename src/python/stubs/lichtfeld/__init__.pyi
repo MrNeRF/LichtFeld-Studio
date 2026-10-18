@@ -2164,6 +2164,13 @@ class OptimizationParams:
     def cropbox_loss_weight(self, arg: float, /) -> None: ...
 
     @property
+    def cropbox_growth_inside(self) -> float:
+        """Share of new splats placed inside the active crop box"""
+
+    @cropbox_growth_inside.setter
+    def cropbox_growth_inside(self, arg: float, /) -> None: ...
+
+    @property
     def lambda_dssim(self) -> float:
         """Weight for structural similarity loss"""
 

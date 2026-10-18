@@ -284,6 +284,9 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "label_cropbox_loss_weight" in model.bound_funcs
     assert "cropbox_lr_scale" in model.bound_binds
     assert "cropbox_loss_weight" in model.bound_binds
+    assert "label_cropbox_growth_inside" in model.bound_funcs
+    assert "cropbox_growth_inside_percent" in model.bound_funcs
+    assert "cropbox_growth_inside" in model.bound_binds
     assert "show_selection_volume_gizmos" in model.bound_funcs
     assert "toolbar_action" in model.bound_events
     assert "selection_tool_label" not in model.bound_funcs
@@ -1016,6 +1019,7 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     class Params:
         cropbox_lr_scale = 0.1
         cropbox_loss_weight = 0.1
+        cropbox_growth_inside = 0.8
 
         @staticmethod
         def has_params():
@@ -1055,6 +1059,8 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
 
     lr_getter, lr_setter = model.bound_binds["cropbox_lr_scale"]
     loss_getter, loss_setter = model.bound_binds["cropbox_loss_weight"]
+    growth_getter, growth_setter = model.bound_binds["cropbox_growth_inside"]
+    growth_percent = model.bound_funcs["cropbox_growth_inside_percent"]
 
     assert controller._gizmo.cropbox_toolbar_signature() == (
         "bicycle_cropbox",
@@ -1062,47 +1068,61 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
         True,
         0.1,
         0.1,
+        0.8,
     )
     assert controller._gizmo._build_crop_settings_records(True)[0]["selected"] is True
 
     lr_setter("0.35")
     loss_setter("0.65")
+    growth_setter("0.5")
 
     assert set_calls == [
         ("cropbox_lr_scale", 0.35),
         ("cropbox_loss_weight", 0.65),
+        ("cropbox_growth_inside", 0.5),
     ]
     assert lr_getter() == "0.350"
     assert loss_getter() == "0.650"
-    assert model.handle.request_update_calls == 2
+    assert growth_getter() == "0.50"
+    assert growth_percent() == "50%"
+    assert model.handle.request_update_calls == 3
 
     params.cropbox_lr_scale = 0.42
     params.cropbox_loss_weight = 0.73
+    params.cropbox_growth_inside = 1.0
     signature = controller._gizmo.cropbox_toolbar_signature()
-    assert signature[-2:] == (0.42, 0.73)
+    assert signature[-3:] == (0.42, 0.73, 1.0)
 
     controller._sync_crop_roi_params(signature)
 
     assert lr_getter() == "0.420"
     assert loss_getter() == "0.730"
+    assert growth_percent() == "100%"
     assert "cropbox_lr_scale" in model.handle.dirty_calls
     assert "cropbox_loss_weight" in model.handle.dirty_calls
+    assert "cropbox_growth_inside_percent" in model.handle.dirty_calls
+
+    # 0 is Auto: growth follows the error, no fixed share.
+    params.cropbox_growth_inside = 0.0
+    controller._sync_crop_roi_params(controller._gizmo.cropbox_toolbar_signature())
+    assert growth_percent() == "Auto"
 
 
-@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1)])
+@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8)])
 def test_crop_roi_unavailable_state_preserves_last_display_values(toolbar_module, signature):
     module, *_ = toolbar_module
     controller = module._ViewportToolbarController()
-    controller._sync_crop_roi_params(("crop", True, True, 0.0, 0.37))
+    controller._sync_crop_roi_params(("crop", True, True, 0.0, 0.37, 0.6))
 
     controller._sync_crop_roi_params(signature)
 
     assert not controller._crop_roi_params_available
     assert controller._cropbox_lr_scale == 0.0
     assert controller._cropbox_loss_weight == 0.37
+    assert controller._cropbox_growth_inside == 0.6
 
 
-@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1)])
+@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8)])
 def test_crop_roi_stale_slider_events_do_not_write_live_params(
     toolbar_module, monkeypatch, signature
 ):

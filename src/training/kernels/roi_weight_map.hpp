@@ -52,7 +52,8 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr);
 
     // Marks splats that no listed camera sees inside, in front of or behind the box (outside it
-    // when inverse). Deleted rows stay false.
+    // when inverse). in_roi, when given, marks centres inside the ROI (outside the box when
+    // inverse). Deleted rows stay false in both.
     void launch_roi_relevance_reject_mask(
         const float* means,       // [N,3] CUDA, model frame
         const float* scaling_raw, // [N,3] CUDA or null
@@ -65,6 +66,7 @@ namespace lfs::training::kernels {
         bool inverse,
         const bool* deleted, // [N] CUDA or null
         bool* rejected,      // [N] CUDA
+        bool* in_roi,        // [N] CUDA or null
         cudaStream_t stream = nullptr);
 
 } // namespace lfs::training::kernels

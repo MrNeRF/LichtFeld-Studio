@@ -1028,6 +1028,7 @@ namespace lfs::training {
         fused_sh_rest_reg_loss_ = {};
         cropbox_view_reject_ = {};
         cropbox_score_reject_ = {};
+        cropbox_roi_rows_ = {};
         cropbox_camera_centres_ = {};
         roi_camera_rays_ = {};
         depth_loss_scalar_ = {};
@@ -2105,10 +2106,12 @@ namespace lfs::training {
         lfs::core::SplatData& model,
         AdamOptimizer& optimizer) {
         const float scale = params_.optimization.cropbox_lr_scale;
+        const float growth_inside = params_.optimization.cropbox_growth_inside;
         optimizer.set_cropbox_lr_scale(scale);
         const size_t n = static_cast<size_t>(model.size());
-        if (!cropbox_ || scale == 1.0f || n == 0 || !train_dataset_) {
+        if (!cropbox_ || n == 0 || !train_dataset_) {
             optimizer.set_crop_score_mask({});
+            optimizer.set_crop_roi_rows({}, growth_inside);
             return;
         }
         // Up to 256 evenly spaced training cameras bound the per-splat test.
@@ -2121,6 +2124,7 @@ namespace lfs::training {
             centres.push_back(cameras[i]->cam_position().reshape({1, 3}));
         if (centres.empty()) {
             optimizer.set_crop_score_mask({});
+            optimizer.set_crop_roi_rows({}, growth_inside);
             return;
         }
         const glm::mat4& w2b = cropbox_->world_to_cropbox;
@@ -2134,11 +2138,14 @@ namespace lfs::training {
         const auto means = model.get_means().contiguous();
         const auto scales = model.scaling_raw().contiguous();
         auto rejected = bool_rows(cropbox_score_reject_, n);
+        auto in_roi = bool_rows(cropbox_roi_rows_, n);
         lfs::training::kernels::launch_roi_relevance_reject_mask(
             means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_camera_centres_.ptr<float>(),
             static_cast<int>(cropbox_camera_centres_.size(0)), cropbox_->min, cropbox_->max,
-            cropbox_->inverse, deleted_rows(model), rejected.ptr<bool>(), lfs::core::getCurrentCUDAStream());
-        optimizer.set_crop_score_mask(rejected);
+            cropbox_->inverse, deleted_rows(model), rejected.ptr<bool>(), in_roi.ptr<bool>(),
+            lfs::core::getCurrentCUDAStream());
+        optimizer.set_crop_score_mask(scale == 1.0f ? lfs::core::Tensor{} : rejected);
+        optimizer.set_crop_roi_rows(growth_inside > 0.0f ? in_roi : lfs::core::Tensor{}, growth_inside);
     }
 
     Trainer::Trainer(lfs::core::Scene& scene)
@@ -6264,10 +6271,15 @@ namespace lfs::training {
                 // The crop box for this whole step; refine steps also get fresh score masks.
                 refresh_cropbox_snapshot();
                 if (strategy_) {
-                    if (strategy_->is_refining(iter))
-                        install_cropbox_score_damping(strategy_->get_model(), strategy_->get_optimizer());
-                    else if (strategy_->get_optimizer().crop_score_mask().is_valid())
-                        strategy_->get_optimizer().set_crop_score_mask({});
+                    auto& optimizer = strategy_->get_optimizer();
+                    if (strategy_->is_refining(iter)) {
+                        install_cropbox_score_damping(strategy_->get_model(), optimizer);
+                    } else {
+                        if (optimizer.crop_score_mask().is_valid())
+                            optimizer.set_crop_score_mask({});
+                        if (optimizer.crop_roi_rows().is_valid())
+                            optimizer.set_crop_roi_rows({}, params_.optimization.cropbox_growth_inside);
+                    }
                 }
 
                 // Training step entering forward/backward/optimizer region (commands blocked)

@@ -949,6 +949,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self, float v) { self.set("cropbox_loss_weight", nb::cast(v)); },
                 "Scales pixel losses for camera rays outside the active crop box")
             .def_prop_rw(
+                "cropbox_growth_inside",
+                [](PyOptimizationParams& self) { return self.params().cropbox_growth_inside; },
+                [](PyOptimizationParams& self, float v) { self.set("cropbox_growth_inside", nb::cast(v)); },
+                "Share of new splats placed inside the active crop box")
+            .def_prop_rw(
                 "lambda_dssim",
                 [](PyOptimizationParams& self) { return self.params().lambda_dssim; },
                 [](PyOptimizationParams& self, float v) { self.set("lambda_dssim", nb::cast(v)); },
