@@ -219,12 +219,13 @@ namespace {
         auto data = tabs(3);
         RmlRightPanelTestAccess::sync(panel, data, data[1].id);
         auto* selected = button(1);
-        auto* rail = doc->GetElementById("tab-bar");
+        auto* strip = doc->GetElementById("tab-strip-viewport");
         auto* before = doc->GetElementById("tab-edge-before");
         auto* after = doc->GetElementById("tab-edge-after");
         const float top = selected->GetAbsoluteOffset(Rml::BoxArea::Border).y -
-                          rail->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+                          strip->GetAbsoluteOffset(Rml::BoxArea::Border).y;
         EXPECT_NEAR(before->GetBox().GetSize().y, top, 1.0f);
+        EXPECT_NEAR(before->GetAbsoluteTop(), strip->GetAbsoluteTop(), 0.5f);
         EXPECT_NEAR(after->GetAbsoluteOffset(Rml::BoxArea::Border).y,
                     selected->GetAbsoluteOffset(Rml::BoxArea::Border).y +
                         selected->GetBox().GetSize(Rml::BoxArea::Border).y,
@@ -233,6 +234,9 @@ namespace {
         RmlRightPanelTestAccess::settle(panel);
         EXPECT_GE(before->GetBox().GetSize().y, 0);
         EXPECT_GE(after->GetBox().GetSize().y, 0);
+        EXPECT_GE(after->GetAbsoluteTop(), strip->GetAbsoluteTop());
+        RmlRightPanelTestAccess::sync(panel, data, data[0].id);
+        EXPECT_FLOAT_EQ(before->GetBox().GetSize().y, 0);
     }
 
     TEST_P(RightPanelTabsTest, WheelScrollsOverflowWithoutChangingTheActiveTab) {

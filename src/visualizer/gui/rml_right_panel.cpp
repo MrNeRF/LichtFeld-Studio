@@ -363,21 +363,24 @@ namespace lfs::vis::gui {
         if (changed)
             tab_strip_viewport_el_->SetScrollTop(next_scroll);
         const float rail_height = tab_bar_el_ ? tab_bar_el_->GetClientHeight() : viewport_height;
+        const float viewport_top = tab_bar_el_
+                                       ? tab_strip_viewport_el_->GetAbsoluteOffset(Rml::BoxArea::Border).y -
+                                             tab_bar_el_->GetAbsoluteOffset(Rml::BoxArea::Border).y
+                                       : 0.0f;
         float open_top = rail_height;
         float open_bottom = rail_height;
         if (button) {
-            const float viewport_top = tab_bar_el_
-                                           ? tab_strip_viewport_el_->GetAbsoluteOffset(Rml::BoxArea::Border).y -
-                                                 tab_bar_el_->GetAbsoluteOffset(Rml::BoxArea::Border).y
-                                           : 0.0f;
             open_top = std::clamp(viewport_top + active_top - next_scroll, 0.0f, rail_height);
             open_bottom = std::clamp(viewport_top + active_top + active_height - next_scroll, 0.0f, rail_height);
         }
-        if (auto* edge = document_->GetElementById("tab-edge-before"))
-            changed |= setPixelProperty(edge, Rml::PropertyId::Height, open_top);
+        if (auto* edge = document_->GetElementById("tab-edge-before")) {
+            changed |= setPixelProperty(edge, Rml::PropertyId::Top, viewport_top);
+            changed |= setPixelProperty(edge, Rml::PropertyId::Height, std::max(0.0f, open_top - viewport_top));
+        }
         if (auto* edge = document_->GetElementById("tab-edge-after")) {
-            changed |= setPixelProperty(edge, Rml::PropertyId::Top, open_bottom);
-            changed |= setPixelProperty(edge, Rml::PropertyId::Height, rail_height - open_bottom);
+            const float edge_top = std::max(viewport_top, open_bottom);
+            changed |= setPixelProperty(edge, Rml::PropertyId::Top, edge_top);
+            changed |= setPixelProperty(edge, Rml::PropertyId::Height, std::max(0.0f, rail_height - edge_top));
         }
         return changed;
     }
