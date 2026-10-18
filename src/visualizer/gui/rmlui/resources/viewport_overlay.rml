@@ -938,6 +938,25 @@
     <div id="transform-block" class="viewport-transform-overlay hidden">
         <div class="viewport-transform-panel" data-tooltip="tooltip.transform_panel">
             <div class="viewport-transform-row">
+                <div class="viewport-transform-tool-group" data-if="show_crop_numeric_controls">
+                    <button class="icon-btn viewport-transform-option"
+                            data-for="button : crop_enable_buttons"
+                            data-class-selected="button.selected"
+                            data-attr-title="button.tooltip_text"
+                            data-attrif-disabled="!button.enabled"
+                            data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </button>
+                    <button class="icon-btn viewport-transform-option"
+                            data-for="button : crop_settings_buttons"
+                            data-class-selected="button.selected"
+                            data-attr-title="button.tooltip_text"
+                            data-attrif-disabled="!button.enabled"
+                            data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </button>
+                </div>
+
                 <div class="viewport-transform-tool-group" data-if="transform_show_actions">
                     <button class="icon-btn viewport-transform-option viewport-transform-tool"
                             data-for="button : transform_tool_buttons"

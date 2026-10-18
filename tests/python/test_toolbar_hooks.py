@@ -942,9 +942,14 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
     controller = module._GizmoToolbarController()
     snapshot = controller.snapshot()
 
-    assert snapshot["show_crop_toolbar"] is True
+    assert snapshot["show_crop_toolbar"] is False
+    assert snapshot["show_crop_numeric_controls"] is True
     assert snapshot["show_crop_edit_controls"] is False
     assert snapshot["show_crop_enable_separator"] is False
+    fallback = controller.snapshot(numeric_overlay_available=False)
+    assert fallback["show_crop_toolbar"] is True
+    assert fallback["show_crop_edit_controls"] is True
+    assert fallback["show_crop_numeric_controls"] is False
     # Parent selection still needs the ordinary crop toolbar; numeric inputs
     # only take its place when a matching crop volume itself is selected.
     crop_node.type = SimpleNamespace(name="POINTCLOUD")
@@ -1483,8 +1488,8 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert rml.count('data-for="button : pivot_buttons"') == 1
     assert rml.count('data-for="button : mirror_group_buttons"') == 2
     assert rml.count('data-for="button : crop_group_buttons"') == 2
-    assert rml.count('data-for="button : crop_enable_buttons"') == 2
-    assert rml.count('data-for="button : crop_settings_buttons"') == 2
+    assert rml.count('data-for="button : crop_enable_buttons"') == 3
+    assert rml.count('data-for="button : crop_settings_buttons"') == 3
     assert rml.count('data-for="button : crop_object_buttons"') == 3
     assert rml.count('data-for="button : crop_transform_buttons"') == 3
     assert rml.count('data-for="button : crop_action_buttons"') == 3
@@ -2144,6 +2149,14 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     extra_buttons = model.handle.record_updates["utility_extra_buttons"]
     extra_by_id = {button["button_id"]: button for button in extra_buttons}
     assert extra_by_id["util-viewport-export"]["selected"] is True
+
+    # Overlay availability changes must invalidate cached crop toolbar records.
+    normal_signature = controller._toolbar_signature(None)
+    monkeypatch.setattr(lf_stub, "get_depth_view", lambda: True)
+    assert controller._toolbar_signature(None) != normal_signature
+    monkeypatch.setattr(lf_stub, "get_depth_view", lambda: False)
+    monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "gt_comparison")
+    assert controller._toolbar_signature(None) != normal_signature
 
 
 def test_viewport_export_toolbar_action_shows_overlay_immediately(toolbar_module, monkeypatch):
