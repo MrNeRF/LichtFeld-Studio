@@ -10,12 +10,12 @@
 #include "core/splat_data.hpp"
 #include "io/error.hpp"
 #include "io/export_progress.hpp"
-#include <glm/vec3.hpp>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <glm/vec3.hpp>
 #include <optional>
 #include <span>
 #include <string>

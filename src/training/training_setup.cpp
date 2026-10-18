@@ -826,9 +826,9 @@ namespace lfs::training {
                     bg_color = glm::vec3(train_bg[0], train_bg[1], train_bg[2]);
                 }
                 return lfs::io::export_html(splat, {.output_path = output,
-                                                   .kmeans_iterations = 10,
-                                                   .provenance = provenance,
-                                                   .background_color = bg_color});
+                                                    .kmeans_iterations = 10,
+                                                    .provenance = provenance,
+                                                    .background_color = bg_color});
             }
             case OutputFormat::USD:
             case OutputFormat::USDA:
