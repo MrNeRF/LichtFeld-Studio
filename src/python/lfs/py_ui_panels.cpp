@@ -21,7 +21,6 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -84,33 +83,6 @@ namespace lfs::python {
             auto mod = nb::cast<std::string>(cls.attr("__module__"));
             auto name = nb::cast<std::string>(cls.attr("__qualname__"));
             return mod + "." + name;
-        }
-
-        bool is_loaded_plugin_module(const std::string& module_name) {
-            if (module_name.empty())
-                return false;
-
-            constexpr std::string_view plugin_prefix = "lfs_plugins.";
-            if (!module_name.starts_with(plugin_prefix))
-                return false;
-
-            const auto root_end = module_name.find('.', plugin_prefix.size());
-            const std::string root_module_name = module_name.substr(0, root_end);
-
-            PyObject* const modules = PyImport_GetModuleDict();
-            if (!modules)
-                return false;
-
-            PyObject* const module = PyDict_GetItemString(modules, root_module_name.c_str());
-            if (!module)
-                return false;
-
-            const int marked = PyObject_HasAttrString(module, "__lfs_plugin_name__");
-            if (marked < 0) {
-                PyErr_Clear();
-                return false;
-            }
-            return marked == 1;
         }
 
         bool class_declares_attr(nb::handle cls, const char* attr_name) {
@@ -521,9 +493,6 @@ namespace lfs::python {
         info.options = options;
         info.poll_dependencies = static_cast<gui::PollDependency>(poll_dependencies);
         info.is_native = false;
-        info.tab_closeable = info.space == gui::PanelSpace::MainPanelTab &&
-                             info.parent_id.empty() &&
-                             is_loaded_plugin_module(module_prefix);
         info.initial_width = initial_width;
         info.initial_height = initial_height;
 

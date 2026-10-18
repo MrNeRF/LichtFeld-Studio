@@ -75,7 +75,6 @@ namespace lfs::vis::gui {
             h.RegisterMember("id", &TabSnapshot::id);
             h.RegisterMember("label", &TabSnapshot::label);
             h.RegisterMember("dom_id", &TabSnapshot::dom_id);
-            h.RegisterMember("closeable", &TabSnapshot::closeable);
         }
         ctor.RegisterArray<std::vector<TabSnapshot>>();
         ctor.Bind("tabs", &tabs_);
@@ -97,15 +96,6 @@ namespace lfs::vis::gui {
                                        const auto id = args[0].Get<Rml::String>();
                                        if (!id.empty() && on_tab_changed)
                                            on_tab_changed(id);
-                                   }
-                               });
-        ctor.BindEventCallback("tab_close",
-                               [this](Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& args) {
-                                   event.StopPropagation();
-                                   if (!args.empty()) {
-                                       auto id = args[0].Get<Rml::String>();
-                                       if (!id.empty() && on_tab_closed)
-                                           on_tab_closed(std::string(id));
                                    }
                                });
         tab_model_ = ctor.GetModelHandle();
@@ -288,19 +278,18 @@ namespace lfs::vis::gui {
                 metrics = {font, dp, std::ceil(Rml::ElementUtilities::GetStringWidth(label, tab.label) + text_clearance_dp * dp)};
             }
             const float text_width = metrics.width;
-            const float height = std::ceil(std::max(28.0f * dp, text_width + (tab.closeable ? 48.0f : 28.0f) * dp));
+            const float height = std::ceil(std::max(28.0f * dp, text_width + 18.0f * dp));
             changed |= setPixelProperty(button, Rml::PropertyId::Height, height);
             // A rotated line box must fit across the tab. Snap its origin and
             // dimensions in physical pixels so fractional scales do not clip or
             // blur glyph edges. Keep clearance for the font's ink overhang.
             const auto origin = button->GetAbsoluteOffset(Rml::BoxArea::Padding);
             const float content_width = button->GetBox().GetSize(Rml::BoxArea::Padding).x;
+            const float content_height = button->GetBox().GetSize(Rml::BoxArea::Padding).y;
             const float left = std::round(origin.x + (content_width - line_height) * 0.5f) - origin.x;
-            // Bottom-to-top text rotates upward from this lower origin. Keep
-            // its upper extent aligned with Rendering's first heading, excluding
-            // the trailing clearance included in the measured width. The strip's
-            // 6dp top inset plus this 9dp inset preserve the heading alignment.
-            const float top = std::round(origin.y + (9.0f - text_clearance_dp) * dp + text_width) - origin.y;
+            // Center the rotated text along the tab. Exclude its trailing ink
+            // clearance from the text center.
+            const float top = std::round(origin.y + (content_height + text_width - text_clearance_dp * dp) * 0.5f) - origin.y;
             changed |= setPixelProperty(label, Rml::PropertyId::Width, text_width);
             changed |= setPixelProperty(label, Rml::PropertyId::Height, line_height);
             changed |= setPixelProperty(label, Rml::PropertyId::LineHeight, line_height);
@@ -763,7 +752,7 @@ namespace lfs::vis::gui {
 
             // Data-model and overflow updates can move the tab strip after input was
             // processed for this frame. Re-resolve hover against the settled layout so
-            // a long or closeable tab cannot briefly hover at its previous coordinates
+            // a long tab cannot briefly hover at its previous coordinates
             // and then drop the pseudo-class on the following frame.
             if (rml_pointer_inside_) {
                 const float local_x = prev_mouse_x_ - layout.pos.x;

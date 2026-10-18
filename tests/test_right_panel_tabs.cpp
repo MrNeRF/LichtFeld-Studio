@@ -81,7 +81,6 @@ namespace {
         Rml::ElementDocument* doc = nullptr;
         RmlRightPanel panel;
         std::vector<std::string> picks;
-        std::vector<std::string> closes;
         void SetUp() override {
             ASSERT_TRUE(Rml::Initialise());
             const auto root = std::filesystem::path(PROJECT_ROOT_PATH);
@@ -97,7 +96,6 @@ namespace {
             doc->GetElementById("tab-bar")->SetProperty("top", "0px");
             doc->GetElementById("tab-bar")->SetProperty("height", "240px");
             panel.on_tab_changed = [this](const std::string& id) { picks.push_back(id); };
-            panel.on_tab_closed = [this](const std::string& id) { closes.push_back(id); };
             doc->Show();
         }
         void TearDown() override {
@@ -144,7 +142,7 @@ namespace {
             EXPECT_NEAR(size.x, (i == 0 ? 28 : 25) * GetParam(), 0.5f);
             EXPECT_GE(position.y, last_bottom);
             last_bottom = position.y + size.y;
-            EXPECT_NEAR(size.y, tab->GetChild(0)->GetBox().GetSize().x + 28 * GetParam(), 1.0f);
+            EXPECT_NEAR(size.y, tab->GetChild(0)->GetBox().GetSize().x + 18 * GetParam(), 1.0f);
         }
         EXPECT_GT(button(2)->GetBox().GetSize().y, button(0)->GetBox().GetSize().y);
         EXPECT_NE(button(0)->GetProperty("nav-down"), nullptr);
@@ -152,7 +150,7 @@ namespace {
         EXPECT_GT(button(1)->GetBox().GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right), 0);
     }
 
-    TEST_P(RightPanelTabsTest, RelabelingAndClosingControlsResizePreviouslySettledTabs) {
+    TEST_P(RightPanelTabsTest, RelabelingResizesPreviouslySettledTabs) {
         auto data = tabs(2);
         RmlRightPanelTestAccess::sync(panel, data, data[0].id);
         const float initial_height = button(1)->GetBox().GetSize(Rml::BoxArea::Border).y;
@@ -160,14 +158,12 @@ namespace {
             RmlRightPanelTestAccess::settle(panel);
 
         data[1].label = "A plugin with a much longer translated label";
-        data[1].closeable = true;
         RmlRightPanelTestAccess::sync(panel, data, data[0].id);
         EXPECT_GT(button(1)->GetBox().GetSize(Rml::BoxArea::Border).y, initial_height);
         EXPECT_NEAR(button(1)->GetBox().GetSize(Rml::BoxArea::Border).y,
-                    button(1)->GetChild(0)->GetBox().GetSize().x + 48 * GetParam(), 1.0f);
+                    button(1)->GetChild(0)->GetBox().GetSize().x + 18 * GetParam(), 1.0f);
 
         data[1].label = "Plugin 1";
-        data[1].closeable = false;
         RmlRightPanelTestAccess::sync(panel, data, data[0].id);
         EXPECT_NEAR(button(1)->GetBox().GetSize(Rml::BoxArea::Border).y, initial_height, 0.5f);
     }
@@ -203,6 +199,8 @@ namespace {
                 EXPECT_LE(draw.bounds.Right(), pos.x + size.x - GetParam());
                 EXPECT_GE(draw.bounds.Top(), pos.y + 9.0f * GetParam());
                 EXPECT_LE(draw.bounds.Bottom(), pos.y + size.y - 8.0f * GetParam());
+                EXPECT_NEAR((draw.bounds.Top() + draw.bounds.Bottom()) * 0.5f,
+                            pos.y + size.y * 0.5f, 1.5f);
                 EXPECT_NEAR(label->GetAbsoluteLeft(), std::round(label->GetAbsoluteLeft()), 0.01f);
                 EXPECT_NEAR(label->GetAbsoluteTop(), std::round(label->GetAbsoluteTop()), 0.01f);
             }
@@ -301,17 +299,16 @@ namespace {
         EXPECT_TRUE(picks.empty());
     }
 
-    TEST_P(RightPanelTabsTest, ClickAndCloseDispatchSeparateActions) {
+    TEST_P(RightPanelTabsTest, PluginTabsSelectTheirPanelWithoutCloseControls) {
         auto data = tabs(2);
+        // Shared snapshots still support close controls in the bottom dock.
+        // Sidebar categories remain persistent regardless of that flag.
         data[1].closeable = true;
         RmlRightPanelTestAccess::sync(panel, data, data[0].id);
         button(1)->Click();
         ASSERT_EQ(picks.size(), 1);
         EXPECT_EQ(picks.back(), data[1].id);
-        button(1)->GetChild(1)->Click();
-        ASSERT_EQ(closes.size(), 1);
-        EXPECT_EQ(closes.back(), data[1].id);
-        EXPECT_EQ(picks.size(), 1);
+        EXPECT_EQ(button(1)->GetNumChildren(), 1);
     }
 
     TEST_P(RightPanelTabsTest, KeyboardActivatesFocusedCategories) {

@@ -146,11 +146,11 @@ The active panel fills the space to the right of the strip, including its former
 horizontal tab row. The bottom dock retains its horizontal tabs.
 
 Labels read bottom to top and use the translated panel label. Tab height follows
-the measured text length, including glyph clearance. Rotated labels use
-pixel-aligned origins and line boxes at fractional scales. The top of each label
-aligns with the first Rendering heading. Plugin authors do not need special
-dimensions or markup. Optional close buttons still disable closeable plugin
-panels.
+the measured text length, including glyph clearance and compact padding. Labels
+are centered along the tab. Rotated labels use pixel-aligned origins and line
+boxes at fractional scales. The Rendering label aligns with its first panel
+heading. Plugin authors do not need special dimensions or markup. Category tabs
+are persistent. Manage plugin enablement in the Plugin Marketplace.
 
 - Click a tab to select its panel.
 - Scroll the wheel over the strip, or drag it with the middle mouse button, to

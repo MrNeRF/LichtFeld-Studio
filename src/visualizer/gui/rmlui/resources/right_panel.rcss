@@ -101,25 +101,6 @@ body {
     pointer-events: none;
 }
 
-.tab-close {
-    position: absolute;
-    bottom: 3dp;
-    left: 5dp;
-    width: 16dp;
-    height: 16dp;
-    margin: 0;
-    padding: 0;
-    border-width: 0;
-    border-radius: 3dp;
-    background-color: transparent;
-    line-height: 16dp;
-    text-align: center;
-    font-size: 13dp;
-    cursor: pointer;
-    tab-index: auto;
-    nav: auto;
-}
-
 .tab-edge {
     position: absolute;
     right: 0;

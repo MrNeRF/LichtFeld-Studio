@@ -40,16 +40,6 @@
     border-color: @{right_panel.tab_active_border};
 }
 
-.tab-close {
-    color: @{text_dim};
-}
-
-.tab-close:hover,
-.tab-close:focus-visible {
-    background-color: @{right_panel.tab_hover};
-    color: @{text};
-}
-
 #left-border {
     @{chrome.right_panel_edge_shape};
 }

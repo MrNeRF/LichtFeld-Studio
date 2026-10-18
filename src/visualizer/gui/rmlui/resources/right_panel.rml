@@ -17,10 +17,6 @@
                  data-event-click="tab_click(tab.id)"
                  data-event-keydown="tab_keydown(tab.id)">
                 <span class="tab-label">{{ tab.label }}</span>
-                <button class="tab-close"
-                        data-if="tab.closeable"
-                        data-tooltip="common.close"
-                        data-event-click="tab_close(tab.id)">&#215;</button>
             </div>
         </div>
     </div>

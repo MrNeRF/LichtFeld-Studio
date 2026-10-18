@@ -4537,18 +4537,6 @@ namespace lfs::vis::gui {
             }
             panel_layout_.setActiveTab(id);
         };
-        rml_right_panel_.on_tab_closed = [this](const std::string& id) {
-            if (id.empty())
-                return;
-            if (viewer_) {
-                viewer_->projectMarkSessionChapterCommitted("GUIL");
-            }
-            PanelRegistry::instance().set_panel_enabled(id, false);
-            if (panel_layout_.getActiveTab() == id)
-                panel_layout_.setActiveTab({});
-            if (focus_panel_name_ == id)
-                focus_panel_name_.clear();
-        };
         rml_right_panel_.on_splitter_height = [this](float height, float panel_height) {
             viewer_->getRenderingManager()->setViewportResizeActive(true);
             panel_layout_.setScenePanelHeight(height, panel_height);
@@ -6419,7 +6407,6 @@ namespace lfs::vis::gui {
                     .id = t.id,
                     .label = t.label,
                     .dom_id = makeRmlTabDomId(t.id),
-                    .closeable = t.tab_closeable,
                 });
             }
 

@@ -69,7 +69,6 @@ namespace lfs::vis::gui {
         void setTabStripScroll(float value);
 
         std::function<void(const std::string&)> on_tab_changed;
-        std::function<void(const std::string&)> on_tab_closed;
         std::function<void(float, float)> on_splitter_height;
         std::function<void()> on_splitter_end;
         std::function<void(float)> on_resize_width;
