@@ -4,6 +4,7 @@
 #include "app/gpu_preflight.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
+#include "core/gpu_device_info.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
@@ -101,16 +102,36 @@ TEST(ViewerNoCuda, PreflightViewerOnlyCudaUsableUsesCuda) {
     EXPECT_EQ(decide_gpu_preflight(true, true, false), GpuPreflightDecision::UseCuda);
 }
 
+TEST(ViewerNoCuda, HardwareDiscoveryDoesNotInitializeTensorContext) {
+    const auto backend = configured_gpu_backend();
+    const bool live = gpu_backend_live(GpuBackend::Vulkan);
+    const auto hardware = enumerate_vulkan_hardware();
+    EXPECT_EQ(configured_gpu_backend(), backend);
+    EXPECT_EQ(gpu_backend_live(GpuBackend::Vulkan), live);
+    for (const auto& device : hardware) {
+        EXPECT_FALSE(device.name.empty());
+        EXPECT_EQ(device.uuid.size(), 32);
+    }
+}
+
+TEST(ViewerNoCuda, IterationTelemetryKeepsUnusedCudaCold) {
+    if (configured_gpu_backend() == GpuBackend::CUDA)
+        GTEST_SKIP() << "Requires a non-CUDA default backend";
+    const bool live = gpu_backend_live(GpuBackend::CUDA);
+    Tensor::set_memory_pool_iteration(17);
+    EXPECT_EQ(gpu_backend_live(GpuBackend::CUDA), live);
+}
+
 TEST(ViewerNoCuda, PreflightViewerOnlyCudaUnusableUsesVulkanWhenAvailable) {
-    EXPECT_EQ(decide_gpu_preflight(true, false, true), GpuPreflightDecision::UseVulkanViewer);
+    EXPECT_EQ(decide_gpu_preflight(true, false, true), GpuPreflightDecision::UseVulkan);
 }
 
 TEST(ViewerNoCuda, PreflightTrainingCudaUsableUsesCuda) {
     EXPECT_EQ(decide_gpu_preflight(false, true, true), GpuPreflightDecision::UseCuda);
 }
 
-TEST(ViewerNoCuda, PreflightTrainingCudaUnusableIsFatal) {
-    EXPECT_EQ(decide_gpu_preflight(false, false, true), GpuPreflightDecision::Fatal);
+TEST(ViewerNoCuda, PreflightTrainingCudaUnusableUsesVulkan) {
+    EXPECT_EQ(decide_gpu_preflight(false, false, true), GpuPreflightDecision::UseVulkan);
     EXPECT_EQ(decide_gpu_preflight(true, false, false), GpuPreflightDecision::Fatal);
 }
 

@@ -3,8 +3,12 @@
 
 #include "vulkan_graphics_context.hpp"
 
+#include "core/gpu_device_selection.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_backend_vulkan.hpp"
+#include "core/vulkan_device_selection.hpp"
+#include "core/vulkan_helpers.hpp"
+#include "preferences.hpp"
 
 #include <utility>
 
@@ -34,12 +38,19 @@ namespace lfs::vis {
     bool VulkanGraphicsContext::initialize(SDL_Window* const window,
                                            const int framebuffer_width,
                                            const int framebuffer_height) {
-        return context_.init(window, framebuffer_width, framebuffer_height);
+        if (!context_.init(window, framebuffer_width, framebuffer_height))
+            return false;
+        return true;
     }
 
     bool VulkanGraphicsContext::initializeHeadless() {
         headless_ = context_.initHeadless();
         return headless_;
+    }
+    void VulkanGraphicsContext::publishPrimaryGpuState() {
+        lfs::core::set_cuda_vulkan_direct_interop(context_.directTensorInteropEnabled());
+        publishRenderingGpuIdentity(lfs::core::gpu_identity_string(context_.deviceUUID()), deviceName(),
+                                    context_.tensorBackendDevice().complete || lfs::core::vulkan_backend_adopted());
     }
     void VulkanGraphicsContext::shutdown() { context_.shutdown(); }
 
@@ -125,6 +136,13 @@ namespace lfs::vis {
         };
     }
     void VulkanGraphicsContext::flushPipelineCache() { context_.flushPipelineCache(); }
+    std::string VulkanGraphicsContext::deviceName() const {
+        if (!context_.physicalDevice())
+            return {};
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(context_.physicalDevice(), &properties);
+        return properties.deviceName;
+    }
     lfs::core::SplatTensorAllocator VulkanGraphicsContext::splatTensorAllocator(
         const bool preserve_float_shN) {
         return context_.tensorInterop().splat_allocator(preserve_float_shN);
@@ -133,6 +151,21 @@ namespace lfs::vis {
     void VulkanGraphicsContext::connectTensorBackend() {
         if (!lfs::core::tensor_backend_shares_vulkan_device())
             return;
+        const auto backend = lfs::core::configured_gpu_backend();
+        if (backend == lfs::core::GpuBackend::CUDA && !context_.directTensorInteropEnabled())
+            return;
+        const auto requested = backend == lfs::core::GpuBackend::Vulkan
+                                   ? lfs::core::tensor_backend_options().vulkan_device
+                                   : std::string{};
+        if (!requested.empty()) {
+            const auto devices = lfs::core::enumerate_vulkan_physical_devices(context_.instance());
+            const auto found = std::find(devices.devices.begin(), devices.devices.end(), context_.physicalDevice());
+            if (found == devices.devices.end() ||
+                !lfs::core::matches_vulkan_device_preference(requested, found - devices.devices.begin(), context_.deviceUUID())) {
+                LOG_INFO("Tensor and rendering Vulkan GPUs differ; using host-staged transfers");
+                return;
+            }
+        }
         const auto& device = context_.tensorBackendDevice();
         if (!device.complete) {
             LOG_INFO("Tensor Vulkan backend keeps its own device: the window device has no spare compute queue or lacks a required feature");
@@ -161,7 +194,7 @@ namespace lfs::vis {
             .consumer_queue = context_.graphicsQueue(),
             .consumer_queue_mutex = &context_.graphicsQueueMutex(),
         };
-        if (const auto status = lfs::core::adopt_vulkan_device(handles); !status) {
+        if (const auto status = lfs::core::adopt_vulkan_device(handles, device.subgroup_size_control); !status) {
             LOG_WARN("Tensor Vulkan backend keeps its own device: {}", lfs::format_for_developer(status.error()));
             return;
         }

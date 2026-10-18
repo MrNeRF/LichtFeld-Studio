@@ -53,7 +53,7 @@ namespace lfs::core {
         //                    0 means reserve exactly `capacity`.
         // sh_degree = SH degree the run uses; determines shN region size.
         [[nodiscard]] LFS_CORE_API static std::expected<SplatExportableStorage, std::string>
-        create(std::size_t capacity, int sh_degree, int device = 0,
+        create(std::size_t capacity, int sh_degree, int device = -1,
                std::size_t reserve_capacity = 0);
 
         // Byte size of the packed layout for `capacity` gaussians (region

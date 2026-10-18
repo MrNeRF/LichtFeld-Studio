@@ -170,7 +170,8 @@ bool firstMatchingLane(uint4 matchMask, uint lane) {
             if (lane == 0u) {
                 uint chunkTotal = 0u;
                 for (uint previous = 0u; previous < kMaxSubgroups; ++previous) {
-                    if (previous < kWorkers / WaveGetLaneCount())
+                    // A 32-worker group still has one active subgroup on wave64.
+                    if (previous < (kWorkers + WaveGetLaneCount() - 1u) / WaveGetLaneCount())
                         chunkTotal += subgroupTotals[previous];
                 }
                 chunkCarry = carry + chunkTotal;

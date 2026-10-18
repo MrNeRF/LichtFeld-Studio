@@ -13,6 +13,7 @@
 #include "core/device_fault.hpp"
 #include "core/gpu_device_info.hpp"
 #include "core/gpu_device_runtime.hpp"
+#include "core/gpu_device_selection.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_allocator_stats.hpp"
 #include "internal/tensor_impl.hpp"
@@ -47,6 +48,7 @@
 #endif
 #include "backend/vulkan/vk_memory.hpp"
 #include "backend/vulkan/vk_recorder.hpp"
+#include "core/vulkan_helpers.hpp"
 #endif
 
 namespace lfs::core::tensor_ops {
@@ -69,6 +71,90 @@ namespace lfs::core::tensor_ops {
 } // namespace lfs::core::tensor_ops
 
 namespace lfs::core {
+    std::vector<VulkanHardwareDevice> enumerate_vulkan_hardware() {
+        std::vector<VulkanHardwareDevice> result;
+#ifdef LFS_TENSOR_VULKAN
+        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+        app.pApplicationName = "LichtFeld hardware discovery";
+        app.apiVersion = VK_API_VERSION_1_3;
+        VkInstance instance = VK_NULL_HANDLE;
+        if (create_vulkan_instance(app, {}, {}, nullptr, 0, &instance) != VK_SUCCESS)
+            return result;
+        struct InstanceGuard {
+            VkInstance instance;
+            ~InstanceGuard() { vkDestroyInstance(instance, nullptr); }
+        } guard{instance};
+        const auto devices = enumerate_vulkan_physical_devices(instance);
+        if (devices.count_result != VK_SUCCESS || devices.devices_result != VK_SUCCESS)
+            return result;
+        for (uint32_t index = 0; index < devices.devices.size(); ++index) {
+            VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+            VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            props.pNext = &ids;
+            vkGetPhysicalDeviceProperties2(devices.devices[index], &props);
+            std::string uuid;
+            constexpr char hex[] = "0123456789abcdef";
+            for (const auto byte : ids.deviceUUID) {
+                uuid += hex[byte >> 4];
+                uuid += hex[byte & 15];
+            }
+            auto tensor = check_vulkan_feature_requirements(devices.devices[index]);
+            auto rendering = check_vulkan_feature_requirements(
+                devices.devices[index], {.viewer_shaders = true, .window_renderer = true});
+            if (props.properties.apiVersion < VK_API_VERSION_1_3) {
+                tensor.missing = "Vulkan 1.3 is required";
+                rendering.missing = tensor.missing;
+            }
+            result.push_back({props.properties.deviceName, std::move(uuid),
+                              std::move(tensor.missing), std::move(rendering.missing), index,
+                              props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU});
+            auto& entry = result.back();
+            entry.shared_memory = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+            VkPhysicalDeviceMemoryProperties memory{};
+            vkGetPhysicalDeviceMemoryProperties(devices.devices[index], &memory);
+            for (uint32_t heap = 0; heap < memory.memoryHeapCount; ++heap)
+                if (memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                    entry.total_memory_bytes += memory.memoryHeaps[heap].size;
+        }
+#endif
+        return result;
+    }
+
+    std::vector<VulkanHardwareDevice> enumerate_cuda_hardware() {
+        std::vector<VulkanHardwareDevice> devices;
+#if LFS_HAS_CUDA
+        int count = 0;
+        if (cudaGetDeviceCount(&count) != cudaSuccess) {
+            (void)cudaGetLastError();
+            return devices;
+        }
+        constexpr char hex[] = "0123456789abcdef";
+        for (int index = 0; index < count; ++index) {
+            cudaDeviceProp properties{};
+            if (cudaGetDeviceProperties(&properties, index) != cudaSuccess) {
+                (void)cudaGetLastError();
+                continue;
+            }
+            VulkanHardwareDevice item;
+            item.name = properties.name;
+            item.index = index;
+            item.discrete = !properties.integrated;
+            item.shared_memory = properties.integrated;
+            item.total_memory_bytes = properties.totalGlobalMem;
+            for (const unsigned char byte : properties.uuid.bytes) {
+                item.uuid += hex[byte >> 4];
+                item.uuid += hex[byte & 15];
+            }
+#ifdef LFS_MIN_SM
+            if (properties.major * 10 + properties.minor < LFS_MIN_SM)
+                item.tensor_unavailable_reason = std::format("Requires compute capability {}.{}", LFS_MIN_SM / 10, LFS_MIN_SM % 10);
+#endif
+            devices.push_back(std::move(item));
+        }
+#endif
+        return devices;
+    }
+
     void gpu_trim_cached_memory(const GpuBackend backend) {
         if (gpu_backend_live(backend))
             internal::backend_ops(backend).trim();
@@ -168,9 +254,19 @@ namespace lfs::core {
             if (!result) {
 #ifdef LFS_TENSOR_VULKAN
 #if LFS_HAS_CUDA
-                result = backend == GpuBackend::CUDA
-                             ? internal::make_cuda_vulkan_interop(device)
-                             : internal::make_vulkan_vulkan_interop(device);
+                if (backend == GpuBackend::CUDA) {
+                    const auto cuda = gpu_backend_device_info(GpuBackend::CUDA, selected_cuda_device());
+                    VkPhysicalDeviceIDProperties identity{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+                    VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+                    properties.pNext = &identity;
+                    vkGetPhysicalDeviceProperties2(static_cast<VkPhysicalDevice>(device.physical_device), &properties);
+                    const bool direct = device.external_memory && device.external_semaphore && cuda &&
+                                        std::equal(cuda->uuid.begin(), cuda->uuid.end(), identity.deviceUUID);
+                    result = direct ? internal::make_cuda_vulkan_interop(device)
+                                    : internal::make_host_vulkan_interop(device, backend);
+                } else {
+                    result = internal::make_vulkan_vulkan_interop(device);
+                }
 #else
                 if (backend == GpuBackend::CUDA)
                     throw TensorError("CUDA tensor interop is not available in this build");
@@ -198,12 +294,22 @@ namespace lfs::core {
         }
     }
 
+    namespace {
+        std::atomic<bool> cuda_direct_interop{true};
+    }
+    void set_cuda_vulkan_direct_interop(const bool enabled) {
+        cuda_direct_interop.store(enabled, std::memory_order_release);
+    }
+    bool cuda_vulkan_direct_interop() {
+        return cuda_direct_interop.load(std::memory_order_acquire);
+    }
+
     SplatPublication splat_publication(const GpuBackend backend) {
         switch (backend) {
         case GpuBackend::Vulkan:
             return SplatPublication::Shared;
         case GpuBackend::CUDA:
-            return SplatPublication::RendererStorage;
+            return cuda_vulkan_direct_interop() ? SplatPublication::RendererStorage : SplatPublication::Copied;
         default:
             // Metal storage readiness includes its readers.
             return SplatPublication::Copied;
@@ -365,6 +471,7 @@ namespace lfs::core {
         std::mutex options_mutex;
         TensorBackendOptions backend_options;
         bool options_frozen = false;
+        std::atomic<int> explicit_cuda_device{-1};
 
         bool is_resolved(const int state) {
             return state >= 0 && state < static_cast<int>(kGpuBackendCount);
@@ -431,13 +538,58 @@ namespace lfs::core {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
+        int cuda_ordinal = -1;
+#if LFS_HAS_CUDA
+        if (!options.cuda_device.empty()) {
+            const auto devices = enumerate_cuda_hardware();
+            const auto selected = find_gpu_device<VulkanHardwareDevice>(devices, options.cuda_device);
+            if (!selected || !devices[*selected].tensor_unavailable_reason.empty())
+                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::Core,
+                    .user_message = "Selected CUDA GPU is unavailable or incompatible",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            cuda_ordinal = devices[*selected].index;
+        }
+#endif
         backend_options = options;
+        explicit_cuda_device.store(cuda_ordinal, std::memory_order_release);
         return {};
+    }
+
+    int selected_cuda_device() {
+        const int selected = explicit_cuda_device.load(std::memory_order_acquire);
+        if (selected >= 0)
+            return selected;
+        int current = 0;
+#if LFS_HAS_CUDA
+        if (cudaGetDevice(&current) != cudaSuccess)
+            (void)cudaGetLastError();
+#endif
+        return current;
+    }
+
+    void activate_selected_cuda_device() {
+#if LFS_HAS_CUDA
+        const int selected = explicit_cuda_device.load(std::memory_order_acquire);
+        if (selected < 0)
+            return; // Preserve the existing automatic/default device behavior.
+        int current = -1;
+        LFS_CUDA_CHECK_MSG(cudaGetDevice(&current), "query selected CUDA worker device");
+        if (current != selected)
+            LFS_CUDA_CHECK_MSG(cudaSetDevice(selected), "activate selected CUDA worker device");
+#endif
     }
 
     TensorBackendOptions tensor_backend_options() {
         std::lock_guard lock(options_mutex);
         options_frozen = true;
+        return backend_options;
+    }
+
+    TensorBackendOptions tensor_backend_options_snapshot() {
+        std::lock_guard lock(options_mutex);
         return backend_options;
     }
 
@@ -575,6 +727,8 @@ namespace lfs::core {
 
     GpuBackendScope::GpuBackendScope(const GpuBackend backend)
         : previous_(scoped_backend) {
+        if (backend == GpuBackend::CUDA)
+            activate_selected_cuda_device();
         scoped_backend = backend;
     }
 
@@ -910,11 +1064,7 @@ namespace lfs::core {
     std::optional<GpuDeviceInfo> gpu_backend_device_info(const GpuBackend backend) {
         if (backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
-            int device = 0;
-            if (cudaGetDevice(&device) != cudaSuccess) {
-                return std::nullopt;
-            }
-            return gpu_backend_device_info(backend, device);
+            return gpu_backend_device_info(backend, selected_cuda_device());
 #else
             return std::nullopt;
 #endif
@@ -1027,6 +1177,11 @@ namespace lfs::core {
     }
 
     lfs::Status adopt_vulkan_device(const VulkanDeviceHandles& handles) {
+        return adopt_vulkan_device(handles, false);
+    }
+
+    lfs::Status adopt_vulkan_device(const VulkanDeviceHandles& handles,
+                                    const bool subgroup_size_control_enabled) {
 #ifdef LFS_TENSOR_VULKAN
         return internal::adopt_vulkan_context(internal::AdoptedDevice{
             .instance = static_cast<VkInstance>(handles.instance),
@@ -1048,11 +1203,13 @@ namespace lfs::core {
 #ifdef __APPLE__
             .metal_objects = handles.metal_objects,
 #endif
+            .subgroup_size_control = subgroup_size_control_enabled,
             .consumer_queue = static_cast<VkQueue>(handles.consumer_queue),
             .consumer_queue_mutex = handles.consumer_queue_mutex,
         });
 #else
         (void)handles;
+        (void)subgroup_size_control_enabled;
         return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
             .code = lfs::ErrorCode::Unsupported,
             .domain = lfs::ErrorDomain::Vulkan,
@@ -1156,6 +1313,13 @@ namespace lfs::core {
             if (!context->memory().exports_memory() || !context->timeline_exportable()) {
                 return false;
             }
+            const auto cuda = gpu_backend_device_info(GpuBackend::CUDA, selected_cuda_device());
+            VkPhysicalDeviceIDProperties identity{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+            VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            properties.pNext = &identity;
+            vkGetPhysicalDeviceProperties2(context->physical_device(), &properties);
+            if (!cuda || !std::equal(cuda->uuid.begin(), cuda->uuid.end(), identity.deviceUUID))
+                return false;
             context->cuda_imports()->import_timeline(context->timeline());
             return context->cuda_imports()->timeline_imported();
         } catch (...) { // LFS-CENSUS-OK(empty-catch): export probe fails closed when CUDA import is absent
@@ -1406,6 +1570,8 @@ namespace lfs::core {
             process_backend_state.store(kUnconfigured, std::memory_order_release);
             std::lock_guard lock(options_mutex);
             options_frozen = false;
+            explicit_cuda_device.store(-1, std::memory_order_release);
+            set_cuda_vulkan_direct_interop(true);
         }
 
     } // namespace internal

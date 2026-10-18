@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "dispatch.hpp"
+#include "core/logger.hpp"
 #include "core/tensor/backend/vulkan/vk_recorder.hpp"
 #include "training_shader_table.hpp"
 #include <map>
@@ -57,6 +58,32 @@ namespace lfs::training::vulkan {
             stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
             stage.module = shader;
             stage.pName = "main";
+            VkPipelineShaderStageRequiredSubgroupSizeCreateInfo required_size{
+                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
+            // The raster backward has a shuffle-based logical warp path. Select
+            // wave32 only for that stage on compatible AMD devices; other stages
+            // and vendors retain their existing subgroup selection.
+            const bool gsplat_raster =
+                (name == "gsplat_backward" || name == "gsplat_backward_atomic") && specialization == 0;
+            // Fast stage is packed into the low four bits; higher bits describe
+            // SH, output and densification variants of the same raster kernel.
+            const bool fast_raster =
+                (name == "fast_backward" || name == "fast_backward_atomic") && (specialization & 15u) == 0;
+            if ((gsplat_raster || fast_raster) &&
+                context->caps().subgroup_size == 64 && context->caps().subgroup_size_control &&
+                context->caps().min_subgroup_size <= 32 && context->caps().max_subgroup_size >= 32) {
+                VkPhysicalDeviceSubgroupSizeControlProperties size_properties{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+                VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+                properties.pNext = &size_properties;
+                vkGetPhysicalDeviceProperties2(context->physical_device(), &properties);
+                if (properties.properties.vendorID == 0x1002 &&
+                    (size_properties.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+                    size_properties.maxComputeWorkgroupSubgroups >= 4) {
+                    required_size.requiredSubgroupSize = 32;
+                    stage.pNext = &required_size;
+                }
+            }
             const VkSpecializationMapEntry entry{0, 0, sizeof(specialization)};
             const VkSpecializationInfo constants{1, &entry, sizeof(specialization), &specialization};
             if (specialization != UINT32_MAX)
@@ -64,8 +91,20 @@ namespace lfs::training::vulkan {
             VkComputePipelineCreateInfo info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
             info.stage = stage;
             info.layout = pipeline->layout;
-            vk_check(context.get(), vkCreateComputePipelines(context->device(), context->pipeline_cache(), 1, &info, nullptr, &pipeline->handle),
-                     "vkCreateComputePipelines(training.dispatch)");
+            auto result = vkCreateComputePipelines(context->device(), context->pipeline_cache(), 1, &info, nullptr, &pipeline->handle);
+            if (result != VK_SUCCESS && info.stage.pNext && result != VK_ERROR_DEVICE_LOST) {
+                LOG_WARN("Vulkan training kernel {}: wave32 pipeline rejected (VkResult {}); falling back to the device default subgroup size",
+                         name, static_cast<int>(result));
+                if (pipeline->handle != VK_NULL_HANDLE) {
+                    vkDestroyPipeline(context->device(), pipeline->handle, nullptr);
+                    pipeline->handle = VK_NULL_HANDLE;
+                }
+                info.stage.pNext = nullptr;
+                result = vkCreateComputePipelines(context->device(), context->pipeline_cache(), 1, &info, nullptr, &pipeline->handle);
+            }
+            vk_check(context.get(), result, "vkCreateComputePipelines(training.dispatch)");
+            if (info.stage.pNext)
+                LOG_DEBUG("Vulkan training kernel {} stage {} uses required subgroup size 32", name, specialization);
             vkDestroyShaderModule(context->device(), shader, nullptr);
             cache.emplace(key, pipeline);
             release_at_shutdown(*context, mutex, cache);

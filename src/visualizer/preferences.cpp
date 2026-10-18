@@ -3,11 +3,14 @@
 
 #include "preferences.hpp"
 #include "core/native_fs.hpp"
+#include "gpu_preferences_state.hpp"
 #include "rendering/rendering_types.hpp"
 #include "visualizer/navigation_up_axis.hpp"
 
 #include "core/environment.hpp"
 #include "core/error.hpp"
+#include "core/gpu_device_info.hpp"
+#include "core/gpu_device_selection.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/persisted_settings.hpp"
@@ -15,6 +18,7 @@
 #include "rendering/scene_upscaler_registry.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -37,6 +41,10 @@
 namespace lfs::vis {
     namespace {
         using json = nlohmann::json;
+        std::mutex gpu_runtime_mutex;
+        std::optional<TensorPreferenceState> startup_gpu_preferences;
+        std::string rendering_gpu_identity, rendering_gpu_name;
+        bool rendering_tensor_adoption_available = false;
 
         [[nodiscard]] bool disabled() {
             return lfs::core::environment::flag("LFS_SAFE_MODE", false);
@@ -1120,6 +1128,8 @@ namespace lfs::vis {
         const nlohmann::json values = {
             {"backend", backend},
             {"vulkan_device", state.options.vulkan_device},
+            {"rendering_vulkan_device", state.options.rendering_vulkan_device},
+            {"cuda_device", state.options.cuda_device},
             {"vulkan_validation", std::clamp(state.options.vulkan_validation, 0, 2)},
             {"force_fp32_half", state.options.force_fp32_half},
             {"force_no_atomic_float", state.options.force_no_atomic_float},
@@ -1130,15 +1140,160 @@ namespace lfs::vis {
         impl_->saveLocked();
     }
 
+    void recordGpuStartupPreferences(const TensorPreferenceState& requested) {
+        std::lock_guard lock(gpu_runtime_mutex);
+        startup_gpu_preferences = requested;
+    }
+
+    void publishRenderingGpuIdentity(std::string uuid, std::string name, const bool tensor_adoption_available) {
+        std::lock_guard lock(gpu_runtime_mutex);
+        rendering_gpu_identity = std::move(uuid);
+        rendering_gpu_name = std::move(name);
+        rendering_tensor_adoption_available = tensor_adoption_available;
+    }
+
+    GpuPreferenceRuntimeStatus gpuPreferenceRuntimeStatus() {
+        // Discovery is cached separately from tensor contexts: polling UI state
+        // cannot freeze options or create a GPU tensor device.
+        TensorPreferenceState startup;
+        GpuRuntimeSelection running;
+        GpuPreferenceRuntimeStatus result;
+        bool renderer_can_host_tensors = false;
+        {
+            std::lock_guard lock(gpu_runtime_mutex);
+            if (!startup_gpu_preferences)
+                return result;
+            startup = *startup_gpu_preferences;
+            running.rendering_uuid = rendering_gpu_identity;
+            result.rendering_gpu = rendering_gpu_name;
+            renderer_can_host_tensors = rendering_tensor_adoption_available;
+        }
+        static const auto cuda = core::enumerate_cuda_hardware();
+        static const auto vulkan = core::enumerate_vulkan_hardware();
+        running.backend = core::configured_gpu_backend();
+        running.options = core::tensor_backend_options_snapshot();
+        const auto automatic = [](const auto& devices, bool rendering, bool prefer_discrete = true) -> std::string {
+            const auto selected = core::automatic_gpu_device<core::VulkanHardwareDevice>(devices, rendering, prefer_discrete);
+            return selected ? devices[*selected].uuid : "";
+        };
+        running.automatic_cuda_uuid = automatic(cuda, false, false);
+        running.automatic_vulkan_uuid = automatic(vulkan, false);
+        if (renderer_can_host_tensors) {
+            const auto renderer = core::find_gpu_device<core::VulkanHardwareDevice>(vulkan, running.rendering_uuid);
+            if (renderer && vulkan[*renderer].tensor_unavailable_reason.empty())
+                running.automatic_vulkan_uuid = vulkan[*renderer].uuid;
+        }
+        running.automatic_backend = !running.automatic_cuda_uuid.empty()                   ? core::GpuBackend::CUDA
+                                    : core::gpu_backend_available(core::GpuBackend::Metal) ? core::GpuBackend::Metal
+                                                                                           : core::GpuBackend::Vulkan;
+        running.cuda_uuid = requestedGpuIdentity(running.options.cuda_device, cuda, running.automatic_cuda_uuid);
+        running.vulkan_uuid = requestedGpuIdentity(running.options.vulkan_device, vulkan, running.automatic_vulkan_uuid);
+        if (const auto active = core::gpu_backend_device_info(running.backend)) {
+            result.tensor_gpu = active->name;
+            if (running.backend == core::GpuBackend::Vulkan)
+                running.vulkan_uuid = core::gpu_identity_string(active->uuid);
+            else if (running.backend == core::GpuBackend::CUDA)
+                running.cuda_uuid = core::gpu_identity_string(active->uuid);
+        }
+        if (result.tensor_gpu.empty()) {
+            const auto& devices = running.backend == core::GpuBackend::CUDA ? cuda : vulkan;
+            const auto selected = core::find_gpu_device<core::VulkanHardwareDevice>(devices,
+                                                                                    running.backend == core::GpuBackend::CUDA ? running.cuda_uuid : running.vulkan_uuid);
+            if (selected)
+                result.tensor_gpu = devices[*selected].name;
+            else if (running.backend == core::GpuBackend::Metal)
+                result.tensor_gpu = result.rendering_gpu;
+        }
+        result.rendering_gpu = gpuPreferenceDeviceName(running.rendering_uuid, vulkan, result.rendering_gpu);
+        if (running.backend != core::GpuBackend::Metal) {
+            const auto& devices = running.backend == core::GpuBackend::CUDA ? cuda : vulkan;
+            result.tensor_gpu = gpuPreferenceDeviceName(
+                running.backend == core::GpuBackend::CUDA ? running.cuda_uuid : running.vulkan_uuid,
+                devices, result.tensor_gpu);
+        }
+        const auto preferred_rendering = running.backend == core::GpuBackend::CUDA ? running.cuda_uuid : running.vulkan_uuid;
+        const auto shared = core::find_gpu_device<core::VulkanHardwareDevice>(vulkan, preferred_rendering);
+        running.automatic_rendering_uuid = shared && vulkan[*shared].rendering_unavailable_reason.empty()
+                                               ? vulkan[*shared].uuid
+                                               : automatic(vulkan, true);
+        auto requested = UserPreferences::instance().tensorBackend();
+#ifdef LFS_GRAPHICS_METAL
+        running.vulkan_renderer = false;
+        requested.options.rendering_vulkan_device = startup.options.rendering_vulkan_device;
+#endif
+        result.restart_required = gpuPreferencesRequireRestart(requested, startup, running, cuda, vulkan);
+        result.tensor_backend = core::gpu_backend_name(running.backend);
+        return result;
+    }
+
     TensorPreferenceState UserPreferences::sanitizeTensorBackend() {
         auto state = tensorBackend();
         if (state.backend && std::find(core::kCompiledGpuBackends.begin(),
                                        core::kCompiledGpuBackends.end(), *state.backend) ==
                                  core::kCompiledGpuBackends.end()) {
-            LOG_WARN("Saved tensor backend {} is not compiled in this build; ignoring the preference for this run and selecting automatically",
+            LOG_WARN("GPU fallback: role=tensor/training, requested={}, effective=Auto, reason=backend not compiled; saved preference preserved",
                      core::gpu_backend_name(*state.backend));
             state.backend.reset();
         }
+#if LFS_HAS_CUDA
+        if (state.backend == core::GpuBackend::Vulkan) {
+            // The backend availability probe reads (and freezes) tensor options.
+            // Startup discovery must happen before those options are installed.
+            const auto devices = core::enumerate_vulkan_hardware();
+            if (std::none_of(devices.begin(), devices.end(), [](const auto& device) {
+                    return device.tensor_unavailable_reason.empty();
+                }) &&
+                core::gpu_backend_available(core::GpuBackend::CUDA)) {
+                LOG_WARN("GPU fallback: requested=Vulkan, effective=CUDA, reason=no compatible Vulkan GPU/runtime; saved preference preserved");
+                state.backend = core::GpuBackend::CUDA;
+            }
+        }
+#endif
+        if (state.backend && state.backend != core::GpuBackend::CUDA)
+            state.options.cuda_device.clear(); // Inactive saved choices remain persisted.
+        if ((!state.backend || state.backend == core::GpuBackend::CUDA) && !state.options.cuda_device.empty()) {
+            const auto devices = core::enumerate_cuda_hardware();
+            const auto selected = core::find_gpu_device<core::VulkanHardwareDevice>(devices, state.options.cuda_device);
+            if (!selected || !devices[*selected].tensor_unavailable_reason.empty()) {
+                LOG_WARN("GPU fallback: role=tensor/training, requested CUDA GPU={}, effective=Auto, reason=GPU missing or incompatible; saved preference preserved", state.options.cuda_device);
+                state.options.cuda_device.clear();
+            } else {
+                state.options.cuda_device = devices[*selected].uuid;
+            }
+        }
+#if LFS_HAS_CUDA
+        if ((!state.backend || state.backend == core::GpuBackend::CUDA) && state.options.cuda_device.empty()) {
+            const auto devices = core::enumerate_cuda_hardware();
+            const auto selected = core::automatic_gpu_device<core::VulkanHardwareDevice>(devices, false, false);
+            if (selected && devices[*selected].index != 0) {
+                state.options.cuda_device = devices[*selected].uuid;
+                LOG_INFO("Automatic CUDA GPU selection: {} (device {}); earlier adapters are incompatible with this build", devices[*selected].name, devices[*selected].index);
+            }
+        }
+#endif
+#ifdef LFS_TENSOR_VULKAN
+        if (!state.options.vulkan_device.empty() || !state.options.rendering_vulkan_device.empty()) {
+            const auto hardware = core::enumerate_vulkan_hardware();
+            const auto resolve = [&](std::string& requested, const bool rendering) {
+                if (requested.empty())
+                    return;
+                const auto selected = core::find_gpu_device<core::VulkanHardwareDevice>(hardware, requested);
+                const auto found = selected ? hardware.begin() + *selected : hardware.end();
+                const std::string reason = found == hardware.end() ? "GPU not detected"
+                                           : rendering             ? found->rendering_unavailable_reason
+                                                                   : found->tensor_unavailable_reason;
+                if (!reason.empty()) {
+                    LOG_WARN("GPU fallback: role={}, requested={}, effective=Auto, reason={}; saved preference preserved",
+                             rendering ? "rendering" : "tensor/training", requested, reason);
+                    requested.clear();
+                } else {
+                    requested = found->uuid; // Canonical run-only identity; preserve the saved spelling.
+                }
+            };
+            resolve(state.options.vulkan_device, false);
+            resolve(state.options.rendering_vulkan_device, true);
+        }
+#endif
         return state;
     }
 
@@ -1163,6 +1318,10 @@ namespace lfs::vis {
         }
         if (const auto device = it->find("vulkan_device"); device != it->end() && device->is_string())
             result.options.vulkan_device = device->get<std::string>();
+        if (const auto device = it->find("rendering_vulkan_device"); device != it->end() && device->is_string())
+            result.options.rendering_vulkan_device = device->get<std::string>();
+        if (const auto device = it->find("cuda_device"); device != it->end() && device->is_string())
+            result.options.cuda_device = device->get<std::string>();
         if (const auto mode = it->find("vulkan_validation"); mode != it->end() && mode->is_number_integer()) {
             const auto value = mode->get<std::int64_t>();
             if (value >= 0 && value <= 2)

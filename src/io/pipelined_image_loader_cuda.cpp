@@ -278,7 +278,7 @@ namespace lfs::io {
 
             auto instance = [&requested_pool_size, create_eagerly] {
                 NvCodecImageLoader::Options opts;
-                opts.device_id = 0;
+                opts.device_id = lfs::core::selected_cuda_device();
                 opts.decoder_pool_size = requested_pool_size;
                 opts.enable_fallback = true;
                 opts.create_eagerly = create_eagerly;

@@ -401,12 +401,16 @@ TEST(PreferencesMigration, TensorBackendOptionsPersistWithoutChangingTheRunningB
     const auto active_backend = lfs::core::default_gpu_backend();
     const lfs::vis::TensorPreferenceState selected{
         .backend = lfs::core::GpuBackend::Vulkan,
-        .options = {.vulkan_device = "0", .vulkan_validation = 2, .force_fp32_half = true, .force_no_atomic_float = true},
+        .options = {.vulkan_device = "0", .rendering_vulkan_device = "different-renderer", .cuda_device = "independent-cuda-gpu", .vulkan_validation = 2, .force_fp32_half = true, .force_no_atomic_float = true},
     };
     preferences.setTensorBackend(selected);
     const auto saved = readPreferences(*paths).at("tensor_backend");
     EXPECT_EQ(saved.at("backend"), "vulkan");
     EXPECT_EQ(saved.at("vulkan_device"), "0");
+    EXPECT_EQ(saved.at("rendering_vulkan_device"), "different-renderer");
+    EXPECT_EQ(saved.at("cuda_device"), "independent-cuda-gpu");
+    EXPECT_EQ(preferences.tensorBackend().options.cuda_device, "independent-cuda-gpu");
+    EXPECT_EQ(preferences.tensorBackend().options.rendering_vulkan_device, "different-renderer");
     EXPECT_EQ(saved.at("vulkan_validation"), 2);
     EXPECT_TRUE(saved.at("force_fp32_half").get<bool>());
     EXPECT_TRUE(saved.at("force_no_atomic_float").get<bool>());
@@ -566,6 +570,8 @@ TEST(PreferencesMigration, StartupIgnoresBackendMissingFromBuildAndPreservesSave
     EXPECT_EQ(sanitized.options.vulkan_validation, 2);
     EXPECT_EQ(preferences.tensorBackend().backend, lfs::core::GpuBackend::Vulkan);
     EXPECT_EQ(readPreferences(*paths).at("tensor_backend").at("backend"), "vulkan");
+    EXPECT_EQ(readPreferences(*paths).at("tensor_backend").at("vulkan_device"), "0");
+    EXPECT_EQ(readPreferences(*paths).at("tensor_backend").at("vulkan_validation"), 2);
 }
 
 TEST(PreferencesMigration, MarketplacePreferencesPersistAndResetIndependently) {

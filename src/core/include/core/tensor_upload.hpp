@@ -86,6 +86,8 @@ namespace lfs::core {
         // Non-owning adapter for a backend execution target, including default.
         TensorWorkQueue(GpuBackend backend, void* execution_target);
         TensorWorkQueue(GpuBackend backend, void* vulkan_device, void* consumer_timeline);
+        // External-handle compatibility belongs to this consumer, not another window.
+        TensorWorkQueue(GpuBackend backend, void* vulkan_device, void* consumer_timeline, bool external_interop);
         class LFS_CORE_API Scope {
         public:
             explicit Scope(const TensorWorkQueue& queue);

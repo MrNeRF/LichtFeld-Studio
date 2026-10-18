@@ -2,6 +2,26 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Testing module - comprehensive tests for all components
+if(BUILD_TESTS OR BUILD_VISUALIZER_TESTS)
+    find_package(GTest CONFIG REQUIRED)
+    add_executable(gpu_configuration_policy_tests test_gpu_configuration_policy.cpp)
+    target_include_directories(gpu_configuration_policy_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core/include)
+    target_compile_features(gpu_configuration_policy_tests PRIVATE cxx_std_23)
+    target_compile_definitions(gpu_configuration_policy_tests PRIVATE LFS_STATIC_BUILD)
+    target_link_libraries(gpu_configuration_policy_tests PRIVATE GTest::gtest_main)
+    if(LFS_HAS_CUDA)
+        target_link_libraries(gpu_configuration_policy_tests PRIVATE CUDA::cudart)
+    endif()
+    add_test(NAME GpuConfigurationPolicy COMMAND gpu_configuration_policy_tests)
+    if(LFS_TENSOR_VULKAN)
+        add_executable(gpu_cross_device_interop_tests gpu_contract_main.cpp test_gpu_cross_device_interop.cpp)
+        target_compile_features(gpu_cross_device_interop_tests PRIVATE cxx_std_23)
+        target_link_libraries(gpu_cross_device_interop_tests PRIVATE lfs_core GTest::gtest)
+        add_test(NAME GpuCrossDeviceInterop COMMAND gpu_cross_device_interop_tests)
+        set_tests_properties(GpuCrossDeviceInterop PROPERTIES LABELS "gpu;interop" TIMEOUT 120)
+    endif()
+endif()
 if(BUILD_TESTS OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS)
     add_subdirectory(media)
 endif()

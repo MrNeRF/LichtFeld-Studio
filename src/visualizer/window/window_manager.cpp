@@ -849,6 +849,7 @@ namespace lfs::vis {
             return false;
         }
         graphics_context_->connectTensorBackend();
+        graphics_context_->publishPrimaryGpuState();
         if (!graphics_context_->presentBootstrapFrame(0.11f, 0.11f, 0.14f, 1.0f)) {
             std::cerr << "Failed to present graphics bootstrap frame: " << graphics_context_->lastError() << std::endl;
             graphics_context_->disconnectTensorBackend();

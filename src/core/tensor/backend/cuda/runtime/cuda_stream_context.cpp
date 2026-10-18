@@ -5,6 +5,7 @@
 #include "core/cuda_error.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
+#include "core/tensor_backend.hpp"
 #include "internal/tensor_impl.hpp"
 
 #include <format>
@@ -14,6 +15,7 @@ namespace lfs::core {
     static thread_local cudaStream_t tl_current_stream = nullptr;
 
     cudaStream_t getCurrentCUDAStream() {
+        activate_selected_cuda_device();
         return tl_current_stream;
     }
 

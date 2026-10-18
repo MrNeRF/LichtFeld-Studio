@@ -243,9 +243,12 @@ namespace lfs::vis {
         public:
             RasterizerArenaRenderGuard(
                 lfs::core::RasterizerMemoryArena::RenderHandoffToken* const handoff_token,
-                const bool camera_navigating)
+                const bool camera_navigating,
+                const bool direct_interop)
                 : handoff_token_(handoff_token),
                   camera_navigating_(camera_navigating) {
+                if (lfs::core::configured_gpu_backend() != lfs::core::GpuBackend::CUDA || !direct_interop)
+                    return;
                 if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
                     LOG_WARN("Rasterizer arena is unavailable without a usable CUDA device");
                     return;
@@ -1685,10 +1688,10 @@ namespace lfs::vis {
 
     bool VksplatViewportRenderer::hasLiveTrainerReleaseFence() const {
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
-        return static_cast<bool>(training_completion_);
-#else
-        return render_complete_timeline_ != VK_NULL_HANDLE;
+        if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::CUDA && (context_ && context_->directTensorInteropEnabled()))
+            return static_cast<bool>(training_completion_);
 #endif
+        return render_complete_timeline_ != VK_NULL_HANDLE;
     }
 
     VksplatViewportRenderer::~VksplatViewportRenderer() {
@@ -1716,15 +1719,17 @@ namespace lfs::vis {
         if (auto result = ensureInitialized(context); !result)
             return result;
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
-        const auto cuda_device = lfs::core::gpu_backend_device_info(lfs::core::GpuBackend::CUDA, 0);
+        if (lfs::core::configured_gpu_backend() != lfs::core::GpuBackend::CUDA || !(context_ && context_->directTensorInteropEnabled()))
+            return {};
+        const auto cuda_device = lfs::core::gpu_backend_device_info(lfs::core::GpuBackend::CUDA, lfs::core::selected_cuda_device());
         if (!cuda_device)
-            return std::unexpected("CUDA training requires CUDA device 0");
+            return std::unexpected("CUDA training requires an available selected CUDA device");
         VkPhysicalDeviceIDProperties identity{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
         VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         properties.pNext = &identity;
         vkGetPhysicalDeviceProperties2(context.physicalDevice(), &properties);
         if (!std::equal(cuda_device->uuid.begin(), cuda_device->uuid.end(), identity.deviceUUID))
-            return std::unexpected("CUDA training requires the viewport Vulkan device to match CUDA device 0");
+            return std::unexpected("Direct CUDA interop requires matching training and viewport GPUs");
         if (!training_completion_) {
             try {
                 training_completion_ = lfs::core::cuda::import_vulkan_semaphore(
@@ -1739,6 +1744,8 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::requestArenaHandoff() {
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
+        if (lfs::core::configured_gpu_backend() != lfs::core::GpuBackend::CUDA || !(context_ && context_->directTensorInteropEnabled()))
+            return;
         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
         arena_handoff_token_ = arena.request_render_handoff(arena_handoff_token_);
 #endif
@@ -1767,6 +1774,8 @@ namespace lfs::vis {
 
     bool VksplatViewportRenderer::pollArenaHandoff() {
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
+        if (lfs::core::configured_gpu_backend() != lfs::core::GpuBackend::CUDA || !(context_ && context_->directTensorInteropEnabled()))
+            return true;
         renewArenaHandoff();
         return lfs::core::GlobalArenaManager::instance().get_arena().render_frame_ready(arena_handoff_token_);
 #else
@@ -1776,6 +1785,8 @@ namespace lfs::vis {
 
     bool VksplatViewportRenderer::waitForArenaHandoff(const std::chrono::milliseconds timeout) {
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
+        if (lfs::core::configured_gpu_backend() != lfs::core::GpuBackend::CUDA || !(context_ && context_->directTensorInteropEnabled()))
+            return true;
         return waitForViewerArenaWindow(lfs::core::GlobalArenaManager::instance().get_arena(),
                                         arena_handoff_token_, timeout, kNavigationTrainingGrace);
 #else
@@ -2213,7 +2224,7 @@ namespace lfs::vis {
             layout.pool.regions[7] = region(lod_tree_meta_, lod_tree_meta_.bounds_offset, n * core::radq::kMetaBoundsBytes);
             layout.pool.regions[8] = region(lod_tree_meta_, lod_tree_meta_.links_offset, n * core::radq::kMetaLinksBytes);
         }
-        discardLodEngineResults(lod_upload_engine_.configure(std::move(layout), context_->device(), render_complete_timeline_),
+        discardLodEngineResults(lod_upload_engine_.configure(std::move(layout), context_->device(), render_complete_timeline_, context_->directTensorInteropEnabled()),
                                 "LOD pool layout changed before upload completed");
         lod_upload_engine_.noteRendererCompletion(last_lod_page_borrow_value_);
         const auto* tree = splat_data.lod_tree.get();
@@ -3069,6 +3080,8 @@ namespace lfs::vis {
         VulkanContext& context,
         const std::size_t required_bytes) {
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
+        if (lfs::core::configured_gpu_backend() != lfs::core::GpuBackend::CUDA || !(context_ && context_->directTensorInteropEnabled()))
+            return std::unexpected("Shared CUDA scratch is not used by the selected tensor backend");
         if (required_bytes == 0) {
             return std::unexpected("VkSplat shared scratch requested zero bytes");
         }
@@ -3418,6 +3431,8 @@ namespace lfs::vis {
         (void)viewport_size;
         return {};
 #else
+        if (lfs::core::configured_gpu_backend() != lfs::core::GpuBackend::CUDA || !(context_ && context_->directTensorInteropEnabled()))
+            return {};
         if (num_splats == 0 || viewport_size.x <= 0 || viewport_size.y <= 0) {
             return {};
         }
@@ -7881,7 +7896,7 @@ namespace lfs::vis {
         if (synchronize_input_read && shared_scratch_.block) {
             try {
                 renewArenaHandoff();
-                overlay_arena_guard.emplace(&arena_handoff_token_, camera_navigating_);
+                overlay_arena_guard.emplace(&arena_handoff_token_, camera_navigating_, context_ && context_->directTensorInteropEnabled());
             } catch (const std::exception& e) {
                 if (context_)
                     context_->noteFailure(e);
@@ -8765,7 +8780,8 @@ namespace lfs::vis {
         };
 
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
-        if (synchronize_input_upload) {
+        if (synchronize_input_upload &&
+            lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::CUDA && (context_ && context_->directTensorInteropEnabled())) {
             // A busy training arena makes this frame fall back to the cached viewport.
             // Do not resize output images until this render is guaranteed to proceed.
             releasePrivateScratchBuffers();
@@ -8780,7 +8796,7 @@ namespace lfs::vis {
             if (auto ok = ensureSharedScratchArena(context, required_shared_scratch); ok) {
                 try {
                     if (!shared_arena_guard) {
-                        shared_arena_guard.emplace(&arena_handoff_token_, camera_navigating_);
+                        shared_arena_guard.emplace(&arena_handoff_token_, camera_navigating_, context_ && context_->directTensorInteropEnabled());
                     }
                     // Pause can detach after ensureSharedScratchArena checked
                     // installation but before this frame acquired ownership.

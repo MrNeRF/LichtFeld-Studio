@@ -280,6 +280,7 @@ namespace lfs::core::internal {
             void* mapped = nullptr;
             uint64_t address = 0;
             size_t bytes = 0;
+            size_t source_bytes = 0;
             uint64_t pending = 0;
             uint64_t generation = 0;
 
@@ -294,6 +295,129 @@ namespace lfs::core::internal {
                 mapped = nullptr;
                 buffer = VK_NULL_HANDLE;
                 memory = VK_NULL_HANDLE;
+            }
+        };
+
+        // Foreign CUDA devices cannot share exported memory or semaphores.
+        // Each lease owns a snapshot, so subsequent frames cannot overwrite a
+        // buffer still read by the consumer. The caller holds the model read
+        // epoch while the synchronous host copy is prepared.
+        class HostTensorVulkanInterop final : public TensorVulkanInteropBackend {
+            struct Lease {
+                Tensor tensor;
+                std::shared_ptr<ForeignTensorBuffer> buffer;
+            };
+            VulkanInteropDevice target_;
+            GpuBackend backend_;
+            std::vector<std::weak_ptr<Lease>> leases_;
+
+        public:
+            HostTensorVulkanInterop(VulkanInteropDevice target, GpuBackend backend)
+                : target_(target), backend_(backend) {}
+            void shutdown() override {
+                for (auto& weak : leases_)
+                    if (auto lease = weak.lock())
+                        lease->buffer->release();
+                leases_.clear();
+            }
+            void release_timeline(void*) override {}
+            void drain() override { backend_ops(backend_).synchronize_device(); }
+            std::shared_ptr<void> execution_scope() override {
+                return std::make_shared<GpuBackendScope>(backend_);
+            }
+            Tensor empty_splat(TensorShape shape, size_t capacity, DataType dtype,
+                               std::string_view, bool) override {
+                return empty(std::move(shape), dtype, capacity);
+            }
+            Tensor empty(TensorShape shape, DataType dtype, size_t capacity) override {
+                GpuBackendScope scope(backend_);
+                auto tensor = Tensor::empty(std::move(shape), Device::GPU, dtype);
+                if (tensor.ndim() && capacity > tensor.size(0))
+                    tensor.reserve(capacity);
+                return tensor;
+            }
+            std::optional<TensorVulkanBuffer> buffer(const Tensor& tensor) override {
+                if (!tensor.is_valid() || gpu_backend_of(tensor) != backend_)
+                    return std::nullopt;
+                if (!tensor.is_contiguous())
+                    throw TensorError("Foreign GPU renderer input must be contiguous");
+                auto lease = std::make_shared<Lease>();
+                lease->tensor = tensor;
+                auto buffer = std::make_shared<ForeignTensorBuffer>();
+                lease->buffer = buffer;
+                buffer->device = static_cast<VkDevice>(target_.device);
+                // Packed masks and vectorized shader loads may access the final
+                // aligned word. Match the padding of native GPU storage, while
+                // exposing only logical tensor bytes to callers.
+                if (tensor.bytes() > std::numeric_limits<size_t>::max() - 255)
+                    throw TensorError("Foreign GPU tensor allocation size overflows");
+                buffer->bytes = (std::max<size_t>(tensor.bytes(), 1) + 255) & ~size_t{255};
+                VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+                info.size = buffer->bytes;
+                info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+                info.sharingMode = target_.queue_family_count > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+                if (target_.queue_family_count > 1) {
+                    info.queueFamilyIndexCount = target_.queue_family_count;
+                    info.pQueueFamilyIndices = target_.queue_families.data();
+                }
+                vk_check(nullptr, vkCreateBuffer(buffer->device, &info, nullptr, &buffer->buffer), "vkCreateBuffer(host tensor)");
+                VkMemoryRequirements requirements{};
+                vkGetBufferMemoryRequirements(buffer->device, buffer->buffer, &requirements);
+                VkPhysicalDeviceMemoryProperties memory{};
+                vkGetPhysicalDeviceMemoryProperties(static_cast<VkPhysicalDevice>(target_.physical_device), &memory);
+                const auto type = find_vulkan_memory_type(memory, requirements.memoryTypeBits,
+                                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                if (type == std::numeric_limits<uint32_t>::max())
+                    throw TensorError("Consumer GPU has no coherent host-visible tensor memory");
+                VkMemoryAllocateFlagsInfo flags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
+                flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+                VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+                allocation.pNext = &flags;
+                allocation.allocationSize = requirements.size;
+                allocation.memoryTypeIndex = type;
+                vk_check(nullptr, vkAllocateMemory(buffer->device, &allocation, nullptr, &buffer->memory), "vkAllocateMemory(host tensor)");
+                vk_check(nullptr, vkBindBufferMemory(buffer->device, buffer->buffer, buffer->memory, 0), "vkBindBufferMemory(host tensor)");
+                vk_check(nullptr, vkMapMemory(buffer->device, buffer->memory, 0, buffer->bytes, 0, &buffer->mapped), "vkMapMemory(host tensor)");
+                const auto host = tensor.cpu();
+                if (tensor.bytes())
+                    std::memcpy(buffer->mapped, host.data_ptr(), tensor.bytes());
+                std::memset(static_cast<std::byte*>(buffer->mapped) + tensor.bytes(), 0,
+                            buffer->bytes - tensor.bytes());
+                VkBufferDeviceAddressInfo address{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+                address.buffer = buffer->buffer;
+                buffer->address = vkGetBufferDeviceAddress(buffer->device, &address);
+                std::erase_if(leases_, [](const auto& value) { return value.expired(); });
+                leases_.push_back(lease);
+                return TensorVulkanBuffer{.buffer = buffer->buffer, .device_address = buffer->address, .bytes = tensor.bytes(), .keep_alive = lease, .device = target_.device};
+            }
+            TensorCompletion ready(std::span<const Tensor* const>) override { return {}; }
+            void wait(std::span<const Tensor* const> tensors, VulkanTimelinePoint point) override {
+                if (!point.semaphore || !point.value)
+                    return;
+                const auto semaphore = static_cast<VkSemaphore>(point.semaphore);
+                VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+                info.semaphoreCount = 1;
+                info.pSemaphores = &semaphore;
+                info.pValues = &point.value;
+                vk_check(nullptr, vkWaitSemaphores(static_cast<VkDevice>(target_.device), &info, 30'000'000'000ull), "vkWaitSemaphores(host tensor)");
+                for (const auto* tensor : tensors) {
+                    if (!tensor || !tensor->is_valid())
+                        continue;
+                    for (auto it = leases_.rbegin(); it != leases_.rend(); ++it) {
+                        auto lease = it->lock();
+                        if (!lease || lease->tensor.data_ptr() != tensor->data_ptr() ||
+                            lease->tensor.bytes() != tensor->bytes())
+                            continue;
+                        auto host = Tensor::empty(tensor->shape(), Device::CPU, tensor->dtype());
+                        std::memcpy(host.data_ptr(), lease->buffer->mapped, tensor->bytes());
+                        auto destination = *tensor;
+                        destination.copy_from(host);
+                        // Host staging must outlive the asynchronous GPU upload.
+                        backend_ops(backend_).synchronize_device();
+                        break;
+                    }
+                }
             }
         };
 
@@ -364,10 +488,7 @@ namespace lfs::core::internal {
                     wait.semaphoreCount = 1;
                     wait.pSemaphores = &semaphore;
                     wait.pValues = &point.value;
-                    VkResult status;
-                    do {
-                        status = vkWaitSemaphores(static_cast<VkDevice>(target_.device), &wait, 1'000'000'000);
-                    } while (status == VK_TIMEOUT);
+                    const auto status = vkWaitSemaphores(static_cast<VkDevice>(target_.device), &wait, 30'000'000'000ull);
                     vk_check(nullptr, status, "vkWaitSemaphores(foreign tensor consumer)");
                     for (const auto* tensor : tensors) {
                         const auto storage = storage_ref(*tensor);
@@ -404,10 +525,13 @@ namespace lfs::core::internal {
                 auto& cached = storage.meta->vulkan_interop_owners[target_.device];
                 auto buffer = std::static_pointer_cast<ForeignTensorBuffer>(cached);
                 if (!buffer || buffer->pending != pending || buffer->generation != generation ||
-                    buffer->bytes != storage.meta->gpu_descriptor.byte_size) {
+                    buffer->source_bytes != storage.meta->gpu_descriptor.byte_size) {
                     buffer = std::make_shared<ForeignTensorBuffer>();
                     buffer->device = static_cast<VkDevice>(target_.device);
-                    buffer->bytes = storage.meta->gpu_descriptor.byte_size;
+                    buffer->source_bytes = storage.meta->gpu_descriptor.byte_size;
+                    if (buffer->source_bytes > std::numeric_limits<size_t>::max() - 255)
+                        throw TensorError("Foreign GPU tensor allocation size overflows");
+                    buffer->bytes = (std::max<size_t>(buffer->source_bytes, 1) + 255) & ~size_t{255};
                     VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
                     info.size = buffer->bytes;
                     info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
@@ -438,7 +562,8 @@ namespace lfs::core::internal {
                     auto base_storage = storage;
                     base_storage.byte_offset = 0;
                     VulkanReadbackBuffer readback;
-                    readback.enqueue(base_storage, buffer->bytes, {});
+                    std::memset(static_cast<std::byte*>(buffer->mapped) + buffer->source_bytes, 0, buffer->bytes - buffer->source_bytes);
+                    readback.enqueue(base_storage, buffer->source_bytes, {});
                     readback.wait();
                     if (!readback.poll(buffer->mapped))
                         throw TensorError("Foreign tensor readback did not complete");
@@ -458,6 +583,10 @@ namespace lfs::core::internal {
             VulkanInteropDevice target_;
         };
     } // namespace
+
+    std::shared_ptr<TensorVulkanInteropBackend> make_host_vulkan_interop(VulkanInteropDevice target, GpuBackend backend) {
+        return std::make_shared<HostTensorVulkanInterop>(target, backend);
+    }
 
     std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_vulkan_interop(VulkanInteropDevice target) {
         return std::make_shared<VulkanTensorVulkanInterop>(target);

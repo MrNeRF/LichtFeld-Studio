@@ -7,6 +7,7 @@
   <div class="preferences-layout">
     <div class="preferences-nav">
       <button class="btn preferences-nav-item" data-class-active="show_general" data-event-click="show_general">@tr:preferences.general</button>
+      <button class="btn preferences-nav-item" data-class-active="show_hardware" data-event-click="show_hardware">@tr:preferences.hardware</button>
       <button class="btn preferences-nav-item" data-class-active="show_appearance" data-event-click="show_appearance">@tr:preferences.appearance</button>
       <button class="btn preferences-nav-item" data-class-active="show_viewport" data-event-click="show_viewport">@tr:preferences.viewport</button>
       <button class="btn preferences-nav-item" data-class-active="show_input" data-event-click="show_input">@tr:preferences.input</button>
@@ -18,44 +19,59 @@
     </div>
 
     <div class="preferences-content">
-      <div class="preferences-section" data-if="show_general">
-        <div class="section-header text-accent" data-class-is-expanded="tensor_backend_expanded" data-event-click="toggle_section('tensor_backend')">
-          <span class="section-arrow text-accent" data-class-is-expanded="tensor_backend_expanded">&#x25B6;</span>
-          <span class="text-accent">@tr:preferences.tensor_backend</span>
+      <div class="preferences-warning status-warning gpu-restart-notice" data-if="gpu_restart_required">@tr:preferences.gpu_restart_required</div>
+      <div class="preferences-section" data-if="show_hardware">
+        <div class="gpu-section-title text-accent"><span>@tr:preferences.gpu_active</span></div>
+        <div class="gpu-running-card">
+          <div class="preferences-row"><span class="preferences-label">@tr:preferences.gpu_training</span><span class="gpu-device-name">{{ gpu_active_tensor }}</span></div>
+          <div class="preferences-row"><span class="preferences-label">@tr:preferences.gpu_rendering</span><span class="gpu-device-name">{{ gpu_active_rendering }}</span></div>
         </div>
-        <div class="section-content" data-if="tensor_backend_expanded">
+        <div class="gpu-section-title text-accent"><span>@tr:preferences.gpu_next_start</span></div>
+        <div class="preferences-row">
+          <span class="preferences-label">@tr:preferences.tensor_backend</span>
+          <select class="preferences-select" data-value="tensor_backend">
+            <option value="auto">@tr:preferences.tensor_auto</option>
+            <option value="cuda" data-if="tensor_cuda_available || tensor_backend == 'cuda'" data-attrif-disabled="!tensor_cuda_available">@tr:preferences.tensor_cuda</option>
+            <option value="vulkan" data-if="tensor_vulkan_available || tensor_backend == 'vulkan'" data-attrif-disabled="!tensor_vulkan_available">@tr:preferences.tensor_vulkan</option>
+            <option value="metal" data-if="tensor_metal_available || tensor_backend == 'metal'" data-attrif-disabled="!tensor_metal_available">@tr:preferences.tensor_metal</option>
+          </select>
+        </div>
+        <div class="preferences-row" data-if="gpu_tensor_cuda">
+          <span class="preferences-label">@tr:preferences.gpu_training_device</span>
+          <select class="preferences-select gpu-device-select" data-value="tensor_cuda_device"><option data-for="device : cuda_devices" data-attr-value="device.value" data-attrif-disabled="device.disabled">{{ device.label }}</option></select>
+        </div>
+        <div class="preferences-row" data-if="gpu_tensor_vulkan">
+          <span class="preferences-label">@tr:preferences.gpu_training_device</span>
+          <select class="preferences-select gpu-device-select" data-value="tensor_vulkan_device"><option data-for="device : tensor_devices" data-attr-value="device.value" data-attrif-disabled="device.disabled">{{ device.label }}</option></select>
+        </div>
+        <div class="preferences-row" data-if="rendering_vulkan_available">
+          <span class="preferences-label">@tr:preferences.gpu_rendering_device</span>
+          <select class="preferences-select gpu-device-select" data-value="tensor_rendering_vulkan_device"><option data-for="device : rendering_devices" data-attr-value="device.value" data-attrif-disabled="device.disabled">{{ device.label }}</option></select>
+        </div>
+        <span class="preferences-description">@tr:preferences.gpu_independent_hint</span>
+        <span class="preferences-description">@tr:preferences.gpu_viewport_backend_hint</span>
+        <div class="gpu-section-title text-accent"><span>@tr:preferences.gpu_detected</span></div>
+        <div class="gpu-hardware-card" data-for="gpu : gpu_hardware">
+          <div class="gpu-device-name text-accent">{{ gpu.name }}</div>
+          <div>{{ gpu.backends }}</div><div class="preferences-description">{{ gpu.memory }}</div>
+          <div class="preferences-description status-warning">{{ gpu.details }}</div>
+        </div>
+        <button class="btn btn--secondary" data-event-click="refresh_gpu_hardware">@tr:preferences.gpu_refresh</button>
+        <div class="section-header text-accent" data-if="rendering_vulkan_available || tensor_vulkan_available" data-class-is-expanded="gpu_diagnostics_expanded" data-event-click="toggle_section('gpu_diagnostics')">
+          <span class="section-arrow text-accent" data-class-is-expanded="gpu_diagnostics_expanded">&#x25B6;</span><span>@tr:preferences.gpu_diagnostics</span>
+        </div>
+        <div class="section-content" data-if="gpu_diagnostics_expanded &amp;&amp; (rendering_vulkan_available || tensor_vulkan_available)">
+          <span class="preferences-description">@tr:preferences.gpu_diagnostics_hint</span>
           <div class="preferences-row">
-            <span class="preferences-label">@tr:preferences.tensor_backend</span>
-            <select class="preferences-select" data-value="tensor_backend">
-              <option value="auto">@tr:preferences.tensor_auto</option>
-              <option value="cuda" data-if="tensor_cuda_available">@tr:preferences.tensor_cuda</option>
-              <option value="vulkan" data-if="tensor_vulkan_available">@tr:preferences.tensor_vulkan</option>
-              <option value="metal" data-if="tensor_metal_available">@tr:preferences.tensor_metal</option>
-            </select>
-          </div>
-          <span class="preferences-description">@tr:preferences.tensor_restart</span>
-          <div class="preferences-row" data-if="tensor_vulkan_available">
-            <span class="preferences-label">@tr:preferences.tensor_device</span>
-            <input class="preferences-select" type="text" data-value="tensor_vulkan_device" />
-          </div>
-          <span class="preferences-description" data-if="tensor_vulkan_available">@tr:preferences.tensor_device_hint</span>
-          <div class="preferences-row" data-if="tensor_vulkan_available">
             <span class="preferences-label">@tr:preferences.tensor_validation</span>
-            <select class="preferences-select" data-value="tensor_vulkan_validation">
-              <option value="0">@tr:preferences.tensor_validation_off</option>
-              <option value="1">@tr:preferences.tensor_validation_api</option>
-              <option value="2">@tr:preferences.tensor_validation_sync</option>
-            </select>
+            <select class="preferences-select" data-value="tensor_vulkan_validation"><option value="0">@tr:preferences.tensor_validation_off</option><option value="1">@tr:preferences.tensor_validation_api</option><option value="2">@tr:preferences.tensor_validation_sync</option></select>
           </div>
-          <div class="preferences-row preferences-checkbox-row">
-            <span class="preferences-label">@tr:preferences.tensor_fp32_half</span>
-            <input type="checkbox" data-checked="tensor_force_fp32_half" />
-          </div>
-          <div class="preferences-row preferences-checkbox-row">
-            <span class="preferences-label">@tr:preferences.tensor_no_atomic_float</span>
-            <input type="checkbox" data-checked="tensor_force_no_atomic_float" />
-          </div>
+          <div class="preferences-row preferences-checkbox-row" data-if="gpu_tensor_vulkan"><span class="preferences-label">@tr:preferences.tensor_fp32_half</span><input type="checkbox" data-checked="tensor_force_fp32_half" /></div>
+          <div class="preferences-row preferences-checkbox-row" data-if="gpu_tensor_vulkan"><span class="preferences-label">@tr:preferences.tensor_no_atomic_float</span><input type="checkbox" data-checked="tensor_force_no_atomic_float" /></div>
         </div>
+      </div>
+
+      <div class="preferences-section" data-if="show_general">
         <div class="section-header text-accent" data-class-is-expanded="language_expanded" data-event-click="toggle_section('language')">
           <span class="section-arrow text-accent" data-class-is-expanded="language_expanded">&#x25B6;</span>
           <span class="text-accent">@tr:preferences.language_title</span>

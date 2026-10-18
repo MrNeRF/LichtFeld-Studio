@@ -610,3 +610,15 @@ body.fit-8 #upscaler-backend-chip .backend-value { display: none; }
 body.fit-9 #fps-group { margin-left: 2dp; }
 body.fit-9 .fps-separator { margin: 0 2dp; }
 body.fit-9 .backend-chip { margin-left: 2dp; padding: 0 2dp; }
+
+.gpu-restart-chip { display: flex; align-items: center; justify-content: center; box-sizing: border-box; margin-left: 6dp; margin-right: 8dp; padding: 0 7dp; height: 18dp; font-size: 11dp; white-space: nowrap; flex-shrink: 0; }
+
+.gpu-restart-chip.hidden { display: none; }
+.gpu-restart-symbol { display: none; font-weight: bold; }
+body.gpu-action-tiny .gpu-restart-label { display: none; }
+body.gpu-action-tiny .gpu-restart-symbol { display: inline; }
+body.gpu-action-tiny .gpu-restart-chip { margin-left: 4dp; padding: 0; width: 20dp; min-width: 20dp; }
+
+/* At the narrowest fit, prioritize the pending GPU action over UI telemetry. */
+body.fit-9.gpu-restart-pending .fps-ui-metric,
+body.fit-9.gpu-restart-pending .fps-separator { display: none; }

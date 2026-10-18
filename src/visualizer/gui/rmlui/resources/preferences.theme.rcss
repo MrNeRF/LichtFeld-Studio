@@ -98,3 +98,14 @@
 .preferences-conflict-message {
     color: @{text};
 }
+
+.gpu-running-card,
+.gpu-hardware-card {
+    border-color: @{border};
+    background-color: @{alpha(surface_bright,0.2)};
+}
+
+.gpu-restart-notice {
+    border-color: @{warning};
+    background-color: @{blend(surface,warning,0.10)};
+}

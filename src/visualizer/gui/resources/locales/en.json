@@ -956,6 +956,24 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "hardware": "Hardware & GPUs",
+    "gpu_active": "Currently running",
+    "gpu_next_start": "Configuration for next launch",
+    "gpu_training": "Training and computation",
+    "gpu_rendering": "Viewport rendering",
+    "gpu_training_device": "Training GPU",
+    "gpu_rendering_device": "Viewport GPU",
+    "gpu_independent_hint": "Training and the viewport can use different GPUs. Transfers between GPUs may reduce viewport performance.",
+    "gpu_viewport_backend_hint": "The viewport backend is fixed for this build of LichtFeld Studio.",
+    "gpu_detected": "Detected graphics cards",
+    "gpu_refresh": "Refresh device list",
+    "gpu_diagnostics": "Advanced Vulkan diagnostics",
+    "gpu_diagnostics_hint": "Change these options only when diagnosing a GPU issue. They can affect performance.",
+    "gpu_restart_required": "GPU changes are saved but are not active yet. Restart LichtFeld Studio to apply them.",
+    "gpu_memory_shared": "Shared memory · {size} GiB reported by the driver",
+    "gpu_memory_dedicated": "{size} GiB GPU memory",
+    "gpu_system_default": "System GPU",
+    "gpu_unavailable": "Unavailable",
     "marketplace": "Marketplace",
     "marketplace_layout": "Layout",
     "marketplace_git_checkout_description": "Installs a Git clone instead of a source archive, so you can inspect changes and use Git tools in the plugin folder. Requires Git; otherwise an archive is used.",
@@ -2297,6 +2315,8 @@
     "reload": "Reload"
   },
   "status_bar": {
+    "gpu_restart_required": "Restart needed",
+    "gpu_restart_tooltip": "GPU settings have changed. The current GPUs remain in use until LichtFeld Studio restarts. Click to review Hardware & GPUs.",
     "preview_reduced": "Preview resolution reduced (GPU memory)",
     "safe_mode": "SAFE MODE",
     "mcp_preferences": "Edit",

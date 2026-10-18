@@ -6,6 +6,7 @@
 #include "core/camera_metrics.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/gpu_device_info.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/number_format.hpp"
@@ -33,6 +34,7 @@
 #include "rendering/scene_upscaler_registry.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
+#include "window/graphics_context.hpp"
 #include <RmlUi/Core/StringUtilities.h>
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
@@ -534,6 +536,12 @@ namespace lfs::vis::gui {
         ctor.Bind("tensor_label", &model_.tensor_label);
         ctor.Bind("tensor_value", &model_.tensor_value);
         ctor.Bind("tensor_tooltip", &model_.tensor_tooltip);
+        ctor.Bind("gpu_restart_required", &model_.gpu_restart_required);
+        ctor.Bind("gpu_restart_text", &model_.gpu_restart_text);
+        ctor.Bind("gpu_restart_tooltip", &model_.gpu_restart_tooltip);
+        ctor.BindEventCallback("open_gpu_preferences", [](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            openPreferencesPanel("hardware");
+        });
         model_handle_ = ctor.GetModelHandle();
 
         try {
@@ -752,7 +760,7 @@ namespace lfs::vis::gui {
 
     bool RmlStatusBar::layoutFits(const float reserve_px) const {
         assert(reserve_px >= 0.0f);
-        if (!document_)
+        if (!document_ || !rml_context_)
             return false;
 
         auto* const body = document_->GetElementById("body");
@@ -769,7 +777,8 @@ namespace lfs::vis::gui {
             return element->GetScrollHeight() <= element->GetClientHeight() + tolerance_px;
         };
 
-        return height_fits(body) && height_fits(status_left) && height_fits(status_right) &&
+        return status_right->GetAbsoluteOffset().x + status_right->GetOffsetWidth() <= rml_context_->GetDimensions().x + tolerance_px &&
+               height_fits(body) && height_fits(status_left) && height_fits(status_right) &&
                neededContentWidth(status_left) + reserve_px <=
                    status_left->GetBox().GetSize().x + tolerance_px &&
                neededContentWidth(status_right) <=
@@ -797,6 +806,13 @@ namespace lfs::vis::gui {
         if (!document_ || !rml_context_ || save_step_interaction_.dragging)
             return;
 
+        if (auto* body = document_->GetElementById("body")) {
+            const bool tiny = rml_context_->GetDimensions().x <= 640.0f * rml_context_->GetDensityIndependentPixelRatio();
+            if (body->IsClassSet("gpu-action-tiny") != tiny) {
+                body->SetClass("gpu-action-tiny", tiny);
+                rml_context_->Update();
+            }
+        }
         const int entry_level = fit_level_;
         while (!layoutFits(0.0f) && fit_level_ < kMaxFitLevel) {
             ++fit_level_;
@@ -1719,6 +1735,19 @@ namespace lfs::vis::gui {
         setModelString("fps_color", model_.fps_color, colorToRml(p.text));
         setModelString("fps_label", model_.fps_label, LOC(lichtfeld::Strings::Status::FPS));
         const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
+        std::string renderer_name;
+        if (viewer && viewer->getWindowManager()) {
+            if (const auto* graphics = viewer->getWindowManager()->getGraphicsContext())
+                renderer_name = graphics->deviceName();
+        }
+        std::string tensor_name;
+        if (const auto info = core::gpu_backend_device_info(core::configured_gpu_backend()))
+            tensor_name = info->name;
+        if (renderer_name != renderer_gpu_name_ || tensor_name != tensor_gpu_name_) {
+            renderer_gpu_name_ = std::move(renderer_name);
+            tensor_gpu_name_ = std::move(tensor_name);
+            backend_status_stamp_.reset();
+        }
         if (backend_manager)
             updateBackendContent(backend_manager->activeViewerBackend());
         else
@@ -1739,6 +1768,7 @@ namespace lfs::vis::gui {
             (model_.preview_reduced ? uint32_t{1} << 10 : 0) |
             (model_.show_status_message ? uint32_t{1} << 6 : 0) |
             (model_.show_gpu_model ? uint32_t{1} << 7 : 0);
+        section_signature_ |= model_.gpu_restart_required ? uint32_t{1} << 11 : 0;
 
         // A paused trainer has a static progress display. Keep the miner's
         // periodic refresh armed only while its particles actually advance.
@@ -1765,17 +1795,23 @@ namespace lfs::vis::gui {
         // tensor preferences or reuse another view's output for an empty view.
         constexpr auto configured = rendering::desktopViewerBackend();
         const auto tensor_backend = core::configured_gpu_backend();
+        const auto gpu_status = gpuPreferenceRuntimeStatus();
         const BackendStatusStamp stamp{published_backend, static_cast<int>(configured),
                                        static_cast<int>(tensor_backend),
-                                       lfs::vis::app_store().language_generation.get()};
+                                       lfs::vis::app_store().language_generation.get(), gpu_status.restart_required};
         if (backend_status_stamp_ == stamp)
             return;
         backend_status_stamp_ = stamp;
+        setModelBool("gpu_restart_required", model_.gpu_restart_required, gpu_status.restart_required);
+        setModelString("gpu_restart_text", model_.gpu_restart_text, LOC("status_bar.gpu_restart_required"));
+        setModelString("gpu_restart_tooltip", model_.gpu_restart_tooltip, LOC("status_bar.gpu_restart_tooltip"));
         const auto active_renderer = std::string(rendering::viewerBackendDisplayName(published_backend.value_or(configured)));
         setModelString("renderer_label", model_.renderer_label, LOC("status_bar.renderer_backend_short"));
         setModelString("renderer_value", model_.renderer_value, active_renderer);
         auto renderer_tooltip = std::string(LOC("status_bar.renderer_backend")) + ": " +
                                 LOC("status_bar.renderer_backend_tooltip");
+        if (!renderer_gpu_name_.empty())
+            renderer_tooltip += "\nGPU: " + renderer_gpu_name_;
         if (!published_backend)
             renderer_tooltip += std::string("\n") + LOC("status_bar.backend_no_frame");
         setModelString("renderer_tooltip", model_.renderer_tooltip, std::move(renderer_tooltip));
@@ -1783,7 +1819,8 @@ namespace lfs::vis::gui {
         setModelString("tensor_value", model_.tensor_value,
                        core::gpu_backend_name(tensor_backend));
         setModelString("tensor_tooltip", model_.tensor_tooltip,
-                       std::string(LOC("status_bar.tensor_backend")) + ": " + LOC("status_bar.tensor_backend_tooltip"));
+                       std::string(LOC("status_bar.tensor_backend")) + ": " + LOC("status_bar.tensor_backend_tooltip") +
+                           (tensor_gpu_name_.empty() ? "" : "\nGPU: " + tensor_gpu_name_));
     }
 
     void RmlStatusBar::selectUpscaler(const std::string& backend_id, const std::optional<std::string>& preset_id) {

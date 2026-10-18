@@ -84,6 +84,7 @@ namespace lfs::core::internal {
 #ifdef __APPLE__
         bool metal_objects = false;
 #endif
+        bool subgroup_size_control = false;
         VkQueue consumer_queue = VK_NULL_HANDLE;
         std::mutex* consumer_queue_mutex = nullptr;
     };

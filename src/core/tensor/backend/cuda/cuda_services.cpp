@@ -19,6 +19,7 @@
 #include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_label.hpp"
 #include "core/tensor_vulkan_interop.hpp"
@@ -40,6 +41,7 @@ namespace lfs::core {
     }
 
     TensorCudaStream::TensorCudaStream() {
+        activate_selected_cuda_device();
         LFS_CUDA_CHECK(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
     }
 
@@ -318,7 +320,7 @@ namespace lfs::core {
             MemoryInfo result;
             LFS_CUDA_CHECK(cudaMemGetInfo(&result.free_bytes, &result.total_bytes));
             result.allocated_bytes = result.total_bytes - result.free_bytes;
-            result.device_id = 0;
+            LFS_CUDA_CHECK(cudaGetDevice(&result.device_id));
             return result;
         }
 

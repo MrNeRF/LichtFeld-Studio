@@ -15,6 +15,7 @@
 #include "core/environment.hpp"
 #include "core/exportable_storage.hpp"
 #include "core/gpu_device_info.hpp"
+#include "core/gpu_device_selection.hpp"
 #include "core/headless_vulkan_device.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -144,7 +145,9 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] std::optional<lfs::core::GpuDeviceInfo> interopCudaDevice() {
-            return lfs::core::gpu_backend_device_info(lfs::core::default_gpu_backend(), 0);
+            if (lfs::core::configured_gpu_backend() != lfs::core::GpuBackend::CUDA)
+                return std::nullopt;
+            return lfs::core::gpu_backend_device_info(lfs::core::GpuBackend::CUDA, lfs::core::selected_cuda_device());
         }
 
         [[nodiscard]] bool isPreVoltaCudaDevice(const std::array<std::uint8_t, VK_UUID_SIZE>& vk_device_uuid) {
@@ -536,13 +539,31 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::initHeadless() {
-        const bool interop = lfs::core::tensor_backend_needs_vulkan_interop();
+        bool interop = lfs::core::tensor_backend_needs_vulkan_interop();
+        const bool cuda_tensor = interop;
         const auto cuda_device = interop ? interopCudaDevice() : std::nullopt;
         if (interop && !cuda_device)
-            return fail("Cannot identify CUDA device 0 for off-screen Vulkan interop");
+            return fail("Cannot identify the selected CUDA GPU for off-screen Vulkan interop");
+        const auto options = lfs::core::tensor_backend_options();
+        const std::string requested_device(lfs::core::rendering_device_preference(options, lfs::core::configured_gpu_backend()));
+        if (interop && !requested_device.empty()) {
+            const auto devices = lfs::core::enumerate_vulkan_hardware();
+            const auto selected = lfs::core::find_gpu_device<lfs::core::VulkanHardwareDevice>(devices, requested_device);
+            interop = selected && lfs::core::normalize_gpu_identity(devices[*selected].uuid) ==
+                                      lfs::core::gpu_identity_string(cuda_device->uuid);
+        }
+        cuda_device_matches_ = !cuda_tensor || interop;
         auto owner = lfs::core::HeadlessAdoptedDevice::try_create(
-            interop, true, lfs::core::tensor_backend_options().vulkan_device,
-            cuda_device ? std::make_optional(cuda_device->uuid) : std::nullopt);
+            interop, true, requested_device,
+            interop && cuda_device ? std::make_optional(cuda_device->uuid) : std::nullopt);
+        if (!owner && !requested_device.empty()) {
+            LOG_WARN("GPU fallback: role=off-screen rendering, requested={}, effective=Auto, reason=GPU unavailable or incompatible with rendering/interop; saved preference preserved",
+                     requested_device);
+            auto fallback_owner = lfs::core::HeadlessAdoptedDevice::try_create(
+                interop, true, "", interop && cuda_device ? std::make_optional(cuda_device->uuid) : std::nullopt);
+            if (fallback_owner)
+                owner.emplace(std::move(*fallback_owner));
+        }
         if (!owner)
             return fail("No Vulkan device supports off-screen rendering");
         const auto handles = owner->release();
@@ -572,7 +593,22 @@ namespace lfs::vis {
         compute_queue_ = graphics_queue_;
         transfer_queue_ = graphics_queue_;
         graphics_queue_family_ = present_queue_family_ = compute_queue_family_ = transfer_queue_family_ = handles.queue_family;
-        if (!interop && lfs::core::tensor_backend_shares_vulkan_device()) {
+        bool adopt_tensor = !cuda_tensor && lfs::core::tensor_backend_shares_vulkan_device();
+        if (adopt_tensor && !options.vulkan_device.empty()) {
+            VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+            VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            properties.pNext = &ids;
+            vkGetPhysicalDeviceProperties2(physical_device_, &properties);
+            lfs::core::VulkanDeviceUuid uuid{};
+            std::copy_n(ids.deviceUUID, uuid.size(), uuid.begin());
+            const auto devices = lfs::core::enumerate_vulkan_physical_devices(instance_);
+            const auto found = std::find(devices.devices.begin(), devices.devices.end(), physical_device_);
+            adopt_tensor = found != devices.devices.end() && lfs::core::matches_vulkan_device_preference(
+                                                                 options.vulkan_device, found - devices.devices.begin(), uuid);
+            if (!adopt_tensor)
+                LOG_INFO("Off-screen rendering and tensor Vulkan GPUs differ; using host-staged transfers");
+        }
+        if (adopt_tensor) {
             if (auto result = lfs::core::adopt_vulkan_device(handles); !result)
                 return fail(std::string(result.error().user_message()));
         }
@@ -2543,7 +2579,8 @@ namespace lfs::vis {
         const auto& devices = enumeration.devices;
 
         const auto cuda_device = interopCudaDevice();
-        const auto requested_device = lfs::core::tensor_backend_options().vulkan_device;
+        const auto options = lfs::core::tensor_backend_options();
+        std::string requested_device(lfs::core::rendering_device_preference(options, lfs::core::configured_gpu_backend()));
         const auto matches_requested = [&](VkPhysicalDevice device, std::size_t index) {
             VkPhysicalDeviceIDProperties id{};
             id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
@@ -2556,74 +2593,79 @@ namespace lfs::vis {
             return lfs::core::matches_vulkan_device_preference(requested_device, index, uuid);
         };
 
-        VkPhysicalDevice fallback = VK_NULL_HANDLE;
-        VkPhysicalDevice first_discrete = VK_NULL_HANDLE;
-        for (std::size_t index = 0; index < devices.size(); ++index) {
-            const auto device = devices[index];
-            if (!matches_requested(device, index))
-                continue;
-            const QueueFamilies families = findQueueFamilies(device);
-            if (!families.complete() || !deviceSupportsSwapchain(device)) {
-                continue;
-            }
-
-            const SwapchainSupport swapchain = querySwapchainSupport(device);
-            if (swapchain.formats.empty() || swapchain.present_modes.empty()) {
-                continue;
-            }
-
-            VkPhysicalDeviceProperties props{};
-            vkGetPhysicalDeviceProperties(device, &props);
-            if (props.apiVersion < VK_API_VERSION_1_3) {
-                LOG_WARN("Skipping Vulkan device '{}' because it exposes Vulkan {}, but 1.3 is required",
-                         props.deviceName,
-                         vulkanApiVersionString(props.apiVersion));
-                continue;
-            }
-
-            const auto feature_check = lfs::core::check_vulkan_feature_requirements(
-                device, {.viewer_shaders = true, .window_renderer = true});
-            if (!feature_check.supported()) {
-                LOG_WARN("Skipping Vulkan device '{}' because required Vulkan 1.2/1.3 features are missing: {}",
-                         props.deviceName,
-                         feature_check.missing);
-                continue;
-            }
-
-            if (!requested_device.empty()) {
-                if (cuda_device && !vulkanDeviceMatchesCudaDevice(device, *cuda_device))
-                    return fail("The selected Vulkan device must match CUDA device 0 when using CUDA tensors or training");
-                physical_device_ = device;
-                break;
-            }
-
-            if (fallback == VK_NULL_HANDLE) {
-                fallback = device;
-            }
-            if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-                // Prefer the discrete GPU that matches CUDA's device 0. Picking
-                // the first discrete GPU in Vulkan's enumeration order can land
-                // the viewer on a different physical card than the CUDA trainer
-                // on multi-GPU systems; CUDA<->Vulkan external-memory import then
-                // fails (VK_ERROR_OUT_OF_DEVICE_MEMORY) and corrupts the CUDA
-                // context, surfacing as a spurious "out of GPU memory".
-                if (first_discrete == VK_NULL_HANDLE) {
-                    first_discrete = device;
+        for (;;) {
+            VkPhysicalDevice fallback = VK_NULL_HANDLE;
+            VkPhysicalDevice first_discrete = VK_NULL_HANDLE;
+            for (std::size_t index = 0; index < devices.size(); ++index) {
+                const auto device = devices[index];
+                if (!matches_requested(device, index))
+                    continue;
+                const QueueFamilies families = findQueueFamilies(device);
+                if (!families.complete() || !deviceSupportsSwapchain(device)) {
+                    continue;
                 }
-                if (cuda_device && vulkanDeviceMatchesCudaDevice(device, *cuda_device)) {
+
+                const SwapchainSupport swapchain = querySwapchainSupport(device);
+                if (swapchain.formats.empty() || swapchain.present_modes.empty()) {
+                    continue;
+                }
+
+                VkPhysicalDeviceProperties props{};
+                vkGetPhysicalDeviceProperties(device, &props);
+                if (props.apiVersion < VK_API_VERSION_1_3) {
+                    LOG_WARN("Skipping Vulkan device '{}' because it exposes Vulkan {}, but 1.3 is required",
+                             props.deviceName,
+                             vulkanApiVersionString(props.apiVersion));
+                    continue;
+                }
+
+                const auto feature_check = lfs::core::check_vulkan_feature_requirements(
+                    device, {.viewer_shaders = true, .window_renderer = true});
+                if (!feature_check.supported()) {
+                    LOG_WARN("Skipping Vulkan device '{}' because required Vulkan 1.2/1.3 features are missing: {}",
+                             props.deviceName,
+                             feature_check.missing);
+                    continue;
+                }
+
+                if (!requested_device.empty()) {
                     physical_device_ = device;
                     break;
                 }
-            }
-        }
 
-        // No CUDA-matched discrete GPU: keep the legacy "first discrete" choice,
-        // then any presentable device.
-        if (physical_device_ == VK_NULL_HANDLE) {
-            physical_device_ = first_discrete;
-        }
-        if (physical_device_ == VK_NULL_HANDLE) {
-            physical_device_ = fallback;
+                if (fallback == VK_NULL_HANDLE) {
+                    fallback = device;
+                }
+                if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+                    // Prefer the discrete GPU that matches CUDA's device 0. Picking
+                    // the first discrete GPU in Vulkan's enumeration order can land
+                    // the viewer on a different physical card than the CUDA trainer
+                    // on multi-GPU systems; CUDA<->Vulkan external-memory import then
+                    // fails (VK_ERROR_OUT_OF_DEVICE_MEMORY) and corrupts the CUDA
+                    // context, surfacing as a spurious "out of GPU memory".
+                    if (first_discrete == VK_NULL_HANDLE) {
+                        first_discrete = device;
+                    }
+                    if (cuda_device && vulkanDeviceMatchesCudaDevice(device, *cuda_device)) {
+                        physical_device_ = device;
+                        break;
+                    }
+                }
+            }
+
+            // No CUDA-matched discrete GPU: keep the legacy "first discrete" choice,
+            // then any presentable device.
+            if (physical_device_ == VK_NULL_HANDLE) {
+                physical_device_ = first_discrete;
+            }
+            if (physical_device_ == VK_NULL_HANDLE) {
+                physical_device_ = fallback;
+            }
+            if (physical_device_ != VK_NULL_HANDLE || requested_device.empty())
+                break;
+            LOG_WARN("GPU fallback: role=rendering, requested={}, effective=Auto, reason=GPU cannot present to this window or required features are unavailable; saved preference preserved",
+                     requested_device);
+            requested_device.clear();
         }
         if (physical_device_ == VK_NULL_HANDLE) {
             return fail("No selected Vulkan device supports graphics presentation, swapchain creation, Vulkan 1.3, and required features");
@@ -2640,6 +2682,10 @@ namespace lfs::vis {
         props2.pNext = &id_props;
         vkGetPhysicalDeviceProperties2(physical_device_, &props2);
         std::memcpy(device_uuid_.data(), id_props.deviceUUID, VK_UUID_SIZE);
+        const bool direct = !cuda_device || vulkanDeviceMatchesCudaDevice(physical_device_, *cuda_device);
+        cuda_device_matches_ = direct;
+        if (!direct)
+            LOG_INFO("Training and rendering use different physical GPUs; transferring tensors through host memory (CUDA external interop disabled)");
         return true;
     }
 
@@ -2758,7 +2804,7 @@ namespace lfs::vis {
         const bool has_platform_external_memory =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
 #endif
-        const bool enable_external_memory = has_external_memory && has_platform_external_memory;
+        const bool enable_external_memory = has_external_memory && has_platform_external_memory && cuda_device_matches_;
         if (enable_external_memory) {
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
 #ifdef _WIN32
@@ -2778,7 +2824,7 @@ namespace lfs::vis {
         const bool has_platform_external_semaphore =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
 #endif
-        const bool enable_external_semaphore = has_external_semaphore && has_platform_external_semaphore;
+        const bool enable_external_semaphore = has_external_semaphore && has_platform_external_semaphore && cuda_device_matches_;
         if (enable_external_semaphore) {
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME);
 #ifdef _WIN32
@@ -3081,6 +3127,7 @@ namespace lfs::vis {
             tensor_backend_device_.vulkan_memory_model_device_scope =
                 features12.vulkanMemoryModelDeviceScope == VK_TRUE;
             tensor_backend_device_.cooperative_matrix = enable_cooperative_matrix;
+            tensor_backend_device_.subgroup_size_control = features13.subgroupSizeControl == VK_TRUE;
             tensor_backend_device_.complete =
                 tensor_backend_device_.queue != VK_NULL_HANDLE &&
                 features2.features.shaderInt64 == VK_TRUE && features2.features.shaderInt16 == VK_TRUE &&
@@ -3143,16 +3190,8 @@ namespace lfs::vis {
         vkGetPhysicalDeviceProperties(physical_device_, &device_properties);
         line_width_range_[0] = device_properties.limits.lineWidthRange[0];
         line_width_range_[1] = device_properties.limits.lineWidthRange[1];
-#ifdef __APPLE__
-        constexpr bool require_external_interop = false;
-#else
-        const bool require_external_interop = LFS_HAS_CUDA || !tensor_backend_device_.complete;
-#endif
-        if (require_external_interop && !external_memory_interop_enabled_) {
-            return fail("Vulkan external memory interop is required (KHR_external_memory + platform variant); device is missing the extension(s)");
-        }
-        if (require_external_interop && !external_semaphore_interop_enabled_) {
-            return fail("Vulkan external timeline-semaphore interop is required (KHR_external_semaphore + platform variant); device is missing the extension(s)");
+        if (lfs::core::tensor_backend_needs_vulkan_interop() && !directTensorInteropEnabled()) {
+            LOG_INFO("GPU transfer fallback: role=rendering, effective=host-staged tensors, reason=training and viewport cannot share external GPU memory/semaphores");
         }
         return true;
     }
@@ -3692,8 +3731,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;

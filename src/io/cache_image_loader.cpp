@@ -717,7 +717,7 @@ namespace lfs::io {
 
             std::call_once(init_flag, [] {
                 NvCodecImageLoader::Options opts;
-                opts.device_id = 0;
+                opts.device_id = lfs::core::selected_cuda_device();
                 opts.decoder_pool_size = DEFAULT_DECODER_POOL_SIZE;
                 opts.enable_fallback = true;
                 instance = new NvCodecImageLoader(opts);

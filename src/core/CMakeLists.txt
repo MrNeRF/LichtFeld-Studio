@@ -338,6 +338,9 @@ add_dependencies(lfs_core lfs_core_abi_stamp)
 target_include_directories(lfs_core BEFORE PRIVATE "${LFS_CORE_ABI_INCLUDE_DIR}")
 
 target_compile_definitions(lfs_core PRIVATE LFS_CORE_EXPORTS LFS_TENSOR_PRIVATE_ACCESS)
+if(LFS_HAS_CUDA)
+    target_compile_definitions(lfs_core PRIVATE LFS_MIN_SM=${LFS_RUNTIME_MIN_SM})
+endif()
 
 # Keep headless descriptors and the English UI catalogue identical, including
 # before the localisation manager is initialised.
@@ -439,6 +442,13 @@ target_link_libraries(lfs_core
 )
 # OpenMP for tensor multi-threaded operations
 find_package(OpenMP)
+if(MSVC AND LFS_HAS_CUDA)
+    # A complete CUDA+Vulkan build must start on machines without NVIDIA's
+    # driver DLL. Propagate delay loading to consumers using driver APIs too.
+    target_link_options(lfs_core PUBLIC "/DELAYLOAD:nvcuda.dll")
+    target_link_libraries(lfs_core PUBLIC delayimp)
+endif()
+
 if(OpenMP_CXX_FOUND)
     target_link_libraries(lfs_core PRIVATE OpenMP::OpenMP_CXX)
     message(STATUS "[ok] OpenMP support enabled for lfs_core")

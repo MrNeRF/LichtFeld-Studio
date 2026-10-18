@@ -28,6 +28,7 @@ namespace lfs::vis {
         LodUploadEngine(const LodUploadEngine&) = delete;
         LodUploadEngine& operator=(const LodUploadEngine&) = delete;
         std::vector<LodPageCache::PendingUpload> configure(DeviceLayout layout, void* device = nullptr, void* consumer_timeline = nullptr);
+        std::vector<LodPageCache::PendingUpload> configure(DeviceLayout layout, void* device, void* consumer_timeline, bool external_interop);
         [[nodiscard]] bool configured() const;
         [[nodiscard]] bool idle() const;
         [[nodiscard]] size_t stagingBytes() const;

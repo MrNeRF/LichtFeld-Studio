@@ -437,6 +437,10 @@ namespace {
             bound &= constructor.Bind("fps_view_label", &model_.fps_view_label);
             bound &= constructor.Bind("fps_color", &model_.fps_color);
             bound &= constructor.Bind("fps_label", &model_.fps_label);
+            bound &= constructor.Bind("gpu_restart_required", &model_.gpu_restart_required);
+            bound &= constructor.Bind("gpu_restart_text", &model_.gpu_restart_text);
+            bound &= constructor.Bind("gpu_restart_tooltip", &model_.gpu_restart_tooltip);
+            bound &= constructor.BindEventCallback("open_gpu_preferences", [](auto, auto&, const auto&) {});
             bound &= constructor.Bind("renderer_label", &model_.renderer_label);
             bound &= constructor.Bind("renderer_value", &model_.renderer_value);
             bound &= constructor.Bind("renderer_tooltip", &model_.renderer_tooltip);
@@ -668,6 +672,36 @@ namespace {
             }
         }
         EXPECT_TRUE(loc.setLanguage("en"));
+    }
+
+    TEST_F(StatusBarFitTest, PendingGpuRestartStaysVisibleWithoutOverlappingBackendBadges) {
+        model_.gpu_restart_required = true;
+        model_.gpu_restart_text = "Restart needed";
+        model_.gpu_restart_tooltip = "Restart to apply the saved GPU selection";
+        model_handle_.DirtyVariable("gpu_restart_required");
+        model_handle_.DirtyVariable("gpu_restart_text");
+        model_handle_.DirtyVariable("gpu_restart_tooltip");
+        auto* chip = document_->GetElementById("gpu-restart-chip");
+        ASSERT_NE(chip, nullptr);
+        auto* label = chip->QuerySelector(".gpu-restart-label");
+        ASSERT_NE(label, nullptr);
+        for (const int width : {1280, 960, 640, 480, 320}) {
+            SCOPED_TRACE(width);
+            context_->SetDimensions({width, 22});
+            context_->Update();
+            lfs::vis::gui::RmlStatusBarTestAccess::fit(status_bar_, true);
+            context_->Update();
+            EXPECT_TRUE(chip->IsVisible(true));
+            EXPECT_GT(chip->GetOffsetWidth(), 0.0f);
+            EXPECT_EQ(label->IsVisible(true), width > 640);
+            EXPECT_LE(chip->GetAbsoluteOffset().x + chip->GetOffsetWidth(), width + 0.5f);
+            assertNoVerticalOverflow(document_);
+            assertFlexSiblingsDoNotOverlap(document_);
+        }
+        model_.gpu_restart_required = false;
+        model_handle_.DirtyVariable("gpu_restart_required");
+        context_->Update();
+        EXPECT_FALSE(chip->IsVisible(true));
     }
 
     TEST_F(StatusBarFitTest, KeepsSingleLineNonOverlappingLayoutAcrossWidths) {

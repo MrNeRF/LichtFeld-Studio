@@ -27,6 +27,14 @@ namespace lfs::vis {
         core::TensorBackendOptions options;
     };
 
+    struct GpuPreferenceRuntimeStatus {
+        bool restart_required = false;
+        std::string tensor_backend, tensor_gpu, rendering_gpu;
+    };
+    LFS_VIS_API void recordGpuStartupPreferences(const TensorPreferenceState& requested);
+    LFS_VIS_API void publishRenderingGpuIdentity(std::string uuid, std::string name, bool tensor_adoption_available = false);
+    [[nodiscard]] LFS_VIS_API GpuPreferenceRuntimeStatus gpuPreferenceRuntimeStatus();
+
     struct McpPreferenceState {
         bool enabled = true;
         bool expose_network = false;

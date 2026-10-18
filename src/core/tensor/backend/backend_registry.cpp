@@ -5,6 +5,7 @@
 
 #include "../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
+#include "core/tensor_backend.hpp"
 #ifdef LFS_TENSOR_VULKAN
 #include "vulkan/vk_backend_ops.hpp"
 #endif
@@ -29,6 +30,7 @@ namespace lfs::core::internal {
     GpuBackendOps& backend_ops(const GpuBackend backend) {
         if (backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
+            activate_selected_cuda_device();
             static CudaBackendOps* const cuda_ops = new CudaBackendOps();
             return *cuda_ops;
 #else

@@ -2875,7 +2875,19 @@ def reset_scene_reconstruction_preferences() -> None:
 def get_tensor_backend_preferences() -> dict:
     """Get saved tensor backend preferences; changes apply after restart"""
 
-def set_tensor_backend_preferences(backend: str = 'auto', vulkan_device: str = '', vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False) -> None:
+def get_graphics_backend() -> str:
+    """Get the compiled graphics backend."""
+
+def get_vulkan_hardware() -> list[dict]:
+    """Enumerate Vulkan GPU names, UUIDs and capability exclusions."""
+
+def get_cuda_hardware() -> list[dict]:
+    """Discover CUDA GPU names, UUIDs, memory and compatibility."""
+
+def get_gpu_runtime_status() -> dict:
+    """Running GPU identities and whether saved GPU changes require restart."""
+
+def set_tensor_backend_preferences(backend: str = 'auto', vulkan_device: str = '', vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False, rendering_vulkan_device: str = '', cuda_device: str = '') -> None:
     """Save tensor backend preferences for the next application start"""
 
 def get_mcp_preferences() -> dict:

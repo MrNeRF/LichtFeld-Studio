@@ -606,6 +606,8 @@ namespace lfs::app {
             }
             checkpoint_params.optimization.headless =
                 cli_params.optimization.headless;
+            checkpoint_params.optimization.perf_bench = cli_params.optimization.perf_bench;
+            checkpoint_params.optimization.perf_bench_warmup = cli_params.optimization.perf_bench_warmup;
             checkpoint_params.optimization.auto_train =
                 cli_params.optimization.auto_train;
             checkpoint_params.optimization.no_splash =
@@ -1519,8 +1521,6 @@ namespace lfs::app {
 #if LFS_HAS_CUDA
         if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
             if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
-                // Training has no Vulkan kernels yet. Let startup reach
-                // Trainer::initialize, which names the missing families.
                 return true;
             }
             reportFatalStartupError(
@@ -1531,10 +1531,22 @@ namespace lfs::app {
         }
         const bool cuda_usable =
             lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
-        const bool vulkan_usable =
-            lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan);
-        switch (decide_gpu_preflight(viewer_only, cuda_usable, vulkan_usable)) {
-        case GpuPreflightDecision::UseVulkanViewer: {
+        // A usable CUDA session must not initialize a saved, inactive Vulkan
+        // adapter merely to check a fallback it does not need.
+        const auto vulkan_usable = [] {
+            return lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan);
+        };
+        const auto fallback_to_vulkan = [&](const std::string& reason) {
+            if (!vulkan_usable())
+                return false;
+            const auto status = lfs::core::set_default_gpu_backend(lfs::core::GpuBackend::Vulkan);
+            if (!status)
+                return false;
+            LOG_WARN("GPU fallback: requested=CUDA/Auto, effective=Vulkan, reason={}; saved preference preserved", reason);
+            return true;
+        };
+        switch (decide_gpu_preflight(viewer_only, cuda_usable, !cuda_usable && vulkan_usable())) {
+        case GpuPreflightDecision::UseVulkan: {
             const lfs::Status backend = lfs::core::set_default_gpu_backend(
                 lfs::core::GpuBackend::Vulkan);
             if (!backend.has_value()) {
@@ -1546,8 +1558,7 @@ namespace lfs::app {
                     show_dialog);
                 return false;
             }
-            LOG_WARN("No usable NVIDIA GPU: training is unavailable, the viewer runs on the "
-                     "Vulkan tensor backend");
+            LOG_WARN("GPU fallback: requested=CUDA/Auto, effective=Vulkan, reason=no usable CUDA GPU; viewer and training use Vulkan");
             return true;
         }
         case GpuPreflightDecision::Fatal:
@@ -1568,6 +1579,8 @@ namespace lfs::app {
         } else {
             LOG_INFO("CUDA driver version: {}.{}", info.major, info.minor);
             if (!info.supported) {
+                if (fallback_to_vulkan(std::format("CUDA driver {}.{} is older than 12.8", info.major, info.minor)))
+                    return true;
                 reportFatalStartupError(
                     "LichtFeld Studio - Incompatible driver",
                     std::format("CUDA {}.{} is too old. LichtFeld Studio requires CUDA 12.8 or "
@@ -1579,7 +1592,9 @@ namespace lfs::app {
         }
 
         cudaDeviceProp prop{};
-        if (const cudaError_t err = cudaGetDeviceProperties(&prop, 0); err != cudaSuccess) {
+        if (const cudaError_t err = cudaGetDeviceProperties(&prop, lfs::core::selected_cuda_device()); err != cudaSuccess) {
+            if (fallback_to_vulkan(std::format("CUDA device query failed: {}", cudaGetErrorString(err))))
+                return true;
             reportFatalStartupError(
                 "LichtFeld Studio - No usable GPU",
                 std::format("No usable NVIDIA GPU found ({}). LichtFeld Studio requires an "
@@ -1593,6 +1608,9 @@ namespace lfs::app {
                  prop.totalGlobalMem / (1024 * 1024));
 
         if (const int device_sm = prop.major * 10 + prop.minor; device_sm < LFS_MIN_SM) {
+            if (fallback_to_vulkan(std::format("{} has SM {}.{}, this build requires {}.{}",
+                                               prop.name, prop.major, prop.minor, LFS_MIN_SM / 10, LFS_MIN_SM % 10)))
+                return true;
             reportFatalStartupError(
                 "LichtFeld Studio - Incompatible GPU",
                 std::format("This PC's GPU ({}) has compute capability {}.{}, below the {}.{} "
@@ -1605,8 +1623,6 @@ namespace lfs::app {
         return true;
 #else
         if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
-            // Training has no Vulkan kernels yet. Let startup reach
-            // Trainer::initialize, which names the missing families.
             return true;
         }
         reportFatalStartupError(
@@ -1627,6 +1643,7 @@ namespace lfs::app {
 
         void warmupCudaAsync() {
             cudaWarmupFuture() = std::async(std::launch::async, [] {
+                lfs::core::activate_selected_cuda_device();
                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
                 // NVML is intentionally first touched here, after the window
                 // has been made visible. The primary context already exists
