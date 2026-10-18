@@ -324,6 +324,15 @@ namespace lfs::vis::gui {
             scene.invalidateCache();
         }
 
+        void clampVolumeAxisScale(glm::mat4& transform) {
+            for (int axis = 0; axis < 3; ++axis) {
+                const float length = glm::length(glm::vec3(transform[axis]));
+                // A zero or non-finite axis has no direction to scale; leave it as is.
+                if (length > 0.0f && length < MIN_VOLUME_AXIS_SCALE)
+                    transform[axis] *= MIN_VOLUME_AXIS_SCALE / length;
+            }
+        }
+
         void applyBoundsScale(
             GizmoTransformContext& ctx,
             core::Scene& scene,
@@ -349,6 +358,7 @@ namespace lfs::vis::gui {
             transform[0] *= ctx.cumulative_scale.x;
             transform[1] *= ctx.cumulative_scale.y;
             transform[2] *= ctx.cumulative_scale.z;
+            clampVolumeAxisScale(transform);
             transform[3] = glm::vec4(new_pivot_world - glm::mat3(transform) * local_center, 1.0f);
             setNodeVisualizerWorldTransform(scene, target.name, transform);
 

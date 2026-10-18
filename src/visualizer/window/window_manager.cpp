@@ -995,6 +995,7 @@ namespace lfs::vis {
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
         suppressFrameInputForManualResize();
+        pinFrameInputForValueDrag();
         flushPendingTitlebarDoubleClick();
     }
 
@@ -1033,6 +1034,7 @@ namespace lfs::vis {
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
         suppressFrameInputForManualResize();
+        pinFrameInputForValueDrag();
         flushPendingTitlebarDoubleClick();
     }
 
@@ -1106,8 +1108,20 @@ namespace lfs::vis {
 
         gui::RmlUIManager::InputDispatchResult dispatched;
         if (eventTargetsWindow(event, main_window_id) && !shouldSuppressGuiRoutingForResize(event, main_window_id)) {
-            if (auto* gui = services().guiOrNull())
-                dispatched = gui->dispatchInputEvent(event);
+            if (auto* gui = services().guiOrNull()) {
+                // A value drag owns the hidden pointer; the UI sees it resting at the grab point.
+                const auto anchor = input_controller_ ? input_controller_->valueDragAnchor() : std::nullopt;
+                if (!anchor) {
+                    dispatched = gui->dispatchInputEvent(event);
+                } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                    SDL_Event pinned = event;
+                    pinned.button.x = anchor->x;
+                    pinned.button.y = anchor->y;
+                    dispatched = gui->dispatchInputEvent(pinned);
+                } else if (event.type != SDL_EVENT_MOUSE_MOTION) {
+                    dispatched = gui->dispatchInputEvent(event);
+                }
+            }
         }
 
         switch (event.type) {
@@ -1643,6 +1657,21 @@ namespace lfs::vis {
         updateWindowSize("manual-resize-end", ResizeIntent::Exact);
         lfs::core::events::ui::WindowResizeInteraction{.active = false}.emit();
         wakeEventLoop();
+    }
+
+    void WindowManager::pinFrameInputForValueDrag() {
+        const auto pin = input_controller_ ? input_controller_->takeValueDragPin() : std::nullopt;
+        if (!pin)
+            return;
+        const glm::vec2 pixels = *pin * input::windowPixelScale(window_);
+        frame_input_.mouse_x = pixels.x;
+        frame_input_.mouse_y = pixels.y;
+        frame_input_.mouse_dx = 0.0f;
+        frame_input_.mouse_dy = 0.0f;
+        for (auto& event : frame_input_.mouse_button_events) {
+            event.x = pixels.x;
+            event.y = pixels.y;
+        }
     }
 
     void WindowManager::suppressFrameInputForManualResize() {

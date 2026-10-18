@@ -7111,7 +7111,10 @@ namespace lfs::vis::gui {
             viewer_->getWindowManager() &&
             viewer_->getWindowManager()->manualResizeEdgeMask() != 0;
         if (!window_resize_active) {
-            const auto rml_cursor = rmlui_manager_.consumeCursorRequest();
+            auto rml_cursor = rmlui_manager_.consumeCursorRequest();
+            if (const auto overlay_cursor = rml_viewport_overlay_.cursorRequest();
+                !block_underlay_input && overlay_cursor != RmlCursorRequest::None)
+                rml_cursor = overlay_cursor;
             const bool floating_resize_applied =
                 !floating_panel_cursor_hidden_ && has_floating_panels &&
                 reg.apply_floating_resize_cursor();

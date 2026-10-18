@@ -1153,7 +1153,8 @@ body {
     text-align: center;
 }
 
-.viewport-transform-axis > .number-input {
+.viewport-transform-axis > .number-input,
+.transform-drag-field > .number-input {
     width: 64dp;
     min-width: 64dp;
     height: 22dp;
@@ -1180,7 +1181,8 @@ body {
     min-width: 8dp;
 }
 
-#transform-block .viewport-transform-axis > .number-input {
+#transform-block .viewport-transform-axis > .number-input,
+#transform-block .transform-drag-field > .number-input {
     width: 58dp;
     min-width: 58dp;
     height: 22dp;
@@ -1190,6 +1192,25 @@ body {
 #transform-block .viewport-transform-axis > .num-step-btn {
     width: 20dp;
     min-width: 20dp;
+}
+
+.transform-drag-field {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.transform-drag-handle {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    cursor: ew-resize;
+}
+
+.transform-drag-handle.hidden,
+.transform-drag-field.is-editing > .transform-drag-handle {
+    display: none;
 }
 
 .viewport-transform-axis--split {
