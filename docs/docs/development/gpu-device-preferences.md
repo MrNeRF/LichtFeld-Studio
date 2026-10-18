@@ -8,7 +8,7 @@ This branch starts from `4ef50cbbc7f649cfed1d76d1d1770a3bff62d27f` on `dev`, inc
 - Training chooses a tensor backend and its device. The Vulkan viewer has a separate device selector. CUDA device selection uses the adapter UUID rather than assuming ordinal zero.
 - Saved choices take effect on the next application start. The active configuration remains visible in Preferences and in the R/T status tooltips.
 - A persistent **Restart needed** action opens the hardware preferences. Selecting the actual running configuration again clears it. Narrow windows use a compact action with the same tooltip.
-- An unavailable device or backend falls back for the current run and logs the reason in the CLI. The saved request is retained, so a temporarily disconnected card can be selected on a later launch.
+- An unavailable device or backend falls back for the current run and logs the reason in the CLI. The saved request is retained, so a temporarily disconnected card can be selected on a later launch. Device menus list only enumerated hardware; an absent saved identity displays Auto without creating a synthetic option or overwriting the saved request.
 - Auto preserves the existing CUDA default. An inactive Vulkan tensor preference does not redirect the viewer when CUDA or Metal is active.
 
 Names are presentation only. Selection uses normalized UUIDs, with index aliases resolved against the current inventory. Identically named adapters include index and UUID suffixes in their labels. Integrated memory is identified as shared; its reported heap is not described as dedicated VRAM or as the BIOS reservation.

@@ -440,3 +440,25 @@ Detailed logs, profiles, CSV traces, JSON metrics and contact sheets are under
 `training-windows-*`, `mac-results`, `quality-comparison`, `runtime/large-final-*`
 and `runtime/large-training-*`. No validation-layer/VUID-clean claim is made;
 the Khronos validation layer is not installed on the Windows test machine.
+
+### Device-menu follow-up
+
+The normal profile still requested Radeon UUID `00000000c70000000000000000000000`
+at startup, while current Vulkan enumeration reports `00000000c80000000000000000000000`.
+The old missing-selection option was mistaken for a second Radeon. Menus now
+contain only currently enumerated devices and Auto. A missing saved identity
+maps to Auto for display, while its saved preference and CLI fallback remain.
+Names continue to come from Vulkan; real distinct adapters sharing a name are
+not merged. Eight Python preference tests pass, including the exact c700/c800
+case and multi-adapter identities. The plugin-copy build target was updated;
+an isolated live MCP run confirms both role menus contain exactly Auto, one
+`AMD Radeon(TM) 890M Graphics` and one `NVIDIA GeForce RTX 5060 Ti`.
+Evidence: `runtime/gpu-inventory-no-phantom/inventory.json`.
+
+The four gsplat/Fast forward and backward shader sources are identical to the
+previous `fix/vulkan-amd-validation` branch. The current dispatch retains the
+AMD-compatible backward wave32 policy. Prepared-image CPU caching and the
+full-resolution-source limit are present. This does not establish that every
+historical experiment was retained, or that a new optimization will be faster;
+forward/backward substage measurements remain the next justified performance
+investigation. No training kernel is changed by this menu correction.

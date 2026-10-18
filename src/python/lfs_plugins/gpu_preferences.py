@@ -16,11 +16,12 @@ def selected_value(devices, requested):
     for device in devices:
         if identity(requested) == identity(device["uuid"]) or str(requested) == str(device["index"]):
             return device["uuid"]
-    return str(requested)
+    # A missing saved identity follows the runtime Auto fallback. Keep it in
+    # preferences for reconnects, but do not invent a device in the selector.
+    return ""
 
 
 def device_choices(devices, requested, role, tr):
-    selected = selected_value(devices, requested)
     choices = [{"value": "", "label": tr("preferences.tensor_auto"), "disabled": False}]
     names = [device["name"] for device in devices]
     for device in devices:
@@ -31,9 +32,6 @@ def device_choices(devices, requested, role, tr):
         if reason:
             label += " · " + tr("preferences.gpu_unavailable")
         choices.append({"value": device["uuid"], "label": label, "disabled": bool(reason)})
-    if selected and not any(item["value"] == selected for item in choices):
-        choices.append({"value": selected, "label": tr("preferences.gpu_unavailable") + " · " + selected,
-                        "disabled": True})
     return choices
 
 

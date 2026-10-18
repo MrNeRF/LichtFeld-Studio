@@ -20,11 +20,25 @@ def test_duplicate_names_keep_distinct_stable_choices_after_reordering():
     assert selected_value(devices, "0") == "b" * 32
 
 
-def test_missing_saved_gpu_remains_visible_and_cannot_be_selected():
+def test_missing_saved_gpu_uses_auto_without_adding_a_phantom_device():
     choices = device_choices([gpu("a" * 32)], "missing", "tensor", str)
-    assert choices[-1] == dict(value="missing", label="preferences.gpu_unavailable · missing", disabled=True)
+    assert len(choices) == 2
+    assert all(choice["value"] != "missing" for choice in choices)
+    assert selected_value([gpu("a" * 32)], "missing") == ""
     assert choices[0]["value"] == ""
     assert choices[0]["disabled"] is False
+
+
+def test_changed_radeon_identity_only_lists_the_detected_vulkan_name():
+    old = "00000000c70000000000000000000000"
+    current = "00000000c80000000000000000000000"
+    devices = [gpu(current, name="AMD Radeon(TM) 890M Graphics")]
+    for role in ("tensor", "rendering"):
+        assert device_choices(devices, old, role, str) == [
+            dict(value="", label="preferences.tensor_auto", disabled=False),
+            dict(value=current, label="AMD Radeon(TM) 890M Graphics", disabled=False),
+        ]
+    assert devices[0]["uuid"] == current
 
 
 def test_capabilities_are_specific_to_each_role():
