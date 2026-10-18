@@ -3270,8 +3270,11 @@ namespace lfs::vis {
             // Camera uids key the viewport caches and selection, so an additive import must not reuse them.
             int first_uid = 0;
             for (const auto& camera : scene_.getAllCameras()) {
-                if (camera)
-                    first_uid = std::max(first_uid, camera->uid() + 1);
+                if (!camera)
+                    continue;
+                if (camera->uid() == std::numeric_limits<int>::max())
+                    throw std::overflow_error("No camera uid is left above the scene's highest one");
+                first_uid = std::max(first_uid, camera->uid() + 1);
             }
             auto result = lfs::io::read_colmap_cameras_only(sparse_path, 1.0f, first_uid);
             if (!result) {
