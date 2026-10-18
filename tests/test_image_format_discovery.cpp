@@ -8,6 +8,7 @@
 #include "io/loaders/blender_loader.hpp"
 #include "io/loaders/colmap_loader.hpp"
 #include "io/project_document.hpp"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -48,6 +49,7 @@ namespace {
         ASSERT_TRUE(lfs::core::image_codecs::write_jpeg(dataset / "frame.jpg", rgb.data(), 2, 2, 3, 95, std::nullopt, error));
         write_text_file(dataset / "frame.exr", "unreferenced depth/HDR companion");
         write_text_file(dataset / "frame.webp", "unreferenced image companion");
+        write_text_file(dataset / "frame.jxl", "unreferenced JXL companion");
         lfs::io::ColmapLoader loader;
         ASSERT_TRUE(loader.load(dataset, {.validate_only = true}).has_value());
         EXPECT_EQ(lfs::io::count_image_files(dataset, false), 1);
@@ -65,9 +67,47 @@ namespace {
         EXPECT_EQ(lfs::io::detect_dataset_info(dataset).image_count, 2);
         fs::remove(dataset / "frame.jpg");
         fs::remove(dataset / "second.JPG");
-        EXPECT_EQ(lfs::io::count_image_files(dataset, false), 3);
+        EXPECT_EQ(lfs::io::count_image_files(dataset, false), 4);
         ASSERT_TRUE(lfs::io::project::first_dataset_image(config).has_value());
-        EXPECT_EQ(lfs::io::project::first_dataset_image(config)->lexically_normal(), dataset / "frame.exr");
+        // With no legacy image left, the existing fallback follows directory
+        // iteration order; APFS and NTFS need not choose the same companion.
+        const auto preview = lfs::io::project::first_dataset_image(config)->lexically_normal();
+        const std::array candidates{dataset / "frame.exr", dataset / "frame.webp", dataset / "frame.jxl", dataset / "second.WEBP"};
+        EXPECT_NE(std::find(candidates.begin(), candidates.end(), preview), candidates.end());
+    }
+    TEST_F(ImageFormatDiscoveryTest, JxlDatasetUsesTheSharedReaderAndPreservesLegacyPreference) {
+        const auto dataset = temp_dir_ / "jxl";
+        const auto image = dataset / "frame.JXL";
+        write_minimal_colmap_text_dataset(dataset, "frame.JXL");
+        fs::copy_file(fs::path(LFS_JXL_FIXTURES) / "rgb8.jxl", image);
+        EXPECT_TRUE(lfs::io::is_image_file(image));
+        EXPECT_FALSE(lfs::io::is_legacy_image_file(image));
+        EXPECT_EQ(lfs::io::count_image_files(dataset, false), 1);
+        lfs::io::ColmapLoader loader;
+        ASSERT_TRUE(loader.load(dataset, {.validate_only = true}).has_value());
+        auto [samples, width, height, channels] = lfs::core::load_image(image, 1, 0);
+        const auto owner = std::unique_ptr<unsigned char, decltype(&std::free)>(samples, &std::free);
+        ASSERT_NE(samples, nullptr);
+        EXPECT_EQ(width, 2);
+        EXPECT_EQ(height, 2);
+        EXPECT_EQ(channels, 3);
+        EXPECT_EQ(samples[0], 255);
+        EXPECT_EQ(samples[1], 0);
+        EXPECT_EQ(samples[2], 0);
+        std::ifstream input(image, std::ios::binary);
+        const std::vector<uint8_t> encoded((std::istreambuf_iterator<char>(input)), {});
+        auto [memory, mw, mh, mc] = lfs::core::load_image_from_memory(encoded.data(), encoded.size(), 1, 0);
+        const auto memory_owner = std::unique_ptr<unsigned char, decltype(&std::free)>(memory, &std::free);
+        ASSERT_NE(memory, nullptr);
+        ASSERT_EQ(mw, width);
+        ASSERT_EQ(mh, height);
+        ASSERT_EQ(mc, channels);
+        EXPECT_EQ(std::memcmp(memory, samples, size_t(width) * height * channels), 0);
+        lfs::core::param::DatasetConfig config;
+        config.data_path = dataset;
+        config.images = ".";
+        ASSERT_TRUE(lfs::io::project::first_dataset_image(config));
+        EXPECT_EQ(lfs::io::project::first_dataset_image(config)->lexically_normal(), image);
     }
     TEST_F(ImageFormatDiscoveryTest, FlatExrAndWebpDatasetsUseExistingCpuDecoders) {
         for (const auto extension : {".exr", ".webp"}) {

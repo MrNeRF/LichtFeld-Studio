@@ -949,6 +949,7 @@ if(NOT LFS_HAS_CUDA)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp test_mcp_render_capture_utils.cpp)
     endif()
     add_executable(lichtfeld_tests ${TEST_SOURCES})
+    target_compile_definitions(lichtfeld_tests PRIVATE LFS_JXL_FIXTURES="${CMAKE_SOURCE_DIR}/tests/data/jxl")
     target_link_libraries(lichtfeld_tests PRIVATE ${FFMPEG_LIBRARIES})
     target_include_directories(lichtfeld_tests SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
     target_compile_definitions(lichtfeld_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}" TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
@@ -1589,6 +1590,7 @@ list(APPEND TEST_SOURCES
 
 # Create test executable
 add_executable(lichtfeld_tests ${TEST_SOURCES})
+target_compile_definitions(lichtfeld_tests PRIVATE LFS_JXL_FIXTURES="${CMAKE_SOURCE_DIR}/tests/data/jxl")
 target_link_libraries(lichtfeld_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_include_directories(lichtfeld_tests SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})
 

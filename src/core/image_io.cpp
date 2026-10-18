@@ -7,6 +7,7 @@
 
 #include "image_codecs.hpp"
 #include "image_heif.hpp"
+#include "image_jxl.hpp"
 
 #if LFS_HAS_CUDA
 #include "core/cuda/image_quantize.hpp"
@@ -50,6 +51,8 @@ namespace {
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         if (extension == ".avif" || extension == ".heic" || extension == ".heif")
             return image_codecs::decode_heif(path, image, error, true);
+        if (extension == ".jxl")
+            return image_codecs::decode_jxl(path, image, error, true);
         return image_codecs::decode(path, image, error);
     }
 
@@ -58,6 +61,8 @@ namespace {
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         if (extension == ".avif" || extension == ".heic" || extension == ".heif")
             return image_codecs::decode_heif_to_buffer(path, target, info, error, true);
+        if (extension == ".jxl")
+            return image_codecs::decode_jxl_to_buffer(path, target, info, error, true);
         return image_codecs::decode_to_buffer(path, target, info, error);
     }
     struct TiffDisplayEncoding {
@@ -788,14 +793,23 @@ namespace lfs::core {
         image_codecs::DecodeTarget target{3, image_codecs::SampleType::UInt8, nullptr, allocate_image_buffer, nullptr};
         image_codecs::Probe direct_info;
         std::string direct_error;
-        if ((image_codecs::is_heif({data, size}) ? image_codecs::decode_heif_to_buffer(std::span<const uint8_t>{data, size}, target, direct_info, direct_error, true) : image_codecs::decode_memory_to_buffer(data, size, target, direct_info, direct_error)))
+        const std::span<const uint8_t> encoded{data, size};
+        const bool heif = image_codecs::is_heif(encoded);
+        const bool jxl = image_codecs::is_jxl(encoded);
+        const bool direct = heif  ? image_codecs::decode_heif_to_buffer(encoded, target, direct_info, direct_error, true)
+                            : jxl ? image_codecs::decode_jxl_to_buffer(encoded, target, direct_info, direct_error, true)
+                                  : image_codecs::decode_memory_to_buffer(data, size, target, direct_info, direct_error);
+        if (direct)
             return ::resize_loaded_rgb(static_cast<unsigned char*>(target.data), direct_info.width,
                                        direct_info.height, res_div, max_width);
         if (target.data)
             std::free(target.data);
         image_codecs::Image decoded;
         std::string error;
-        if (!(image_codecs::is_heif({data, size}) ? image_codecs::decode_heif(std::span<const uint8_t>{data, size}, decoded, error, true) : image_codecs::decode_memory(data, size, decoded, error)))
+        const bool success = heif  ? image_codecs::decode_heif(encoded, decoded, error, true)
+                             : jxl ? image_codecs::decode_jxl(encoded, decoded, error, true)
+                                   : image_codecs::decode_memory(data, size, decoded, error);
+        if (!success)
             throw std::runtime_error("Load from memory failed: " + error);
         const size_t pixel_count = static_cast<size_t>(decoded.width) * decoded.height;
         auto* out = static_cast<unsigned char*>(std::malloc(pixel_count * 3));
