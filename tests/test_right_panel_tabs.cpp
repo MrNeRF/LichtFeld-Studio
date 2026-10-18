@@ -6,6 +6,7 @@
 #include <RmlUi/Core.h>
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <unordered_map>
 
 namespace lfs::vis::gui {
     class RmlRightPanelTestAccess {
@@ -24,11 +25,15 @@ namespace lfs::vis::gui {
             settle(panel);
         }
         static void settle(RmlRightPanel& panel) {
-            panel.updateTabModel();
-            panel.layoutTabs();
-            panel.updateTabModel();
-            panel.syncTabNavigation();
-            panel.syncTabScrollState();
+            for (int pass = 0; pass < 3; ++pass) {
+                panel.updateTabModel();
+                const bool layout_changed = panel.layoutTabs();
+                panel.updateTabModel();
+                panel.syncTabNavigation();
+                const bool scroll_changed = panel.syncTabScrollState();
+                if (!layout_changed && !scroll_changed)
+                    break;
+            }
             panel.updateTabModel();
         }
         static void scroll(RmlRightPanel& panel, float delta) { panel.scrollTabs(delta); }
@@ -38,14 +43,44 @@ namespace lfs::vis::gui {
 namespace {
     using namespace lfs::vis::gui;
     class TabRenderer final : public Rml::RenderInterface {
-        Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
-        void RenderGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, Rml::TextureHandle) override {}
-        void ReleaseGeometry(Rml::CompiledGeometryHandle) override {}
+    public:
+        struct TextDraw {
+            Rml::Rectanglef bounds;
+            Rml::Rectanglei clip;
+        };
+        std::vector<TextDraw> text_draws;
+
+    private:
+        std::unordered_map<Rml::CompiledGeometryHandle, std::vector<Rml::Vertex>> geometry;
+        Rml::CompiledGeometryHandle next_handle = 1;
+        Rml::Matrix4f transform = Rml::Matrix4f::Identity();
+        Rml::Rectanglei clip;
+        bool clipping = false;
+        Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int>) override {
+            const auto handle = next_handle++;
+            geometry[handle] = {vertices.begin(), vertices.end()};
+            return handle;
+        }
+        void RenderGeometry(Rml::CompiledGeometryHandle handle, Rml::Vector2f translation, Rml::TextureHandle texture) override {
+            if (!texture)
+                return;
+            auto bounds = Rml::Rectanglef::MakeInvalid();
+            for (const auto& vertex : geometry.at(handle)) {
+                const auto pos = transform * Rml::Vector4f(vertex.position.x + translation.x, vertex.position.y + translation.y, 0, 1);
+                const Rml::Vector2f point(pos.x / pos.w, pos.y / pos.w);
+                bounds = bounds.Valid() ? bounds.Join(point) : Rml::Rectanglef::FromPosition(point);
+            }
+            text_draws.push_back({bounds, clipping ? clip : Rml::Rectanglei::FromSize({400, 600})});
+        }
+        void ReleaseGeometry(Rml::CompiledGeometryHandle handle) override { geometry.erase(handle); }
         Rml::TextureHandle LoadTexture(Rml::Vector2i&, const Rml::String&) override { return 0; }
         Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte>, Rml::Vector2i) override { return 1; }
         void ReleaseTexture(Rml::TextureHandle) override {}
-        void EnableScissorRegion(bool) override {}
-        void SetScissorRegion(Rml::Rectanglei) override {}
+        void EnableScissorRegion(bool enabled) override { clipping = enabled; }
+        void SetScissorRegion(Rml::Rectanglei region) override { clip = region; }
+        void SetTransform(const Rml::Matrix4f* matrix) override {
+            transform = matrix ? *matrix : Rml::Matrix4f::Identity();
+        }
     };
 
     class RightPanelTabsTest : public ::testing::TestWithParam<float> {
@@ -60,6 +95,7 @@ namespace {
             ASSERT_TRUE(Rml::Initialise());
             const auto root = std::filesystem::path(PROJECT_ROOT_PATH);
             ASSERT_TRUE(Rml::LoadFontFace((root / "src/visualizer/gui/assets/fonts/Inter-Regular.ttf").generic_string()));
+            ASSERT_TRUE(Rml::LoadFontFace((root / "src/visualizer/gui/assets/fonts/Inter-SemiBold.ttf").generic_string()));
             context = Rml::CreateContext("vertical-tabs", {400, 600}, &renderer);
             ASSERT_NE(context, nullptr);
             context->SetDensityIndependentPixelRatio(GetParam());
@@ -116,12 +152,54 @@ namespace {
             EXPECT_NEAR(size.x, (i == 0 ? 28 : 25) * GetParam(), 0.5f);
             EXPECT_GE(position.y, last_bottom);
             last_bottom = position.y + size.y;
-            EXPECT_NEAR(size.y, tab->GetChild(0)->GetBox().GetSize().x + 20 * GetParam(), 1.0f);
+            EXPECT_NEAR(size.y, tab->GetChild(0)->GetBox().GetSize().x + 28 * GetParam(), 1.0f);
         }
         EXPECT_GT(button(2)->GetBox().GetSize().y, button(0)->GetBox().GetSize().y);
         EXPECT_NE(button(0)->GetProperty("nav-down"), nullptr);
         EXPECT_FLOAT_EQ(button(0)->GetBox().GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right), 0);
         EXPECT_GT(button(1)->GetBox().GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right), 0);
+    }
+
+    TEST_P(RightPanelTabsTest, RotatedTextFitsTheRenderClipAtFractionalScales) {
+        auto data = tabs(2);
+        data[0].label = "Rendering";
+        data[1].label = "ForestFormer3D";
+        doc->GetElementById("tab-bar")->SetProperty("height", "580px");
+        auto reference = doc->CreateElement("span");
+        reference->SetInnerRML("Camera");
+        reference->SetProperty("position", "absolute");
+        reference->SetProperty("left", "150px");
+        reference->SetProperty("top", "14dp");
+        reference->SetProperty("font-size", "12dp");
+        reference->SetProperty("line-height", "1.2");
+        reference->SetProperty("font-weight", "600");
+        doc->AppendChild(std::move(reference));
+        for (const auto& selected : data) {
+            RmlRightPanelTestAccess::sync(panel, data, selected.id);
+            renderer.text_draws.clear();
+            context->Render();
+            ASSERT_EQ(renderer.text_draws.size(), 3);
+            EXPECT_NEAR(renderer.text_draws[0].bounds.Top(), renderer.text_draws.back().bounds.Top(), 1.5f);
+            for (int i = 0; i < 2; ++i) {
+                auto* tab = button(i);
+                auto* label = tab->GetChild(0);
+                const auto& draw = renderer.text_draws[i];
+                const auto pos = tab->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto size = tab->GetBox().GetSize(Rml::BoxArea::Border);
+                EXPECT_GE(draw.bounds.Left(), pos.x + GetParam());
+                EXPECT_LE(draw.bounds.Right(), pos.x + size.x - GetParam());
+                EXPECT_GE(draw.bounds.Top(), pos.y + 15.0f * GetParam());
+                EXPECT_LE(draw.bounds.Bottom(), pos.y + size.y - 8.0f * GetParam());
+                EXPECT_NEAR(label->GetAbsoluteLeft(), std::round(label->GetAbsoluteLeft()), 0.01f);
+                EXPECT_NEAR(label->GetAbsoluteTop(), std::round(label->GetAbsoluteTop()), 0.01f);
+            }
+            for (const auto& draw : renderer.text_draws) {
+                EXPECT_GE(draw.bounds.Left(), draw.clip.Left() - 1.0f);
+                EXPECT_GE(draw.bounds.Top(), draw.clip.Top() - 1.0f);
+                EXPECT_LE(draw.bounds.Right(), draw.clip.Right() + 1.0f);
+                EXPECT_LE(draw.bounds.Bottom(), draw.clip.Bottom() + 1.0f);
+            }
+        }
     }
 
     TEST_P(RightPanelTabsTest, RailEdgeOpensOnlyBesideTheSelectedTab) {
@@ -254,5 +332,5 @@ namespace {
         EXPECT_EQ(picks.back(), data[2].id);
     }
 
-    INSTANTIATE_TEST_SUITE_P(UiScale, RightPanelTabsTest, ::testing::Values(1.0f, 1.5f, 2.0f));
+    INSTANTIATE_TEST_SUITE_P(UiScale, RightPanelTabsTest, ::testing::Values(1.0f, 1.25f, 1.5f, 1.75f, 2.0f));
 } // namespace

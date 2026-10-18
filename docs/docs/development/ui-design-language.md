@@ -145,8 +145,9 @@ The active panel fills the space to the right of the strip, including its former
 horizontal tab row. The bottom dock retains its horizontal tabs.
 
 Labels read downwards and use the translated panel label. Tab height follows the
-measured text length; plugin authors do not need to supply dimensions or special
-markup. Optional close buttons still disable closeable plugin panels.
+measured text length, including glyph clearance. Rotated labels use pixel-aligned
+origins and line boxes at fractional scales. The label start aligns with the
+first Rendering heading. Plugin authors do not need special dimensions or markup. Optional close buttons still disable closeable plugin panels.
 
 - Click a tab to select its panel.
 - Scroll the wheel over the strip, or drag it with the middle mouse button, to
@@ -161,7 +162,7 @@ The right sidebar owns `right_panel.{rml,rcss,theme.rcss}`. Do not apply the
 horizontal `panel_tabs.rcss` geometry to it. Content bounds, preload bounds, and
 pointer routing must reserve `PanelLayoutManager::RIGHT_TAB_BAR_W` at the current
 UI scale. Tests in `test_right_panel_tabs.cpp` exercise real RmlUi geometry and
-input at 1x, 1.5x, and 2x scales.
+input at 1x, 1.25x, 1.5x, 1.75x, and 2x scales, including rendered glyph bounds.
 
 ### Docked panels
 

@@ -244,13 +244,27 @@ namespace lfs::vis::gui {
                 continue;
             // Rotation changes drawing and hit testing, but not layout. Reserve
             // the measured text length on the vertical axis, including plugin labels.
-            const float text_width = Rml::ElementUtilities::GetStringWidth(label, tab.label);
-            const float height = std::max(28.0f * dp, text_width + (tab.closeable ? 40.0f : 20.0f) * dp);
+            const float text_width = std::ceil(Rml::ElementUtilities::GetStringWidth(label, tab.label) + 2.0f * dp);
+            const float height = std::ceil(std::max(28.0f * dp, text_width + (tab.closeable ? 48.0f : 28.0f) * dp));
             if (std::abs(button->GetBox().GetSize(Rml::BoxArea::Border).y - height) > 0.5f) {
                 button->SetProperty("height", std::format("{:.0f}px", height));
                 changed = true;
             }
+            // A rotated line box must fit across the tab. Snap its origin and
+            // dimensions in physical pixels so fractional scales do not clip or
+            // blur glyph edges. Keep clearance for the font's ink overhang.
+            const float line_height = std::ceil(20.0f * dp);
+            const auto origin = button->GetAbsoluteOffset(Rml::BoxArea::Padding);
+            const float content_width = button->GetBox().GetSize(Rml::BoxArea::Padding).x;
+            const float left = std::round(origin.x + (content_width + line_height) * 0.5f) - origin.x;
+            // Align the rotated first glyph with Rendering's first heading,
+            // including its content/header insets and line leading.
+            const float top = std::round(origin.y + 15.0f * dp) - origin.y;
             label->SetProperty("width", std::format("{:.0f}px", text_width));
+            label->SetProperty("height", std::format("{:.0f}px", line_height));
+            label->SetProperty("line-height", std::format("{:.0f}px", line_height));
+            label->SetProperty("left", std::format("{:.3f}px", left));
+            label->SetProperty("top", std::format("{:.3f}px", top));
         }
         return changed;
     }
@@ -709,10 +723,12 @@ namespace lfs::vis::gui {
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
             for (int pass = 0; pass < 3; ++pass) {
                 updateTabModel();
-                if (layoutTabs())
+                const bool tab_layout_changed = layoutTabs();
+                if (tab_layout_changed)
                     updateTabModel();
                 syncTabNavigation();
-                if (!syncTabScrollState())
+                const bool scroll_changed = syncTabScrollState();
+                if (!scroll_changed && !tab_layout_changed)
                     break;
             }
             updateTabModel();

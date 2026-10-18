@@ -92,10 +92,9 @@ body {
 .tab-label {
     position: absolute;
     display: block;
-    left: 24dp;
-    top: 9dp;
-    height: 26dp;
-    line-height: 26dp;
+    top: 15dp;
+    height: 20dp;
+    line-height: 20dp;
     white-space: nowrap;
     transform-origin: 0 0;
     transform: rotate(90deg);
@@ -121,7 +120,6 @@ body {
     nav: auto;
 }
 
-.tab.active .tab-label { left: 27dp; }
 .tab-edge {
     position: absolute;
     right: 0;
