@@ -2296,6 +2296,8 @@ namespace lfs::vis {
 
         // Update editor context state from scene/trainer
         editor_context_.update(scene_manager_.get(), trainer_manager_.get());
+        if (trainer_manager_)
+            trainer_manager_->syncCropBox();
 
         if (pending_training_completion_refresh_frames_ > 0 &&
             (!trainer_manager_ || !trainer_manager_->isTrainingActive())) {

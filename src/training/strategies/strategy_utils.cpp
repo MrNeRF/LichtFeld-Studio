@@ -268,7 +268,7 @@ namespace lfs::training {
     lfs::core::Tensor apply_crop_damping_to_scores(
         const AdamOptimizer& optimizer,
         const lfs::core::Tensor& scores) {
-        const auto& crop_mask = optimizer.crop_damping_mask();
+        const auto& crop_mask = optimizer.crop_score_mask();
         const float scale = optimizer.cropbox_lr_scale();
         if (!crop_mask.is_valid() || crop_mask.numel() == 0 || scale == 1.0f) {
             return scores;
@@ -277,15 +277,19 @@ namespace lfs::training {
         LFS_ASSERT_MSG(scores.is_valid(), "crop-damped scores must be valid");
         LFS_ASSERT_MSG(scores.ndim() == 1, "crop-damped scores must be one-dimensional");
         LFS_ASSERT_MSG(
-            scores.numel() <= crop_mask.numel(),
-            "crop damping mask must cover every score row");
-        LFS_ASSERT_MSG(
             scores.device() == crop_mask.device(),
             "crop damping mask and scores must use the same device");
 
-        const auto active_mask = scores.numel() == crop_mask.numel()
-                                     ? crop_mask
-                                     : crop_mask.slice(0, 0, scores.numel());
+        // Rows appended by this refine after the mask was built are not damped.
+        lfs::core::Tensor active_mask;
+        if (scores.numel() == crop_mask.numel()) {
+            active_mask = crop_mask;
+        } else if (scores.numel() < crop_mask.numel()) {
+            active_mask = crop_mask.slice(0, 0, scores.numel());
+        } else {
+            active_mask = lfs::core::Tensor::cat(
+                {crop_mask, lfs::core::Tensor::zeros_bool({scores.numel() - crop_mask.numel()}, crop_mask.device())}, 0);
+        }
         if (scale == 0.0f) {
             return scores.masked_fill(active_mask, 0.0f);
         }

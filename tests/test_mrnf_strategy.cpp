@@ -479,7 +479,7 @@ TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale)
 
     auto crop_mask = Tensor::zeros_bool({10}, Device::CPU);
     crop_mask.ptr<unsigned char>()[0] = 1;
-    strategy.get_optimizer().set_crop_damping_mask(crop_mask);
+    strategy.get_optimizer().set_crop_score_mask(crop_mask);
     strategy.get_optimizer().set_cropbox_lr_scale(0.0f);
 
     const auto damped_candidates =
@@ -493,7 +493,7 @@ TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale)
     strategy.get_optimizer().set_cropbox_lr_scale(1.0f);
     const auto unit_scale_candidates =
         strategy.compute_refine_candidates().to(DataType::Int32).to_vector_int();
-    strategy.get_optimizer().set_crop_damping_mask({});
+    strategy.get_optimizer().set_crop_score_mask({});
     const auto unmasked_candidates =
         strategy.compute_refine_candidates().to(DataType::Int32).to_vector_int();
     EXPECT_EQ(unit_scale_candidates, unmasked_candidates);

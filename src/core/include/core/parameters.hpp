@@ -254,7 +254,8 @@ namespace lfs::core {
             float late_lr_anneal = 1.0f;
             float scaling_lr_end = 0.005f;
             float rotation_lr = 0.001f;
-            // Adam and refinement signals only; strategy noise, decay, and resets remain crop-unaware.
+            // With an active crop box: Adam steps and refine scores of splats that no camera sees
+            // inside, in front of or behind the box. Strategy noise, decay and resets are unscaled.
             float cropbox_lr_scale = 0.1f;
             float cropbox_loss_weight = 0.1f;
             float lambda_dssim = 0.2f;

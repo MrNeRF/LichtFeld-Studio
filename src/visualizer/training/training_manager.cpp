@@ -29,6 +29,7 @@
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
+#include "training/training_cropbox_mask.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/post_work_utils.hpp"
@@ -1239,6 +1240,12 @@ namespace lfs::vis {
         return getCurrentIteration() == *checkpoint_baseline_iteration_;
     }
 
+    void TrainerManager::syncCropBox() {
+        if (!trainer_ || !scene_)
+            return;
+        trainer_->setCropBoxSnapshot(lfs::training::resolve_training_cropbox_geom(*scene_));
+    }
+
     bool TrainerManager::startTraining() {
         LOG_TIMER("TrainerManager::startTraining");
 
@@ -1849,6 +1856,7 @@ namespace lfs::vis {
         completion_pending_.store(true, std::memory_order_release);
 
         last_training_error_.clear();
+        syncCropBox();
         auto worker = std::make_unique<std::jthread>(
             [this](const std::stop_token stop_token) {
                 trainingInitializationThreadFunc(stop_token);

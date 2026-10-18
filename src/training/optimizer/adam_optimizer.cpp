@@ -193,6 +193,22 @@ namespace lfs::training {
         crop_damping_mask_ = std::move(mask);
     }
 
+    void AdamOptimizer::set_crop_score_mask(lfs::core::Tensor mask) {
+        if (mask.is_valid()) {
+            LFS_ASSERT_MSG(
+                mask.dtype() == lfs::core::DataType::Bool && mask.ndim() == 1,
+                "AdamOptimizer crop score mask must be a 1D bool tensor");
+            LFS_ASSERT_MSG(
+                mask.numel() == static_cast<size_t>(splat_data_.size()),
+                "AdamOptimizer crop score mask must match the model row count");
+            if (mask.device() != lfs::core::Device::CUDA)
+                mask = mask.cuda();
+            if (!mask.is_contiguous())
+                mask = mask.contiguous();
+        }
+        crop_score_mask_ = std::move(mask);
+    }
+
     void AdamOptimizer::set_cropbox_lr_scale(const float scale) {
         LFS_ASSERT_MSG(
             std::isfinite(scale) && scale >= 0.0f && scale <= 1.0f,
