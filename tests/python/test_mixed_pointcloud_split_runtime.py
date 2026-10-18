@@ -70,6 +70,43 @@ lf.select_nodes([])
 assert lf.get_scene().get_node('green_cloud') is not None
 assert lf.get_scene().get_node('red_splat') is not None
 ''')
+    _editor(endpoint, "assert lf.get_scene().get_node('green_cloud').splat_data() is not None")
+    # Normal view keeps the previous editable Gaussian representation. Separate
+    # the models so an opaque red sheet cannot hide the green cloud.
+    _editor(endpoint, """
+cloud_transform = identity.copy(); cloud_transform[13] = -1.5
+splat_transform = identity.copy(); splat_transform[13] = 1.5
+lf.set_node_visualizer_world_transform('green_cloud', cloud_transform, record_history=False)
+lf.set_node_visualizer_world_transform('red_splat', splat_transform, record_history=False)
+""")
+    _tool(endpoint, 'render_settings_set', {
+        'split_view_mode': 0, 'point_cloud_mode': False, 'show_grid': False,
+        'show_camera_frustums': False, 'show_coord_axes': False,
+        'raster_backend': backend, 'render_scale': 1.,
+    })
+    _tool(endpoint, 'camera_set_view', {'eye': [0., 0., 10.], 'target': [0., 0., 0.]})
+    normal = _window(endpoint)
+    normal.save(pictures / 'normal.png')
+    pixels = normal.crop((90, 180, normal.width - 35, normal.height - 55)).getdata()
+    normal_green = sum(g > 80 and g > 2 * max(r, b) for r, g, b in pixels)
+    assert normal_green > 20, normal_green
+    assert _color_counts(normal)[0] > 1000
+    # Both existing screen-selection tools must still include all raw points.
+    _tool(endpoint, 'selection_brush', {'x': 0., 'y': 0., 'radius': 4 * max(normal.size), 'camera_index': -1})
+    assert _tool(endpoint, 'selection_get', {'max_indices': 0})['selected_count'] == 1130
+    _editor(endpoint, "lf.get_scene().clear_selection()")
+    assert _tool(endpoint, 'selection_get', {'max_indices': 0})['selected_count'] == 0
+    _tool(endpoint, 'selection_lasso', {'camera_index': -1, 'points': [
+        [-normal.width, -normal.height], [2 * normal.width, -normal.height],
+        [2 * normal.width, 2 * normal.height], [-normal.width, 2 * normal.height],
+    ]})
+    assert _tool(endpoint, 'selection_get', {'max_indices': 0})['selected_count'] == 1130
+    _editor(endpoint, "lf.get_scene().clear_selection()")
+    assert _tool(endpoint, 'selection_get', {'max_indices': 0})['selected_count'] == 0
+    _editor(endpoint, """
+for name in ('green_cloud', 'red_splat'):
+    lf.set_node_visualizer_world_transform(name, identity, record_history=False)
+""")
     _tool(endpoint, 'render_settings_set', {
         'point_cloud_mode': False, 'split_view_mode': 1, 'split_position': .5,
         'show_grid': False, 'show_camera_frustums': False, 'show_coord_axes': False,
@@ -94,10 +131,16 @@ assert lf.get_scene().get_node('red_splat') is not None
     assert red_small > 1000
     assert red_large == pytest.approx(red_small, rel=.01), (red_small, red_large)
     _editor(endpoint, '''
-assert lf.get_scene().get_node('green_cloud').point_cloud() is not None
-assert lf.get_scene().get_node('green_cloud').splat_data() is None
+assert lf.get_scene().get_node('green_cloud').point_cloud() is None
+assert lf.get_scene().get_node('green_cloud').splat_data() is not None
 assert lf.get_scene().get_node('red_splat').splat_data() is not None
 ''')
+    exported = tmp_path / 'cloud.spz'
+    _editor(endpoint, f"lf.io.save_spz(lf.get_scene().get_node('green_cloud').splat_data(), {str(exported)!r})")
+    assert exported.is_file() and exported.stat().st_size > 0
+    exported_sog = tmp_path / 'cloud.sog'
+    _editor(endpoint, f"lf.io.save_sog(lf.get_scene().get_node('green_cloud').splat_data(), {str(exported_sog)!r}, use_gpu=False, kmeans_iterations=1)")
+    assert exported_sog.is_file() and exported_sog.stat().st_size > 0
     project = tmp_path / 'mixed.licht'
     _tool(endpoint, 'project_save_as', {'path': str(project)})
     _tool(endpoint, 'project_open', {'path': str(project), 'discard_changes': True})
@@ -105,8 +148,15 @@ assert lf.get_scene().get_node('red_splat').splat_data() is not None
     while _tool(endpoint, 'project_get_info').get('hydration_state') != 'complete':
         assert time.monotonic() < deadline, 'mixed project did not finish hydrating'
         time.sleep(.05)
-    _editor(endpoint, "assert lf.get_scene().get_node('green_cloud').point_cloud() is not None; "
+    _editor(endpoint, "assert lf.get_scene().get_node('green_cloud').splat_data() is not None; "
                       "assert lf.get_scene().get_node('red_splat').splat_data() is not None")
+
+    # The raw-source hint survives embedded project payloads and hydration.
+    _tool(endpoint, 'render_settings_set', {'voxel_size': .015})
+    reopened_small = _color_counts(_window(endpoint))[1]
+    _tool(endpoint, 'render_settings_set', {'voxel_size': .12})
+    reopened_large = _color_counts(_window(endpoint))[1]
+    assert reopened_large > reopened_small * 3, (reopened_small, reopened_large)
 
     # Group order must take precedence over model insertion/render-slot order.
     _editor(endpoint, f"""
@@ -119,3 +169,24 @@ assert scene.reparent(scene.get_node({expected_left!r}).id, second)
     _window(endpoint).save(pictures / 'reordered.png')
     _editor(endpoint, f"info = lf.ui.get_split_view_info(); "
                       f"assert (info['left_name'], info['right_name']) == {(expected_right, expected_left)!r}, info")
+
+
+def test_native_single_cloud_comparison_falls_back_to_normal_view(tmp_path, camera_runtime):
+    cloud = tmp_path / 'native_green.ply'
+    _cloud(cloud)
+    endpoint = camera_runtime
+    _editor(endpoint, f"""
+import lichtfeld as lf
+means, colors = lf.io.load_point_cloud({str(cloud)!r})
+assert lf.get_scene().add_point_cloud('Native cloud', means, colors) >= 0
+""")
+    _tool(endpoint, 'render_settings_set', {
+        'split_view_mode': 1, 'point_cloud_mode': False, 'voxel_size': .12,
+        'show_grid': False, 'show_coord_axes': False, 'show_camera_frustums': False,
+    })
+    _tool(endpoint, 'camera_set_view', {'eye': [0., 0., 6.], 'target': [0., 0., 0.]})
+    image = _window(endpoint)
+    image.save(tmp_path / 'native-single-cloud.png')
+    assert _color_counts(image)[1] > 1000
+    _editor(endpoint, "assert not lf.ui.get_split_view_info()['enabled']")
+    _editor(endpoint, "assert lf.get_scene().get_node('Native cloud').point_cloud() is not None")

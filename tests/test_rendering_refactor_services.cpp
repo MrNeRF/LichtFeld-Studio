@@ -1911,6 +1911,46 @@ namespace lfs::vis {
         EXPECT_FALSE(scene.hasPreparedCombinedModel());
     }
 
+    TEST_F(SceneManagerRenderStateTest, RawPointSourceDeleteUndoKeepsRenderingHint) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto id = scene.addSplat("Raw points", makeTwoPointTestSplat(0.0f, 1.0f));
+        scene.getNodeById(id)->point_cloud_source = true;
+        const auto uuid = scene.getNodeById(id)->uuid;
+        manager.selectNode(id);
+        scene.setSelection({0, 1});
+        const auto deleted = manager.deleteSelectedGaussiansWithHistory();
+        ASSERT_TRUE(deleted) << deleted.error();
+        EXPECT_EQ(scene.getNodeByUuid(uuid), nullptr);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        const auto* restored = scene.getNodeByUuid(uuid);
+        ASSERT_NE(restored, nullptr);
+        EXPECT_TRUE(restored->point_cloud_source);
+        ASSERT_NE(restored->model, nullptr);
+        EXPECT_EQ(restored->model->size(), 2u);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, DatasetPointCloudLookupIgnoresUnrelatedCloudOrder) {
+        core::Scene scene;
+        const auto unrelated = scene.addPointCloud("Imported", makeTestPointCloud());
+        EXPECT_EQ(scene.getDatasetPointCloudNode(), nullptr);
+        const auto dataset = scene.addDataset("Dataset");
+        const auto seed = makeTestPointCloud();
+        const auto seed_id = scene.addPointCloud("Seed", seed, dataset);
+        ASSERT_NE(scene.getDatasetPointCloudNode(), nullptr);
+        EXPECT_EQ(scene.getDatasetPointCloudNode()->id, seed_id);
+        scene.setInitialPointCloud(seed);
+        ASSERT_TRUE(scene.moveNode(dataset, core::NULL_NODE, 0));
+        ASSERT_TRUE(scene.moveNode(unrelated, core::NULL_NODE, 0));
+        EXPECT_EQ(scene.getDatasetPointCloudNode()->id, seed_id);
+        // Retained seed identity still works if its display parent changes.
+        ASSERT_TRUE(scene.reparent(seed_id, core::NULL_NODE));
+        EXPECT_EQ(scene.getDatasetPointCloudNode()->id, seed_id);
+        scene.removeNodeById(seed_id);
+        EXPECT_EQ(scene.getDatasetPointCloudNode(), nullptr);
+    }
+
     TEST_F(SceneManagerRenderStateTest, PlyComparisonUsesSceneTreeOrder) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
@@ -1942,6 +1982,12 @@ namespace lfs::vis {
         ASSERT_EQ(reordered.size(), 2u);
         EXPECT_EQ(reordered[0].node->id, splat_id);
         EXPECT_EQ(reordered[1].node->id, mesh_id);
+        ASSERT_TRUE(reordered[0].splat_slot.has_value());
+        EXPECT_EQ(reordered[0].splat_slot, nodes[1].splat_slot);
+        EXPECT_FALSE(reordered[1].splat_slot.has_value());
+        const auto moved = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
+        EXPECT_EQ(moved.node->id, splat_id);
+        EXPECT_EQ(moved.visible_index, static_cast<int>(*reordered[0].splat_slot));
     }
 
     TEST_F(SceneManagerRenderStateTest, PlyComparisonConsolidatedUsesPreparedCombinedWithoutRebuild) {

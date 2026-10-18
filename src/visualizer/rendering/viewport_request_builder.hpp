@@ -57,7 +57,7 @@ namespace lfs::vis {
         std::optional<size_t> splat_slot;
     };
 
-    // Nodes the PLY comparison pairs: visible splat slots, point clouds, then meshes.
+    // Visible comparison-eligible nodes in depth-first scene-tree order.
     [[nodiscard]] LFS_VIS_API std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene);
 
     // Visible splat, point cloud, or mesh shown in a comparison panel, or null when

@@ -4464,6 +4464,7 @@ namespace lfs::core {
         node->locked.set(desc.locked, false);
         node->training_enabled = desc.training_enabled;
         node->payload_diverged = desc.payload_diverged;
+        node->point_cloud_source = desc.point_cloud_source;
         node->payload_hydration = desc.payload_hydration;
         node->georef_pose = std::move(desc.georef_pose);
 
@@ -5020,6 +5021,7 @@ namespace lfs::core {
                 new_node->local_transform.setQuiet(src_transform);
                 new_node->visible.setQuiet(src_visible);
                 new_node->locked.setQuiet(src_locked);
+                new_node->point_cloud_source = getNodeById(src_id)->point_cloud_source;
                 new_node->transform_dirty = true;
             }
 
@@ -6136,6 +6138,24 @@ namespace lfs::core {
             }
         }
         return false;
+    }
+
+    const SceneNode* Scene::getDatasetPointCloudNode() const {
+        if (initial_point_cloud_) {
+            for (const auto& node : nodes_) {
+                if (node->type == NodeType::POINTCLOUD && node->point_cloud == initial_point_cloud_)
+                    return node.get();
+            }
+        }
+        for (const auto& node : nodes_) {
+            if (node->type != NodeType::POINTCLOUD || !node->point_cloud)
+                continue;
+            for (auto* parent = getNodeById(node->parent_id); parent; parent = getNodeById(parent->parent_id)) {
+                if (parent->type == NodeType::DATASET)
+                    return node.get();
+            }
+        }
+        return nullptr;
     }
 
     void Scene::setInitialPointCloud(std::shared_ptr<lfs::core::PointCloud> point_cloud) {

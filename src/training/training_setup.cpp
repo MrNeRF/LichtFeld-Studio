@@ -1100,15 +1100,11 @@ namespace lfs::training {
         context.training_model = scene.getTrainingModel();
         context.scene_center = scene.getSceneCenter();
         context.training_data_origin = scene.getTrainingDataOrigin();
-        for (const auto* node : scene.getNodes()) {
-            if (!node || node->type != lfs::core::NodeType::POINTCLOUD || !node->point_cloud) {
-                continue;
-            }
+        if (const auto* node = scene.getDatasetPointCloudNode()) {
             context.point_cloud_node_id = node->id;
             context.parent_id = node->parent_id;
             context.node_transform = node->transform();
             context.point_cloud = *node->point_cloud;
-            break;
         }
         if (context.point_cloud_node_id == lfs::core::NULL_NODE) {
             return context;

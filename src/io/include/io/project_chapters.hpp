@@ -425,6 +425,7 @@ namespace lfs::io::project {
         bool locked = false;
         bool training_enabled = true;
         bool payload_diverged = false;
+        bool point_cloud_source = false;
         std::optional<GeorefPose> georef_pose = std::nullopt;
         std::optional<PayloadBinding> payload;
         std::optional<CropBoxRecord> cropbox = std::nullopt;

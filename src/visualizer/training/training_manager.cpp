@@ -408,18 +408,13 @@ namespace lfs::vis {
                 }
 
                 if (!had_model) {
-                    for (const auto* node : scene.getNodes()) {
-                        if (!node || node->type != lfs::core::NodeType::POINTCLOUD ||
-                            !node->point_cloud) {
-                            continue;
-                        }
+                    if (const auto* node = scene.getDatasetPointCloudNode()) {
                         point_cloud = makeRestoreNodeDesc(*node);
                         const auto cropbox_id = scene.getCropBoxForSplat(node->id);
                         if (const auto* cropbox_node = scene.getNodeById(cropbox_id);
                             cropbox_node && cropbox_node->cropbox) {
                             cropbox = makeRestoreNodeDesc(*cropbox_node);
                         }
-                        break;
                     }
                 }
             }
@@ -464,6 +459,7 @@ namespace lfs::vis {
                 result.locked = node.locked.get();
                 result.training_enabled = node.training_enabled;
                 result.payload_diverged = node.payload_diverged;
+                result.point_cloud_source = node.point_cloud_source;
                 result.payload_hydration = node.payload_hydration;
                 result.georef_pose = node.georef_pose;
                 result.point_cloud = node.point_cloud;
