@@ -290,17 +290,20 @@ namespace lfs::training {
                 .pass_index = pass,
                 .control = control.meta ? vk::address(control) : 0,
             };
-            const std::array histogram_reads{source_keys};
+            // The direct shader path reads source_values as a safe substitute
+            // for its absent indirect-control buffer. Track that read in every
+            // stage, including its producer dependency from the preceding pass.
+            const std::array histogram_reads{source_keys, source_values};
             const std::array histogram_writes{counts};
             timed_dispatch(kHistogramStage, partitions, push,
                            histogram_reads, histogram_writes,
                            pass_timings == nullptr ? nullptr
                                                    : &(*pass_timings)[pass].histogram_ms);
-            const std::array partition_scan_reads{counts};
+            const std::array partition_scan_reads{counts, source_values};
             const std::array partition_scan_writes{counts, offsets};
             timed_dispatch(kPartitionScanStage, 256, push, partition_scan_reads, partition_scan_writes,
                            pass_timings == nullptr ? nullptr : &(*pass_timings)[pass].partition_scan_ms);
-            const std::array base_scan_reads{offsets};
+            const std::array base_scan_reads{offsets, source_values};
             const std::array base_scan_writes{offsets};
             timed_dispatch(kDigitBaseScanStage, 1, push, base_scan_reads, base_scan_writes,
                            pass_timings == nullptr ? nullptr : &(*pass_timings)[pass].digit_base_scan_ms);

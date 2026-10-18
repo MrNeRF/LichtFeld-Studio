@@ -110,10 +110,15 @@ bool firstMatchingLane(uint4 matchMask, uint lane) {
                                        uint3 groupId : SV_GroupID,
                                        uint3 groupThreadId : SV_GroupThreadID,
                                        uniform SortParameters parameters) {
-    if (parameters.control != 0) {
-        parameters.elementCount = ((Ptr<uint, Access.Read>)parameters.control)[0];
-        parameters.partitionCount = (parameters.elementCount + kPartitionWidth - 1) / kPartitionWidth;
-    }
+    // Some drivers speculate physical loads across the optional-control test.
+    // The direct path still needs a valid read address; its source payload is
+    // nonempty and read-only throughout this dispatch.
+    const uint64_t controlAddress = parameters.control != 0
+        ? parameters.control : parameters.sourceValues;
+    const uint controlCount = ((Ptr<uint, Access.Read>)controlAddress)[0];
+    parameters.elementCount = parameters.control != 0 ? controlCount : parameters.elementCount;
+    parameters.partitionCount = parameters.control != 0
+        ? (parameters.elementCount + kPartitionWidth - 1) / kPartitionWidth : parameters.partitionCount;
     Ptr<uint, Access.Read> valuesIn = (Ptr<uint, Access.Read>)parameters.sourceValues;
     Ptr<uint, Access.ReadWrite> valuesOut = (Ptr<uint, Access.ReadWrite>)parameters.destinationValues;
     Ptr<uint, Access.ReadWrite> counts = (Ptr<uint, Access.ReadWrite>)parameters.partitionCounts;

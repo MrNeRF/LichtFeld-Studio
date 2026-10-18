@@ -7,8 +7,10 @@ The implementation and reproduction checklist are in [GPU device preferences](gp
 The branch subsequently merges `upstream/dev` commit
 `d23669db9de3d7cfc0b3517fb439428d65fb743d` through merge commit
 `acb933295f2d02c03953230d095a0df7f165ed97`, without conflicts.
-No compilation is run after this merge at the user's request. The measurements
-and binaries below refer to the pre-merge source; they do not validate the merged revision.
+The user subsequently authorized compilation and runtime tests. Windows, Linux/WSL
+and all three macOS build configurations were rebuilt after this merge. The controlled
+2,000-step measurements below remain the historical pre-merge comparisons; final
+functional checks are recorded separately and are not replacement performance benchmarks.
 
 ## Scope and hardware
 
@@ -117,7 +119,10 @@ optimizer column is not the cost of every Adam operation.
 | vulkan-nvidia | 1.520 | 15.687 | 2.459 | 91.116 | 0.017 |
 | vulkan-amd | 3.376 | 106.362 | 11.339 | 123.566 | 0.514 |
 
-## Numerical and integration checks
+## Historical numerical and integration checks
+
+These counts describe the earlier validation phase. Post-merge final counts and
+additional operator coverage are recorded in the final-results table below.
 
 - Windows policy: 13 passed. CUDA/Vulkan source and consumer transfer checks
   pass on both physical adapters, including float32, float16, packed uint8,
@@ -143,9 +148,9 @@ optimizer column is not the cost of every Adam operation.
   neutrality, I/O discipline, CUDA logging and error-debt gates pass without
   changing debt baselines.
 
-The 110 tensor SPIR-V binaries match the control byte for byte. Of 68 training
-SPIR-V outputs, 64 match; the four changed outputs are the raw/optimized pair-sort
-variants. Their correction counts a partially occupied subgroup with ceiling
+The final audit confirms that all 110 tensor SPIR-V binaries match the control
+byte for byte. Of 68 training SPIR-V outputs, 62 match; six changed outputs are
+raw/optimized Adam and the two pair-sort variants. The pair-sort correction counts a partially occupied subgroup with ceiling
 division: a 32-worker group on wave64 has one active subgroup, not zero. At
 wave32 the count stays one. Backward wave32 selection is restricted to compatible
 AMD devices, with a logged fallback; other vendors retain their selection.
@@ -178,7 +183,7 @@ driver imports in that closure; the application-owned nvcuda imports are delayed
 ## Linux and remaining hardware coverage
 
 The Linux Release combined CUDA+Vulkan application builds successfully with GCC
-14 and CUDA 12.8 (SM86/PTX86 in this WSL environment). An incremental final build
+14 and CUDA 12.8 (the final build uses the native SM120 target; the earlier build used SM86/PTX86). An incremental final build
 also succeeds. The complete ELF dependency audit follows 90 files: no unresolved
 libraries and no eager `libcuda` or `libnvidia-ml` dependencies.
 
@@ -187,12 +192,12 @@ For the process-only driver-absence test, an `LD_PRELOAD` interceptor rejects
 exits successfully. The fresh one-iteration smoke selects Vulkan, logs
 `GPU fallback: requested=CUDA/Auto, effective=Vulkan, reason=no usable CUDA GPU`,
 and saves its final project. Its adapter is Mesa 25.2.8 llvmpipe (LLVM 20.1.2),
-a CPU Vulkan implementation. A longer three-iteration smoke **fails** with
+a CPU Vulkan implementation. Before the final correction, a longer three-iteration smoke **failed** with
 SIGSEGV in a driver execution thread while the application waits for
 `Tensor::append_gather` during MCMC growth. It also fails with a fixed Gaussian
 cap and with the Khronos validation layer enabled; no validation message is
 reported before the crash. This does not establish whether the cause is a driver
-or application shader defect, and is an unresolved software-Vulkan limitation.
+or application shader defect from that trace alone. The later causal investigation and compiled correction below supersede this crash result.
 The one-iteration result is only loader/fallback/save evidence, not proof of
 stable Linux Vulkan training. The Linux CUDA control completes three iterations
 with Gaussian growth and saves successfully. Native Radeon Linux training still
@@ -228,9 +233,9 @@ Further process-isolated runs reuse the existing pre-merge executable only:
 
 The main-thread backtrace waits in `append_gather` via Adam/MCMC; a queued earlier
 operation could also be responsible. Absence of a validation message does not
-rule out shader address errors. No speculative kernel change or software-device
-blacklist is added. A minimal isolated operation reproducer and a matched dev
-control are the next useful diagnostics when further build work is authorized.
+rule out shader address errors. At this diagnostic stage no kernel change or software-device
+blacklist was added. The subsequent isolated operation and compiled corrections
+are described below.
 Native Linux hardware testing remains separate and outstanding.
 
 Evidence: `linux-explicit-vulkan-stack.log`, `linux-explicit-no-refine.log`,
@@ -298,34 +303,135 @@ Evidence: `linux-refine-debug-detail.log`, `linux-gather-addresses.log`,
 `linux-adam-readonly-control.log`, and their `.gdb` / `.sh` harnesses under
 `.local/gpu-backend-preferences`.
 
-### Targeted source correction, not yet rebuilt
+### Final compiled corrections and numerical contract
 
-The follow-up applies `p.value_bounds = p.bounds` only after the zero-encoding
-mark stage, immediately before operation 2 is queued in `adam_vulkan.cpp`.
-Operation 3 keeps its original parameters. The valid address points to an already
-tracked allocation; there is no extra buffer, allocation, host copy or change to
-optimizer arithmetic. CUDA, native Metal and all shader sources are untouched
-by this follow-up. Mac Vulkan uses the corrected Vulkan adapter and therefore
-must be included in the compiled regression checks.
+The initial host-only `encode_zero` pointer substitution was superseded: the
+expanded software suite also reproduced the optional read in FP32 SH Adam.
+The final correction is in the shared Vulkan shader helper `loadOldBounds`.
+It selects a valid physical address before loading: real value bounds use
+`block * 8`, while the absent-buffer fallback uses the current group's moment
+bounds at `block * 16`. Reading its own block avoids racing another group's
+in-place bounds update. The logical absent value remains zero and the original
+`valueBounds` flag retains its codec-selection meaning. There is no additional
+allocation or change to optimizer arithmetic. CUDA and native Metal kernels
+are unchanged by this correction; Mac Vulkan uses the corrected helper.
 
-The existing portable Adam CPU-oracle helper now also accepts the exact growth
-geometry (19,555 to 20,532 primitives). A new parameterized regression compares
-all packed output bytes and bounds against that CPU oracle for row and swizzled
-layouts, both 8-bit and 16-bit codecs. It covers the live partial source block,
-new complete blocks, final partial block 80, and preservation of untouched rows
-and padding. Existing 700-row fixtures retain their original inputs.
+The software suite then isolated the same speculative-null-load behavior in
+radix sort's optional indirect-control read. The direct path now supplies its
+nonempty, immutable source payload as a safe physical read address and retains
+its original element/partition counts. The indirect path retains its control
+buffer and computed counts. Both pair-sort variants use the same protection.
+Every stage declares the extra source-payload read to the recorder, preserving
+the dependency on the preceding pass and avoiding reliance on implicit ordering.
+GDB evidence is retained in `linux-morton-crash-diagnostic.log`.
 
-No compilation is run, in accordance with the user's current instruction. The
-new C++ regression is **added but not executed**, and the source correction is
-**not yet tested in a rebuilt binary**. The GDB causal result above is supporting
-evidence, not a substitute for that validation. Backend-neutrality, I/O discipline,
-CUDA log-format and error-debt source gates pass; debt baselines are unchanged.
+The portable CPU oracle now covers the exact growth geometry (19,555 to 20,532
+primitives), comparing all packed bytes and bounds for row/swizzled layouts,
+8/16-bit codecs, partial block 80, untouched rows and padding. Existing 700-row
+fixtures keep their inputs. An additional FP32 SH test covers skipped rows.
 
-When build work resumes, run the new test and all existing `EncodeZero*` CPU
-comparisons on llvmpipe, both physical Windows adapters, and Mac Metal/Vulkan;
-then repeat the previously failing refinement smoke on the rebuilt Linux app.
-Do not count the old binaries' successful measurements as validation of this
-new source revision.
+Expanded physical-GPU tests exposed three quantization codes exactly at FP32
+half-rounding boundaries. The two permutation assertions now use the already
+established one-code/one-FP32-ULP boundary contract from this test file, with
+independent CUDA-to-CPU and Vulkan-to-CPU comparisons. All nonboundary codes,
+padding and bounds retain strict checks. This changes test assertions, not
+GPU math. Diagnostic scaled values were 14309.5, 37461.5 and 35179.5; evidence
+is retained in `portable-boundary-diagnostic-amd.log`.
+
+### Post-merge dependencies and smoke-test discipline
+
+The merged TIFF allocation-failure regression initially failed against the
+machine's older unpatched shared vcpkg TIFF installation. Private dependencies
+were built with dev's existing TIFF overlay and linked/staged for validation;
+no shared vcpkg installation was changed. Windows and macOS standalone codec
+CTest suites each pass all five registered tests with that dependency.
+Linux application builds use the same patched TIFF library; public TIFF headers
+were verified byte-identical to the existing prefix. The optional standalone
+Linux EXR fixture additionally requires `openexr[cpp]`, which is absent from this
+Core-only production prefix; its configuration failure is an environment
+limitation, not a passing Linux codec-suite result.
+
+Fresh 200-step training checks use max width 1920, SH0 and a one-million cap,
+and require both completion and a saved checkpoint. They exercise CUDA and
+both physical Windows Vulkan adapters, plus native Metal and Mac Vulkan.
+A first nominal Mac Vulkan smoke profile lacked `schema_version=2` and was
+migrated to Auto/Metal; that run is excluded from Vulkan evidence. Corrected
+profiles explicitly verify the actual backend in the log. These short-run
+wall times are functional evidence, not controlled iteration benchmarks.
+
+### Final results after rebuilding
+
+| Platform/configuration | Completed | Skipped | Disabled | Failures |
+|---|---:|---:|---:|---:|
+| Windows portable operators, NVIDIA | 50 | 32 | 3 | 0 |
+| Windows portable operators, Radeon | 50 | 32 | 3 | 0 |
+| Windows complete UI | 352 | 5 | 2 | 0 |
+| Mac Metal graphics, Metal tensors | 1235 | 177 | 5 | 0 |
+| Mac Metal graphics, Vulkan tensors | 1236 | 176 | 5 | 0 |
+| Mac Vulkan graphics, Metal tensors | 1234 | 176 | 5 | 0 |
+| Mac Vulkan graphics, Vulkan tensors | 1235 | 175 | 5 | 0 |
+| Mac native Metal-only general suite | 750 | 418 | 4 | 0 |
+| Mac Metal graphics UI | 398 | 4 | 2 | 0 |
+| Mac Vulkan graphics UI | 404 | 3 | 2 | 0 |
+| Mac Metal-only UI | 399 | 3 | 2 | 0 |
+
+All 13 selection-policy tests pass on Windows, Linux and each Mac build.
+The additional Mac Adam/SH/Morton CPU-oracle runs pass 32/32 in each combined
+build, and 16 with 16 unavailable Vulkan cases skipped in Metal-only.
+Windows CUDA byte-contract tests and both adapters' cross-device transfers pass;
+Linux CUDA byte-contract tests also pass. The final WSL ELF audit follows 90
+files with no missing dependencies or eager CUDA/NVIDIA driver imports. Windows
+PE audit follows the eager dependency closure without eager driver imports.
+
+Final 200-step Windows functional runs complete and save one-million-Gaussian
+checkpoints with CUDA, NVIDIA Vulkan and Radeon Vulkan. Mac Vulkan's final
+verified run also completes and saves.
+The previously verified native Metal run completes and saves as well.
+CUDA shutdown also emits the nvImageCodec `cuDevicePrimaryCtxRelease failed: 4`
+message already present in the immutable baseline training/evaluation logs; it
+is not counted as a newly introduced warning. These
+are not directly comparable timings or new quality benchmarks.
+
+The exact three-step, refine-every-step reproduction also completes and saves
+22,635 Gaussians after rebuilding.
+
+The rebuilt WSL application now completes the three-step driver-absence training
+smoke, saving 21,558 Gaussians. Morton sorting and all Adam regressions also
+complete without crashes. The original strict portable suite reports 14 passed,
+20 unavailable cases skipped and **three numerical failures**: Q16 decode,
+range decode and joint permutation. The oracle explicitly uses `std::fma` to
+match CUDA; llvmpipe instead executes these pre-existing shader expressions
+without contraction. A separate, artifact-only diagnostic changes only the
+oracle decode to a volatile multiply followed by addition: **17 passed,
+20 skipped, zero failures**, including the previously failing joint bounds/code.
+The repository's strict oracle remains unchanged. The relevant SH/joint-Morton
+SPIR-V modules are byte-identical to the control. This isolates the mismatch to
+fused/nonfused FP32 results in unchanged codec paths, rather than treating the
+original failures as passes or loosening production precision. Native Linux
+GPU behavior still requires physical-driver validation.
+
+Actual MCP integration with an isolated profile hides CUDA and requests a
+missing saved rendering adapter. It verifies Vulkan fallback, preserved saved
+requests, CLI `GPU fallback:` reasons, and the effective GPU names. Changing the
+tensor adapter leaves the actual GPU unchanged, sets `restart_required=true`,
+and displays the amber **Restart needed** action in the main status bar.
+Restoring the active configuration clears it and logs `restart required=false`.
+Evidence: `runtime/final-fallback-restart-4`. Consolidated final results and
+source hashes are retained in `final-physical-gpu-validation-summary.json`.
+
+The same saved one-million-Gaussian project renders successfully in all four
+cross-device viewer combinations. Offscreen images are byte-identical when the
+rendering adapter is held constant while the tensor adapter changes. Across
+rendering adapters, mean absolute channel difference is 0.03124/255 and maximum
+8/255. Window captures were visually inspected.
+
+The final runtime source files were hash-checked against the Mac copy;
+`final-runtime-source-manifest.json` records the matching contents. Final source
+gates report zero backend-neutrality, I/O-discipline, CUDA-format or error-debt
+violations, without baseline changes. Historical 2,000-step quality/timing data
+remain above; they predate these final safe-address guards. No absolute absence
+of regressions, full Linux codec-suite pass, native Radeon Linux pass, or
+physical multi-CUDA-card validation is claimed.
 
 ## Evidence locations
 
