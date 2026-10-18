@@ -171,9 +171,32 @@ driver imports in that closure; the application-owned nvcuda imports are delayed
 
 ## Linux and remaining hardware coverage
 
-Linux combined-build and process-only driver-absence results are recorded after
-the final rebuild. Native Radeon Linux execution and two physical CUDA cards
-remain outside the available hardware coverage.
+The Linux Release combined CUDA+Vulkan application builds successfully with GCC
+14 and CUDA 12.8 (SM86/PTX86 in this WSL environment). An incremental final build
+also succeeds. The complete ELF dependency audit follows 90 files: no unresolved
+libraries and no eager `libcuda` or `libnvidia-ml` dependencies.
+
+For the process-only driver-absence test, an `LD_PRELOAD` interceptor rejects
+`dlopen("libcuda.so.1")`; system driver files are untouched. Application help
+exits successfully. The fresh one-iteration smoke selects Vulkan, logs
+`GPU fallback: requested=CUDA/Auto, effective=Vulkan, reason=no usable CUDA GPU`,
+and saves its final project. Its adapter is Mesa 25.2.8 llvmpipe (LLVM 20.1.2),
+a CPU Vulkan implementation. A longer three-iteration smoke **fails** with
+SIGSEGV in a driver execution thread while the application waits for
+`Tensor::append_gather` during MCMC growth. It also fails with a fixed Gaussian
+cap and with the Khronos validation layer enabled; no validation message is
+reported before the crash. This does not establish whether the cause is a driver
+or application shader defect, and is an unresolved software-Vulkan limitation.
+The one-iteration result is only loader/fallback/save evidence, not proof of
+stable Linux Vulkan training. The Linux CUDA control completes three iterations
+with Gaussian growth and saves successfully. Native Radeon Linux training still
+requires validation on a machine exposing the actual hardware driver.
+
+All 13 Linux selection-policy tests pass. Both device-transfer tests are skipped
+because this WSL setup exposes no Vulkan adapter compatible with the rendering
+requirements; they are not counted as passed. The corresponding physical-device
+checks pass on Windows. Native Radeon Linux execution and two physical CUDA
+cards remain outside the available hardware coverage.
 
 ## Evidence locations
 
