@@ -1145,7 +1145,7 @@ namespace lfs::vis::gui {
             if (hovered_interactive_) {
                 guiFocusState().want_capture_mouse = true;
                 if (hover) {
-                    cursor_request_ = rmlCursorRequestForName(hover->GetComputedValues().cursor());
+                    cursor_request_ = rmlCursorRequestForName(hover->GetProperty<Rml::String>("cursor"));
                     if (value_drag)
                         tooltip_.setHover({}, nullptr);
                     else
@@ -1232,7 +1232,7 @@ namespace lfs::vis::gui {
         const bool over_interactive = is_inside && hover_root != nullptr;
         hovered_interactive_ = over_interactive;
         if (over_interactive && hover)
-            cursor_request_ = rmlCursorRequestForName(hover->GetComputedValues().cursor());
+            cursor_request_ = rmlCursorRequestForName(hover->GetProperty<Rml::String>("cursor"));
 
         bool replayed_button_events = false;
         for (const auto& event : input.mouse_button_events) {
