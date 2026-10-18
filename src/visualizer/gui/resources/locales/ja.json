@@ -406,7 +406,6 @@
     "section.refinement": "リファインメント",
     "section.appearance_correction": "外観補正",
     "section.learning_rates": "学習率",
-    "section.evaluation": "評価",
     "section.bilateral_grid": "バイラテラルグリッド設定",
     "section.losses": "損失パラメータ",
     "section.initialization": "初期化",

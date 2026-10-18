@@ -406,7 +406,6 @@
     "section.refinement": "Verfeinerung",
     "section.appearance_correction": "Erscheinungsbildkorrektur",
     "section.learning_rates": "Lernraten",
-    "section.evaluation": "Auswertung",
     "section.bilateral_grid": "Bilaterales Gitter Einstellungen",
     "section.losses": "Verlustparameter",
     "section.initialization": "Initialisierung",

@@ -562,7 +562,7 @@ namespace {
         const auto loss = [&](const PpispParams& q, const Doubles& image) {
             return weighted(ppisp_forward(q, image, H, W, 0, H, camera, frame), grad_values);
         };
-        const auto group = [&](Doubles PpispParams::* member) {
+        const auto group = [&](Doubles PpispParams::*member) {
             return finite_difference(p.*member, [&](const Doubles& values) {
                 PpispParams q = p;
                 q.*member = values;
@@ -597,7 +597,7 @@ namespace {
         table.backward({exposure, vignetting, color, crf}, gpu(rgb_values, {3, H, W}), gpu(grad_values, {3, H, W}),
                        {ge, gv, gc, gk}, grad_rgb, 2, 3, camera, frame);
 
-        const auto group = [&](Doubles PpispParams::* member) {
+        const auto group = [&](Doubles PpispParams::*member) {
             return finite_difference(p.*member, [&](const Doubles& values) {
                 PpispParams q = p;
                 q.*member = values;

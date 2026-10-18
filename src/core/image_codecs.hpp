@@ -133,6 +133,20 @@ namespace lfs::core::image_codecs {
         std::optional<std::array<float, 8>> chromaticities;
         std::span<const std::uint16_t> transfer_function;
     };
+    struct TiffEncodeOptions {
+        std::optional<std::string> description;
+        TiffColorTags color;
+        std::size_t max_output_bytes = 256 * 1024 * 1024;
+    };
+    // Classic TIFF, existing LZW/strip policy, interleaved UINT8 or native-endian
+    // UINT16 gray/gray-alpha/RGB/RGBA. Explicit byte stride; unaligned rows and
+    // input/output aliasing supported. No sample/alpha/orientation conversion.
+    // Owns output only on success; failures preserve the previous output.
+    // The byte limit bounds the seekable encoded extent, not codec working RAM.
+    [[nodiscard]] LFS_IMAGE_CODECS_API Status encode_tiff_memory(
+        std::span<const std::uint8_t> data, int width, int height, int channels,
+        int bit_depth, std::size_t row_stride, std::vector<std::uint8_t>& output,
+        const TiffEncodeOptions& options = {});
     LFS_IMAGE_CODECS_API Status write_tiff_u16(const std::filesystem::path& path,
                                                std::span<const std::uint8_t> data, int width, int height, int channels,
                                                std::size_t row_stride, const std::optional<std::string>& description,
