@@ -49,7 +49,6 @@ namespace {
         ASSERT_TRUE(lfs::core::image_codecs::write_jpeg(dataset / "frame.jpg", rgb.data(), 2, 2, 3, 95, std::nullopt, error));
         write_text_file(dataset / "frame.exr", "unreferenced depth/HDR companion");
         write_text_file(dataset / "frame.webp", "unreferenced image companion");
-        write_text_file(dataset / "frame.jxl", "unreferenced JXL companion");
         lfs::io::ColmapLoader loader;
         ASSERT_TRUE(loader.load(dataset, {.validate_only = true}).has_value());
         EXPECT_EQ(lfs::io::count_image_files(dataset, false), 1);
@@ -67,13 +66,9 @@ namespace {
         EXPECT_EQ(lfs::io::detect_dataset_info(dataset).image_count, 2);
         fs::remove(dataset / "frame.jpg");
         fs::remove(dataset / "second.JPG");
-        EXPECT_EQ(lfs::io::count_image_files(dataset, false), 4);
+        EXPECT_EQ(lfs::io::count_image_files(dataset, false), 3);
         ASSERT_TRUE(lfs::io::project::first_dataset_image(config).has_value());
-        // With no legacy image left, the existing fallback follows directory
-        // iteration order; APFS and NTFS need not choose the same companion.
-        const auto preview = lfs::io::project::first_dataset_image(config)->lexically_normal();
-        const std::array candidates{dataset / "frame.exr", dataset / "frame.webp", dataset / "frame.jxl", dataset / "second.WEBP"};
-        EXPECT_NE(std::find(candidates.begin(), candidates.end(), preview), candidates.end());
+        EXPECT_EQ(lfs::io::project::first_dataset_image(config)->lexically_normal(), dataset / "frame.exr");
     }
     TEST_F(ImageFormatDiscoveryTest, JxlDatasetUsesTheSharedReaderAndPreservesLegacyPreference) {
         const auto dataset = temp_dir_ / "jxl";

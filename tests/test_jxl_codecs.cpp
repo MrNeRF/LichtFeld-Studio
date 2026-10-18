@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/color_transfer.h"
 #include "core/image_jxl.hpp"
 #include <algorithm>
 #include <array>
@@ -17,11 +18,24 @@
 
 namespace {
     namespace codec = lfs::core::image_codecs;
+    // Precision/conformance tests explicitly request native decoded samples.
+    // Application/generic dispatch defaults to canonical sRGB instead.
+    template <class Source>
+    bool native_decode(Source source, codec::Image& image, std::string& error, bool display = false, codec::JxlDecodeLimits limits = {}) {
+        limits.color_policy = codec::JxlColorPolicy::Native;
+        return codec::decode_jxl(source, image, error, display, limits);
+    }
+    template <class Source>
+    bool native_target(Source source, codec::DecodeTarget& target, codec::Probe& info, std::string& error, bool display = false, codec::JxlDecodeLimits limits = {}) {
+        limits.color_policy = codec::JxlColorPolicy::Native;
+        return codec::decode_jxl_to_buffer(source, target, info, error, display, limits);
+    }
     struct Encoding {
         int width = 3, height = 2, channels = 3, bits = 8;
         bool floating = false, container = false, animation = false, premultiplied = false, lossless = true;
         bool codestream_range = false, depth = false;
         JxlTransferFunction transfer = JXL_TRANSFER_FUNCTION_UNKNOWN;
+        double gamma = 0.;
         float intensity = 255.f;
         JxlOrientation orientation = JXL_ORIENT_IDENTITY;
         std::span<const uint8_t> metadata;
@@ -65,6 +79,10 @@ namespace {
             JxlColorEncodingSetToSRGB(&color, basic.num_color_channels == 1);
         if (options.transfer != JXL_TRANSFER_FUNCTION_UNKNOWN)
             color.transfer_function = options.transfer;
+        if (options.gamma) {
+            color.transfer_function = JXL_TRANSFER_FUNCTION_GAMMA;
+            color.gamma = 1. / options.gamma;
+        }
         if (options.icc.empty())
             check(JxlEncoderSetColorEncoding(encoder.get(), &color));
         else
@@ -171,7 +189,7 @@ namespace {
         const auto encoded = encode(samples.data(), sizeof(samples), {.bits = 32, .floating = true});
         codec::Image image;
         std::string error;
-        ASSERT_TRUE(codec::decode_jxl(encoded, image, error)) << error;
+        ASSERT_TRUE(native_decode(encoded, image, error)) << error;
         ASSERT_EQ(image.sample_type, codec::SampleType::Float32);
         ASSERT_EQ(image.data.size(), sizeof(samples));
         EXPECT_EQ(std::memcmp(image.data.data(), samples.data(), sizeof(samples)), 0);
@@ -197,18 +215,18 @@ namespace {
                 limits.encoded_bytes = encoded.size() - 1;
             codec::Image image{1, 1, 1, codec::SampleType::UInt8, {123}};
             std::string error = "old error";
-            EXPECT_FALSE(codec::decode_jxl(path, image, error, false, limits));
+            EXPECT_FALSE(native_decode(path, image, error, false, limits));
             EXPECT_NE(error, "old error");
             EXPECT_FALSE(error.empty());
             EXPECT_EQ(image.data, (std::vector<uint8_t>{123}));
-            ASSERT_TRUE(codec::decode_jxl(path, image, error)) << error;
+            ASSERT_TRUE(native_decode(path, image, error)) << error;
             EXPECT_TRUE(error.empty());
             EXPECT_EQ(image.data, (std::vector<uint8_t>(samples.begin(), samples.end())));
         }
         for (const size_t length : {size_t{0}, size_t{1}, encoded.size() / 2}) {
             codec::Image image{1, 1, 1, codec::SampleType::UInt8, {123}};
             std::string error;
-            EXPECT_FALSE(codec::decode_jxl(std::span(encoded).first(length), image, error));
+            EXPECT_FALSE(native_decode(std::span(encoded).first(length), image, error));
             EXPECT_EQ(image.data, (std::vector<uint8_t>{123}));
         }
     }
@@ -230,10 +248,10 @@ namespace {
                                    &allocation};
         codec::Probe probe{9, 9, 9};
         std::string error;
-        EXPECT_FALSE(codec::decode_jxl_to_buffer(std::span(encoded).first(encoded.size() / 2), target, probe, error));
+        EXPECT_FALSE(native_target(std::span(encoded).first(encoded.size() / 2), target, probe, error));
         EXPECT_EQ(allocation.calls, 0u);
         EXPECT_EQ(probe.width, 9);
-        ASSERT_TRUE(codec::decode_jxl_to_buffer(encoded, target, probe, error)) << error;
+        ASSERT_TRUE(native_target(encoded, target, probe, error)) << error;
         ASSERT_EQ(allocation.calls, 1u);
         ASSERT_EQ(allocation.values.size(), 18u);
         for (size_t i = 0; i < gray.size(); ++i)
@@ -247,11 +265,11 @@ namespace {
         const auto encoded = encode(pixels.data(), pixels.size(), {.container = true, .metadata = metadata});
         codec::Image image;
         std::string error;
-        ASSERT_TRUE(codec::decode_jxl(write(encoded), image, error)) << error;
+        ASSERT_TRUE(native_decode(write(encoded), image, error)) << error;
         EXPECT_EQ(image.data, (std::vector<uint8_t>(pixels.begin(), pixels.end())));
         const auto animated = encode(pixels.data(), pixels.size(), {.container = true, .animation = true});
         const auto previous = image.data;
-        EXPECT_FALSE(codec::decode_jxl(animated, image, error));
+        EXPECT_FALSE(native_decode(animated, image, error));
         EXPECT_NE(error.find("animation"), std::string::npos);
         EXPECT_EQ(image.data, previous);
     }
@@ -264,7 +282,7 @@ namespace {
             codec::Image image;
             codec::Probe probe;
             std::string error;
-            ASSERT_TRUE(codec::decode_jxl(encoded, image, error)) << error;
+            ASSERT_TRUE(native_decode(encoded, image, error)) << error;
             ASSERT_TRUE(codec::probe_jxl(write(encoded), probe, error)) << error;
             EXPECT_EQ(probe.width, image.width);
             EXPECT_EQ(probe.height, image.height);
@@ -311,7 +329,7 @@ namespace {
         const auto encoded = encode(values.data(), values.size() * sizeof(uint16_t), {.width = 256, .height = 256, .channels = 1, .bits = 16});
         codec::Image image;
         std::string error;
-        ASSERT_TRUE(codec::decode_jxl(encoded, image, error)) << error;
+        ASSERT_TRUE(native_decode(encoded, image, error)) << error;
         ASSERT_EQ(image.data.size(), values.size() * sizeof(uint16_t));
         EXPECT_EQ(std::memcmp(image.data.data(), values.data(), image.data.size()), 0);
     }
@@ -321,8 +339,8 @@ namespace {
         const auto encoded = encode(linear.data(), sizeof(linear), {.channels = 1, .bits = 32, .floating = true});
         codec::Image raw, display;
         std::string error;
-        ASSERT_TRUE(codec::decode_jxl(encoded, raw, error)) << error;
-        ASSERT_TRUE(codec::decode_jxl(encoded, display, error, true)) << error;
+        ASSERT_TRUE(native_decode(encoded, raw, error)) << error;
+        ASSERT_TRUE(native_decode(encoded, display, error, true)) << error;
         for (size_t i = 0; i < linear.size(); ++i) {
             float a, b;
             std::memcpy(&a, raw.data.data() + i * sizeof(float), sizeof(float));
@@ -339,13 +357,13 @@ namespace {
         const auto path = write(encoded);
         codec::Image expected;
         std::string error;
-        ASSERT_TRUE(codec::decode_jxl(encoded, expected, error)) << error;
+        ASSERT_TRUE(native_decode(encoded, expected, error)) << error;
         std::vector<std::future<std::vector<uint8_t>>> readers;
         for (int i = 0; i < 8; ++i)
             readers.push_back(std::async(std::launch::async, [&] {
                 codec::Image image;
                 std::string diagnostic;
-                if (!codec::decode_jxl(path, image, diagnostic))
+                if (!native_decode(path, image, diagnostic))
                     throw std::runtime_error(diagnostic);
                 return image.data;
             }));
@@ -362,12 +380,12 @@ namespace {
             limits.decoder_bytes = budget;
             codec::Image image{1, 1, 1, codec::SampleType::UInt8, {123}};
             std::string error;
-            if (!codec::decode_jxl(encoded, image, error, false, limits)) {
+            if (!native_decode(encoded, image, error, false, limits)) {
                 ++failures;
                 EXPECT_NE(error.find("allocation"), std::string::npos) << error;
                 EXPECT_EQ(image.data, (std::vector<uint8_t>{123}));
             }
-            ASSERT_TRUE(codec::decode_jxl(encoded, image, error)) << error;
+            ASSERT_TRUE(native_decode(encoded, image, error)) << error;
         }
         EXPECT_GT(failures, 0u);
     }
@@ -378,24 +396,24 @@ namespace {
         const auto valid = encoded;
         codec::Image image;
         std::string error;
-        ASSERT_TRUE(codec::decode_jxl(encoded, image, error)) << error;
+        ASSERT_TRUE(native_decode(encoded, image, error)) << error;
         std::fill(encoded.begin(), encoded.end(), 0xff);
         EXPECT_EQ(image.data, (std::vector<uint8_t>(samples.begin(), samples.end())));
         std::array<uint8_t, 18> output;
         output.fill(123);
         codec::DecodeTarget target{3, codec::SampleType::UInt8, output.data()};
         codec::Probe probe{9, 9, 9};
-        EXPECT_FALSE(codec::decode_jxl_to_buffer(encoded, target, probe, error));
+        EXPECT_FALSE(native_target(encoded, target, probe, error));
         EXPECT_EQ(probe.width, 9);
         for (const auto value : output)
             EXPECT_EQ(value, 123);
-        ASSERT_TRUE(codec::decode_jxl_to_buffer(valid, target, probe, error)) << error;
+        ASSERT_TRUE(native_target(valid, target, probe, error)) << error;
         EXPECT_EQ(output, samples);
         unsigned calls = 0;
         target.data = nullptr;
         target.user = &calls;
         target.allocate = [](size_t, void* user) -> void* { ++*static_cast<unsigned*>(user); return nullptr; };
-        EXPECT_FALSE(codec::decode_jxl_to_buffer(valid, target, probe, error));
+        EXPECT_FALSE(native_target(valid, target, probe, error));
         EXPECT_EQ(calls, 1u);
         EXPECT_EQ(target.data, nullptr);
     }
@@ -404,7 +422,7 @@ namespace {
         const auto path = std::filesystem::path(LFS_JXL_FIXTURES) / "rgb8.jxl";
         codec::Image image;
         std::string error;
-        ASSERT_TRUE(codec::decode_jxl(path, image, error)) << error;
+        ASSERT_TRUE(native_decode(path, image, error)) << error;
         ASSERT_EQ(image.data.size(), 12u);
         for (size_t i = 0; i < 4; ++i) {
             EXPECT_EQ(image.data[i * 3], 255);
@@ -420,7 +438,7 @@ namespace {
             const auto encoded = encode(samples.data(), sizeof(samples), {.channels = 1, .bits = bits, .codestream_range = true});
             codec::Image image;
             std::string error;
-            ASSERT_TRUE(codec::decode_jxl(encoded, image, error)) << error;
+            ASSERT_TRUE(native_decode(encoded, image, error)) << error;
             ASSERT_EQ(image.sample_type, codec::SampleType::UInt16);
             for (size_t i = 0; i < samples.size(); ++i) {
                 uint16_t actual;
@@ -444,7 +462,7 @@ namespace {
         const auto encoded = encode(samples.data(), sizeof(samples), {.channels = 4, .bits = 32, .floating = true, .premultiplied = true});
         codec::Image image;
         std::string error;
-        ASSERT_TRUE(codec::decode_jxl(encoded, image, error)) << error;
+        ASSERT_TRUE(native_decode(encoded, image, error)) << error;
         for (size_t pixel = 0; pixel < 6; ++pixel)
             for (size_t channel = 0; channel < 4; ++channel) {
                 float actual;
@@ -460,11 +478,11 @@ namespace {
             const auto encoded = encode(samples.data(), sizeof(samples), {.bits = 16, .transfer = transfer, .intensity = 1000.f});
             codec::Image image;
             std::string error;
-            ASSERT_TRUE(codec::decode_jxl(encoded, image, error)) << error;
+            ASSERT_TRUE(native_decode(encoded, image, error)) << error;
             ASSERT_EQ(image.data.size(), sizeof(samples));
             EXPECT_EQ(std::memcmp(image.data.data(), samples.data(), sizeof(samples)), 0);
             const auto previous = image.data;
-            EXPECT_FALSE(codec::decode_jxl(encoded, image, error, true));
+            EXPECT_FALSE(native_decode(encoded, image, error, true));
             EXPECT_NE(error.find("tone-mapping"), std::string::npos);
             EXPECT_EQ(image.data, previous);
         }
@@ -486,9 +504,9 @@ namespace {
         const auto encoded = encode(samples.data(), samples.size(), {.icc = icc});
         codec::Image raw, display;
         std::string error;
-        ASSERT_TRUE(codec::decode_jxl(encoded, raw, error)) << error;
+        ASSERT_TRUE(native_decode(encoded, raw, error)) << error;
         EXPECT_EQ(raw.data, (std::vector<uint8_t>(samples.begin(), samples.end())));
-        ASSERT_TRUE(codec::decode_jxl(encoded, display, error, true)) << error;
+        ASSERT_TRUE(native_decode(encoded, display, error, true)) << error;
         for (size_t i = 0; i < samples.size(); ++i) {
             const double linear = std::pow(samples[i] / 255., 2.2);
             const double srgb = linear <= .0031308 ? linear * 12.92 : 1.055 * std::pow(linear, 1. / 2.4) - .055;
@@ -501,7 +519,7 @@ namespace {
         const auto encoded = encode(samples.data(), samples.size(), {.depth = true});
         codec::Image image{1, 1, 1, codec::SampleType::UInt8, {123}};
         std::string error;
-        EXPECT_FALSE(codec::decode_jxl(encoded, image, error));
+        EXPECT_FALSE(native_decode(encoded, image, error));
         EXPECT_NE(error.find("auxiliary"), std::string::npos);
         EXPECT_EQ(image.data, (std::vector<uint8_t>{123}));
     }
@@ -518,7 +536,7 @@ namespace {
             changed[offset] ^= 0x80;
             codec::Image image{1, 1, 1, codec::SampleType::UInt8, {123}};
             std::string error;
-            if (!codec::decode_jxl(changed, image, error, false, limits)) {
+            if (!native_decode(changed, image, error, false, limits)) {
                 EXPECT_FALSE(error.empty());
                 EXPECT_EQ(image.data, (std::vector<uint8_t>{123}));
             } else {
@@ -528,7 +546,7 @@ namespace {
         }
         codec::Image recovered;
         std::string error;
-        ASSERT_TRUE(codec::decode_jxl(encoded, recovered, error)) << error;
+        ASSERT_TRUE(native_decode(encoded, recovered, error)) << error;
         EXPECT_EQ(recovered.data, (std::vector<uint8_t>(samples.begin(), samples.end())));
     }
     TEST_F(JxlCodec, OfficialStaticProfilesPatchesAndCoalescedLayersDecode) {
@@ -539,13 +557,13 @@ namespace {
             const std::vector<uint8_t> encoded((std::istreambuf_iterator<char>(input)), {});
             codec::Image file, memory;
             std::string error;
-            ASSERT_TRUE(codec::decode_jxl(path, file, error)) << error;
-            ASSERT_TRUE(codec::decode_jxl(encoded, memory, error)) << error;
+            ASSERT_TRUE(native_decode(path, file, error)) << error;
+            ASSERT_TRUE(native_decode(encoded, memory, error)) << error;
             EXPECT_EQ(file.width, memory.width);
             EXPECT_EQ(file.height, memory.height);
             EXPECT_EQ(file.data, memory.data);
-            ASSERT_TRUE(codec::decode_jxl(path, file, error, true)) << error;
-            ASSERT_TRUE(codec::decode_jxl(encoded, memory, error, true)) << error;
+            ASSERT_TRUE(native_decode(path, file, error, true)) << error;
+            ASSERT_TRUE(native_decode(encoded, memory, error, true)) << error;
             EXPECT_EQ(file.data, memory.data);
         }
     }
@@ -564,10 +582,10 @@ namespace {
             codec::DecodeTarget memory_target{0, codec::SampleType::Float32, nullptr, allocate, &memory};
             codec::Probe info, memory_info;
             std::string error;
-            ASSERT_TRUE(codec::decode_jxl_to_buffer(path, file_target, info, error)) << error;
+            ASSERT_TRUE(native_target(path, file_target, info, error)) << error;
             std::ifstream input(path, std::ios::binary);
             const std::vector<uint8_t> encoded((std::istreambuf_iterator<char>(input)), {});
-            ASSERT_TRUE(codec::decode_jxl_to_buffer(encoded, memory_target, memory_info, error)) << error;
+            ASSERT_TRUE(native_target(encoded, memory_target, memory_info, error)) << error;
             EXPECT_EQ(file, memory);
             codec::JxlDecodeLimits limits;
             limits.output_bytes = file.size() * sizeof(float) - 1;
@@ -575,7 +593,7 @@ namespace {
             codec::DecodeTarget limited{0, codec::SampleType::Float32, nullptr,
                                         [](size_t, void* user) -> void* { ++*static_cast<unsigned*>(user); return nullptr; }, &allocations};
             const auto previous = memory_info;
-            EXPECT_FALSE(codec::decode_jxl_to_buffer(encoded, limited, memory_info, error, false, limits));
+            EXPECT_FALSE(native_target(encoded, limited, memory_info, error, false, limits));
             EXPECT_NE(error.find("output byte limit"), std::string::npos);
             EXPECT_EQ(allocations, 0u);
             EXPECT_EQ(limited.data, nullptr);
@@ -596,6 +614,124 @@ namespace {
         }
     }
 
+    std::vector<uint8_t> review_icc(int hdr, double gamma = 1.8) {
+        std::vector<float> values(4096);
+        for (size_t i = 0; i < values.size(); ++i) {
+            const float x = float(i) / float(values.size() - 1);
+            values[i] = hdr == 16 ? lfs::core::color::pqToLinear(x) : hdr == 18 ? lfs::core::color::hlgToSceneLinear(x)
+                                                                                : std::pow(x, gamma);
+        }
+        std::unique_ptr<cmsToneCurve, decltype(&cmsFreeToneCurve)> curve(cmsBuildTabulatedToneCurveFloat(nullptr, static_cast<cmsUInt32Number>(values.size()), values.data()), cmsFreeToneCurve);
+        if (!curve)
+            throw std::bad_alloc();
+        cmsToneCurve* curves[]{curve.get(), curve.get(), curve.get()};
+        cmsCIExyY white{.3127, .3290, 1.};
+        cmsCIExyYTRIPLE primaries{{.708, .292, 1.}, {.170, .797, 1.}, {.131, .046, 1.}};
+        if (!hdr)
+            primaries = {{.64, .33, 1.}, {.30, .60, 1.}, {.15, .06, 1.}};
+        std::unique_ptr<void, decltype(&cmsCloseProfile)> profile(cmsCreateRGBProfile(&white, &primaries, curves), cmsCloseProfile);
+        if (!profile || cmsIsTag(profile.get(), cmsSigcicpTag))
+            throw std::runtime_error("Expected ICC-only profile without cicp");
+        cmsUInt32Number bytes = 0;
+        if (!cmsSaveProfileToMem(profile.get(), nullptr, &bytes))
+            throw std::runtime_error("ICC serialization failed");
+        std::vector<uint8_t> result(bytes);
+        if (!cmsSaveProfileToMem(profile.get(), result.data(), &bytes))
+            throw std::runtime_error("ICC serialization failed");
+        return result;
+    }
+
+    TEST_F(JxlCodec, IccOnlyPqAndHlgRequireExplicitNativePolicy) {
+        const std::array<uint8_t, 18> samples{128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128};
+        for (const int transfer : {16, 18}) {
+            const auto icc = review_icc(transfer);
+            const auto encoded = encode(samples.data(), samples.size(), {.icc = icc});
+            const auto path = write(encoded);
+            codec::Image image{1, 1, 1, codec::SampleType::UInt8, {123}};
+            std::string error;
+            EXPECT_FALSE(codec::decode_jxl(encoded, image, error));
+            EXPECT_NE(error.find("HDR"), std::string::npos);
+            EXPECT_EQ(image.data, (std::vector<uint8_t>{123}));
+            EXPECT_FALSE(codec::decode(path, image, error, true));
+            EXPECT_NE(error.find("HDR"), std::string::npos);
+            ASSERT_TRUE(native_decode(encoded, image, error)) << error;
+            EXPECT_EQ(image.data, (std::vector<uint8_t>(samples.begin(), samples.end())));
+            EXPECT_FALSE(native_decode(encoded, image, error, true));
+        }
+    }
+
+    TEST_F(JxlCodec, CanonicalSrgbIsIndependentOfPrecisionAndOriginalProfileRepresentation) {
+        const std::array<uint8_t, 18> samples{128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128};
+        const auto icc = review_icc(0);
+        for (const bool lossless : {true, false})
+            for (const bool embedded : {true, false}) {
+                const auto encoded = encode(samples.data(), samples.size(), {.lossless = lossless, .gamma = embedded ? 0. : 1.8, .icc = embedded ? std::span<const uint8_t>(icc) : std::span<const uint8_t>()});
+                const auto path = write(encoded);
+                codec::Image bytes;
+                std::string error;
+                ASSERT_TRUE(codec::decode(path, bytes, error)) << error;
+                std::array<float, 18> floats{};
+                codec::DecodeTarget target{3, codec::SampleType::Float32, floats.data()};
+                codec::Probe info;
+                ASSERT_TRUE(codec::decode_memory_to_buffer(encoded.data(), encoded.size(), target, info, error)) << error;
+                const float expected = lfs::core::color::linearToSrgb(std::pow(128.f / 255.f, 1.8f));
+                EXPECT_NEAR(floats[0], expected, .003f);
+                EXPECT_NEAR(bytes.data[0] / 255.f, floats[0], 1.1f / 255.f);
+                codec::Image display;
+                ASSERT_TRUE(codec::decode(path, display, error, true)) << error;
+                EXPECT_EQ(bytes.data, display.data);
+                std::array<uint16_t, 18> wide{};
+                codec::DecodeTarget wide_target{3, codec::SampleType::UInt16, wide.data()};
+                ASSERT_TRUE(codec::decode_to_buffer(path, wide_target, info, error, true)) << error;
+                EXPECT_NEAR(wide[0] / 65535.f, floats[0], 2.f / 65535.f);
+            }
+    }
+
+    TEST_F(JxlCodec, MissingEmptyAndTruncatedFilesHaveDistinctDiagnostics) {
+        codec::Image image;
+        std::string error;
+        EXPECT_FALSE(codec::decode_jxl(directory / "missing.jxl", image, error));
+        EXPECT_NE(error.find("cannot open"), std::string::npos);
+        const auto empty = write({});
+        EXPECT_FALSE(codec::decode_jxl(empty, image, error));
+        EXPECT_NE(error.find("empty source"), std::string::npos);
+        const std::array<uint8_t, 2> truncated{0xff, 0x0a};
+        EXPECT_FALSE(codec::decode_jxl(write(truncated), image, error));
+        EXPECT_EQ(error.find("cannot open"), std::string::npos);
+    }
+
+    TEST_F(JxlCodec, ParallelAndSerialDecodingAgreeAndAllocationLimitsRecover) {
+        std::vector<uint8_t> samples(2048 * 1024 * 3);
+        for (size_t i = 0; i < samples.size(); ++i)
+            samples[i] = static_cast<uint8_t>(i * 73 + i / 127);
+        const auto encoded = encode(samples.data(), samples.size(), {.width = 2048, .height = 1024, .lossless = false});
+        codec::Image serial, parallel;
+        std::string error;
+        codec::JxlDecodeLimits limits;
+        limits.max_threads = 1;
+        ASSERT_TRUE(codec::decode_jxl(encoded, serial, error, false, limits)) << error;
+        limits.max_threads = 4;
+        ASSERT_TRUE(codec::decode_jxl(encoded, parallel, error, false, limits)) << error;
+        EXPECT_EQ(serial.data, parallel.data);
+        limits.decoder_bytes = 32;
+        EXPECT_FALSE(codec::decode_jxl(encoded, parallel, error, false, limits));
+        EXPECT_EQ(serial.data, parallel.data);
+        limits.decoder_bytes = size_t{1} << 30;
+        ASSERT_TRUE(codec::decode_jxl(encoded, parallel, error, false, limits)) << error;
+        EXPECT_EQ(serial.data, parallel.data);
+        std::vector<std::future<codec::Image>> readers;
+        for (int i = 0; i < 4; ++i)
+            readers.push_back(std::async(std::launch::async, [&] {
+                codec::Image result;
+                std::string diagnostic;
+                if (!codec::decode_jxl(encoded, result, diagnostic, false, limits))
+                    throw std::runtime_error(diagnostic);
+                return result;
+            }));
+        for (auto& reader : readers)
+            EXPECT_EQ(reader.get().data, serial.data);
+    }
+
     TEST_F(JxlCodec, LargeImagesPreserveSamplesAndRecoverFromLimits) {
         for (const auto dimensions : {std::pair{3840, 2160}, std::pair{7680, 4320}}) {
             const auto [width, height] = dimensions;
@@ -607,9 +743,9 @@ namespace {
             codec::JxlDecodeLimits limits;
             limits.output_bytes = samples.size() - 1;
             std::string error;
-            EXPECT_FALSE(codec::decode_jxl(encoded, image, error, false, limits));
+            EXPECT_FALSE(native_decode(encoded, image, error, false, limits));
             EXPECT_EQ(image.data, (std::vector<uint8_t>{123}));
-            ASSERT_TRUE(codec::decode_jxl(encoded, image, error)) << error;
+            ASSERT_TRUE(native_decode(encoded, image, error)) << error;
             EXPECT_EQ(image.width, width);
             EXPECT_EQ(image.height, height);
             EXPECT_EQ(image.data, samples);

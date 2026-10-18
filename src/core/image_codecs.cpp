@@ -1521,11 +1521,16 @@ namespace lfs::core::image_codecs {
 
     bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
                           Probe& result, std::string& error) {
+        return decode_to_buffer(path, target, result, error, false);
+    }
+
+    bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
+                          Probe& result, std::string& error, bool display) {
         const auto extension = lower_extension(path);
         if (extension == ".jxl")
-            return decode_jxl_to_buffer(path, target, result, error);
+            return decode_jxl_to_buffer(path, target, result, error, display);
         if (extension == ".avif" || extension == ".heic" || extension == ".heif")
-            return decode_heif_to_buffer(path, target, result, error);
+            return decode_heif_to_buffer(path, target, result, error, display);
         if (extension == ".jpg" || extension == ".jpeg")
             return decode_jpeg_file_to_buffer(path, target, result, error);
         if (extension == ".png")
@@ -1544,6 +1549,11 @@ namespace lfs::core::image_codecs {
 
     bool decode_memory_to_buffer(const std::uint8_t* data, const std::size_t size,
                                  DecodeTarget& target, Probe& result, std::string& error) {
+        return decode_memory_to_buffer(data, size, target, result, error, false);
+    }
+
+    bool decode_memory_to_buffer(const std::uint8_t* data, const std::size_t size,
+                                 DecodeTarget& target, Probe& result, std::string& error, bool display) {
         if (!data || size == 0) {
             error = "Empty image buffer";
             return false;
@@ -1551,11 +1561,11 @@ namespace lfs::core::image_codecs {
         if (is_exr({data, size}))
             return decode_exr_memory_to_buffer({data, size}, target, result, error);
         if (is_jxl({data, size}))
-            return decode_jxl_to_buffer(std::span<const uint8_t>{data, size}, target, result, error);
+            return decode_jxl_to_buffer(std::span<const uint8_t>{data, size}, target, result, error, display);
         if (is_tiff({data, size}))
             return decode_tiff_memory_to_buffer({data, size}, target, result, error);
         if (is_heif({data, size}))
-            return decode_heif_to_buffer(std::span<const uint8_t>{data, size}, target, result, error);
+            return decode_heif_to_buffer(std::span<const uint8_t>{data, size}, target, result, error, display);
         if (size >= 2 && data[0] == 0xff && data[1] == 0xd8)
             return decode_jpeg_memory_to_buffer(data, size, target, result, error);
         if (size >= kPngSignature.size() && std::equal(kPngSignature.begin(), kPngSignature.end(), data))
@@ -1762,11 +1772,15 @@ namespace lfs::core::image_codecs {
     }
 
     bool decode(const std::filesystem::path& path, Image& result, std::string& error) {
+        return decode(path, result, error, false);
+    }
+
+    bool decode(const std::filesystem::path& path, Image& result, std::string& error, bool display) {
         const auto extension = lower_extension(path);
         if (extension == ".jxl")
-            return decode_jxl(path, result, error);
+            return decode_jxl(path, result, error, display);
         if (extension == ".avif" || extension == ".heic" || extension == ".heif")
-            return decode_heif(path, result, error);
+            return decode_heif(path, result, error, display);
         if (extension == ".tif" || extension == ".tiff")
             return decode_tiff(path, result, error);
         if (extension == ".exr")
@@ -1795,6 +1809,10 @@ namespace lfs::core::image_codecs {
     }
 
     bool decode_memory(const std::uint8_t* data, const size_t size, Image& result, std::string& error) {
+        return decode_memory(data, size, result, error, false);
+    }
+
+    bool decode_memory(const std::uint8_t* data, const size_t size, Image& result, std::string& error, bool display) {
         if (!data || size == 0) {
             error = "Empty image buffer";
             return false;
@@ -1804,9 +1822,9 @@ namespace lfs::core::image_codecs {
         if (is_tiff({data, size}))
             return decode_tiff_memory({data, size}, result, error);
         if (is_heif({data, size}))
-            return decode_heif(std::span<const uint8_t>{data, size}, result, error);
+            return decode_heif(std::span<const uint8_t>{data, size}, result, error, display);
         if (is_jxl({data, size}))
-            return decode_jxl(std::span<const uint8_t>{data, size}, result, error);
+            return decode_jxl(std::span<const uint8_t>{data, size}, result, error, display);
         if (size >= 2 && data[0] == 0xff && data[1] == 0xd8)
             return decode_jpeg_bytes(data, size, result, error);
         if (size >= kPngSignature.size() && std::equal(kPngSignature.begin(), kPngSignature.end(), data)) {

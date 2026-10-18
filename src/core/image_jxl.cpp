@@ -1,14 +1,18 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "image_jxl.hpp"
+#include "core/color_transfer.h"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 
 #include <jxl/cms.h>
 #include <jxl/color_encoding.h>
 #include <jxl/decode.h>
+#include <jxl/resizable_parallel_runner.h>
+#include <lcms2.h>
 
 #include <algorithm>
+#include <atomic>
 #include <climits>
 #include <cmath>
 #include <cstddef>
@@ -18,6 +22,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <thread>
 
 namespace lfs::core::image_codecs {
     namespace {
@@ -30,28 +35,34 @@ namespace lfs::core::image_codecs {
             struct alignas(std::max_align_t) Header {
                 size_t bytes;
             };
-            size_t limit, live = 0;
-            bool exhausted = false;
+            size_t limit;
+            std::atomic<size_t> live{0};
+            std::atomic<bool> exhausted{false};
             static void* allocate(void* opaque, size_t bytes) noexcept {
                 auto& memory = *static_cast<DecoderMemory*>(opaque);
-                if (bytes > memory.limit - memory.live || bytes > SIZE_MAX - sizeof(Header)) {
-                    memory.exhausted = true;
-                    return nullptr;
+                size_t previous = memory.live.load();
+                for (;;) {
+                    if (bytes > memory.limit - previous || bytes > SIZE_MAX - sizeof(Header)) {
+                        memory.exhausted = true;
+                        return nullptr;
+                    }
+                    if (memory.live.compare_exchange_weak(previous, previous + bytes))
+                        break;
                 }
                 auto* block = static_cast<Header*>(std::malloc(sizeof(Header) + bytes));
                 if (!block) {
+                    memory.live.fetch_sub(bytes);
                     memory.exhausted = true;
                     return nullptr;
                 }
                 block->bytes = bytes;
-                memory.live += bytes;
                 return block + 1;
             }
             static void release(void* opaque, void* pointer) noexcept {
                 if (!pointer)
                     return;
                 auto* block = static_cast<Header*>(pointer) - 1;
-                static_cast<DecoderMemory*>(opaque)->live -= block->bytes;
+                static_cast<DecoderMemory*>(opaque)->live.fetch_sub(block->bytes);
                 std::free(block);
             }
         };
@@ -65,9 +76,11 @@ namespace lfs::core::image_codecs {
             size_t window_size = 0;
             uint64_t remaining = 0;
             bool memory = false, supplied = false;
+            bool opened = false;
             explicit Input(std::span<const uint8_t> bytes) : borrowed(bytes), memory(true) {}
             explicit Input(const std::filesystem::path& path) {
                 if (lfs::core::open_file_for_read(path, std::ios::binary | std::ios::ate, file) && file.tellg() >= 0) {
+                    opened = true;
                     remaining = static_cast<uint64_t>(file.tellg());
                     file.seekg(0);
                 }
@@ -83,6 +96,10 @@ namespace lfs::core::image_codecs {
                     JxlDecoderCloseInput(decoder);
                     return true;
                 }
+                if (!opened)
+                    return fail(error, "cannot open source file");
+                if (!remaining && !supplied)
+                    return fail(error, "empty source file");
                 if (!file || !remaining)
                     return fail(error, "cannot read complete source");
                 if (retained > window_size)
@@ -114,7 +131,48 @@ namespace lfs::core::image_codecs {
                                                                                             : 1;
         }
 
-        bool header_layout(const JxlBasicInfo& basic, Probe& info, const JxlDecodeLimits& limits, std::string& error) {
+        struct WorkerLease {
+            static inline std::atomic<size_t> used{0};
+            size_t count = 0;
+            void acquire(size_t desired) {
+                const size_t capacity = std::max(1u, std::thread::hardware_concurrency());
+                size_t current = used.load();
+                do {
+                    count = std::min(desired, capacity - std::min(current, capacity));
+                } while (!used.compare_exchange_weak(current, current + count));
+            }
+            ~WorkerLease() { used.fetch_sub(count); }
+        };
+
+        bool validate_sdr_icc(std::span<const uint8_t> bytes, std::string& error) {
+            using Profile = std::unique_ptr<void, decltype(&cmsCloseProfile)>;
+            Profile profile(cmsOpenProfileFromMem(bytes.data(), static_cast<cmsUInt32Number>(bytes.size())), cmsCloseProfile);
+            if (!profile)
+                return fail(error, "invalid ICC profile");
+            if (const auto* cicp = static_cast<const cmsVideoSignalType*>(cmsReadTag(profile.get(), cmsSigcicpTag));
+                cicp && (cicp->TransferCharacteristics == 16 || cicp->TransferCharacteristics == 18))
+                return fail(error, "HDR display conversion requires an explicit tone-mapping policy");
+            const cmsTagSignature tags[]{cmsSigRedTRCTag, cmsSigGreenTRCTag, cmsSigBlueTRCTag, cmsSigGrayTRCTag};
+            for (auto tag : tags) {
+                const auto* curve = static_cast<const cmsToneCurve*>(cmsReadTag(profile.get(), tag));
+                if (!curve)
+                    continue;
+                double pq_error = 0., hlg_error = 0.;
+                for (int i = 1; i < 32; ++i) {
+                    const float x = i / 32.f;
+                    const float y = cmsEvalToneCurveFloat(curve, x);
+                    if (!std::isfinite(y))
+                        return fail(error, "invalid ICC transfer curve");
+                    pq_error = std::max(pq_error, double(std::abs(y - lfs::core::color::pqToLinear(x))));
+                    hlg_error = std::max(hlg_error, double(std::abs(y - lfs::core::color::hlgToSceneLinear(x))));
+                }
+                if (pq_error < .003 || hlg_error < .003)
+                    return fail(error, "HDR display conversion requires an explicit tone-mapping policy");
+            }
+            return true;
+        }
+
+        bool header_layout(const JxlBasicInfo& basic, Probe& info, const JxlDecodeLimits& limits, std::string& error, bool native_output = true) {
             if (!basic.xsize || !basic.ysize || basic.xsize > INT_MAX || basic.ysize > INT_MAX ||
                 basic.ysize > limits.pixels / basic.xsize)
                 return fail(error, "image dimensions exceed pixel limit");
@@ -133,7 +191,7 @@ namespace lfs::core::image_codecs {
             info = {static_cast<int>(basic.xsize), static_cast<int>(basic.ysize),
                     static_cast<int>(basic.num_color_channels + (basic.alpha_bits ? 1 : 0)), type};
             const size_t pixels = size_t(info.width) * info.height;
-            if (pixels > limits.output_bytes / (info.channels * sample_bytes(type)))
+            if (native_output && pixels > limits.output_bytes / (info.channels * sample_bytes(type)))
                 return fail(error, "decoded output byte limit exhausted");
             return true;
         }
@@ -147,12 +205,15 @@ namespace lfs::core::image_codecs {
                 profile_bytes > limits.icc_bytes)
                 return fail(error, "unsupported or oversized color profile");
             std::vector<uint8_t> profile;
-            if (!structured) {
+            const bool convert = display || limits.color_policy == JxlColorPolicy::SRGB;
+            if (!structured && convert) {
                 profile.resize(profile_bytes);
                 if (profile.empty() || JxlDecoderGetColorAsICCProfile(decoder, JXL_COLOR_PROFILE_TARGET_ORIGINAL, profile.data(), profile.size()) != JXL_DEC_SUCCESS)
                     return fail(error, "invalid color profile");
+                if (!validate_sdr_icc(profile, error))
+                    return false;
             }
-            if (display) {
+            if (convert) {
                 if (basic.intensity_target > 255.f || (structured && (original.transfer_function == JXL_TRANSFER_FUNCTION_PQ || original.transfer_function == JXL_TRANSFER_FUNCTION_HLG)))
                     return fail(error, "HDR display conversion requires an explicit tone-mapping policy");
                 JxlColorEncoding srgb{};
@@ -168,11 +229,13 @@ namespace lfs::core::image_codecs {
         }
 
         bool run(Input& input, Image& image, Probe& info, std::string& error,
-                 bool probe_only, bool display, const JxlDecodeLimits& limits, bool float_output = false) {
+                 bool probe_only, bool display, const JxlDecodeLimits& limits, DecodeTarget* requested = nullptr) {
             if ((input.memory ? input.borrowed.size() : input.remaining) > limits.encoded_bytes)
                 return fail(error, "encoded input byte limit exhausted");
             DecoderMemory memory{limits.decoder_bytes};
             const JxlMemoryManager manager{&memory, DecoderMemory::allocate, DecoderMemory::release};
+            WorkerLease workers;
+            std::unique_ptr<void, decltype(&JxlResizableParallelRunnerDestroy)> runner(JxlResizableParallelRunnerCreate(nullptr), JxlResizableParallelRunnerDestroy);
             std::unique_ptr<JxlDecoder, decltype(&JxlDecoderDestroy)> decoder(JxlDecoderCreate(&manager), JxlDecoderDestroy);
             if (!decoder)
                 return fail(error, "decoder allocation limit exhausted");
@@ -183,10 +246,13 @@ namespace lfs::core::image_codecs {
                 JxlDecoderSetKeepOrientation(decoder.get(), JXL_FALSE) != JXL_DEC_SUCCESS ||
                 JxlDecoderSetUnpremultiplyAlpha(decoder.get(), JXL_TRUE) != JXL_DEC_SUCCESS ||
                 JxlDecoderSetRenderSpotcolors(decoder.get(), JXL_FALSE) != JXL_DEC_SUCCESS ||
-                (display && JxlDecoderSetCms(decoder.get(), *cms) != JXL_DEC_SUCCESS))
+                ((display || limits.color_policy == JxlColorPolicy::SRGB) && JxlDecoderSetCms(decoder.get(), *cms) != JXL_DEC_SUCCESS) ||
+                !runner || JxlDecoderSetParallelRunner(decoder.get(), JxlResizableParallelRunner, runner.get()) != JXL_DEC_SUCCESS)
                 return fail(error, "cannot configure decoder");
             JxlBasicInfo basic{};
             Image candidate;
+            std::unique_ptr<uint8_t[]> staging;
+            size_t staging_bytes = 0;
             unsigned frames = 0, images = 0, boxes = 0;
             bool header = false, color = false;
             for (;;) {
@@ -199,11 +265,22 @@ namespace lfs::core::image_codecs {
                         return false;
                     break;
                 case JXL_DEC_BASIC_INFO:
-                    if (JxlDecoderGetBasicInfo(decoder.get(), &basic) != JXL_DEC_SUCCESS || !header_layout(basic, info, limits, error))
+                    if (JxlDecoderGetBasicInfo(decoder.get(), &basic) != JXL_DEC_SUCCESS || !header_layout(basic, info, limits, error, !requested))
                         return error.empty() ? fail(error, "invalid basic information") : false;
-                    if (float_output) {
-                        info.sample_type = SampleType::Float32;
-                        if (size_t(info.width) * info.height > limits.output_bytes / (size_t(info.channels) * sizeof(float)))
+                    if (!probe_only) {
+                        const size_t suggested = JxlResizableParallelRunnerSuggestThreads(basic.xsize, basic.ysize);
+                        const size_t cap = limits.max_threads ? limits.max_threads - 1 : size_t{8};
+                        workers.acquire(std::min(suggested, cap));
+                        JxlResizableParallelRunnerSetThreads(runner.get(), workers.count);
+                    }
+                    if (requested) {
+                        const int channels = requested->channels ? requested->channels : info.channels;
+                        if (channels < 1 || channels > 4 || (channels <= 2 && basic.num_color_channels == 3) ||
+                            (requested->sample_type != SampleType::UInt8 && requested->sample_type != SampleType::UInt16 && requested->sample_type != SampleType::Float32))
+                            return fail(error, "unsupported target layout");
+                        info.channels = channels;
+                        info.sample_type = requested->sample_type;
+                        if (size_t(info.width) * info.height > limits.output_bytes / (size_t(info.channels) * sample_bytes(info.sample_type)))
                             return fail(error, "decoded output byte limit exhausted");
                     }
                     if (basic.num_extra_channels != (basic.alpha_bits ? 1u : 0u))
@@ -234,8 +311,10 @@ namespace lfs::core::image_codecs {
                     const size_t expected = size_t(info.width) * info.height * info.channels * sample_bytes(info.sample_type);
                     if (JxlDecoderImageOutBufferSize(decoder.get(), &format, &bytes) != JXL_DEC_SUCCESS || bytes != expected || bytes > limits.output_bytes)
                         return fail(error, "inconsistent output buffer size");
-                    candidate = {info.width, info.height, info.channels, info.sample_type, std::vector<uint8_t>(bytes)};
-                    if (JxlDecoderSetImageOutBuffer(decoder.get(), &format, candidate.data.data(), candidate.data.size()) != JXL_DEC_SUCCESS)
+                    candidate = {info.width, info.height, info.channels, info.sample_type, {}};
+                    staging.reset(new uint8_t[bytes]);
+                    staging_bytes = bytes;
+                    if (JxlDecoderSetImageOutBuffer(decoder.get(), &format, staging.get(), bytes) != JXL_DEC_SUCCESS)
                         return fail(error, "cannot set output buffer");
                     break;
                 }
@@ -248,18 +327,28 @@ namespace lfs::core::image_codecs {
                         return fail(error, "container box limit exhausted");
                     break;
                 case JXL_DEC_SUCCESS:
-                    if (!header || !color || frames != 1 || images != 1 || candidate.data.empty())
+                    if (!header || !color || frames != 1 || images != 1 || !staging_bytes)
                         return fail(error, "incomplete still image");
                     if ((!input.memory && input.remaining) || JxlDecoderReleaseInput(decoder.get()))
                         return fail(error, "unprocessed trailing input");
                     if (candidate.sample_type == SampleType::Float32)
-                        for (size_t offset = 0; offset < candidate.data.size(); offset += sizeof(float)) {
+                        for (size_t offset = 0; offset < staging_bytes; offset += sizeof(float)) {
                             float value;
-                            std::memcpy(&value, candidate.data.data() + offset, sizeof(value));
+                            std::memcpy(&value, staging.get() + offset, sizeof(value));
                             if (!std::isfinite(value))
                                 return fail(error, "nonfinite decoded sample");
                         }
-                    image = std::move(candidate);
+                    if (requested) {
+                        void* destination = requested->data ? requested->data : requested->allocate ? requested->allocate(staging_bytes, requested->user)
+                                                                                                    : std::malloc(staging_bytes);
+                        if (!destination)
+                            return fail(error, "cannot allocate target");
+                        std::memcpy(destination, staging.get(), staging_bytes);
+                        requested->data = destination;
+                    } else {
+                        candidate.data.assign(staging.get(), staging.get() + staging_bytes);
+                        image = std::move(candidate);
+                    }
                     return true;
                 default:
                     error = "JXL: malformed or incomplete codestream (status=" + std::to_string(status) + ")";
@@ -283,64 +372,16 @@ namespace lfs::core::image_codecs {
             }
         }
 
-        bool copy_target(const Image& image, DecodeTarget& target, Probe& result,
-                         const JxlDecodeLimits& limits, std::string& error) {
-            const int channels = target.channels ? target.channels : image.channels;
-            if (channels < 1 || channels > 4 || (channels <= 2 && image.channels >= 3) ||
-                (target.sample_type != SampleType::UInt8 && target.sample_type != SampleType::UInt16 && target.sample_type != SampleType::Float32))
-                return fail(error, "unsupported target channel count");
-            const size_t pixels = size_t(image.width) * image.height;
-            const size_t stride = sample_bytes(target.sample_type);
-            if (pixels > limits.output_bytes / (channels * stride))
-                return fail(error, "target byte limit exhausted");
-            const size_t bytes = pixels * channels * stride;
-            void* destination = target.data ? target.data : target.allocate ? target.allocate(bytes, target.user)
-                                                                            : std::malloc(bytes);
-            if (!destination)
-                return fail(error, "cannot allocate target");
-            for (size_t pixel = 0; pixel < pixels; ++pixel)
-                for (int channel = 0; channel < channels; ++channel) {
-                    const bool alpha = (channels == 2 || channels == 4) && channel == channels - 1;
-                    const bool source_alpha = image.channels == 2 || image.channels == 4;
-                    const int source_color = image.channels <= 2 ? 1 : 3;
-                    const size_t index = pixel * image.channels + (alpha ? image.channels - 1 : source_color == 1 ? 0
-                                                                                                                  : std::min(channel, 2));
-                    double value = 1.;
-                    if (!alpha || source_alpha) {
-                        if (image.sample_type == SampleType::UInt8)
-                            value = image.data[index] / 255.;
-                        else if (image.sample_type == SampleType::UInt16) {
-                            uint16_t sample;
-                            std::memcpy(&sample, image.data.data() + index * sizeof(sample), sizeof(sample));
-                            value = sample / 65535.;
-                        } else {
-                            float sample;
-                            std::memcpy(&sample, image.data.data() + index * sizeof(sample), sizeof(sample));
-                            value = sample;
-                        }
-                    }
-                    auto* output = static_cast<uint8_t*>(destination) + (pixel * channels + channel) * stride;
-                    if (target.sample_type == SampleType::Float32) {
-                        const float sample = static_cast<float>(value);
-                        std::memcpy(output, &sample, sizeof(sample));
-                    } else if (target.sample_type == SampleType::UInt16) {
-                        const auto sample = static_cast<uint16_t>(std::floor(std::clamp(value, 0., 1.) * 65535. + .5));
-                        std::memcpy(output, &sample, sizeof(sample));
-                    } else
-                        *output = static_cast<uint8_t>(std::floor(std::clamp(value, 0., 1.) * 255. + .5));
-                }
-            target.data = destination;
-            result = {image.width, image.height, channels, target.sample_type};
-            return true;
-        }
-
         template <class Source>
         bool target_decode(Source source, DecodeTarget& target, Probe& result, std::string& error, bool display, const JxlDecodeLimits& limits) {
             return guarded(error, [&] {
                 Image image;
                 Input input(source);
                 Probe info;
-                return run(input, image, info, error, false, display, limits, target.sample_type == SampleType::Float32) && copy_target(image, target, result, limits, error);
+                if (!run(input, image, info, error, false, display, limits, &target))
+                    return false;
+                result = info;
+                return true;
             });
         }
     } // namespace

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/color_transfer.h"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_codecs.hpp"
@@ -505,9 +506,12 @@ namespace {
         params.decode_float = true;
         const auto original = loader.load_image_immediate(file, params).cpu();
         ASSERT_EQ(original.shape(), (TensorShape{3, 2, 2}));
-        EXPECT_EQ(original.ptr<float>()[0], 2.f);
-        EXPECT_EQ(original.ptr<float>()[4], .5f);
-        EXPECT_EQ(original.ptr<float>()[8], -.25f);
+        // libjxl uses sign-preserving sRGB extension outside the unit range.
+        // Its SIMD approximation need not match the host pow implementation
+        // in the last bits; cache restoration below remains bit-exact.
+        EXPECT_NEAR(original.ptr<float>()[0], lfs::core::color::linearToSrgb(2.f), 1e-4f);
+        EXPECT_NEAR(original.ptr<float>()[4], lfs::core::color::linearToSrgb(.5f), 1e-4f);
+        EXPECT_NEAR(original.ptr<float>()[8], -lfs::core::color::linearToSrgb(.25f), 1e-4f);
         auto camera = distorted_camera();
         params.undistort = &camera;
         const auto cold = loader.load_image_immediate(file, params).cpu();
