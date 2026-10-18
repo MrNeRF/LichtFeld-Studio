@@ -632,6 +632,7 @@ namespace lfs::vis::project {
                 required_field("use_crop_box", &RenderSettings::use_crop_box),
                 required_field("show_ellipsoid", &RenderSettings::show_ellipsoid),
                 required_field("use_ellipsoid", &RenderSettings::use_ellipsoid),
+                optional_field("selection_outline", &RenderSettings::selection_outline),
                 required_field("desaturate_unselected", &RenderSettings::desaturate_unselected),
                 required_field("desaturate_cropping", &RenderSettings::desaturate_cropping),
                 required_field("hide_outside_depth_box", &RenderSettings::hide_outside_depth_box),

@@ -1006,6 +1006,10 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
         createComputePipeline(pipeline_compute_tile_ranges[i], spirv_paths.at("compute_tile_ranges"));
         createComputePipeline(pipeline_compute_tile_ranges_and_batch_counts[i],
                               spirv_paths.at("compute_tile_ranges_and_batch_counts"));
+        createComputePipeline(pipeline_rasterize_outline[i], spirv_paths.at("rasterize_outline"));
+        createComputePipeline(pipeline_rasterize_outline_gut[i], spirv_paths.at("rasterize_outline_gut"));
+        createComputePipeline(pipeline_rasterize_outline_plain[i], spirv_paths.at("rasterize_outline_plain"));
+        createComputePipeline(pipeline_rasterize_outline_gut_plain[i], spirv_paths.at("rasterize_outline_gut_plain"));
         createComputePipeline(pipeline_rasterize_forward[i], spirv_paths.at("rasterize_forward"));
         createComputePipeline(pipeline_rasterize_forward_3dgut[i], spirv_paths.at("rasterize_forward_3dgut"));
         createComputePipeline(pipeline_rasterize_forward_plain[i], spirv_paths.at("rasterize_forward_plain"));
@@ -1027,6 +1031,7 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     createComputePipeline(pipeline_cumsum.scan_block_sums, spirv_paths.at("cumsum_scan_block_sums"));
     createComputePipeline(pipeline_cumsum.add_block_offsets, spirv_paths.at("cumsum_add_block_offsets"));
     createComputePipeline(pipeline_radix_histogram_clear, spirv_paths.at("radix_histogram_clear"));
+    createComputePipeline(pipeline_outline_resolve, spirv_paths.at("selection_outline_resolve"));
     createComputePipeline(pipeline_expected_depth_finalize,
                           spirv_paths.at("expected_depth_finalize"));
     createComputePipeline(pipeline_sorting_indirect_1.upsweep, spirv_paths.at("radix_sort/upsweep_indirect"));
@@ -1427,7 +1432,8 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     const _VulkanBuffer& model_transforms,
     const bool use_gut_rasterization,
     const bool overlays_active,
-    const bool predicate_waves) {
+    const bool predicate_waves,
+    const bool selection_outline) {
     PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
     DEVICE_GUARD;
 
@@ -1501,7 +1507,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     // This one-frame heuristic selects only the faster of two wave-correct
     // raster paths. It never sizes storage or changes the wave budget.
     const bool use_batched_raster =
-        !use_gut_rasterization && !depth_capture_ &&
+        !selection_outline && !use_gut_rasterization && !depth_capture_ &&
         buffers.num_indices >= kMinLoadBalancedRasterInstances &&
         buffers.num_indices / num_tiles >= kMinLoadBalancedAverageTileInstances;
     const size_t batch_capacity = denseTileBatchCapacity(capacity, alloc_tiles);
@@ -1517,6 +1523,9 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     auto& pixel_depth_weight =
         resize_scratch(buffers.pixel_depth_weight, alloc_pixels);
     auto& n_contributors = resize_scratch(buffers.n_contributors, alloc_pixels);
+    const _VulkanBuffer* outline_ids = selection_outline
+                                           ? &resizeDeviceBuffer(buffers.pixel_outline_ids, alloc_pixels)
+                                           : nullptr;
 
     constexpr size_t kRadix = 256u;
     constexpr size_t kPartitionSize = 512u * 8u;
@@ -1757,67 +1766,58 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
         }
 
         if (!use_batched_raster) {
+            std::vector<TaggedBinding> raster_bindings;
+            raster_bindings.reserve(use_gut_rasterization ? 24u : 19u);
+            raster_bindings.insert(raster_bindings.end(), {
+                                                              {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+                                                              {tile_ranges, BufferUse::ComputeRead},
+                                                              {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+                                                              {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+                                                              {buffers.rgb.deviceBuffer, BufferUse::ComputeRead},
+                                                              {buffers.depths.deviceBuffer, BufferUse::ComputeRead},
+                                                          });
             if (use_gut_rasterization) {
-                auto& gut_pipeline = overlays_active
-                                         ? pipeline_rasterize_forward_3dgut
-                                         : pipeline_rasterize_forward_3dgut_plain;
-                executeComputeIndirect(
-                    record,
-                    indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),
-                    &wave_uniforms,
-                    sizeof(wave_uniforms),
-                    gut_pipeline[buffers.is_unsorted_1],
-                    std::vector<TaggedBinding>{
-                        {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
-                        {tile_ranges, BufferUse::ComputeRead},
-                        {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
-                        {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
-                        {buffers.rgb.deviceBuffer, BufferUse::ComputeRead},
-                        {buffers.depths.deviceBuffer, BufferUse::ComputeRead},
-                        {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
-                        {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},
-                        {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead},
-                        {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},
-                        {pixel_state, BufferUse::ComputeReadWrite},
-                        {pixel_depth, BufferUse::ComputeReadWrite},
-                        {n_contributors, BufferUse::ComputeReadWrite},
-                        {pixel_depth_weight, BufferUse::ComputeReadWrite},
-                        {selection_mask, BufferUse::ComputeRead},
-                        {preview_mask, BufferUse::ComputeRead},
-                        {selection_colors, BufferUse::ComputeRead},
-                        {overlay_flags, BufferUse::ComputeRead},
-                        {overlay_params, BufferUse::ComputeRead},
-                        {transform_indices, BufferUse::ComputeRead},
-                        {model_transforms, BufferUse::ComputeRead},
-                    });
-            } else {
-                auto& raster_pipeline = overlays_active
-                                            ? pipeline_rasterize_forward
-                                            : pipeline_rasterize_forward_plain;
-                executeComputeIndirect(
-                    record,
-                    indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),
-                    &wave_uniforms,
-                    sizeof(wave_uniforms),
-                    raster_pipeline[buffers.is_unsorted_1],
-                    std::vector<TaggedBinding>{
-                        {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
-                        {tile_ranges, BufferUse::ComputeRead},
-                        {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
-                        {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
-                        {buffers.rgb.deviceBuffer, BufferUse::ComputeRead},
-                        {buffers.depths.deviceBuffer, BufferUse::ComputeRead},
-                        {pixel_state, BufferUse::ComputeReadWrite},
-                        {pixel_depth, BufferUse::ComputeReadWrite},
-                        {n_contributors, BufferUse::ComputeReadWrite},
-                        {pixel_depth_weight, BufferUse::ComputeReadWrite},
-                        {selection_mask, BufferUse::ComputeRead},
-                        {preview_mask, BufferUse::ComputeRead},
-                        {selection_colors, BufferUse::ComputeRead},
-                        {overlay_flags, BufferUse::ComputeRead},
-                        {overlay_params, BufferUse::ComputeRead},
-                    });
+                raster_bindings.insert(raster_bindings.end(), {
+                                                                  {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
+                                                                  {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},
+                                                                  {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead},
+                                                                  {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},
+                                                              });
             }
+            raster_bindings.insert(raster_bindings.end(), {
+                                                              {pixel_state, BufferUse::ComputeReadWrite},
+                                                              {pixel_depth, BufferUse::ComputeReadWrite},
+                                                              {n_contributors, BufferUse::ComputeReadWrite},
+                                                              {pixel_depth_weight, BufferUse::ComputeReadWrite},
+                                                              {selection_mask, BufferUse::ComputeRead},
+                                                              {preview_mask, BufferUse::ComputeRead},
+                                                              {selection_colors, BufferUse::ComputeRead},
+                                                              {overlay_flags, BufferUse::ComputeRead},
+                                                              {overlay_params, BufferUse::ComputeRead},
+                                                          });
+            if (use_gut_rasterization) {
+                raster_bindings.push_back({transform_indices, BufferUse::ComputeRead});
+                raster_bindings.push_back({model_transforms, BufferUse::ComputeRead});
+            }
+            if (selection_outline) {
+                raster_bindings.push_back({*outline_ids, BufferUse::ComputeReadWrite});
+                if (!use_gut_rasterization)
+                    raster_bindings.push_back({transform_indices, BufferUse::ComputeRead});
+                const bool gpu_lod = (uniforms.lod_enabled & 32u) != 0u;
+                const auto& lod_ids = gpu_lod ? buffers.lod_gpu_indices.deviceBuffer : buffers.lod_indices.deviceBuffer;
+                const auto& logical_ids = gpu_lod ? buffers.lod_gpu_logical_indices.deviceBuffer : buffers.lod_logical_indices.deviceBuffer;
+                raster_bindings.push_back({(uniforms.lod_enabled & 1u) != 0u ? lod_ids : pixel_depth, BufferUse::ComputeRead});
+                raster_bindings.push_back({(uniforms.lod_enabled & 8u) != 0u ? logical_ids : pixel_depth, BufferUse::ComputeRead});
+            }
+            auto& raster_pipeline = use_gut_rasterization
+                                        ? (selection_outline ? (overlays_active ? pipeline_rasterize_outline_gut : pipeline_rasterize_outline_gut_plain)
+                                                             : (overlays_active ? pipeline_rasterize_forward_3dgut : pipeline_rasterize_forward_3dgut_plain))
+                                        : (selection_outline ? (overlays_active ? pipeline_rasterize_outline : pipeline_rasterize_outline_plain)
+                                                             : (overlays_active ? pipeline_rasterize_forward : pipeline_rasterize_forward_plain));
+            executeComputeIndirect(record,
+                                   indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),
+                                   &wave_uniforms, sizeof(wave_uniforms),
+                                   raster_pipeline[buffers.is_unsorted_1], raster_bindings);
         }
     }
 
@@ -1830,6 +1830,16 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                        std::vector<TaggedBinding>{
                            {pixel_depth, BufferUse::ComputeReadWrite},
                            {pixel_depth_weight, BufferUse::ComputeRead},
+                       });
+    }
+    if (selection_outline) {
+        const uint32_t dimensions[] = {uniforms.image_width, uniforms.image_height};
+        executeCompute({{dimensions[0], 8u}, {dimensions[1], 8u}},
+                       dimensions, sizeof(dimensions), pipeline_outline_resolve,
+                       std::vector<TaggedBinding>{
+                           {*outline_ids, BufferUse::ComputeRead},
+                           {pixel_state, BufferUse::ComputeReadWrite},
+                           {selection_colors, BufferUse::ComputeRead},
                        });
     }
 }

@@ -766,6 +766,11 @@ namespace lfs::vis {
                 {"compute_tile_ranges", lfs::core::path_to_utf8((root / "generated/compute_tile_ranges.spv"))},
                 {"compute_tile_ranges_and_batch_counts",
                  lfs::core::path_to_utf8((root / "generated/compute_tile_ranges_and_batch_counts.spv"))},
+                {"rasterize_outline", lfs::core::path_to_utf8((root / "generated/rasterize_outline.spv"))},
+                {"rasterize_outline_gut", lfs::core::path_to_utf8((root / "generated/rasterize_outline_gut.spv"))},
+                {"rasterize_outline_plain", lfs::core::path_to_utf8((root / "generated/rasterize_outline_plain.spv"))},
+                {"rasterize_outline_gut_plain", lfs::core::path_to_utf8((root / "generated/rasterize_outline_gut_plain.spv"))},
+                {"selection_outline_resolve", lfs::core::path_to_utf8((root / "generated/selection_outline_resolve.spv"))},
                 {"rasterize_forward", lfs::core::path_to_utf8((root / "generated/rasterize_forward.spv"))},
                 {"rasterize_forward_3dgut", lfs::core::path_to_utf8((root / "generated/rasterize_forward_3dgut.spv"))},
                 {"rasterize_forward_plain", lfs::core::path_to_utf8((root / "generated/rasterize_forward_plain.spv"))},
@@ -1596,7 +1601,7 @@ namespace lfs::vis {
                           MarkerFlags,
                           glm::vec4(request.overlay.markers.show_rings ? 1.0f : 0.0f,
                                     request.overlay.markers.show_center_markers ? 1.0f : 0.0f,
-                                    0.0f,
+                                    request.overlay.markers.show_object_outline ? 1.0f : 0.0f,
                                     0.0f));
                 const bool cursor_selection_enabled =
                     !request.overlay.cursor.saturation_preview &&
@@ -9166,7 +9171,7 @@ namespace lfs::vis {
         // input. 3DGUT and live training use the legacy per-render-tile chain.
         const bool higs_candidate =
             !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload &&
-            !depth_capture_mode_;
+            !depth_capture_mode_ && !request.overlay.markers.show_object_outline;
         // Depth view and camera-frustum occlusion consume per-pixel median depth.
         // mip_filter bit 1
         // switches the macro compose to an exact per-pixel replay of the single
@@ -9629,7 +9634,8 @@ namespace lfs::vis {
                         overlay_bindings->model_transforms,
                         request.gut,
                         overlay_bindings->raster_overlays_active,
-                        /*predicate_waves=*/!export_wave_batch);
+                        /*predicate_waves=*/!export_wave_batch,
+                        request.overlay.markers.show_object_outline);
                 }
                 LOG_TIMER("vksplat.render.record.composePixelState");
                 // Record compose into the rasterizer's batch so the entire frame

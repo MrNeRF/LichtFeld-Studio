@@ -1,4 +1,6 @@
 {
+  "main_panel.selection_outline": "选择轮廓",
+  "tooltip.selection_outline": "以实线显示所选 Splat 对象的外轮廓，以虚线显示对象之间的边界。使用中心标记的颜色。训练期间以及点云或深度视图中不可用。",
   "preferences.drag_sh_hint": "限制随视角变化的颜色细节。导出阶数取此上限与源数据SH阶数中的较小值。",
   "preferences.drag_format_hint": "将高斯点从LichtFeld拖出时创建的文件格式。",
   "preferences.drag_sh_limit": "最大SH阶数",

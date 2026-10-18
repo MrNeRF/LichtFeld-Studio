@@ -1579,6 +1579,18 @@ install(CODE "
 " COMPONENT runtime)
 
 option(BUILD_SPLAT_TRANSFER_TESTS "Build splat drag export contract tests" ${BUILD_FORMAT_TESTS})
+option(BUILD_SELECTION_OUTLINE_TESTS "Build selection outline request and persistence contracts" ${BUILD_VISUALIZER_TESTS})
+if(BUILD_SELECTION_OUTLINE_TESTS)
+    add_executable(lfs_selection_outline_contract tools/selection_outline_test/main.cpp)
+    target_include_directories(lfs_selection_outline_contract PRIVATE
+        src src/visualizer src/rendering/include src/io/include)
+    target_link_libraries(lfs_selection_outline_contract PRIVATE lfs_visualizer lfs_core)
+    target_compile_features(lfs_selection_outline_contract PRIVATE cxx_std_23)
+    enable_testing()
+    add_test(NAME selection_outline_contract COMMAND lfs_selection_outline_contract)
+    set_tests_properties(selection_outline_contract PROPERTIES TIMEOUT 30
+        ENVIRONMENT "LFS_HOME=${CMAKE_BINARY_DIR}/outline-test-profile;LFS_PLUGIN_AUTOLOAD=0")
+endif()
 if(BUILD_SPLAT_TRANSFER_TESTS)
     add_executable(lfs_native_modal_frame_contract tools/splat_transfer_test/modal_frame_contract.cpp src/visualizer/core/main_loop.cpp)
     target_include_directories(lfs_native_modal_frame_contract PRIVATE src/visualizer)

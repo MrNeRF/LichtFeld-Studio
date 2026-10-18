@@ -245,6 +245,27 @@ def test_rendering_panel_noop_property_binding_does_not_mark_view_dirty(renderin
     assert marks == ["VIEW"]
 
 
+def test_selection_outline_checkbox_commits_view_only_on_change(rendering_panel_module):
+    module = rendering_panel_module
+    marks = []
+    settings = _RenderSettingsStub(selection_outline=False)
+    module.lf.get_render_settings = lambda: settings
+    module.lf.ui.mark_project_session_chapter_committed = marks.append
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+    panel.on_bind_model(_BindingContextStub(model))
+    getter, setter = model.bindings["selection_outline"]
+    assert getter() is False
+    setter(True)
+    assert settings.selection_outline is True
+    assert marks == ["VIEW"]
+    setter(True)
+    assert marks == ["VIEW"]
+    setter(False)
+    assert settings.selection_outline is False
+    assert marks == ["VIEW", "VIEW"]
+
+
 def test_rendering_panel_color_text_marks_view_dirty_on_commit(rendering_panel_module):
     module = rendering_panel_module
     marks = []

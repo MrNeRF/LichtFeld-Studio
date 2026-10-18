@@ -1,4 +1,6 @@
 {
+  "main_panel.selection_outline": "Kontur zaznaczenia",
+  "tooltip.selection_outline": "Ciągły kontur zewnętrzny zaznaczonych obiektów splat i przerywane granice między nimi. Używa koloru znacznika środka. Niedostępny podczas treningu oraz w widokach chmury punktów i głębi.",
   "preferences.drag_sh_hint": "Ogranicza szczegóły koloru zależne od kierunku patrzenia. Eksport używa mniejszej wartości z tego limitu i dostępnego stopnia SH.",
   "preferences.drag_format_hint": "Format plików tworzonych przy przeciąganiu splatów poza LichtFeld.",
   "preferences.drag_sh_limit": "Maksymalny stopień SH",

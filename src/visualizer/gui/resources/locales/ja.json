@@ -1,4 +1,6 @@
 {
+  "main_panel.selection_outline": "選択のアウトライン",
+  "tooltip.selection_outline": "選択したスプラットオブジェクトの外周を実線で、オブジェクト間の境界を破線で表示します。中心マーカーの色を使用します。学習中、および点群・深度ビューでは使用できません。",
   "preferences.drag_sh_hint": "視点に依存する色の詳細度を制限します。この上限と元のSH次数のうち、小さい方でエクスポートします。",
   "preferences.drag_format_hint": "LichtFeldからスプラットをドラッグして書き出すファイルの形式です。",
   "preferences.drag_sh_limit": "最大SH次数",

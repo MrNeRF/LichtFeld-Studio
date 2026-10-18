@@ -28,6 +28,10 @@ import utils;
 #define LFS_SKIP_DENSE_TILES 0
 #endif
 
+#ifndef LFS_SELECTION_OUTLINE
+#define LFS_SELECTION_OUTLINE 0
+#endif
+
 #define SHARED_STRUCT 1
 
 #if SUBTILE_SIZE > 0
@@ -171,6 +175,19 @@ layout(binding=13) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=14) StructuredBuffer<float4> overlay_params;
 #endif
 
+#if LFS_SELECTION_OUTLINE
+#if LFS_3DGUT_RASTERIZE
+layout(binding=21) RWStructuredBuffer<uint> outline_ids;
+layout(binding=22) StructuredBuffer<uint> outline_lod_indices;
+layout(binding=23) StructuredBuffer<uint> outline_logical_indices;
+#else
+layout(binding=15) RWStructuredBuffer<uint> outline_ids;
+layout(binding=16) ByteAddressBuffer transform_indices;
+layout(binding=17) StructuredBuffer<uint> outline_lod_indices;
+layout(binding=18) StructuredBuffer<uint> outline_logical_indices;
+#endif
+#endif
+
 #if LFS_3DGUT_RASTERIZE
 [ForceInline]
 bool inverse_3x3(float3x3 m, out float3x3 inv_m)
@@ -298,6 +315,10 @@ void main(
             median_depth = final_pixel_depth[pix_id];
         }
     }
+#if LFS_SELECTION_OUTLINE
+    uint outline_id = uniforms.depth_wave > 0u && is_inside ? outline_ids[pix_id] : 0u;
+    const bool outline_has_indices = overlay_enabled(overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS].y);
+#endif
     bool thread_active = is_inside && curr_pixel_state.a >= 0.0001f;
 
     const uint2 projection_origin = full_frame_binning(uniforms)
@@ -443,6 +464,24 @@ void main(
               #endif
                 if (gauss_rgba.a < ALPHA_THRESHOLD)
                     continue;
+#if LFS_SELECTION_OUTLINE
+                // Resolve the first significant footprint in raster order before UI color/alpha changes.
+                // Preserve it across depth waves, including unselected foreground occluders.
+                if (outline_id == 0u && gauss_rgba.a >= 0.1f) {
+                    uint logical_id = splat_id;
+                    if ((uniforms.lod_enabled & 1u) != 0u)
+                        logical_id = (uniforms.lod_enabled & 8u) != 0u
+                            ? outline_logical_indices[splat_id] : outline_lod_indices[splat_id];
+                    uint node = outline_has_indices ? uint(max(read_int32(transform_indices, logical_id), 0)) : 0u;
+                    // Outline-only variants avoid the unrelated point-selection and ring work.
+                    #if LFS_RASTER_OVERLAYS
+                    uint outline_flags = flags;
+                    #else
+                    uint outline_flags = read_byte(gaussian_overlay_flags, splat_id);
+                    #endif
+                    outline_id = (outline_flags & OVERLAY_FLAG_OUTLINE_SELECTED) != 0u ? node + 2u : 1u;
+                }
+#endif
 
               #if LFS_3DGUT_RASTERIZE
                 splat_depth = gut_splat_view_depth(g, ray_origin, ray_direction, cam);
@@ -547,6 +586,9 @@ void main(
     }
 
     if (is_inside) {
+#if LFS_SELECTION_OUTLINE
+        outline_ids[pix_id] = outline_id;
+#endif
         n_contributors[pix_id] = local_n_contrib;
         final_pixel_state[pix_id] = curr_pixel_state;
         if (uniforms.expected_far > 0.0f) {

@@ -108,6 +108,7 @@ namespace lfs::rendering {
     };
 
     struct GaussianMarkerOverlayState {
+        bool show_object_outline = false;
         bool show_rings = false;
         float ring_width = 0.002f;
         bool show_center_markers = false;

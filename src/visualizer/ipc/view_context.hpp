@@ -82,6 +82,7 @@ namespace lfs::vis {
         bool use_crop_box = false;
         bool show_ellipsoid = false;
         bool use_ellipsoid = false;
+        bool selection_outline = false;
         bool desaturate_unselected = false;
         bool desaturate_cropping = false;
         bool hide_outside_depth_box = false;

@@ -181,6 +181,10 @@
           <span class="preferences-label">@tr:main_panel.camera_frustums</span>
           <input type="checkbox" class="" data-checked="default_show_camera_frustums" />
         </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.selection_outline">
+          <span class="preferences-label">@tr:main_panel.selection_outline</span>
+          <input type="checkbox" data-checked="default_selection_outline" />
+        </div>
         <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.desaturate_unselected">
           <span class="preferences-label">@tr:main_panel.desaturate_unselected</span>
           <input type="checkbox" class="" data-checked="default_desaturate_unselected" />

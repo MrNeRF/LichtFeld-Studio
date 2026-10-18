@@ -31,6 +31,7 @@ namespace lfs::vis {
         p.use_crop_box = s.use_crop_box;
         p.show_ellipsoid = s.show_ellipsoid;
         p.use_ellipsoid = s.use_ellipsoid;
+        p.selection_outline = s.selection_outline;
         p.desaturate_unselected = s.desaturate_unselected;
         p.desaturate_cropping = s.desaturate_cropping;
         p.hide_outside_depth_box = s.hide_outside_depth_box;
@@ -123,6 +124,7 @@ namespace lfs::vis {
         s.use_crop_box = p.use_crop_box;
         s.show_ellipsoid = p.show_ellipsoid;
         s.use_ellipsoid = p.use_ellipsoid;
+        s.selection_outline = p.selection_outline;
         s.desaturate_unselected = p.desaturate_unselected;
         s.desaturate_cropping = p.desaturate_cropping;
         s.hide_outside_depth_box = p.hide_outside_depth_box;

@@ -527,6 +527,7 @@ namespace lfs::vis {
         values["show_grid"] = settings.show_grid;
         values["show_camera_frustums"] = settings.show_camera_frustums;
         values["desaturate_unselected"] = settings.desaturate_unselected;
+        values["selection_outline"] = settings.selection_outline;
         values["desaturate_cropping"] = settings.desaturate_cropping;
         values["hide_outside_depth_box"] = settings.hide_outside_depth_box;
         values["axes_size"] = settings.axes_size;
@@ -566,6 +567,11 @@ namespace lfs::vis {
             if (!it->is_boolean())
                 return invalid("show_camera_frustums");
             candidate.show_camera_frustums = it->get<bool>();
+        }
+        if (const auto it = values.find("selection_outline"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("selection_outline");
+            candidate.selection_outline = it->get<bool>();
         }
         if (const auto it = values.find("desaturate_unselected"); it != values.end()) {
             if (!it->is_boolean())

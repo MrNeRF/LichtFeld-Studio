@@ -436,6 +436,12 @@
       <span class="text-accent">{{label_hdr_selection}}</span>
     </div>
     <div class="section-content collapsed" id="sec-selection">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.selection_outline">
+        <span class="setting-row__label-col">{{label_selection_outline}}</span>
+        <label class="setting-row__control-col setting-row__control-col--checkbox">
+          <input type="checkbox" data-checked="selection_outline" />
+        </label>
+      </div>
       <div class="setting-row setting-row--aligned" data-tooltip="tooltip.desaturate_unselected">
         <span class="setting-row__label-col">{{label_desaturate_unselected}}</span>
         <label class="setting-row__control-col setting-row__control-col--checkbox">

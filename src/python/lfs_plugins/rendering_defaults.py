@@ -9,7 +9,7 @@ from . import rml_widgets as w
 
 DEFAULTS = {
     "show_coord_axes": False, "show_pivot": False, "show_grid": True,
-    "show_camera_frustums": False, "desaturate_unselected": False,
+    "show_camera_frustums": False, "desaturate_unselected": False, "selection_outline": False,
     "desaturate_cropping": False, "hide_outside_depth_box": False,
     "axes_size": 2.0, "grid_opacity": 0.5, "camera_frustum_scale": 0.25,
     "selection_color_preview": [0.0, 0.871, 0.298],

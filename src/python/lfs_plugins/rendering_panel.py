@@ -62,7 +62,7 @@ LOD_BUDGET_HARD_MAX = 500_000_000
 
 BOOL_PROPS = [
     "show_coord_axes", "show_pivot", "show_grid", "show_camera_frustums",
-    "point_cloud_mode", "desaturate_unselected", "desaturate_cropping", "hide_outside_depth_box",
+    "point_cloud_mode", "selection_outline", "desaturate_unselected", "desaturate_cropping", "hide_outside_depth_box",
     "equirectangular", "mip_filter",
     "mesh_wireframe", "mesh_backface_culling", "mesh_shadow_enabled",
     "apply_appearance_correction", "ppisp_vignette_enabled",
@@ -165,6 +165,7 @@ LOCALE_KEY = {
     "show_grid": "main_panel.show_grid",
     "show_camera_frustums": "main_panel.camera_frustums",
     "point_cloud_mode": "main_panel.point_cloud_mode",
+    "selection_outline": "main_panel.selection_outline",
     "desaturate_unselected": "main_panel.desaturate_unselected",
     "desaturate_cropping": "main_panel.desaturate_cropping",
     "hide_outside_depth_box": "main_panel.hide_outside_depth_box",
