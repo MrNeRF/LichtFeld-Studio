@@ -89,6 +89,7 @@ namespace {
             context = Rml::CreateContext("vertical-tabs", {400, 600}, &renderer);
             ASSERT_NE(context, nullptr);
             context->SetDensityIndependentPixelRatio(GetParam());
+            context->SetDefaultScrollBehavior(Rml::ScrollBehavior::Instant, 1.0f);
             RmlRightPanelTestAccess::bind(panel, context);
             doc = context->LoadDocument((root / "src/visualizer/gui/rmlui/resources/right_panel.rml").generic_string());
             ASSERT_NE(doc, nullptr);
@@ -339,11 +340,45 @@ namespace {
         input.input_events.push_back({.kind = lfs::vis::FrameInputEventKind::KeyDown, .scancode = SDL_SCANCODE_TAB});
         panel.processInput(layout(), input);
         ASSERT_EQ(picks.size(), 2);
-        EXPECT_EQ(picks.back(), data[0].id);
+        EXPECT_EQ(picks.back(), data[2].id);
         RmlRightPanelTestAccess::sync(panel, data, data[0].id);
         input.key_shift = true;
         panel.processInput(layout(), input);
         EXPECT_EQ(picks.back(), data[2].id);
+    }
+
+    TEST_P(RightPanelTabsTest, ConsecutiveCyclesAdvanceWithoutRendering) {
+        auto data = tabs(4);
+        RmlRightPanelTestAccess::sync(panel, data, data[0].id);
+        auto input = inputOverRail();
+        input.key_ctrl = true;
+        input.mouse_wheel = -1;
+        panel.processInput(layout(), input);
+        panel.processInput(layout(), input);
+        ASSERT_EQ(picks.size(), 2);
+        EXPECT_EQ(picks[0], data[1].id);
+        EXPECT_EQ(picks[1], data[2].id);
+        button(0)->Click();
+        panel.processInput(layout(), input);
+        EXPECT_EQ(picks.back(), data[1].id);
+    }
+
+    TEST_P(RightPanelTabsTest, FocusScrollUpdatesRailAndTheNextWheelOffset) {
+        auto data = tabs(40);
+        RmlRightPanelTestAccess::sync(panel, data, data[0].id);
+        ASSERT_TRUE(button(0)->Focus());
+        for (int i = 0; i < 39; ++i)
+            context->ProcessKeyDown(Rml::Input::KI_DOWN, 0);
+        RmlRightPanelTestAccess::settle(panel);
+        auto* strip = doc->GetElementById("tab-strip-viewport");
+        const float focused_scroll = strip->GetScrollTop();
+        ASSERT_GT(focused_scroll, 100);
+        EXPECT_FLOAT_EQ(panel.tabStripScroll(), focused_scroll);
+        EXPECT_FLOAT_EQ(doc->GetElementById("tab-edge-before")->GetBox().GetSize().y, 0);
+        RmlRightPanelTestAccess::scroll(panel, -30);
+        RmlRightPanelTestAccess::settle(panel);
+        EXPECT_NEAR(panel.tabStripScroll(), focused_scroll - 30, 0.5f);
+        EXPECT_NEAR(strip->GetScrollTop(), focused_scroll - 30, 0.5f);
     }
 
     INSTANTIATE_TEST_SUITE_P(UiScale, RightPanelTabsTest, ::testing::Values(1.0f, 1.25f, 1.5f, 1.75f, 2.0f));

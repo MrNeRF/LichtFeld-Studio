@@ -22,6 +22,7 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
+    class WindowInputDispatchTest;
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     struct Theme;
 } // namespace lfs::vis
@@ -76,7 +77,10 @@ namespace lfs::vis::gui {
 
     private:
         friend class RmlRightPanelTestAccess;
+        friend class lfs::vis::WindowInputDispatchTest;
         void bindTabModel();
+        bool interceptCategoryInput(const RightPanelLayout& layout, const PanelInputState& input);
+        bool inputOccluded(float x, float y) const;
         void updateTabs();
         friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         bool updateTheme();
@@ -85,6 +89,7 @@ namespace lfs::vis::gui {
         void syncTabNavigation();
         void scrollTabs(float delta);
         void cycleTab(int direction, bool wrap);
+        void selectTab(std::string id);
         bool layoutTabs();
 
         RmlUIManager* rml_manager_ = nullptr;
@@ -105,6 +110,7 @@ namespace lfs::vis::gui {
             float width = 0.0f;
         };
         std::vector<TabTextMetrics> tab_text_metrics_;
+        bool tab_scroll_pending_ = false;
         bool tab_layout_dirty_ = true;
         bool tab_navigation_dirty_ = true;
         Rml::String active_tab_;

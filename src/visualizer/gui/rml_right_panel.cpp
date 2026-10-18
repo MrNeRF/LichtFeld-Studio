@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
@@ -84,7 +85,7 @@ namespace lfs::vis::gui {
                                    if (!args.empty()) {
                                        auto id = args[0].Get<Rml::String>();
                                        if (!id.empty() && on_tab_changed)
-                                           on_tab_changed(std::string(id));
+                                           selectTab(std::string(id));
                                    }
                                });
         ctor.BindEventCallback("tab_keydown",
@@ -95,7 +96,7 @@ namespace lfs::vis::gui {
                                        event.StopPropagation();
                                        const auto id = args[0].Get<Rml::String>();
                                        if (!id.empty() && on_tab_changed)
-                                           on_tab_changed(id);
+                                           selectTab(id);
                                    }
                                });
         tab_model_ = ctor.GetModelHandle();
@@ -105,6 +106,7 @@ namespace lfs::vis::gui {
         tab_model_ = {};
         tabs_.clear();
         tab_text_metrics_.clear();
+        tab_scroll_pending_ = false;
         tab_layout_dirty_ = true;
         tab_navigation_dirty_ = true;
         active_tab_.clear();
@@ -146,6 +148,7 @@ namespace lfs::vis::gui {
         tab_strip_viewport_el_ = nullptr;
         base_rcss_.clear();
         tab_text_metrics_.assign(tabs_.size(), {});
+        tab_scroll_pending_ = false;
         tab_layout_dirty_ = true;
         tab_navigation_dirty_ = true;
         has_theme_signature_ = false;
@@ -235,6 +238,11 @@ namespace lfs::vis::gui {
 
     void RmlRightPanel::updateTabs() {
         rml_context_->Update();
+        if (tab_strip_viewport_el_ && !tab_scroll_pending_ &&
+            tab_strip_viewport_el_->GetScrollTop() != tab_scroll_top_) {
+            tab_scroll_top_ = tab_strip_viewport_el_->GetScrollTop();
+            tab_layout_dirty_ = true;
+        }
         if (tab_navigation_dirty_) {
             syncTabNavigation();
             tab_navigation_dirty_ = false;
@@ -255,6 +263,7 @@ namespace lfs::vis::gui {
                 break;
         }
         tab_layout_dirty_ = false;
+        tab_scroll_pending_ = false;
     }
 
     bool RmlRightPanel::layoutTabs() {
@@ -302,6 +311,8 @@ namespace lfs::vis::gui {
     void RmlRightPanel::scrollTabs(float delta) {
         if (!tab_strip_viewport_el_ || delta == 0.0f)
             return;
+        if (!tab_scroll_pending_)
+            tab_scroll_top_ = tab_strip_viewport_el_->GetScrollTop();
         const float max_scroll = std::max(0.0f, tab_strip_viewport_el_->GetScrollHeight() -
                                                     tab_strip_viewport_el_->GetClientHeight());
         setTabStripScroll(std::clamp(tab_scroll_top_ + delta, 0.0f, max_scroll));
@@ -319,7 +330,16 @@ namespace lfs::vis::gui {
             index = (index + count) % count;
         else if (index < 0 || index >= count)
             return;
-        on_tab_changed(tabs_[index].id);
+        selectTab(tabs_[index].id);
+    }
+
+    void RmlRightPanel::selectTab(std::string id) {
+        if (id.empty() || !on_tab_changed)
+            return;
+        syncTabData(tabs_, id);
+        render_needed_ = true;
+        input_dirty_ = true;
+        on_tab_changed(id);
     }
 
     bool RmlRightPanel::syncTabScrollState() {
@@ -347,10 +367,14 @@ namespace lfs::vis::gui {
             next_scroll = std::clamp(next_scroll, 0.0f, max_scroll);
             reveal_active_tab_ = false;
         }
-        bool changed = tab_strip_viewport_el_->GetScrollTop() != next_scroll;
-        tab_scroll_top_ = next_scroll;
-        if (changed)
+        const float previous_scroll = tab_strip_viewport_el_->GetScrollTop();
+        if (previous_scroll != next_scroll)
             tab_strip_viewport_el_->SetScrollTop(next_scroll);
+        // RmlUi rounds scroll offsets to physical pixels, including at the
+        // fractional-scale scroll limit. Keep the model and rail at that offset.
+        next_scroll = tab_strip_viewport_el_->GetScrollTop();
+        tab_scroll_top_ = next_scroll;
+        bool changed = previous_scroll != next_scroll;
         const float rail_height = tab_bar_el_ ? tab_bar_el_->GetClientHeight() : viewport_height;
         const float viewport_top = tab_bar_el_
                                        ? tab_strip_viewport_el_->GetAbsoluteOffset(Rml::BoxArea::Border).y -
@@ -402,6 +426,7 @@ namespace lfs::vis::gui {
         if (next == tab_scroll_top_)
             return;
         tab_scroll_top_ = next;
+        tab_scroll_pending_ = true;
         tab_layout_dirty_ = true;
         render_needed_ = true;
         input_dirty_ = true;
@@ -452,8 +477,38 @@ namespace lfs::vis::gui {
             next_update_delay);
     }
 
+    bool RmlRightPanel::inputOccluded(float x, float y) const {
+        return PanelRegistry::instance().isPositionOverFloatingPanel(x, y) ||
+               (rml_manager_ && rml_manager_->activeOverlayOccludesContext(rml_context_, x, y));
+    }
+
+    bool RmlRightPanel::interceptCategoryInput(const RightPanelLayout& layout, const PanelInputState& input) {
+        if (!input.key_ctrl || splitter_dragging_ || resize_dragging_ || tab_scroll_dragging_ ||
+            inputOccluded(input.mouse_x, input.mouse_y))
+            return false;
+        const float dp = rml_context_->GetDensityIndependentPixelRatio();
+        const float x = input.mouse_x - layout.pos.x;
+        const float y = input.mouse_y - layout.pos.y;
+        if (x < 0 || x >= layout.size.x ||
+            y < layout.scene_h + layout.splitter_h + PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * dp || y >= layout.size.y)
+            return false;
+        if (input.mouse_wheel != 0) {
+            cycleTab(input.mouse_wheel < 0 ? 1 : -1, false);
+            return true;
+        }
+        for (const auto& event : input.input_events) {
+            if (event.kind == FrameInputEventKind::KeyDown && event.scancode == SDL_SCANCODE_TAB) {
+                cycleTab(input.key_shift ? -1 : 1, true);
+                if (event.dispatch)
+                    event.dispatch->consumed = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
     void RmlRightPanel::processInput(const RightPanelLayout& layout, const PanelInputState& input) {
-        if (rml_manager_ && rml_context_ && rml_manager_->routeInput(rml_context_, input, [this, layout](const PanelInputState& event) { processInput(layout, event); }))
+        if (rml_manager_ && rml_context_ && rml_manager_->routeInput(rml_context_, input, [this, layout](const PanelInputState& event) { processInput(layout, event); }, false, [this](float x, float y) { return inputOccluded(x, y); }, [this, layout](const PanelInputState& event) { return interceptCategoryInput(layout, event); }))
             return;
         const CursorRequest previous_cursor_request = cursor_request_;
         wants_input_ = false;
@@ -562,21 +617,7 @@ namespace lfs::vis::gui {
         const bool over_tabs = tab_bar_el_ &&
                                mx >= 8.0f && mx < 8.0f + PanelLayoutManager::RIGHT_TAB_BAR_W * dp_ratio && my >= layout.scene_h + layout.splitter_h + PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * dp_ratio &&
                                my < layout.size.y;
-        const bool over_properties = pointer_in_context &&
-                                     my >= layout.scene_h + layout.splitter_h + PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * dp_ratio;
-        bool cycled = false;
-        if (over_properties && input.key_ctrl && input.mouse_wheel != 0.0f) {
-            cycleTab(input.mouse_wheel < 0.0f ? 1 : -1, false);
-            cycled = true;
-        }
-        if (over_properties && input.key_ctrl) {
-            for (const auto& event : input.input_events) {
-                if (event.kind == FrameInputEventKind::KeyDown && event.scancode == SDL_SCANCODE_TAB) {
-                    cycleTab(input.key_shift ? -1 : 1, true);
-                    cycled = true;
-                }
-            }
-        }
+        const bool cycled = interceptCategoryInput(layout, input);
         if (cycled) {
             wants_input_ = true;
             input_dirty_ = true;
@@ -585,6 +626,8 @@ namespace lfs::vis::gui {
             wants_input_ = true;
         }
         if (over_tabs && input.mouse_clicked[2]) {
+            if (tab_strip_viewport_el_ && !tab_scroll_pending_)
+                tab_scroll_top_ = tab_strip_viewport_el_->GetScrollTop();
             tab_scroll_dragging_ = true;
             tab_drag_start_y_ = input.mouse_y;
             tab_drag_start_scroll_ = tab_scroll_top_;

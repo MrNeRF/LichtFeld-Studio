@@ -214,6 +214,26 @@ if(BUILD_VISUALIZER_TESTS)
         Zep::Zep
         SDL3::SDL3
     )
+    # Exercise sidebar gestures through the SDL dispatcher without building the
+    # full CUDA test suite. Reuse the native-window fixture and its test helpers.
+    add_executable(lichtfeld_sidebar_input_tests
+        test_ordered_input_dispatch.cpp
+        test_python_lsp_client.cpp
+        licht_test_support.cpp
+    )
+    target_compile_features(lichtfeld_sidebar_input_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_sidebar_input_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(lichtfeld_sidebar_input_tests PRIVATE
+        PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(lichtfeld_sidebar_input_tests PRIVATE
+        lfs_io lfs_visualizer lfs_core lfs_python_runtime
+        GTest::gtest_main Zep::Zep SDL3::SDL3)
+    add_test(NAME lichtfeld.sidebar_input COMMAND lichtfeld_sidebar_input_tests
+        --gtest_filter=WindowInputDispatchTest.Sidebar*)
+    set_tests_properties(lichtfeld.sidebar_input PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy"
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(
         NAME lichtfeld_visualizer_tests
         COMMAND lichtfeld_visualizer_tests

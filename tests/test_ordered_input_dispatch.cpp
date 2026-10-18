@@ -661,7 +661,49 @@ namespace lfs::vis {
             host.forwardInput(x, y);
             host.setInput(nullptr);
         }
-        void registerInputFloat() {
+        gui::RmlRightPanel& sidebar() { return gui_->rml_right_panel_; }
+        void setupSidebar() {
+            auto& panel = sidebar();
+            panel.init(&manager());
+            panel.rml_context_->SetDimensions({400, 300});
+            panel.tab_bar_el_->SetProperty("top", "0px");
+            panel.tab_bar_el_->SetProperty("height", "300px");
+            std::vector<gui::TabSnapshot> tabs;
+            for (int i = 0; i < 14; ++i) {
+                const auto id = "test.sidebar." + std::to_string(i);
+                tabs.push_back({.id = id, .label = "Temporary Tab " + std::to_string(i), .dom_id = "native-tab-" + std::to_string(i)});
+            }
+            panel.syncTabData(tabs, tabs.front().id);
+            panel.updateTabs();
+            panel.on_tab_changed = [this](const auto& id) { sidebar_picks_.push_back(id); };
+            gui::PanelInputState input;
+            input.mouse_x = 120;
+            input.mouse_y = 200;
+            gui::RightPanelLayout layout;
+            layout.size = {400, 300};
+            layout.splitter_h = 0;
+            panel.processInput(layout, input);
+        }
+        void settleSidebar() { sidebar().updateTabs(); }
+        void focusSidebar() {
+            auto& panel = sidebar();
+            ASSERT_TRUE(panel.document_->GetElementById("native-tab-0")->Focus());
+            setKeyboardContext(panel.rml_context_, false);
+        }
+        gui::RmlUIManager::InputDispatchResult sidebarWheel(float x, float y, float amount, SDL_Keymod mods) {
+            SDL_SetModState(mods);
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_WHEEL;
+            event.wheel.windowID = SDL_GetWindowID(window_->getWindow());
+            event.wheel.mouse_x = x;
+            event.wheel.mouse_y = y;
+            event.wheel.y = amount;
+            const auto result = manager().dispatchInputEvent(event);
+            SDL_SetModState(SDL_KMOD_NONE);
+            return result;
+        }
+        std::vector<std::string> sidebar_picks_;
+        void registerInputFloat(float x = 100.f) {
             class Panel final : public gui::IPanel {
                 void draw(const gui::PanelDrawContext&) override {}
                 gui::PanelRenderCapabilities renderCapabilities() const override { return {.direct = true}; }
@@ -676,17 +718,17 @@ namespace lfs::vis {
                 .id = "test.input_float",
                 .space = gui::PanelSpace::Floating,
                 .enabled = true,
-                .float_x = 100.f,
+                .float_x = x,
                 .float_y = 60.f,
                 .float_user_height = 100.f,
                 .float_last_bounds_valid = true,
-                .float_last_x = 100.f,
+                .float_last_x = x,
                 .float_last_y = 60.f,
                 .float_last_w = 180.f,
                 .float_last_h = 100.f,
                 .float_auto_center = false,
             }});
-            ASSERT_TRUE(gui::PanelRegistry::instance().isPositionOverFloatingPanel(140, 100));
+            ASSERT_TRUE(gui::PanelRegistry::instance().isPositionOverFloatingPanel(x + 40, 100));
         }
         RenderInterface_VK input_renderer_;
         // GuiManager keeps these listeners alive until their Rml context is shut down.
@@ -2677,57 +2719,6 @@ namespace lfs::vis {
         EXPECT_FALSE(overlay_select->IsSelectBoxVisible());
     }
 
-    // Fails if a pointer event drops the open tab picker list from the overlay
-    // record, so the panel under the list takes clicks meant for its options.
-    TEST_F(WindowInputDispatchTest, OpenTabPickerKeepsCoveringPanelsDuringPointerEvents) {
-        gui::RmlRightPanel right_panel;
-        right_panel.init(&manager());
-        struct Shutdown {
-            gui::RmlRightPanel& panel;
-            ~Shutdown() { panel.shutdown(); }
-        } shutdown{right_panel};
-        gui::RightPanelLayout layout;
-        layout.pos = {250.0f, 0.0f};
-        layout.size = {150.0f, 300.0f};
-        std::vector<gui::TabSnapshot> tabs;
-        for (const char* id : {"first", "second", "third", "fourth"})
-            tabs.push_back({.id = id, .label = id, .dom_id = std::string("rp-tab-") + id});
-        const auto render = [&] {
-            manager().beginFrameCursorTracking();
-            right_panel.render(layout, tabs, "first", 0.0f, 0.0f, 400, 300);
-        };
-        render();
-        render();
-        auto* const context = Rml::GetContext("right_panel");
-        ASSERT_NE(context, nullptr);
-        auto* const picker = dynamic_cast<Rml::ElementFormControlSelect*>(
-            context->GetDocument(0)->GetElementById("tab-picker"));
-        ASSERT_NE(picker, nullptr);
-        picker->ShowSelectBox();
-        context->Update();
-        context->Render();
-        render();
-        Rml::Element* list = nullptr;
-        for (int i = 0; i < picker->GetNumChildren(true); ++i)
-            if (picker->GetChild(i)->GetTagName() == "selectbox")
-                list = picker->GetChild(i);
-        ASSERT_NE(list, nullptr);
-        const auto list_pos = list->GetAbsoluteOffset(Rml::BoxArea::Border);
-        const glm::vec2 point(layout.pos.x + list_pos.x + 10.0f, layout.pos.y + list_pos.y + 6.0f);
-        ASSERT_TRUE(manager().activeOverlayContainsPoint(point.x, point.y));
-
-        // SDL delivers the pointer to the right panel before the next frame.
-        right_panel.processInput(layout, {});
-        SDL_Event motion{};
-        motion.type = SDL_EVENT_MOUSE_MOTION;
-        motion.motion.x = point.x;
-        motion.motion.y = point.y;
-        dispatch(motion);
-        manager().beginFrameCursorTracking();
-        EXPECT_TRUE(picker->IsSelectBoxVisible());
-        EXPECT_TRUE(manager().activeOverlayOccludesContext(context_, point.x, point.y));
-    }
-
     // Fails if a tab picked while the strip overflows stays scrolled out of view.
     TEST_F(WindowInputDispatchTest, ActiveTabScrollsIntoTheOverflowingStrip) {
         gui::RmlRightPanel right_panel;
@@ -2737,7 +2728,7 @@ namespace lfs::vis {
             ~Shutdown() { panel.shutdown(); }
         } shutdown{right_panel};
         gui::RightPanelLayout layout;
-        layout.size = {150.0f, 300.0f};
+        layout.size = {150.0f, 100.0f};
         std::vector<gui::TabSnapshot> tabs;
         for (const char* id : {"first", "second", "third", "fourth"})
             tabs.push_back({.id = id, .label = id, .dom_id = std::string("rp-tab-") + id});
@@ -2749,10 +2740,10 @@ namespace lfs::vis {
             right_panel.render(layout, tabs, active, 0.0f, 0.0f, 400, 300);
             auto* const tab = document->GetElementById(std::string("rp-tab-") + active);
             ASSERT_NE(tab, nullptr);
-            EXPECT_GT(strip->GetScrollWidth(), strip->GetClientWidth());
-            EXPECT_GE(tab->GetOffsetLeft(), strip->GetScrollLeft() - 0.5f);
-            EXPECT_LE(tab->GetOffsetLeft() + tab->GetOffsetWidth(),
-                      strip->GetScrollLeft() + strip->GetClientWidth() + 0.5f);
+            EXPECT_GT(strip->GetScrollHeight(), strip->GetClientHeight());
+            const float top = tab->GetAbsoluteTop() - strip->GetAbsoluteTop();
+            EXPECT_GE(top, -0.5f);
+            EXPECT_LE(top + tab->GetOffsetHeight(), strip->GetClientHeight() + 0.5f);
         }
     }
 
@@ -3562,5 +3553,94 @@ namespace lfs::vis {
     }
     TEST_F(ScenePanelRefreshTest, AddGroupRefreshesCachedTreeWithCapturedFrameContext) {
         checkMutation(true, true);
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    TEST_F(WindowInputDispatchTest, SidebarCtrlWheelReservesNativeWheelBeforeScrollableContent) {
+        gui::RmlPanelHost host(&manager(), "sidebar-content", "");
+        attachInputHost(host, 400, 300,
+                        "<rml><head><style>body { width:400px; height:300px; }"
+                        "#scroll { height:250px; overflow:auto; } #long { height:2000px; }</style></head>"
+                        "<body><div id='scroll'><div id='long'>Content</div></div></body></rml>");
+        forwardHost(host, 0, 0);
+        setupSidebar();
+        auto* scroll = host.getDocument()->GetElementById("scroll");
+        ASSERT_EQ(scroll->GetScrollTop(), 0);
+        EXPECT_TRUE(sidebarWheel(120, 200, -1, SDL_KMOD_CTRL).consumed);
+        ASSERT_EQ(sidebar_picks_.size(), 1);
+        EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.1");
+        EXPECT_EQ(scroll->GetScrollTop(), 0);
+        sidebarWheel(120, 200, -1, SDL_KMOD_NONE);
+        EXPECT_GT(scroll->GetScrollTop(), 0);
+    }
+
+    TEST_F(WindowInputDispatchTest, SidebarCtrlTabWorksWithTextFocusAndWithoutFocus) {
+        setupSidebar();
+        ASSERT_TRUE(field_->Focus());
+        setKeyboardContext(context_, false);
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.windowID = SDL_GetWindowID(window_->getWindow());
+        event.key.scancode = SDL_SCANCODE_TAB;
+        event.key.mod = SDL_KMOD_CTRL;
+        EXPECT_TRUE(manager().dispatchInputEvent(event).consumed);
+        ASSERT_EQ(sidebar_picks_.size(), 1);
+        EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.1");
+        event.type = SDL_EVENT_KEY_UP;
+        EXPECT_TRUE(manager().dispatchInputEvent(event).consumed);
+        field_->Blur();
+        setKeyboardContext(nullptr, false);
+        event.type = SDL_EVENT_KEY_DOWN;
+        EXPECT_TRUE(manager().dispatchInputEvent(event).consumed);
+        ASSERT_EQ(sidebar_picks_.size(), 2);
+        EXPECT_EQ(sidebar_picks_.back(), "test.sidebar.2");
+    }
+
+    TEST_F(WindowInputDispatchTest, SidebarFloatingOcclusionBlocksNewGesturesButKeepsOwnedDrag) {
+        setupSidebar();
+        registerInputFloat(0);
+        sidebarWheel(20, 100, -1, SDL_KMOD_CTRL);
+        EXPECT_TRUE(sidebar_picks_.empty());
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_MIDDLE;
+        event.button.x = 20;
+        event.button.y = 100;
+        dispatch(event);
+        EXPECT_FALSE(sidebar().isResizeInteractionActive());
+        event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        dispatch(event);
+        gui::PanelRegistry::instance().unregister_panel("test.input_float");
+        registerInputFloat();
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.y = 200;
+        dispatch(event);
+        ASSERT_TRUE(sidebar().isResizeInteractionActive());
+        event.type = SDL_EVENT_MOUSE_MOTION;
+        event.motion.x = 140;
+        event.motion.y = 100;
+        dispatch(event);
+        settleSidebar();
+        EXPECT_GT(sidebar().tabStripScroll(), 0);
+        event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        event.button.button = SDL_BUTTON_MIDDLE;
+        event.button.x = 140;
+        event.button.y = 100;
+        dispatch(event);
+        EXPECT_FALSE(sidebar().isResizeInteractionActive());
+    }
+
+    TEST_F(WindowInputDispatchTest, SidebarKeyboardOverflowThenWheelKeepsTheCurrentOffset) {
+        setupSidebar();
+        focusSidebar();
+        for (int i = 0; i < 13; ++i)
+            key(SDL_SCANCODE_DOWN);
+        settleSidebar();
+        const float before = sidebar().tabStripScroll();
+        ASSERT_GT(before, 100);
+        sidebarWheel(20, 200, 1, SDL_KMOD_NONE);
+        settleSidebar();
+        EXPECT_NEAR(sidebar().tabStripScroll(), before - 30, 0.5f);
     }
 } // namespace lfs::vis

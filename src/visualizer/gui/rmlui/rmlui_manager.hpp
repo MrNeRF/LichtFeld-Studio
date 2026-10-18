@@ -151,12 +151,13 @@ namespace lfs::vis::gui {
 
         // Render passes register geometry and handlers. SDL polling dispatches each
         // event once, before polling the next event or invoking scene operators.
+        using InputInterceptor = std::function<bool(const PanelInputState&)>;
         template <typename Handler>
         bool routeInput(Rml::Context* context, const PanelInputState& input, Handler&& handler, bool exclusive = false,
-                        std::function<bool(float, float)> pointer_blocker = {}) {
+                        std::function<bool(float, float)> pointer_blocker = {}, InputInterceptor interceptor = {}) {
             if (dispatching_input_)
                 return false;
-            return registerInput(context, input, std::forward<Handler>(handler), exclusive, std::move(pointer_blocker));
+            return registerInput(context, input, std::forward<Handler>(handler), exclusive, std::move(pointer_blocker), std::move(interceptor));
         }
         LFS_VIS_API void activateInput(Rml::Context* context, std::function<void(const PanelInputState&)> handler,
                                        bool exclusive = true, std::vector<SDL_Scancode> shortcuts = {});
@@ -283,7 +284,7 @@ namespace lfs::vis::gui {
 
         LFS_VIS_API bool registerInput(Rml::Context* context, const PanelInputState& input,
                                        std::function<void(const PanelInputState&)> handler, bool exclusive,
-                                       std::function<bool(float, float)> pointer_blocker);
+                                       std::function<bool(float, float)> pointer_blocker, InputInterceptor interceptor);
         enum class PointerPressState { None,
                                        Accepted,
                                        Blocked };
@@ -291,6 +292,7 @@ namespace lfs::vis::gui {
             std::shared_ptr<std::function<void(const PanelInputState&)>> callback;
             PanelInputState input;
             std::function<bool(float, float)> pointer_blocker;
+            InputInterceptor interceptor;
             PointerPressState pointer_presses[3] = {};
             Rml::ObserverPtr<Rml::Element> pointer_documents[3];
             Rml::ObserverPtr<Rml::Element> drag_element;

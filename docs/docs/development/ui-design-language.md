@@ -158,7 +158,8 @@ are persistent. Manage plugin enablement in the Plugin Marketplace.
 - Ctrl+wheel over the lower sidebar selects the previous or next category and
   stops at the ends.
 - Ctrl+Tab cycles categories; Ctrl+Shift+Tab cycles backwards and wraps.
-- Up/Down navigate tab focus; Enter/Space activate a focused tab.
+- Up/Down navigate tab focus and reveal overflowing tabs; Enter/Space activate
+  a focused tab.
 - A category selected through another UI action is scrolled into view.
 
 The right sidebar owns `right_panel.{rml,rcss,theme.rcss}`. Do not apply the
@@ -166,6 +167,10 @@ horizontal `panel_tabs.rcss` geometry to it. Content bounds, preload bounds, and
 pointer routing must reserve `PanelLayoutManager::RIGHT_TAB_BAR_W` at the current
 UI scale. Tests in `test_right_panel_tabs.cpp` exercise real RmlUi geometry and
 input at 1x, 1.25x, 1.5x, 1.75x, and 2x scales, including rendered glyph bounds.
+Category gestures reserve native input before child content receives it. Floating
+panels and popups block gestures behind them. An accepted drag keeps its motion
+and release across overlapping panels. The focused native checks are available
+through `lichtfeld_sidebar_input_tests` and the `lichtfeld.sidebar_input` CTest.
 
 ### Docked panels
 

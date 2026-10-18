@@ -62,7 +62,12 @@ body {
     flex-direction: column;
     align-items: stretch;
     gap: 3dp;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+#tab-strip-viewport scrollbarvertical {
+    width: 0;
 }
 
 .tab {
