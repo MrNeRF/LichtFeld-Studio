@@ -1,6 +1,6 @@
 {
   "main_panel.selection_outline": "Auswahlkontur",
-  "tooltip.selection_outline": "Durchgezogene Außenkontur ausgewählter Splat-Objekte mit gestrichelten Grenzen zwischen den Objekten. Verwendet die Farbe der Mittelpunktmarkierung. Nicht während des Trainings oder in Punktwolken- und Tiefenansichten verfügbar.",
+  "tooltip.selection_outline": "Zeigt die sichtbaren Konturen ausgewählter Splat-Objekte in der Farbe der Mittelpunktmarkierung. Nicht während des Trainings oder in Punktwolken- und Tiefenansichten verfügbar.",
   "preferences.drag_sh_hint": "Begrenzt die blickrichtungsabhängigen Farbdetails. Exportiert wird der kleinere Wert aus diesem Limit und dem vorhandenen SH-Grad.",
   "preferences.drag_format_hint": "Dateiformat beim Ziehen von Splats aus LichtFeld.",
   "preferences.drag_sh_limit": "Maximaler SH-Grad",

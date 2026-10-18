@@ -1,6 +1,6 @@
 {
   "main_panel.selection_outline": "Selection outline",
-  "tooltip.selection_outline": "Solid outer contour of selected splat objects, with dashed boundaries between them. Uses the center marker color. Unavailable during training and in point cloud or depth views.",
+  "tooltip.selection_outline": "Outline the visible contours of selected splat objects using the center marker color. Unavailable during training and in point cloud or depth views.",
   "preferences.drag_sh_hint": "Limits view-dependent color detail. Export uses the lower of this limit and the available SH degree.",
   "preferences.drag_format_hint": "File format used when dragging splats out of LichtFeld.",
   "preferences.drag_sh_limit": "Maximum SH degree",

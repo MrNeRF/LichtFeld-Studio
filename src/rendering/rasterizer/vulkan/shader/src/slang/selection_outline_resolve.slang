@@ -17,13 +17,10 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uniform OutlineSize size)
         return;
     uint index = p.y * size.width + p.x;
     uint center = outline_ids[index];
-    // IDs 0/1 both represent non-selected coverage. Keep the selection's
-    // exterior solid and distinguish visible object boundaries with dashes.
+    // IDs 0/1 both represent non-selected coverage. Object IDs retain only
+    // visible boundaries, including boundaries between selected objects.
     center = center > 1u ? center : 0u;
-    float exterior_distance = 3.0f;
-    float interior_distance = 3.0f;
-    float2 interior_normal = float2(0.0f);
-    float2 nearest_interior_offset = float2(0.0f);
+    float distance_to_edge = 3.0f;
     // Only the 3x3 neighborhood can contribute to this two-sided 2px line.
     // Samples at distance >= 2 have zero coverage.
     [unroll]
@@ -37,33 +34,11 @@ void main(uint3 dispatch_id : SV_DispatchThreadID, uniform OutlineSize size)
                 continue; // Clipping at the viewport edge is not an object contour.
             uint neighbor = outline_ids[uint(q.y) * size.width + uint(q.x)];
             neighbor = neighbor > 1u ? neighbor : 0u;
-            float2 offset = float2(x, y);
-            float distance = length(offset);
-            if ((neighbor == 0u) != (center == 0u)) {
-                exterior_distance = min(exterior_distance, distance);
-            } else if (center != 0u && neighbor != center) {
-                interior_normal += offset;
-                if (distance < interior_distance) {
-                    interior_distance = distance;
-                    nearest_interior_offset = offset;
-                }
-            }
+            if (neighbor != center && (neighbor != 0u || center != 0u))
+                distance_to_edge = min(distance_to_edge, length(float2(x, y)));
         }
     }
-    float coverage = 1.0f - smoothstep(1.0f, 2.0f, exterior_distance);
-    if (interior_distance < 2.0f) {
-        // Advance along the dominant tangent, so horizontal, vertical and
-        // diagonal boundaries all have gaps. Absolute normals make the two
-        // sides of a boundary use the same axis, independent of object IDs.
-        if (dot(interior_normal, interior_normal) == 0.0f)
-            interior_normal = nearest_interior_offset;
-        float coordinate = abs(interior_normal.x) >= abs(interior_normal.y) ? float(p.y) : float(p.x);
-        // Six-pixel dashes and gaps, with one-pixel antialiased end caps.
-        float phase = frac((coordinate + 0.5f) / 12.0f) * 12.0f;
-        float dash = smoothstep(0.0f, 1.0f, phase) * (1.0f - smoothstep(5.0f, 6.0f, phase));
-        float interior_coverage = (1.0f - smoothstep(1.0f, 2.0f, interior_distance)) * dash;
-        coverage = max(coverage, interior_coverage);
-    }
+    float coverage = 1.0f - smoothstep(1.0f, 2.0f, distance_to_edge);
     if (coverage > 0.0f) {
         // The raster buffer contains premultiplied RGB and transmittance.
         // Blend an opaque UI line without touching the scene/depth buffers.

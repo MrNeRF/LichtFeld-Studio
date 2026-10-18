@@ -1,6 +1,6 @@
 {
   "main_panel.selection_outline": "Contour de sélection",
-  "tooltip.selection_outline": "Contour extérieur continu des objets splat sélectionnés, avec des séparations en pointillés entre eux. Utilise la couleur du marqueur central. Indisponible pendant l’entraînement et dans les vues nuage de points ou profondeur.",
+  "tooltip.selection_outline": "Affiche les contours visibles des objets splat sélectionnés avec la couleur du marqueur central. Indisponible pendant l’entraînement et dans les vues nuage de points ou profondeur.",
   "preferences.drag_sh_hint": "Limite les détails de couleur dépendant du point de vue. Le degré exporté est le plus petit entre cette limite et le degré SH disponible.",
   "preferences.drag_format_hint": "Format des fichiers créés en faisant glisser des splats hors de LichtFeld.",
   "preferences.drag_sh_limit": "Degré SH maximal",

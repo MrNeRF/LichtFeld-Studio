@@ -1,6 +1,6 @@
 {
   "main_panel.selection_outline": "Contorno de selección",
-  "tooltip.selection_outline": "Contorno exterior continuo de los objetos splat seleccionados, con límites discontinuos entre ellos. Usa el color del marcador central. No disponible durante el entrenamiento ni en las vistas de nube de puntos o profundidad.",
+  "tooltip.selection_outline": "Muestra los contornos visibles de los objetos splat seleccionados con el color del marcador central. No disponible durante el entrenamiento ni en las vistas de nube de puntos o profundidad.",
   "preferences.drag_sh_hint": "Limita el detalle del color dependiente de la vista. Se exporta el menor valor entre este límite y el grado SH disponible.",
   "preferences.drag_format_hint": "Formato de los archivos al arrastrar splats fuera de LichtFeld.",
   "preferences.drag_sh_limit": "Grado SH máximo",

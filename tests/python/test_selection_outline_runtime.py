@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""GPU contracts for solid selection silhouettes and dashed object boundaries."""
+"""GPU contracts for visible per-object selection contours."""
 
 from contextlib import nullcontext
 import json
@@ -52,15 +52,22 @@ def _select(endpoint, code):
     _rpc(endpoint, "resources/read", {"uri": "lichtfeld://selection/current"})
 
 
-def _write_splat(path, x, scales):
+def _write_splat(path, x, scales, dense=False):
     names = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
              "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
-    header = "ply\nformat binary_little_endian 1.0\nelement vertex 1\n"
+    points = [(0., 0.)]
+    if dense:
+        points = [(i / 10., j / 10.) for i in range(-15, 16) for j in range(-15, 16)
+                  if i * i + j * j <= 225]
+    header = f"ply\nformat binary_little_endian 1.0\nelement vertex {len(points)}\n"
     header += "".join(f"property float {name}\n" for name in names) + "end_header\n"
     # No red component: the red UI contour can be measured without screenshots.
     dc = [(component - 0.5) / 0.28209479177387814 for component in (0., 0.3, 0.6)]
-    data = struct.pack("<14f", x, 0, 0, *dc, math.log(0.95 / 0.05),
-                       *(math.log(scale) for scale in scales), 1, 0, 0, 0)
+    local_scales = (0.08, 0.08, 0.05) if dense else scales
+    data = b"".join(struct.pack("<14f", x + px * scales[0], py * scales[1], 0,
+                               *dc, math.log(0.95 / 0.05),
+                               *(math.log(scale) for scale in local_scales), 1, 0, 0, 0)
+                    for px, py in points)
     path.write_bytes(header.encode() + data)
 
 
@@ -84,15 +91,16 @@ del frame, pixels, mask
 
 @pytest.mark.parametrize("backend", [2, 3])
 @pytest.mark.parametrize("roll", [0, 45, 90, 135])
-def test_selection_outline_exterior_and_dashed_boundaries(tmp_path, backend, roll):
+@pytest.mark.parametrize("dense", [False, True], ids=["single-gaussian", "dense-model"])
+def test_selection_outline_visible_object_boundaries(tmp_path, backend, roll, dense):
     endpoint = os.environ.get("LFS_OUTLINE_TEST_ENDPOINT")
     if not os.environ.get("LFS_EXECUTABLE"):
         pytest.skip("Set LFS_EXECUTABLE to a build with selection outlines")
     if os.name == "nt" and not endpoint:
         pytest.skip("Windows GPU test requires an owned LFS_OUTLINE_TEST_ENDPOINT")
     a, b = tmp_path / "a.ply", tmp_path / "b.ply"
-    _write_splat(a, 0., (0.5, 0.2, 0.1))
-    _write_splat(b, 0.65, (0.3, 0.3, 0.1))
+    _write_splat(a, 0., (0.5, 0.2, 0.1), dense)
+    _write_splat(b, 0.65, (0.3, 0.3, 0.1), dense)
     context = nullcontext(endpoint) if endpoint else isolated_app(tmp_path)
     with context as endpoint:
         _rpc(endpoint, "initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
@@ -124,7 +132,13 @@ s.background_color = (0., 0., 0.)
 s.scene_upscaler = 'native'
 s.render_scale = 1.
 s.lod_enabled = False
-lf.set_camera((0., 0., 4.), (0., 0., 0.), ({math.sin(angle)!r}, {math.cos(angle)!r}, 0.))
+frame = lf.capture_viewport()
+assert frame is not None
+rows = frame.image.cpu().tolist()
+# Keep both fixtures in view even when docked panels leave a narrow viewport.
+distance = 4. * max(1., len(rows) / (1.5 * len(rows[0])))
+lf.set_camera((0., 0., distance), (0., 0., 0.), ({math.sin(angle)!r}, {math.cos(angle)!r}, 0.))
+del frame, rows
 """)
         _select(endpoint, "lf.select_node('a')")
         shape, mask_a = _mask(endpoint, tmp_path / "a.json")
@@ -138,11 +152,9 @@ lf.set_camera((0., 0., 4.), (0., 0., 0.), ({math.sin(angle)!r}, {math.cos(angle)
         exterior = mask_a ^ mask_b
         interior = mask_a & mask_b
         assert len(exterior) > 100 and len(interior) > 30
-        assert exterior <= both, "The exterior contour acquired dash gaps"
+        assert exterior <= both, "The exterior contour acquired gaps"
         assert both <= mask_a | mask_b, "A contour appeared outside visible object boundaries"
-        lit, gaps = interior & both, interior - both
-        assert len(lit) > len(interior) * 0.1, "The interior contour disappeared"
-        assert len(gaps) > len(interior) * 0.1, "The interior contour became solid"
+        assert interior <= both, "A visible object boundary acquired gaps"
         _editor(endpoint, "s.desaturate_unselected = True")
         assert _mask(endpoint, tmp_path / "full-overlays.json")[1] == both
         _editor(endpoint, "s.desaturate_unselected = False")
@@ -152,6 +164,6 @@ lf.set_camera((0., 0., 4.), (0., 0., 0.), ({math.sin(angle)!r}, {math.cos(angle)
         _select(endpoint, "lf.deselect_all()")
         assert not _mask(endpoint, tmp_path / "none.json")[1]
         (tmp_path / "evidence.json").write_text(json.dumps({
-            "backend": backend, "roll": roll, "exterior_pixels": len(exterior),
-            "interior_pixels": len(interior), "dash_pixels": len(lit), "gap_pixels": len(gaps),
+            "backend": backend, "roll": roll, "dense": dense, "exterior_pixels": len(exterior),
+            "interior_pixels": len(interior),
         }, indent=2))
