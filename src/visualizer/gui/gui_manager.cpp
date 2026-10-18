@@ -6772,6 +6772,18 @@ namespace lfs::vis::gui {
                 split_divider_state.y = content_bounds.y;
                 split_divider_state.width = divider_width;
                 split_divider_state.height = content_bounds.height;
+                const auto info = rendering->getSplitViewInfo();
+                if (splitViewUsesPLYComparison(rendering->getSettings().split_view_mode)) {
+                    const float inset = 10.0f * current_ui_scale_;
+                    split_divider_state.left_name = info.left_name;
+                    split_divider_state.right_name = info.right_name;
+                    split_divider_state.left_name_right = *divider_x - screen.work_pos.x - inset;
+                    split_divider_state.right_name_right = viewport_content_offset + content_bounds.x + content_bounds.width - inset;
+                    split_divider_state.name_bottom = content_bounds.y + content_bounds.height - inset;
+                    const float left_width = *divider_x - viewport_layout_.pos.x - content_bounds.x;
+                    const float right_width = content_bounds.width - left_width;
+                    split_divider_state.name_max_width = std::max(0.0f, std::min(left_width, right_width) - 2.0f * inset);
+                }
             }
         }
         rml_viewport_overlay_.setSplitDividerOverlay(split_divider_state);

@@ -78,6 +78,11 @@ assert lf.get_scene().get_node('red_splat') is not None
     _tool(endpoint, 'camera_set_view', {'eye': [0., 0., 6.], 'target': [0., 0., 0.]})
     small = _window(endpoint)
     small.save(pictures / 'small.png')
+    expected_left, expected_right = (('green_cloud', 'red_splat') if cloud_first
+                                     else ('red_splat', 'green_cloud'))
+    _editor(endpoint, f"info = lf.ui.get_split_view_info(); "
+                      f"assert (info['left_name'], info['right_name']) == {(expected_left, expected_right)!r}, info")
+
     _tool(endpoint, 'render_settings_set', {'voxel_size': .12})
     large = _window(endpoint)
     large.save(pictures / 'large.png')
@@ -102,3 +107,15 @@ assert lf.get_scene().get_node('red_splat').splat_data() is not None
         time.sleep(.05)
     _editor(endpoint, "assert lf.get_scene().get_node('green_cloud').point_cloud() is not None; "
                       "assert lf.get_scene().get_node('red_splat').splat_data() is not None")
+
+    # Group order must take precedence over model insertion/render-slot order.
+    _editor(endpoint, f"""
+scene = lf.get_scene()
+first = scene.add_group('First comparison group')
+second = scene.add_group('Second comparison group')
+assert scene.reparent(scene.get_node({expected_right!r}).id, first)
+assert scene.reparent(scene.get_node({expected_left!r}).id, second)
+""")
+    _window(endpoint).save(pictures / 'reordered.png')
+    _editor(endpoint, f"info = lf.ui.get_split_view_info(); "
+                      f"assert (info['left_name'], info['right_name']) == {(expected_right, expected_left)!r}, info")

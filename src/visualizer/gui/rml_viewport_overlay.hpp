@@ -55,6 +55,12 @@ namespace lfs::vis::gui {
             float y = 0.0f;
             float width = 0.0f;
             float height = 0.0f;
+            std::string left_name;
+            std::string right_name;
+            float left_name_right = 0.0f;
+            float right_name_right = 0.0f;
+            float name_bottom = 0.0f;
+            float name_max_width = 0.0f;
         };
 
         struct LodStatsOverlayState {

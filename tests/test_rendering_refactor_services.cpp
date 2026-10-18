@@ -1911,7 +1911,7 @@ namespace lfs::vis {
         EXPECT_FALSE(scene.hasPreparedCombinedModel());
     }
 
-    TEST_F(SceneManagerRenderStateTest, PlyComparisonPairsVisibleMeshesAfterSplats) {
+    TEST_F(SceneManagerRenderStateTest, PlyComparisonUsesSceneTreeOrder) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
         auto& scene = manager.getScene();
@@ -1926,16 +1926,22 @@ namespace lfs::vis {
 
         const auto nodes = plyComparisonNodes(scene);
         ASSERT_EQ(nodes.size(), 2u);
-        EXPECT_EQ(nodes[0].node->id, splat_id);
-        EXPECT_TRUE(nodes[0].splat_slot.has_value());
-        EXPECT_EQ(nodes[1].node->id, mesh_id);
-        EXPECT_FALSE(nodes[1].splat_slot.has_value());
+        EXPECT_EQ(nodes[0].node->id, mesh_id);
+        EXPECT_FALSE(nodes[0].splat_slot.has_value());
+        EXPECT_EQ(nodes[1].node->id, splat_id);
+        EXPECT_TRUE(nodes[1].splat_slot.has_value());
 
-        const auto right = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Right);
-        ASSERT_NE(right.node, nullptr);
-        EXPECT_EQ(right.node->id, mesh_id);
-        EXPECT_EQ(right.model, nullptr);
-        EXPECT_EQ(right.visible_index, -1);
+        const auto left = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
+        ASSERT_NE(left.node, nullptr);
+        EXPECT_EQ(left.node->id, mesh_id);
+        EXPECT_EQ(left.model, nullptr);
+        EXPECT_EQ(left.visible_index, -1);
+
+        ASSERT_TRUE(scene.moveNode(splat_id, core::NULL_NODE, 0));
+        const auto reordered = plyComparisonNodes(scene);
+        ASSERT_EQ(reordered.size(), 2u);
+        EXPECT_EQ(reordered[0].node->id, splat_id);
+        EXPECT_EQ(reordered[1].node->id, mesh_id);
     }
 
     TEST_F(SceneManagerRenderStateTest, PlyComparisonConsolidatedUsesPreparedCombinedWithoutRebuild) {

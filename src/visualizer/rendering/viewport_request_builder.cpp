@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 namespace lfs::vis {
@@ -693,6 +694,23 @@ namespace lfs::vis {
                 nodes.push_back({.node = node, .splat_slot = std::nullopt});
             }
         }
+        // Match the scene tree's depth-first order, independent of model type
+        // and of the retained Gaussian render-slot order.
+        std::unordered_map<core::NodeId, PlyComparisonNode> by_id;
+        for (const auto& entry : nodes)
+            by_id.emplace(entry.node->id, entry);
+        nodes.clear();
+        const auto visit = [&](auto&& self, const core::NodeId id) -> void {
+            const auto* node = scene.getNodeById(id);
+            if (!node)
+                return;
+            if (const auto it = by_id.find(id); it != by_id.end())
+                nodes.push_back(it->second);
+            for (const auto child : node->children)
+                self(self, child);
+        };
+        for (const auto root : scene.getRootNodes())
+            visit(visit, root);
         return nodes;
     }
 
