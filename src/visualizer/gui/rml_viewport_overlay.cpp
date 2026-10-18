@@ -98,6 +98,12 @@ namespace lfs::vis::gui {
             return false;
         }
 
+        // Rml::Style::ComputedValues::cursor() is not exported from the RmlUi DLL.
+        [[nodiscard]] RmlCursorRequest hoverCursorRequest(Rml::Element* element) {
+            const auto* const cursor = element->GetProperty(Rml::PropertyId::Cursor);
+            return rmlCursorRequestForName(cursor ? cursor->Get<Rml::String>() : Rml::String{});
+        }
+
         // Keep guiFocusState in sync with the overlay's live RmlUi focus so
         // InputController shortcut dispatch sees text editing on the next key.
         bool publishOverlayTextFocus(Rml::Element* focused) {
@@ -1145,7 +1151,7 @@ namespace lfs::vis::gui {
             if (hovered_interactive_) {
                 guiFocusState().want_capture_mouse = true;
                 if (hover) {
-                    cursor_request_ = rmlCursorRequestForName(hover->GetComputedValues().cursor());
+                    cursor_request_ = hoverCursorRequest(hover);
                     if (value_drag)
                         tooltip_.setHover({}, nullptr);
                     else
@@ -1232,7 +1238,7 @@ namespace lfs::vis::gui {
         const bool over_interactive = is_inside && hover_root != nullptr;
         hovered_interactive_ = over_interactive;
         if (over_interactive && hover)
-            cursor_request_ = rmlCursorRequestForName(hover->GetComputedValues().cursor());
+            cursor_request_ = hoverCursorRequest(hover);
 
         bool replayed_button_events = false;
         for (const auto& event : input.mouse_button_events) {
