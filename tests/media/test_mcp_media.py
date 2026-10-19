@@ -177,9 +177,30 @@ class McpMedia(unittest.TestCase):
                         {"format": "avif", "exr_precision": "half"},
                         {"format": "png", "avif_speed": 1},
                         {"format": "avif", "avif_quality": 101},
-                        {"format": "avif", "avif_speed": 10}):
+                        {"format": "avif", "avif_speed": 10},
+                        {"format": "avif", "avif_quality": 4294967396},
+                        {"format": "avif", "avif_speed": 4294967304},
+                        {"format": "avif", "avif_depth": 4294967304},
+                        {"format": "avif", "avif_speed": True},
+                        {"format": "avif", "avif_depth": 8.5}):
             result, output = self.invoke(**options)
             self.assertFalse(result["start"].get("success", False))
+            self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")
+            self.assertFalse(output.exists())
+
+    def test_jxl_uint16_job_and_schema_validation(self):
+        for transfer in ("linear", "srgb"):
+            result, output = self.invoke(format="jxl", input_transfer="linear", input_primaries="bt709",
+                                         jxl_precision="uint16", jxl_transfer=transfer, jxl_effort=1)
+            self.assertEqual(len(list(output.glob("*.jxl"))), 4)
+            metadata = json.loads((output / "extraction_metadata.json").read_text())
+            self.assertEqual(metadata["output"]["bit_depth"], 16)
+            self.assertEqual(metadata["output"]["transfer"], transfer)
+        for options in ({"format": "png", "jxl_precision": "uint16"},
+                        {"format": "jxl", "jxl_precision": "half"},
+                        {"format": "jxl", "jxl_transfer": "srgb"},
+                        {"format": "jxl", "jxl_precision": "uint16", "jxl_transfer": "bt709"}):
+            result, output = self.invoke(**options)
             self.assertEqual(result["start"]["error"]["code"], "InvalidArgument")
             self.assertFalse(output.exists())
 

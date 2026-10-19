@@ -1633,10 +1633,10 @@ namespace lfs::python {
                 auto t = image.tensor().contiguous().cpu();
                 auto extension = core::path_to_utf8(path.extension());
                 std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
-                // Generic JXL output is pixel-only. Do not synthesize a comment
+                // Generic JXL/AVIF output is pixel-only. Do not synthesize a comment
                 // that its shared writer correctly rejects as unsupported.
                 std::optional<std::string> comment;
-                if (extension != ".jxl")
+                if (extension != ".jxl" && extension != ".avif")
                     comment = core::provenance_to_json(
                         include_provenance ? core::make_provenance_stamp()
                                            : core::make_minimal_provenance_stamp());
@@ -1644,8 +1644,8 @@ namespace lfs::python {
             },
             nb::arg("path"), nb::arg("image"),
             nb::arg("include_provenance") = true,
-            "Save display image tensor to PNG, JPG, TIFF or JPEG XL. Accepts [H,W,C] or [C,H,W] float [0,1]. "
-            "include_provenance (default true) writes a full Comment stamp on supported formats; false writes a minimal stamp. JPEG XL stores pixels without a provenance stamp.");
+            "Save display image tensor to PNG, JPG, TIFF, JPEG XL or AVIF. Accepts [H,W,C] or [C,H,W] float [0,1]. "
+            "include_provenance (default true) writes a full Comment stamp on supported formats; false writes a minimal stamp. JPEG XL and AVIF store pixels without a provenance stamp.");
         m.def(
             "save_exr_image",
             [](const std::filesystem::path& path, const PyTensor& image, media::FrameColor color,

@@ -105,3 +105,5 @@ Allocation failures use ResourceExhausted, including provider allocation errors
 and callback-copy failures during publication setup. Standard exception details
 and native stdio errors are retained. No callback exception crosses the C writer
 ABI; it is captured and handled after returning from the provider.
+
+Generic `lf.io.save_image` omits the synthetic provenance comment for AVIF, as for JXL. Explicit unsupported metadata comments remain rejected by the shared writer. Source metadata embedding requires the separate metadata policy.

@@ -127,6 +127,8 @@ namespace lfs::media {
                     p.jxl_lossless = files->files.jxl.lossless;
                     p.jxl_distance = files->files.jxl.distance;
                     p.jxl_effort = files->files.jxl.effort;
+                    p.jxl_precision = files->files.jxl.precision;
+                    p.jxl_transfer = files->files.jxl.transfer;
                     p.avif_lossless = files->files.avif.lossless;
                     p.avif_quality = files->files.avif.quality;
                     p.avif_speed = files->files.avif.speed;

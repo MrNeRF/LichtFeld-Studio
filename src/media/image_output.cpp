@@ -158,11 +158,20 @@ namespace lfs::media {
                               "ImageOutput.writeAvif");
     }
     SinkResult validateJxlOutputOptions(const JxlOutputOptions& options) {
+        if (outputOptionName(options.precision) == "unknown" ||
+            (options.transfer != ColorTransfer::Linear && options.transfer != ColorTransfer::Srgb) ||
+            (options.precision == JxlPrecision::Float32 && options.transfer != ColorTransfer::Linear))
+            return SinkResult::failure(outputError(ErrorCode::InvalidArgument, "JXL UInt16 allows linear/sRGB transfer; Float32 requires linear transfer", 0, "JXL", "ImageOutput.writeJxl"));
         return core::image_codecs::validate_jxl_encode_options({.lossless = options.lossless, .distance = options.distance, .effort = options.effort});
     }
     SinkResult validateJxlOutputOptions(const JxlOutputOptions& options, FramePixelFormat format) {
+        if (auto valid = validateJxlOutputOptions(options); !valid)
+            return valid;
+        if (format == FramePixelFormat::RGB8 && options.precision == JxlPrecision::UInt16)
+            return SinkResult::failure(outputError(ErrorCode::Unsupported, "JXL UInt16 conversion requires linear Float32 input", 0, "JXL", "ImageOutput.writeJxl"));
         return core::image_codecs::validate_jxl_encode_options({.lossless = options.lossless, .distance = options.distance, .effort = options.effort},
-                                                               format == FramePixelFormat::RGB8 ? core::image_codecs::SampleType::UInt8 : core::image_codecs::SampleType::Float32);
+                                                               format == FramePixelFormat::RGB8 ? core::image_codecs::SampleType::UInt8 : options.precision == JxlPrecision::UInt16 ? core::image_codecs::SampleType::UInt16
+                                                                                                                                                                                    : core::image_codecs::SampleType::Float32);
     }
     SinkResult ImageOutput::writeJxl(const std::filesystem::path& path, const FrameView& frame, const JxlOutputOptions& options) {
         return outputBoundary([&]() -> SinkResult {
@@ -184,8 +193,30 @@ namespace lfs::media {
             codecs::JxlEncodeOptions encoding{.lossless = options.lossless, .distance = options.distance, .effort = options.effort, .color = rgb8 ? codecs::JxlEncodingColor::SRGB : layout.color.primaries == ColorPrimaries::Bt2020 ? codecs::JxlEncodingColor::LinearBT2020
                                                                                                                                                                                                                                       : codecs::JxlEncodingColor::LinearSRGB,
                                               .premultiplied_alpha = rgba && layout.color.alpha == AlphaMode::Premultiplied};
-            return codecs::write_jxl(path, frame.pixels, layout.width, layout.height, rgba ? 4 : 3,
-                                     rgb8 ? codecs::SampleType::UInt8 : codecs::SampleType::Float32, layout.row_stride, encoding,
+            std::vector<uint16_t> converted;
+            auto pixels = frame.pixels;
+            size_t stride = layout.row_stride;
+            if (options.precision == JxlPrecision::UInt16) {
+                const auto fail = [](ErrorCode code, std::string message) { return SinkResult::failure(outputError(code, std::move(message), 0, "JXL", "ImageOutput.writeJxl")); };
+                const size_t channels = rgba ? 4 : 3;
+                if (size_t(layout.height) > encoding.pixels / size_t(layout.width) ||
+                    size_t(layout.width) > SIZE_MAX / size_t(layout.height) / channels / sizeof(uint16_t))
+                    return fail(ErrorCode::ResourceExhausted, "JXL UInt16 pixel limit or packed extent exceeded before conversion");
+                if (options.cancelled && options.cancelled())
+                    return fail(ErrorCode::Cancelled, "JXL UInt16 conversion cancelled");
+                converted.resize(size_t(layout.width) * layout.height * channels);
+                if (auto result = quantizeSdr(frame, options.transfer, 65535, options.cancelled, converted, fail); !result)
+                    return result;
+                pixels = {reinterpret_cast<const uint8_t*>(converted.data()), converted.size() * sizeof(uint16_t)};
+                stride = size_t(layout.width) * channels * sizeof(uint16_t);
+                encoding.premultiplied_alpha = false;
+                if (options.transfer == ColorTransfer::Srgb)
+                    encoding.color = layout.color.primaries == ColorPrimaries::Bt2020 ? codecs::JxlEncodingColor::SRGBBT2020 : codecs::JxlEncodingColor::SRGB;
+            }
+            return codecs::write_jxl(path, pixels, layout.width, layout.height, rgba ? 4 : 3,
+                                     rgb8 ? codecs::SampleType::UInt8 : options.precision == JxlPrecision::UInt16 ? codecs::SampleType::UInt16
+                                                                                                                  : codecs::SampleType::Float32,
+                                     stride, encoding,
                                      {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled});
         },
                               "ImageOutput.writeJxl");

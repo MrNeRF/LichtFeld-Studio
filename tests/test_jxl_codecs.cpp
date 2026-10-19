@@ -12,6 +12,7 @@
 #include <fstream>
 #include <future>
 #include <gtest/gtest.h>
+#include <jxl/cms.h>
 #include <jxl/decode.h>
 #include <jxl/encode.h>
 #include <lcms2.h>
@@ -452,11 +453,13 @@ namespace {
 
     // Independent provider reader: do not validate the writer solely through
     // the application decoder, which could hide matching policy mistakes.
-    std::vector<uint8_t> direct_decode(std::span<const uint8_t> bytes, int channels, codec::SampleType type) {
+    std::vector<uint8_t> direct_decode(std::span<const uint8_t> bytes, int channels, codec::SampleType type, bool srgb = false) {
         std::unique_ptr<JxlDecoder, decltype(&JxlDecoderDestroy)> decoder(JxlDecoderCreate(nullptr), JxlDecoderDestroy);
-        if (!decoder || JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_FULL_IMAGE) != JXL_DEC_SUCCESS ||
+        if (!decoder || JxlDecoderSubscribeEvents(decoder.get(), JXL_DEC_FULL_IMAGE | (srgb ? JXL_DEC_COLOR_ENCODING : 0)) != JXL_DEC_SUCCESS ||
             JxlDecoderSetInput(decoder.get(), bytes.data(), bytes.size()) != JXL_DEC_SUCCESS)
             throw std::runtime_error("Independent JXL decoder initialization failed");
+        if (srgb && (!JxlGetDefaultCms() || JxlDecoderSetCms(decoder.get(), *JxlGetDefaultCms()) != JXL_DEC_SUCCESS))
+            throw std::runtime_error("Independent JXL CMS initialization failed");
         JxlDecoderCloseInput(decoder.get());
         const JxlPixelFormat format{uint32_t(channels), type == codec::SampleType::Float32 ? JXL_TYPE_FLOAT : type == codec::SampleType::UInt16 ? JXL_TYPE_UINT16
                                                                                                                                                 : JXL_TYPE_UINT8,
@@ -464,7 +467,12 @@ namespace {
         std::vector<uint8_t> result;
         for (;;) {
             const auto status = JxlDecoderProcessInput(decoder.get());
-            if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
+            if (status == JXL_DEC_COLOR_ENCODING && srgb) {
+                JxlColorEncoding color;
+                JxlColorEncodingSetToSRGB(&color, channels <= 2);
+                if (JxlDecoderSetOutputColorProfile(decoder.get(), &color, nullptr, 0) != JXL_DEC_SUCCESS)
+                    throw std::runtime_error("Independent JXL sRGB output failed");
+            } else if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
                 size_t size = 0;
                 if (JxlDecoderImageOutBufferSize(decoder.get(), &format, &size) != JXL_DEC_SUCCESS)
                     throw std::runtime_error("Independent JXL size failed");
@@ -540,7 +548,7 @@ namespace {
     }
 
     TEST_F(JxlCodec, EncoderColorDeclarationsMatchTheSamplesWithoutImplicitConversion) {
-        for (auto color : {codec::JxlEncodingColor::SRGB, codec::JxlEncodingColor::LinearSRGB, codec::JxlEncodingColor::LinearBT2020}) {
+        for (auto color : {codec::JxlEncodingColor::SRGB, codec::JxlEncodingColor::LinearSRGB, codec::JxlEncodingColor::LinearBT2020, codec::JxlEncodingColor::SRGBBT2020}) {
             const std::array<float, 3> input{.125f, .5f, 2.f};
             codec::JxlEncodeOptions options;
             options.color = color;
@@ -556,12 +564,12 @@ namespace {
             ASSERT_EQ(JxlDecoderProcessInput(decoder.get()), JXL_DEC_COLOR_ENCODING);
             JxlColorEncoding profile{};
             ASSERT_EQ(JxlDecoderGetColorAsEncodedProfile(decoder.get(), JXL_COLOR_PROFILE_TARGET_ORIGINAL, &profile), JXL_DEC_SUCCESS);
-            EXPECT_EQ(profile.transfer_function, color == codec::JxlEncodingColor::SRGB ? JXL_TRANSFER_FUNCTION_SRGB : JXL_TRANSFER_FUNCTION_LINEAR);
-            EXPECT_EQ(profile.primaries, color == codec::JxlEncodingColor::LinearBT2020 ? JXL_PRIMARIES_2100 : JXL_PRIMARIES_SRGB);
+            EXPECT_EQ(profile.transfer_function, (color == codec::JxlEncodingColor::SRGB || color == codec::JxlEncodingColor::SRGBBT2020) ? JXL_TRANSFER_FUNCTION_SRGB : JXL_TRANSFER_FUNCTION_LINEAR);
+            EXPECT_EQ(profile.primaries, (color == codec::JxlEncodingColor::LinearBT2020 || color == codec::JxlEncodingColor::SRGBBT2020) ? JXL_PRIMARIES_2100 : JXL_PRIMARIES_SRGB);
         }
     }
 
-    TEST_F(JxlCodec, EncoderLinearBt2020DisplayMatchesIndependentColorTransform) {
+    TEST_F(JxlCodec, EncoderBt2020DisplayMatchesIndependentColorTransform) {
         constexpr int width = 16, height = 16;
         std::vector<float> input(width * height * 3), expected(input.size());
         for (int y = 0; y < height; ++y)
@@ -573,29 +581,42 @@ namespace {
             }
         const cmsCIExyY white{.3127, .329, 1.};
         const cmsCIExyYTRIPLE primaries{{.708, .292, 1.}, {.17, .797, 1.}, {.131, .046, 1.}};
-        std::unique_ptr<cmsToneCurve, decltype(&cmsFreeToneCurve)> curve(cmsBuildGamma(nullptr, 1.), cmsFreeToneCurve);
-        ASSERT_TRUE(curve);
-        cmsToneCurve* curves[]{curve.get(), curve.get(), curve.get()};
-        std::unique_ptr<void, decltype(&cmsCloseProfile)> original(cmsCreateRGBProfile(&white, &primaries, curves), cmsCloseProfile), srgb(cmsCreate_sRGBProfile(), cmsCloseProfile);
-        ASSERT_TRUE(original);
+        std::unique_ptr<void, decltype(&cmsCloseProfile)> srgb(cmsCreate_sRGBProfile(), cmsCloseProfile);
         ASSERT_TRUE(srgb);
-        std::unique_ptr<void, decltype(&cmsDeleteTransform)> transform(cmsCreateTransform(original.get(), TYPE_RGB_FLT, srgb.get(), TYPE_RGB_FLT, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE), cmsDeleteTransform);
-        ASSERT_TRUE(transform);
-        cmsDoTransform(transform.get(), input.data(), expected.data(), width * height);
-        for (bool lossless : {false, true}) {
-            codec::JxlEncodeOptions options;
-            options.color = codec::JxlEncodingColor::LinearBT2020;
-            options.lossless = lossless;
-            options.distance = .25f;
-            std::vector<uint8_t> encoded;
-            ASSERT_TRUE(codec::encode_jxl_memory({reinterpret_cast<const uint8_t*>(input.data()), input.size() * sizeof(float)}, width, height, 3, codec::SampleType::Float32, width * 3 * sizeof(float), encoded, options));
-            std::vector<float> actual(input.size());
-            codec::DecodeTarget target{3, codec::SampleType::Float32, actual.data()};
-            codec::Probe info;
-            std::string error;
-            ASSERT_TRUE(codec::decode_jxl_to_buffer(encoded, target, info, error)) << error;
-            for (size_t i = 0; i < actual.size(); ++i)
-                EXPECT_NEAR(actual[i], expected[i], lossless ? .0005f : .01f);
+        for (auto color : {codec::JxlEncodingColor::LinearBT2020, codec::JxlEncodingColor::SRGBBT2020}) {
+            std::unique_ptr<cmsToneCurve, decltype(&cmsFreeToneCurve)> curve(
+                color == codec::JxlEncodingColor::LinearBT2020 ? cmsBuildGamma(nullptr, 1.) : cmsDupToneCurve(static_cast<cmsToneCurve*>(cmsReadTag(srgb.get(), cmsSigRedTRCTag))), cmsFreeToneCurve);
+            ASSERT_TRUE(curve);
+            cmsToneCurve* curves[]{curve.get(), curve.get(), curve.get()};
+            std::unique_ptr<void, decltype(&cmsCloseProfile)> original(cmsCreateRGBProfile(&white, &primaries, curves), cmsCloseProfile);
+            ASSERT_TRUE(original);
+            std::unique_ptr<void, decltype(&cmsDeleteTransform)> transform(cmsCreateTransform(original.get(), TYPE_RGB_FLT, srgb.get(), TYPE_RGB_FLT, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE), cmsDeleteTransform);
+            ASSERT_TRUE(transform);
+            cmsDoTransform(transform.get(), input.data(), expected.data(), width * height);
+            for (bool lossless : {false, true}) {
+                codec::JxlEncodeOptions options;
+                options.color = color;
+                options.lossless = lossless;
+                options.distance = .25f;
+                std::vector<uint8_t> encoded;
+                ASSERT_TRUE(codec::encode_jxl_memory({reinterpret_cast<const uint8_t*>(input.data()), input.size() * sizeof(float)}, width, height, 3, codec::SampleType::Float32, width * 3 * sizeof(float), encoded, options));
+                std::vector<float> actual(input.size());
+                codec::DecodeTarget target{3, codec::SampleType::Float32, actual.data()};
+                codec::Probe info;
+                std::string error;
+                ASSERT_TRUE(codec::decode_jxl_to_buffer(encoded, target, info, error)) << error;
+                const auto independent = direct_decode(encoded, 3, codec::SampleType::Float32, true);
+                ASSERT_EQ(independent.size(), actual.size() * sizeof(float));
+                for (size_t i = 0; i < actual.size(); ++i) {
+                    float reference;
+                    std::memcpy(&reference, independent.data() + i * sizeof(float), sizeof(float));
+                    EXPECT_NEAR(actual[i], reference, .000001f);
+                    // A perceptual lossy distance is not a per-channel error bound.
+                    // Compare source colors with LittleCMS only when samples are lossless.
+                    if (lossless)
+                        EXPECT_NEAR(actual[i], expected[i], .0005f);
+                }
+            }
         }
     }
 

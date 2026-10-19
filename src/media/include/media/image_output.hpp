@@ -21,12 +21,16 @@ namespace lfs::media {
         std::string provenance;
         std::function<bool()> cancelled;
     };
+    enum class JxlPrecision { Float32,
+                              UInt16 };
     struct JxlOutputOptions {
         bool lossless = true;
         float distance = 1.f;
         int effort = 4; // Float32 lossless: 4..9; integer or lossy: 1..9.
         bool overwrite = false;
         std::function<bool()> cancelled;
+        JxlPrecision precision = JxlPrecision::Float32;
+        ColorTransfer transfer = ColorTransfer::Linear; // UInt16: linear or sRGB; Float32: linear only.
     };
     struct AvifOutputOptions {
         bool lossless = true;
@@ -46,7 +50,9 @@ namespace lfs::media {
         // primaries preserved, straight alpha, finite samples clamped to [0,1].
         [[nodiscard]] static SinkResult writeTiff16(const std::filesystem::path&, const FrameView&, const Tiff16OutputOptions& = {});
         // SDR sRGB RGB8 or relative linear BT709/BT2020 Float32 RGB/RGBA.
-        // Preserve precision; straight alpha in output, no implicit tone mapping.
+        // Default preserves Float32. Explicit UInt16 clamps and rounds relative
+        // linear float to linear/sRGB codes; lossless then applies to those codes.
+        // Straight alpha in output, no implicit tone mapping.
         [[nodiscard]] static SinkResult writeJxl(const std::filesystem::path&, const FrameView&, const JxlOutputOptions& = {});
         // Relative linear float is clamped, sRGB-transferred and rounded to the
         // selected 8/10/12-bit codes. Lossless applies to those integer codes.

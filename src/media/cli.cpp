@@ -78,7 +78,7 @@ namespace {
                              "  [--algorithm laplacian|tenengrad|combined] [--candidates N] [--hdr-to-sdr] [--quiet]\n"
                              "  TIFF16: [--tiff16-transfer srgb|bt709|linear] [--overwrite] (relative SDR only)\n"
                              "  AVIF: [--avif-quality 0..100 (enables lossy)] [--avif-speed 0..9] [--avif-depth 8|10|12] [--overwrite]\n"
-                             "  JXL: [--jxl-distance N (enables lossy)] [--jxl-effort N] [--overwrite] (linear Float32 SDR; effort 4..9 lossless, 1..9 lossy)\n"
+                             "  JXL: [--jxl-distance N (enables lossy)] [--jxl-effort N] [--overwrite] (Float32 SDR default; --jxl-precision float32|uint16; --jxl-transfer linear|srgb; effort 4..9 for lossless Float32, otherwise 1..9)\n"
                              "  EXR: [--exr-precision half|float] [--exr-compression zip|none] [--overwrite]\n"
                              "       [--float-profile sdr|pq-nits|hlg-scene] [--input-transfer auto|linear|srgb|bt709] [--input-primaries auto|bt709|bt2020]\n";
                 return 0;
@@ -179,6 +179,12 @@ namespace {
                 } else if (flag == "--avif-depth") {
                     avif_options = true;
                     output.files.avif.bit_depth = number<int>(value());
+                } else if (flag == "--jxl-precision") {
+                    jxl_options = true;
+                    output.files.jxl.precision = parse<JxlPrecision>(value());
+                } else if (flag == "--jxl-transfer") {
+                    jxl_options = true;
+                    output.files.jxl.transfer = parse<ColorTransfer>(value());
                 } else if (flag == "--jxl-distance") {
                     jxl_options = true;
                     output.files.jxl.lossless = false;

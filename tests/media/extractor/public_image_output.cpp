@@ -51,6 +51,8 @@ int main() {
     auto jxl_path = path;
     jxl_path.replace_extension(".jxl");
     Cleanup jxl_cleanup{jxl_path};
+    const JxlOutputOptions legacy_jxl_options{true, 1.f, 4, false, {}};
+    static_cast<void>(legacy_jxl_options);
     auto jxl_result = ImageOutput::writeJxl(jxl_path, surface->view());
     if (!jxl_result) {
         std::cerr << jxl_result.error().detail();

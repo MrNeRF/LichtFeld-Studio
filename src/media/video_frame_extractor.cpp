@@ -1029,7 +1029,7 @@ namespace lfs::io {
                 return false;
             }
             if (params.format == ImageFormat::JXL) {
-                const auto valid = media::validateJxlOutputOptions({.lossless = params.jxl_lossless, .distance = params.jxl_distance, .effort = params.jxl_effort}, params.output_format);
+                const auto valid = media::validateJxlOutputOptions({.lossless = params.jxl_lossless, .distance = params.jxl_distance, .effort = params.jxl_effort, .precision = params.jxl_precision, .transfer = params.jxl_transfer}, params.output_format);
                 if (!valid) {
                     failure_ = valid.error();
                     error = std::string(failure_->detail());
@@ -2698,6 +2698,16 @@ namespace lfs::io {
                             root["output"]["jxl_distance"] = params.jxl_lossless ? nlohmann::json(nullptr) : nlohmann::json(params.jxl_distance);
                             root["output"]["jxl_effort"] = params.jxl_effort;
                             root["output"]["libjxl_version"] = core::image_codecs::jxl_encoder_version();
+                            if (params.jxl_precision == media::JxlPrecision::UInt16) {
+                                root["output"]["bit_depth"] = 16;
+                                root["output"]["pixel_format"] = "rgb_uint16";
+                                root["output"]["compression"] = params.jxl_lossless ? "lossless-integer-codes" : "lossy";
+                                root["output"]["transfer"] = media::outputOptionName(params.jxl_transfer);
+                                root["output"]["color_profile"] = "uint16-sdr";
+                                root["output"]["color_space"] = std::string(media::outputOptionName(params.jxl_transfer)) +
+                                                                (output_color.primaries == media::ColorPrimaries::Bt709 ? " BT709, relative" : " BT2020, relative");
+                                root["output"]["quantization"] = "clamp-round-half-up-uint16";
+                            }
                         }
                         root["processing"] = {
                             {"decoder", {

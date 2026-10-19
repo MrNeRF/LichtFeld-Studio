@@ -13,6 +13,7 @@
 #include <cmath>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 namespace lfs::app {
     namespace {
@@ -228,8 +229,10 @@ namespace lfs::app {
                     {"avif_quality", {{"type", "integer"}, {"minimum", 0}, {"maximum", 100}}},
                     {"avif_speed", {{"type", "integer"}, {"minimum", 0}, {"maximum", 9}}},
                     {"avif_depth", {{"type", "integer"}, {"enum", {8, 10, 12}}}},
+                    {"jxl_precision", {{"type", "string"}, {"enum", option_names<JxlPrecision>()}}},
+                    {"jxl_transfer", {{"type", "string"}, {"enum", {"linear", "srgb"}}}},
                     {"jxl_distance", {{"type", "number"}, {"exclusiveMinimum", 0}, {"maximum", 25}}},
-                    {"jxl_effort", {{"type", "integer"}, {"minimum", 1}, {"maximum", 9}, {"description", "Lossless Float32 requires effort 4..9; lossy allows 1..9"}}},
+                    {"jxl_effort", {{"type", "integer"}, {"minimum", 1}, {"maximum", 9}, {"description", "Lossless Float32 requires effort 4..9; UInt16 and lossy Float32 allow 1..9"}}},
                     {"jpeg_quality", integer},
                     {"exr_precision", {{"type", "string"}, {"enum", option_names<ExrPrecision>()}}},
                     {"exr_compression", {{"type", "string"}, {"enum", option_names<ExrCompression>()}}},
@@ -369,14 +372,14 @@ namespace lfs::app {
                                        return mcp::invalid_argument_result("JXL effort requires an integer in [1,9]; lossless Float32 requires [4,9]", "media.extract");
 
                                    const bool avif = format == "avif";
-                                   for (const auto* option : {"avif_quality", "avif_speed", "avif_depth"})
-                                       if (args.contains(option) && !args[option].is_number_integer())
-                                           return mcp::invalid_argument_result("AVIF quality, speed and depth require integers", "media.extract");
+                                   for (const auto& [option, maximum] : {std::pair{"avif_quality", 100}, std::pair{"avif_speed", 9}, std::pair{"avif_depth", 12}})
+                                       if (args.contains(option) && (!args[option].is_number_integer() || args[option] < 0 || args[option] > maximum))
+                                           return mcp::invalid_argument_result("AVIF quality, speed and depth require integers within their declared ranges", "media.extract");
                                    if ((!exr && (args.contains("exr_precision") || args.contains("exr_compression"))) ||
                                        (!(exr || tiff || jxl || avif) && (args.contains("overwrite") || args.contains("input_transfer") || args.contains("input_primaries") || args.contains("float_profile"))) ||
                                        ((exr || tiff || jxl || avif) && (args.contains("jpeg_quality") || args.value("convert_hdr_to_sdr", false))) ||
                                        (!tiff && args.contains("tiff16_transfer")) ||
-                                       (!jxl && (args.contains("jxl_distance") || args.contains("jxl_effort"))) ||
+                                       (!jxl && (args.contains("jxl_distance") || args.contains("jxl_effort") || args.contains("jxl_precision") || args.contains("jxl_transfer"))) ||
                                        (!avif && (args.contains("avif_quality") || args.contains("avif_speed") || args.contains("avif_depth"))))
                                        return mcp::invalid_argument_result("Image options must match EXR/TIFF16/JXL/AVIF format; float output does not accept JPEG quality or HDR to SDR", "media.extract");
                                    const auto parsed_format = parseOutputOption<FrameFileFormat>(format);
@@ -406,6 +409,14 @@ namespace lfs::app {
                                    files.files.jxl.lossless = !args.contains("jxl_distance");
                                    files.files.jxl.distance = args.value("jxl_distance", 1.f);
                                    files.files.jxl.effort = args.value("jxl_effort", 4);
+                                   const auto jxl_precision = parseOutputOption<JxlPrecision>(args.value("jxl_precision", "float32"));
+                                   const auto jxl_transfer = parseOutputOption<ColorTransfer>(args.value("jxl_transfer", "linear"));
+                                   if (!jxl_precision)
+                                       throw Exception(jxl_precision.error());
+                                   if (!jxl_transfer)
+                                       throw Exception(jxl_transfer.error());
+                                   files.files.jxl.precision = *jxl_precision;
+                                   files.files.jxl.transfer = *jxl_transfer;
                                    if (jxl)
                                        if (const auto valid = validateJxlOutputOptions(files.files.jxl, FramePixelFormat::RGBFloat32); !valid)
                                            return mcp::invalid_argument_result(std::string(valid.error().detail()), "media.extract");

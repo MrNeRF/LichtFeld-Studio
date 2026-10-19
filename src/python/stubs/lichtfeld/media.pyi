@@ -396,6 +396,11 @@ class AvifOutputOptions:
     @overwrite.setter
     def overwrite(self, arg: bool, /) -> None: ...
 
+class JxlPrecision(enum.Enum):
+    Float32 = 0
+
+    UInt16 = 1
+
 class JxlOutputOptions:
     def __init__(self) -> None: ...
 
@@ -416,6 +421,18 @@ class JxlOutputOptions:
 
     @effort.setter
     def effort(self, arg: int, /) -> None: ...
+
+    @property
+    def precision(self) -> JxlPrecision: ...
+
+    @precision.setter
+    def precision(self, arg: JxlPrecision, /) -> None: ...
+
+    @property
+    def transfer(self) -> ColorTransfer: ...
+
+    @transfer.setter
+    def transfer(self, arg: ColorTransfer, /) -> None: ...
 
     @property
     def overwrite(self) -> bool: ...

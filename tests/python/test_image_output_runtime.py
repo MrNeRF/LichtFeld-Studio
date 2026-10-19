@@ -43,15 +43,19 @@ def test_byte_export_independent_decoder(lf, tmp_path, channels, extension):
 
 @pytest.mark.parametrize("include_provenance", [None, False, True])
 @pytest.mark.parametrize("channels", [1, 2, 3, 4])
-def test_jxl_byte_export_accepts_generated_provenance_policy(lf, tmp_path, channels, include_provenance):
-    path = tmp_path / f"export 日本語-{channels}.JXL"
+@pytest.mark.parametrize("extension", ["JXL", "AVIF"])
+def test_pixel_only_export_accepts_generated_provenance_policy(lf, tmp_path, channels, include_provenance, extension):
+    path = tmp_path / f"export 日本語-{channels}.{extension}"
     image = lf.Tensor.full([channels, 8, 19], 0.5, device="cpu")
     if include_provenance is None:
         lf.io.save_image(str(path), image)
     else:
         lf.io.save_image(str(path), image, include_provenance=include_provenance)
     data = path.read_bytes()
-    assert data.startswith(b"\xff\x0a") or data.startswith(b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a")
+    if extension == "JXL":
+        assert data.startswith(b"\xff\x0a") or data.startswith(b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a")
+    else:
+        assert data[4:8] == b"ftyp" and data[8:12] == b"avif"
     assert len(data) > 12
 
 

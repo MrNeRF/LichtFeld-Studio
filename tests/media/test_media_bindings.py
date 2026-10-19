@@ -195,6 +195,78 @@ class MediaBindings(unittest.TestCase):
         media.ImageOutput.write_jxl(path, frame, options)
         self.assertEqual(path.read_bytes(), original)
 
+    def test_jxl_uint16_options_publication_and_verified_resume(self):
+        color = media.FrameColor()
+        color.transfer = media.ColorTransfer.Linear
+        color.primaries = media.ColorPrimaries.Bt2020
+        color.alpha = media.AlphaMode.Straight
+        payload = struct.pack("=8f", -.25, .0031308, 1.25, .5, .1, .25, .5, 0.)
+        frame = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBAFloat32, payload, color=color)
+        options = media.JxlOutputOptions()
+        options.precision = media.JxlPrecision.UInt16
+        options.effort = 1
+        options.overwrite = True
+        path = self.root / "uint16 日本語.jxl"
+        for transfer in (media.ColorTransfer.Linear, media.ColorTransfer.Srgb):
+            options.transfer = transfer
+            media.ImageOutput.write_jxl(path, frame, options)
+            previous = path.read_bytes()
+            with self.assertRaises(MEDIA_ERROR):
+                media.ImageOutput.write_jxl(path, frame, options, cancelled=lambda: True)
+            self.assertEqual(path.read_bytes(), previous)
+            def failed():
+                raise ValueError("UInt16 cancellation callback")
+            with self.assertRaisesRegex(ValueError, "UInt16 cancellation callback"):
+                media.ImageOutput.write_jxl(path, frame, options, cancelled=failed)
+            self.assertEqual(path.read_bytes(), previous)
+            for value in (float("nan"), float("inf"), -float("inf")):
+                invalid = media.FrameSurface.from_bytes(2, 1, media.FramePixelFormat.RGBAFloat32,
+                                struct.pack("=8f", value, .1, .2, .5, .1, .2, .3, 1.), color=color)
+                with self.assertRaises(MEDIA_ERROR):
+                    media.ImageOutput.write_jxl(path, invalid, options)
+                self.assertEqual(path.read_bytes(), previous)
+        options.transfer = media.ColorTransfer.Bt709
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_jxl(path, frame, options)
+        self.assertEqual(path.read_bytes(), previous)
+        options.transfer = media.ColorTransfer.Srgb
+        options.precision = media.JxlPrecision.Float32
+        options.effort = 4
+        with self.assertRaises(MEDIA_ERROR):
+            media.ImageOutput.write_jxl(path, frame, options)
+        self.assertEqual(path.read_bytes(), previous)
+        request = self.request()
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        for transfer, name in ((media.ColorTransfer.Linear, "linear"), (media.ColorTransfer.Srgb, "srgb")):
+            files = self.resume_files(self.root / ("jxl-u16-" + name), media.FrameFileFormat.JXL)
+            files.files.jxl.precision = media.JxlPrecision.UInt16
+            files.files.jxl.transfer = transfer
+            files.files.jxl.effort = 1
+            self.interrupt_resume(request, files)
+            self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 4)
+            images = sorted(files.files.output_directory.glob("*.jxl"))
+            original = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}
+            metadata = json.loads((files.files.output_directory / "extraction_metadata.json").read_text())
+            self.assertEqual(metadata["output"]["bit_depth"], 16)
+            self.assertEqual(metadata["output"]["transfer"], name)
+            self.assertEqual(metadata["output"]["compression"], "lossless-integer-codes")
+            self.assertEqual(metadata["output"]["quantization"], "clamp-round-half-up-uint16")
+            files.files.jxl.overwrite = True
+            media.MediaIngest.extract_files(request, files)
+            self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}, original)
+            files.files.jxl.transfer = media.ColorTransfer.Srgb if name == "linear" else media.ColorTransfer.Linear
+            with self.assertRaises(MEDIA_ERROR):
+                media.MediaIngest.extract_files(request, files)
+            self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}, original)
+            files.files.jxl.transfer = media.ColorTransfer.Linear
+            files.files.jxl.precision = media.JxlPrecision.Float32
+            files.files.jxl.effort = 4
+            with self.assertRaises(MEDIA_ERROR):
+                media.MediaIngest.extract_files(request, files)
+            self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}, original)
+
     def test_jxl_lossless_float_effort_is_rejected_before_publication(self):
         color = media.FrameColor()
         color.transfer = media.ColorTransfer.Linear

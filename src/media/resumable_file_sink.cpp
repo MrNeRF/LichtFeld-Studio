@@ -8,6 +8,7 @@
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "git_version.h"
+#include "media/media_options.hpp"
 #include "media/video_frame_extractor.hpp"
 #include <algorithm>
 #include <array>
@@ -162,8 +163,11 @@ namespace lfs::media::detail {
             identity_["tiff16"] = {core::image_codecs::tiff_sdr_encoding, static_cast<int>(f.tiff16.transfer), f.tiff16.provenance};
         if (f.format == FrameFileFormat::AVIF)
             identity_["avif"] = {"avif-sdr-v1", core::image_codecs::avif_encoder_version(), f.avif.lossless, f.avif.lossless ? Json(nullptr) : Json(f.avif.quality), f.avif.speed, f.avif.bit_depth};
-        if (f.format == FrameFileFormat::JXL)
+        if (f.format == FrameFileFormat::JXL) {
             identity_["jxl"] = {"jxl-sdr-v1", core::image_codecs::jxl_encoder_version(), f.jxl.lossless, f.jxl.lossless ? Json(nullptr) : Json(f.jxl.distance), f.jxl.effort};
+            if (f.jxl.precision == JxlPrecision::UInt16)
+                identity_["jxl_integer"] = {"uint16-clamp-round-half-up-v1", outputOptionName(f.jxl.transfer)};
+        }
         identity_["files"].push_back(f.first_source_frame_number);
         identity_["layout"] = {session.output.width, session.output.height, static_cast<int>(session.output.format), static_cast<int>(session.output.color.transfer), static_cast<int>(session.output.color.primaries)};
         identity_["metadata"] = output_.write_metadata;

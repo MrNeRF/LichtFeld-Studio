@@ -290,6 +290,29 @@ class IngestCLI(unittest.TestCase):
                 self.assertEqual(actual["frames_accepted"],len(metadata["frames"]))
                 progress=[json.loads(line) for line in stderr.splitlines() if line.startswith(b'{')]
                 self.assertTrue(progress)
+    def test_jxl_uint16_transfer_and_option_validation(self):
+        for transfer in ("linear", "srgb"):
+            output = self.root / ("jxl-u16-" + transfer)
+            args = ("extract", self.source(), "--output", output, "--interval", "1", "--end", "0.35",
+                    "--format", "jxl", "--jxl-precision", "uint16", "--jxl-transfer", transfer,
+                    "--jxl-effort", "1", "--input-transfer", "linear", "--input-primaries", "bt709", "--resume")
+            result, _ = self.invoke(*args)
+            self.assertEqual(result["frames_accepted"], 4)
+            metadata = json.loads((output / "extraction_metadata.json").read_text())
+            self.assertEqual(metadata["output"]["bit_depth"], 16)
+            self.assertEqual(metadata["output"]["transfer"], transfer)
+            self.assertEqual(metadata["output"]["compression"], "lossless-integer-codes")
+            before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in output.glob("*.jxl")}
+            self.invoke(*args, "--overwrite")
+            self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in output.glob("*.jxl")}, before)
+        for i, flags in enumerate((("--format", "png", "--jxl-precision", "uint16"),
+                                    ("--format", "jxl", "--jxl-precision", "half"),
+                                    ("--format", "jxl", "--jxl-transfer", "srgb"),
+                                    ("--format", "jxl", "--jxl-precision", "uint16", "--jxl-transfer", "bt709"))):
+            destination = self.root / f"jxl-u16-invalid-{i}"
+            self.invoke("extract", self.source(), "--output", destination, *flags, code=2)
+            self.assertFalse(destination.exists())
+
     def test_jxl_missing_primaries_uses_format_neutral_diagnostic(self):
         destination = self.root / "jxl-no-primaries"
         result, _ = self.invoke("extract", self.source(), "--output", destination,

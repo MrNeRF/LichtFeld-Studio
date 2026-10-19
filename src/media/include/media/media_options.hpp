@@ -32,6 +32,9 @@ namespace lfs::media {
     template <>
     inline constexpr auto outputOptionValues<ColorPrimaries> = std::array{
         NamedOption{ColorPrimaries::Unspecified, "auto"sv}, NamedOption{ColorPrimaries::Bt709, "bt709"sv}, NamedOption{ColorPrimaries::Bt2020, "bt2020"sv}};
+    template <>
+    inline constexpr auto outputOptionValues<JxlPrecision> = std::array{
+        NamedOption{JxlPrecision::Float32, "float32"sv}, NamedOption{JxlPrecision::UInt16, "uint16"sv}};
     template <class T>
     constexpr std::string_view outputOptionName(T value) {
         for (const auto& option : outputOptionValues<T>)
