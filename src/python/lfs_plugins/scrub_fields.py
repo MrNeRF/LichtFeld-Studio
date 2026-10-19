@@ -425,9 +425,8 @@ class ScrubFieldController:
         width = max(float(getattr(state.field, "absolute_width", 0.0)), 1.0)
         delta_x = mouse_x - state.drag_last_mouse_x
         state.drag_last_mouse_x = mouse_x
-        factor = 10.0 if event.get_bool_parameter("ctrl_key", False) else (
-            0.1 if event.get_bool_parameter("shift_key", False) else 1.0
-        )
+        accelerated = event.get_bool_parameter("shift_key", False) or event.get_bool_parameter("ctrl_key", False)
+        factor = 10.0 if accelerated else 1.0
         state.drag_value += delta_x * (state.spec.max_value - state.spec.min_value) / width * factor
         state.drag_value = max(state.spec.min_value, min(state.spec.max_value, state.drag_value))
         value = self._snap_value(state.spec, state.drag_value)

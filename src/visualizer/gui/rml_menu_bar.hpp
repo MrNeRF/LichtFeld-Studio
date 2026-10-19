@@ -66,6 +66,7 @@ namespace lfs::vis::gui {
         std::string label;
         bool active = false;
         AccessKeyLabel access;
+        bool logo = false;
     };
 
     struct MenuToolbarButtonView {
@@ -242,6 +243,7 @@ namespace lfs::vis::gui {
         std::uint64_t navigation_tooltip_language_generation_ = 0;
         bool has_navigation_tooltip_language_generation_ = false;
         int active_index_ = -1;
+        std::string brand_logo_src_;
         std::string portal_connection_label_;
         std::string portal_connection_tooltip_;
         std::string portal_connection_icon_;
@@ -261,7 +263,6 @@ namespace lfs::vis::gui {
         Rml::Element* dropdown_container_ = nullptr;
         Rml::Element* dropdown_popup_ = nullptr;
         Rml::Element* dropdown_overlay_ = nullptr;
-        Rml::Element* brand_logo_ = nullptr;
         Rml::Element* project_title_container_ = nullptr;
         Rml::Element* project_title_el_ = nullptr;
         Rml::Element* menu_toolbar_ = nullptr;

@@ -214,7 +214,7 @@ def test_lichtfeld_version_matches_cmake_project_version(monkeypatch):
     from lfs_plugins.compat import LICHTFELD_VERSION
 
     cmake_text = (PROJECT_ROOT / "CMakeLists.txt").read_text()
-    cmake_match = re.search(r"project\([^)]*\bVERSION\s+(\d+\.\d+\.\d+)", cmake_text)
+    cmake_match = re.search(r"project\([^)]*\bVERSION\s+(\d+(?:\.\d+){2,3})", cmake_text)
     assert cmake_match, "CMakeLists.txt: could not find project() VERSION"
     assert cmake_match.group(1) == LICHTFELD_VERSION, (
         f"CMakeLists.txt project VERSION ({cmake_match.group(1)!r}) is out of sync with "

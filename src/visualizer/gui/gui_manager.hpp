@@ -151,6 +151,9 @@ namespace lfs::vis {
             void enqueueToast(ToastRequest request);
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
+            // Runs the overlay's Python document sync on the next frame even when no
+            // store change or UI event would trigger it.
+            void requestViewportOverlaySync() { rml_viewport_overlay_.requestDocumentSync(); }
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
             [[nodiscard]] const PanelLayoutManager& panelLayout() const { return panel_layout_; }
             void focusMainPanelTab(std::string panel_id) { focus_panel_name_ = std::move(panel_id); }

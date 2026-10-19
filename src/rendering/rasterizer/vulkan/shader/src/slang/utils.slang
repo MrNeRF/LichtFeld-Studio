@@ -777,25 +777,48 @@ Splat_2D_AlphaBlend load_splat_alphablend(
 
 [ForceInline]
 Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
-    int32_t g_idx,
+    uint g_idx,
+    uint rgb_idx,
     StructuredBuffer<float> xyz_ws,
-    StructuredBuffer<float4> rotations,
-    StructuredBuffer<float> scaling_raw,
-    StructuredBuffer<float> opacity_raw,
+    ByteAddressBuffer rotations,
+    ByteAddressBuffer scaling_raw,
+    ByteAddressBuffer opacity_raw,
     StructuredBuffer<float> rgb,
+    uint lod_flags,
+    bool quantized_pool,
     uint splat_render_profile
 ) {
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
-    float4 g_rotation = rotations[g_idx];
-    float3 g_scale = exp(read_t3_float3(g_idx, scaling_raw));
-    float g_opacity = sigmoid_activation(opacity_raw[g_idx]);
-    float3 g_rgb = read_t3_float3(g_idx, rgb);
+    float4 g_rotation;
+    float3 raw_scale;
+    float raw_opacity;
+    // Match the canonical RAD pool layout used by load_gaussian_split_quant.
+    if (quantized_pool) {
+        uint2 rq = rotations.Load2(g_idx * 8u);
+        g_rotation = float4(f16tof32(rq.x & 0xffffu), f16tof32(rq.x >> 16),
+                            f16tof32(rq.y & 0xffffu), f16tof32(rq.y >> 16));
+        uint2 sq = scaling_raw.Load2(g_idx * 8u);
+        raw_scale = float3(f16tof32(sq.x & 0xffffu), f16tof32(sq.x >> 16),
+                           f16tof32(sq.y & 0xffffu));
+        uint word = opacity_raw.Load((g_idx >> 1u) * 4u);
+        raw_opacity = f16tof32((g_idx & 1u) != 0u ? word >> 16 : word & 0xffffu);
+    } else {
+        g_rotation = asfloat(rotations.Load4(g_idx * 16u));
+        raw_scale = asfloat(scaling_raw.Load3(g_idx * 12u));
+        raw_opacity = asfloat(opacity_raw.Load(g_idx * 4u));
+    }
+    float3 g_scale = exp(min(raw_scale, float3(MAX_RAW_SCALE)));
+    const bool spark_rad_opacity = (lod_flags & 4u) != 0u;
+    float g_opacity = spark_rad_opacity ? max(raw_opacity, 0.0f) : sigmoid_activation(raw_opacity);
+    if (spark_rad_opacity && g_opacity > 1.0f)
+        g_opacity = min(g_opacity * 4.0f - 3.0f, 5.0f);
+    float3 g_rgb = read_t3_float3(rgb_idx, rgb);
     if (splat_render_profile == 1u) {
         g_rotation = lfsPortalCompactRotation(g_rotation);
         g_scale = lfsPortalCompactScales(g_scale);
         g_opacity = lfsPortalCompactOpacity(g_opacity);
     }
-    float3x3 rotation = quat_to_rotmat(normalize(g_rotation));
+    float3x3 rotation = quat_to_rotmat(safe_quat_normalize(g_rotation));
     float3 safe_scale = max(g_scale, float3(1e-8f));
     float3x3 inv_scale = float3x3(
         1.0f / safe_scale.x, 0.0f, 0.0f,
@@ -920,6 +943,28 @@ float evaluate_splat_alpha(
 
     float alpha = clipOpacity(g_opacity * val);
     return float(alpha);
+}
+
+[ForceInline]
+float4 evaluate_gut_splat_lod(Splat_3D_GUT_AlphaBlend g, float3 ray_origin, float3 ray_direction,
+                              bool spark_rad, uint profile) {
+    float3 gro = mul(g.iscl_rot, ray_origin - g.xyz_ws);
+    float3 grd = safe_normalize(mul(g.iscl_rot, ray_direction));
+    float3 distance = cross(grd, gro);
+    float sigma_over_2 = 0.5f * dot(distance, distance);
+    float value = exp(-sigma_over_2);
+    float alpha;
+    // Spark RAD leaves (opacity <= 1) blend like ordinary splats; only high-density LOD parents
+    // need the Spark kernel, so the ordinary path keeps its cost.
+    if (spark_rad && g.opacity > 1.0f) {
+        alpha = spark_rad_alpha_from_value(
+            g.opacity, sigma_over_2 > power_threshold_for_spark_rad_opacity(g.opacity) ? 0.0f : value);
+    } else {
+        alpha = clipOpacity(g.opacity * value);
+        if (!spark_rad && profile == 1u && alpha < (1.0f / 255.0f))
+            alpha = 0.0f;
+    }
+    return float4(clamp(g.rgb, float3(0.0f), float3(MAX_BLEND_COLOR)) * alpha, alpha);
 }
 
 [ForceInline]

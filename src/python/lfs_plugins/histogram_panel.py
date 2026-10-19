@@ -55,6 +55,84 @@ def _trf(key: str, fallback: str, **kwargs) -> str:
     return _tr(key, fallback).format(**kwargs)
 
 
+def _metric_source(metric_id: str) -> str:
+    if metric_id == "opacity":
+        return "opacity"
+    if metric_id in {"position_x", "position_y", "position_z", "world_distance", "distance"}:
+        return "means"
+    return "scaling"
+
+
+class _NodeSnapshot:
+    __slots__ = ("id", "parent_id", "type", "visible", "gaussian_count", "world_transform")
+
+    def __init__(self, node):
+        self.id = int(node.id)
+        self.parent_id = int(node.parent_id)
+        self.type = node.type
+        self.visible = bool(node.visible)
+        self.gaussian_count = int(node.gaussian_count)
+        self.world_transform = node.world_transform
+
+
+class _SceneSnapshot:
+    """Scene state for one histogram job, read on the UI thread.
+
+    The scene bindings wrap live C++ objects that the UI and render threads keep changing, so the
+    worker must never call into them.
+    """
+
+    def __init__(self, scene, model_size: int, device: str):
+        self._nodes = [_NodeSnapshot(node) for node in scene.get_nodes()]
+        self.scene_center = getattr(scene, "scene_center", None)
+        self._crop_keep = None
+        apply_crop_filter = getattr(scene, "apply_crop_filter", None)
+        if apply_crop_filter is not None:
+            keep = lf.Tensor.ones([model_size], dtype="bool", device=device)
+            try:
+                apply_crop_filter(keep)
+                self._crop_keep = keep
+            except Exception as exc:
+                _LOGGER.debug("Histogram crop filter unavailable: %s", exc)
+
+    def get_nodes(self) -> list[_NodeSnapshot]:
+        return self._nodes
+
+    def apply_crop_filter(self, mask: lf.Tensor) -> None:
+        if self._crop_keep is not None:
+            mask[~self._crop_keep] = False
+
+
+class _ModelSnapshot:
+    """Combined-model tensors for one histogram job, read on the UI thread.
+
+    The tensors keep their storage alive after the scene replaces the combined model.
+    """
+
+    def __init__(self, model, metric_ids: Iterable[str]):
+        sources = {_metric_source(metric_id) for metric_id in metric_ids if metric_id}
+        self.num_points = int(model.num_points)
+        self._opacity = model.get_opacity() if "opacity" in sources else None
+        self._means = model.get_means() if "means" in sources else None
+        self._scaling = model.get_scaling() if "scaling" in sources else None
+        has_deleted_mask = getattr(model, "has_deleted_mask", None)
+        self.deleted = model.deleted if has_deleted_mask is not None and has_deleted_mask() else None
+        fetched = next(t for t in (self._opacity, self._means, self._scaling) if t is not None)
+        self.device = "cuda" if fetched.is_cuda else "cpu"
+
+    def get_opacity(self) -> lf.Tensor | None:
+        return self._opacity
+
+    def get_means(self) -> lf.Tensor | None:
+        return self._means
+
+    def get_scaling(self) -> lf.Tensor | None:
+        return self._scaling
+
+    def has_deleted_mask(self) -> bool:
+        return self.deleted is not None
+
+
 @panel_class("histogram")
 class HistogramPanel(Panel):
 
@@ -1286,10 +1364,12 @@ class HistogramPanel(Panel):
             self._handle.dirty_all()
             return
 
+        model_snapshot = _ModelSnapshot(model, (self._metric_id, self._compare_metric_id))
+        scene_snapshot = _SceneSnapshot(scene, model_snapshot.num_points, model_snapshot.device)
         self._set_computing()
         self._queue_histogram_compute(
-            scene,
-            model,
+            scene_snapshot,
+            model_snapshot,
             cache_key,
             self._selection_scope_node_ids() or set(),
             view_only=view_only,

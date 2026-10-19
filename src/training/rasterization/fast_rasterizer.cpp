@@ -854,7 +854,9 @@ namespace lfs::training {
             bwd_shN_n_cells,
             bwd_shN_bits,
             fused_extra_gradients.edge_weight_map,
-            fused_extra_gradients.edge_score_out);
+            fused_extra_gradients.edge_score_out,
+            fused_extra_gradients.impact_sum_out,
+            fused_extra_gradients.impact_peak_out);
 
         ctx.mark_forward_context_released();
 
