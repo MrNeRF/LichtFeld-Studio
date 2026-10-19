@@ -5325,6 +5325,7 @@ namespace lfs::vis {
         result.local_transform = node->local_transform.get();
         result.visible = node->visible;
         result.locked = node->locked;
+        result.point_cloud_source = node->point_cloud_source;
 
         if (node->model && node->model->size() > 0) {
             if (node->model->has_deleted_mask() &&
@@ -5801,6 +5802,7 @@ namespace lfs::vis {
                                 if (child_id == core::NULL_NODE)
                                     continue;
                                 if (auto* pasted_child = scene_.getNodeById(child_id)) {
+                                    pasted_child->point_cloud_source = child.point_cloud_source;
                                     pasted_child->local_transform.setQuiet(child.local_transform);
                                     pasted_child->visible.setQuiet(child.visible);
                                     pasted_child->locked.setQuiet(child.locked);
@@ -5872,6 +5874,8 @@ namespace lfs::vis {
             }
 
             if (entry.hierarchy) {
+                if (auto* mutable_node = scene_.getMutableNode(pasted_name))
+                    mutable_node->point_cloud_source = entry.hierarchy->point_cloud_source;
                 pasteNodeHierarchy(*entry.hierarchy, pasted_node->id);
             }
 

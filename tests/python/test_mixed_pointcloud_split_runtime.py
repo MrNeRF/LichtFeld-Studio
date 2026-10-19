@@ -130,6 +130,18 @@ for name in ('green_cloud', 'red_splat'):
     assert green_large > green_small * 3, (green_small, green_large)
     assert red_small > 1000
     assert red_large == pytest.approx(red_small, rel=.01), (red_small, red_large)
+    # The native point path must show the selection before destructive edits.
+    _tool(endpoint, 'ui_tool_invoke', {'tool_id': 'builtin.select', 'submode_id': 'rectangle'})
+    cloud_offset = 0 if cloud_first else 961
+    _editor(endpoint, f"lf.select_node('green_cloud'); "
+                      f"lf.get_scene().set_selection(list(range({cloud_offset}, {cloud_offset + 169})))")
+    assert _tool(endpoint, 'selection_get', {'max_indices': 0})['selected_count'] == 169
+    highlighted = _window(endpoint)
+    highlighted.save(pictures / 'selected-points.png')
+    assert _color_counts(highlighted)[1] < _color_counts(large)[1] / 2
+    _editor(endpoint, "lf.get_scene().clear_selection(); lf.select_nodes([])")
+    _tool(endpoint, 'ui_tool_clear_active', {'clear_submode': True})
+
     _editor(endpoint, '''
 assert lf.get_scene().get_node('green_cloud').point_cloud() is None
 assert lf.get_scene().get_node('green_cloud').splat_data() is not None

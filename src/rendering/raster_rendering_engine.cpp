@@ -534,6 +534,32 @@ namespace lfs::rendering {
                 deleted_mask_device = deleted_mask_cuda.ptr<bool>();
             }
 
+            const auto prepare_overlay_mask = [](const Tensor* source) {
+                if (!source || !source->is_valid())
+                    return Tensor{};
+                Tensor result = source->to(lfs::core::DataType::UInt8);
+                if (result.device() != lfs::core::Device::CUDA)
+                    result = result.cuda();
+                return result.contiguous();
+            };
+            const auto* selection_source = request.overlay.selection_mask.get();
+            const auto* preview_source = request.overlay.transient_mask.mask;
+            for (const auto* mask : {selection_source, preview_source}) {
+                if (mask && mask->is_valid() && mask->numel() != positions_source.size(0))
+                    return std::unexpected("Point cloud overlay mask must match point count");
+            }
+            Tensor selection_cuda = prepare_overlay_mask(selection_source);
+            Tensor preview_cuda = prepare_overlay_mask(preview_source);
+            Tensor selection_colors_cuda;
+            if (selection_cuda.is_valid() || preview_cuda.is_valid()) {
+                std::vector<float> colors;
+                colors.reserve(kSelectionColorTableCount * 4);
+                for (const auto& color : request.overlay.selection_colors)
+                    colors.insert(colors.end(), {color.r, color.g, color.b, color.a});
+                selection_colors_cuda = Tensor::from_vector(
+                    colors, {kSelectionColorTableCount, size_t{4}}, lfs::core::Device::CUDA);
+            }
+
             const glm::mat4 view = request.frame_view.getViewMatrix();
             const glm::ivec2 camera_size = request.frame_view.cameraSize();
             const glm::mat4 projection = createProjectionMatrix(
@@ -564,6 +590,11 @@ namespace lfs::rendering {
             params.transform_indices = transform_indices_ptr;
             params.visibility_mask = visibility_device;
             params.deleted_mask = deleted_mask_device;
+            params.selection_mask = selection_cuda.is_valid() ? selection_cuda.ptr<std::uint8_t>() : nullptr;
+            params.preview_mask = preview_cuda.is_valid() ? preview_cuda.ptr<std::uint8_t>() : nullptr;
+            params.selection_colors = selection_colors_cuda.is_valid() ? selection_colors_cuda.ptr<float>() : nullptr;
+            params.preview_additive = request.overlay.transient_mask.additive;
+            lfs::core::pin_operands({&selection_cuda, &preview_cuda, &selection_colors_cuda});
             params.n_points = static_cast<std::size_t>(positions_source.size(0));
             params.n_transforms = static_cast<int>(transforms.size());
             params.n_visibility = static_cast<int>(request.scene.node_visibility_mask.size());

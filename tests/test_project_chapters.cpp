@@ -873,6 +873,10 @@ namespace {
         auto old_found = old->find(id);
         ASSERT_TRUE(old_found && *old_found);
         EXPECT_FALSE((*old_found)->point_cloud_source);
+        auto cleared = SceneNodeRecord{.uuid = id, .type = "splat", .name = "Ordinary splat"};
+        ASSERT_TRUE(chapter.upsert_node(cleared));
+        auto without_hint = lfs::io::JsonChapterDom::Json::parse(chapter.dom().dump());
+        EXPECT_FALSE(without_hint["nodes"][0].contains("point_cloud_source"));
         legacy["nodes"][0]["point_cloud_source"] = "invalid";
         auto invalid = SceneGraphChapter::parse(legacy.dump());
         ASSERT_FALSE(invalid);

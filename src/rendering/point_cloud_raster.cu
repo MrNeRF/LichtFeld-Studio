@@ -199,6 +199,22 @@ namespace lfs::rendering::pcraster {
                 b = b + (gray - b) * 0.75f;
             }
 
+            // Match the selection-group and additive/subtractive preview colors
+            // used by the Vulkan point renderer. Unmarked points keep their RGB.
+            const unsigned group = params.selection_mask ? params.selection_mask[idx] : 0;
+            const bool committed = group != 0;
+            const bool in_preview = params.preview_mask && params.preview_mask[idx] != 0;
+            const bool preview = in_preview && (params.preview_additive ? !committed : committed);
+            if (params.selection_colors && (committed || preview)) {
+                const float* tint = params.selection_colors + 4 * (preview ? 256 : group);
+                const float blend = preview ? 0.9f : 0.75f;
+                r += (tint[0] - r) * blend;
+                g += (tint[1] - g) * blend;
+                b += (tint[2] - b) * blend;
+                const float scale = preview ? 1.6f : 1.35f;
+                radius = static_cast<int>(ceilf(fmaxf(radius + 1.0f, radius * scale)));
+            }
+
             const std::uint64_t packed = packDepthColor(depth, r, g, b);
             const int center_x = static_cast<int>(rintf(pixel_x));
             const int center_y = static_cast<int>(rintf(pixel_y));

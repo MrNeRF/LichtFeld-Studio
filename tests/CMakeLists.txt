@@ -763,6 +763,7 @@ set(TEST_FILES
     test_higs_exact_depth.cpp
     test_point_cloud_raster_orientation.cpp
     test_point_cloud_vulkan_projection.cpp
+    test_point_cloud_selection_overlay.cpp
     test_viewport_grid.cpp
     test_theme_registry.cpp
     test_viewport.cpp

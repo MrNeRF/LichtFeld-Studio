@@ -4060,4 +4060,57 @@ namespace lfs::vis::gui {
         EXPECT_TRUE(activeVolumeGuideVisible(true, 8, volumes));
         EXPECT_FALSE(activeVolumeGuideVisible(true, 9, volumes));
     }
+
+    TEST_F(SceneManagerRenderStateTest, RawPointSourceClipboardPreservesHintInNodesAndGroups) {
+        for (const bool grouped : {false, true}) {
+            SceneManager manager;
+            manager.changeContentType(SceneManager::ContentType::SplatFiles);
+            auto& scene = manager.getScene();
+            const auto parent = grouped ? scene.addGroup("Source group") : core::NULL_NODE;
+            const auto id = scene.addSplat("Raw source", makeTwoPointTestSplat(0.f, 1.f), parent);
+            scene.getNodeById(id)->point_cloud_source = true;
+            manager.selectNode(grouped ? parent : id);
+            ASSERT_TRUE(manager.copySelectedNodes());
+            const auto pasted = manager.pasteNodes();
+            ASSERT_EQ(pasted.size(), 1u);
+            const auto* root = scene.getNode(pasted.front());
+            ASSERT_NE(root, nullptr);
+            const auto* cloud = grouped ? scene.getNodeById(root->children.front()) : root;
+            ASSERT_NE(cloud, nullptr);
+            ASSERT_NE(cloud->model, nullptr);
+            EXPECT_TRUE(cloud->point_cloud_source);
+        }
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PointNodePreviewIsSlicedOnlyForEditedNode) {
+        using core::DataType;
+        using core::Device;
+        using core::Tensor;
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto left = scene.addSplat("left", makeTwoPointTestSplat(0.f, 1.f));
+        const auto right = scene.addSplat("right", makeTwoPointTestSplat(2.f, 3.f));
+        manager.selectNode(right);
+        Viewport viewport(640, 480);
+        Tensor preview = Tensor::from_vector(std::vector<int>{0, 0, 1, 0}, {size_t{4}}, Device::CPU).to(DataType::UInt8);
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = manager.getModelForRendering(),
+            .scene_state = manager.buildRenderState(),
+            .settings = RenderSettings{},
+            .render_size = {640, 480},
+            .cursor_preview = {.active = true, .add_mode = false, .preview_selection = &preview},
+        };
+        const std::vector<glm::mat4> transforms{glm::mat4(1.f)};
+        auto a = buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(left), {320, 480}, transforms);
+        auto b = buildPointCloudNodeRenderRequest(ctx, scene, *scene.getNodeById(right), {320, 480}, transforms);
+        EXPECT_EQ(a.overlay.transient_mask.mask, nullptr);
+        ASSERT_NE(b.overlay.transient_mask.mask, nullptr);
+        EXPECT_EQ(b.overlay.transient_mask.mask->numel(), 2u);
+        EXPECT_EQ(b.overlay.transient_mask.mask->ptr<std::uint8_t>()[0], 1);
+        EXPECT_EQ(b.overlay.transient_mask.mask->ptr<std::uint8_t>()[1], 0);
+        EXPECT_FALSE(b.overlay.transient_mask.additive);
+    }
+
 } // namespace lfs::vis::gui

@@ -2915,7 +2915,10 @@ namespace lfs::io::project {
         element["locked"] = value.locked;
         element["training_enabled"] = value.training_enabled;
         element["payload_diverged"] = value.payload_diverged;
-        element["point_cloud_source"] = value.point_cloud_source;
+        if (value.point_cloud_source)
+            element["point_cloud_source"] = true;
+        else
+            element.erase("point_cloud_source");
         if (pose) {
             element["georef_pose"] = std::move(*pose);
         } else {

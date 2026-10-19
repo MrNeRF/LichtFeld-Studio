@@ -675,7 +675,33 @@ namespace lfs::vis {
                                       ctx.scene_manager->getSelectedNodeCropBoxId() == scene.getCropBoxForSplat(node.id);
         scoped.gizmo.ellipsoid_active = ctx.gizmo.ellipsoid_active && ctx.scene_manager &&
                                         ctx.scene_manager->getSelectedNodeEllipsoidId() == scene.getEllipsoidForSplat(node.id);
-        return buildPointCloudRenderRequest(scoped, render_size, transforms);
+        auto request = buildPointCloudRenderRequest(scoped, render_size, transforms);
+        // Preview tensors use the visible combined-model order. Keep only the
+        // edited node's slice, with ownership through the render request.
+        const auto* preview = ctx.cursor_preview.preview_selection
+                                  ? ctx.cursor_preview.preview_selection
+                                  : ctx.cursor_preview.selection_tensor;
+        size_t offset = 0;
+        if (!ctx.training_active && preview && preview->is_valid() && preview->ndim() == 1) {
+            for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
+                if (!slot.node || !slot.node->model)
+                    continue;
+                const size_t count = slot.node->model->size();
+                if (slot.node->id == node.id) {
+                    const bool selected = slot.slot_index < ctx.scene_state.selected_node_mask.size() &&
+                                          ctx.scene_state.selected_node_mask[slot.slot_index];
+                    if (selected && offset + count <= preview->numel()) {
+                        auto& transient = request.overlay.transient_mask;
+                        transient.owned_mask = std::make_shared<core::Tensor>(preview->slice(0, offset, offset + count));
+                        transient.mask = transient.owned_mask.get();
+                        transient.additive = ctx.cursor_preview.add_mode;
+                    }
+                    break;
+                }
+                offset += count;
+            }
+        }
+        return request;
     }
 
     std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene) {
