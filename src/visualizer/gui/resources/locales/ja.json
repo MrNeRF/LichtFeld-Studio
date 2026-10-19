@@ -156,7 +156,6 @@
     "access_key.select": "S",
     "access_key.tools": "T",
     "access_key.view": "V",
-    "access_key.help": "H",
     "file": "ファイル",
     "file.new_project": "新規プロジェクト",
     "file.open_project": "プロジェクトを開く...",
@@ -2365,7 +2364,6 @@
     "not_now": "後で",
     "dont_ask": "今後表示しない",
     "menu_register": "既定のアプリケーションに設定...",
-    "menu_unregister": "既定のアプリケーションから解除...",
     "success": "ファイルの関連付けが正常に登録されました。"
   },
   "error_actions": {

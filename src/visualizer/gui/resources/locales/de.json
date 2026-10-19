@@ -156,7 +156,6 @@
     "access_key.select": "U",
     "access_key.tools": "W",
     "access_key.view": "A",
-    "access_key.help": "H",
     "file": "Datei",
     "file.new_project": "Neues Projekt",
     "file.open_project": "Projekt öffnen...",
@@ -2365,7 +2364,6 @@
     "not_now": "Nicht jetzt",
     "dont_ask": "Nicht mehr fragen",
     "menu_register": "Als Standardanwendung festlegen...",
-    "menu_unregister": "Als Standardanwendung entfernen...",
     "success": "Dateizuordnungen erfolgreich registriert."
   },
   "error_actions": {

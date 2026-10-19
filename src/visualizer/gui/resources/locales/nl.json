@@ -156,7 +156,6 @@
     "access_key.select": "S",
     "access_key.tools": "U",
     "access_key.view": "W",
-    "access_key.help": "H",
     "file": "Bestand",
     "file.new_project": "Nieuw Project",
     "file.open_project": "Project openen...",
@@ -2365,7 +2364,6 @@
     "not_now": "Niet nu",
     "dont_ask": "Niet meer vragen",
     "menu_register": "Instellen als standaardtoepassing...",
-    "menu_unregister": "Verwijderen als standaardtoepassing...",
     "success": "Bestandskoppelingen succesvol geregistreerd."
   },
   "error_actions": {

@@ -156,7 +156,6 @@
     "access_key.select": "S",
     "access_key.tools": "T",
     "access_key.view": "V",
-    "access_key.help": "H",
     "file": "文件",
     "file.new_project": "新建项目",
     "file.open_project": "打开项目...",
@@ -2365,7 +2364,6 @@
     "not_now": "暂不",
     "dont_ask": "不再询问",
     "menu_register": "设为默认应用程序...",
-    "menu_unregister": "移除默认应用程序...",
     "success": "文件关联注册成功。"
   },
   "error_actions": {

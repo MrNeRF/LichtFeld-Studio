@@ -156,7 +156,6 @@
     "access_key.select": "Z",
     "access_key.tools": "N",
     "access_key.view": "W",
-    "access_key.help": "M",
     "file": "Plik",
     "file.new_project": "Nowy Projekt",
     "file.open_project": "Otwórz projekt...",
@@ -2365,7 +2364,6 @@
     "not_now": "Nie teraz",
     "dont_ask": "Nie pytaj ponownie",
     "menu_register": "Ustaw jako domyślną aplikację...",
-    "menu_unregister": "Usuń jako domyślną aplikację...",
     "success": "Skojarzenia plików zostały pomyślnie zarejestrowane."
   },
   "error_actions": {

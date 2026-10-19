@@ -156,7 +156,6 @@
     "access_key.select": "S",
     "access_key.tools": "O",
     "access_key.view": "A",
-    "access_key.help": "E",
     "file": "Fichier",
     "file.new_project": "Nouveau Projet",
     "file.open_project": "Ouvrir un projet...",
@@ -2365,7 +2364,6 @@
     "not_now": "Pas maintenant",
     "dont_ask": "Ne plus demander",
     "menu_register": "Définir comme application par défaut...",
-    "menu_unregister": "Retirer comme application par défaut...",
     "success": "Associations de fichiers enregistrées avec succès."
   },
   "error_actions": {

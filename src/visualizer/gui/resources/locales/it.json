@@ -169,7 +169,6 @@
     "access_key.select": "S",
     "access_key.tools": "T",
     "access_key.view": "V",
-    "access_key.help": "A",
     "file": "File",
     "file.new_project": "Nuovo Progetto",
     "file.open_project": "Apri progetto...",
@@ -2378,7 +2377,6 @@
     "not_now": "Non ora",
     "dont_ask": "Non chiedere più",
     "menu_register": "Imposta come applicazione predefinita...",
-    "menu_unregister": "Rimuovi come applicazione predefinita...",
     "success": "Associazioni file registrate con successo."
   },
   "error_actions": {

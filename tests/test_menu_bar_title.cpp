@@ -61,21 +61,6 @@ namespace lfs::vis::gui {
             bar.menu_model_.DirtyVariable("dropdown_items");
             bar.rml_context_->Update();
         }
-        static void logoDropdown(RmlMenuBar& bar, const std::vector<MenuItemDesc>& items) {
-            bar.dropdown_container_ = bar.document_->GetElementById("dropdown-container");
-            bar.dropdown_popup_ = bar.document_->GetElementById("dropdown-popup");
-            bar.dropdown_overlay_ = bar.document_->GetElementById("dropdown-overlay");
-            bar.dropdown_items_ = bar.buildDropdownItems(items);
-            bar.open_menu_index_ = RmlMenuBar::LOGO_MENU_INDEX;
-            bar.open_menu_idname_ = "lfs_plugins.help_menu.HelpMenu";
-            bar.open_submenu_index_ = -1;
-            bar.open_child_submenu_index_ = -1;
-            bar.open_grandchild_submenu_index_ = -1;
-            bar.keyboard_path_.fill(-1);
-            bar.keyboard_depth_ = 0;
-            bar.menu_model_.DirtyVariable("dropdown_items");
-            bar.rebuildDropdownDOM();
-        }
         static void openPath(RmlMenuBar& bar, int root, int child, int grandchild) {
             bar.setOpenSubmenu(root, child, grandchild);
             bar.sizeOpenDropdowns();
@@ -143,18 +128,21 @@ namespace lfs::vis::gui {
             input.mouse_wheel = force_input ? 1.0f : 0.0f;
             bar.processInput(input);
         }
-        static void clickAt(RmlMenuBar& bar, float x, float y) {
-            lfs::vis::gui::PanelInputState input{};
-            input.screen_w = 1600;
-            input.screen_h = 300;
-            input.mouse_x = x;
-            input.mouse_y = y;
-            input.mouse_clicked[0] = true;
-            input.mouse_down[0] = true;
-            bar.processInput(input);
+        static void click(RmlMenuBar& bar, float x, float y) {
+            hover(bar, x, y, true);
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.button = SDL_BUTTON_LEFT;
+            event.button.down = true;
+            event.button.x = x;
+            event.button.y = y;
+            bar.rml_manager_->dispatchInputEvent(event);
+            event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            event.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            event.button.down = false;
+            bar.rml_manager_->dispatchInputEvent(event);
         }
-        static int logoMenuIndex() { return RmlMenuBar::LOGO_MENU_INDEX; }
-        static bool logoAt(RmlMenuBar& bar, float x, float y) { return bar.logoAtPoint(x, y); }
         static void outsideClick(RmlMenuBar& bar) {
             SDL_Event event{};
             event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
@@ -203,7 +191,6 @@ namespace lfs::vis::gui {
             bar.menu_items_ = doc->GetElementById("menu-items");
             bar.menu_toolbar_ = doc->GetElementById("menu-toolbar");
             bar.menu_window_controls_ = doc->GetElementById("menu-window-controls");
-            bar.brand_logo_ = doc->GetElementById("brand-logo");
             bar.dropdown_container_ = doc->GetElementById("dropdown-container");
             bar.dropdown_popup_ = doc->GetElementById("dropdown-popup");
             bar.dropdown_overlay_ = doc->GetElementById("dropdown-overlay");
@@ -996,7 +983,7 @@ namespace {
         EXPECT_FLOAT_EQ(bar_.barHeight(), 30);
     }
 
-    TEST_F(MenuBarTitleTest, GermanToolsStayOnTheTitleRowAt1100) {
+    TEST_F(MenuBarTitleTest, GermanToolsStayOnTheTitleRowAt1000) {
         auto* body = el("body");
         auto* portal = el("menu-portal-connection");
         Rml::Element* portal_label = nullptr;
@@ -1012,12 +999,12 @@ namespace {
             context_->Update();
         };
 
-        bar_.updateLabels({"Datei", "Bearbeiten", "Auswahl", "Werkzeuge", "Ansicht", "Hilfe"},
-                          {"file", "edit", "select", "tools", "view", "help"});
+        bar_.updateLabels({"Hilfe", "Datei", "Bearbeiten", "Auswahl", "Werkzeuge", "Ansicht"},
+                          {"lfs_plugins.help_menu.HelpMenu", "file", "edit", "select", "tools", "view"});
         bar_.updateProjectDisplay("Untitled", "/projects/scene.licht", false);
         RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Nicht verbunden");
         RmlMenuBarTestAccess::fullToolbar(bar_);
-        layout_at(1100);
+        layout_at(1000);
         EXPECT_FALSE(el("menu-toolbar")->IsClassSet("second-row"));
         EXPECT_FLOAT_EQ(RmlMenuBarTestAccess::heightDp(bar_), 30);
         EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).top, 0);
@@ -1033,10 +1020,10 @@ namespace {
         EXPECT_TRUE(portal_label->IsVisible());
         EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).top, 0);
 
-        bar_.updateLabels({"File", "Edit", "Select", "Tools", "View", "Help"},
-                          {"file", "edit", "select", "tools", "view", "help"});
+        bar_.updateLabels({"Help", "File", "Edit", "Select", "Tools", "View"},
+                          {"lfs_plugins.help_menu.HelpMenu", "file", "edit", "select", "tools", "view"});
         RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Not connected");
-        layout_at(1100);
+        layout_at(1000);
         EXPECT_FALSE(body->IsClassSet("toolbar-squeeze"));
         EXPECT_FALSE(el("menu-toolbar")->IsClassSet("second-row"));
         EXPECT_TRUE(portal_label->IsVisible());
@@ -1110,11 +1097,8 @@ namespace {
     }
 
     TEST_F(MenuBarTitleTest, NarrowBarsKeepEveryMenuVisible) {
-        // Help no longer owns a label: the logo carries its menu instead.
-        bar_.updateLabels({"File", "Edit", "Select", "Tools", "View", "Help"},
-                          {"lfs_plugins.file_menu.FileMenu", "lfs_plugins.edit_menu.EditMenu",
-                           "lfs_plugins.select_menu.SelectMenu", "lfs_plugins.tools_menu.ToolsMenu",
-                           "lfs_plugins.view_menu.ViewMenu", "lfs_plugins.help_menu.HelpMenu"});
+        bar_.updateLabels({"Help", "File", "Edit", "Select", "Tools", "View"},
+                          {"lfs_plugins.help_menu.HelpMenu", "file", "edit", "select", "tools", "view"});
         RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Not connected");
         for (float dp : {1.0f, 1.5f, 2.0f}) {
             // The narrowest window SDL allows, and a little wider.
@@ -1125,10 +1109,7 @@ namespace {
                 Rml::ElementList labels;
                 document_->GetElementsByClassName(labels, "menu-label");
                 std::erase_if(labels, [](Rml::Element* label) { return !label->IsVisible(); });
-                ASSERT_EQ(labels.size(), 5u);
-                EXPECT_TRUE(el("brand-logo")->IsVisible());
-                EXPECT_GE(bounds(el("brand-logo")).left, 0);
-                EXPECT_LE(bounds(el("brand-logo")).right, controls.left + 0.5f);
+                ASSERT_EQ(labels.size(), 6u);
                 for (auto* label : labels)
                     EXPECT_LE(bounds(label).right, controls.left + 0.5f);
                 EXPECT_LE(bounds(el("menu-window-close")).right, width + 0.5f);
@@ -1625,110 +1606,59 @@ namespace {
         EXPECT_EQ(textContent(marks.front()), "F");
     }
 
-    // Help has no top-level label of its own: the brand logo opens that dropdown.
-    TEST_F(MenuBarTitleTest, LogoOpensTheHelpDropdownWithoutAHelpLabel) {
-        bar_.updateLabels({"File", "Edit", "View", "Help"},
-                          {"lfs_plugins.file_menu.FileMenu", "lfs_plugins.edit_menu.EditMenu",
-                           "lfs_plugins.view_menu.ViewMenu", "lfs_plugins.help_menu.HelpMenu"});
+    TEST_F(MenuBarTitleTest, TheBrandLogoIsTheHelpMenu) {
+        bar_.updateLabels({"Help", "File", "Edit"},
+                          {"lfs_plugins.help_menu.HelpMenu", "lfs_plugins.file_menu.FileMenu",
+                           "lfs_plugins.edit_menu.EditMenu"});
         context_->Update();
-        Rml::ElementList labels;
-        document_->GetElementsByClassName(labels, "menu-label");
-        std::erase_if(labels, [](Rml::Element* label) { return !label->IsVisible(); });
-        EXPECT_EQ(labels.size(), 3u);
-        EXPECT_FALSE(el("brand-logo")->IsClassSet("hidden"));
-
-        const auto logo = bounds(el("brand-logo"));
-        const float x = (logo.left + logo.right) / 2;
-        const float y = (logo.top + logo.bottom) / 2;
-        EXPECT_TRUE(RmlMenuBarTestAccess::logoAt(bar_, x, y));
+        auto* const logo = el("menu-items")->GetChild(0);
+        ASSERT_NE(logo, nullptr);
+        EXPECT_TRUE(logo->IsClassSet("logo"));
+        auto* const image = logo->GetChild(0);
+        EXPECT_EQ(image->GetTagName(), "img");
+        // The logo is a full menu box: it holds the whole image and ends before File starts.
+        const auto box = bounds(logo);
+        const auto icon = bounds(image);
+        EXPECT_FLOAT_EQ(icon.right - icon.left, 20);
+        EXPECT_GT(icon.left, box.left);
+        EXPECT_LT(icon.right, box.right);
+        EXPECT_GE(bounds(el("menu-items")->GetChild(1)).left, box.right);
+        EXPECT_EQ(textContent(el("menu-items")), "FileEdit");
+        EXPECT_FALSE(RmlMenuBarTestAccess::letterKey(bar_, SDLK_H, SDL_KMOD_LALT));
         EXPECT_FALSE(bar_.isOpen());
-        RmlMenuBarTestAccess::hover(bar_, x, y, true);
-        SDL_Event event{};
-        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-        event.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-        event.button.button = SDL_BUTTON_LEFT;
-        event.button.down = true;
-        event.button.x = x;
-        event.button.y = y;
-        manager_.dispatchInputEvent(event);
-        event.type = SDL_EVENT_MOUSE_BUTTON_UP;
-        event.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
-        event.button.down = false;
-        manager_.dispatchInputEvent(event);
-        EXPECT_TRUE(bar_.isOpen());
-        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), RmlMenuBarTestAccess::logoMenuIndex());
-        EXPECT_TRUE(el("dropdown-container")->IsClassSet("visible"));
-        EXPECT_NEAR(bounds(el("dropdown-popup")).left, logo.left, 0.5f);
-        EXPECT_NEAR(bounds(el("dropdown-popup")).top, logo.bottom, 0.5f);
-        context_->Update();
-        EXPECT_TRUE(el("brand-logo")->IsClassSet("active"));
-        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_ESCAPE);
-        EXPECT_FALSE(bar_.isOpen());
-        context_->Update();
-        EXPECT_FALSE(el("brand-logo")->IsClassSet("active"));
     }
 
-    TEST_F(MenuBarTitleTest, LogoCascadesHelpEntries) {
-        using Item = lfs::vis::gui::MenuItemDesc;
-        using Type = Item::Type;
-        bar_.updateLabels({"File", "Help"},
-                          {"lfs_plugins.file_menu.FileMenu", "lfs_plugins.help_menu.HelpMenu"});
+    TEST_F(MenuBarTitleTest, TheBrandLogoOpensLikeEveryOtherMenu) {
+        bar_.updateLabels({"Help", "File", "Edit"},
+                          {"lfs_plugins.help_menu.HelpMenu", "lfs_plugins.file_menu.FileMenu",
+                           "lfs_plugins.edit_menu.EditMenu"});
         context_->Update();
-        const auto logo = bounds(el("brand-logo"));
-        const std::vector<Item> items{
-            {.type = Type::Operator, .label = "Getting Started", .operator_id = "lfs_plugins.help_menu.GettingStartedOperator"},
-            {.type = Type::Separator},
-            {.type = Type::Operator, .label = "Report a Bug", .operator_id = "lfs_plugins.help_menu.BugReportOperator"},
-            {.type = Type::Operator, .label = "About", .operator_id = "lfs_plugins.help_menu.AboutOperator"},
-        };
-        RmlMenuBarTestAccess::logoDropdown(bar_, items);
-        Rml::ElementList rows;
-        el("dropdown-popup")->GetElementsByClassName(rows, "menu-item");
-        int entries = 0;
-        for (auto* row : rows)
-            if (row->HasAttribute("data-operator-id"))
-                ++entries;
-        EXPECT_EQ(entries, 3);
-        EXPECT_TRUE(el("dropdown-container")->IsClassSet("visible"));
-        EXPECT_NEAR(bounds(el("dropdown-popup")).left, logo.left, 0.5f);
-        EXPECT_NEAR(bounds(el("dropdown-popup")).top, logo.bottom, 0.5f);
-    }
+        const auto center = [](const Rect& r) { return std::pair{(r.left + r.right) / 2, (r.top + r.bottom) / 2}; };
+        const auto logo = bounds(el("menu-items")->GetChild(0));
+        const auto file = bounds(el("menu-items")->GetChild(1));
+        const auto [logo_x, logo_y] = center(logo);
+        const auto [file_x, file_y] = center(file);
 
-    TEST_F(MenuBarTitleTest, LogoJoinsKeyboardCyclingOnlyWithAHelpMenu) {
-        bar_.updateLabels({"File", "Edit"},
-                          {"lfs_plugins.file_menu.FileMenu", "lfs_plugins.edit_menu.EditMenu"});
-        context_->Update();
-        // The logo stays as branding but is inert while no Help menu is registered.
-        {
-            const auto logo = bounds(el("brand-logo"));
-            EXPECT_FALSE(RmlMenuBarTestAccess::logoAt(bar_, (logo.left + logo.right) / 2,
-                                                      (logo.top + logo.bottom) / 2));
-        }
-        RmlMenuBarTestAccess::altTap(bar_);
-        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_DOWN);
+        RmlMenuBarTestAccess::click(bar_, logo_x, logo_y);
+        ASSERT_TRUE(bar_.isOpen());
         EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 0);
-        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_LEFT);
+        EXPECT_EQ(RmlMenuBarTestAccess::activeLabel(bar_), 0);
+        EXPECT_NEAR(bounds(el("dropdown-popup")).left, logo.left, 0.5f);
+        EXPECT_NEAR(bounds(el("dropdown-popup")).top, logo.bottom, 0.5f);
+
+        RmlMenuBarTestAccess::hover(bar_, file_x, file_y, true);
         EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 1);
-        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_ESCAPE);
+        RmlMenuBarTestAccess::hover(bar_, logo_x, logo_y, true);
+        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 0);
+        RmlMenuBarTestAccess::click(bar_, logo_x, logo_y);
+        EXPECT_FALSE(bar_.isOpen());
 
-        bar_.updateLabels({"File", "Edit", "Help"},
-                          {"lfs_plugins.file_menu.FileMenu", "lfs_plugins.edit_menu.EditMenu",
-                           "lfs_plugins.help_menu.HelpMenu"});
-        context_->Update();
-        EXPECT_FALSE(el("brand-logo")->IsClassSet("hidden"));
-        {
-            const auto logo = bounds(el("brand-logo"));
-            EXPECT_TRUE(RmlMenuBarTestAccess::logoAt(bar_, (logo.left + logo.right) / 2,
-                                                     (logo.top + logo.bottom) / 2));
-        }
-        RmlMenuBarTestAccess::altTap(bar_);
-        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_DOWN);
-        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 0);
+        RmlMenuBarTestAccess::click(bar_, file_x, file_y);
+        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 1);
         RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_LEFT);
-        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), RmlMenuBarTestAccess::logoMenuIndex());
-        EXPECT_TRUE(bar_.isOpen());
-        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_RIGHT);
         EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 0);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_RIGHT);
+        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 1);
         RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_ESCAPE);
         EXPECT_FALSE(bar_.isOpen());
     }
@@ -1736,7 +1666,7 @@ namespace {
     TEST(MenuAccessKeyLocales, LettersAreUniqueAndNotAltBound) {
         const auto locales = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales";
         const auto profile = lfs::vis::input::InputBindings::createDefaultProfile();
-        const char* ids[] = {"file", "edit", "select", "tools", "view", "help"};
+        const char* ids[] = {"file", "edit", "select", "tools", "view"};
         for (const auto& entry : std::filesystem::directory_iterator(locales)) {
             if (entry.path().extension() != ".json")
                 continue;

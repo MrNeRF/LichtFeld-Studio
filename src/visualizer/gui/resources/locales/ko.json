@@ -156,7 +156,6 @@
     "access_key.select": "S",
     "access_key.tools": "T",
     "access_key.view": "V",
-    "access_key.help": "H",
     "file": "파일",
     "file.new_project": "새 프로젝트",
     "file.open_project": "프로젝트 열기...",
@@ -2365,7 +2364,6 @@
     "not_now": "나중에",
     "dont_ask": "다시 묻지 않기",
     "menu_register": "기본 응용 프로그램으로 설정...",
-    "menu_unregister": "기본 응용 프로그램 해제...",
     "success": "파일 연결이 성공적으로 등록되었습니다."
   },
   "error_actions": {

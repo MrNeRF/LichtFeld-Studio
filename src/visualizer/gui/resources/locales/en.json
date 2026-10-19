@@ -165,7 +165,6 @@
     "access_key.select": "S",
     "access_key.tools": "T",
     "access_key.view": "V",
-    "access_key.help": "H",
     "file": "File",
     "file.new_project": "New Project",
     "file.open_project": "Open Project...",
@@ -2376,7 +2375,6 @@
     "not_now": "Not Now",
     "dont_ask": "Don't Ask Again",
     "menu_register": "Set as Default Application...",
-    "menu_unregister": "Remove as Default Application...",
     "success": "File associations registered successfully."
   },
   "error_actions": {
