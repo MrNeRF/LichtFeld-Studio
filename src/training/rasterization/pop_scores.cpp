@@ -76,7 +76,7 @@ namespace lfs::training {
         const auto stream = core::prepare_inputs_for_stream({&scores}, ctx.forward_ctx.stream ? ctx.forward_ctx.stream : core::getCurrentCUDAStream());
         prepare_background(ctx.bg_color, ctx.bg_image, stream);
         fast_lfs::rasterization::accumulate_pop_scores(ctx.forward_ctx, ctx.width, ctx.height,
-                                                       optional_float(ctx.bg_color), optional_float(ctx.bg_image), reinterpret_cast<double*>(scores.data_ptr()), stream);
+                                                       optional_float(ctx.bg_color), optional_float(ctx.bg_image), reinterpret_cast<double*>(scores.data_ptr()), n, stream);
         scores.set_stream(stream);
         return {};
     } catch (const lfs::Exception& e) {

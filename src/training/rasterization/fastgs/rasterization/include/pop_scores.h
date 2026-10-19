@@ -7,5 +7,5 @@
 namespace fast_lfs::rasterization {
     void accumulate_pop_scores(const ForwardContext& ctx, int width, int height,
                                const float* background, const float* background_image,
-                               double* scores, cudaStream_t stream);
+                               double* scores, size_t n_primitives, cudaStream_t stream);
 }
