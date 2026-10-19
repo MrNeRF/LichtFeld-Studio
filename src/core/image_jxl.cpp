@@ -8,11 +8,13 @@
 #include <jxl/cms.h>
 #include <jxl/color_encoding.h>
 #include <jxl/decode.h>
+#include <jxl/encode.h>
 #include <jxl/resizable_parallel_runner.h>
 #include <lcms2.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <climits>
 #include <cmath>
 #include <cstddef>
@@ -31,7 +33,7 @@ namespace lfs::core::image_codecs {
             return false;
         }
 
-        struct DecoderMemory {
+        struct CodecMemory {
             struct alignas(std::max_align_t) Header {
                 size_t bytes;
             };
@@ -39,7 +41,7 @@ namespace lfs::core::image_codecs {
             std::atomic<size_t> live{0};
             std::atomic<bool> exhausted{false};
             static void* allocate(void* opaque, size_t bytes) noexcept {
-                auto& memory = *static_cast<DecoderMemory*>(opaque);
+                auto& memory = *static_cast<CodecMemory*>(opaque);
                 size_t previous = memory.live.load();
                 for (;;) {
                     if (bytes > memory.limit - previous || bytes > SIZE_MAX - sizeof(Header)) {
@@ -62,7 +64,7 @@ namespace lfs::core::image_codecs {
                 if (!pointer)
                     return;
                 auto* block = static_cast<Header*>(pointer) - 1;
-                static_cast<DecoderMemory*>(opaque)->live.fetch_sub(block->bytes);
+                static_cast<CodecMemory*>(opaque)->live.fetch_sub(block->bytes);
                 std::free(block);
             }
         };
@@ -143,6 +145,177 @@ namespace lfs::core::image_codecs {
             }
             ~WorkerLease() { used.fetch_sub(count); }
         };
+
+        Status encode_error(ErrorCode code, std::string detail) {
+            return Status::failure(make_error({.code = code, .domain = ErrorDomain::IO, .detail = "JXL encode: " + std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()}));
+        }
+
+        template <class Writer>
+        Status encode_image(std::span<const uint8_t> input, int width, int height, int channels,
+                            SampleType type, size_t stride, const JxlEncodeOptions& options, Writer&& write) {
+            try {
+                const auto cancelled = [&] { return options.cancelled && options.cancelled(); };
+                if (cancelled())
+                    return encode_error(ErrorCode::Cancelled, "cancelled before encoding");
+                if (auto valid = validate_jxl_encode_options(options, type); !valid)
+                    return valid;
+                const bool floating = type == SampleType::Float32;
+                const bool alpha = channels == 2 || channels == 4;
+                if (width <= 0 || height <= 0 || channels < 1 || channels > 4 ||
+                    (type != SampleType::UInt8 && type != SampleType::UInt16 && !floating) ||
+                    (options.premultiplied_alpha && (!floating || !alpha)))
+                    return encode_error(ErrorCode::InvalidArgument, "invalid layout, color or encoder options");
+                const size_t sample = sample_bytes(type);
+                if (size_t(height) > options.pixels / size_t(width) ||
+                    size_t(width) > SIZE_MAX / size_t(channels) / sample / size_t(height))
+                    return encode_error(ErrorCode::ResourceExhausted, "pixel limit or packed extent exceeded");
+                const size_t row = size_t(width) * channels * sample;
+                if (stride < row || (size_t(height - 1) && stride > (SIZE_MAX - row) / size_t(height - 1)) ||
+                    input.size() < size_t(height - 1) * stride + row)
+                    return encode_error(ErrorCode::InvalidArgument, "invalid row stride or truncated pixel buffer");
+                const size_t extent = row * size_t(height);
+                // Packed borrowed input needs no additional whole-image copy.
+                std::unique_ptr<uint8_t[]> packed;
+                if (stride != row || options.premultiplied_alpha)
+                    packed.reset(new uint8_t[extent]);
+                if (floating || packed) {
+                    for (int y = 0; y < height; ++y) {
+                        if (cancelled())
+                            return encode_error(ErrorCode::Cancelled, "cancelled while preparing rows");
+                        const auto* source = input.data() + size_t(y) * stride;
+                        if (!floating) {
+                            std::memcpy(packed.get() + size_t(y) * row, source, row);
+                            continue;
+                        }
+                        for (int x = 0; x < width; ++x) {
+                            float values[4];
+                            const size_t offset = size_t(x) * channels * sample;
+                            std::memcpy(values, source + offset, channels * sample);
+                            for (int c = 0; c < channels; ++c)
+                                if (!std::isfinite(values[c]))
+                                    return encode_error(ErrorCode::InvalidArgument, "nonfinite input sample");
+                            const float a = alpha ? values[channels - 1] : 1.f;
+                            if (alpha && (a < 0 || a > 1))
+                                return encode_error(ErrorCode::InvalidArgument, "alpha must be in [0,1]");
+                            if (options.premultiplied_alpha) {
+                                for (int c = 0; c < channels - 1; ++c) {
+                                    values[c] = a > 0 ? values[c] / a : 0;
+                                    if (!std::isfinite(values[c]))
+                                        return encode_error(ErrorCode::InvalidArgument, "nonfinite unassociated sample");
+                                }
+                            }
+                            if (packed)
+                                std::memcpy(packed.get() + size_t(y) * row + offset, values, channels * sample);
+                        }
+                    }
+                }
+                const uint8_t* pixels = packed ? packed.get() : input.data();
+                CodecMemory memory{options.encoder_bytes};
+                const JxlMemoryManager manager{&memory, CodecMemory::allocate, CodecMemory::release};
+                WorkerLease workers;
+                std::unique_ptr<void, decltype(&JxlResizableParallelRunnerDestroy)> runner(JxlResizableParallelRunnerCreate(nullptr), JxlResizableParallelRunnerDestroy);
+                std::unique_ptr<JxlEncoder, decltype(&JxlEncoderDestroy)> encoder(JxlEncoderCreate(&manager), JxlEncoderDestroy);
+                if (!encoder || !runner)
+                    return encode_error(ErrorCode::ResourceExhausted, "cannot allocate encoder or runner");
+                const auto* cms = JxlGetDefaultCms();
+                if (!cms)
+                    return encode_error(ErrorCode::Unavailable, "color management is unavailable");
+                JxlEncoderSetCms(encoder.get(), *cms);
+                const auto check = [&](JxlEncoderStatus status, const char* operation = "configuration") -> Status {
+                    if (memory.exhausted)
+                        return encode_error(ErrorCode::ResourceExhausted, "encoder allocation limit exhausted");
+                    if (status != JXL_ENC_SUCCESS)
+                        return encode_error(ErrorCode::Internal, std::string("provider failure during ") + operation + " (code=" + std::to_string(JxlEncoderGetError(encoder.get())) + ")");
+                    return {};
+                };
+                workers.acquire(std::min<size_t>(JxlResizableParallelRunnerSuggestThreads(width, height), options.max_threads ? options.max_threads - 1 : size_t{8}));
+                JxlResizableParallelRunnerSetThreads(runner.get(), workers.count);
+                if (auto result = check(JxlEncoderSetParallelRunner(encoder.get(), JxlResizableParallelRunner, runner.get())); !result)
+                    return result;
+                JxlBasicInfo info;
+                JxlEncoderInitBasicInfo(&info);
+                info.xsize = width;
+                info.ysize = height;
+                info.bits_per_sample = sample * 8;
+                info.exponent_bits_per_sample = floating ? 8 : 0;
+                info.uses_original_profile = options.lossless;
+                info.num_color_channels = channels <= 2 ? 1 : 3;
+                info.num_extra_channels = alpha ? 1 : 0;
+                info.alpha_bits = alpha ? info.bits_per_sample : 0;
+                info.alpha_exponent_bits = alpha ? info.exponent_bits_per_sample : 0;
+                if (auto result = check(JxlEncoderSetBasicInfo(encoder.get(), &info)); !result)
+                    return result;
+                JxlColorEncoding color;
+                if (options.color == JxlEncodingColor::SRGB)
+                    JxlColorEncodingSetToSRGB(&color, channels <= 2);
+                else
+                    JxlColorEncodingSetToLinearSRGB(&color, channels <= 2);
+                if (options.color == JxlEncodingColor::LinearBT2020)
+                    color.primaries = JXL_PRIMARIES_2100;
+                if (auto result = check(JxlEncoderSetColorEncoding(encoder.get(), &color)); !result)
+                    return result;
+                auto* frame = JxlEncoderFrameSettingsCreate(encoder.get(), nullptr);
+                if (!frame)
+                    return encode_error(ErrorCode::ResourceExhausted, "cannot allocate frame settings");
+                for (auto status : {JxlEncoderSetFrameLossless(frame, options.lossless),
+                                    JxlEncoderSetFrameDistance(frame, options.lossless ? 0.f : options.distance),
+                                    JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_EFFORT, options.effort)})
+                    if (auto result = check(status); !result)
+                        return result;
+                if (alpha) {
+                    // Distance >=10 otherwise resamples alpha despite distance 0.
+                    for (auto status : {JxlEncoderSetExtraChannelDistance(frame, 0, 0.f),
+                                        JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_RESAMPLING, 1),
+                                        JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_EXTRA_CHANNEL_RESAMPLING, 1)})
+                        if (auto result = check(status); !result)
+                            return result;
+                }
+                if (floating && options.lossless)
+                    // The default adaptive predictor in libjxl 0.12 can reject
+                    // finite IEEE32 patterns with mixed signs. Left prediction
+                    // keeps the full bit pattern without a lossy fallback.
+                    if (auto result = check(JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_MODULAR_PREDICTOR, 1)); !result)
+                        return result;
+                const JxlPixelFormat format{static_cast<uint32_t>(channels), floating ? JXL_TYPE_FLOAT : type == SampleType::UInt16 ? JXL_TYPE_UINT16
+                                                                                                                                    : JXL_TYPE_UINT8,
+                                            JXL_NATIVE_ENDIAN, 0};
+                if (auto result = check(JxlEncoderAddImageFrame(frame, &format, pixels, extent), "pixel submission"); !result)
+                    return result;
+                JxlEncoderCloseInput(encoder.get());
+                std::array<uint8_t, 64 * 1024> buffer;
+                size_t total = 0;
+                const size_t output_limit = options.max_output_bytes ? options.max_output_bytes : size_t{256} * 1024 * 1024;
+                for (;;) {
+                    if (cancelled())
+                        return encode_error(ErrorCode::Cancelled, "cancelled while producing output");
+                    uint8_t* next = buffer.data();
+                    size_t available = buffer.size();
+                    const auto status = JxlEncoderProcessOutput(encoder.get(), &next, &available);
+                    if (memory.exhausted)
+                        return encode_error(ErrorCode::ResourceExhausted, "encoder allocation limit exhausted");
+                    const size_t count = buffer.size() - available;
+                    if (count > output_limit - total)
+                        return encode_error(ErrorCode::ResourceExhausted, "encoded output byte limit exhausted");
+                    if (count) {
+                        if (auto result = write(std::span<const uint8_t>(buffer.data(), count)); !result)
+                            return result;
+                        total += count;
+                    }
+                    if (status == JXL_ENC_SUCCESS)
+                        return cancelled() ? encode_error(ErrorCode::Cancelled, "cancelled before completing output") : Status{};
+                    if (status != JXL_ENC_NEED_MORE_OUTPUT)
+                        return check(status, "output production");
+                }
+            } catch (const std::bad_alloc&) {
+                return encode_error(ErrorCode::ResourceExhausted, "allocation failed");
+            } catch (const std::exception& exception) {
+                // LFS-CENSUS-OK(empty-catch): retain encoder/callback diagnostics at the synchronous Status boundary.
+                return encode_error(ErrorCode::Internal, exception.what());
+            } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): no callback exception escapes the synchronous encoding boundary.
+                return encode_error(ErrorCode::Internal, "nonstandard callback exception");
+            }
+        }
 
         bool validate_sdr_icc(std::span<const uint8_t> bytes, std::string& error) {
             using Profile = std::unique_ptr<void, decltype(&cmsCloseProfile)>;
@@ -232,8 +405,8 @@ namespace lfs::core::image_codecs {
                  bool probe_only, bool display, const JxlDecodeLimits& limits, DecodeTarget* requested = nullptr) {
             if ((input.memory ? input.borrowed.size() : input.remaining) > limits.encoded_bytes)
                 return fail(error, "encoded input byte limit exhausted");
-            DecoderMemory memory{limits.decoder_bytes};
-            const JxlMemoryManager manager{&memory, DecoderMemory::allocate, DecoderMemory::release};
+            CodecMemory memory{limits.decoder_bytes};
+            const JxlMemoryManager manager{&memory, CodecMemory::allocate, CodecMemory::release};
             WorkerLease workers;
             std::unique_ptr<void, decltype(&JxlResizableParallelRunnerDestroy)> runner(JxlResizableParallelRunnerCreate(nullptr), JxlResizableParallelRunnerDestroy);
             std::unique_ptr<JxlDecoder, decltype(&JxlDecoderDestroy)> decoder(JxlDecoderCreate(&manager), JxlDecoderDestroy);
@@ -399,6 +572,73 @@ namespace lfs::core::image_codecs {
             return false;
         const auto signature = JxlSignatureCheck(bytes.data(), bytes.size());
         return signature == JXL_SIG_CODESTREAM || signature == JXL_SIG_CONTAINER;
+    }
+
+    uint32_t jxl_encoder_version() { return JxlEncoderVersion(); }
+
+    Status validate_jxl_encode_options(const JxlEncodeOptions& options) {
+        if (!std::isfinite(options.distance) || options.distance <= 0 || options.distance > 25 || options.effort < 1 || options.effort > 9 ||
+            (options.color != JxlEncodingColor::SRGB && options.color != JxlEncodingColor::LinearSRGB && options.color != JxlEncodingColor::LinearBT2020))
+            return encode_error(ErrorCode::InvalidArgument, "invalid color, distance (must be in (0,25]) or effort (must be in [1,9])");
+        return {};
+    }
+
+    Status validate_jxl_encode_options(const JxlEncodeOptions& options, SampleType type) {
+        if (auto valid = validate_jxl_encode_options(options); !valid)
+            return valid;
+        if (type == SampleType::Float32 && options.lossless && options.effort < 4)
+            return encode_error(ErrorCode::InvalidArgument, "lossless Float32 requires effort in [4,9] with libjxl 0.12; efforts 1-3 remain available for integer or lossy input");
+        return {};
+    }
+
+    Status encode_jxl_memory(std::span<const uint8_t> input, int width, int height, int channels, SampleType type,
+                             size_t stride, std::vector<uint8_t>& output, const JxlEncodeOptions& options) {
+        std::vector<uint8_t> candidate;
+        auto status = encode_image(input, width, height, channels, type, stride, options, [&](std::span<const uint8_t> bytes) -> Status {
+            candidate.insert(candidate.end(), bytes.begin(), bytes.end());
+            return {};
+        });
+        if (status)
+            output = std::move(candidate);
+        return status;
+    }
+
+    Status write_jxl(const std::filesystem::path& path, std::span<const uint8_t> input, int width, int height,
+                     int channels, SampleType type, size_t stride, const JxlEncodeOptions& options, const AtomicFileOptions& publication) {
+        try {
+            if (auto valid = validate_jxl_encode_options(options, type); !valid)
+                return valid;
+            auto encoding = options;
+            if (!encoding.max_output_bytes) {
+                constexpr size_t minimum = size_t{256} * 1024 * 1024;
+                constexpr size_t overhead = 1024 * 1024;
+                encoding.max_output_bytes = minimum;
+                // Packed raw extent, not stride padding. Invalid views are rejected
+                // by encode_image; arithmetic here must remain safe before that.
+                const size_t sample = sample_bytes(type);
+                if (width > 0 && height > 0 && channels >= 1 && channels <= 4 && sample &&
+                    size_t(width) <= (SIZE_MAX - overhead) / 2 / size_t(height) / size_t(channels) / sample) {
+                    const size_t raw = size_t(width) * size_t(height) * size_t(channels) * sample;
+                    encoding.max_output_bytes = std::max(minimum, raw * 2 + overhead);
+                }
+            }
+            encoding.cancelled = [a = options.cancelled, b = publication.cancelled] { return (a && a()) || (b && b()); };
+            return writeFileAtomically(path, [&](FILE* stream) { return encode_image(input, width, height, channels, type, stride, encoding, [&](std::span<const uint8_t> bytes) -> Status {
+                                                                     if (std::fwrite(bytes.data(), 1, bytes.size(), stream) != bytes.size()) {
+                                                                         const int native = errno;
+                                                                         return Status::failure(make_error({.code = ErrorCode::Unavailable, .domain = ErrorDomain::IO, .detail = "Cannot write JXL output (errno=" + std::to_string(native) + ")", .detection = LFS_SOURCE_SITE_CURRENT(), .native = NativeError{ErrorDomain::IO, native, "stdio"}}));
+                                                                     }
+                                                                     return {};
+                                                                 }); }, publication);
+        } catch (const std::bad_alloc&) {
+            return encode_error(ErrorCode::ResourceExhausted, "allocation failed while preparing publication");
+        } catch (const std::exception& exception) {
+            // LFS-CENSUS-OK(empty-catch): preserve publication setup diagnostics at the Status boundary.
+            return encode_error(ErrorCode::Internal, exception.what());
+        } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): report callback setup exceptions without changing the destination.
+            return encode_error(ErrorCode::Internal, "nonstandard publication exception");
+        }
     }
 
     bool probe_jxl(const std::filesystem::path& path, Probe& result, std::string& error, const JxlDecodeLimits& limits) {

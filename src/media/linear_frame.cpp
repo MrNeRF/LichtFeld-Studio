@@ -24,10 +24,10 @@ namespace lfs::media {
                                                                    name(av_color_space_name(static_cast<AVColorSpace>(matrix))), name(av_color_range_name(static_cast<AVColorRange>(range))))));
             };
             if (!desc || desc->nb_components != 3 || (desc->flags & (AV_PIX_FMT_FLAG_HWACCEL | AV_PIX_FMT_FLAG_FLOAT | AV_PIX_FMT_FLAG_ALPHA | AV_PIX_FMT_FLAG_PAL | AV_PIX_FMT_FLAG_BITSTREAM | AV_PIX_FMT_FLAG_BAYER)) || std::string_view(desc->name).starts_with("xyz"))
-                return fail("Linear EXR requires integer RGB/YUV without alpha");
+                return fail("Linear image output requires integer RGB/YUV without alpha");
             for (int i = 0; i < 3; ++i)
                 if (desc->comp[i].depth < 8 || desc->comp[i].depth > 16 || desc->comp[i].depth + desc->comp[i].shift > 32 || desc->comp[i].step <= 0)
-                    return fail("Linear EXR requires 8-16 bit components");
+                    return fail("Linear image output requires 8-16 bit components");
             if (profile != FloatColorProfile::Sdr && profile != FloatColorProfile::PqNits && profile != FloatColorProfile::HlgScene)
                 return fail("Unknown float color profile");
             const bool hdr_profile = profile != FloatColorProfile::Sdr;
@@ -42,9 +42,9 @@ namespace lfs::media {
             if (transfer != ColorTransfer::Linear && transfer != ColorTransfer::Srgb && transfer != ColorTransfer::Bt709 &&
                 !(profile == FloatColorProfile::PqNits && transfer == ColorTransfer::Pq) &&
                 !(profile == FloatColorProfile::HlgScene && transfer == ColorTransfer::Hlg))
-                return fail("Linear EXR requires Linear, sRGB or BT709 transfer; supply an input override for missing metadata");
+                return fail("Linear image output requires Linear, sRGB or BT709 transfer; supply an input override for missing metadata");
             if (primaries != ColorPrimaries::Bt709 && primaries != ColorPrimaries::Bt2020)
-                return fail("Linear EXR requires BT709 or BT2020 primaries; supply an input override for missing metadata");
+                return fail("Linear image output requires BT709 or BT2020 primaries; supply an input override for missing metadata");
             if (desc->flags & AV_PIX_FMT_FLAG_RGB) {
                 if (range == ColorRange::Limited || (hdr_profile && range != ColorRange::Full))
                     return fail(hdr_profile
@@ -52,12 +52,12 @@ namespace lfs::media {
                                     : "Limited-range RGB is outside the linear SDR profile");
             } else {
                 if (!(desc->flags & AV_PIX_FMT_FLAG_PLANAR))
-                    return fail("Linear YUV EXR requires planar or semiplanar component storage");
+                    return fail("Linear YUV image output requires planar or semiplanar component storage");
                 std::array<float, 3> coefficients{};
                 if (matrix == ColorMatrix::Unspecified || !detail::yuvLumaCoefficients(matrix, 0, 0, coefficients))
-                    return fail("Linear YUV EXR requires an explicit supported YUV matrix");
+                    return fail("Linear YUV image output requires an explicit supported YUV matrix");
                 if (range != ColorRange::Full && range != ColorRange::Limited)
-                    return fail("Linear YUV EXR requires explicit full or limited range");
+                    return fail("Linear YUV image output requires explicit full or limited range");
             }
             return {};
         }
@@ -87,7 +87,7 @@ namespace lfs::media::detail {
         if (color != ColorPrimaries::Bt709 && color != ColorPrimaries::Bt2020)
             return unsupported(profile_ != FloatColorProfile::Sdr
                                    ? "HDR float requires declared BT709 or BT2020 primaries without input overrides"
-                                   : "Linear EXR requires declared BT709 or BT2020 primaries; supply an input override for missing metadata");
+                                   : "Linear image output requires declared BT709 or BT2020 primaries; supply an input override for missing metadata");
         return FrameColor{ColorTransfer::Linear, color, AlphaMode::None,
                           profile_ == FloatColorProfile::PqNits ? ColorUnits::Nits : profile_ == FloatColorProfile::HlgScene ? ColorUnits::SceneRelative
                                                                                                                              : ColorUnits::Relative};

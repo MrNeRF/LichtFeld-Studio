@@ -3,6 +3,7 @@
 #include "core/image_exr.hpp"
 #include "core/image_heif.hpp"
 #include "core/image_io.hpp"
+#include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/loaders/blender_loader.hpp"
@@ -41,6 +42,18 @@ namespace {
             write_text_file(path / "images.txt", "1 1 0 0 0 0 0 0 1 " + name + "\n\n");
         }
     };
+    TEST_F(ImageFormatDiscoveryTest, GenericTensorImageSaveRoutesJxlThroughTheSharedWriter) {
+        std::array<uint8_t, 16> pixels{1, 2, 3, 0, 4, 5, 6, 255, 7, 8, 9, 128, 10, 11, 12, 255};
+        const auto image = lfs::core::Tensor::from_blob(pixels.data(), {2, 2, 4}, lfs::core::Device::CPU, lfs::core::DataType::UInt8).clone();
+        const auto path = temp_dir_ / "display.JXL";
+        ASSERT_NO_THROW(lfs::core::save_image_u8(path, image, 95));
+        lfs::core::image_codecs::Image decoded;
+        std::string error;
+        ASSERT_TRUE(lfs::core::image_codecs::decode(path, decoded, error)) << error;
+        EXPECT_EQ(decoded.data, (std::vector<uint8_t>(pixels.begin(), pixels.end())));
+        EXPECT_EQ(decoded.channels, 4);
+    }
+
     TEST_F(ImageFormatDiscoveryTest, ExistingDatasetKeepsPreviewAndCountsWithFormatCompanions) {
         const auto dataset = temp_dir_ / "companions";
         write_minimal_colmap_text_dataset(dataset, "frame.jpg");

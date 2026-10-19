@@ -83,6 +83,8 @@ namespace lfs::media {
         Result<IngestReport> execute(const IngestRequest& request, FrameSink* sink, const FileExtraction* files) {
             std::size_t accepted = 0;
             try {
+                if (files && files->files.format == FrameFileFormat::JXL && request.convert_hdr_to_sdr)
+                    return failure(ErrorCode::InvalidArgument, "JXL video extraction uses the declared linear SDR path; HDR tone mapping requires a separate conversion", 0);
                 if (request.convert_hdr_to_sdr && !detail::hasHdrBackend())
                     return failure(ErrorCode::Unsupported, "HDR to SDR is unavailable in this host", 0);
                 if (request.input.empty() || request.input.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos)
@@ -110,16 +112,21 @@ namespace lfs::media {
                     p.output_dir = files->files.output_directory;
                     p.filename_pattern = files->files.filename_pattern;
                     p.first_source_frame_number = files->files.first_source_frame_number;
-                    p.format = files->files.format == FrameFileFormat::TIFF16 ? io::ImageFormat::TIFF16 : files->files.format == FrameFileFormat::PNG ? io::ImageFormat::PNG
-                                                                                                      : files->files.format == FrameFileFormat::EXR   ? io::ImageFormat::EXR
-                                                                                                                                                      : io::ImageFormat::JPG;
+                    p.format = files->files.format == FrameFileFormat::JXL ? io::ImageFormat::JXL : files->files.format == FrameFileFormat::TIFF16 ? io::ImageFormat::TIFF16
+                                                                                                : files->files.format == FrameFileFormat::PNG      ? io::ImageFormat::PNG
+                                                                                                : files->files.format == FrameFileFormat::EXR      ? io::ImageFormat::EXR
+                                                                                                                                                   : io::ImageFormat::JPG;
                     p.jpg_quality = files->files.jpeg_quality;
-                    p.generate_metadata = files->write_metadata || files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16;
-                    p.overwrite_metadata = files->files.format == FrameFileFormat::TIFF16 ? files->files.tiff16.overwrite : files->files.exr.overwrite;
+                    p.generate_metadata = files->write_metadata || files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16 || files->files.format == FrameFileFormat::JXL;
+                    p.overwrite_metadata = files->files.format == FrameFileFormat::JXL ? files->files.jxl.overwrite : files->files.format == FrameFileFormat::TIFF16 ? files->files.tiff16.overwrite
+                                                                                                                                                                     : files->files.exr.overwrite;
                     p.tiff16_transfer = files->files.tiff16.transfer;
+                    p.jxl_lossless = files->files.jxl.lossless;
+                    p.jxl_distance = files->files.jxl.distance;
+                    p.jxl_effort = files->files.jxl.effort;
                     p.exr_precision = files->files.exr.precision;
                     p.exr_compression = files->files.exr.compression;
-                    if ((files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16) != (request.output_format == FramePixelFormat::RGBFloat32))
+                    if (files->files.format != FrameFileFormat::JXL && (files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16) != (request.output_format == FramePixelFormat::RGBFloat32))
                         return failure(ErrorCode::InvalidArgument, "EXR/TIFF16 file extraction requires float output; PNG/JPEG require RGB8", 0);
                     if (files->files.format == FrameFileFormat::EXR) {
                         if (auto valid = validateExrOutputOptions(files->files.exr); !valid)
@@ -131,10 +138,18 @@ namespace lfs::media {
                         if (auto valid = validateTiff16OutputOptions(files->files.tiff16); !valid)
                             return std::move(valid).error();
                     }
+                    if (files->files.format == FrameFileFormat::JXL) {
+                        if (request.output_format != FramePixelFormat::RGBFloat32)
+                            return failure(ErrorCode::InvalidArgument, "JXL video extraction requires declared linear Float32 output; RGB8 sRGB is available for independent image writers", 0);
+                        if (request.float_color_profile != FloatColorProfile::Sdr)
+                            return failure(ErrorCode::Unsupported, "JXL extraction requires relative SDR; PQ/HLG masters require EXR", 0);
+                        if (auto valid = validateJxlOutputOptions(files->files.jxl, request.output_format); !valid)
+                            return std::move(valid).error();
+                    }
                     if (files->files.output_directory.empty() ||
                         files->files.output_directory.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
                         files->files.filename_pattern.find('\0') != std::string::npos ||
-                        (files->files.format != FrameFileFormat::PNG && files->files.format != FrameFileFormat::JPEG && files->files.format != FrameFileFormat::EXR && files->files.format != FrameFileFormat::TIFF16))
+                        (files->files.format != FrameFileFormat::PNG && files->files.format != FrameFileFormat::JPEG && files->files.format != FrameFileFormat::EXR && files->files.format != FrameFileFormat::TIFF16 && files->files.format != FrameFileFormat::JXL))
                         return failure(ErrorCode::InvalidArgument, "File extraction requires a nonempty output directory, supported format and NUL-free paths/names", 0);
                 }
                 // Request-only validation reuses the same rules as the compatibility
@@ -167,6 +182,11 @@ namespace lfs::media {
                     const auto sink_cancel = files->files.tiff16.cancelled;
                     file_options.tiff16.cancelled = [&, sink_cancel] { return (request.cancelled && request.cancelled()) || (sink_cancel && sink_cancel()); };
                     p.cancel_requested = file_options.tiff16.cancelled;
+                }
+                if (files && files->files.format == FrameFileFormat::JXL) {
+                    const auto sink_cancel = files->files.jxl.cancelled;
+                    file_options.jxl.cancelled = [&, sink_cancel] { return (request.cancelled && request.cancelled()) || (sink_cancel && sink_cancel()); };
+                    p.cancel_requested = file_options.jxl.cancelled;
                 }
                 FileFrameSink file_sink(std::move(file_options));
                 std::unique_ptr<detail::ResumableFileSink> resume_sink;

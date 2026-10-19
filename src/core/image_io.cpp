@@ -436,7 +436,7 @@ namespace {
         LOG_INFO("Saving image: {} shape: [{}, {}, {}]", path_utf8, height, width, channels);
         auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
-        if (ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".tif" && ext != ".tiff")
+        if (ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".tif" && ext != ".tiff" && ext != ".jxl")
             throw std::runtime_error("Unsupported image extension: " + ext);
         if ((ext == ".jpg" || ext == ".jpeg") && channels == 2)
             throw std::runtime_error("save_image: unsupported JPEG channel count");

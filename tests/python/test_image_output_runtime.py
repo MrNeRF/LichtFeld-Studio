@@ -41,6 +41,20 @@ def test_byte_export_independent_decoder(lf, tmp_path, channels, extension):
     assert set(raw) == {128}
 
 
+@pytest.mark.parametrize("include_provenance", [None, False, True])
+@pytest.mark.parametrize("channels", [1, 2, 3, 4])
+def test_jxl_byte_export_accepts_generated_provenance_policy(lf, tmp_path, channels, include_provenance):
+    path = tmp_path / f"export 日本語-{channels}.JXL"
+    image = lf.Tensor.full([channels, 8, 19], 0.5, device="cpu")
+    if include_provenance is None:
+        lf.io.save_image(str(path), image)
+    else:
+        lf.io.save_image(str(path), image, include_provenance=include_provenance)
+    data = path.read_bytes()
+    assert data.startswith(b"\xff\x0a") or data.startswith(b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a")
+    assert len(data) > 12
+
+
 def test_float_render_requires_active_viewer(lf):
     with pytest.raises(RuntimeError, match="No active viewer"):
         lf.render_linear_image(32, 32)

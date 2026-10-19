@@ -968,7 +968,7 @@ def get_supported_extensions() -> list[str]:
 
 def save_image(path: str | os.PathLike, image: lichtfeld.Tensor, include_provenance: bool = True) -> None:
     """
-    Save display image tensor to PNG, JPG or TIFF. Accepts [H,W,C] or [C,H,W] float [0,1]. include_provenance (default true) writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
+    Save display image tensor to PNG, JPG, TIFF or JPEG XL. Accepts [H,W,C] or [C,H,W] float [0,1]. include_provenance (default true) writes a full Comment stamp on supported formats; false writes a minimal stamp. JPEG XL stores pixels without a provenance stamp.
     """
 
 def save_exr_image(path: str | os.PathLike, image: lichtfeld.Tensor, color: lichtfeld.media.FrameColor, options: lichtfeld.media.ExrOutputOptions, include_provenance: bool = True) -> None:

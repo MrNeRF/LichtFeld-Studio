@@ -1,8 +1,8 @@
-# JPEG XL image import
+# JPEG XL image I/O
 
 JPEG XL reading uses libjxl 0.12.0 through the existing shared image-codec
-library. The standard dependency exposes a common read/write library; this
-integration adds no application JXL encoder or export format. CPU SIMD is
+library. Reading and writing share the existing dependency and codec boundary.
+CPU SIMD is
 selected by libjxl/Highway. No GPU JPEG XL decoding is promised.
 
 ## Pixel contracts
@@ -94,7 +94,7 @@ this is not a full metadata/JPEG-reconstruction conformance certification.
 Three small official bitstreams and their license/provenance are retained as
 offline regressions for ICC profiles, patches, coalesced static layers and
 Float32 reconstruction beyond the integer range. Float32 output limits are
-checked before caller allocation. The focused JXL suite has 26 tests, including
+checked before caller allocation. Reader regressions include
 ICC-only PQ/HLG rejection, canonical sRGB consistency across precisions and
 profile representations, serial/parallel equality, simultaneous parallel
 readers, allocation-limit recovery, distinct input diagnostics and preservation
@@ -112,3 +112,91 @@ libjxl uses BSD-3-Clause with its separate additional IP rights grant. Both
 texts are included under `resources/licenses`; dependency notices come from
 the existing install/package generator. Source licensing does not constitute
 a blanket patent guarantee.
+
+## Image and sequence output
+
+`encode_jxl_memory` and `write_jxl` use one shared libjxl encoder. Borrowed,
+interleaved UInt8, native-endian UInt16 and Float32 gray/gray-alpha/RGB/RGBA
+samples are accepted with an explicit byte stride. Padded rows are packed only
+when needed; contiguous input is borrowed without another full-image copy.
+Internal packing uses uninitialized owned storage, combining float validation,
+unassociation and packing in one row pass instead of zero-filling and then
+overwriting a full-image vector.
+Memory output owns its bytes only on success, including aliased input/output.
+The file writer drains 64 KiB chunks directly into the existing atomic file
+service instead of constructing a complete encoded-file vector first.
+
+Lossless is the default. Lossy mode explicitly selects perceptual distance
+in `(0,25]`; effort `[1,9]` controls the speed/compression tradeoff (default 4).
+Distance must remain valid but has no encoding effect in lossless mode. Alpha
+is encoded losslessly even when RGB is lossy. Lossy RGB, including invisible
+RGB, is not an exact-sample preservation contract.
+
+Color is declared as sRGB, linear sRGB or linear BT.2020. No tone mapping or
+implicit integer reduction is performed. Float32 inputs must be finite; alpha
+must be in `[0,1]`. Explicit premultiplied float input is unassociated, with
+RGB zeroed at alpha zero. Lossless Float32 uses left modular prediction:
+libjxl 0.12's adaptive prediction rejects some valid signed IEEE32 patterns.
+The qualified path retains negative/above-one values, subnormals and signed
+zero without a lossy fallback. Float32 requires JPEG XL level 10 and may have
+more limited interoperability than integer level-5 images. Application reads
+still default to canonical sRGB; explicit Native reads are needed to compare
+lossless source samples. Lossy DATA color can differ from ORIGINAL color.
+
+Lossless Float32 requires effort 4..9 with libjxl 0.12, including positive-only
+input. Efforts 1..3 are rejected before provider allocation or file publication;
+they remain available for integer input and lossy Float32. Video-extraction
+preflight rejects the unsupported combination before creating an output
+folder. Requested effort is never changed silently. With alpha present, both
+color and extra-channel resampling are fixed at 1 so alpha remains exact even
+at lossy distance 10..25; high-distance files can therefore be larger than
+libjxl's automatically resampled output.
+
+Encoder limits are per call: 64 Mi pixels and 1 GiB tracked provider allocation
+payload. `max_output_bytes = 0` uses a 256 MiB memory-output cap; streamed file
+output instead uses `max(256 MiB, 2 * packed_raw_bytes + 1 MiB)`, with checked
+arithmetic. A nonzero value is an explicit hard cap for either API. This lets
+large lossless Float32 files exceed 256 MiB without raising the encoder RAM
+budget or staging a whole encoded file in memory. They are configurable
+through `JxlEncodeOptions`, and are separate from borrowed input, optional
+packing, the memory-result vector and library/CMS/runner overhead. They do not
+constitute a whole-process RAM bound or guarantee every allowed image can be
+encoded within the working-memory budget. The existing shared JXL additional
+worker budget also covers encoding. Cancellation is checked around row work,
+provider submission/output and atomic publication; an individual synchronous
+provider call is not preemptible. Failure or cancellation leaves previous
+memory output and existing destination files intact.
+
+`ImageOutput::writeJxl` accepts declared relative sRGB RGB8 or relative linear
+BT.709/BT.2020 Float32 RGB/RGBA. `FileFrameSink` writes `.jxl` sequences through
+that same writer. Video extraction deliberately uses the existing declared
+linear Float32 SDR conversion path; legacy RGB8 extraction does not provide a
+complete sRGB color contract. Integer writer access remains available through
+the codec API and explicitly declared RGB8 through `ImageOutput`. PQ/HLG nits
+or scene-HDR master export remains an explicit separate policy; EXR is retained
+for those existing workflows.
+
+CLI: `--format jxl` defaults to lossless; `--jxl-distance N` selects lossy and
+`--jxl-effort N` selects effort. Existing float-source declarations/overrides
+apply. Python exposes `JxlOutputOptions`, `ImageOutput.write_jxl` and
+`FileFrameSinkOptions.jxl`; MCP uses `format: "jxl"`, optional `jxl_distance`
+and `jxl_effort`. Shared preflight rejects incompatible options before output.
+Extraction manifests report JXL mode, nominal Float32 precision and effort,
+without EXR compression or JPEG quality labels. Resume identities include the
+libjxl version, encoding policy and effective settings; verified files are
+retained and missing files must reproduce their recorded encoded checksum.
+
+This adds backend writers and sequence sinks, not a new timeline export GUI or
+a single animated JXL file. Source EXIF/XMP/auxiliary-channel preservation stays
+with the separately planned metadata/channel work; arbitrary source metadata
+is not silently copied into newly rendered or converted images.
+
+The existing generic display-byte writer and `save_image` also route `.jxl`
+through the shared lossless sRGB writer. Their existing UInt8 display-image
+policy remains in force; use `ImageOutput::writeJxl` for Float32 masters.
+JPEG quality does not select JXL lossiness in this compatibility path.
+Nonempty explicit generic metadata comments are rejected for JXL pending the
+common metadata policy. The Python convenience binding omits its automatically
+generated provenance stamp for JXL in both full and minimal-provenance modes;
+this format-specific behavior is documented in its generated stub. Other
+formats retain their existing stamp policy.
