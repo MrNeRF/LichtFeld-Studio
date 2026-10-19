@@ -23,6 +23,7 @@ namespace Rml {
 
 namespace lfs::vis {
     class WindowInputDispatchTest;
+    class SidebarInputDispatchTest;
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     struct Theme;
 } // namespace lfs::vis
@@ -78,6 +79,7 @@ namespace lfs::vis::gui {
     private:
         friend class RmlRightPanelTestAccess;
         friend class lfs::vis::WindowInputDispatchTest;
+        friend class lfs::vis::SidebarInputDispatchTest;
         void bindTabModel();
         bool interceptCategoryInput(const RightPanelLayout& layout, const PanelInputState& input);
         bool inputOccluded(float x, float y) const;

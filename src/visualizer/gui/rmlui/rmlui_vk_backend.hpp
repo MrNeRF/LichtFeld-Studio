@@ -7,6 +7,7 @@
 #include <RmlUi/Core/RenderInterface.h>
 
 #include "core/assert.hpp"
+#include "core/export.hpp"
 #include "rendering/vulkan_result.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
@@ -57,8 +58,8 @@ public:
     static constexpr uint32_t kSwapchainBackBufferCount = 3;
     static constexpr VkDeviceSize kVideoMemoryForAllocation = 4 * 1024 * 1024; // [bytes]
 
-    RenderInterface_VK();
-    ~RenderInterface_VK();
+    LFS_VIS_API RenderInterface_VK();
+    LFS_VIS_API ~RenderInterface_VK();
 
     struct ExternalContext {
         VkInstance instance = VK_NULL_HANDLE;

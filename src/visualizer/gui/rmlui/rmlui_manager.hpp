@@ -41,6 +41,7 @@ namespace Rml {
 
 namespace lfs::vis {
     class WindowInputDispatchTest;
+    class SidebarInputDispatchTest;
     class VulkanContext;
 } // namespace lfs::vis
 
@@ -247,6 +248,7 @@ namespace lfs::vis::gui {
         std::optional<std::chrono::steady_clock::time_point> native_geometry_deadline_;
         SDL_Window* contextWindow(const Rml::Context* context) const;
         friend class lfs::vis::WindowInputDispatchTest;
+        friend class lfs::vis::SidebarInputDispatchTest;
         struct VulkanContextCommand {
             Rml::Context* context = nullptr;
             std::string context_name;
