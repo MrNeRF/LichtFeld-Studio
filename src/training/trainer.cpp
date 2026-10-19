@@ -6509,7 +6509,7 @@ namespace lfs::training {
                                         *training_ops_->gsplat, gsplat_saved_,
                                         *cam, strategy_->get_model(), bg,
                                         0, 0, 0, 0, 1.0f, false, (normal_supervision_started && (params_.optimization.normal_loss_weight > 0.f || params_.optimization.normal_consistency_weight > 0.f)) ? GsplatRenderMode::RGB_D_N : ((params_.optimization.use_depth_loss && params_.optimization.depth_loss_weight > 0.f) || roi_surface_weights) ? GsplatRenderMode::RGB_D
-                                                                                                                                                                                                                                                                                                                             : GsplatRenderMode::RGB,
+                                                                                                                                                                                                                                                                                                                                                      : GsplatRenderMode::RGB,
                                         bg_tile, output,
                                         cropbox_.has_value() && params_.optimization.cropbox_loss_weight < 1.0f);
                                     if (result.code != lfs::gpu_ops::RasterResult::Code::Success) {
