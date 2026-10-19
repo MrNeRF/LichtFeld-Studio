@@ -1,8 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "device_requirements.hpp"
+#include "core/rad_pool_quant.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
+#include "io/formats/rad.hpp"
 #include "io/ply_to_rad_lod.hpp"
 #include "metal_rad_pager.hpp"
 #include "metal_viewport_renderer.hpp"
@@ -200,13 +202,50 @@ static void run() {
     require(bool(legacy_model), "Legacy RAD load failed");
     require(legacy_model->lod_tree->rad_source.chunk_size == 65536, "Legacy RAD fixture block size differs");
     pager.configure(*legacy_model, context.device(), nullptr, {.pool_splats = 4096, .fade_frames = 0});
+    {
+        // A fully loaded RAD fills its pool from the resident splats at
+        // configure: every page is published, with the sidecar's metadata.
+        const auto& filled = pager.cache().snapshot();
+        const auto opened_meta = io::open_rad_meta_sidecar(legacy);
+        require(bool(opened_meta), "Legacy RAD sidecar unavailable");
+        const auto& legacy_meta = *opened_meta;
+        require(size_t(legacy_model->size()) == legacy_meta.node_count && filled.resident_chunks == filled.logical_chunks && !pager.pending(),
+                "A fully loaded RAD streamed its pool instead of filling it from resident splats");
+        const std::array<const core::Tensor*, 3> regions{&pager.pool().regions[6], &pager.pool().regions[7], &pager.pool().regions[8]};
+        std::array<id<MTLBuffer>, 3> copies{};
+        for (size_t n = 0; n < regions.size(); ++n)
+            copies[n] = [reader.device() newBufferWithLength:regions[n]->bytes() options:MTLResourceStorageModeShared];
+        auto readback = reader.submit(regions, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
+            auto blit = [command blitCommandEncoder];
+            for (size_t n = 0; n < views.size(); ++n)
+                [blit copyFromBuffer:views[n].buffer sourceOffset:views[n].offset toBuffer:copies[n] destinationOffset:0 size:views[n].bytes];
+            [blit endEncoding];
+        });
+        [readback waitUntilCompleted];
+        const auto* frames = static_cast<const core::radq::PageFrame*>(copies[0].contents);
+        const auto* bounds = static_cast<const core::RadMetaBoundsQ*>(copies[1].contents);
+        const auto* links = static_cast<const core::RadMetaLinksQ*>(copies[2].contents);
+        for (size_t chunk = 0; chunk < filled.logical_chunks; ++chunk) {
+            const uint32_t page = filled.chunk_to_page[chunk];
+            const auto& record = legacy_meta.chunks[chunk];
+            require(frames[page].bbox_min[0] == record.bbox_min[0] && frames[page].bbox_extent[2] == record.bbox_extent[2] &&
+                        frames[page].log_size_range == record.log_size_range,
+                    "Resident RAD page frame differs from the sidecar chunk record");
+            for (size_t node = chunk * 2048; node < std::min<size_t>((chunk + 1) * 2048, legacy_meta.node_count); ++node) {
+                const size_t slot = size_t(page) * 2048 + node - chunk * 2048;
+                require(bounds[slot].qx == legacy_meta.bounds[node].qx && bounds[slot].qsize == legacy_meta.bounds[node].qsize &&
+                            links[slot].child_start == legacy_meta.links[node].child_start && links[slot].parent == legacy_meta.links[node].parent,
+                        "Resident RAD node metadata differs from the sidecar");
+            }
+        }
+    }
     await(0, {});
     interest.assign(pager.cache().snapshot().logical_chunks, 0);
     interest[0] = 0xffffffffu;
     interest.back() = std::bit_cast<uint32_t>(4.f);
     await(uint32_t(interest.size() - 1), interest);
     require(pager.pool().page_splats == 2048, "Legacy RAD file block leaked into the GPU page stride");
-    std::printf("RAD paging, generation replacement, preview host cut and native desktop cut passed; fixture=%s\n", directory.c_str());
+    std::printf("RAD paging, generation replacement, preview host cut, native desktop cut and resident fill passed; fixture=%s\n", directory.c_str());
 }
 int main() {
     @autoreleasepool {

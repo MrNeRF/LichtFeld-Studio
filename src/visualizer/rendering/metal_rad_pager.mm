@@ -3,8 +3,10 @@
 #include "metal_rad_pager.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
+#include "core/rad_pool_quant.hpp"
 #include "core/sh_layout.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_upload.hpp"
 #include "metal_frame_budget.hpp"
 #include "lod_upload_engine.hpp"
 #include <algorithm>
@@ -126,10 +128,14 @@ namespace lfs::vis {
             if (sizes[j])
                 pool.regions[j] = core::Tensor::zeros({sizes[j]}, core::Device::GPU, core::DataType::UInt8);
         (void)i.engine.configure({pool}, device, consumer);
-        // The captured mapped-file owner outlives every decode job, including
-        // model replacement. The engine remains alive until cache.reset joins.
-        i.cache.configure(chunks, pages, 1, size_t(page_bytes), true);
-        i.cache.setRadSource(&tree->rad_source, model.get_max_sh_degree(), tree->lod_opacity_encoded);
+        // A fully loaded RAD fills the whole pool from its resident tensors, as
+        // Vulkan does; only out-of-core or capped pools stream from the file.
+        const bool resident_fill = nodes <= size_t(model.size()) && pages == chunks;
+        i.cache.configure(chunks, pages, 1, size_t(page_bytes), !resident_fill);
+        if (resident_fill)
+            fillResident(model, meta, pool);
+        else
+            i.cache.setRadSource(&tree->rad_source, model.get_max_sh_degree(), tree->lod_opacity_encoded);
         auto* engine = &i.engine;
         i.cache.setPageSink([engine, meta, degree = model.get_max_sh_degree(), encoded = tree->lod_opacity_encoded](uint32_t chunk, uint32_t page, uint64_t generation,
                                                                                                                     std::span<const uint8_t> bytes) -> std::string {
@@ -157,7 +163,77 @@ namespace lfs::vis {
         i.settings = settings;
         i.nodes = uint32_t(nodes);
         i.signature = next_signature.fetch_add(1);
-        LOG_INFO("Metal RAD page cache configured: nodes={} logical_chunks={} physical_pages={}", nodes, chunks, pages);
+        LOG_INFO("Metal RAD page cache configured: nodes={} logical_chunks={} physical_pages={} resident_fill={}", nodes, chunks, pages, resident_fill);
+    }
+    void MetalRadPager::fillResident(const core::SplatData& model, const core::SplatLodTree::NodeMetaView& meta, const core::RadPagePool& pool) {
+        auto& i = *impl_;
+        const auto started = std::chrono::steady_clock::now();
+        const size_t nodes = meta.node_count;
+        auto uploads = i.cache.drainPendingUploads();
+        std::sort(uploads.begin(), uploads.end(), [](const auto& a, const auto& b) { return a.chunk < b.chunk; });
+        // The page frames and node metadata decode_rad_chunk_packed would pack,
+        // from the sidecar; quantize writes the SH maxima of each frame.
+        std::vector<core::radq::PageFrame> frames(pool.regions[6].bytes() / sizeof(core::radq::PageFrame));
+        std::vector<LodUploadEngine::ResidentPage> pages;
+        pages.reserve(uploads.size());
+        for (const auto& upload : uploads) {
+            if (upload.page >= frames.size() || upload.chunk >= meta.chunk_count)
+                throw std::logic_error(std::format("Metal RAD resident fill got an invalid page (page={}, chunk={}, pages={}, chunks={})", upload.page, upload.chunk, frames.size(), meta.chunk_count));
+            const auto& record = meta.chunks[upload.chunk];
+            auto& frame = frames[upload.page];
+            std::copy_n(record.bbox_min, 3, frame.bbox_min);
+            std::copy_n(record.bbox_extent, 3, frame.bbox_extent);
+            frame.log_size_min = record.log_size_min;
+            frame.log_size_range = record.log_size_range;
+            const size_t offset = size_t(upload.chunk) * kPage;
+            pages.push_back({upload.page, uint32_t(offset), uint32_t(std::min(kPage, nodes - offset))});
+        }
+        core::TensorUpload copy;
+        const auto upload_bytes = [&](const core::Tensor& region, size_t offset, const void* data, size_t bytes) {
+            if (!bytes)
+                return;
+            copy.enqueue(region.slice(0, offset, offset + bytes), std::span(static_cast<const std::byte*>(data), bytes), static_cast<void*>(nullptr));
+            copy.wait();
+        };
+        upload_bytes(pool.regions[6], 0, frames.data(), frames.size() * sizeof(frames[0]));
+        // Pages of consecutive chunks are consecutive: copy metadata in runs.
+        for (size_t first = 0; first < pages.size();) {
+            size_t last = first + 1;
+            while (last < pages.size() && pages[last].page == pages[first].page + (last - first) &&
+                   pages[last].offset == pages[first].offset + (last - first) * kPage)
+                ++last;
+            const size_t begin = pages[first].offset, end = pages[last - 1].offset + pages[last - 1].count;
+            const size_t slot = size_t(pages[first].page) * kPage;
+            upload_bytes(pool.regions[7], slot * sizeof(core::RadMetaBoundsQ), meta.bounds + begin, (end - begin) * sizeof(core::RadMetaBoundsQ));
+            upload_bytes(pool.regions[8], slot * sizeof(core::RadMetaLinksQ), meta.links + begin, (end - begin) * sizeof(core::RadMetaLinksQ));
+            first = last;
+        }
+        // A partial tail page has no children or parents past its nodes.
+        if (!pages.empty() && pages.back().count < kPage) {
+            const auto& tail = pages.back();
+            const std::vector<core::RadMetaLinksQ> none(kPage - tail.count, core::RadMetaLinksQ{0xffffffffu, 0xffffffffu, 0xffffffffu});
+            upload_bytes(pool.regions[8], (size_t(tail.page) * kPage + tail.count) * sizeof(core::RadMetaLinksQ), none.data(), none.size() * sizeof(none[0]));
+        }
+        // Quantize every page from the resident splats, staged on the GPU.
+        const auto& resident = preview(model);
+        const auto f32 = [](const core::Tensor& tensor) { return tensor.dtype() == core::DataType::Float32 ? tensor.contiguous() : tensor.to(core::DataType::Float32).contiguous(); };
+        const bool has_sh = resident[5].is_valid() && resident[5].bytes() > 0;
+        const core::RadPageSources source{.means = f32(resident[0]),
+                                          .sh0 = f32(resident[4]),
+                                          .shN = has_sh ? resident[5] : core::Tensor{},
+                                          .rotation = f32(resident[2]),
+                                          .scaling = f32(resident[1]),
+                                          .opacity = f32(resident[3]),
+                                          .shN_bounds = resident[6],
+                                          .sh_rest = has_sh ? uint32_t(model.max_sh_coeffs_rest()) : 0u,
+                                          .sh_q16 = has_sh && model.shN_value_quantized()};
+        i.engine.quantizeResident(source, pages).wait();
+        i.cache.completeUploads(uploads);
+        i.last_publish_frame = i.cache.frameIndex();
+        // The pool now holds every node; selection restages the preview on demand.
+        i.preview = {};
+        LOG_INFO("Metal RAD pool filled from resident splats: pages={} nodes={} ms={}", pages.size(), nodes,
+                 std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
     }
     void MetalRadPager::advance(std::span<const uint32_t> touches) {
         auto& i = *impl_;

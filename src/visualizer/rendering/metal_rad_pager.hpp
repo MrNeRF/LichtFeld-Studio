@@ -46,6 +46,8 @@ namespace lfs::vis {
         const core::Tensor& deleted(const core::SplatData&);
 
     private:
+        // Fills a full pool of a fully loaded RAD from its resident splats.
+        void fillResident(const core::SplatData&, const core::SplatLodTree::NodeMetaView&, const core::RadPagePool&);
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };
