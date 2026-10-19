@@ -513,7 +513,7 @@ namespace fast_lfs::rasterization {
             return outputs;
         }
         if ((impact_sum_out == nullptr) != (impact_peak_out == nullptr)) {
-            release_forward_context(forward_ctx);
+            release_forward_context(forward_ctx, stream);
             outputs.error_message = "Invalid impact-score outputs in backward_raw";
             return outputs;
         }
