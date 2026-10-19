@@ -671,8 +671,8 @@ namespace lfs::training {
              adam.impact_sum.numel() != adam.impact_peak.numel() || !adam.impact_sum.is_contiguous() || !adam.impact_peak.is_contiguous()))
             throw std::invalid_argument(std::format("FastGS impact outputs need matching contiguous float32 vectors, got {} and {} elements",
                                                     adam.impact_sum.numel(), adam.impact_peak.numel()));
-        float* impact_sum = impact_requested ? adam.impact_sum.ptr<float>() : nullptr;
-        float* impact_peak = impact_requested ? adam.impact_peak.ptr<float>() : nullptr;
+        float* impact_sum = impact_requested ? core::Tensor(adam.impact_sum).ptr<float>() : nullptr;
+        float* impact_peak = impact_requested ? core::Tensor(adam.impact_peak).ptr<float>() : nullptr;
         auto& caches = state.caches;
         auto& ctx = state.frame;
         const auto& grad_image = gradients.image;

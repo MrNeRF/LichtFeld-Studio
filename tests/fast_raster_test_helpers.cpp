@@ -127,6 +127,8 @@ namespace lfs::training {
                     .erank_reg_loss = device_f32(fused_extra_gradients.erank_reg_loss_out, {1}),
                     .dc_reg_loss = device_f32(fused_extra_gradients.dc_reg_loss_out, {1}),
                     .sh_rest_reg_loss = device_f32(fused_extra_gradients.sh_rest_reg_loss_out, {1}),
+                    .impact_sum = device_f32(fused_extra_gradients.impact_sum_out, {static_cast<size_t>(gaussian_model.size())}),
+                    .impact_peak = device_f32(fused_extra_gradients.impact_peak_out, {static_cast<size_t>(gaussian_model.size())}),
                 },
                 densification_type);
             if (fastgs_adam_enabled(prepared)) {
