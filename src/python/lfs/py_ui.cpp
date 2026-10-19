@@ -5337,6 +5337,11 @@ namespace lfs::python {
             nb::arg("speed"), nb::arg("persist") = true,
             "Set the default WASD navigation speed (1-100)");
 
+        m.def("get_gt_comparison_key_repeat", [] { return vis::UserPreferences::instance().gtComparisonKeyRepeat(); }, "Get whether held camera shortcuts repeat in GT comparison");
+        m.def("set_gt_comparison_key_repeat", [](bool enabled) { vis::UserPreferences::instance().setGTComparisonKeyRepeat(enabled); }, nb::arg("enabled"), "Enable held camera shortcuts in GT comparison");
+        m.def("get_gt_comparison_repeat_rate", [] { return vis::UserPreferences::instance().gtComparisonRepeatRate(); }, "Get GT comparison repeat rate in views per second");
+        m.def("set_gt_comparison_repeat_rate", [](float rate, bool persist) { vis::UserPreferences::instance().setGTComparisonRepeatRate(rate, persist); }, nb::arg("rate"), nb::arg("persist") = true, "Set GT comparison repeat rate (1-20 views per second)");
+
         m.def(
             "get_navigation_speed_preference",
             []() -> float { return vis::loadNavigationSpeedPreference(); },

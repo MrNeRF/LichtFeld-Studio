@@ -69,6 +69,7 @@ class PreferencesPanel(Panel):
     )
 
     SPEED_SCRUB_FIELD_DEFS = {
+        "gt_comparison_repeat_rate": ScrubFieldSpec(1.0, 20.0, 1.0, "%d", data_type=int),
         "zoom_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
         "navigation_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
         **{f"theme_vignette_{name}": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")
@@ -223,6 +224,10 @@ class PreferencesPanel(Panel):
             lf.ui.get_navigation_speed_preference,
             self._set_navigation_speed,
         )
+        model.bind("gt_comparison_key_repeat", lf.ui.get_gt_comparison_key_repeat,
+                   self._set_gt_comparison_key_repeat)
+        model.bind("gt_comparison_repeat_rate", lf.ui.get_gt_comparison_repeat_rate,
+                   self._set_gt_comparison_repeat_rate)
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
         model.bind("remember_navigation", lf.ui.remember_camera_navigation, self._set_remember_navigation)
         model.bind("remember_view_snap", lf.ui.remember_camera_view_snap, self._set_remember_view_snap)
@@ -417,6 +422,8 @@ class PreferencesPanel(Panel):
             lf.get_new_project_align_grid(),
             float(lf.ui.get_zoom_speed_preference()),
             float(lf.ui.get_navigation_speed_preference()),
+            lf.ui.get_gt_comparison_key_repeat(),
+            float(lf.ui.get_gt_comparison_repeat_rate()),
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
             lf.project_auto_save_on_close_enabled(),
@@ -850,9 +857,19 @@ class PreferencesPanel(Panel):
         lf.ui.set_navigation_speed_preference(float(value))
         self._refresh_selection()
 
+    def _set_gt_comparison_key_repeat(self, value):
+        lf.ui.set_gt_comparison_key_repeat(bool(value))
+        self._refresh_selection()
+
+    def _set_gt_comparison_repeat_rate(self, value):
+        lf.ui.set_gt_comparison_repeat_rate(float(value))
+        self._refresh_selection()
+
     def _get_scrub_value(self, prop):
         if prop.startswith("theme_vignette_"):
             return float(vignette_value(prop.removeprefix("theme_vignette_")))
+        if prop == "gt_comparison_repeat_rate":
+            return float(lf.ui.get_gt_comparison_repeat_rate())
         if prop == "zoom_speed":
             return float(lf.ui.get_zoom_speed_preference())
         if prop == "navigation_speed":
@@ -869,6 +886,8 @@ class PreferencesPanel(Panel):
             lf.ui.set_zoom_speed_preference(float(value), persist=False)
         elif prop == "navigation_speed":
             lf.ui.set_navigation_speed_preference(float(value), persist=False)
+        elif prop == "gt_comparison_repeat_rate":
+            lf.ui.set_gt_comparison_repeat_rate(float(value), persist=False)
         self._refresh_selection()
 
     def _commit_scrub_value(self, prop, value):
@@ -879,6 +898,8 @@ class PreferencesPanel(Panel):
             self._set_zoom_speed(value)
         elif prop == "navigation_speed":
             self._set_navigation_speed(value)
+        elif prop == "gt_comparison_repeat_rate":
+            self._set_gt_comparison_repeat_rate(value)
 
     def _set_view_snap(self, enabled):
         lf.set_camera_view_snap_enabled(bool(enabled))
@@ -1690,6 +1711,8 @@ class PreferencesPanel(Panel):
             lf.set_new_project_navigation_defaults("legacy_y", True)
             lf.ui.set_zoom_speed_preference(11.0)
             lf.ui.set_navigation_speed_preference(10.0)
+            lf.ui.set_gt_comparison_key_repeat(True)
+            lf.ui.set_gt_comparison_repeat_rate(5.0)
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
             lf.set_camera_navigation_mode("orbit")
@@ -1734,6 +1757,8 @@ class PreferencesPanel(Panel):
             self._handle.dirty("new_project_align_grid")
             self._handle.dirty("zoom_speed")
             self._handle.dirty("navigation_speed")
+            self._handle.dirty("gt_comparison_key_repeat")
+            self._handle.dirty("gt_comparison_repeat_rate")
             self._handle.dirty("view_snap")
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")

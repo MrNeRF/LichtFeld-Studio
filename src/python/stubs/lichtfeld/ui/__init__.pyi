@@ -2795,6 +2795,18 @@ def get_zoom_speed_preference() -> float:
 def set_navigation_speed_preference(speed: float, persist: bool = True) -> None:
     """Set the default WASD navigation speed (1-100)"""
 
+def get_gt_comparison_key_repeat() -> bool:
+    """Get whether held camera shortcuts repeat in GT comparison"""
+
+def set_gt_comparison_key_repeat(enabled: bool) -> None:
+    """Enable held camera shortcuts in GT comparison"""
+
+def get_gt_comparison_repeat_rate() -> float:
+    """Get GT comparison repeat rate in views per second"""
+
+def set_gt_comparison_repeat_rate(rate: float, persist: bool = True) -> None:
+    """Set GT comparison repeat rate (1-20 views per second)"""
+
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
 

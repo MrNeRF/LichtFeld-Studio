@@ -379,6 +379,17 @@
               <span class="slider-value">{{ navigation_speed | format_int }}</span>
             </div>
           </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.gt_comparison_key_repeat_tooltip">
+            <span class="preferences-label">@tr:preferences.gt_comparison_key_repeat</span>
+            <input type="checkbox" data-checked="gt_comparison_key_repeat" />
+          </div>
+          <div class="setting-row setting-row--aligned" data-if="gt_comparison_key_repeat">
+            <span class="setting-row__label-col">@tr:preferences.gt_comparison_repeat_rate</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="gt_comparison_repeat_rate" min="1" max="20" step="1" />
+              <span class="slider-value">{{ gt_comparison_repeat_rate | format_int }}</span>
+            </div>
+          </div>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.remember_camera_navigation</span>
             <input type="checkbox" data-checked="remember_navigation" />

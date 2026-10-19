@@ -57,6 +57,11 @@ namespace lfs::vis {
         void setNavigationSpeed(float value, bool persist = true);
         [[nodiscard]] float navigationSpeed();
 
+        void setGTComparisonKeyRepeat(bool enabled);
+        [[nodiscard]] bool gtComparisonKeyRepeat();
+        void setGTComparisonRepeatRate(float value, bool persist = true);
+        [[nodiscard]] float gtComparisonRepeatRate();
+
         void setLanguage(const std::string& value);
         [[nodiscard]] std::string language();
         void clearLanguage();
